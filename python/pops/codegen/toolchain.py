@@ -19,7 +19,8 @@ def _pops_module() -> Any:
         return _pops
     except Exception:
         try:
-            from pops import _pops  # noqa: PLC0415  # SPEC4-TODO: lazy import
+            import pops._bootstrap  # noqa: F401, PLC0415 -- establishes RTLD_GLOBAL first
+            from pops import _pops  # noqa: PLC0415
             return _pops
         except Exception:
             return None
@@ -105,13 +106,7 @@ def loader_cxx_std() -> str:
     POPS_CXX_STD : 20 under Kokkos, 23 otherwise). Graceful fallbacks if the attribute is missing (old module) :
     we parse __cplusplus from _pops.abi_key() (>202002L -> c++23, otherwise c++20) ; failing all that,
     we fall back to the historical default c++23 (non-Kokkos host case, unchanged)."""
-    try:
-        import _pops
-    except Exception:
-        try:
-            from pops import _pops  # noqa: PLC0415  # SPEC4-TODO: lazy import
-        except Exception:
-            _pops = None
+    _pops = _pops_module()
     std = _pops_cxx_std_from_module(_pops) if _pops is not None else None
     return std or "c++23"
 

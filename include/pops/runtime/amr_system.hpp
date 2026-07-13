@@ -873,7 +873,7 @@ class AmrSystem {
   /// @}
 
   int nx() const;
-  double time() const;
+  POPS_EXPORT double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with
   /// System::macro_step. Required for checkpoint/restart (the stride / regrid cadence depends on
   /// macro_step % stride|regrid_every, not only on t). Prerequisite IO PR-IO-3 (audit 2026-06).
@@ -883,7 +883,7 @@ class AmrSystem {
   /// RESTORES the AMR clock (t, macro_step) -- parity with System::set_clock. Sets the time AND the
   /// macro-step counter (propagated to the regrid/stride cadence of the engine, mono-block as well as multi-block). Useful
   /// alone (stride cadence + clock resumption). @throws if macro_step < 0.
-  void set_clock(double t, int macro_step);
+  POPS_EXPORT void set_clock(double t, int macro_step);
 
   /// @name AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43)
   /// Per-phase wall-clock timing of the AMR runtime: the engine times its non-numeric phases --

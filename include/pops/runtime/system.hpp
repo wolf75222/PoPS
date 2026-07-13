@@ -1031,14 +1031,14 @@ class System {
   /// RESTORES the clock (t, macro_step) -- reserved for the RESTART (sim.restart). Restoring macro_step
   /// is MANDATORY to resume the stride cadence exactly; a restart that would only restore
   /// t would desynchronize the blocks at stride > 1. @throws if macro_step < 0.
-  void set_clock(double t, int macro_step);
+  POPS_EXPORT void set_clock(double t, int macro_step);
   /// Extent of the SLOW axis of the field (rows of the (ny, nx) row-major array returned by density / potential
   /// / get_state). Cartesian: ny() == nx() == n (square, UNCHANGED). Polar (ring): ny() == ntheta
   /// (slow azimuthal axis) while nx() == nr (fast radial axis) -- with nr != ntheta the field has
   /// nr*ntheta values, NOT nx()^2: it is this dimension that correctly sizes the numpy
   /// array on the bindings side (without it, a (nx, nx) reshape overflows the buffer when nr != ntheta).
   int ny() const;
-  double time() const;
+  POPS_EXPORT double time() const;
   int n_species() const;
   /// Block names, in the order of addition. SINGLE SOURCE: the internal block registry, populated by
   /// ALL the addition paths (add_block / add_dynamic_block / add_compiled_block / install_block).

@@ -174,7 +174,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # each block's scratch name so the coupled_rate_out for that block aliases it. All input
         # states are co-located (same ba/dm as the System aux), so a single shared loop is sound
         # (the same co-distribution every aux-reading kernel relies on; see _kernel_open).
-        components = _coupled_rate_components(program, v)
+        components = _coupled_rate_components(program, v, model)
         by_block = {s.block: s for s in v.inputs}
         scratch = {}
         for blk in components:                       # bundle / expr block order
@@ -193,7 +193,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         (coupled_in,) = v.inputs
         var[v.id] = var[("coupled_scratch", coupled_in.id, v.attrs["out_block"])]
     elif v.op == "solve_coupled_implicit":
-        components = _coupled_rate_components(program, v)
+        components = _coupled_rate_components(program, v, model)
         by_block = {state.block: state for state in v.inputs}
         scratch = {}
         for block in components:

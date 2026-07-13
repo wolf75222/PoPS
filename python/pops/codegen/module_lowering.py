@@ -199,6 +199,31 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             ("component_provider_pack:%s" % stable_key,)))
     _CODEGEN_KINDS = ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                       "projection")
+    # The native HyperbolicModel concept always needs one base flux, even when a typed Program reads
+    # only a named grid operator.  For one exact StateSpace route, a sole named flux selected by its
+    # local_rate is unambiguous: install it both as the concept's base flux and under its authored
+    # name.  This is a lowering fact, not an authoring alias; multiple candidates remain fail-closed.
+    operators = tuple(module.operator_registry())
+    applicable_rates = tuple(
+        op for op in operators if op.kind == "local_rate" and state in op.signature.inputs)
+    routed_fluxes = {
+        flux_name
+        for op in applicable_rates
+        for flux_name in (op.lowering.get("fluxes") or ())
+    }
+    applicable_grid_names = {
+        op.name for op in operators
+        if op.kind == "grid_operator" and (
+            not tuple(item for item in op.signature.inputs
+                      if getattr(item, "kind", None) == "state")
+            or state in op.signature.inputs)
+    }
+    explicit_default = applicable_grid_names & {"flux", "flux_default"}
+    fallback_default = None
+    if not explicit_default and len(routed_fluxes) == 1:
+        candidate = next(iter(routed_fluxes))
+        if candidate in applicable_grid_names:
+            fallback_default = candidate
     # ADC-642: one decode -- a {kind: builder} dispatch over the shared OPERATOR_KINDS vocabulary.
     # Each builder holds its arm body verbatim. _CODEGEN_KINDS is the body-requirement set (local_rate
     # lowers from op.lowering, not a body, so it stays out); the assert makes an unwired kind loud.
@@ -206,6 +231,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         body = _body_for_state(op.body)
         if op.name in ("flux", "flux_default"):
             m.flux(x=body["x"], y=body["y"])
+        elif op.name == fallback_default:
+            m.flux(x=body["x"], y=body["y"])
+            m.flux_term(op.name, x=body["x"], y=body["y"])
         else:
             m.flux_term(op.name, x=body["x"], y=body["y"])
 

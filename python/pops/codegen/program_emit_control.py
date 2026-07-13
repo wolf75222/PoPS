@@ -10,13 +10,14 @@ resolve and scan a coupled_rate node.  The op dispatcher ``_emit_op`` lives in
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import json
 from pops.time.references import block_name
 
 
-def _coupled_rate_components(program: Any, v: Any) -> dict:
+def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dict:
     """Resolve a ``coupled_rate`` node @p v to its per-block component formulas (Spec 3 criterion
     27, ADC-457), validated for the cons-only MVP. Returns ``{block: [Expr, ...]}`` (one formula
     per component of that block's StateSpace).
@@ -33,14 +34,36 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
         resolve_operator_handle, resolve_registered_operator,
     )
     operator_handle = v.attrs.get("operator_handle")
-    if operator_handle is not None:
+    if operator_handle is not None and getattr(program, "_operator_registries", None):
         op = resolve_operator_handle(
             program, operator_handle, where="coupled_rate codegen", values=v.inputs)
-    else:
+    elif operator_handle is None:
         op = resolve_registered_operator(
             program, op_name, where="coupled_rate codegen", values=v.inputs)
+    else:
+        # Compiled Programs deliberately detach mutable authoring registries.  Whole-system
+        # compilation retains the immutable source Module in ProgramModelGraph, so resolve the
+        # canonical owner-qualified handle against that authority instead of reattaching a registry.
+        from pops.codegen.program_models import ProgramModelGraph
+        if type(authority) is not ProgramModelGraph:
+            raise ValueError(
+                "coupled_rate codegen: detached Program requires a ProgramModelGraph authority")
+        source = authority.source_module_for_owner(operator_handle.owner_path)
+        if source.owner_path.canonical() != operator_handle.owner_path.canonical():
+            raise ValueError("coupled_rate codegen: source Module owner identity drift")
+        matches = tuple(
+            candidate for candidate in source.operator_registry()
+            if candidate.name == operator_handle.local_id)
+        if len(matches) != 1:
+            raise ValueError(
+                "coupled_rate codegen: operator %r is absent or ambiguous in its source Module"
+                % operator_handle.local_id)
+        op = matches[0]
+        if op.kind != operator_handle.kind or op.kind != "coupled_rate":
+            raise ValueError(
+                "coupled_rate codegen: operator handle kind differs from its source Module")
     expr = op.body
-    if not isinstance(expr, dict):
+    if not isinstance(expr, Mapping):
         raise NotImplementedError(
             "the coupled_rate kernel codegen (ADC-457) needs operator %r to carry its per-block "
             "component formulas as an expr={block: [Expr, ...]} dict (got %r); a decorator-body "

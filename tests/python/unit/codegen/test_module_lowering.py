@@ -127,6 +127,27 @@ def test_emit_is_byte_identical_through_lower_and_validate():
     assert direct == via, "routing a facade Model through lower_and_validate is byte-identical"
 
 
+def test_one_typed_named_flux_supplies_the_native_base_flux_without_losing_its_name():
+    module = model_pkg.Module("named_flux_route")
+    state = module.state_space("fluid", ("rho",))
+    (rho,) = module.state_symbols(state)
+    flux = module.operator(
+        name="transport",
+        signature=(state,) >> model_pkg.Rate(state),
+        kind="grid_operator",
+        expr={"x": (rho,), "y": (rho,)},
+    )
+    module.eigenvalues(x=(Const(1.0),), y=(Const(1.0),))
+    module.rate_operator(
+        "advance", state_space=module.state_handle(state), flux=True, fluxes=(flux,))
+
+    lowered = _module_to_model(module)
+
+    assert lowered._m._flux, "the native HyperbolicModel base-flux concept is satisfied"
+    assert tuple(lowered._m._flux_terms) == ("transport",)
+    assert lowered._m._rate_operators["advance"]["fluxes"] == ["transport"]
+
+
 # --- 5: the handle carries the module_hash for drift detection + the lowered-module trace -------
 
 def test_handle_carries_module_hash_and_trace():

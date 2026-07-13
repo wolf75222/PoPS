@@ -366,10 +366,10 @@ class _SystemUnifiedInstall(_System):
         }
         self._s.set_field_solver_plan(
             slot, options["provider_identity_text"],
-            canonical_bytes(output_route["owner_identity"]).decode("utf-8"),
+            canonical_bytes(output_route["owner_identity"]).hex(),
             output_route["owner_block"],
             output_route["key"],
-            [canonical_bytes(route["provider_identity"]).decode("utf-8")
+            [canonical_bytes(route["provider_identity"]).hex()
              for route in routes],
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],

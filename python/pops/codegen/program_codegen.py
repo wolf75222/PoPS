@@ -345,7 +345,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
         # state's cons names from that input's StateSpace -- so the operator must be bound and the
         # formulas must be cons-only (the MVP). Validate both here so a non-lowerable coupled_rate
         # fails loud naming ADC-457, never emits an undefined reference.
-        _coupled_rate_components(program, v)
+        _coupled_rate_components(program, v, model)
         return
     if v.op == "coupled_rate_out":
         # A pure projection of one block out of the coupled bundle: it emits nothing (its var
