@@ -11,10 +11,23 @@ from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 
 
-class HDF5(Descriptor):
+class FormatInterface(Descriptor):
+    """Typed scientific-format protocol; concrete descriptors select one exact writer."""
+
+    category = "output_format"
+    format_name = ""
+    extension = ""
+
+    def writer(self) -> Any:
+        raise NotImplementedError("output format does not provide a writer")
+
+
+class HDF5(FormatInterface):
     """HDF5 output. ``parallel=True`` requests the parallel-HDF5 path (build-dependent)."""
 
     category = "output_format"
+    format_name = "hdf5"
+    extension = ".h5"
 
     def __init__(self, parallel: bool = False) -> None:
         self.parallel = bool(parallel)
@@ -24,6 +37,32 @@ class HDF5(Descriptor):
 
     def requirements(self) -> Any:
         return RequirementSet({"parallel_io": True} if self.parallel else {})
+
+    def writer(self) -> Any:
+        from .writers import HDF5Writer
+        return HDF5Writer()
+
+
+class NPZ(FormatInterface):
+    """Compressed NumPy scientific container, always serial and independently verifiable."""
+
+    format_name = "npz"
+    extension = ".npz"
+
+    def writer(self) -> Any:
+        from .writers import NPZWriter
+        return NPZWriter()
+
+
+class ParaView(FormatInterface):
+    """Single-file VTK UnstructuredGrid output read directly by ParaView."""
+
+    format_name = "paraview-vtu"
+    extension = ".vtu"
+
+    def writer(self) -> Any:
+        from .writers import ParaViewWriter
+        return ParaViewWriter()
 
 
 class Plotfile(Descriptor):
@@ -35,4 +74,4 @@ class Plotfile(Descriptor):
         return CapabilitySet({"per_level": True})
 
 
-__all__ = ["HDF5", "Plotfile"]
+__all__ = ["FormatInterface", "HDF5", "NPZ", "ParaView", "Plotfile"]

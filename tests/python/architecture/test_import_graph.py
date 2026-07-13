@@ -65,7 +65,8 @@ ALLOWED = {
     # (L1 / L2 / LInf), so diagnostics imports linalg (acyclic: linalg imports nothing).
     "diagnostics": {"linalg"},
     "params": set(),
-    "output": set(),
+    # Exact output selections authenticate canonical field Handles; writers remain runtime-free.
+    "output": {"model"},
     # External package manifests are semantic authoring inputs and consume the canonical
     # ComponentManifest value; platform/runtime imports remain lazy phase-boundary operations.
     "external": {"model"},
@@ -80,7 +81,8 @@ ALLOWED = {
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
     "codegen": {"ir", "model", "physics", "time", "lib", "solvers", "params", "external"},
-    "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen", "params"},
+    "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen", "params",
+                "output"},
 }
 LAYERS = set(ALLOWED)
 
