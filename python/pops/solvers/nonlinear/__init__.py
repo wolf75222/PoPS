@@ -9,6 +9,13 @@ from typing import Any
 from pops.descriptors import Availability, Descriptor, _planned
 from pops.descriptors_report import CapabilitySet
 from pops.identity import Identity, make_identity
+from pops.ir.literals import scalar_data
+
+
+def _runtime_number(value: Any) -> float:
+    if isinstance(value, dict) and value.get("kind") == "binary64":
+        return float.fromhex(value["value"])
+    return float(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +68,9 @@ class PreparedFieldNonlinear:
             raise TypeError(
                 "prepared nonlinear provider requires the field nonlinear install protocol")
         o = self.options
-        setter(provider_slot, o["tolerance"], o["max_iterations"],
-               o["linear_tolerance"], o["linear_max_iterations"], o["restart"],
-               o["armijo"], o["minimum_step"])
+        setter(provider_slot, _runtime_number(o["tolerance"]), o["max_iterations"],
+               _runtime_number(o["linear_tolerance"]), o["linear_max_iterations"], o["restart"],
+               _runtime_number(o["armijo"]), _runtime_number(o["minimum_step"]))
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -152,7 +159,11 @@ class Newton(Descriptor):
         del layout
         if target not in ("system", "amr_system"):
             raise ValueError("Newton field outer solve requires a uniform or AMR system")
-        options = self.options()
+        authored = self.options()
+        options = {
+            key: value if isinstance(value, int) else scalar_data(value)
+            for key, value in authored.items()
+        }
         capabilities = frozenset({
             "residual", "jvp", "line_search", "publication_atomic", "reject_attempt",
             "newton_krylov" if target == "system" else "full_approximation_scheme",
