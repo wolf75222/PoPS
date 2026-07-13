@@ -33,7 +33,7 @@ def euler_native():
 def main():
     # (0) sans .so : un add_block est deja vu par block_names (garde de base, sans compilateur).
     s0 = System(n=16, L=1.0, periodic=True)
-    s0.add_block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
+    s0.block("gas", model=euler_native(), spatial=pops.Spatial(minmod=True))
     assert list(s0.block_names()) == ["gas"], "add_block invisible dans block_names()"
     assert s0.n_species() == 1, "n_species != 1 pour un bloc"
     print("OK  block_names() voit un add_block natif")
@@ -51,7 +51,7 @@ def main():
         so = e.compile_so(os.path.join(tmp, "euler_model.so"), INCLUDE)
 
         sim = System(n=n, L=L, periodic=True)
-        sim.add_block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
+        sim.block("native", model=euler_native(), spatial=pops.Spatial(minmod=True))
         sim.add_dynamic_block("dyn", so, names=["rho", "rho_u", "rho_v", "E"])
 
         # (1) le bloc dynamique (.so) figure dans block_names, dans l'ordre d'ajout

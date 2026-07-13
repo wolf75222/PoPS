@@ -76,7 +76,7 @@ def _state_ring_program(name):
     _case, states = program_states(P, module, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=3, checkpoint_policy=Interval(2))
-    nxt = P.linear_combine("Un", U.n + P.dt * (0.6 * U.n) + 0.0 * U.prev(2))
+    nxt = P.value("Un", U.n + P.dt * (0.6 * U.n) + 0.0 * U.prev(2))
     P.commit(U.next, nxt)
     return P
 

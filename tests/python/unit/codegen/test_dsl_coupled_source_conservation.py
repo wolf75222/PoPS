@@ -51,8 +51,8 @@ def density_block(n0=1.0):
 
 def make_system(n, na0, nb0):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(none=True))
-    sim.add_block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(none=True))
+    sim.block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(none=True))
+    sim.block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("alpha", np.full((n, n), na0))
     sim.set_density("beta", np.full((n, n), nb0))

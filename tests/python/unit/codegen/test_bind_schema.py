@@ -24,7 +24,7 @@ from pops.params import (
     RuntimeParam,
 )
 from pops.model.bind_schema import BindSchema
-from pops.problem import Problem
+from pops.problem import Case
 from pops.runtime._bound_snapshot import BoundSnapshot, build_amr_snapshot
 
 
@@ -36,9 +36,9 @@ def _two_instance_schema(*, default: float = 1.0):
     module = model.Module("transport")
     speed = module.param(RuntimeParam("speed", dtype=Real, default=default, domain=Positive()))
     order = module.param(ConstParam("order", 2, dtype=Integer))
-    problem = Problem(name="two-blocks")
-    left = problem.add_block("left", module)
-    right = problem.add_block("right", module)
+    problem = Case(name="two-blocks")
+    left = problem.block("left", module)
+    right = problem.block("right", module)
     return BindSchema.from_problem(problem), left, right, speed, order
 
 
@@ -83,8 +83,8 @@ def test_native_real_carrier_refuses_lossy_integer_lowering():
 
     module = model.Module("integer-carrier")
     count = module.param(RuntimeParam("count", dtype=Integer, default=1))
-    problem = Problem(name="integer-carrier-case")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="integer-carrier-case")
+    block = problem.block("fluid", module)
     schema = BindSchema.from_problem(problem)
     resolved = _resolve(schema, {block[count]: 2**53 + 1})
     carrier = {"fluid": SimpleNamespace(runtime_param_names=("count",))}
@@ -96,8 +96,8 @@ def test_native_real_carrier_refuses_lossy_integer_lowering():
 def test_schema_extraction_from_an_already_frozen_problem_is_read_only():
     module = model.Module("frozen-schema")
     speed = module.param(RuntimeParam("speed", default=1.0))
-    problem = Problem(name="frozen-schema-case")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="frozen-schema-case")
+    block = problem.block("fluid", module)
 
     problem.freeze()
     schema = BindSchema.from_problem(problem)
@@ -110,8 +110,8 @@ def test_schema_alias_authentication_does_not_retain_live_authoring_graph():
     def build():
         module = model.Module("detached-schema")
         speed = module.param(RuntimeParam("speed", default=1.0))
-        problem = Problem(name="detached-schema-case")
-        block = problem.add_block("fluid", module)
+        problem = Case(name="detached-schema-case")
+        block = problem.block("fluid", module)
         live_alias = block[speed]
         schema = BindSchema.from_problem(problem)
         assert schema.slot(live_alias).handle.is_resolved
@@ -129,7 +129,7 @@ def test_schema_alias_authentication_does_not_retain_live_authoring_graph():
 def test_raw_module_cannot_add_parameters_after_problem_freeze():
     module = model.Module("frozen-raw-module")
     module.param(RuntimeParam("speed", default=1.0))
-    problem = Problem(name="frozen-raw-module-case").block("fluid", physics=module)
+    problem = Case(name="frozen-raw-module-case").block("fluid", physics=module)
 
     snapshot = problem.freeze()
     with pytest.raises(RuntimeError, match="frozen.*parameter"):
@@ -144,8 +144,8 @@ def test_raw_module_cannot_add_parameters_after_problem_freeze():
 def test_case_and_block_parameters_with_same_local_name_never_merge():
     module = model.Module("transport-case-scope")
     local = module.param(RuntimeParam("threshold", default=1.0))
-    problem = Problem(name="case-scope")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="case-scope")
+    block = problem.block("fluid", module)
     case = problem.param(RuntimeParam("threshold", default=2.0))
 
     schema = BindSchema.from_problem(problem)
@@ -211,8 +211,8 @@ def test_bind_mapping_requires_handles_and_validates_kind_dtype_domain_and_requi
     enabled = module.param(RuntimeParam("enabled", dtype=Bool, default=True))
     positive = module.param(RuntimeParam("positive", dtype=Real, default=1.0, domain=Positive()))
     order = module.param(ConstParam("order", 2, dtype=Integer))
-    problem = Problem(name="typed-case")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="typed-case")
+    block = problem.block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
     with pytest.raises(ValueError, match="missing required"):
@@ -262,8 +262,8 @@ def _bind_derived_module(*, phase=ParamPhase.Bind, invalidation=ParamInvalidatio
 
 def test_bind_derived_cache_is_topological_and_cannot_be_overridden():
     module, alpha, beta, gamma = _bind_derived_module()
-    problem = Problem(name="derived-case")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="derived-case")
+    block = problem.block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
     resolved = _resolve(schema, {block[alpha]: 3.0})
@@ -287,8 +287,8 @@ def test_compile_inline_derived_is_materialized_for_python_consumers():
         dtype=Integer,
         domain=Positive(),
     ))
-    problem = Problem(name="compile-derived-case")
-    block = problem.add_block("fluid", module)
+    problem = Case(name="compile-derived-case")
+    block = problem.block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
     compile_values = schema.resolve_compile()
@@ -299,8 +299,8 @@ def test_compile_inline_derived_is_materialized_for_python_consumers():
 
 def test_derived_foreign_cycle_phase_and_invalidation_fail_loudly():
     module, _, _, _ = _bind_derived_module()
-    problem = Problem(name="derived-invalid")
-    problem.add_block("fluid", module)
+    problem = Case(name="derived-invalid")
+    problem.block("fluid", module)
     schema = BindSchema.from_problem(problem)
 
     foreign = copy.deepcopy(schema.to_dict())
@@ -343,8 +343,8 @@ def test_derived_foreign_cycle_phase_and_invalidation_fail_loudly():
         storage=ParamStorage.DerivedCache,
         invalidation=ParamInvalidation.OnDependencies,
     ))
-    late_problem = Problem(name="late")
-    late_problem.add_block("fluid", late)
+    late_problem = Case(name="late")
+    late_problem.block("fluid", late)
     with pytest.raises(NotImplementedError, match="no execution provider"):
         BindSchema.from_problem(late_problem)
 

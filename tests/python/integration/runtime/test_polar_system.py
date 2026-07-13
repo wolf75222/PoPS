@@ -44,7 +44,7 @@ def _flat(field):
 def test_polar_system_step_and_cfl_conserve_mass():
     rmin, rmax, nr, nth = 0.30, 1.00, 48, 48
     sim = System(mesh=pops.PolarMesh(r_min=rmin, r_max=rmax, nr=nr, ntheta=nth))
-    sim.add_block(
+    sim.block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),

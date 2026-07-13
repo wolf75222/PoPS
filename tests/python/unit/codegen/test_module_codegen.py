@@ -91,7 +91,7 @@ def test_no_model_empty_module():
     target = typed_state(P, "plasma", state_name="U")
     P.commit(
         target.next,
-        P.linear_combine(
+        P.value(
             "u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u)),
             at=target.next.point,
         ),

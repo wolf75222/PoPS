@@ -88,7 +88,7 @@ def single_block_program(t, name, block):
     U = typed_state(P, block)
     R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
     endpoint = typed_state(P, block, state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         block + "_next", U + dt * R, at=endpoint.point))
     return P
 
@@ -103,7 +103,7 @@ def two_block_program(t, name="two_block_passive"):
         U = typed_state(P, blk)
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
         endpoint = typed_state(P, blk, state_name="U").next
-        P.commit(endpoint, P.linear_combine(
+        P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
     return P
 
@@ -120,7 +120,7 @@ def section_a(t):
         U = typed_state(P, blk)
         R = P._rhs_legacy(state=U, flux=True, sources=["default"])
         endpoint = typed_state(P, blk, state_name="U").next
-        P.commit(endpoint, P.linear_combine(
+        P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
@@ -133,7 +133,7 @@ def section_a(t):
     fa = Pro.solve_fields(Ua)
     Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
     endpoint_a = typed_state(Pro, "a", state_name="U").next
-    Pro.commit(endpoint_a, Pro.linear_combine(
+    Pro.commit(endpoint_a, Pro.value(
         "a1", Ua + Pro.dt * Ra, at=endpoint_a.point))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
     src_ro = Pro.emit_cpp_program()
@@ -143,9 +143,9 @@ def section_a(t):
     Pd = t.Program("double")
     Uad = typed_state(Pd, "a")
     endpoint_d = typed_state(Pd, "a", state_name="U").next
-    Pd.commit(endpoint_d, Pd.linear_combine("x", 1.0 * Uad, at=endpoint_d.point))
+    Pd.commit(endpoint_d, Pd.value("x", 1.0 * Uad, at=endpoint_d.point))
     chk(raises(ValueError, lambda: Pd.commit(
-        endpoint_d, Pd.linear_combine("y", 1.0 * Uad, at=endpoint_d.point))),
+        endpoint_d, Pd.value("y", 1.0 * Uad, at=endpoint_d.point))),
         "a double commit of the same block is rejected")
 
     # A commit of a block no P.state declares cannot route to an index -> rejected.
@@ -155,7 +155,7 @@ def section_a(t):
     chk(raises(
         ValueError,
         lambda: Pu.commit(
-            ghost, Pu.linear_combine("g", 1.0 * Uau, at=ghost.point))),
+            ghost, Pu.value("g", 1.0 * Uau, at=ghost.point))),
         "a cross-block commit is rejected before lowering")
 
     # The SIMULTANEOUS multi-target coupled field solve LOWERS (Spec 3 criterion 24, ADC-457): every
@@ -166,10 +166,10 @@ def section_a(t):
     Pc.solve_fields_from_blocks([Uac, Ubc])
     endpoint_a = typed_state(Pc, "a", state_name="U").next
     endpoint_b = typed_state(Pc, "b", state_name="U").next
-    Pc.commit(endpoint_a, Pc.linear_combine(
+    Pc.commit(endpoint_a, Pc.value(
         "a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"]),
         at=endpoint_a.point))
-    Pc.commit(endpoint_b, Pc.linear_combine(
+    Pc.commit(endpoint_b, Pc.value(
         "b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"]),
         at=endpoint_b.point))
     src_c = Pc.emit_cpp_program()
@@ -195,13 +195,13 @@ def section_a(t):
     Ubcf = typed_state(Pcf, "b")
     endpoint_a = typed_state(Pcf, "a", state_name="U").next
     endpoint_b = typed_state(Pcf, "b", state_name="U").next
-    Pcf.commit(endpoint_a, Pcf.linear_combine(
+    Pcf.commit(endpoint_a, Pcf.value(
         "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(
             state=Uacf, flux=True, sources=["default"]),
         at=endpoint_a.point))
 
     def _cf_body(prog, x):
-        return prog.linear_combine(
+        return prog.value(
             None,
             x + prog.dt * prog._rhs_legacy(
                 state=x, flux=True, sources=["default"]),
@@ -209,7 +209,7 @@ def section_a(t):
         )
 
     ranged = Pcf.range(Ubcf, 2, _cf_body)
-    Pcf.commit(endpoint_b, Pcf.define("b_next", ranged, at=endpoint_b.point))
+    Pcf.commit(endpoint_b, Pcf.value("b_next", ranged, at=endpoint_b.point))
     src_cf = Pcf.emit_cpp_program()
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")

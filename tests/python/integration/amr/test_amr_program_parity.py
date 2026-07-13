@@ -96,10 +96,10 @@ def _ssprk2_program(model, name="adc508_ssprk2"):
     U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0, at=TimePoint(P.clock, 1))
+    U1 = P.value("U1", U0 + dt * k0, at=TimePoint(P.clock, 1))
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.linear_combine(
+    U2 = P.value(
         "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=temporal.next.point)
     P.commit(temporal.next, U2)
     return P
@@ -115,10 +115,10 @@ def _midpoint_program(model, name="adc508_midpoint"):
     U0 = temporal.n
     f0 = P.solve_fields("f0", U0)
     k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + 0.5 * dt * k0)
+    U1 = P.value("U1", U0 + 0.5 * dt * k0)
     f1 = P.solve_fields("f1", U1)
     k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.linear_combine("U2", U0 + dt * k1)
+    U2 = P.value("U2", U0 + dt * k1)
     P.commit(temporal.next, U2)
     return P
 

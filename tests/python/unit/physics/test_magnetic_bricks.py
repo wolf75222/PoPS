@@ -37,7 +37,7 @@ n, B0, q = 16, 3.0, -2.0
 # --- 1. MagneticLorentzForce : residu quantitatif sur etat uniforme ----------------
 print("== MagneticLorentzForce : residu = force magnetique exacte (etat uniforme) ==")
 sim = System(n=n, L=1.0, periodic=True)
-sim.add_block("e",
+sim.block("e",
               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                         transport=pops.IsothermalFlux(),
                         source=pops.MagneticLorentzForce(charge=q),
@@ -65,7 +65,7 @@ chk(np.all(np.isfinite(rho)), "5 pas magnetises : densite finie")
 # --- 2. PotentialMagneticForce : accepte et tourne ---------------------------------
 print("== PotentialMagneticForce (electrostatique + Lorentz sommees) ==")
 sim2 = System(n=n, L=1.0, periodic=True)
-sim2.add_block("e",
+sim2.block("e",
                pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.PotentialMagneticForce(charge=q),
@@ -85,7 +85,7 @@ chk(np.all(np.isfinite(np.asarray(sim2.density("e")))),
 print("== rejet sur transport scalaire (la force exige >= 3 variables) ==")
 sim3 = System(n=8, L=1.0, periodic=True)
 try:
-    sim3.add_block("s",
+    sim3.block("s",
                    pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                              source=pops.MagneticLorentzForce(charge=1.0),
                              elliptic=pops.BackgroundDensity()),

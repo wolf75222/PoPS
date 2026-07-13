@@ -95,7 +95,7 @@ def lorentz_program(name="lorentz_step", model=None):
     dt = P.dt
     U = typed_state(P, "plasma", model=model)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    Q = P.linear_combine(
+    Q = P.value(
         "Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
     W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source("lorentz"), rhs=Q)
     P.commit(endpoint, W)
@@ -125,7 +125,7 @@ big.linear_source("L", zero9)
 Pbig = adctime.Program("big")
 Ub = typed_state(Pbig, "blk", model=big)
 endpoint_big = typed_state(Pbig, "blk", state_name="U", model=big).next
-Qb = Pbig.linear_combine("Qb", 1.0 * Ub, at=endpoint_big.point)
+Qb = Pbig.value("Qb", 1.0 * Ub, at=endpoint_big.point)
 Pbig.commit(endpoint_big, Pbig.solve_local_linear(
     name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"), rhs=Qb))
 chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),

@@ -19,7 +19,7 @@ from pops.model import (
     Signature,
     StateSpace,
 )
-from pops.problem import Problem
+from pops.problem import Case
 from pops.problem.handles import BlockHandle, FieldHandle
 from pops.time import Program, StagePoint, TimePoint
 from pops.time.program_detach import detach_compiled_program
@@ -54,9 +54,9 @@ class _Model:
 
 def _authored_program():
     model = _Model()
-    problem = Problem(name="case")
-    block = problem.add_block("fluid", model)
-    field = problem.add_field(FieldProblem(name="psi"))
+    problem = Case(name="case")
+    block = problem.block("fluid", model)
+    field = problem.field(FieldProblem(name="psi"))
     program = Program("compiled-step").bind_operators(model)
     state = program.state(block, model.state)
     program.keep_history(state, depth=1)
@@ -66,15 +66,15 @@ def _authored_program():
     predictor_point = StagePoint(
         "predictor", {"main": TimePoint(state.clock, 1)})
     stage = state.stage("predictor", point=predictor_point)
-    candidate = program.linear_combine(
+    candidate = program.value(
         "candidate", state.n + program.dt * rate, at=stage.point)
     looped = program.range(
         candidate,
         2,
-        lambda builder, value: builder.linear_combine("range-body", value),
+        lambda builder, value: builder.value("range-body", value),
     )
-    program.define(stage, looped)
-    final = program.linear_combine("final", stage.value, at=state.next.point)
+    program.value(stage, looped)
+    final = program.value("final", stage.value, at=state.next.point)
     program.commit(state.next, final)
     return {
         "model": model,
@@ -176,7 +176,7 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
 
     stale_values.clear()
     authored["model"]._registry.register_alias("decay-alias", "decay")
-    authored["problem"].add_field(FieldProblem(name="late-field"))
+    authored["problem"].field(FieldProblem(name="late-field"))
 
     assert detached._serialize() == before
     assert detached._ir_hash() == before_hash

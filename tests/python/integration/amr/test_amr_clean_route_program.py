@@ -301,14 +301,14 @@ def _decay_program(model, name="adc634_decay_prog", *, problem=None, block=None)
     if problem is None:
         problem = pops.Problem(name=name + "-case")
     if block is None:
-        block = problem.add_block("gas", model)
+        block = problem.block("gas", model)
     module = model.module
     state = module.state_handle(next(iter(module.state_spaces().values())))
     P = adctime.Program(name)
     endpoint = P.state(block, state)
     U = endpoint.n
     S = P._source("decay", state=U)
-    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("U1", U + P.dt * S, at=endpoint.next.point))
     return P
 
 
@@ -351,7 +351,7 @@ def _clean_decay_amr(u0, k_override=MISSING, nsteps=1, dt=1e-2):
     evolved density after nsteps."""
     model, k_handle = _decay_model(2.0, with_handle=True)
     problem = pops.Problem(name="adc634-decay")
-    block = problem.add_block("gas", model, spatial=_spatial())
+    block = problem.block("gas", model, spatial=_spatial())
     problem.time(_decay_program(model, problem=problem, block=block))
     try:
         compiled = pops.compile(problem, layout=_amr_layout())

@@ -44,13 +44,13 @@ def _program(name="intro_demo", *, krylov=False, n_vars=3):
     With ``krylov=True`` it also records a matrix-free ``solve_linear`` (Krylov) node, so the IR
     carries the Krylov memory category."""
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
 
     components = ("rho", "mx", "my", "E")[:n_vars]
     module = Module(name + "-state")
     state = module.state_space("U", components)
-    problem = Problem(name=name + "-case")
-    block = problem.add_block("plasma", module)
+    problem = Case(name=name + "-case")
+    block = problem.block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
     endpoint = P.state(block, module.state_handle(state))
@@ -70,7 +70,7 @@ def _program(name="intro_demo", *, krylov=False, n_vars=3):
         from pops.solvers.krylov import CG
         P.set_apply(A, _apply)
         P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.value("U1", U + dt * R))
     return P
 
 

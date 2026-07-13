@@ -15,9 +15,6 @@ from pops.model import Handle
 from pops.model.hash_data import canonical_hash_data
 
 
-_DESCRIPTOR_PROJECTIONS: Mapping[type[Any], Callable[[Any], Any]] = {}
-
-
 _FIELD_EXPR_PROJECTIONS: Mapping[type[Any], Callable[[Any], Any]] = MappingProxyType(
     {
         Laplacian: lambda value: {"field": value.field, "scale": value.scale},
@@ -47,28 +44,6 @@ _FIELD_EXPR_PROJECTIONS: Mapping[type[Any], Callable[[Any], Any]] = MappingProxy
 )
 
 
-def _register_builtin_descriptor_projection(
-    descriptor_type: type[Any], projector: Callable[[Any], Any]
-) -> None:
-    """Register one built-in exact type once; replacement is always an error."""
-    if not isinstance(descriptor_type, type) or not callable(projector):
-        raise TypeError("descriptor projection requires a type and callable")
-    if isinstance(_DESCRIPTOR_PROJECTIONS, MappingProxyType):
-        raise RuntimeError("built-in field descriptor projections are sealed")
-    if descriptor_type in _DESCRIPTOR_PROJECTIONS:
-        raise ValueError(
-            "field descriptor projection for %s is already registered" % descriptor_type.__name__
-        )
-    _DESCRIPTOR_PROJECTIONS[descriptor_type] = projector
-
-
-def _seal_builtin_descriptor_projections() -> None:
-    global _DESCRIPTOR_PROJECTIONS
-    if isinstance(_DESCRIPTOR_PROJECTIONS, MappingProxyType):
-        raise RuntimeError("built-in field descriptor projections are already sealed")
-    _DESCRIPTOR_PROJECTIONS = MappingProxyType(dict(_DESCRIPTOR_PROJECTIONS))
-
-
 def strict_field_data(value: Any) -> Any:
     """Project supported field values without ``repr`` or address identity."""
     if isinstance(value, Handle):
@@ -96,18 +71,10 @@ def strict_field_data(value: Any) -> Any:
     if callable(hook):
         return strict_field_data(hook())
     if isinstance(value, Descriptor) or hasattr(value, "category"):
-        projector = _DESCRIPTOR_PROJECTIONS.get(type(value))
-        if projector is None:
-            raise TypeError(
-                "field descriptor %s has no exact to_data() or registered projection"
-                % type(value).__name__
-            )
-        return {
-            "descriptor": {
-                "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
-                "data": strict_field_data(projector(value)),
-            }
-        }
+        raise TypeError(
+            "field descriptor %s must implement the small exact to_data() protocol"
+            % type(value).__name__
+        )
     if isinstance(value, Mapping):
         if any(not isinstance(key, str) or not key for key in value):
             raise TypeError("field identity mappings require non-empty string keys")

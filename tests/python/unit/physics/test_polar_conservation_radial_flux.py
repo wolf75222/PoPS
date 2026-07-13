@@ -129,7 +129,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
     Voir docstring du module pour la motivation et la strategie.
     """
     sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.add_block(
+    sim.block(
         "ne",
         model=pops.Model(
             state=pops.Scalar(),
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     import math as _math2
 
     _sim = _pops_mod.System(mesh=_pops_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    _sim.add_block(
+    _sim.block(
         "ne",
         model=_pops_mod.Model(
             state=_pops_mod.Scalar(),

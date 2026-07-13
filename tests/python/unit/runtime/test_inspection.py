@@ -44,7 +44,7 @@ def test_program_dump_operator_ir_shows_the_lowering():
     u = temporal.n
     f = P.solve_fields("f", u)
     r = P._rhs_legacy(name="R", state=u, fields=f, flux=True, sources=["electric"])
-    u1 = P.linear_combine("U1", u + dt * r)
+    u1 = P.value("U1", u + dt * r)
     P.commit(temporal.next, u1)
     txt = P.dump_operator_ir()
     assert "operator-first Program IR" in txt

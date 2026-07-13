@@ -120,13 +120,13 @@ def test_arbitrary_valid_three_stage_program_compiles_with_unknown_order():
     u0 = temporal.n
     k0 = _rhs_at(program, u0, "arbitrary-0", 0)
     p1 = StagePoint("arbitrary-1", {"main": TimePoint(program.clock, Fraction(1, 3))})
-    u1 = program.linear_combine("arbitrary-u1", u0 + Fraction(1, 3) * program.dt * k0, at=p1)
+    u1 = program.value("arbitrary-u1", u0 + Fraction(1, 3) * program.dt * k0, at=p1)
     k1 = _rhs_at(program, u1, "arbitrary-1", Fraction(1, 3))
     p2 = StagePoint("arbitrary-2", {"main": TimePoint(program.clock, Fraction(2, 3))})
-    u2 = program.linear_combine(
+    u2 = program.value(
         "arbitrary-u2", u0 + Fraction(2, 3) * program.dt * k1, at=p2)
     k2 = _rhs_at(program, u2, "arbitrary-2", Fraction(2, 3))
-    out = program.linear_combine(
+    out = program.value(
         "arbitrary-step",
         u0 + Fraction(1, 4) * program.dt * k0
         + Fraction(1, 4) * program.dt * k1 + Fraction(1, 4) * program.dt * k2,

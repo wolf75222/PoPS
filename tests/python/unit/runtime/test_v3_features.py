@@ -65,8 +65,8 @@ print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
 sim = System(n=n, L=1.0, periodic=True)
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-sim.add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-sim.add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+sim.block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+sim.block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 sim.set_density("a", gaussian(n).ravel())
 sim.set_density("b", gaussian(n).ravel())
 src = CoupledSource("friction").frequency(500.0)  # mu = 500 -> dt = 0.4/500 = 8e-4 << transport
@@ -98,9 +98,9 @@ print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi,
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
-amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
-amr.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amr.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.Explicit())
 amr.set_density("e1", gaussian(16).ravel())
 amr.set_density("e2", gaussian(16).ravel())
@@ -111,7 +111,7 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
 mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 mono.set_refinement(1e30)
-mono.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
+mono.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
 mono.set_density("e", gaussian(16).ravel())
 mono.step(2e-3)  # build paresseux mono-bloc : les options sont threadees au coupleur, ne leve plus
@@ -121,9 +121,9 @@ chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
 amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amrd.set_refinement(1e30)
-amrd.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amrd.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amrd.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amrd.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.Explicit())
 amrd.set_density("e1", gaussian(16).ravel())
 amrd.set_density("e2", gaussian(16).ravel())
@@ -136,7 +136,7 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
 monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 monod.set_refinement(1e30)
-monod.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
+monod.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                 time=pops.IMEX(newton_diagnostics=True))
 monod.set_density("e", gaussian(16).ravel())
 try:
@@ -150,8 +150,8 @@ print("== (C) set_conservative_state multi-blocs : etat complet seede (avec deri
 amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr3.set_refinement(1e30)
-amr3.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-amr3.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr3.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr3.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 rho0 = gaussian(16)
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))

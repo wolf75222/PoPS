@@ -81,7 +81,7 @@ def test_static_range_requires_int_bound():
     U = typed_state(P, "plasma")
 
     def body(prog, x):
-        return prog.linear_combine("x1", 1.0 * x)
+        return prog.value("x1", 1.0 * x)
 
     # a valid bound unrolls the body 'count' times
     out = P.static_range(U, 3, body)
@@ -97,7 +97,7 @@ def test_range_requires_int_bound_and_refuses_runtime_scalar():
     U = typed_state(P, "plasma")
 
     def body(prog, x):
-        return prog.linear_combine("x1", 1.0 * x)
+        return prog.value("x1", 1.0 * x)
 
     out = P.range(U, 4, body)
     assert out.op == "range" and out.attrs["count"] == 4
@@ -121,8 +121,8 @@ def test_commit_many_atomic_double_commit_rejected():
     Ub = typed_state(P, "b")
     a_next = typed_state(P, "a", state_name="U").next
     b_next = typed_state(P, "b", state_name="U").next
-    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
-    b1 = P.linear_combine("b1", 1.0 * Ub, at=b_next.point)
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.value("b1", 1.0 * Ub, at=b_next.point)
     P.commit(a_next, a1)  # 'a' already committed
     # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
     _expect(
@@ -138,8 +138,8 @@ def test_commit_many_foreign_value_rejected_atomically():
     other = adctime.Program("other")
     Ua = typed_state(P, "a")
     a_next = typed_state(P, "a", state_name="U").next
-    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
-    foreign = other.linear_combine("z", 1.0 * typed_state(other, "a"))
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    foreign = other.value("z", 1.0 * typed_state(other, "a"))
     z_next = typed_state(P, "z", state_name="U").next
     _expect(
         ValueError,
@@ -155,8 +155,8 @@ def test_commit_many_success_commits_all():
     Ub = typed_state(P, "b")
     a_next = typed_state(P, "a", state_name="U").next
     b_next = typed_state(P, "b", state_name="U").next
-    a1 = P.linear_combine("a1", 1.0 * Ua, at=a_next.point)
-    b1 = P.linear_combine("b1", 1.0 * Ub, at=b_next.point)
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.value("b1", 1.0 * Ub, at=b_next.point)
     P.commit_many({a_next: a1, b_next: b1})
     assert commits_by_block(P) == {"a": a1, "b": b1}
 

@@ -42,11 +42,11 @@ def _clamp_program(t, *, name="where_clamp", floor=0.5):
     inert / absent); the select is decided per cell entirely in C++."""
     P = t.Program(name)
     U = typed_state(P, "blk")
-    half = P.linear_combine("half", 0.5 * U)        # the 'b' branch: 0.5 * U
+    half = P.value("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
     endpoint = typed_state(P, "blk", state_name="U").next
-    result = P.linear_combine("clamped_next", 1 * clamped, at=endpoint.point)
+    result = P.value("clamped_next", 1 * clamped, at=endpoint.point)
     P.commit(endpoint, result)
     return P
 
@@ -73,8 +73,8 @@ def test_cell_compare_variants(t):
 def test_where_result_type(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
-    a = P.linear_combine("a", 1.0 * U)
-    b = P.linear_combine("b", 0.5 * U)
+    a = P.value("a", 1.0 * U)
+    b = P.value("b", 0.5 * U)
     m = P.cell_ge(U, 0.5)
     w = P.where(m, a, b)
     assert w.vtype == "state", "where over states returns a State (got %r)" % w.vtype

@@ -5,7 +5,6 @@ from typed_program_support import typed_state
 
 import pytest
 
-from pops.math import unknown
 from pops.time import Program
 
 
@@ -34,20 +33,6 @@ def _authoring_identity(program: Program) -> tuple[object, ...]:
         tuple(program._state_spaces.items()),
         program._dt_bound,
     )
-
-
-def test_board_solve_rolls_back_materialized_affine_rhs_on_operator_failure():
-    program = Program("atomic_solve")
-    state = typed_state(program, "plasma")
-    equation = (program.I @ unknown("candidate")) == state + state
-    before = _authoring_identity(program)
-
-    with pytest.raises(NotImplementedError, match="single linear source"):
-        program.solve("candidate", equation)
-
-    assert _authoring_identity(program) == before
-    retry = program.linear_combine("retry", state + state)
-    assert retry.id == before[1]
 
 
 def test_dt_bound_builder_exception_restores_ids_values_regions_and_metadata():
@@ -100,7 +85,7 @@ def test_record_rolls_back_a_builder_exception_exactly():
     before = _authoring_identity(program)
 
     def fail(prog, current):
-        leaked.append(prog.linear_combine("partial", current + current))
+        leaked.append(prog.value("partial", current + current))
         raise _BuilderFailure("record failed")
 
     with pytest.raises(_BuilderFailure, match="record failed"):
@@ -121,7 +106,7 @@ def test_while_body_failure_rolls_back_successful_condition_recording():
         return leaked[-1] > 0
 
     def body(prog, current):
-        leaked.append(prog.linear_combine("partial", current + current))
+        leaked.append(prog.value("partial", current + current))
         raise _BuilderFailure("body failed")
 
     with pytest.raises(_BuilderFailure, match="body failed"):
@@ -148,7 +133,7 @@ def test_step_builder_failure_is_atomic():
     before = _authoring_identity(program)
 
     def fail(prog):
-        prog.linear_combine("partial", state + state)
+        prog.value("partial", state + state)
         raise _BuilderFailure("step failed")
 
     with pytest.raises(_BuilderFailure, match="step failed"):
@@ -164,8 +149,8 @@ def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
     before = _authoring_identity(program)
 
     def fail_after_nodes(prog, iterate, guess):
-        first = prog.linear_combine("first", iterate + guess)
-        second = prog.linear_combine("second", first + iterate)
+        first = prog.value("first", iterate + guess)
+        second = prog.value("second", first + iterate)
         leaked.extend((iterate, guess, first, second))
         raise _BuilderFailure("local residual failed")
 
@@ -180,8 +165,8 @@ def test_local_nonlinear_callback_failure_rolls_back_and_retry_reuses_ids():
     retried = []
 
     def succeed(prog, iterate, guess):
-        first = prog.linear_combine("first", iterate + guess)
-        second = prog.linear_combine("second", first + iterate)
+        first = prog.value("first", iterate + guess)
+        second = prog.value("second", first + iterate)
         retried.extend((iterate, guess, first, second))
         return second
 

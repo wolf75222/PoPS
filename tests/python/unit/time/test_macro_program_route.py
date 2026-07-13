@@ -110,12 +110,12 @@ def test_macro_and_manual_same_ir():
     k0 = manual._replace_value(manual.rhs(
         state=U0, fields=fields0, terms=[Flux(), DefaultSource()]), point=point0)
     point1 = StagePoint("ssprk2_stage_1", {"main": TimePoint(manual.clock, 1)})
-    U1 = manual.linear_combine("ssprk2_U1", U0 + manual.dt * k0, at=point1)
+    U1 = manual.value("ssprk2_U1", U0 + manual.dt * k0, at=point1)
     fields1 = manual._replace_value(manual.solve_fields(U1), point=point1)
     k1 = manual._replace_value(manual.rhs(
         state=U1, fields=fields1, terms=[Flux(), DefaultSource()]), point=point1)
     endpoint = typed_state(manual, "plasma", state_name="U").next
-    manual.commit(endpoint, manual.linear_combine(
+    manual.commit(endpoint, manual.value(
         "ssprk2_step",
         U0 + (manual.dt * Fraction(1, 2)) * k0 + (manual.dt * Fraction(1, 2)) * k1,
         at=endpoint.point,

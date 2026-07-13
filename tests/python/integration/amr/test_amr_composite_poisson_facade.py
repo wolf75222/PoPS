@@ -28,7 +28,7 @@ def _model():
 
 def _sim(n=32, composite=None, **fac):
     sim = AmrSystem(n=n, L=1.0, periodic=True)
-    sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     # A REAL 2-level hierarchy: refine over the compact gaussian bump (one interior mono-box fine
     # patch after Berger-Rigoutsos clustering) -- the coupler's composite scope.
     sim.set_refinement(0.5)
@@ -65,8 +65,8 @@ def test_composite_on_changes_the_field_solve():
 def test_composite_out_of_scope_refuses_loud():
     """(3) multi-block refuses at build (the composite solve lives on the single-block coupler)."""
     sim = AmrSystem(n=16, L=1.0, periodic=True)
-    sim.add_block("a", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.add_block("b", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("a", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("b", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_poisson(composite=True)
     sim.set_density("a", np.ones((16, 16)))
     with pytest.raises(RuntimeError, match="single-block"):
@@ -75,7 +75,7 @@ def test_composite_out_of_scope_refuses_loud():
 
 def test_composite_fac_knobs_refuse_out_of_domain():
     sim = AmrSystem(n=16, L=1.0, periodic=True)
-    sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     with pytest.raises((RuntimeError, ValueError)):
         sim.set_poisson(composite=True, fac_tol=2.0)
     with pytest.raises((RuntimeError, ValueError)):

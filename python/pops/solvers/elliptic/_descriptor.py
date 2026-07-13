@@ -129,6 +129,37 @@ class GeometricMG(Descriptor):
             view["amr_composite"] = self.amr_composite.name
         return view
 
+    def to_data(self) -> dict[str, Any]:
+        """Exact structural identity consumed through the generic descriptor protocol."""
+        return {
+            "scheme": self.scheme,
+            "smoother": {
+                "type": type(self.smoother).__name__,
+                "options": self.smoother.options(),
+            },
+            "coarse": {
+                "type": type(self.coarse).__name__,
+                "options": self.coarse.options(),
+            },
+            "tolerance": {
+                "type": type(self.tolerance).__name__,
+                "options": self.tolerance.options(),
+            },
+            "max_cycles": self.max_cycles,
+            "min_coarse": self.min_coarse,
+            "pre_sweeps": self.pre_sweeps,
+            "post_sweeps": self.post_sweeps,
+            "bottom_sweeps": self.bottom_sweeps,
+            "amr_composite": (
+                None
+                if self.amr_composite is None
+                else {
+                    "type": type(self.amr_composite).__name__,
+                    "options": self.amr_composite.options(),
+                }
+            ),
+        }
+
     def mg_options(self) -> dict:
         """The RESOLVED native V-cycle scalars set_poisson forwards to C++ (ADC-613).
 
@@ -259,6 +290,9 @@ class FFT(Descriptor):
 
     def options(self) -> dict:
         return {"spectral": self.spectral}
+
+    def to_data(self) -> dict[str, Any]:
+        return {"scheme": self.scheme, "spectral": self.spectral}
 
     def available(self, context: Any = None) -> Any:
         # Spec 6 sec.8: FFT is mathematically incompatible with an AMR hierarchy (it needs a

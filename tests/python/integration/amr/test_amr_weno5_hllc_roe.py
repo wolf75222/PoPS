@@ -67,7 +67,7 @@ for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
     s = AmrSystem(n=n, L=1.0, periodic=True)
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
-    s.add_block("gas", euler_spec(),
+    s.block("gas", euler_spec(),
                 spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem), time=pops.Explicit())
     s.set_density("gas", rho.copy())
     for _ in range(3):
@@ -79,8 +79,8 @@ for riem in (HLLC(), Roe()):
 print("== multi-blocs Euler : 2 blocs weno5 + hllc (dispatch_amr_block) ==")
 s = AmrSystem(n=n, L=1.0, periodic=True)
 s.set_refinement(1e30)
-s.add_block("a", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
-s.add_block("b", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
+s.block("a", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
+s.block("b", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
 s.set_density("a", rho.copy())
 s.set_density("b", rho.copy())
 for _ in range(3):
@@ -93,7 +93,7 @@ print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le li
 try:
     s = AmrSystem(n=n, L=1.0, periodic=True)
     s.set_refinement(1e30)
-    s.add_block("iso", iso_spec(),
+    s.block("iso", iso_spec(),
                 spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
     s.set_density("iso", rho.copy())
     s.step(1e-4)

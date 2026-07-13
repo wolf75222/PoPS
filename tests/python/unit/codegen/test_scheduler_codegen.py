@@ -73,7 +73,7 @@ def _field_program(schedule):
     else:
         P._call("fields_from_state", U, schedule=schedule)
     endpoint = typed_state(P, "plasma", state_name="U", space=u).next
-    P.commit(endpoint, P.linear_combine("U1", U, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U, at=endpoint.point))
     return P
 
 
@@ -97,7 +97,7 @@ def _scratch_program(schedule):
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     R = P._replace_value(R, attrs={**R.attrs, "schedule": schedule})
     endpoint = typed_state(P, "ions", state_name="U").next
-    P.commit(endpoint, P.linear_combine("U1", U + dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + dt * R, at=endpoint.point))
     return P
 
 
@@ -151,7 +151,7 @@ def test_when_reuses_program_predicate_token():
     R2 = P._replace_value(
         R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Hold())})
     endpoint = typed_state(P, "ions", state_name="U").next
-    P.commit(endpoint, P.linear_combine("U1", U + dt * R2, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + dt * R2, at=endpoint.point))
     P._check_schedules_lowerable()  # a Program Bool when() lowers
     cpp = P.emit_cpp_program(model=_transport_model())
     assert "< 1e-06" in cpp                           # exact predicate threshold
@@ -174,7 +174,7 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(
         endpoint,
-        P.linear_combine("U1", U + P.dt * scheduled, at=endpoint.point),
+        P.value("U1", U + P.dt * scheduled, at=endpoint.point),
     )
     P.freeze()
     before = P._ir_hash()

@@ -47,13 +47,13 @@ def _ssprk3(name="ssprk3"):
     U = temporal.n
     f0 = P.solve_fields(U)
     r0 = P._rhs_legacy(state=U, fields=f0, flux=True, sources=["default"])
-    u1 = P.linear_combine("U1", U + dt * r0)
+    u1 = P.value("U1", U + dt * r0)
     f1 = P.solve_fields(u1)
     r1 = P._rhs_legacy(state=u1, fields=f1, flux=True, sources=["default"])
-    u2 = P.linear_combine("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
+    u2 = P.value("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
     f2 = P.solve_fields(u2)
     r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
-    un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
+    un = P.value("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
     P.commit(temporal.next, un)
     return P
 
@@ -75,7 +75,7 @@ def _krylov(name="krylov_demo"):
     from pops.solvers.krylov import CG
     P.set_apply(A, _apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * r))
+    P.commit(temporal.next, P.value("U1", U + P.dt * r))
     return P
 
 
@@ -237,7 +237,7 @@ def test_no_persistent_without_solve():
     P, _, _, _, _, temporal = typed_program_state("transport_only", block_name="plasma")
     U = temporal.n
     r = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * r))
+    P.commit(temporal.next, P.value("U1", U + P.dt * r))
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")

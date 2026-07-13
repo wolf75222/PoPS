@@ -173,7 +173,7 @@ def test_schur_free_program_omits_block_inverse_header():
     temporal = typed_state(P, "blk", state_name="U")
     U = temporal.n
     P.commit(temporal.next,
-             P.linear_combine("id", 1.0 * U, at=temporal.next.point))
+             P.value("id", 1.0 * U, at=temporal.next.point))
     src = P.emit_cpp_program()
     assert "block_inverse.hpp" not in src, "a condensed-free Program must not include block_inverse.hpp"
     print("OK  block_inverse.hpp is gated: absent from a condensed-free Program")

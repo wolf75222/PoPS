@@ -29,7 +29,7 @@ try:
     from pops.output import (OutputPolicy, CheckpointPolicy, HDF5, Plotfile,
                              AllLevels, CoarseOnly)
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops.time.schedule import always, every, on_end, on_start, when
     from pops.runtime._output_driver import policy_due, _format_token, fire_output_policies
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
@@ -42,8 +42,8 @@ fails = 0
 _OUTPUT_MODULE = Module("runtime-output-model")
 _OUTPUT_STATE = _OUTPUT_MODULE.state_space("U", components=("rho",))
 _OUTPUT_STATE_REF = _OUTPUT_MODULE.state_handle(_OUTPUT_STATE)
-_OUTPUT_PROBLEM = Problem(name="runtime-output")
-_IONS_BLOCK = _OUTPUT_PROBLEM.add_block("ions", _OUTPUT_MODULE)
+_OUTPUT_PROBLEM = Case(name="runtime-output")
+_IONS_BLOCK = _OUTPUT_PROBLEM.block("ions", _OUTPUT_MODULE)
 _IONS_STATE = _IONS_BLOCK[_OUTPUT_STATE_REF]
 
 
@@ -58,7 +58,7 @@ def build(n=16):
     """A real native single-block System (no DSL compile): isothermal fluid + shared Poisson."""
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("ions",
+    sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                              transport=pops.IsothermalFlux(),
                              source=pops.PotentialForce(charge=1.0),

@@ -67,10 +67,10 @@ def _solve_program(adctime, fd_eps=None):
     U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
-        return P.linear_combine("r", Uit - U0)
+        return P.value("r", Uit - U0)
 
     endpoint = typed_state(P, "blk", state_name="U").next
-    guess = P.linear_combine("guess", U, at=endpoint.point)
+    guess = P.value("guess", U, at=endpoint.point)
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess, tol=1e-12,
                                 max_iter=20, fd_eps=fd_eps)
     P.commit(endpoint, W)
@@ -93,7 +93,7 @@ def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
     U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
-        return P.linear_combine("r", Uit - U0)
+        return P.value("r", Uit - U0)
 
     with pytest.raises(ValueError, match="fd_eps"):
         P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, fd_eps=0.0)

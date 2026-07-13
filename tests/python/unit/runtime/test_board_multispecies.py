@@ -87,9 +87,9 @@ def _two_fluid_program(mod, e_space, i_space):
     C = P._call("collision", e_n, i_n)
     P.commit_many({
         e_state.next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
+            P.value("e1", e_n + P.dt * C[e_n.block]),
         i_state.next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+            P.value("i1", i_n + P.dt * C[i_n.block]),
     })
     return P
 
@@ -207,7 +207,7 @@ def test_wrong_species_rate_in_affine_combine_errors():
     e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
     with pytest.raises(ValueError, match="incompatible state spaces"):
-        P.linear_combine("bad", e_n + P.dt * C[i_n.block])  # electron state + ion rate
+        P.value("bad", e_n + P.dt * C[i_n.block])  # electron state + ion rate
 
 
 def test_coupled_rate_output_component_count_must_match_state():

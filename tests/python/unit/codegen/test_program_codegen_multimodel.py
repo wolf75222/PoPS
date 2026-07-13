@@ -4,7 +4,7 @@ from __future__ import annotations
 from pops.codegen._plans import ResolvedBlock
 from pops.codegen.program_models import ProgramModelGraph
 from pops.physics.facade import Model
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import Program
 
 
@@ -19,9 +19,9 @@ def _model(name, coefficient):
 def test_two_model_program_emits_each_models_own_source_kernel():
     first, first_source = _model("first_physics", -2)
     second, second_source = _model("second_physics", -7)
-    problem = Problem(name="coupled")
-    first_block = problem.add_block("first", first)
-    second_block = problem.add_block("second", second)
+    problem = Case(name="coupled")
+    first_block = problem.block("first", first)
+    second_block = problem.block("second", second)
 
     program = Program("two-model").bind_operators(first.module).bind_operators(second.module)
     first_state = program.state(
@@ -32,13 +32,13 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     second_rate = program.source(second_source, state=second_state.n)
     program.commit(
         first_state.next,
-        program.linear_combine(
+        program.value(
             "first_next", first_state.n + program.dt * first_rate,
             at=first_state.next.point),
     )
     program.commit(
         second_state.next,
-        program.linear_combine(
+        program.value(
             "second_next", second_state.n + program.dt * second_rate,
             at=second_state.next.point),
     )

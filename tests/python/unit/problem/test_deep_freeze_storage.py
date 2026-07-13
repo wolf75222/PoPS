@@ -13,7 +13,7 @@ from pops.problem._snapshot import build_problem_snapshot  # noqa: E402
 
 def test_problem_freeze_detaches_stale_registry_views_and_keeps_hash_stable():
     problem = pops.Problem(name="deep-storage")
-    problem.add_block("u", Module("model"))
+    problem.block("u", Module("model"))
     declaration = RuntimeParam(
         "alpha", default=1.0,
         provenance=ParamProvenance("test", metadata={"weights": [1, 2]}),

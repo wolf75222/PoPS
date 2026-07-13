@@ -51,7 +51,7 @@ def _fe_program(name="validated_probe"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     return P
 
 
@@ -79,7 +79,7 @@ sim = System(n=24, L=1.0, periodic=True)
 if not hasattr(sim, "install_program"):
     print("-- install skipped: _pops lacks the install_program binding --")
 else:
-    sim.add_block("ions", transport_model(),
+    sim.block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(),
                                             riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))

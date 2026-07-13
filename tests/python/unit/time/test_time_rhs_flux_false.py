@@ -100,7 +100,7 @@ def one_step_program(name, sources, flux=True, model=None):
     fields = P.solve_fields(U) if flux else None
     R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         "%s_step" % name, U + P.dt * R, at=endpoint.point))
     return P
 
@@ -131,9 +131,9 @@ def two_block_noflux(name, model=None):
     Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
     endpoint_a = typed_state(P, "a", state_name="U", model=model).next
     endpoint_b = typed_state(P, "b", state_name="U", model=model).next
-    P.commit(endpoint_a, P.linear_combine(
+    P.commit(endpoint_a, P.value(
         "%s_a" % name, Ua + P.dt * Ra, at=endpoint_a.point))
-    P.commit(endpoint_b, P.linear_combine(
+    P.commit(endpoint_b, P.value(
         "%s_b" % name, Ub + P.dt * Rb, at=endpoint_b.point))
     return P
 
@@ -183,7 +183,7 @@ def _noflux_named_fluxes(model=None):
     U = typed_state(P, "plasma", model=model)
     P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine("p_bad_step", U, at=endpoint.point))
+    P.commit(endpoint, P.value("p_bad_step", U, at=endpoint.point))
     return P
 
 
@@ -269,10 +269,10 @@ def lie_split_program(name, model=None):
     U = typed_state(P, "plasma", model=model)
     H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    U1 = P.linear_combine(
+    U1 = P.value(
         "%s_H" % name, U + P.dt * H, at=adctime.TimePoint(P.clock, 1))
     S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         "%s_S" % name, U1 + P.dt * S, at=endpoint.point))
     return P
 

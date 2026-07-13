@@ -214,7 +214,7 @@ def test_schedule_parameters_that_change_lowering_change_ir_identity():
         program, state, temporal = _program_state(mod, u)
         program._call("fields_from_state", state, schedule=adctime.Schedule(
             adctime.Always(domain_factory(program.clock))))
-        final = program.linear_combine("final", state, at=temporal.next.point)
+        final = program.value("final", state, at=temporal.next.point)
         program.commit(temporal.next, final)
         return program
 

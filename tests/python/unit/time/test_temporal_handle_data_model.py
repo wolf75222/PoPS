@@ -91,15 +91,15 @@ def test_stage_resolution_is_program_owned_single_assignment():
 
     with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
         _ = stage.value
-    result = program.define(stage, state.n)
+    result = program.value(stage, state.n)
     assert stage.value is result
     assert program._time_stage_values[stage] is result
     assert not hasattr(stage, "_value")
-    assert program.linear_combine("negated", -stage).vtype == "state"
+    assert program.value("negated", -stage).vtype == "state"
     operator = program._linear_source("relaxation")
     assert (operator @ stage).vtype == "rhs"
     with pytest.raises(ValueError, match="SSA stage already defined"):
-        program.define(stage, state.n)
+        program.value(stage, state.n)
 
 
 def test_stage_definition_refuses_non_state_values_without_partial_assignment():
@@ -109,8 +109,8 @@ def test_stage_definition_refuses_non_state_values_without_partial_assignment():
     scalar = program.norm2(state.n)
     scalar_name = scalar.name
 
-    with pytest.raises(TypeError, match=r"T\.define stage: expected a State value"):
-        program.define(stage, scalar)
+    with pytest.raises(TypeError, match=r"T\.value stage: expected a State value"):
+        program.value(stage, scalar)
     assert scalar.name == scalar_name
     assert stage not in program._time_stage_values
     with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
@@ -118,7 +118,7 @@ def test_stage_definition_refuses_non_state_values_without_partial_assignment():
 
     scratch = program.scalar_field("scratch")
     with pytest.raises(TypeError, match=r"affine term must be a State/Rate"):
-        program.define(stage, 2 * scratch)
+        program.value(stage, 2 * scratch)
     assert stage not in program._time_stage_values
     with pytest.raises(ValueError, match="stage 'predictor' is undefined"):
         _ = stage.value
@@ -223,9 +223,9 @@ def test_temporal_identity_is_owner_qualified_between_programs():
         assert a != b and a.owner_path != b.owner_path
 
     with pytest.raises(ValueError, match="different Program"):
-        first.define(_stage(right), left.n)
+        first.value(_stage(right), left.n)
     with pytest.raises(ValueError, match="different Program"):
-        first.define(right.prev, left.n)
+        first.value(right.prev, left.n)
     with pytest.raises(ValueError, match="different Program"):
         first.keep_history(right, depth=1)
     with pytest.raises(ValueError, match="different Program"):
@@ -258,7 +258,7 @@ def test_forged_equal_handles_cannot_bypass_program_issuance_tables():
     with pytest.raises(ValueError, match="not issued"):
         _ = forged_state.n
     with pytest.raises(ValueError, match="not issued"):
-        program.define(forged_stage, state.n)
+        program.value(forged_stage, state.n)
     with pytest.raises(ValueError, match="not issued"):
         _ = forged_history.value
     with pytest.raises(ValueError, match="not issued"):
@@ -269,10 +269,10 @@ def test_program_rebuild_reowns_and_remaps_temporal_tables():
     program = Program("temporal_rebuild")
     state = typed_state(program, "fluid", state_name="U")
     stage = _stage(state)
-    program.define(stage, state.n)
+    program.value(stage, state.n)
     program.keep_history(state, depth=1)
     _ = state.prev.value
-    final = program.linear_combine("final", stage.value, at=state.next.point)
+    final = program.value("final", stage.value, at=state.next.point)
     program.commit(state.next, final)
 
     rebuilt = program.eliminate_dead_nodes()

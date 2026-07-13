@@ -59,9 +59,9 @@ def _two_fluid_program():
     i_next = typed_state(P, "ions", state_name=i.name, space=i,
                          model=mod, state=i_state).next
     P.commit_many({
-        e_next: P.linear_combine(
+        e_next: P.value(
             "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
-        i_next: P.linear_combine(
+        i_next: P.value(
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     return mod, P
@@ -154,9 +154,9 @@ def test_coupled_rate_with_prim_var_is_deferred():
     i_next = typed_state(P, "ions", state_name=i.name, space=i,
                          model=mod, state=i_state).next
     P.commit_many({
-        e_next: P.linear_combine(
+        e_next: P.value(
             "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
-        i_next: P.linear_combine(
+        i_next: P.value(
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):
@@ -203,9 +203,9 @@ def test_read_only_catalyst_input_is_bound():
     i_next = typed_state(P, "i", state_name=i.name, space=i,
                          model=mod, state=i_state).next
     P.commit_many({
-        e_next: P.linear_combine(
+        e_next: P.value(
             "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
-        i_next: P.linear_combine(
+        i_next: P.value(
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     src = P.emit_cpp_program(model=None)
@@ -232,9 +232,9 @@ def test_undefined_cons_var_is_rejected():
     i_next = typed_state(P, "ions", state_name=i.name, space=i,
                          model=mod, state=i_state).next
     P.commit_many({
-        e_next: P.linear_combine(
+        e_next: P.value(
             "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
-        i_next: P.linear_combine(
+        i_next: P.value(
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):

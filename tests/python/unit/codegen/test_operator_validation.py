@@ -61,7 +61,7 @@ def test_well_typed_program_passes():
     fields = P._call("fields_from_state", u_n)
     rate = P._call("explicit_rhs", u_n, fields)
     lin = P._call("lorentz", fields)
-    rhs = P.linear_combine(
+    rhs = P.value(
         "rhs", u_n + P.dt * rate,
         at=adctime.TimePoint(P.clock, step=1),
     )
@@ -112,7 +112,7 @@ def test_combine_space_mismatch():
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
     try:
-        P.linear_combine(
+        P.value(
             "bad", u_n + P.dt * rate + wrong,
             at=adctime.TimePoint(P.clock, step=1),
         )  # mixes U and V
@@ -150,7 +150,7 @@ def test_declared_state_builds_with_typed_handles():
         P, "plasma", state_name="U", space=declared,
         model=module, state=module.state_handle(declared),
     ).next
-    P.commit(endpoint, P.linear_combine("u1", u + P.dt * r, at=endpoint.point))
+    P.commit(endpoint, P.value("u1", u + P.dt * r, at=endpoint.point))
     P.validate()
     print("OK  typed block/state handles preserve the declared StateSpace")
 

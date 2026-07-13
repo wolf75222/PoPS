@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from pops.model import Module
-from pops.problem import Problem
+from pops.problem import Case
 
 
 def module_of(model: Any) -> Module:
@@ -51,9 +51,9 @@ def program_states(
     names = tuple(block_names)
     if not names or any(not isinstance(name, str) or not name for name in names):
         raise ValueError("program_states requires non-empty block names")
-    case = Problem(name=case_name or "%s-program-case" % program.name)
+    case = Case(name=case_name or "%s-program-case" % program.name)
     temporals = {
-        name: program.state(case.add_block(name, module), declaration)
+        name: program.state(case.block(name, module), declaration)
         for name in names
     }
     return case, temporals

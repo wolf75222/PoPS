@@ -40,7 +40,7 @@ from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.layouts import AMR, Uniform  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
@@ -69,8 +69,8 @@ def _amr_route_handle():
     snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
     module = Module("amr-introspection-model")
     module.param(alpha)
-    case = Problem("amr-introspection-case")
-    case.add_block("ne", module)
+    case = Case("amr-introspection-case")
+    case.block("ne", module)
     schema = BindSchema.from_problem(case)
     layout_plan, layout_coverage = resolved_layout_contract(
         layout, target="amr_system", block_names=("ne",))
@@ -145,7 +145,7 @@ def test_inspect_amr_surfaces_the_carried_refine_regrid_tags():
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
-    sim.add_block("ne", pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
+    sim.block("ne", pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
                                    pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_poisson(bc="periodic")

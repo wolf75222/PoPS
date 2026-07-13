@@ -65,7 +65,7 @@ def _noring_program(name="adc631_noring"):
     temporal = states["blk"]
     U0 = temporal.n
     k0 = P._rhs_legacy("k0", state=U0, fields=None, flux=False, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U0 + P.dt * k0))
+    P.commit(temporal.next, P.value("U1", U0 + P.dt * k0))
     return P
 
 

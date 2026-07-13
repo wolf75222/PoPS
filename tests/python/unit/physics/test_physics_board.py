@@ -10,7 +10,7 @@ from pops.params import ConstParam
 import pytest
 
 from pops import model as _model
-from pops.problem import Problem
+from pops.problem import Case
 
 physics = pytest.importorskip("pops.physics")
 amath = pytest.importorskip("pops.math")
@@ -162,7 +162,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     assert callable(explicit_rate) and callable(implicit_operator)
 
     P = Program("board_calls").bind_operators(m.module)
-    plasma = Problem(name="board_calls").add_block("plasma", m)
+    plasma = Case(name="board_calls").block("plasma", m)
     U_n = P.state(plasma, U).n
     f_n = P.solve_fields("f_n", U_n)
     R = explicit_rate(U_n, f_n)         # -> P._call("explicit_rate", U_n, f_n)
@@ -183,7 +183,7 @@ def test_board_module_is_consumable_by_operator_first_program():
     m = _euler_poisson_lorentz()
     P = Program("operator_first")
     P.bind_operators(m.module)
-    plasma = Problem(name="operator_first").add_block("plasma", m)
+    plasma = Case(name="operator_first").block("plasma", m)
     state = m.module.state_handle(m.module.state_spaces()["U"])
     U = P.state(plasma, state).n
     fields = P._call("fields_from_state", U)            # field_operator -> solve_fields

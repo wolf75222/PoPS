@@ -401,7 +401,7 @@ def test_field_solve_facade_lowers_to_program_ir_and_context():
     try:
         from pops.model import Module
         from pops.numerics.terms import DefaultSource, Flux
-        from pops.problem import Problem
+        from pops.problem import Case
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
@@ -409,7 +409,7 @@ def test_field_solve_facade_lowers_to_program_ir_and_context():
     module = Module("architecture-field-model")
     state_space = module.state_space("U", ("u",))
     state_handle = module.state_handle(state_space)
-    block = Problem(name="architecture-field-case").add_block("gas", module)
+    block = Case(name="architecture-field-case").block("gas", module)
     program = Program("arch_field_gate")
     temporal = program.state(block, state_handle)
     state = temporal.n
@@ -426,7 +426,7 @@ def test_field_solve_facade_lowers_to_program_ir_and_context():
     )
     program.commit(
         temporal.next,
-        program.linear_combine(
+        program.value(
             "U_next", state + program.dt * rhs, at=temporal.next.point
         ),
     )
@@ -527,7 +527,7 @@ def test_uniform_plus_amr_tags_refused_by_default():
 
     rho = Handle("rho", kind="state", owner=OwnerPath.shared("architecture.uniform"))
     layout = Uniform(CartesianMesh(n=16), refine=Refine.on(rho).above(0.1))
-    case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     with pytest.raises(ValueError, match="carries active AMR criteria"):
         case.validate()
 
@@ -547,7 +547,7 @@ def test_ignore_amr_criteria_escape():
         CartesianMesh(n=16),
         refine=Refine.on(rho).above(0.1),
         ignore_amr=IgnoreAMRCriteria())
-    case = pops.Problem(layout=layout).block("ne", physics=_FakeAmrRefineModel())
+    case = pops.Case(layout=layout).block("ne", physics=_FakeAmrRefineModel())
     # The explicit escape is honoured: no refusal.
     case.validate()
 

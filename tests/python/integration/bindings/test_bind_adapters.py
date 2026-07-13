@@ -130,7 +130,7 @@ def test_bound_simulation_delegates_uniform():
     n = 16
     engine = System(n=n, L=1.0, periodic=True)  # route interne bas-niveau (legitime en test)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    engine.add_block("ions", _isothermal_model(),
+    engine.block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
 
     sim = BoundSimulation(engine)
@@ -180,7 +180,7 @@ def test_bound_simulation_delegates_amr():
     n = 16
     engine = AmrSystem(n=n, L=1.0)  # route interne bas-niveau
     engine.set_poisson("charge_density", "geometric_mg")
-    engine.add_block("gas", _compressible_model(),
+    engine.block("gas", _compressible_model(),
                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     engine.set_density("gas", _bubble(n))
 
@@ -269,7 +269,7 @@ def _lie_program(block="ne", name="adc583_bind_prog"):
     u = temporal.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(temporal.next, P.linear_combine(
+    P.commit(temporal.next, P.value(
         "u1", u + P.dt * r, at=temporal.next.point))
     return P
 

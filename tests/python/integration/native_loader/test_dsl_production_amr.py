@@ -139,7 +139,7 @@ def main():
         A = _amr(n, L, lambda s: s._s.add_native_block(
             "gas", so_t, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
-        B = _amr(n, L, lambda s: s.add_block(
+        B = _amr(n, L, lambda s: s.block(
             "gas", spec_t, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()))
         assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
@@ -172,7 +172,7 @@ def main():
         C = _amr(n, L, lambda s: (s._s.add_native_block(
             "gas", so_p, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1), poisson(s)))
-        D = _amr(n, L, lambda s: (s.add_block(
+        D = _amr(n, L, lambda s: (s.block(
             "gas", spec_p, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()), poisson(s)))
         assert C.n_patches() == D.n_patches()
@@ -199,7 +199,7 @@ def main():
             R = _amr(n, L, lambda s: s.add_equation(
                 "gas", cm_t,
                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=riem, variables=recon)))
-            S = _amr(n, L, lambda s: s.add_block(
+            S = _amr(n, L, lambda s: s.block(
                 "gas", spec_t,
                 spatial=pops.Spatial(minmod=True, flux=riem, recon=recon),
                 time=pops.Explicit()))
@@ -254,7 +254,7 @@ def main():
         Aw = _amr(n, L, lambda s: s._s.add_native_block(
             "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
-        Bw = _amr(n, L, lambda s: s.add_block(
+        Bw = _amr(n, L, lambda s: s.block(
             "gas", spec_t, spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
             time=pops.Explicit()))
         assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"

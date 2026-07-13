@@ -156,9 +156,9 @@ def _routes_by_id():
 # --------------------------------------------------------------------------------------------------
 def _run_explicit_family(time_brick, *, multi, n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.add_block("ions", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=time_brick)
+    sim.block("ions", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=time_brick)
     if multi:
-        sim.add_block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
+        sim.block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
                       time=time_brick)
     sim.set_poisson(bc="periodic")
     sim.set_refinement(1.05)
@@ -181,7 +181,7 @@ def _explicit_family(brick, multi):
 
 def _run_profile_cfl(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
-    sim.add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(threshold=1.05)
     sim.set_density("ne", _bump(n, 0.40))
@@ -372,7 +372,7 @@ def _inert_inspect_amr():
 # --------------------------------------------------------------------------------------------------
 def _refuse_imexrk_on_amr():
     def call():
-        AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).add_block(
+        AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).block(
             "ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=pops.IMEXRK())
     return _expect_refusal(RuntimeError,
                            ("imexrk_ars222", "not wired on AMR", "Cartesian System"), call)

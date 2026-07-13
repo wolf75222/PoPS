@@ -88,7 +88,7 @@ def test_system_seam_combinations():
     for transport, flux in _SYSTEM_COMBOS:
         label = "System %s/%s" % (transport, flux or "-")
         sim = System(n=n, L=1.0, periodic=True)
-        sim.add_block("blk", model=_model(transport), spatial=_spatial(transport, flux))
+        sim.block("blk", model=_model(transport), spatial=_spatial(transport, flux))
         _seed_density(sim, "blk", n)
         dt = sim.step_cfl(0.4)
         _check(math.isfinite(dt) and dt > 0.0, "%s: step_cfl returned dt=%r" % (label, dt))
@@ -100,7 +100,7 @@ def test_amr_seam_combinations():
     for transport, flux in _AMR_COMBOS:
         label = "AmrSystem %s/%s" % (transport, flux or "-")
         amr = AmrSystem(n=nb, regrid_every=0, periodic=True)
-        amr.add_block("blk", model=_model(transport), spatial=_spatial(transport, flux))
+        amr.block("blk", model=_model(transport), spatial=_spatial(transport, flux))
         # AmrSystem seeds its coarse density through the same brick facade as System.
         _seed_density(amr, "blk", nb)
         dt = amr.step_cfl(0.4)

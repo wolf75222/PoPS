@@ -66,7 +66,7 @@ def _fe_program(name="forward_euler_parity"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     return P
 
 
@@ -108,7 +108,7 @@ def transport_model():
 def make_sim():
     n = 24
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim.block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -164,7 +164,7 @@ def _fe_scaled(name, a):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + a * P.dt * R))
+    P.commit(temporal.next, P.value("U1", U + a * P.dt * R))
     return P
 
 

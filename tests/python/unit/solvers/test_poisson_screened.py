@@ -32,7 +32,7 @@ def main():
 
     def solve(kappa_field, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
-        s.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+        s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
         s.set_density("q", f)
         if kappa_field is not None:
@@ -69,7 +69,7 @@ def main():
 
     # (E) kappa + solveur 'fft' (Poisson pur) : refus explicite.
     sp = System(n=n, L=1.0, periodic=True)
-    sp.add_block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+    sp.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)
     sp.set_reaction_field(KAPPA * np.ones((n, n)))

@@ -118,7 +118,7 @@ try:
 
     sn = System(n=n, L=1.0, periodic=True)
     sn.set_poisson()
-    sn.add_block("gas",
+    sn.block("gas",
                  pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
                            transport=pops.CompressibleFlux(), source=pops.NoSource(),
                            elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0)),

@@ -43,19 +43,19 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
     (solve_fields is inert / absent); the loop drives the fixed point entirely in C++."""
     P = t.Program(name)
     U0 = typed_state(P, "blk")
-    target = P.linear_combine("target", 2.0 * U0)  # a fixed target state == 2*U0
+    target = P.value("target", 2.0 * U0)  # a fixed target state == 2*U0
 
     def cond(P, x):
-        diff = P.linear_combine("diff", target - x)
+        diff = P.value("diff", target - x)
         return P.norm2(diff) > tol
 
     def body(P, x):
         # x_next = x + omega*(target - x) = (1-omega)*x + omega*target
-        return P.linear_combine("x_next", (1.0 - omega) * x + omega * target)
+        return P.value("x_next", (1.0 - omega) * x + omega * target)
 
     x_final = P.while_(U0, cond, body)
     endpoint = typed_state(P, "blk", state_name="U").next
-    final = P.linear_combine("fixed_point_next", x_final, at=endpoint.point)
+    final = P.value("fixed_point_next", x_final, at=endpoint.point)
     P.commit(endpoint, final)
     return P
 

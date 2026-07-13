@@ -200,7 +200,7 @@ def _fe_program(name, fluxes, model=None):
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -256,7 +256,7 @@ def _named_field_program(name="nf_ell", model=None):
     f = P.solve_fields("fields_phi2", U, field=typed_field(P, "phi2"))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -332,7 +332,7 @@ def _flux_fe_program(name, fluxes, model=None):
     U = typed_state(P, "plasma", model=model)
     R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 

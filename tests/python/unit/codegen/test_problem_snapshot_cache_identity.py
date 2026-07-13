@@ -17,13 +17,13 @@ def _program(model):
     """Exact frozen compiler input; compile_problem owns detachment and ProgramGraph lowering."""
     if not model.state_spaces():
         model.state_space("U", ("u",))
-    block = pops.Problem(name="program-case").add_block("u", model)
+    block = pops.Problem(name="program-case").block("u", model)
     state = model.state_handle(model.state_spaces()["U"])
     program = Program("same-program")
     temporal = program.state(block, state)
     program.commit(
         temporal.next,
-        program.linear_combine("u_next", temporal.n, at=temporal.next.point),
+        program.value("u_next", temporal.n, at=temporal.next.point),
     )
     return program.freeze()
 

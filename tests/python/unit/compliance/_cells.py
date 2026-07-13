@@ -9,7 +9,7 @@ STABLE, warning-free refusal (exception type + exact message needles that are al
 in the sources), so a message drift fails in ONE place.
 
 Design notes (from the plan):
-  * The CLEAN route only. The ADC-597 matrix drives the legacy ``System(...).add_block()``
+  * The CLEAN route only. The ADC-597 matrix drives the legacy ``System(...).block()``
     route; this matrix inspects the Problem/layout/descriptor clean route and the metadata-stub bind
     gates instead (``pops.runtime.routes`` install-time predicates over a ``CompiledModel`` stub;
     ``run_bind_gates`` over an exact ``CompiledSimulationArtifact`` -- no ``.so`` on disk). That is
@@ -118,7 +118,7 @@ def _state_refs(model_name, block_name):
     module = _model.Module(model_name)
     state_space = module.state_space("U", ("rho", "mx", "my"))
     state = module.state_handle(state_space)
-    block = pops.Problem(name="%s-case" % model_name).add_block(block_name, module)
+    block = pops.Problem(name="%s-case" % model_name).block(block_name, module)
     return module, block, state
 
 
@@ -129,7 +129,7 @@ def _program_with_context():
     temporal = program.state(block, declaration)
     state = temporal.n
     rhs = program._rhs_legacy(state=state, flux=True, sources=["default"])
-    program.commit(temporal.next, program.linear_combine("U1", state + dt * rhs))
+    program.commit(temporal.next, program.value("U1", state + dt * rhs))
     return program
 
 
@@ -141,7 +141,7 @@ def _bindable_program(name="adc547_bind"):
     state = temporal.n
     fields = program.solve_fields("phi", state)
     rhs = program._rhs_legacy(state=state, fields=fields, flux=True, sources=["default"])
-    program.commit(temporal.next, program.linear_combine("U1", state + dt * rhs))
+    program.commit(temporal.next, program.value("U1", state + dt * rhs))
     return program
 
 
@@ -289,7 +289,7 @@ def _pos_params_runtime_const_bind():
     module = _model.Module("adc547-runtime-param")
     k = module.param(RuntimeParam("k", default=2.0))
     problem = pops.Problem(name="adc547-runtime-bind")
-    gas = problem.add_block("gas", module)
+    gas = problem.block("gas", module)
     schema = BindSchema.from_problem(problem)
     canonical = problem.resolve(k, block=gas)
     assert schema.resolve()[canonical] == 2.0
@@ -480,7 +480,7 @@ def _neg_operator_signature_mismatch():
     module = _arity_module()
     program = adctime.Program("adc547_arity")
     program.bind_operators(module)
-    block = pops.Problem(name="adc547-arity-case").add_block("plasma", module)
+    block = pops.Problem(name="adc547-arity-case").block("plasma", module)
     declaration = module.state_handle(module.state_spaces()["U"])
     state = program.state(block, declaration).n
     program._call("explicit_rhs", state)  # missing the fields input -> arity refusal

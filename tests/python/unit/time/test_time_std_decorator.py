@@ -83,7 +83,7 @@ def test_decorator_works_for_a_multistage_body(t):
         U = typed_state(P, "plasma")
         k = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
         endpoint = typed_state(P, "plasma", state_name="U").next
-        P.commit(endpoint, P.linear_combine("step", U + P.dt * k, at=endpoint.point))
+        P.commit(endpoint, P.value("step", U + P.dt * k, at=endpoint.point))
     deco = t.Program("custom").step(build)
     inline = t.Program("custom")
     build(inline)

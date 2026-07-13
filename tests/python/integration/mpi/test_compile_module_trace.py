@@ -47,7 +47,7 @@ def _fe_program(name="module_trace_probe"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     return P
 
 

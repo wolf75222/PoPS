@@ -89,7 +89,7 @@ def _state_ring_program(depth, k, name):
     _case, states = program_states(P, module, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=depth, checkpoint_policy=Interval(k))
-    nxt = P.linear_combine("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1))
+    nxt = P.value("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1))
     P.commit(U.next, nxt)
     return P
 

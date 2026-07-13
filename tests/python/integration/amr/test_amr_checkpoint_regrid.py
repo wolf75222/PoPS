@@ -40,8 +40,8 @@ def _state(n, rho, E, bump_comp, bump_val, lo, hi):
 
 def _build(n, regrid_every):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.add_block("gas0", _comp(), time=pops.Explicit())
-    sim.add_block("gas1", _comp(), time=pops.Explicit())
+    sim.block("gas0", _comp(), time=pops.Explicit())
+    sim.block("gas1", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")
     # A moving energy bump so the hierarchy ACTUALLY changes over the run (regrid fires repeatedly).

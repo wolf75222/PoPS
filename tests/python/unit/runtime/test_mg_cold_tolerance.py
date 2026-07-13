@@ -23,7 +23,7 @@ def build(n=64, abs_tol=None):
     """System cartesien Dirichlet, un bloc de charge (ExB + fond), densite gaussienne -> phi non trivial.
     abs_tol=None : set_poisson par defaut (parametre omis) ; sinon passe abs_tol explicitement."""
     sim = System(n=n, periodic=False)
-    sim.add_block(
+    sim.block(
         "ne",
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),

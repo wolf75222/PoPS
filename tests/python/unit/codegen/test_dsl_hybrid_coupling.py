@@ -66,7 +66,7 @@ def main():
 
         def run(add_ions, collision=True):
             s = System(n=n, L=L, periodic=True)
-            s.add_block("electrons", spec_e, spatial=spatial, time=pops.Explicit())
+            s.block("electrons", spec_e, spatial=spatial, time=pops.Explicit())
             add_ions(s)
             s.set_poisson(rhs="charge_density", solver="geometric_mg")
             if collision:
@@ -80,7 +80,7 @@ def main():
             return e, i
 
         hyb = lambda s: s.add_equation("ions", co_i, spatial=spatial)        # production : sans names=
-        nat = lambda s: s.add_block("ions", spec_i, spatial=spatial, time=pops.Explicit())
+        nat = lambda s: s.block("ions", spec_i, spatial=spatial, time=pops.Explicit())
 
         He, Hi = run(hyb, collision=True)
         Ne, Ni = run(nat, collision=True)

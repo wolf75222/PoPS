@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pops.model import Module
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import Program
 from tests.python.support.layout_plan import resolved_layout_contract
 
@@ -39,7 +39,7 @@ def state_handle(module: Module, state: Any = None) -> Any:
 def add_typed_block(case: Problem, model: Any, block_name: str, state: Any = None):
     """Add one real block and return ``(block_handle, state_handle)``."""
     module = module_of(model)
-    block = case.add_block(block_name, module)
+    block = case.block(block_name, module)
     return block, state_handle(module, state)
 
 
@@ -58,7 +58,7 @@ def typed_program_state(
         state = module.state_space("U", components)
     else:
         module = module_of(model)
-    case = Problem(name="%s_case" % name)
+    case = Case(name="%s_case" % name)
     block, declaration = add_typed_block(case, module, block_name, state)
     program = Program(name)
     if bind_operators:
@@ -79,7 +79,7 @@ def typed_program_states(
     spelling enters the Program IR.
     """
     module = module_of(model)
-    case = Problem(name="%s_case" % name)
+    case = Case(name="%s_case" % name)
     program = Program(name).bind_operators(module)
     endpoints = {}
     for block_name, state in declarations:
@@ -133,7 +133,7 @@ def typed_compiled_artifact(
     state_refs = tuple(commits)
     block_refs = {block_name(ref.block_ref): ref.block_ref for ref in state_refs}
     case_owner = next(iter(block_refs.values())).owner_path.nodes[0].name
-    schema_problem = Problem(name=case_owner)
+    schema_problem = Case(name=case_owner)
     schema_modules = {}
     for name in names:
         model = by_name[name]
@@ -141,7 +141,7 @@ def typed_compiled_artifact(
         schema_module = Module(model_owner)
         for declaration in model.params.values():
             schema_module.param(declaration)
-        schema_problem.add_block(name, schema_module)
+        schema_problem.block(name, schema_module)
         schema_modules[name] = schema_module
     schema = BindSchema.from_problem(schema_problem)
 

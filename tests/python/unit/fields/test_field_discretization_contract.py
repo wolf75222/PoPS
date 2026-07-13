@@ -159,17 +159,20 @@ def test_unregistered_descriptor_projection_fails_loudly() -> None:
         category = "field_method"
 
     plan = FieldDiscretization(method=OpaqueMethod(), boundaries=(), solver=Solver("multigrid"))
-    with pytest.raises(TypeError, match="no exact to_data"):
+    with pytest.raises(TypeError, match="small exact to_data"):
         _ = plan.identity
 
 
-def test_builtin_descriptor_projection_table_is_sealed_and_non_replaceable() -> None:
-    from pops.fields import _identity
+def test_third_party_descriptor_uses_local_protocol_without_registration() -> None:
+    class ThirdPartyMethod(Descriptor):
+        category = "field_method"
 
-    with pytest.raises(RuntimeError, match="sealed"):
-        _identity._register_builtin_descriptor_projection(Method, lambda value: value.to_data())
-    with pytest.raises(TypeError):
-        _identity._DESCRIPTOR_PROJECTIONS[Method] = lambda value: value.to_data()
+        def to_data(self) -> dict:
+            return {"type": "ThirdPartyMethod", "stencil": "compact"}
+
+    plan = FieldDiscretization(method=ThirdPartyMethod(), boundaries=(), solver=Solver("multigrid"))
+
+    assert plan.identity.domain == "field-discretization"
 
 
 def test_boundary_expression_references_resolve_with_the_plan() -> None:

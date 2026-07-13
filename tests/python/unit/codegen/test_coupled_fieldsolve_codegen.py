@@ -60,7 +60,7 @@ def coupled_program(t, name, blocks):
     for b, U in zip(blocks, states, strict=True):
         R = P._rhs_legacy(state=U, fields=f, sources=["default"])
         endpoint = typed_state(P, b, state_name="U").next
-        P.commit(endpoint, P.linear_combine(
+        P.commit(endpoint, P.value(
             b + "_next", U + dt * R, at=endpoint.point))
     return P
 

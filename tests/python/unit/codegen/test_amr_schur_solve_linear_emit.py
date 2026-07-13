@@ -131,7 +131,7 @@ def test_hierarchy_scope_rejects_control_flow_crossing_barrier():
     # Add top-level control flow after the solve: the first driver envelope refuses rather than
     # claiming a region schedule it cannot preserve.
     looped = P.range(U, 1, lambda program, value: value)
-    final = P.linear_combine("next", 1 * looped, at=temporal.next.point)
+    final = P.value("next", 1 * looped, at=temporal.next.point)
     P.commit(temporal.next, final)
     with pytest.raises(NotImplementedError, match="top-level barrier"):
         P.emit_cpp_program(target="amr_system")

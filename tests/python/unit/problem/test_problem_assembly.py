@@ -59,12 +59,12 @@ def test_chaining_setters_return_the_problem_while_param_returns_a_handle():
 
 def test_add_block_returns_a_stable_handle():
     prob = pops.Problem()
-    handle = prob.add_block("ne", _model("electron"), time=object(), diagnostics=object())
+    handle = prob.block("ne", _model("electron"), time=object(), diagnostics=object())
     assert handle.name == "ne"
     assert handle.qualified_id.endswith("::block::ne")
     qualified_id = handle.qualified_id
     # The handle is stable as more blocks are added.
-    prob.add_block("ni", _model("ion"))
+    prob.block("ni", _model("ion"))
     assert prob.add_block.__self__ is prob or True  # add_block returns a handle, not self
     assert handle.qualified_id == qualified_id
     # blocks() exposes the stable handles keyed by name.
@@ -74,7 +74,7 @@ def test_add_block_returns_a_stable_handle():
 
 def test_add_field_returns_a_stable_handle():
     prob = pops.Problem()
-    handle = prob.add_field(_poisson())
+    handle = prob.field(_poisson())
     assert handle.kind == "field"
     assert handle.name == "phi"
     assert set(prob.fields()) == {"phi"}

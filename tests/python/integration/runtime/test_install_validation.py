@@ -39,7 +39,7 @@ try:
     from pops.model import Module
     from pops.params import ConstParam, RuntimeParam
     from pops.model.bind_schema import BindSchema
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops.runtime._system_unified_install import (collect_missing_arguments,
                                                       validate_install_arguments)
     from pops import time as adctime
@@ -60,15 +60,15 @@ def _program(name="installval_demo"):
     'plasma' (so arguments().instances commits the 'plasma' block)."""
     module = Module(name + "-state")
     state = module.state_space("U", ("rho", "mx", "my"))
-    problem = Problem(name=name + "-case")
-    block = problem.add_block("plasma", module)
+    problem = Case(name=name + "-case")
+    block = problem.block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
     endpoint = P.state(block, module.state_handle(state))
     U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("U1", U + dt * R, at=endpoint.next.point))
     return P
 
 
@@ -90,8 +90,8 @@ def _compiled(*, aux_names=("B_z",), params=None):
     module = Module("installval-model")
     for declaration in (params or {}).values():
         module.param(declaration)
-    problem = Problem(name="installval-case")
-    problem.add_block("plasma", module)
+    problem = Case(name="installval-case")
+    problem.block("plasma", module)
     schema = BindSchema.from_problem(problem)
     program = _program()
     model = _model(aux_names=aux_names, params=params)

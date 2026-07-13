@@ -16,7 +16,7 @@ try:
     from pops.ir.expr import Const
     from pops.model import OperatorHandle
     from pops.physics.facade import Model
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_handles (pops unavailable: %s)" % exc)
@@ -70,7 +70,7 @@ def _operator_handle(model, name):
 def _program_state(model, name):
     """Create one typed block instance and bind its declared state to a Program."""
     module = model.module
-    block = Problem(name="%s-case" % name).add_block("plasma", model)
+    block = Case(name="%s-case" % name).block("plasma", model)
     state = module.state_handle(module.state_spaces()["U"])
     program = adctime.Program(name).bind_operators(module)
     return program, program.state(block, state)
@@ -82,7 +82,7 @@ def _rate_program(m, selector):
     U = state.n
     f = P.call(_operator_handle(m, "fields_from_state"), U)
     R = P.call(selector, U, f)
-    P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
+    P.commit(state.next, P.value("u1", U + P.dt * R, at=state.next.point))
     return P
 
 
@@ -113,7 +113,7 @@ def test_typed_path_is_deterministic_and_complete_across_models():
         U = state.n
         f = P.call(_operator_handle(m, "fields_from_state"), U)
         s = P.call(selector, U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * s, at=state.next.point))
+        P.commit(state.next, P.value("u1", U + P.dt * s, at=state.next.point))
         return P
 
     assert src_prog(_operator_handle(m, "electric"))._ir_hash() == src_prog(
@@ -122,7 +122,7 @@ def test_typed_path_is_deterministic_and_complete_across_models():
     def lin_prog(selector):
         P, state = _program_state(m, "p")
         U = state.n
-        rhs = P.linear_combine("rhs", U, at=state.next.point)
+        rhs = P.value("rhs", U, at=state.next.point)
         f = P.call(_operator_handle(m, "fields_from_state"), rhs)
         L = P.call(selector, f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=rhs, fields=f)

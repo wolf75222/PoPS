@@ -17,7 +17,7 @@ def _model():
 
 def _built(**cfg):
     sim = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16, **cfg)
-    sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((32, 32))
     ne[10:22, 10:22] = 5.0

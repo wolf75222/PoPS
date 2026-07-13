@@ -1,7 +1,4 @@
-"""pops.time Program authoring mixin -- solve / commit / record ops.
-
-Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records.
-"""
+"""Program solve, history, value, commit, and record operations."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -12,7 +9,6 @@ from pops.time.handles import (
 from pops.time.program_base import _ProgramConstants
 from pops.time.program_commit_validation import validate_commit_many
 from pops.time.program_diagnostics import _ProgramDiagnostics
-from pops.time.program_transaction import atomic_authoring
 from pops.time.references import block_name
 from pops.time.program_value_validation import (
     require_compatible_spaces, require_top_level, structural_state_space,
@@ -346,68 +342,12 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         """Map of qualified state Handle -> committed State value (copy)."""
         return dict(self._commits)
 
-    # --- board-like sugar (Spec 3): T.define / T.fields / T.solve / T.commit_many ---
-    # These lower to the SAME primitive ops as the P.call / linear_combine /
-    # solve_local_linear / commit style; they are blackboard notation, not a new IR.
-    def op(self, operator: Any) -> Any:
-        """Return callable board sugar for an exact typed operator handle.
-
-        ``expl = P.op(explicit_rate)`` followed by ``expl(U, fields)`` builds the same IR as
-        ``P.call(explicit_rate, U, fields)``. A free name is refused at creation; the closure retains
-        the handle's owner, kind and signature until the ordinary typed call boundary.
-        """
-        from pops.time.operator_resolution import resolve_operator_handle
-        resolve_operator_handle(self, operator, where="P.op")
-
-        def _handle(*args: Any, value_name: Any = None) -> Any:
-            return self.call(operator, *args, name=value_name)
-
-        _handle.__name__ = operator.name
-        return _handle
-
-    def fields(self, name: Any, from_state: Any = None, from_states: Any = None,
-               from_state_set: Any = None, operator: Any = None) -> Any:
-        """Board sugar for a field solve selected by an optional typed operator handle.
-
-        With ``operator=None`` this uses the generic default field solve. Otherwise ``operator`` must
-        be the exact ``field_operator`` handle returned by the declaring model; strings never select
-        a field route.
-        """
-        if from_state_set is not None:
-            states = from_state_set.states()
-        elif from_states is not None:
-            states = list(from_states)
-        elif from_state is not None:
-            states = [from_state]
-        else:
-            raise ValueError("fields: provide from_state=, from_states= or from_state_set=")
-        if operator is not None:
-            from pops.time.operator_resolution import resolve_operator_handle
-            resolve_operator_handle(
-                self, operator, where="P.fields", expected_kinds="field_operator", values=states)
-            return self.call(operator, *states, name=name)
-        raise ValueError(
-            "fields: operator= or an explicit Problem FieldHandle route is required; "
-            "there is no implicit default field")
-
     def value(self, name: Any, expr: Any, *, at: Any = None) -> Any:
-        """Name an intermediate SSA value ``name`` from ``expr`` (ADC-561: the short named-value form).
+        """Materialize one named SSA value or one exact temporal stage.
 
-        The lightweight spelling of the free-value case of :meth:`define`::
-
-            U_star = T.value("rhs_star", U.n + T.dt * R_n)
-            Q      = T.value("Q", U.n + 0.5 * T.dt * R_n + 0.5 * T.dt * R_star)
-
-        Returns the named IR handle (a :class:`pops.time.values.ProgramValue`) so the value composes in the
-        affine algebra. It lowers to the EXACT ``program.define(name, expr)`` path (an affine
-        combination materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
-        right-hand side, any other ProgramValue is named in place), so ``T.value(name, expr)`` produces the
-        byte-identical IR as ``T.define(name, expr)`` -- and the SSA invariants (single definition, no
-        redefine, use-before-define) are unchanged.
-
-        ``name`` MUST be a non-empty string (an intermediate SSA value, never a mutation): the
-        stage handles stay the ``T.define(U.stage(name, point=...), ...)`` door, while ``U.next`` is exclusively a
-        commit destination. Passing either kind here is refused with the corresponding final API.
+        ``T.value("U1", expression, at=point)`` is the sole free-value form. A
+        :class:`StageHandle` may replace the name; its exact point and generated
+        qualified name are then authoritative. Endpoints remain commit-only.
         """
         if isinstance(name, StateEndpointHandle):
             self._require_endpoint(name, "T.value")
@@ -415,62 +355,24 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "T.value: U.next is a commit-only StateEndpointHandle; "
                 "use T.commit(U.next, value)")
         if isinstance(name, StageHandle):
-            self._require_stage(name, "T.value")
-        elif isinstance(name, HistoryHandle):
-            self._require_history(name, "T.value")
-        elif isinstance(name, TimeState):
-            self._require_time_state(name, "T.value")
-        if isinstance(name, (StageHandle, HistoryHandle, TimeState)):
-            raise TypeError(
-                "T.value(name, expr) names a free intermediate value: pass a string name. For a "
-                "temporal stage use T.define(U.stage(name, point=...), expr).")
-        if not isinstance(name, str) or not name:
-            raise ValueError("T.value: name must be a non-empty string")
-        return self.define(name, expr, at=at)
-
-    def define(self, name: Any, value: Any = None, *, at: Any = None) -> Any:
-        """Name a value or assign a stage; a state endpoint is never definable.
-
-        Two forms (additive; the ``(name, value)`` board form is unchanged):
-
-          - ``P.define("U1", U0 + dt * k0)`` (board sugar) names a value: an affine combination of
-            states materializes through the canonical affine IR, a ``rate(U) == <expr>`` equation keeps its
-            right-hand side, and any other ProgramValue is named in place;
-          - ``P.define(U.stage("predictor", point=...), U.n + dt * k0)`` assigns a generated SSA name to the
-            stage and enforces single assignment. ``T.define(U.n, ...)`` raises because the
-            current state is read-only; ``T.define(U.prev, ...)`` raises because history is
-            policy-owned; and ``T.define(U.next, ...)`` raises because ``U.next`` is the
-            commit-only destination of ``T.commit(U.next, value)``.
-
-        The handle form is detected by the FIRST argument being a version handle; the legacy form
-        keeps a string name.
-        """
-        if isinstance(name, StateEndpointHandle):
-            self._require_endpoint(name, "T.define")
-            raise TypeError(
-                "T.define: U.next is a commit-only StateEndpointHandle; "
-                "use T.commit(U.next, value)")
-        if isinstance(name, StageHandle):
             if at is not None:
-                raise TypeError("T.define(stage, value) gets its point from the StageHandle")
-            return self._define_stage(name, value)
+                raise TypeError("T.value(stage, expr) gets its point from the StageHandle")
+            return self._define_stage(name, expr)
         if isinstance(name, HistoryHandle):
-            self._require_history(name, "T.define")
+            self._require_history(name, "T.value")
             raise ValueError("history is produced by the history policy")
         if isinstance(name, TimeState):
-            self._require_time_state(name, "T.define")
-            raise ValueError(
-                "T.define: pass a version handle (U.stage(name, point=...) / U.next), not the TimeState itself")
+            self._require_time_state(name, "T.value")
+            raise TypeError("T.value requires a string name or a TimeState.stage(...) handle")
         if isinstance(name, ProgramValue):
-            # The handle ``U.n`` is a State ProgramValue (the current state). No legacy define names a ProgramValue
-            # (the board form always passes a string name), so a ProgramValue target can only be a misuse of
-            # the read-only current state -- reject it with the spec message.
             raise ValueError("current state is read-only in Program")
-        value = _resolve_handle(value)  # a bare defined handle as the rhs names its resolved ProgramValue
+        if not isinstance(name, str) or not name:
+            raise ValueError("T.value: name must be a non-empty string")
+        value = _resolve_handle(expr)
         from pops import math as _bm
         if isinstance(value, _bm.Equation):
             if not isinstance(value.lhs, _bm.TimeDerivative):
-                raise ValueError("define(%r): an equation must read 'rate(U) == <rate expression>'"
+                raise ValueError("value(%r): an equation must read 'rate(U) == <rate expression>'"
                                  % (name,))
             value = value.rhs
         if isinstance(value, _Affine):
@@ -479,31 +381,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             return self._replace_value(
                 value, name=name, point=value.point if at is None else at)
         raise TypeError(
-            "define(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
+            "value(%r): expected a ProgramValue, an affine combination, or a rate equation; got %r"
             % (name, value))
-
-    @atomic_authoring
-    def solve(self, name: Any, equation: Any, *, at: Any = None) -> Any:
-        """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
-
-        Lowers to the internal affine IR (if the rhs is an affine combination) then
-        ``solve_local_linear``; identical IR to writing those two calls by hand.
-        """
-        from pops import math as _bm
-        if not isinstance(equation, _bm.Equation):
-            raise TypeError("solve(%r): expected '(I - dt*C) @ unknown(\"x\") == rhs'" % (name,))
-        lhs, rhs = equation.lhs, equation.rhs
-        if not isinstance(lhs, _bm.OpApply):
-            raise ValueError("solve(%r): left-hand side must be 'operator @ unknown(name)'" % (name,))
-        if isinstance(rhs, _Affine):
-            rhs = self._linear_combine(name + "_rhs", rhs, at=at)
-        elif not (isinstance(rhs, ProgramValue) and rhs.vtype == "state"):
-            raise ValueError("solve(%r): right-hand side must be a State or an affine of States"
-                             % (name,))
-        result = self.solve_local_linear(name=name, operator=lhs.operator, rhs=rhs)
-        if at is not None and result.point != at:
-            result = self._replace_value(result, point=at)
-        return result
 
     def commit_many(self, mapping: Any) -> None:
         """Commit ``{Ua.next: Ua_next, Ub.next: Ub_next}`` as one atomic group.

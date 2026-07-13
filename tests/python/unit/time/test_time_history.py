@@ -65,7 +65,7 @@ def test_history_builds_state_value(t):
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
     assert Rp.is_field(), "a history value is a grid field (affine algebra applies)"
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True, "the history Program must validate"
 
@@ -138,7 +138,7 @@ def _hist_program(t, name, lag):
     Rp = P.history(
         name, lag=lag, space=U.space, block=U.block, state_ref=U.state_ref)
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
     return P
 
@@ -160,7 +160,7 @@ def test_absent_history_program_lowers(t):
         "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     R = P._rhs_legacy(state=U, sources=["default"])
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True
     src = P.emit_cpp_program()
@@ -288,7 +288,7 @@ def _run_section_c(t):
         "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     R = P._rhs_legacy(state=U, sources=["default"])
     endpoint = typed_state(P, "blk", state_name="U", model=program_model).next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
 
     try:

@@ -92,11 +92,11 @@ def test_strang_combinator():
 
     def half_flow(prog, U, frac, *, at):
         R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
+        return prog.value(None, U + (frac * prog.dt) * R, at=at)
 
     def source(prog, U, frac, *, at):
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S, at=at)
+        return prog.value(None, U + (frac * prog.dt) * S, at=at)
 
     out = libtime.strang(
         P, *state_refs(P, "plasma"), half_flow=half_flow, source=source)

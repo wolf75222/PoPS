@@ -66,7 +66,7 @@ def mono_imex(time):
     s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     s.set_refinement(1e30)
-    s.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
+    s.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
     s.set_density("e", gaussian(16).ravel())
     s.step(2e-3)
     return np.asarray(s.density("e")).reshape(16, 16)
@@ -94,9 +94,9 @@ print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') cohere
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)
-amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amr.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
+amr.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.Explicit())
 amr.set_density("e1", gaussian(16).ravel())
 amr.set_density("e2", gaussian(16).ravel())

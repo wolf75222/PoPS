@@ -30,7 +30,7 @@ from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
 from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
@@ -56,8 +56,8 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
     layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
-    schema_problem = Problem(name="amr-introspection-case")
-    schema_problem.add_block("block", source)
+    schema_problem = Case(name="amr-introspection-case")
+    schema_problem.block("block", source)
     schema = BindSchema.from_problem(schema_problem)
     layout_plan, layout_coverage = resolved_layout_contract(
         layout, target="amr_system", block_names=("block",))

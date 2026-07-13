@@ -75,9 +75,9 @@ def test_module_lowers_to_dsl():
 def test_pure_module_program_emits():
     mod = pure_module()
     P = adctime.Program("pc").bind_operators(mod)
-    from pops.problem import Problem
-    problem = Problem(name="module-compile")
-    block = problem.add_block("plasma", mod)
+    from pops.problem import Case
+    problem = Case(name="module-compile")
+    block = problem.block("plasma", mod)
     state = mod.state_handle(mod.state_spaces()["U"])
     libtime.predictor_corrector_local_linear(
         P, block, state, fields_operator=_op(mod, "fields_from_state"),

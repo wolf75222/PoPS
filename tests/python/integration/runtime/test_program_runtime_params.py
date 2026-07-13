@@ -83,17 +83,17 @@ def _const_decay_model(k_value=2.0):
 
 def _decay_program(model, name="decay_runtime"):
     """U <- U + dt * S, S = the named 'decay' source (the directly-lowered source kernel path)."""
-    from pops.problem import Problem
+    from pops.problem import Case
 
     module = model.module
     state = module.state_handle(next(iter(module.state_spaces().values())))
-    problem = Problem(name=name + "-case")
-    block = problem.add_block("gas", model)
+    problem = Case(name=name + "-case")
+    block = problem.block("gas", model)
     P = adctime.Program(name)
     endpoint = P.state(block, state)
     U = endpoint.n
     S = P._source("decay", state=U)
-    P.commit(endpoint.next, P.linear_combine("U1", U + P.dt * S, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("U1", U + P.dt * S, at=endpoint.next.point))
     return P
 
 
@@ -121,13 +121,13 @@ chk(program_param_entries(P, runtime_model) == [(0, "k", 0, 2.0)],
 # Qualified routing core: BindSchema materialises defaults and rejects ownerless names.
 from types import SimpleNamespace  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 from pops.runtime._install_param_routing import route_program_params  # noqa: E402
 
 route_model, k_handle = _runtime_decay_model(2.0, with_handle=True)
 route_program = _decay_program(route_model, name="program-param-route")
-route_problem = Problem(name="program-param-route")
-gas = route_problem.add_block("gas", route_model)
+route_problem = Case(name="program-param-route")
+gas = route_problem.block("gas", route_model)
 schema = BindSchema.from_problem(route_problem)
 default_values = schema.resolve()
 override_values = schema.resolve({gas[k_handle]: 7.0})

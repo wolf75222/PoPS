@@ -107,40 +107,40 @@ class _ProgramTimeHandles:
 
     def _define_stage(self, handle: Any, value: Any) -> ProgramValue:
         self._guard_mutable("define a temporal stage")
-        handle = self._require_stage(handle, "T.define")
+        handle = self._require_stage(handle, "T.value")
         if handle in self._time_stage_values:
             raise ValueError("SSA stage already defined")
         resolved = _resolve_handle(value)
         if isinstance(resolved, _Affine):
             if not resolved.terms:
-                raise TypeError("T.define stage: an empty affine value is not a State")
+                raise TypeError("T.value stage: an empty affine value is not a State")
             for term, _ in resolved.terms:
-                require_owned(self, term, "T.define stage")
+                require_owned(self, term, "T.value stage")
                 if term.vtype not in ("state", "rhs"):
                     raise TypeError(
-                        "T.define stage: every affine term must be a State/Rate value; "
+                        "T.value stage: every affine term must be a State/Rate value; "
                         "got %s value %r" % (term.vtype, term.name))
             terms = [term for term, _ in resolved.terms]
-            candidate_space = merge_state_spaces(terms, "T.define stage")
+            candidate_space = merge_state_spaces(terms, "T.value stage")
             blocks = {term.block for term in terms if term.block is not None}
             if len(blocks) > 1 or (blocks and handle.block not in blocks):
-                raise ValueError("T.define stage: value belongs to a different block")
+                raise ValueError("T.value stage: value belongs to a different block")
         else:
             if not isinstance(resolved, ProgramValue):
                 raise TypeError(
-                    "T.define stage: expected a State value or an affine combination; got %r"
+                    "T.value stage: expected a State value or an affine combination; got %r"
                     % (resolved,))
-            require_owned(self, resolved, "T.define stage")
+            require_owned(self, resolved, "T.value stage")
             if resolved.vtype != "state":
                 raise TypeError(
-                    "T.define stage: expected a State value, got %s value %r"
+                    "T.value stage: expected a State value, got %s value %r"
                     % (resolved.vtype, resolved.name))
             candidate_space = getattr(resolved, "space", None)
             if getattr(resolved, "block", handle.block) not in (None, handle.block):
-                raise ValueError("T.define stage: value belongs to a different block")
+                raise ValueError("T.value stage: value belongs to a different block")
         require_compatible_spaces(
-            handle.space, candidate_space, "T.define stage", typed_pair=True)
-        out = self.define(
+            handle.space, candidate_space, "T.value stage", typed_pair=True)
+        out = self.value(
             "%s_%s_%s" % (
                 block_name(handle.block), state_name(handle.state), handle.key),
             value,
@@ -155,7 +155,7 @@ class _ProgramTimeHandles:
             value = self._time_stage_values.get(handle)
             if value is None:
                 raise ValueError(
-                    "stage %r is undefined (define it with T.define first)" % handle.key)
+                    "stage %r is undefined (materialize it with T.value first)" % handle.key)
             value = self._canonical_value(value)
             if not self._frozen:
                 self._time_stage_values[handle] = value

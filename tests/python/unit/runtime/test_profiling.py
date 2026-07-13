@@ -56,7 +56,7 @@ chk(isinstance(sim.profile_report(), str), "profile_report returns a str")
 print("== (B) profile_report carries the timed step phase ==")
 N = 16
 sim2 = System(n=N, L=1.0, periodic=True)
-sim2.add_block("gas",
+sim2.block("gas",
                pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                          transport=pops.IsothermalFlux(),
                          source=pops.NoSource(),

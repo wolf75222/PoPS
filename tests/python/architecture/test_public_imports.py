@@ -52,7 +52,7 @@ def test_lib_presets():
     # ADC-524: pops.lib.presets is the home for ready-to-run compose-and-go bundles. A preset really
     # composes a provided model and a provided time scheme (not a stub).
     from pops.lib.presets import Preset, vlasov_poisson_magnetic_euler
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops.time import Program
 
     assert Preset is not None
@@ -60,7 +60,7 @@ def test_lib_presets():
     assert preset.category == "preset"
     model = preset.model()
     assert model is not None
-    block = Problem(name="preset-case").add_block("f", model)
+    block = Case(name="preset-case").block("f", model)
     state = next(
         handle for handle in model.module.declaration_index().records()
         if handle.kind == "state"

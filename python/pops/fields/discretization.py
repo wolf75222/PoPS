@@ -9,12 +9,7 @@ from pops.descriptors import BrickDescriptor, Descriptor, reject_string_selector
 from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.identity import Identity
 
-from ._identity import (
-    _register_builtin_descriptor_projection,
-    _seal_builtin_descriptor_projections,
-    field_identity,
-    strict_field_data,
-)
+from ._identity import field_identity, strict_field_data
 from .bcs import BoundaryCondition
 from .gauges import FieldGauge
 from ._references import collect_references, resolve_value
@@ -67,66 +62,6 @@ def _validate_route(value: Any, context: Any) -> None:
     raise_if_error = getattr(result, "raise_if_error", None)
     if callable(raise_if_error):
         raise_if_error()
-
-
-def _brick_data(value: BrickDescriptor) -> dict[str, Any]:
-    if value.expression is not None or value.builder is not None:
-        raise TypeError(
-            "field methods with expression/builder payloads require an exact registered projection"
-        )
-    return {
-        "name": value.name,
-        "brick_type": value.brick_type,
-        "category": value.category,
-        "native_id": value.native_id,
-        "scheme": value.scheme,
-        "requirements": value.requirements,
-        "capabilities": value.capabilities,
-        "options": value.options,
-        "available": value.available().ok,
-    }
-
-
-_register_builtin_descriptor_projection(BrickDescriptor, _brick_data)
-
-
-def _geometric_mg_data(value: Any) -> dict[str, Any]:
-    return {
-        "scheme": value.scheme,
-        "smoother": {"type": type(value.smoother).__name__, "options": value.smoother.options()},
-        "coarse": {"type": type(value.coarse).__name__, "options": value.coarse.options()},
-        "tolerance": {"type": type(value.tolerance).__name__, "options": value.tolerance.options()},
-        "max_cycles": value.max_cycles,
-        "min_coarse": value.min_coarse,
-        "pre_sweeps": value.pre_sweeps,
-        "post_sweeps": value.post_sweeps,
-        "bottom_sweeps": value.bottom_sweeps,
-        "amr_composite": (
-            None
-            if value.amr_composite is None
-            else {
-                "type": type(value.amr_composite).__name__,
-                "options": value.amr_composite.options(),
-            }
-        ),
-    }
-
-
-def _register_builtin_solver_projections() -> None:
-    from pops.solvers.elliptic import FFT, GeometricMG
-    from pops.solvers.nonlinear import Newton
-
-    _register_builtin_descriptor_projection(GeometricMG, _geometric_mg_data)
-    _register_builtin_descriptor_projection(
-        FFT, lambda value: {"scheme": value.scheme, "spectral": value.spectral}
-    )
-    _register_builtin_descriptor_projection(
-        Newton, lambda value: {"scheme": value.scheme, **value.options()}
-    )
-
-
-_register_builtin_solver_projections()
-_seal_builtin_descriptor_projections()
 
 
 class FieldDiscretization(Descriptor):

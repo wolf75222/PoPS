@@ -54,7 +54,7 @@ def _euler_with_dead_rhs():
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
     P.commit(typed_state(P, "plasma", state_name="U").next,
-             P.linear_combine("U1", U + dt * R,
+             P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
@@ -67,7 +67,7 @@ def _euler_no_dead():
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     P.commit(typed_state(P, "plasma", state_name="U").next,
-             P.linear_combine("U1", U + dt * R,
+             P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
@@ -131,7 +131,7 @@ def test_side_effecting_nodes_never_removed():
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
     P.commit(typed_state(P, "plasma", state_name="U").next,
-             P.linear_combine("U1", U + dt * R,
+             P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
 
     Q = adctime.eliminate_dead_nodes(P)
@@ -160,12 +160,12 @@ def test_chained_dead_nodes_removed():
     fields = P.solve_fields(U)
     R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
     dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
-    P.linear_combine(
+    P.value(
         "dead1", U + dt * dead0,
         at=typed_state(P, "plasma", state_name="U").next.point,
     )  # consumes dead0 but is itself unused
     P.commit(typed_state(P, "plasma", state_name="U").next,
-             P.linear_combine("U1", U + dt * R,
+             P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
 
     Q = adctime.eliminate_dead_nodes(P)
@@ -263,7 +263,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     P.set_apply(A, apply)
     P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
     P.commit(typed_state(P, "plasma", state_name="U").next,
-             P.linear_combine("U1", 1.0 * U,
+             P.value("U1", 1.0 * U,
                               at=typed_state(P, "plasma", state_name="U").next.point))
 
     before = P.emit_cpp_program()
@@ -285,11 +285,11 @@ def test_control_flow_input_kept():
         return p.norm2(x) > 1e-10
 
     def body(p, x):
-        return p.linear_combine("it", 0.5 * x)
+        return p.value("it", 0.5 * x)
 
     Ufinal = P.while_(U, cond, body)
     endpoint = typed_state(P, "plasma", state_name="U").next
-    P.commit(endpoint, P.define("Ufinal", Ufinal, at=endpoint.point))
+    P.commit(endpoint, P.value("Ufinal", Ufinal, at=endpoint.point))
 
     Q = adctime.eliminate_dead_nodes(P)
     ops = [v.op for v in Q._values]
@@ -305,10 +305,10 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
     program = adctime.Program("metadata_rebuild")
     tracked = typed_state(program, "tracked", state_name="U")
     program.keep_history(tracked, depth=4, checkpoint_policy=Interval(3))
-    program.linear_combine("dead", 2 * tracked.n)
+    program.value("dead", 2 * tracked.n)
     advanced = typed_state(program, "advanced", state_name="U")
     program.solve_fields(advanced.n)
-    final = program.linear_combine(
+    final = program.value(
         "advanced_next", advanced.n, at=advanced.next.point)
     program.commit(advanced.next, final)
 

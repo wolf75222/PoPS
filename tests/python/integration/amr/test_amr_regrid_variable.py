@@ -58,8 +58,8 @@ def _min_fine_corner(boxes):
 
 def _run(n, thr, variable, role, s0):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-    sim.add_block("gas0", _comp(), time=pops.Explicit())
-    sim.add_block("gas1", _comp(), time=pops.Explicit())
+    sim.block("gas0", _comp(), time=pops.Explicit())
+    sim.block("gas1", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(thr, variable=variable, role=role)
     sim.set_conservative_state("gas0", s0)
@@ -97,7 +97,7 @@ def _solo_with_selector():
     # Bloc UNIQUE + selecteur : le selecteur n'est cable que sur le moteur multi-blocs ; refuse au
     # build (pas de repli silencieux vers la composante 0).
     sim = AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
-    sim.add_block("solo", _comp(), time=pops.Explicit())
+    sim.block("solo", _comp(), time=pops.Explicit())
     sim.set_poisson(bc="periodic")
     sim.set_refinement(6.0, role="energy")
     sim.set_density("solo", np.full((N, N), 1.0))

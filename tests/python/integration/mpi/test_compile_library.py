@@ -339,21 +339,21 @@ def test_compile_problem_consumes_a_compiled_library_so(tmp_path):
     pytest.importorskip("pops.codegen")
     from pops.codegen.compile import compile_problem
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
     time = pytest.importorskip("pops.time")
     so = str(tmp_path / "consumed.so")
     pops.codegen.compile_library("consumed.so", objects=_objects(), emit=True, so_path=so)
     # A real Forward-Euler Program so the problem lowers; libraries=[.so] is read + ABI-checked.
     module = Module("consume-model")
     state = module.state_space("U", ("rho",))
-    problem = Problem(name="consume-case")
-    block = problem.add_block("ions", module)
+    problem = Case(name="consume-case")
+    block = problem.block("ions", module)
     P = time.Program("consume")
     dt = P.dt
     endpoint = P.state(block, module.state_handle(state))
     U = endpoint.n
     R = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.value("U1", U + dt * R))
     try:
         compiled = compile_problem(time=P, model=module, libraries=[so])
     except RuntimeError as exc:  # .so compile of the PROBLEM failed (toolchain), not the library

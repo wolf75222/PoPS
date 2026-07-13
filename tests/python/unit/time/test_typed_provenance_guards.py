@@ -48,17 +48,17 @@ def test_linear_combine_rejects_cross_block_structural_and_typed_untyped_bypasse
     left = typed_state(program, "left", space=state)
     right = typed_state(program, "right", space=state)
     with pytest.raises((TypeError, ValueError), match="different blocks|not supported"):
-        program.linear_combine(left + right)
+        program.value(left + right)
 
     wrong_rate = program._new(
         "rhs", "rhs", (left,), {}, "wrong_rate", left.block, space=Rate(different))
     with pytest.raises(ValueError, match="incompatible structures"):
-        program.linear_combine(left + wrong_rate)
+        program.value(left + wrong_rate)
 
     untyped_rate = program._new(
         "rhs", "rhs", (left,), {}, "untyped_rate", left.block)
     with pytest.raises(ValueError, match="typed and untyped"):
-        program.linear_combine(left + untyped_rate)
+        program.value(left + untyped_rate)
 
 
 def test_state_preserving_ops_and_timestate_history_keep_space():
@@ -70,21 +70,21 @@ def test_state_preserving_ops_and_timestate_history_keep_space():
     assert rate.space == Rate(state)
     assert rate.logical_shape["n_comp"] == len(state.components)
     endpoint = temporal.next
-    combined = program.linear_combine(
+    combined = program.value(
         current + program.dt * rate, at=endpoint.point)
     assert combined.space == state
     assert program.fill_boundary(combined).space == state
     assert program.project(combined).space == state
 
     ranged = program.range(
-        combined, 2, lambda builder, value: builder.linear_combine(value))
+        combined, 2, lambda builder, value: builder.value(value))
     conditional = program.branch(
         program.norm2(ranged) > 0,
-        lambda builder: builder.linear_combine(ranged),
+        lambda builder: builder.value(ranged),
         lambda _builder: ranged)
     looped = program.while_(
         conditional, lambda builder, value: builder.norm2(value) > 0,
-        lambda builder, value: builder.linear_combine(value))
+        lambda builder, value: builder.value(value))
     assert ranged.space == conditional.space == looped.space == state
 
     program.keep_history(temporal, depth=2)
@@ -104,7 +104,7 @@ def test_callback_results_cannot_cross_program_or_region_boundaries():
     with pytest.raises(ValueError, match="different Program"):
         first.while_(
             left, lambda _builder, _value: second.norm2(right) > 0,
-            lambda builder, value: builder.linear_combine(value))
+            lambda builder, value: builder.value(value))
     with pytest.raises(ValueError, match="different Program|same block"):
         first.range(left, 1, lambda _builder, _value: right)
     with pytest.raises(ValueError, match="different Program"):
@@ -132,13 +132,13 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
     captured = []
 
     def body(builder, value):
-        result = builder.linear_combine(value)
+        result = builder.value(value)
         captured.append(result)
         return result
 
     output = program.range(temporal.n, 1, body)
     with pytest.raises(ValueError, match="region"):
-        program.linear_combine(captured[0])
+        program.value(captured[0])
     with pytest.raises(ValueError, match="sub-block value"):
         program.commit(temporal.next, captured[0])
 
@@ -146,9 +146,9 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
         program, 999, "state", "state", (), {}, "fabricated", temporal.block,
         space=state, point=temporal.n.point, provenance=_direct_provenance(program))
     with pytest.raises(ValueError, match="not authored"):
-        program.linear_combine(fake)
+        program.value(fake)
 
-    output_next = program.linear_combine(
+    output_next = program.value(
         "output_next", 1 * output, at=temporal.next.point)
     program.commit(temporal.next, output_next)
     assert program.validate() is True
@@ -158,7 +158,7 @@ def test_identity_control_body_is_valid_but_keeps_region_metadata_through_rebuil
     program = Program("identity_body")
     temporal = typed_state(program, "fluid", state_name="U")
     output = program.range(temporal.n, 2, lambda _builder, value: value)
-    output_next = program.linear_combine(
+    output_next = program.value(
         "output_next", 1 * output, at=temporal.next.point)
     program.commit(temporal.next, output_next)
     assert program.validate() is True
@@ -186,7 +186,7 @@ def test_where_dot_and_solve_linear_reject_cross_block_fields():
 def test_freeze_guards_metadata_mutations_transactionally():
     program = Program("frozen")
     temporal = typed_state(program, "fluid", state_name="U")
-    current_next = program.linear_combine(
+    current_next = program.value(
         "current_next", 1 * temporal.n, at=temporal.next.point)
     program.commit(temporal.next, current_next)
     before = program._ir_hash()
@@ -220,9 +220,9 @@ def test_program_name_cannot_diverge_from_issued_handle_owners_before_freeze():
 def test_replacing_a_committed_record_keeps_commit_inspection_canonical():
     program = Program("canonical_commit")
     temporal = typed_state(program, "fluid", state_name="U")
-    current = program.linear_combine(
+    current = program.value(
         "current_next", 1 * temporal.n, at=temporal.next.point)
     program.commit(temporal.next, current)
-    renamed = program.define("renamed", current)
+    renamed = program.value("renamed", current)
     assert commits_by_block(program)["fluid"] is renamed
     assert "renamed" in program.dump_operator_ir()

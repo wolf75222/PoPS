@@ -57,7 +57,7 @@ def main():
 
     # --- MONO-BLOC : AmrCouplerMP ---
     mono = AmrSystem(n=n, L=L, regrid_every=10, periodic=True)
-    mono.add_block("ne",
+    mono.block("ne",
                    model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                                    source=pops.NoSource(),
                                    elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(ne0.mean()))),
@@ -80,7 +80,7 @@ def main():
     ne2 = _band(n, L) * 0.5 + 0.5
     multi = AmrSystem(n=n, L=L, regrid_every=0, periodic=True)
     for nm, arr in (("a", ne1), ("b", ne2)):
-        multi.add_block(nm,
+        multi.block(nm,
                         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                                         source=pops.NoSource(),
                                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(arr.mean()))),

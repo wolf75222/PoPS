@@ -55,7 +55,7 @@ def test_call_matches_shortcut_predictor():
         f = P.solve_fields(U)
         R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine("u1", U + P.dt * R, at=endpoint.point))
+        P.commit(endpoint, P.value("u1", U + P.dt * R, at=endpoint.point))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -63,7 +63,7 @@ def test_call_matches_shortcut_predictor():
         f = P._call("fields_from_state", U)
         R = P._call("explicit_rhs", U, f)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine("u1", U + P.dt * R, at=endpoint.point))
+        P.commit(endpoint, P.value("u1", U + P.dt * R, at=endpoint.point))
 
     shortcut_program = _program(shortcut, m)
     operator_program = _program(opfirst, m)
@@ -84,7 +84,7 @@ def test_call_matches_source_and_flux():
         s = P._source("electric", state=U, fields=f)
         flux = P._rhs_legacy(state=U, flux=True, sources=[])
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine(
+        P.commit(endpoint, P.value(
             "u1", U + P.dt * s + P.dt * flux, at=endpoint.point))
 
     def opfirst(P, _m):
@@ -94,7 +94,7 @@ def test_call_matches_source_and_flux():
         s = P._call("electric", U, f)
         flux = P._call("flux_default", U)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine(
+        P.commit(endpoint, P.value(
             "u1", U + P.dt * s + P.dt * flux, at=endpoint.point))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
@@ -118,7 +118,7 @@ def test_call_default_source():
         f = P.solve_fields(U)
         s = P._rhs_legacy(state=U, fields=f, flux=False, sources=["default"])
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine("u1", U + P.dt * s, at=endpoint.point))
+        P.commit(endpoint, P.value("u1", U + P.dt * s, at=endpoint.point))
 
     def opfirst(P, _m):
         P.bind_operators(_m)
@@ -126,7 +126,7 @@ def test_call_default_source():
         f = P._call("fields_from_state", U)
         s = P._call("source_default", U, f)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        P.commit(endpoint, P.linear_combine("u1", U + P.dt * s, at=endpoint.point))
+        P.commit(endpoint, P.value("u1", U + P.dt * s, at=endpoint.point))
 
     assert _emit(shortcut, m) == _emit(opfirst, m)
     print("OK  P.call(source_default) == default-source-only rhs (m._source path)")
@@ -138,7 +138,7 @@ def test_call_linear_operator_matches_solve_local_linear():
     def shortcut(P, _m):
         U = typed_state(P, "plasma", model=_m)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        rhs = P.linear_combine("rhs", U, at=endpoint.point)
+        rhs = P.value("rhs", U, at=endpoint.point)
         f = P.solve_fields(rhs)
         L = P._linear_source("lorentz")
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=rhs, fields=f)
@@ -148,7 +148,7 @@ def test_call_linear_operator_matches_solve_local_linear():
         P.bind_operators(_m)
         U = typed_state(P, "plasma", model=_m)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
-        rhs = P.linear_combine("rhs", U, at=endpoint.point)
+        rhs = P.value("rhs", U, at=endpoint.point)
         f = P._call("fields_from_state", rhs)
         L = P._call("lorentz", f)
         U1 = P.solve_local_linear("u1", operator=P.I - P.dt * L, rhs=rhs, fields=f)

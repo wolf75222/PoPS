@@ -9,7 +9,7 @@ from typed_program_support import typed_state
 
 
 def _copy(program, value, name):
-    return program.linear_combine(name, 1 * value, at=value.point)
+    return program.value(name, 1 * value, at=value.point)
 
 
 def test_branch_captures_two_typed_lazy_regions_and_exact_result_signature():
@@ -99,7 +99,7 @@ def test_branch_rejects_arm_with_different_exact_point():
         program.branch(
             condition,
             lambda T: _copy(T, state, "same_point"),
-            lambda T: T.linear_combine(
+            lambda T: T.value(
                 "next_point", state, at=TimePoint(T.clock, step=1)),
         )
 
@@ -114,7 +114,7 @@ def test_branch_codegen_places_each_arm_inside_if_else_only():
         lambda T: _copy(T, state, "false_only"),
     )
     endpoint = typed_state(program, "fluid", state_name="U").next
-    program.commit(endpoint, program.linear_combine("next", selected, at=endpoint.point))
+    program.commit(endpoint, program.value("next", selected, at=endpoint.point))
 
     source = program.emit_cpp_program()
     branch_start = source.index("if (")

@@ -101,7 +101,7 @@ def test_assembling_before_bind():
     _check(engine.lifecycle_state() == "assembling", "un System frais est 'assembling'")
     _check(engine._lifecycle == "assembling", "le flag Python demarre a 'assembling'")
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    engine.add_block("ions", _isothermal_model(),
+    engine.block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     _check(engine.block_names() == ["ions"], "add_block fonctionne avant bind")
     _check(engine.lifecycle_state() == "assembling", "toujours 'assembling' apres add_block")
@@ -114,7 +114,7 @@ def test_python_freeze_uniform():
     n = 16
     engine = System(n=n, L=1.0, periodic=True)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    engine.add_block("ions", _isothermal_model(),
+    engine.block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     engine.set_density("ions", _bubble(n))
     # Gel bas-niveau LEGITIME (ce que _install_compiled fait en dernier).
@@ -124,7 +124,7 @@ def test_python_freeze_uniform():
     # Chaque methode structurelle Python DIRECTE (pas un wrapper qui delegue a une autre methode
     # deja gardee comme add_background -> add_block) leve RuntimeError avec le vocabulaire bind.
     frozen_calls = {
-        "add_block": lambda: engine.add_block("x", _isothermal_model()),
+        "add_block": lambda: engine.block("x", _isothermal_model()),
         "add_equation": lambda: engine.add_equation("x", _isothermal_model()),
         "set_poisson": lambda: engine.set_poisson(bc="periodic"),
         "add_coupling": lambda: engine.add_coupling(object()),
@@ -168,7 +168,7 @@ def test_python_freeze_amr():
     n = 16
     engine = AmrSystem(n=n, L=1.0)
     engine.set_poisson("charge_density", "geometric_mg")
-    engine.add_block("gas", _compressible_model(),
+    engine.block("gas", _compressible_model(),
                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     engine.set_density("gas", _bubble(n))
     engine._finalize_bind(_minimal_snapshot(layout="amr_system"))
@@ -176,7 +176,7 @@ def test_python_freeze_amr():
 
     # add_block / add_coupling (Python) et set_refinement (natif, __getattr__) levent.
     try:
-        engine.add_block("g2", _compressible_model())
+        engine.block("g2", _compressible_model())
         raise AssertionError("add_block AMR doit lever apres bind")
     except RuntimeError as exc:
         _assert_bind_vocabulary(exc, "add_block")
@@ -205,7 +205,7 @@ def test_assembling_during_install():
     engine = System(n=8, L=1.0, periodic=True)
     # Toute la sequence d'install (add_block / set_poisson) tourne sous 'assembling'.
     engine.set_poisson(bc="periodic")
-    engine.add_block("ions", _isothermal_model())
+    engine.block("ions", _isothermal_model())
     _check(engine.lifecycle_state() == "assembling",
            "la composition reste mutable pendant tout le lowering (avant _finalize_bind)")
     engine._finalize_bind(_minimal_snapshot())
@@ -223,7 +223,7 @@ def test_double_bind_rejected():
     C'est le contrat reel du mixin (guard_assembling lit self._lifecycle), pas une invention."""
     engine = System(n=8, L=1.0, periodic=True)
     engine.set_poisson(bc="periodic")
-    engine.add_block("ions", _isothermal_model())
+    engine.block("ions", _isothermal_model())
     engine._finalize_bind(_minimal_snapshot())
     _check(engine.lifecycle_state() == "bound", "le System est 'bound' apres le premier bind")
     # Un second passage par le seam d'install (ce que pops.bind appelle) DOIT lever.
@@ -244,7 +244,7 @@ def test_restart_on_bound_sim_restores_state():
     n = 16
     engine = System(n=n, L=1.0, periodic=True)
     engine.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    engine.add_block("ions", _isothermal_model(),
+    engine.block("ions", _isothermal_model(),
                      spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     engine.set_density("ions", _bubble(n))
     tmp = tempfile.mkdtemp(prefix="pops_freeze_ckpt_")
@@ -297,7 +297,7 @@ def test_bound_snapshot_manifest():
     # inspect() a travers un moteur reel gele expose lifecycle + snapshot.
     engine = System(n=8, L=1.0, periodic=True)
     engine.set_poisson(bc="periodic")
-    engine.add_block("ions", _isothermal_model())
+    engine.block("ions", _isothermal_model())
     engine._finalize_bind(snap)
     rep = engine.inspect()
     rep_dict = rep.to_dict()
@@ -382,7 +382,7 @@ def _lie_program(block, state, name="adc592_prog"):
     u = endpoint.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(endpoint.next, P.linear_combine("u1", u + P.dt * r, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("u1", u + P.dt * r, at=endpoint.next.point))
     return P
 
 
@@ -399,7 +399,7 @@ def test_full_bind_flow_freeze_gated():
     n = 64
     m = _dsl_isothermal_model()
     case = pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
-    block = case.add_block("ne", m)
+    block = case.block("ne", m)
     module = m.module
     state = module.state_handle(next(iter(module.state_spaces().values())))
     prog = _lie_program(block, state)
@@ -476,7 +476,7 @@ def test_checkpoint_restart_roundtrip_through_bind_gated():
     def _case_and_program():
         model = _dsl_isothermal_model()
         case = pops.Problem(layout=Uniform(CartesianMesh(n=n, L=1.0, periodic=True)))
-        block = case.add_block("ne", model)
+        block = case.block("ne", model)
         module = model.module
         state = module.state_handle(next(iter(module.state_spaces().values())))
         return case, _lie_program(block, state)

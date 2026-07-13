@@ -20,7 +20,7 @@ from pops.fields import bcs, rhs, coefficients, nullspace, aux  # noqa: E402
 from pops.model import Handle, Module, OwnerPath  # noqa: E402
 from pops.numerics.terms import DefaultSource, Flux, SourceTerm, LocalTerm  # noqa: E402
 from pops.physics.facade import Model as PhysicsModel  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 
 
 def _shared_field(name):
@@ -28,9 +28,9 @@ def _shared_field(name):
 
 
 def _registered_blocks(*names):
-    problem = Problem(name="field-authoring-case")
+    problem = Case(name="field-authoring-case")
     module = Module("charge-model")
-    return problem, tuple(problem.add_block(name, module) for name in names)
+    return problem, tuple(problem.block(name, module) for name in names)
 
 
 def _source_operator(name="ionization"):

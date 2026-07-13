@@ -34,14 +34,14 @@ def _program(name="bindgate_demo"):
     module = Module(name + "-state")
     state = module.state_space("U", ("rho", "mx", "my"))
     problem = pops.Problem(name=name + "-case")
-    block = problem.add_block("plasma", module)
+    block = problem.block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
     endpoint = P.state(block, module.state_handle(state))
     U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("U1", U + dt * R, at=endpoint.next.point))
     return P
 
 

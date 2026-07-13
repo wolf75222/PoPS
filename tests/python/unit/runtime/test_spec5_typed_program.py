@@ -90,7 +90,7 @@ def test_call_accepts_an_operator_handle():
     U = temporal.n
     f = P.call(_operator_handle(m, "fields_from_state"), U)
     R = P.call(h["explicit_rhs"], U, f)
-    P.commit(temporal.next, P.linear_combine("u1", U + P.dt * R))
+    P.commit(temporal.next, P.value("u1", U + P.dt * R))
     P.validate()
     print("OK  P.call(handle) accepted + validates")
 
@@ -104,7 +104,7 @@ def _rate_program(m, *, selector, fields_selector):
          else P._call(fields_selector, U))
     R = (P.call(selector, U, f) if isinstance(selector, OperatorHandle)
          else P._call(selector, U, f))
-    P.commit(temporal.next, P.linear_combine("u1", U + P.dt * R))
+    P.commit(temporal.next, P.value("u1", U + P.dt * R))
     return P
 
 
@@ -161,7 +161,7 @@ def _rhs_program(*, terms=None, legacy=None, authored=None):
     else:
         flux, sources = legacy
         R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
 

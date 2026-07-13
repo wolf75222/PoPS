@@ -102,7 +102,7 @@ def main():
         return R, phi
 
     R_nat, phi_nat = fields(
-        lambda s: s.add_block("gas", spec, spatial=spatial, time=pops.Explicit()))
+        lambda s: s.block("gas", spec, spatial=spatial, time=pops.Explicit()))
     assert float(np.max(np.abs(R_nat))) > 1e-3, "residu natif trivial (setup du test)"
 
     tmp = tempfile.mkdtemp()

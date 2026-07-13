@@ -342,9 +342,9 @@ def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
         "shape_rate", signature=(state,) >> rate,
         kind="local_rate", expr="shape")
     from pops.time import Program
-    from pops.problem import Problem
+    from pops.problem import Case
 
-    block = Problem(name="shape-case").add_block("fluid", module)
+    block = Case(name="shape-case").block("fluid", module)
     program = Program("rate_shape").bind_operators(module)
     value = program.state(block, module.state_handle(state)).n
     rate_value = program._rhs_legacy(state=value, sources=[])

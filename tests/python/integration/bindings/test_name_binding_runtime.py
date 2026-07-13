@@ -77,7 +77,7 @@ def two_block_program(t, name="nb_two_block"):
         temporal = states[blk]
         U = temporal.n
         R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(temporal.next, P.linear_combine(
+        P.commit(temporal.next, P.value(
             blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
 

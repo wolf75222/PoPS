@@ -1,9 +1,9 @@
 """Small typed authoring fixtures shared by the time-unit tests.
 
-The production API accepts only ``Program.state(BlockHandle, state Handle)``.  These helpers build
-real Problem/model declaration graphs so focused IR tests do not each need a page of assembly
-boilerplate.  They never wrap or weaken ``Program.state``: the final call always receives the two
-typed semantic handles.
+The production API accepts only ``Program.state(block[state])``. These helpers build real
+Case/model declaration graphs so focused IR tests do not each need a page of assembly boilerplate.
+They never wrap or weaken ``Program.state``: the final call always receives the exact qualified
+instance handle.
 """
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ from pops.model import (
     Handle,
     OwnerKind,
     OwnerPath,
+    OperatorRegistry,
     StateHandle,
     StateSpace,
 )
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import Program
 
 
@@ -29,6 +30,7 @@ class _StateModel:
         owner: OwnerPath | None = None,
         state_name: str = "U",
         space: StateSpace | None = None,
+        registry: OperatorRegistry | None = None,
     ) -> None:
         self.name = name
         self.owner_path = owner or OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
@@ -38,15 +40,20 @@ class _StateModel:
         declared_space = space or StateSpace(state_name, (state_name,))
         self.state = StateHandle(
             state_name, owner=self.owner_path, space=declared_space)
+        self._operators = (
+            registry if registry is not None else OperatorRegistry(owner=self.owner_path))
 
     def declaration_index(self) -> DeclarationIndex:
         return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
+
+    def operator_registry(self) -> OperatorRegistry:
+        return self._operators
 
 
 class _Context:
     def __init__(self, program: Program) -> None:
         self.program = program
-        self.problem = Problem(name="typed-time-unit-case")
+        self.case = Case(name="typed-time-unit-case")
         self.models: dict[Any, _StateModel] = {}
         self.blocks: dict[tuple[str, str, Any], tuple[Any, Handle]] = {}
         self.fields: dict[str, Any] = {}
@@ -98,6 +105,24 @@ def state_refs(
     selected_model = model
     selected_state = state
 
+    if selected_model is None:
+        requested_space = _space_key(space)
+        for (known_block, known_state, _), existing in context.blocks.items():
+            if known_block != block_name or known_state != state_name:
+                continue
+            declaration_space = _space_key(getattr(existing[1], "space", None))
+            if space is None or declaration_space == requested_space:
+                return existing
+        for known_key, candidate in context.models.items():
+            candidate_state = candidate.state
+            if candidate_state.local_id != state_name:
+                continue
+            candidate_space = _space_key(getattr(candidate_state, "space", None))
+            if space is None or candidate_space == requested_space:
+                selected_model = candidate
+                selected_state = candidate_state
+                break
+
     if selected_model is not None:
         if selected_state is None:
             declarations = tuple(selected_model.declaration_index().records())
@@ -116,6 +141,9 @@ def state_refs(
         model_key: Any = ("explicit", id(selected_model))
     else:
         owner, inferred_space = _bound_owner_and_space(program)
+        bound_registry = None
+        if owner is not None:
+            bound_registry = program._operator_registries[owner]
         selected_space = space if space is not None else inferred_space
         model_key = ("proxy", owner, state_name, _space_key(selected_space))
         selected_model = context.models.get(model_key)
@@ -125,6 +153,7 @@ def state_refs(
                 owner=owner,
                 state_name=state_name,
                 space=selected_space,
+                registry=bound_registry,
             )
             context.models[model_key] = selected_model
         selected_state = selected_model.state
@@ -133,7 +162,7 @@ def state_refs(
     existing = context.blocks.get(block_key)
     if existing is not None:
         return existing
-    block = context.problem.add_block(block_name, selected_model)
+    block = context.case.block(block_name, selected_model)
     result = (block, selected_state)
     context.blocks[block_key] = result
     return result
@@ -163,7 +192,7 @@ def typed_state(
         model=model,
         state=state,
     )
-    temporal = program.state(block, declaration)
+    temporal = program.state(block[declaration])
     return temporal if state_name is not None else temporal.n
 
 
@@ -186,9 +215,39 @@ def typed_field(program: Program, name: str) -> Any:
     existing = context.fields.get(name)
     if existing is not None:
         return existing
-    from pops.fields import FieldProblem
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Handle
 
-    field = context.problem.add_field(FieldProblem(name=name))
+    if not context.models:
+        state_refs(program)
+    model = next(iter(context.models.values()))
+    unknown = Handle(name, kind="field", owner=model.owner_path)
+    provider = Handle(name + "_provider", kind="field_operator", owner=model.owner_path)
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self) -> dict[str, Any]:
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self) -> dict[str, Any]:
+            return {"type": "unit-krylov"}
+
+    operator = FieldOperator(
+        name,
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(model.state),
+        providers=provider,
+    )
+    discretization = FieldDiscretization(
+        method=_Method(), boundaries=(), solver=_Solver())
+    field = context.case.field(operator, discretization)
     context.fields[name] = field
     return field
 

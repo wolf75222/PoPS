@@ -89,7 +89,7 @@ def test_problem_freeze_reauthenticates_already_canonical_handles():
     module = Module("transport")
     state = module.state_space("U", components=("rho",))
     problem = pops.Problem(name="snapshot-owner")
-    block = problem.add_block("fluid", module)
+    block = problem.block("fluid", module)
     problem.output(OutputPolicy(fields=[problem.resolve(block[module.state_handle(state)])]))
 
     snapshot = problem.freeze()
@@ -102,7 +102,7 @@ def test_problem_freeze_rejects_canonical_foreign_handle_without_sealing_source(
 
     module = Module("transport")
     problem = pops.Problem(name="snapshot-owner")
-    problem.add_block("fluid", module)
+    problem.block("fluid", module)
     foreign = Handle("ghost", kind="state", owner=OwnerPath.model("foreign"))
     problem.output(OutputPolicy(fields=[foreign]))
 

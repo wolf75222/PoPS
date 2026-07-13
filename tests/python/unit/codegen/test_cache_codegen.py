@@ -44,7 +44,7 @@ def _held_program(schedule):
     U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U, schedule=schedule)
     endpoint = typed_state(P, "plasma", state_name="U", space=u).next
-    P.commit(endpoint, P.linear_combine("U1", U, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U, at=endpoint.point))
     return P
 
 
@@ -65,7 +65,7 @@ def test_unscheduled_solve_fields_has_no_cache_branch():
     U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U)               # no schedule
     endpoint = typed_state(P, "plasma", state_name="U", space=u).next
-    P.commit(endpoint, P.linear_combine("U1", U, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U, at=endpoint.point))
     cpp = P.emit_cpp_program()
     assert "cache_should_update" not in cpp       # plain unconditional solve, no cache
     assert "ctx.solve_fields_from_state(" in cpp

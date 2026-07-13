@@ -241,3 +241,7 @@ def test_final_time_namespace_has_no_legacy_aliases_or_specialized_runtime_prese
         "CondensedSchur",
     ):
         assert not hasattr(libtime, name)
+
+    program = Program("final-surface")
+    for name in ("bind_operators", "linear_combine", "define", "fields", "op", "solve"):
+        assert not hasattr(program, name)

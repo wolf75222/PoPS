@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The public blackboard Model resolves with no manual lowering call.
 
-The standard flow adds ``pops.physics.Model`` directly (``problem.add_block(name, model=m)``)
+The standard flow adds ``pops.physics.Model`` directly (``problem.block(name, model=m)``)
 and ``pops.compile`` captures its operator-first :class:`pops.model.Module` internally -- the user
 never calls ``m.to_module()`` / ``m.lower()``. This pins, at the pure metadata level (no compile /
 no ``.so``), that the compile-side resolver hands the emit model a Module-backed physics model whose

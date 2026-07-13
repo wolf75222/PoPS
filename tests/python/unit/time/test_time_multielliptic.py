@@ -131,7 +131,7 @@ def _prog(name, field=None, model=None):
         f = P.solve_fields("f_" + field, U, field=typed_field(P, field))
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 

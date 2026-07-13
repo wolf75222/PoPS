@@ -241,7 +241,7 @@ def test_lib_time_macros_return_a_core_program():
     try:
         import pops.lib.time as lib_time
         from pops.model import Module
-        from pops.problem import Problem
+        from pops.problem import Case
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
@@ -249,7 +249,7 @@ def test_lib_time_macros_return_a_core_program():
     module = Module("architecture-time-schemes")
     state_space = module.state_space("U", ("u",))
     state = module.state_handle(state_space)
-    block = Problem(name="architecture-time-case").add_block("plasma", module)
+    block = Case(name="architecture-time-case").block("plasma", module)
     for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
         program = getattr(lib_time, name)(block, state, sources=(), flux=False)
         assert isinstance(program, Program), (

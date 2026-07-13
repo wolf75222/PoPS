@@ -26,14 +26,14 @@ import pytest
 # --- 1. solve_linear(method=, preconditioner=) ----------------------------------------------
 def _solve_program(method, *, restart=None, preconditioner=None):
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
     import pops.time as t
 
     module = Module("linear-state")
     state = module.state_space("U", ("u",))
     state_handle = module.state_handle(state)
-    problem = Problem(name="linear-case")
-    block = problem.add_block("blk", module)
+    problem = Case(name="linear-case")
+    block = problem.block("blk", module)
     P = t.Program("p")
     U = P.state(block, state_handle)
     A = P.matrix_free_operator("A")
@@ -188,7 +188,7 @@ def test_case_param_returns_a_case_owned_handle_and_inspection_is_lossless():
     from pops.model import OwnerKind, ParamHandle
     from pops.params import ConstParam, RuntimeParam
 
-    case = pops.Problem(name="c")
+    case = pops.Case(name="c")
     alpha = case.param(RuntimeParam("alpha", default=1.0))
     gamma = case.param(ConstParam("gamma", 1.4))
     assert isinstance(alpha, ParamHandle) and alpha.owner_path.kind is OwnerKind.CASE
@@ -204,7 +204,7 @@ def test_case_param_shorthand_and_chaining_are_removed():
     import pops
     from pops.params import RuntimeParam
 
-    case = pops.Problem(name="c")
+    case = pops.Case(name="c")
     with pytest.raises(TypeError, match="RuntimeParam|ConstParam"):
         case.param("alpha")
     with pytest.raises(TypeError):

@@ -56,7 +56,7 @@ def lie_program(name="adc446_prog"):
     r = P._rhs_legacy(state=u, fields=fields)
     P.commit(
         temporal.next,
-        P.linear_combine("u1", u + P.dt * r, at=temporal.next.point),
+        P.value("u1", u + P.dt * r, at=temporal.next.point),
     )
     return P
 

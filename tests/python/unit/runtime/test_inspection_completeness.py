@@ -45,20 +45,20 @@ from tests.python.unit.runtime._typed_program import typed_compiled_artifact
 def _program(name="intro_demo", *, n_vars=4):
     """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit."""
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
 
     components = ("rho", "mx", "my", "E")[:n_vars]
     module = Module(name + "-state")
     state = module.state_space("U", components)
-    problem = Problem(name=name + "-case")
-    block = problem.add_block("plasma", module)
+    problem = Case(name=name + "-case")
+    block = problem.block("plasma", module)
     P = adctime.Program(name)
     dt = P.dt
     endpoint = P.state(block, module.state_handle(state))
     U = endpoint.n
     f = P.solve_fields("phi", U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(endpoint.next, P.linear_combine("U1", U + dt * R))
+    P.commit(endpoint.next, P.value("U1", U + dt * R))
     return P
 
 

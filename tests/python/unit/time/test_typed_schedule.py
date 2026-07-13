@@ -60,7 +60,7 @@ def _scheduled_rate(*, off=None, domain_factory=AcceptedStep):
     domain = domain_factory(program.clock)
     schedule = Schedule(Every(domain, 2), off=off)
     rate = program._replace_value(rate, attrs={**rate.attrs, "schedule": schedule})
-    final = program.linear_combine(
+    final = program.value(
         "final", state.n + program.dt * rate, at=state.next.point)
     program.commit(state.next, final)
     return program, rate

@@ -51,7 +51,7 @@ def _program(name="env_demo"):
     dt = P.dt
     U = temporal.n
     R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     return P
 
 

@@ -48,7 +48,7 @@ CS2 = 0.5
 
 def make_sim(n=32):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions",
+    sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(),

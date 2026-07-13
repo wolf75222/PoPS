@@ -73,7 +73,7 @@ def test_problem_freeze_rolls_module_back_when_a_later_descriptor_fails():
     module = Module("native-rollback-model")
     module.state_space("U", ("rho",))
     problem = pops.Problem(name="native-rollback")
-    problem.add_block("u", module, spatial=FailingSpatial())
+    problem.block("u", module, spatial=FailingSpatial())
 
     with pytest.raises(RuntimeError, match="spatial freeze failed"):
         problem.freeze()

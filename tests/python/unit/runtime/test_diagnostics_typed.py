@@ -20,11 +20,11 @@ from pops.diagnostics import (ConservationCheck, Integral, MinMax,  # noqa: E402
                              Norm)
 from pops.linalg.norms import L1, L2, LInf  # noqa: E402
 from pops.model import Module  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 
 
-_DIAGNOSTIC_PROBLEM = Problem(name="diagnostic-measures")
-_NE_BLOCK = _DIAGNOSTIC_PROBLEM.add_block("ne", Module("diagnostic-model"))
+_DIAGNOSTIC_PROBLEM = Case(name="diagnostic-measures")
+_NE_BLOCK = _DIAGNOSTIC_PROBLEM.block("ne", Module("diagnostic-model"))
 
 
 class _Role:

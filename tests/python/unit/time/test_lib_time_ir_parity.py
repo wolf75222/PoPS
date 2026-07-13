@@ -22,7 +22,7 @@ import pytest
 from pops.ir.expr import Const
 from pops.model import OperatorHandle
 from pops.physics.facade import Model
-from pops.problem import Problem
+from pops.problem import Case
 from pops import time as adctime
 import pops.lib.time as libtime
 
@@ -54,7 +54,7 @@ def _refs(model):
     # the same owner two competing structural fingerprints and makes the first canonical IR
     # projection depend on serialization order.
     module = model.module
-    block = Problem(name="parity_case").add_block("plasma", model)
+    block = Case(name="parity_case").block("plasma", model)
     state = module.state_handle(module.state_spaces()["U"])
     return block, state
 
@@ -94,7 +94,7 @@ def test_forward_euler_parity():
     state = manual.state(block, state_handle)
     U = state.n
     R = _stage(manual, U, "forward_euler", 0)
-    manual.commit(state.next, manual.linear_combine(
+    manual.commit(state.next, manual.value(
         "fe_step", U + manual.dt * R, at=state.next.point))
     _assert_parity(macro, manual)
 
@@ -126,18 +126,18 @@ def test_rk4_parity():
     state = manual.state(block, state_handle)
     U0 = state.n
     k1 = _stage(manual, U0, "rk4_stage_0", 0)
-    U1 = manual.linear_combine(
+    U1 = manual.value(
         "rk4_U1", U0 + Fraction(1, 2) * dt * k1,
         at=_point(manual, "rk4_stage_1", Fraction(1, 2)))
     k2 = _stage(manual, U1, "rk4_stage_1", Fraction(1, 2))
-    U2 = manual.linear_combine(
+    U2 = manual.value(
         "rk4_U2", U0 + Fraction(1, 2) * dt * k2,
         at=_point(manual, "rk4_stage_2", Fraction(1, 2)))
     k3 = _stage(manual, U2, "rk4_stage_2", Fraction(1, 2))
-    U3 = manual.linear_combine(
+    U3 = manual.value(
         "rk4_U3", U0 + dt * k3, at=_point(manual, "rk4_stage_3", 1))
     k4 = _stage(manual, U3, "rk4_stage_3", 1)
-    manual.commit(state.next, manual.linear_combine(
+    manual.commit(state.next, manual.value(
         "rk4_step",
         U0 + Fraction(1, 6) * dt * k1 + Fraction(1, 3) * dt * k2
         + Fraction(1, 3) * dt * k3 + Fraction(1, 6) * dt * k4,
@@ -222,11 +222,11 @@ def test_explicit_rk_parity():
     k0 = _at(
         manual, manual.call(_op(m, "explicit_rhs"), u0, f0, name="ssprk2_k0"), point0)
     point1 = _point(manual, "ssprk2_stage_1", 1)
-    u1 = manual.linear_combine("ssprk2_U1", u0 + dt * k0, at=point1)
+    u1 = manual.value("ssprk2_U1", u0 + dt * k0, at=point1)
     f1 = _at(manual, manual.call(_op(m, "fields_from_state"), u1), point1)
     k1 = _at(
         manual, manual.call(_op(m, "explicit_rhs"), u1, f1, name="ssprk2_k1"), point1)
-    manual.commit(state.next, manual.linear_combine(
+    manual.commit(state.next, manual.value(
         "ssprk2_step",
         u0 + (dt * Fraction(1, 2)) * k0 + (dt * Fraction(1, 2)) * k1,
         at=state.next.point))
@@ -250,7 +250,7 @@ def test_imex_local_linear_parity():
         manual, manual.call(_op(m, "fields_from_state"), u, name="fields"), point)
     r = _at(manual, manual.call(_op(m, "explicit_rhs"), u, fields, name="R"), point)
     lin = _at(manual, manual.call(_op(m, "lorentz"), fields, name="L"), point)
-    q = manual.linear_combine("imex_rhs", u + manual.dt * r, at=state.next.point)
+    q = manual.value("imex_rhs", u + manual.dt * r, at=state.next.point)
     u1 = manual.solve_local_linear(
         "imex_step", operator=manual.I - 1.0 * manual.dt * lin, rhs=q, fields=fields)
     manual.commit(state.next, u1)
@@ -299,7 +299,7 @@ def test_imex_local_parity():
         manual._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"]),
         point,
     )
-    rhs = manual.linear_combine(
+    rhs = manual.value(
         "plasma_imex_rhs", U + manual.dt * R, at=state.next.point)
     linear = _at(manual, manual.linear_source(lorentz), point)
     operator = manual.I - manual.dt * linear
@@ -328,7 +328,7 @@ def test_predictor_corrector_parity():
     l_n = _at(manual, manual.call(lo, fields_n, name="L_n"), predictor)
     u_star = _at(manual, manual.solve_local_linear(
         "U_star", operator=manual.I - dt * l_n,
-        rhs=manual.linear_combine("U_star_rhs", u_n + dt * r_n, at=predictor),
+        rhs=manual.value("U_star_rhs", u_n + dt * r_n, at=predictor),
         fields=fields_n), predictor)
     corrector = _point(
         manual, "corrector", partitions={"explicit": 1, "implicit": 1})
@@ -339,7 +339,7 @@ def test_predictor_corrector_parity():
     c_star = _at(
         manual, manual.apply(l_star, u_star, fields=fields_star, name="C_star"), corrector)
     half = Fraction(1, 2)
-    q = manual.linear_combine(
+    q = manual.value(
         "Q", u_n + half * dt * r_n + half * dt * r_star + half * dt * c_star,
         at=state.next.point)
     u_np1 = manual.solve_local_linear(
@@ -385,7 +385,7 @@ def test_adams_bashforth2_parity():
         + (manual.dt * Fraction(-1, 2)) * manual.history(
             "plasma.R", lag=1, space=R_n.space, block=block, state_ref=state.state)
     )
-    manual.commit(state.next, manual.linear_combine(
+    manual.commit(state.next, manual.value(
         "ab2_step", expr, at=state.next.point))
     _assert_parity(macro, manual)
 
@@ -401,7 +401,7 @@ def test_bdf1_linear_source_parity():
     U = state.n
     fields = manual.solve_fields(U)
     R = manual._rhs_legacy(state=U, fields=fields, flux=True, sources=["default"])
-    rhs = manual.linear_combine(
+    rhs = manual.value(
         "plasma_bdf1_rhs", U + manual.dt * R, at=state.next.point)
     operator = manual.I - manual.dt * manual.linear_source(lorentz)
     out = manual.solve_local_linear(name="plasma_bdf1_step", operator=operator, rhs=rhs, fields=fields)

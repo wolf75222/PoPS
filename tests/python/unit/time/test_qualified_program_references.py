@@ -16,7 +16,7 @@ from pops.model import (
     Signature,
     StateSpace,
 )
-from pops.problem import Problem
+from pops.problem import Case
 from pops.problem.handles import BlockHandle
 from pops.time import Program, StagePoint, TimePoint
 from pops.lib.time import SSPRK2, forward_euler
@@ -53,8 +53,8 @@ class _Model:
 
 def _declarations(*, with_rate: bool = False):
     model = _Model(with_rate=with_rate)
-    case = Problem(name="case")
-    block = case.add_block("fluid", model)
+    case = Case(name="case")
+    block = case.block("fluid", model)
     return model, block
 
 
@@ -62,7 +62,7 @@ def _forward_copy():
     model, block = _declarations()
     program = Program("step")
     state = program.state(block, model.u)
-    next_value = program.linear_combine("u_next", state.n, at=state.next.point)
+    next_value = program.value("u_next", state.n, at=state.next.point)
     program.commit(state.next, next_value)
     return model, block, program, state, next_value
 
@@ -95,9 +95,9 @@ def test_state_refuses_strings_wrong_kinds_and_redundant_qualification():
 
 def test_two_instances_of_one_model_remain_distinct_in_time_ir():
     model = _Model()
-    case = Problem(name="case")
-    left = case.add_block("left", model)
-    right = case.add_block("right", model)
+    case = Case(name="case")
+    left = case.block("left", model)
+    right = case.block("right", model)
     program = Program("two-blocks")
 
     left_state = program.state(left, model.u)
@@ -115,9 +115,9 @@ def test_two_instances_of_one_model_remain_distinct_in_time_ir():
         "left", "right",
     ]
 
-    program.commit(left_state.next, program.linear_combine(
+    program.commit(left_state.next, program.value(
         "left_next", left_state.n, at=left_state.next.point))
-    program.commit(right_state.next, program.linear_combine(
+    program.commit(right_state.next, program.value(
         "right_next", right_state.n, at=right_state.next.point))
     from pops.codegen.program_codegen import _check_lowerable
     _check_lowerable(program, model=model)
@@ -126,10 +126,10 @@ def test_two_instances_of_one_model_remain_distinct_in_time_ir():
 @pytest.mark.parametrize("case_names", [("same", "same"), ("first", "second")])
 def test_one_program_refuses_blocks_from_distinct_case_authorities(case_names):
     model = _Model()
-    first_case = Problem(name=case_names[0])
-    second_case = Problem(name=case_names[1])
-    first = first_case.add_block("fluid", model)
-    second = second_case.add_block("fluid", model)
+    first_case = Case(name=case_names[0])
+    second_case = Case(name=case_names[1])
+    first = first_case.block("fluid", model)
+    second = second_case.block("fluid", model)
     program = Program("one-case")
 
     first_state = program.state(first, model.u)
@@ -164,7 +164,7 @@ def test_history_tables_and_serialization_retain_the_qualified_state():
     state = program.state(block, model.u)
     program.keep_history(state, depth=2)
     previous = state.prev(2).value
-    program.commit(state.next, program.linear_combine(
+    program.commit(state.next, program.value(
         "next", state.n + previous, at=state.next.point))
 
     assert program._history_state_refs["fluid.u"] is state.state
@@ -212,11 +212,11 @@ def test_board_operator_and_field_routes_refuse_free_names():
 
 def test_named_field_solve_requires_authenticated_field_from_the_state_case():
     model = _Model()
-    case = Problem(name="case")
-    block = case.add_block("fluid", model)
-    field = case.add_field(FieldProblem(name="psi"))
-    foreign_case = Problem(name="case")
-    foreign = foreign_case.add_field(FieldProblem(name="psi"))
+    case = Case(name="case")
+    block = case.block("fluid", model)
+    field = case.field(FieldProblem(name="psi"))
+    foreign_case = Case(name="case")
+    foreign = foreign_case.field(FieldProblem(name="psi"))
     program = Program("field")
     state = program.state(block, model.u)
 
@@ -241,8 +241,8 @@ def test_board_field_operator_retains_its_exact_typed_selector():
     operator = module.operator(
         "psi", kind="field_operator",
         signature=Signature((state_space,), field_space), expr="field-solve")
-    case = Problem(name="case")
-    block = case.add_block("fluid", module)
+    case = Case(name="case")
+    block = case.block("fluid", module)
     program = Program("field-operator").bind_operators(module)
     state = program.state(block, module.state_handle(state_space))
 
@@ -279,9 +279,9 @@ def test_rhs_wrappers_and_ready_presets_keep_typed_source_ownership():
 def test_homonymous_operators_from_two_models_resolve_by_owner_and_block_provenance():
     first = _Model("first", with_rate=True, components=("u",))
     second = _Model("second", with_rate=True, components=("v", "w"))
-    case = Problem(name="coupled")
-    first_block = case.add_block("first_block", first)
-    second_block = case.add_block("second_block", second)
+    case = Case(name="coupled")
+    first_block = case.block("first_block", first)
+    second_block = case.block("second_block", second)
     program = Program("multi-owner").bind_operators(first).bind_operators(second)
     first_state = program.state(first_block, first.u)
     second_state = program.state(second_block, second.u)
@@ -312,7 +312,7 @@ def test_ready_presets_take_typed_references_and_match_the_explicit_program():
         manual._rhs_legacy(state=state.n, fields=None, flux=False, sources=[]),
         point=point,
     )
-    manual.commit(state.next, manual.linear_combine(
+    manual.commit(state.next, manual.value(
         "fe_step", state.n + manual.dt * rate, at=state.next.point))
 
     preset = Program("parity")
@@ -343,8 +343,8 @@ def test_commit_report_contains_full_case_block_model_and_state_identity():
 
 def test_codegen_block_index_helpers_never_default_unknown_blocks_to_zero():
     model, block = _declarations()
-    foreign_case = Problem(name="foreign")
-    foreign = foreign_case.add_block("fluid", model)
+    foreign_case = Case(name="foreign")
+    foreign = foreign_case.block("fluid", model)
     from pops.codegen.program_emit_ops import _required_block_index
     from pops.codegen.program_emit_params import _required_param_block_index
 

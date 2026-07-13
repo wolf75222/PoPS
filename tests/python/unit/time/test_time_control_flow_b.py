@@ -41,7 +41,7 @@ def _fe_body():
     """A Forward-Euler body x -> x + dt*(-div F): rhs(sources=['default']) lowers with NO model, so it
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
-        return _P.linear_combine(
+        return _P.value(
             x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]),
             at=TimePoint(_P.clock, step=1),
         )
@@ -52,7 +52,7 @@ def _contraction_body(target):
     """A dt-free contraction x -> 0.5*x + 0.5*target (uses only linear_combine, so it runs in the
     compiled .so with no flux / solve_fields and has a closed-form offline reference)."""
     def body(_P, x):
-        return _P.linear_combine(0.5 * x + 0.5 * target)
+        return _P.value(0.5 * x + 0.5 * target)
     return body
 
 
@@ -69,7 +69,7 @@ def test_static_range_unrolls(t):
     U = typed_state(P, "blk")
     Uf = P.static_range(U, 3, _fe_body())
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("range_next", Uf, at=endpoint.point))
+    P.commit(endpoint, P.value("range_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert src.count("ctx.rhs_into") == 3, "static_range(3) unrolls the body 3 times\n%s" % src
     assert "for (" not in src, "static_range must NOT emit a C++ loop (it is unrolled)\n%s" % src
@@ -80,7 +80,7 @@ def test_range_emits_for(t):
     U = typed_state(P, "blk")
     Uf = P.range(U, 3, _fe_body())
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("range_next", Uf, at=endpoint.point))
+    P.commit(endpoint, P.value("range_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "for (int i" in src, "range must emit a C++ for loop\n%s" % src
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
@@ -94,10 +94,10 @@ def test_branch_emits_if_else(t):
     Uf = P.branch(
         cond,
         lambda T: body(T, U),
-        lambda T: T.linear_combine(U, at=TimePoint(T.clock, step=1)),
+        lambda T: T.value(U, at=TimePoint(T.clock, step=1)),
     )
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("branch_next", Uf, at=endpoint.point))
+    P.commit(endpoint, P.value("branch_next", Uf, at=endpoint.point))
     src = P.emit_cpp_program()
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
     assert "if (" in src and "} else {" in src, "branch must emit C++ if/else\n%s" % src
@@ -132,7 +132,7 @@ def test_range_count_changes_hash(t):
         U = typed_state(P, "blk")
         endpoint = typed_state(P, "blk", state_name="U").next
         result = P.range(U, count, _fe_body())
-        P.commit(endpoint, P.linear_combine("range_next", result, at=endpoint.point))
+        P.commit(endpoint, P.value("range_next", result, at=endpoint.point))
         return P._ir_hash()
     assert prog(3) != prog(4), "a different range count must change the IR hash (cache key)"
 
@@ -141,11 +141,11 @@ def test_static_range_body_changes_hash(t):
     def prog(c):
         P = t.Program("sr")
         U = typed_state(P, "blk")
-        target = P.linear_combine("target", 2.0 * U)
+        target = P.value("target", 2.0 * U)
         endpoint = typed_state(P, "blk", state_name="U").next
         result = P.static_range(
-            U, 2, lambda _P, x: _P.linear_combine(c * x + 0.5 * target))
-        P.commit(endpoint, P.linear_combine("range_next", result, at=endpoint.point))
+            U, 2, lambda _P, x: _P.value(c * x + 0.5 * target))
+        P.commit(endpoint, P.value("range_next", result, at=endpoint.point))
         return P._ir_hash()
     assert prog(0.5) != prog(0.25), "a different unrolled body must change the IR hash"
 
@@ -155,11 +155,11 @@ def _contraction_program(t, kind, count, *, name):
     """target = 2*U0; loop x -> 0.5*x + 0.5*target  `count` times via `kind` in {'range','static'}."""
     P = t.Program(name)
     U0 = typed_state(P, "blk")
-    target = P.linear_combine("target", 2.0 * U0)
+    target = P.value("target", 2.0 * U0)
     body = _contraction_body(target)
     xf = P.range(U0, count, body) if kind == "range" else P.static_range(U0, count, body)
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("contraction_next", xf, at=endpoint.point))
+    P.commit(endpoint, P.value("contraction_next", xf, at=endpoint.point))
     return P
 
 
@@ -167,13 +167,13 @@ def _branch_program(t, *, name, threshold):
     """if norm_inf(target - U0) > threshold: U <- 0.5*U0 + 0.5*target  (else U unchanged)."""
     P = t.Program(name)
     U0 = typed_state(P, "blk")
-    target = P.linear_combine("target", 2.0 * U0)
-    diff = P.linear_combine("diff", target - U0)
+    target = P.value("target", 2.0 * U0)
+    diff = P.value("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
     body = _contraction_body(target)
     xf = P.branch(cond, lambda T: body(T, U0), lambda _T: U0)
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.linear_combine("branch_next", xf, at=endpoint.point))
+    P.commit(endpoint, P.value("branch_next", xf, at=endpoint.point))
     return P
 
 

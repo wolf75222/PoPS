@@ -82,7 +82,7 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     P.set_apply(A, apply)
     kw = {} if preconditioner is None else {"preconditioner": preconditioner}
     endpoint = typed_state(P, "blk", state_name="U").next
-    rhs = P.linear_combine("rhs", U, at=endpoint.point)
+    rhs = P.value("rhs", U, at=endpoint.point)
     phi = P.solve_linear(
         operator=A, rhs=rhs, method=_krylov(method), tol=tol, max_iter=max_iter,
         at=endpoint.point, **kw).consume(action=action or FailRun())

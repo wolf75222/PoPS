@@ -82,7 +82,7 @@ def _lie_program(model, name="adc508_amr_prog"):
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
     P.commit(temporal.next,
-             P.linear_combine("u1", u + P.dt * r, at=temporal.next.point))
+             P.value("u1", u + P.dt * r, at=temporal.next.point))
     return P
 
 
@@ -97,7 +97,7 @@ def _two_block_program(model, name="adc508_amr_2block"):
         fields = P.solve_fields(u)
         r = P._rhs_legacy(state=u, fields=fields)
         P.commit(temporal.next,
-                 P.linear_combine("u1_%s" % blk, u + P.dt * r,
+                 P.value("u1_%s" % blk, u + P.dt * r,
                                   at=temporal.next.point))
     return P
 

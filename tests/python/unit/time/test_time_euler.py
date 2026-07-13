@@ -67,7 +67,7 @@ def transport_model():
 def make_sim(method):
     n = 24
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim.block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method=method))
     x = (np.arange(n) + 0.5) / n
@@ -102,7 +102,7 @@ if not bit:
 print("== (3) no-default-change : defaut == ssprk2 ==")
 sd = make_sim("ssprk2")
 s_def = System(n=24, L=1.0, periodic=True)
-s_def.add_block("ions", transport_model(),
+s_def.block("ions", transport_model(),
                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                 time=pops.Explicit())
 s_def.set_state("ions", np.array(sd.get_state("ions")))
@@ -121,7 +121,7 @@ chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
 print("== (5) AMR : rejet explicite ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-msg = err_msg(lambda: amr.add_block("ions", transport_model(),
+msg = err_msg(lambda: amr.block("ions", transport_model(),
                                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                                     time=pops.Explicit(method="euler")))
 chk("euler" in msg or "explicit" in msg, f"AmrSystem rejette time='euler' ({msg[:60]}...)")

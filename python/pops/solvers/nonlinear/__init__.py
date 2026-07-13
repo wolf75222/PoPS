@@ -132,6 +132,9 @@ class Newton(Descriptor):
             "minimum_step": self.minimum_step,
         }
 
+    def to_data(self) -> dict[str, Any]:
+        return {"scheme": self.scheme, **self.options()}
+
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet({
             "nonlinear_residual": True,

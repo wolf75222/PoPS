@@ -96,7 +96,7 @@ N = 24
 
 def make_sim(time):
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim.block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=time)
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
@@ -112,7 +112,7 @@ def fe_program(name="fe_cadence"):
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     endpoint = typed_state(P, "ions", state_name="U").next
-    P.commit(endpoint, P.linear_combine("U1", U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
 
 

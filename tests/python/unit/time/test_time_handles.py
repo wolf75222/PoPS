@@ -2,7 +2,7 @@
 """pops.time typed temporal-version handles (Spec 5 sec.5.3.1, ADC-485).
 
 The handle layer (``typed_state(P, "plasma", state_name="U")`` -> a :class:`TimeState` with ``.n`` /
-``.stage`` / ``.next`` / ``.prev``, plus ``T.define`` / ``T.commit`` / ``T.keep_history``)
+``.stage`` / ``.next`` / ``.prev``, plus ``T.value`` / ``T.commit`` / ``T.keep_history``)
 is SUGAR over the existing SSA IR: it lowers to the SAME ``state`` / ``linear_combine`` /
 ``commit`` / ``history`` / ``store_history`` ops the positional ``P.state`` style builds.
 
@@ -43,14 +43,14 @@ def _expect_value_error(fn, needle):
 def test_current_state_is_read_only():
     P = adctime.Program("ro")
     U = typed_state(P, "plasma", state_name="U")
-    _expect_value_error(lambda: P.define(U.n, U.n + P.dt * U.n),
+    _expect_value_error(lambda: P.value(U.n, U.n + P.dt * U.n),
                         "current state is read-only in Program")
 
 
 def test_define_prev_rejected():
     P = adctime.Program("prev_def")
     U = typed_state(P, "plasma", state_name="U")
-    _expect_value_error(lambda: P.define(U.prev, U.n),
+    _expect_value_error(lambda: P.value(U.prev, U.n),
                         "history is produced by the history policy")
 
 
@@ -59,7 +59,7 @@ def test_use_before_define_raises():
     U = typed_state(P, "plasma", state_name="U")
     s1 = _stage(U, "predictor", 1)
     _expect_value_error(lambda: s1 + P.dt * s1,
-                        "stage 'predictor' is undefined (define it with T.define first)")
+                        "stage 'predictor' is undefined (define it with T.value first)")
     with pytest.raises(TypeError, match="StateEndpointHandle"):
         P.commit(s1, U.n)
 
@@ -69,8 +69,8 @@ def test_double_define_rejected():
     U = typed_state(P, "plasma", state_name="U")
     k0 = P._rhs_legacy(state=U.n, fields=P.solve_fields(U.n), sources=["default"])
     stage = _stage(U, "predictor", 1)
-    P.define(stage, U.n + P.dt * k0)
-    _expect_value_error(lambda: P.define(stage, U.n + P.dt * k0),
+    P.value(stage, U.n + P.dt * k0)
+    _expect_value_error(lambda: P.value(stage, U.n + P.dt * k0),
                         "SSA stage already defined")
 
 
@@ -107,14 +107,14 @@ def _ssprk3_values(P, block):
     state = typed_state(P, block, state_name="U")
     stage1 = _stage(state, "stage1", 1)
     stage2 = _stage(state, "stage2", Fraction(1, 2))
-    U1 = P.linear_combine("ssprk3_U1", U0 + P.dt * k0, at=stage1.point)
+    U1 = P.value("ssprk3_U1", U0 + P.dt * k0, at=stage1.point)
     f1 = P.solve_fields(U1)
     k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.linear_combine(
+    U2 = P.value(
         "ssprk3_U2", 0.75 * U0 + 0.25 * (U1 + P.dt * k1), at=stage2.point)
     f2 = P.solve_fields(U2)
     k2 = P._rhs_legacy(state=U2, fields=f2, flux=True, sources=["default"])
-    U_next = P.linear_combine(
+    U_next = P.value(
         "ssprk3_step", (1.0 / 3.0) * U0 + (2.0 / 3.0) * (U2 + P.dt * k2),
         at=state.next.point)
     P.commit(state.next, U_next)
@@ -127,13 +127,13 @@ def _ssprk3_handles(P, block):
     k0 = P._rhs_legacy(state=U.n, fields=f0, flux=True, sources=["default"])
     stage1 = _stage(U, "stage1", 1)
     stage2 = _stage(U, "stage2", Fraction(1, 2))
-    P.define(stage1, U.n + P.dt * k0)
+    P.value(stage1, U.n + P.dt * k0)
     f1 = P.solve_fields(stage1)
     k1 = P._rhs_legacy(state=stage1, fields=f1, flux=True, sources=["default"])
-    P.define(stage2, 0.75 * U.n + 0.25 * (stage1 + P.dt * k1))
+    P.value(stage2, 0.75 * U.n + 0.25 * (stage1 + P.dt * k1))
     f2 = P.solve_fields(stage2)
     k2 = P._rhs_legacy(state=stage2, fields=f2, flux=True, sources=["default"])
-    U_next = P.linear_combine(
+    U_next = P.value(
         "ssprk3_step",
         (1.0 / 3.0) * U.n + (2.0 / 3.0) * (stage2 + P.dt * k2),
         at=U.next.point,

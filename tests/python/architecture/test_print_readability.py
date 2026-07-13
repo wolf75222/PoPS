@@ -55,7 +55,7 @@ def _objects():
     module = pops.model.Module("print-demo-model")
     state_space = module.state_space("U", ("u",))
     state = module.state_handle(state_space)
-    block = pops.Problem(name="print-demo-case").add_block("plasma", module)
+    block = pops.Problem(name="print-demo-case").block("plasma", module)
     prog = pops.time.Program("demo")
     prog.state(block, state)  # one typed op so the summary reports a non-zero op count
     return {

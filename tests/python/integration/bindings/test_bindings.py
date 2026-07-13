@@ -54,9 +54,9 @@ def diocotron(B0=1.0, alpha=1.0, n_i0=0.0):
 # --- 1. Composition de briques : un schema par bloc -----------------------------
 print("== composition par briques (electrons Euler/HLLC/IMEX + ions isothermes) ==")
 sim = System(n=48)
-sim.add_block("electrons", model=electron(),
+sim.block("electrons", model=electron(),
               spatial=pops.Spatial(vanleer=True, flux=HLLC()), time=pops.IMEX(substeps=10))
-sim.add_block("ions", model=ion(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+sim.block("ions", model=ion(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg")
 chk(sim.n_species() == 2, "deux blocs composes")
 xs = meshx(48)
@@ -77,8 +77,8 @@ chk(abs(sim.mass("electrons") - mea) < 1e-9 and abs(sim.mass("ions") - mia) < 1e
 print("== implicite/explicite par bloc, reversible ==")
 for et, it in [("imex", "explicit"), ("explicit", "imex")]:
     s = System(n=32)
-    s.add_block("e", electron(), time=(pops.IMEX() if et == "imex" else pops.Explicit()))
-    s.add_block("i", ion(), time=(pops.IMEX() if it == "imex" else pops.Explicit()))
+    s.block("e", electron(), time=(pops.IMEX() if et == "imex" else pops.Explicit()))
+    s.block("i", ion(), time=(pops.IMEX() if it == "imex" else pops.Explicit()))
     s.set_poisson()
     s.set_density("e", 1.0 + 0.02 * np.cos(2 * np.pi * meshx(32))[None, :] * np.ones((32, 1)))
     s.set_density("i", np.ones((32, 32)))
@@ -90,7 +90,7 @@ for et, it in [("imex", "explicit"), ("explicit", "imex")]:
 print("== diocotron compose par briques (ExB + BackgroundDensity) + paroi ==")
 n = 96
 dio = System(n=n, L=1.0, periodic=False)
-dio.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
+dio.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 dio.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(n), meshx(n), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
@@ -109,7 +109,7 @@ chk(abs(dio.mass("ne") - m0) < 1e-9, "diocotron : masse conservee")
 # --- 4. Integrateur temporel ECRIT EN PYTHON ------------------------------------
 print("== integrateur temporel ecrit en Python (primitives eval_rhs/get_state/set_state) ==")
 pd = System(n=64, L=1.0, periodic=False)
-pd.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
+pd.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 pd.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
 xx, yy = np.meshgrid(meshx(64), meshx(64), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
@@ -131,7 +131,7 @@ y0 = 0.5 + 0.02 * np.cos(2 * np.pi * 4 * xx)
 band = 1.0 + np.exp(-((yy - y0) ** 2) / 0.05 ** 2)
 nbar = float(band.mean())
 amr = AmrSystem(n=nb, regrid_every=10, periodic=True)
-amr.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=nbar), spatial=pops.Spatial(none=True))
+amr.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=nbar), spatial=pops.Spatial(none=True))
 amr.set_refinement(threshold=nbar + 0.15)
 amr.set_poisson()
 amr.set_density("ne", band)
@@ -159,7 +159,7 @@ erho = 1.0 + 0.4 * np.exp(-((exx - 0.5) ** 2 + (eyy - 0.5) ** 2) / 0.02)
 for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
     tag = f"{elim.scheme}+{eflux.scheme}"
     eamr = AmrSystem(n=ne, regrid_every=0, periodic=True)
-    eamr.add_block("gas", model=euler_gas(),
+    eamr.block("gas", model=euler_gas(),
                    spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
     eamr.set_refinement(threshold=1e9)  # patch seed coherent, sans tagger de cellule
     eamr.set_poisson(); eamr.set_density("gas", erho)
@@ -172,7 +172,7 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
     chk(abs(eamr.mass() - em0) / abs(em0) < 1e-6,
         f"AMR {tag}+primitif : masse conservee (reflux)")
     esys = System(n=ne, periodic=True)
-    esys.add_block("gas", model=euler_gas(),
+    esys.block("gas", model=euler_gas(),
                    spatial=pops.Spatial(limiter=elim, flux=eflux, primitive=True))
     esys.set_poisson(); esys.set_density("gas", erho)
     for _ in range(10):
@@ -184,7 +184,7 @@ for elim, eflux in ((Minmod(), HLLC()), (Minmod(), Roe()), (VanLeer(), HLLC())):
 # --- 4c. Espece gelee (background fixe) : non avancee, mais vue par Poisson ------
 print("== espece gelee (evolve=False) : fond fixe vu par Poisson ==")
 fz = System(n=32, L=1.0, periodic=True)
-fz.add_block("electrons", model=electron(), spatial=pops.Spatial(minmod=True))
+fz.block("electrons", model=electron(), spatial=pops.Spatial(minmod=True))
 fz.add_background("ions", model=ion(charge=1.0), density=np.ones((32, 32)))
 fz.set_poisson()
 fz.set_density("electrons", 1.0 + 0.05 * np.cos(2 * np.pi * meshx(32))[None, :] * np.ones((32, 32)))
@@ -207,9 +207,9 @@ def inert():  # scalaire SANS transport (charge 0 -> phi 0 -> derive nulle) : is
 
 
 iz = System(n=24, L=1.0, periodic=True)
-iz.add_block("ne", model=inert(), spatial=pops.Spatial(none=True))
-iz.add_block("ni", model=inert(), spatial=pops.Spatial(none=True))
-iz.add_block("ng", model=inert(), spatial=pops.Spatial(none=True))
+iz.block("ne", model=inert(), spatial=pops.Spatial(none=True))
+iz.block("ni", model=inert(), spatial=pops.Spatial(none=True))
+iz.block("ng", model=inert(), spatial=pops.Spatial(none=True))
 iz.set_poisson()
 iz.set_density("ne", 0.1 * np.ones((24, 24)))
 iz.set_density("ni", np.zeros((24, 24)))
@@ -232,8 +232,8 @@ def iso_inert():  # isotherme sans couplage de champ (charge 0) : on isole la fr
 
 
 co = System(n=24, L=1.0, periodic=True)
-co.add_block("a", model=iso_inert(), spatial=pops.Spatial(minmod=True))
-co.add_block("b", model=iso_inert(), spatial=pops.Spatial(minmod=True))
+co.block("a", model=iso_inert(), spatial=pops.Spatial(minmod=True))
+co.block("b", model=iso_inert(), spatial=pops.Spatial(minmod=True))
 co.set_poisson()
 Ua = np.zeros((3, 24, 24)); Ua[0] = 1.0; Ua[1] = 0.3   # a : rho=1, u_x=0.3
 Ub = np.zeros((3, 24, 24)); Ub[0] = 1.0; Ub[1] = 0.0   # b : rho=1, au repos
@@ -259,8 +259,8 @@ def euler_inert():  # Euler sans couplage de champ (charge 0) : on isole l'echan
 
 
 te = System(n=16, L=1.0, periodic=True)
-te.add_block("a", model=euler_inert(), spatial=pops.Spatial(minmod=True))
-te.add_block("b", model=euler_inert(), spatial=pops.Spatial(minmod=True))
+te.block("a", model=euler_inert(), spatial=pops.Spatial(minmod=True))
+te.block("b", model=euler_inert(), spatial=pops.Spatial(minmod=True))
 te.set_poisson()
 Ua = np.zeros((4, 16, 16)); Ua[0] = 1.0; Ua[3] = 2.0 / 0.4   # rho=1, u=0, p=2 -> T=2
 Ub = np.zeros((4, 16, 16)); Ub[0] = 1.0; Ub[3] = 1.0 / 0.4   # rho=1, u=0, p=1 -> T=1
@@ -282,7 +282,7 @@ chk(abs(Ta1 - Tb1) < 1.0 - 1e-3, "echange thermique : temperatures relaxent")
 # --- 4g. EPM : Poisson comme instance composable d'add_elliptic_model -----------
 print("== EPM : Poisson via add_elliptic_model (set_poisson = raccourci) ==")
 ep = System(n=48, L=1.0, periodic=False)
-ep.add_block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
+ep.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 ep.add_elliptic_model("phi", model=pops.elliptic(operator=pops.div_eps_grad(1.0),
                       rhs=pops.charge_density(), output=pops.electric_field_from_potential()),
                       solver=pops.EllipticSolver("geometric_mg"), bc="dirichlet",
@@ -315,8 +315,8 @@ except NotImplementedError:
 # --- 4h. Descripteur de variables (introspection : noms cons/prim par bloc) -----
 print("== descripteur Variables : noms des variables par bloc ==")
 vn = System(n=16)
-vn.add_block("e", model=electron())
-vn.add_block("d", model=diocotron())
+vn.block("e", model=electron())
+vn.block("d", model=diocotron())
 chk(list(vn.variable_names("e", "conservative")) == ["rho", "rho_u", "rho_v", "E"],
     "noms conservatifs (Euler)")
 chk(list(vn.variable_names("e", "primitive")) == ["rho", "u", "v", "p"], "noms primitifs (Euler)")
@@ -367,12 +367,12 @@ def raises(fn):
 
 
 # HLLC exige un transport compressible (4 var) : refuse sur un scalaire (ExB).
-chk(raises(lambda: System(n=16).add_block("d", diocotron(), spatial=pops.Spatial(flux=HLLC()))),
+chk(raises(lambda: System(n=16).block("d", diocotron(), spatial=pops.Spatial(flux=HLLC()))),
     "hllc refuse sur transport scalaire")
 # Source fluide (PotentialForce) sur un transport scalaire (ExB) : invalide.
 bad = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                 source=pops.PotentialForce(charge=1.0), elliptic=pops.ChargeDensity(charge=1.0))
-chk(raises(lambda: System(n=16).add_block("x", bad)),
+chk(raises(lambda: System(n=16).block("x", bad)),
     "source fluide refusee sur transport scalaire")
 # Etat/transport incoherents rejetes cote Python.
 chk(raises(lambda: pops.Model(state=pops.Scalar(), transport=pops.CompressibleFlux(),
@@ -394,19 +394,19 @@ def err(fn):
 # ADC-585 : ModelSpec est le POD herite du pont natif, hors racine pops (pops.runtime.ModelSpec).
 chk(not hasattr(pops, "ModelSpec"),
     "ModelSpec est hors racine pops (ADC-585) : pops.ModelSpec n'existe plus")
-chk(raises(lambda: System(n=16).add_block("m", ModelSpec())),
+chk(raises(lambda: System(n=16).block("m", ModelSpec())),
     "ModelSpec incomplet (transport non pose) refuse : pas de 'compressible' silencieux")
-chk("transport" in err(lambda: System(n=16).add_block("m", ModelSpec())).lower(),
+chk("transport" in err(lambda: System(n=16).block("m", ModelSpec())).lower(),
     "message ModelSpec incomplet nomme 'transport' (erreur lisible)")
 _only_transport = ModelSpec()
 _only_transport.transport = "exb"  # elliptic encore non pose
-chk(raises(lambda: System(n=16).add_block("m", _only_transport)),
+chk(raises(lambda: System(n=16).block("m", _only_transport)),
     "ModelSpec sans elliptic refuse : pas de 'charge' silencieux")
 # Parite AmrSystem : meme contrat a l'entree de add_block.
-chk(raises(lambda: AmrSystem(n=16).add_block("m", ModelSpec())),
-    "AmrSystem.add_block(ModelSpec incomplet) refuse")
+chk(raises(lambda: AmrSystem(n=16).block("m", ModelSpec())),
+    "AmrSystem.block(ModelSpec incomplet) refuse")
 # Un modele COMPLET (via pops.Model) reste accepte : le garde-fou ne sur-rejette pas.
-chk(not raises(lambda: System(n=16).add_block("ok", diocotron())),
+chk(not raises(lambda: System(n=16).block("ok", diocotron())),
     "modele complet (pops.Model) accepte par add_block")
 
 # --- ADC-299 : une config invalide est REJETEE avant toute construction interne (System / AmrSystem). ---

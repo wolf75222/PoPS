@@ -92,7 +92,7 @@ def test_ambiguous_or_non_finite_literals_are_rejected(value):
 def test_exact_affine_coefficient_has_one_typed_codec_for_hash_and_cpp():
     program = Program("exact_coeff")
     state = _state(program, temporal=True)
-    result = program.linear_combine(
+    result = program.value(
         "next", Fraction(1, 3) * state.n, at=state.next.point)
     program.commit(state.next, result)
 
@@ -114,7 +114,7 @@ def test_unit_target_and_algebraic_program_constants_reach_target_lowering_lossl
     program.record_scalar("algebraic", reduced + algebraic)
     program.commit(
         state.next,
-        program.linear_combine("next", state.n, at=state.next.point),
+        program.value("next", state.n, at=state.next.point),
     )
 
     serialized = program._serialize()
@@ -222,7 +222,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     state = time_state.n
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
-    rhs = program.linear_combine("rhs", state, at=time_state.next.point)
+    rhs = program.value("rhs", state, at=time_state.next.point)
     result = program.solve_linear(
         operator=operator,
         rhs=rhs,

@@ -147,7 +147,7 @@ def test_forged_same_program_value_cannot_be_laundered_by_ssa_id():
 
     assert program._canonical_value(forged) is forged
     with pytest.raises(ValueError, match="not authored"):
-        program.define("forged", forged)
+        program.value("forged", forged)
 
 
 @pytest.mark.parametrize(
@@ -189,7 +189,7 @@ def test_affine_coefficients_refuse_implicit_cross_domain_coercion(other):
     state = typed_state(program, "plasma")
 
     with pytest.raises(TypeError, match="explicit target conversion"):
-        program.linear_combine(Fraction(1, 3) * state + other * state)
+        program.value("mixed", Fraction(1, 3) * state + other * state)
 
 
 def test_affine_coefficients_refuse_a_wide_integer_binary64_coercion():
@@ -197,14 +197,14 @@ def test_affine_coefficients_refuse_a_wide_integer_binary64_coercion():
     state = typed_state(program, "plasma")
 
     with pytest.raises(TypeError, match="explicit target conversion"):
-        program.linear_combine((10 ** 100) * state + 0.5 * state)
+        program.value("wide", (10 ** 100) * state + 0.5 * state)
 
 
-def test_debug_name_is_immutable_and_part_of_ir_identity_when_it_changes_cpp_labels():
+def test_debug_name_is_immutable_and_part_of_ir_identity():
     def build(label):
         program = Program("named_identity")
         state = typed_state(program, "transport", state_name="U")
-        value = program.linear_combine(label, state.n, at=state.next.point)
+        value = program.value(label, state.n, at=state.next.point)
         program.commit(state.next, value)
         return program
 
@@ -212,21 +212,22 @@ def test_debug_name_is_immutable_and_part_of_ir_identity_when_it_changes_cpp_lab
     beta = build("beta")
 
     assert alpha._ir_hash() != beta._ir_hash()
-    assert "node:alpha" in alpha.emit_cpp_program()
-    assert "node:beta" in beta.emit_cpp_program()
+    assert any(node["name"] == "alpha" for node in alpha.ir_nodes())
+    assert any(node["name"] == "beta" for node in beta.ir_nodes())
     with pytest.raises(ValueError, match="non-empty string"):
         Program("")
 
 
-def test_ssa_replacement_is_canonical_in_every_public_inspection_view():
+def test_ssa_aliases_are_canonical_in_every_public_inspection_view():
     program = Program("canonical_inspection")
     state = typed_state(program, "transport")
-    first = program.linear_combine("first", state)
-    program.linear_combine("consumer", first)
+    first = program.value("first", state)
+    program.value("consumer", first)
 
-    program.define("renamed", first)
+    program.value("renamed", first)
 
-    assert "P.linear_combine(renamed)" in program.dump_operator_ir()
-    assert "ctx.linear_combine(renamed)" in program.dump_cpp_plan()
-    consumer = next(node for node in program.ir_nodes() if node["name"] == "consumer")
-    assert consumer["inputs"] == ["renamed"]
+    assert "renamed" in program.dump_operator_ir()
+    assert "renamed" in program.dump_cpp_plan()
+    nodes = program.ir_nodes()
+    assert [node["name"] for node in nodes] == ["renamed"]
+    assert nodes[0]["inputs"] == []

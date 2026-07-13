@@ -62,7 +62,7 @@ def test_numerical_defaults_report_classifies_every_constant():
 
 def test_system_inspect_reports_effective_block_and_solver_options():
     sim = System(n=8, L=1.0, periodic=True)
-    sim.add_block(
+    sim.block(
         "ion",
         _isothermal_model(),
         time=pops.IMEX(

@@ -80,7 +80,7 @@ def test_rate_combined_with_wrong_state_message():
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
     try:
-        P.linear_combine(
+        P.value(
             "bad", u_n + P.dt * rate + wrong,
             at=adctime.TimePoint(P.clock, step=1),
         )

@@ -76,7 +76,7 @@ EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached
 
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", plasma_model(),
+    sim.block("ions", plasma_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -91,7 +91,7 @@ def held_program(name="spec3_runtime_held"):
     """A board-flavoured forward-Euler Program whose field solve is held every EVERY steps.
 
     P.fields(..., from_state=U) is the board sugar for P.solve_fields (test_time_board pins the IR
-    identity) and P.define for P.linear_combine. The typed Every/Hold schedule attaches a hold
+    identity) and P.value for P.linear_combine. The typed Every/Hold schedule attaches a hold
     policy to that solve_fields node (a solve_fields output is the System aux, which is cacheable), so
     the codegen lowers it to `if (cache_should_update(id, N)) { solve_fields_from_state; store_aux }
     else { restore_aux }`. The held aux feeds the rhs source, so a held step != a recompute step.
@@ -110,7 +110,7 @@ def held_program(name="spec3_runtime_held"):
                 adctime.Every(adctime.AcceptedStep(P.clock), EVERY), off=adctime.Hold()),
         })
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.define("U1", U + dt * R, at=temporal.next.point))
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 
 
@@ -190,7 +190,7 @@ chk(len(py_calls) == 0,
 # afresh into a sim built from a model whose Python object is then deleted + gc-collected.
 orphan = System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
-orphan.add_block("ions", _m,
+orphan.block("ions", _m,
                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                  time=pops.Explicit(method="euler"))
 orphan.set_poisson("charge_density", "geometric_mg")

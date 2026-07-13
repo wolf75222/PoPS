@@ -320,7 +320,7 @@ def test_freeze_rolls_back_every_prior_member_when_a_later_member_raises():
     program = pops.time.Program("rollback-program")
     model = _model("rollback-u")
     p = pops.Problem(name="rollback")
-    block = p.add_block("u", model, spatial=first, time=program, diagnostics=[second])
+    block = p.block("u", model, spatial=first, time=program, diagnostics=[second])
 
     with pytest.raises(RuntimeError, match="second member failed"):
         p.freeze()
@@ -352,7 +352,7 @@ def test_opaque_irreversible_freezer_is_refused_before_any_member_mutates():
     first = pops.FiniteVolume()
     opaque = Opaque()
     p = pops.Problem(name="preflight")
-    p.add_block("u", _model(), spatial=first, diagnostics=[opaque])
+    p.block("u", _model(), spatial=first, diagnostics=[opaque])
 
     with pytest.raises(TypeError, match="opaque non-transactional"):
         p.freeze()
@@ -371,7 +371,7 @@ def test_deep_freeze_covers_block_members_and_global_program_without_stale_snaps
     block_time = pops.time.Program("block-time")
     global_time = pops.time.Program("global-time")
     p = pops.Problem(name="deep-freeze")
-    block = p.add_block(
+    block = p.block(
         "u", model, spatial=spatial, time=block_time, diagnostics=[diagnostic])
     p.time(global_time)
 
@@ -550,7 +550,7 @@ def test_later_freeze_failure_restores_python_physics_cascade_exactly():
 
 @pytest.mark.parametrize("mutate", [
     lambda p: p.block("extra", physics=_model()),
-    lambda p: p.add_block("extra2", _model()),
+    lambda p: p.block("extra2", _model()),
     lambda p: p.param(ConstParam("gamma", 1.4)),
     lambda p: p.aux("B_z"),
     lambda p: p.output(pops.output.OutputPolicy()),
@@ -635,7 +635,7 @@ def test_problem_freeze_seals_member_descriptors():
 def test_program_freeze_raises_on_new_node():
     model = _model("program-freeze")
     problem = pops.Problem(name="program-freeze")
-    block = problem.add_block("ne", model)
+    block = problem.block("ne", model)
     state = _state_handle(model)
     prog = pops.time.Program("t")
     prog.state(block, state)

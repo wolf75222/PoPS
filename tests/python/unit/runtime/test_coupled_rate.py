@@ -9,7 +9,7 @@ import pytest
 
 from pops import model
 from pops.ir.expr import Var
-from pops.problem import Problem
+from pops.problem import Case
 from tests.python.unit.runtime._typed_program import add_typed_block
 
 adctime = pytest.importorskip("pops.time")
@@ -30,7 +30,7 @@ def _two_fluid_module():
 
 def _program_states(mod, name, declarations):
     """Build real case-qualified temporal states for a coupled Program."""
-    case = Problem(name="%s_case" % name)
+    case = Case(name="%s_case" % name)
     program = adctime.Program(name).bind_operators(mod)
     result = {}
     for block_name, space in declarations:
@@ -82,8 +82,8 @@ def test_p_call_coupled_rate_returns_indexable_bundle():
     re_, ri_ = C[e_n.block], C[i_n.block]
     assert re_.vtype == "rhs" and ri_.vtype == "rhs"
     # each per-block rate is usable in an affine combination of its block's state
-    e1 = P.linear_combine("e1", e_n + P.dt * re_)
-    i1 = P.linear_combine("i1", i_n + P.dt * ri_)
+    e1 = P.value("e1", e_n + P.dt * re_)
+    i1 = P.value("i1", i_n + P.dt * ri_)
     assert e1.vtype == "state" and i1.vtype == "state"
 
 
@@ -127,7 +127,7 @@ def test_dump_cpp_plan_shows_coupled_rate_kernel():
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     e_n, i_n = states["electrons"].n, states["ions"].n
     C = P._call("collision", e_n, i_n)
-    P.linear_combine("e1", e_n + P.dt * C[e_n.block])
+    P.value("e1", e_n + P.dt * C[e_n.block])
     plan = P.dump_cpp_plan()
     assert "ADC-457" in plan and "ctx.coupled_rate(" not in plan
     assert "multi-state for_each_cell rate kernel" in plan
@@ -144,9 +144,9 @@ def test_coupled_rate_now_lowers_to_cpp():
     C = P._call("collision", e_n, i_n)
     P.commit_many({
         states["electrons"].next:
-            P.linear_combine("e1", e_n + P.dt * C[e_n.block]),
+            P.value("e1", e_n + P.dt * C[e_n.block]),
         states["ions"].next:
-            P.linear_combine("i1", i_n + P.dt * C[i_n.block]),
+            P.value("i1", i_n + P.dt * C[i_n.block]),
     })
     P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate
     src = P.emit_cpp_program(model=None)

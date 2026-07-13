@@ -134,6 +134,24 @@ class BrickDescriptor:
                 "requirements": dict(self.requirements),
                 "capabilities": dict(self.capabilities), "available": self.available().ok}
 
+    def to_data(self) -> dict[str, Any]:
+        """Exact inert identity data for any consumer implementing the descriptor protocol."""
+        if self.expression is not None or self.builder is not None:
+            raise TypeError(
+                "BrickDescriptor with expression/builder payload cannot claim an exact data identity"
+            )
+        return {
+            "name": self.name,
+            "brick_type": self.brick_type,
+            "category": self.category,
+            "native_id": self.native_id,
+            "scheme": self.scheme,
+            "requirements": dict(self.requirements),
+            "capabilities": dict(self.capabilities),
+            "options": dict(self.options),
+            "available": self.available().ok,
+        }
+
     def validate(self, context: Any = None) -> bool:
         """Raise a clear error when this brick has no native symbol yet (unavailable route)."""
         if not self.available(context).ok:

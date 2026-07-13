@@ -264,7 +264,7 @@ def test_native_amr_from_layout_runs():
     _bind_adapters._flow_amr_layout(sim, layout)
     # The Poisson field (set via the install solvers seam in bind) -- exercise it directly here.
     sim.set_poisson("charge_density", "geometric_mg")
-    sim.add_block("gas", _native_compressible_model(),
+    sim.block("gas", _native_compressible_model(),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_density("gas", _bubble(n))
 

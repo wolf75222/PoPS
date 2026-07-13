@@ -20,7 +20,7 @@ import pytest
 
 from pops.model.handles import OperatorHandle
 from pops.physics.board_handles import FieldOutputs, FieldsHandle
-from pops.problem import Problem
+from pops.problem import Case
 
 
 def _board_with_field():
@@ -68,7 +68,7 @@ def test_fields_handle_call_lowers_to_solve_fields():
     h = m.solve_field("phi_solve", equation=(-laplacian(phi) == rho),
                       outputs={"E": grad(phi).x}, solver=None)
     P = Program("p").bind_operators(m.module)
-    plasma = Problem(name="field_solve").add_block("plasma", m)
+    plasma = Case(name="field_solve").block("plasma", m)
     state = m.module.state_handle(m.module.state_spaces()["U"])
     U = P.state(plasma, state).n
     v = h(U)
@@ -90,7 +90,7 @@ def test_fields_handle_alias_keeps_exact_declaring_owner():
         "phi_solve", equation=(-laplacian2(phi2) == rho2),
         outputs={"E": grad2(phi2).x}, solver=None)
     program = Program("p").bind_operators(first.module)
-    plasma = Problem(name="field_alias").add_block("plasma", first)
+    plasma = Case(name="field_alias").block("plasma", first)
     declaration = first.module.state_handle(first.module.state_spaces()["U"])
     state = program.state(plasma, declaration).n
 

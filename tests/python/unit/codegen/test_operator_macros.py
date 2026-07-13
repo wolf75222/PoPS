@@ -130,7 +130,7 @@ def test_handle_macro_ir_parity_with_name_call():
     r = P_manual._call("explicit_rhs", u, fields, name="R")
     lin = P_manual._call("lorentz", fields, name="L")
     endpoint = typed_state(P_manual, "plasma", state_name="U", model=m).next
-    q = P_manual.linear_combine("imex_rhs", u + P_manual.dt * r, at=endpoint.point)
+    q = P_manual.value("imex_rhs", u + P_manual.dt * r, at=endpoint.point)
     u1 = P_manual.solve_local_linear("imex_step", operator=P_manual.I - 1.0 * P_manual.dt * lin,
                                      rhs=q, fields=fields)
     P_manual.commit(endpoint, u1)

@@ -8,7 +8,7 @@ pops = pytest.importorskip("pops")
 
 def _make_system():
     sim = System(n=4, L=1.0, periodic=True)
-    sim.add_block(
+    sim.block(
         "ne",
         pops.Model(
             state=pops.Scalar(),

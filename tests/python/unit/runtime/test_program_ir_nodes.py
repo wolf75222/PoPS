@@ -17,7 +17,7 @@ import sys
 try:
     from pops import time as adctime
     from pops import model
-    from pops.problem import Problem
+    from pops.problem import Case
     from tests.python.unit.runtime._typed_program import add_typed_block, typed_program_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_program_ir_nodes (pops unavailable: %s)" % exc)
@@ -29,7 +29,7 @@ def _euler(scale=1.0):
         "forward_euler", block_name="plasma")
     U = temporal.n
     R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-    P.commit(temporal.next, P.linear_combine("U1", U + (scale * P.dt) * R))
+    P.commit(temporal.next, P.value("U1", U + (scale * P.dt) * R))
     return P
 
 
@@ -62,14 +62,14 @@ def test_source_location_capture_is_opt_in_and_out_of_hash():
     off = _euler()
     module = model.Module("forward_euler_model")
     space = module.state_space("U", ("u",))
-    case = Problem(name="forward_euler_case")
+    case = Case(name="forward_euler_case")
     block, state = add_typed_block(case, module, "plasma", space)
     on = adctime.Program("forward_euler").capture_source_locations(True)
     on.bind_operators(module)
     temporal = on.state(block, state)
     U = temporal.n
     R = on._rhs_legacy(state=U, fields=on.solve_fields(U), flux=True, sources=["default"])
-    on.commit(temporal.next, on.linear_combine("U1", U + (1.0 * on.dt) * R))
+    on.commit(temporal.next, on.value("U1", U + (1.0 * on.dt) * R))
     located = [n for n in on.ir_nodes() if n["source_location"]]
     assert located, "capture ON must populate at least one source_location"
     loc = located[0]["source_location"]
@@ -88,7 +88,7 @@ def test_space_tag_changes_the_hash():
             "forward_euler", components=components)
         U = temporal.n
         R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-        P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
+        P.commit(temporal.next, P.value("U1", U + P.dt * R))
         return P
     assert build(True)._ir_hash() != build(False)._ir_hash()
     print("OK  the operator-first space tag participates in the IR hash")
@@ -109,7 +109,7 @@ def test_missing_commit_rejected():
 def test_double_commit_rejected():
     P, _, _, _, _, temporal = typed_program_state("p")
     U = temporal.n
-    U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
+    U1 = P.value("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
     P.commit(temporal.next, U1)
     try:
         P.commit(temporal.next, U1)
@@ -123,7 +123,7 @@ def test_distinct_field_context_per_stage():
     P, _, _, _, _, temporal = typed_program_state("p")
     U = temporal.n
     f0 = P.solve_fields(U)
-    U1 = P.linear_combine("U1", U + P.dt * P._rhs_legacy(state=U, fields=f0))
+    U1 = P.value("U1", U + P.dt * P._rhs_legacy(state=U, fields=f0))
     f1 = P.solve_fields(U1)
     assert f0 is not f1 and f0.id != f1.id
     # Each stage's FieldContext is tagged with the state it was solved from (no stale global aux).

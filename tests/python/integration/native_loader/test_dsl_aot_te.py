@@ -59,7 +59,7 @@ def main():
         so = m.compile_or_jit(os.path.join(tmp, "tescalar_aot.so"), INCLUDE, mode="compile")
 
         sim = System(n=n, L=L, periodic=True)
-        sim.add_block("gas", model=gas_model(gamma),
+        sim.block("gas", model=gas_model(gamma),
                       spatial=pops.Spatial(flux=Rusanov()), time=pops.Explicit())
         # add_compiled_block : pops_compiled_naux()=5 -> ensure_aux_width(5)
         sim.add_compiled_block("probe", so, limiter="none", riemann="rusanov",

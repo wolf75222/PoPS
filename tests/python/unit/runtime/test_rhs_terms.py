@@ -48,7 +48,7 @@ def _terms_program(terms, authored=None):
     U = temporal.n
     f = P.solve_fields(U)
     R = P.rhs("R", state=U, fields=f, terms=terms)
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     P.validate()
     return P
 
@@ -63,7 +63,7 @@ def _legacy_program(flux, sources, model=None):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit(temporal.next, P.linear_combine("U1", U + dt * R))
+    P.commit(temporal.next, P.value("U1", U + dt * R))
     P.validate()
     return P
 

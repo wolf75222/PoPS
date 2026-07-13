@@ -6,7 +6,7 @@ from fractions import Fraction
 import pytest
 
 from pops.model import Module, Rate
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import Program
 from pops.time.graph import (
     Branch, Commit, Loop, OperatorCall, ProgramValue, Region, RegionCapture, StateRead,
@@ -28,15 +28,15 @@ def _program(*, with_operator=False):
             lowering={"source": "default"},
             expr={"test": "decay"},
         )
-    problem = Problem(name="case")
-    block = problem.add_block("fluid", model)
+    problem = Case(name="case")
+    block = problem.block("fluid", model)
     program = Program("step").bind_operators(model)
     state = program.state(block, state_declaration)
     if rate is None:
-        result = program.linear_combine("u_next", state.n, at=state.next.point)
+        result = program.value("u_next", state.n, at=state.next.point)
     else:
         called = program.call(rate, state.n, name="decay_rate")
-        result = program.linear_combine(
+        result = program.value(
             "u_next", state.n + program.dt * called, at=state.next.point)
     program.commit(state.next, result)
     return program
@@ -75,8 +75,8 @@ def test_to_graph_maps_typed_operator_call_without_retaining_registry():
 def test_to_graph_preserves_exact_cross_clock_synchronization():
     model = Module("clocked")
     space = model.state_space("U", ("u",))
-    problem = Problem(name="case")
-    block = problem.add_block("fluid", model)
+    problem = Case(name="case")
+    block = problem.block("fluid", model)
     program = Program("clock-transfer")
     state = program.state(block, model.state_handle(space))
     fast = Clock("fast", owner=program.owner_path)
@@ -101,7 +101,7 @@ def test_to_graph_is_a_deep_snapshot_of_serialized_attrs():
 
     # The source builder remains independent and mutable; a later node cannot alter the snapshot.
     state = next(value for value in program._values if value.op == "state")
-    program.linear_combine("later", state)
+    program.value("later", state)
 
     assert graph.to_data() == before
 
@@ -109,14 +109,14 @@ def test_to_graph_is_a_deep_snapshot_of_serialized_attrs():
 def test_to_graph_converts_branch_range_and_while_blocks_to_structured_regions():
     model = Module("control")
     space = model.state_space("U", ("u",))
-    block = Problem(name="case").add_block("fluid", model)
+    block = Case(name="case").block("fluid", model)
     program = Program("structured-control")
     state = program.state(block, model.state_handle(space))
 
     condition = program.norm2(state.n) > 0
 
     def copy(P, value):
-        return P.linear_combine("body_copy", 1 * value)
+        return P.value("body_copy", 1 * value)
 
     selected = program.branch(
         condition,

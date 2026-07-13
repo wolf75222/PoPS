@@ -133,7 +133,7 @@ def _electric_fe_program(model, name="electric_fe"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
 
@@ -143,7 +143,7 @@ def _unknown_source_program(model, name="unknown_src"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
 
@@ -183,7 +183,7 @@ def _extra_fe_program(model, srcs, name="extra_fe"):
     U = temporal.n
     f = P.solve_fields(U)
     R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=srcs)
-    P.commit(temporal.next, P.linear_combine("U1", U + P.dt * R))
+    P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
 
@@ -210,13 +210,13 @@ def predictor_corrector_program(model, name="predictor_corrector_poisson_lorentz
     U_n = temporal.n
     f_n = P.solve_fields("fields_n", U_n)
     R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
-    U_star_rhs = P.linear_combine("U_star_rhs", U_n + dt * R_n)
+    U_star_rhs = P.value("U_star_rhs", U_n + dt * R_n)
     U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P._linear_source("lorentz"),
                                   rhs=U_star_rhs, fields=f_n)
     f_star = P.solve_fields("fields_star", U_star)
     R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
     C_star = P.apply(operator=P._linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
-    Q = P.linear_combine("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
+    Q = P.value("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
     U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source("lorentz"),
                                  rhs=Q, fields=f_star)
     P.commit(temporal.next, U_np1)

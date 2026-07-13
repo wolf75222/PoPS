@@ -38,7 +38,7 @@ def _density(n):
 
 def _solve_single(elliptic, dens, n, rhs="composite"):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("blk", model=_scalar(elliptic), spatial=pops.Spatial(none=True))
+    sim.block("blk", model=_scalar(elliptic), spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs=rhs, solver="fft")
     sim.set_density("blk", dens.reshape(-1).tolist())
     sim.solve_fields()
@@ -78,8 +78,8 @@ def mixed_bricks_sum():
     d0, d1 = _density(n), 1.0 + 0.2 * np.cos(2 * PI * (np.arange(n) + 0.5) / n)[None, :] * np.ones((n, n))
 
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("a", model=_scalar(pops.ChargeDensity(charge=q0)), spatial=pops.Spatial(none=True))
-    sim.add_block("b", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0bg)),
+    sim.block("a", model=_scalar(pops.ChargeDensity(charge=q0)), spatial=pops.Spatial(none=True))
+    sim.block("b", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0bg)),
                   spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs="composite", solver="fft")
     sim.set_density("a", d0.reshape(-1).tolist())
@@ -105,7 +105,7 @@ def epm_facade_roundtrip():
     phi_setpoisson = _solve_single(pops.BackgroundDensity(alpha=alpha, n0=n0), dens, n)
 
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("blk", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0)),
+    sim.block("blk", model=_scalar(pops.BackgroundDensity(alpha=alpha, n0=n0)),
                   spatial=pops.Spatial(none=True))
     sim.add_elliptic_model("poisson",
                            pops.elliptic(operator=pops.div_eps_grad(1.0), rhs=pops.composite_rhs(),
@@ -134,7 +134,7 @@ def token_alias():
     # Un token inconnu est refuse explicitement -- desormais PRE-BIND par set_poisson lui-meme
     # (validation de route typee, ADC-599/584), avant tout solve.
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("blk", model=_scalar(pops.ChargeDensity(charge=1.0)), spatial=pops.Spatial(none=True))
+    sim.block("blk", model=_scalar(pops.ChargeDensity(charge=1.0)), spatial=pops.Spatial(none=True))
     try:
         sim.set_poisson(rhs="bogus", solver="fft")
         raise AssertionError("un token rhs inconnu aurait du etre refuse")

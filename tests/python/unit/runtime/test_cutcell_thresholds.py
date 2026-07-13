@@ -51,7 +51,7 @@ from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 def _sim():
     sim = System(n=16, L=1.0, periodic=False)
-    sim.add_block("ion", pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(),
+    sim.block("ion", pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(),
                                     pops.NoSource(), pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial())
     return sim

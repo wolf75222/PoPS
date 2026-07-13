@@ -88,7 +88,7 @@ def test_every_canonical_brick_still_builds():
                             transport=pops.IsothermalFlux(),
                             source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
     for name, model in (("exb", scalar), ("comp", compressible), ("iso", isothermal)):
-        _system(n).add_block(name, model=model, spatial=pops.Spatial(none=True))
+        _system(n).block(name, model=model, spatial=pops.Spatial(none=True))
 
     # Sources on a fluid transport (isothermal, 3 vars). NoSource covered above.
     def iso_source(src):
@@ -100,14 +100,14 @@ def test_every_canonical_brick_still_builds():
                       ("gravity", pops.GravityForce()),
                       ("magnetic", pops.MagneticLorentzForce(charge=1.0)),
                       ("potmag", pops.PotentialMagneticForce(charge=1.0))):
-        _system(n).add_block(name, model=iso_source(src), spatial=pops.Spatial(none=True))
+        _system(n).block(name, model=iso_source(src), spatial=pops.Spatial(none=True))
 
     # Elliptics (on a scalar transport, the historical diocotron shape). ChargeDensity covered above.
     for name, ell in (("bg", pops.BackgroundDensity(alpha=1.0, n0=0.0)),
                       ("grav", pops.GravityCoupling())):
         model = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                            source=pops.NoSource(), elliptic=ell)
-        _system(n).add_block(name, model=model, spatial=pops.Spatial(none=True))
+        _system(n).block(name, model=model, spatial=pops.Spatial(none=True))
     assert ic.shape == (n, n)  # touch the array so the import is not flagged unused
 
 
@@ -119,7 +119,7 @@ def test_unknown_transport_modelspec_throws_historical_message():
     spec.elliptic = "charge"
     spec.source = "none"
     with pytest.raises(Exception) as exc:
-        _system().add_block("m", spec)
+        _system().block("m", spec)
     message = str(exc.value)
     assert "unknown transport" in message, "historical 'unknown transport' message drifted: %r" % message
     assert "bogus" in message

@@ -77,7 +77,7 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
     phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
                          restart=restart).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
-    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
     return P
 
@@ -111,7 +111,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
         kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
     phi = P.solve_linear(**kw).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
-    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
     return P
 

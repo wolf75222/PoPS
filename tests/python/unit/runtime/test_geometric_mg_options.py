@@ -94,7 +94,7 @@ from pops.runtime.system import System  # noqa: E402  (ADC-545 advanced runtime 
 
 def _sim(**poisson):
     sim = System(n=16, L=1.0, periodic=True)
-    sim.add_block(
+    sim.block(
         "ion",
         pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(), pops.NoSource(),
                    pops.ChargeDensity(charge=-1.0)),

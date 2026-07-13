@@ -9,7 +9,7 @@ from pops.model import Module
 
 def _problem(name="phase-case"):
     problem = pops.Problem(name=name)
-    problem.add_block("fluid", Module("physics"))
+    problem.block("fluid", Module("physics"))
     return problem
 
 

@@ -148,7 +148,7 @@ def test_runtime_bundle_is_flattened_once_in_problem_snapshot():
     bundle = RuntimePolicies(
         output=output, diagnostics=[diagnostic], schedules=[schedule])
     problem = pops.Problem(name="runtime-snapshot")
-    problem.add_block("fluid", Module("runtime-model"))
+    problem.block("fluid", Module("runtime-model"))
     problem.runtime(bundle)
 
     payload = problem.freeze().to_dict()
@@ -165,8 +165,8 @@ def test_problem_validates_output_field_ownership_before_lowering():
     state_ref = module.state_handle(state)
 
     ambiguous = pops.Problem(name="ambiguous-output")
-    block_a = ambiguous.add_block("a", module)
-    block_b = ambiguous.add_block("b", module)
+    block_a = ambiguous.block("a", module)
+    block_b = ambiguous.block("b", module)
     ambiguous.output(OutputPolicy(fields=[state_ref]))
     report = ambiguous.validate_report()
     issue = next(
@@ -176,7 +176,7 @@ def test_problem_validates_output_field_ownership_before_lowering():
     assert str(block_b.instance_owner_path) in issue.message
 
     resolved = pops.Problem(name="resolved-output")
-    block = resolved.add_block("a", module)
+    block = resolved.block("a", module)
     resolved.output(OutputPolicy(fields=[block[state_ref]]))
     assert resolved.validate_report().ok
 
@@ -194,7 +194,7 @@ def test_runtime_registry_rejects_non_writable_output_handle_kind():
     policy = OutputPolicy()
     policy.fields = [operator]
     problem = pops.Problem(name="bad-output-kind")
-    problem.add_block("fluid", module)
+    problem.block("fluid", module)
     problem.output(policy)
     issue = next(
         item for item in problem.validate_report().issues
@@ -205,12 +205,12 @@ def test_runtime_registry_rejects_non_writable_output_handle_kind():
 def test_problem_validates_diagnostic_block_ownership_before_lowering():
     module = Module("transport-diagnostic")
     owner = pops.Problem(name="diagnostic-owner")
-    local_block = owner.add_block("local", module)
+    local_block = owner.block("local", module)
     owner.runtime(RuntimePolicies(diagnostics=[Integral(block=local_block)]))
     assert owner.validate_report().ok
 
     foreign = pops.Problem(name="diagnostic-foreign")
-    foreign.add_block("other", module)
+    foreign.block("other", module)
     foreign.runtime(RuntimePolicies(diagnostics=[Integral(block=local_block)]))
     report = foreign.validate_report()
     issue = next(
@@ -227,7 +227,7 @@ def test_compiled_runtime_snapshot_detaches_and_canonicalizes_references():
     state = module.state_space("U", components=("rho",))
     state_ref = module.state_handle(state)
     problem = pops.Problem(name="snapshot-output")
-    block = problem.add_block("transport", module)
+    block = problem.block("transport", module)
     measure = Integral(block=block)
     policy = OutputPolicy(fields=[state_ref], diagnostics=[measure])
     problem.output(policy)
@@ -258,8 +258,8 @@ def test_runtime_snapshot_capture_refuses_ambiguous_model_local_reference():
     state = module.state_space("U", components=("rho",))
     state_ref = module.state_handle(state)
     problem = pops.Problem(name="ambiguous-snapshot")
-    problem.add_block("a", module)
-    problem.add_block("b", module)
+    problem.block("a", module)
+    problem.block("b", module)
     problem.output(OutputPolicy(fields=[state_ref]))
     with pytest.raises(AmbiguousReferenceError, match="candidates"):
         _capture_runtime_declarations(problem)

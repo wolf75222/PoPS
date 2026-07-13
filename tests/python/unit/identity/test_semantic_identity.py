@@ -5,7 +5,7 @@ from pops.identity.semantic import semantic_identity, semantic_identity_of
 from pops.mesh import CartesianMesh
 from pops.mesh.layouts import Uniform
 from pops.model import Module
-from pops.problem import Problem
+from pops.problem import Case
 from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot
 
 
@@ -17,7 +17,7 @@ def _snapshot(*, representation="conservative", centering="cell", units=("kg/m3"
         representation=representation, centering=centering, units=units,
         frame=frame, clock=clock,
     )
-    problem = Problem(name="case").block("fluid", module)
+    problem = Case(name="case").block("fluid", module)
     return build_authoring_snapshot(
         problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=None)
 

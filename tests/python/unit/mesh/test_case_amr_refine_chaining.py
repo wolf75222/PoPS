@@ -39,7 +39,7 @@ class _FakeModel:
 def _case():
     model = _FakeModel()
     case = pops.Problem(layout=AMR(base=CartesianMesh(n=32)))
-    case.add_block("ne", model)
+    case.block("ne", model)
     return case, model
 
 
@@ -133,8 +133,8 @@ def test_expression_indicator_is_resolved_recursively_without_mutating_the_sourc
 def test_reused_model_requires_explicit_block_handle_and_lists_candidate_owners():
     model = _FakeModel()
     case = pops.Problem(name="multi", layout=AMR(base=CartesianMesh(n=32)))
-    left = case.add_block("left", model)
-    case.add_block("right", model)
+    left = case.block("left", model)
+    case.block("right", model)
 
     with pytest.raises(AmbiguousReferenceError) as exc:
         case.amr.refine(Refine.on(_gradient_norm(model.rho)).above(0.1))
@@ -176,7 +176,7 @@ def test_direct_layout_rejects_canonical_foreign_and_nested_ghost_handles():
 
     _, model = _case()
     case = pops.Problem(name="layout-auth")
-    case.add_block("ne", model)
+    case.block("ne", model)
     ghost = Handle("ghost", kind="state", owner=model.owner_path.canonical())
     foreign = Handle("rho", kind="state", owner=OwnerPath.model("foreign-model"))
 

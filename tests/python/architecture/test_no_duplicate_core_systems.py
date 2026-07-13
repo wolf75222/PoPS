@@ -214,7 +214,7 @@ def test_lib_time_macro_returns_the_same_program_handle():
     try:
         import pops.lib.time as lib_time
         from pops.model import Module
-        from pops.problem import Problem
+        from pops.problem import Case
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
@@ -222,7 +222,7 @@ def test_lib_time_macro_returns_the_same_program_handle():
     module = Module("architecture-time-schemes")
     state_space = module.state_space("U", ("u",))
     state = module.state_handle(state_space)
-    block = Problem(name="architecture-time-case").add_block("plasma", module)
+    block = Case(name="architecture-time-case").block("plasma", module)
     # Strang / imex / bdf / predictor_corrector need extra scheme arguments and are covered by the
     # ADC-566 boundary proof through their in-place form.
     for name in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
@@ -289,7 +289,7 @@ def test_field_facade_and_direct_lowering_share_one_ir_hash():
     """
     try:
         from pops.model import Module
-        from pops.problem import Problem
+        from pops.problem import Case
         from pops.time import Program
     except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
         pytest.skip("pops import unavailable: %s" % exc)
@@ -297,7 +297,7 @@ def test_field_facade_and_direct_lowering_share_one_ir_hash():
     module = Module("field-parity-model")
     state_space = module.state_space("U", ("u",))
     state_handle = module.state_handle(state_space)
-    block = Problem(name="field-parity-case").add_block("gas", module)
+    block = Case(name="field-parity-case").block("gas", module)
 
     def _direct():
         program = Program("field_parity")

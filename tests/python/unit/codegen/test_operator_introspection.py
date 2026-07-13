@@ -14,7 +14,7 @@ try:
     from pops.codegen.loader import CompiledProblem
     from pops.ir.expr import Const
     from pops.physics.facade import Model
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
@@ -47,7 +47,7 @@ def _model():
 
 def _time_refs(m):
     module = m.module
-    block = Problem(name="introspection-case").add_block("plasma", module)
+    block = Case(name="introspection-case").block("plasma", module)
     state = module.state_handle(module.state_spaces()["U"])
     return block, state
 

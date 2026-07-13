@@ -38,9 +38,9 @@ def _bump(n, amp):
 def _run_amr_explicit_family(time_brick, *, multi, n=32):
     """Build + step a native AmrSystem of scalar-charge block(s) under an explicit-family @p time_brick."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.add_block("ions", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=time_brick)
+    sim.block("ions", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=time_brick)
     if multi:
-        sim.add_block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
+        sim.block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
                       time=time_brick)
     sim.set_poisson(bc="periodic")
     sim.set_refinement(1.05)  # low threshold -> the bump tags + refines (live fine patches)

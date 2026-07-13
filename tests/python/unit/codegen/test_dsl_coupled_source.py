@@ -58,9 +58,9 @@ def density_block(alpha=1.0, n0=1.0):
 def make_system(n, ne0, ni0, ng0):
     sim = System(n=n, L=1.0, periodic=True)
     # n0 = densite uniforme de chaque bloc : f = alpha (n - n0) = 0 a l'init (phi uniforme -> derive nulle)
-    sim.add_block("electrons", model=density_block(n0=ne0), spatial=pops.Spatial(none=True))
-    sim.add_block("ions", model=density_block(n0=ni0), spatial=pops.Spatial(none=True))
-    sim.add_block("neutrals", model=density_block(n0=ng0), spatial=pops.Spatial(none=True))
+    sim.block("electrons", model=density_block(n0=ne0), spatial=pops.Spatial(none=True))
+    sim.block("ions", model=density_block(n0=ni0), spatial=pops.Spatial(none=True))
+    sim.block("neutrals", model=density_block(n0=ng0), spatial=pops.Spatial(none=True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("electrons", np.full((n, n), ne0))
     sim.set_density("ions", np.full((n, n), ni0))

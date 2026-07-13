@@ -53,7 +53,7 @@ def gaussian(n):
 print("== System : FiniteVolume(minmod, hll, primitive) sur isotherme 3 var ==")
 n = 32
 sim = System(n=n, L=1.0, periodic=True)
-sim.add_block("ions", iso_model(),
+sim.block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
               time=pops.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
@@ -73,7 +73,7 @@ sim2 = System(n=16, L=1.0, periodic=True)
 scal = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
                  elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
 try:
-    sim2.add_block("e", scal, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
+    sim2.block("e", scal, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()))
     chk(False, "hll sur scalaire ExB aurait du lever")
 except RuntimeError as e:
     chk("wave_speeds" in str(e) or "hll" in str(e), f"erreur explicite : {e}")
@@ -82,7 +82,7 @@ except RuntimeError as e:
 print("== hllc sur isotherme 3 var natif : rejet explicite (ni capability HLLC, ni Euler 2D) ==")
 sim3 = System(n=16, L=1.0, periodic=True)
 try:
-    sim3.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC()))
+    sim3.block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC()))
     chk(False, "hllc sur isotherme 3 var aurait du lever")
 except RuntimeError as e:
     chk("hllc" in str(e), f"erreur explicite : {e}")
@@ -92,7 +92,7 @@ print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
-amr.add_block("ions", iso_model(),
+amr.block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
               time=pops.Explicit())
 amr.set_density("ions", gaussian(32).ravel())

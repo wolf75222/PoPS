@@ -92,7 +92,7 @@ policies = {
 results = {}
 for label, policy in policies.items():
     s = System(n=n, periodic=False)
-    s.add_block("ne", electron_model(),
+    s.block("ne", electron_model(),
                 spatial=pops.Spatial(minmod=True), time=policy)
     s.set_poisson(bc="dirichlet")
     rho_e = 1.0 + 0.04 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))

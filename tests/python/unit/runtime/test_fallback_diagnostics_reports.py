@@ -32,7 +32,7 @@ def test_runtime_inspect_includes_fallback_diagnostics_and_configured_opt_in():
         pops.NoSource(),
         pops.ChargeDensity(),
     )
-    sim.add_block("ion", model, spatial=pops.Spatial(positivity_floor=1e-12))
+    sim.block("ion", model, spatial=pops.Spatial(positivity_floor=1e-12))
 
     report = sim.inspect().to_dict()
     fallbacks = report["diagnostics"]["fallbacks"]

@@ -11,7 +11,7 @@ from pops.time import Program, StagePoint, TimePoint
 def _program():
     program = Program("deep-program")
     state = typed_state(program, "fluid", state_name="U")
-    final = program.linear_combine("final", state.n, at=state.next.point)
+    final = program.value("final", state.n, at=state.next.point)
     program.commit(state.next, final)
     return program
 
@@ -75,11 +75,11 @@ def test_frozen_temporal_handles_preserve_materialized_pure_reads():
     current = state.n
     point = StagePoint("predictor", {"main": TimePoint(state.clock, 1)})
     stage = state.stage("predictor", point=point)
-    defined = program.define(stage, current)
+    defined = program.value(stage, current)
     program.keep_history(state, depth=1)
     previous = state.prev.value
     endpoint = state.next
-    final = program.linear_combine("final", defined, at=endpoint.point)
+    final = program.value("final", defined, at=endpoint.point)
     program.commit(endpoint, final)
 
     program.freeze()

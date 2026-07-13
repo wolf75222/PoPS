@@ -93,7 +93,7 @@ def test_problem_and_program_inspect_return_typed_reports_and_do_not_compile():
     state_space = model.state_space("U", ("u",))
     state = model.state_handle(state_space)
     prob = pops.Problem(name="p")
-    block = prob.add_block("ne", model)
+    block = prob.block("ne", model)
     prob_report = prob.inspect()
     assert isinstance(prob_report, Report) and not isinstance(prob_report, dict)
     assert prob_report.category == "problem"

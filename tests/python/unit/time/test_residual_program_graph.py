@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pops.model import Module
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import FailRun, Program, RejectAttempt
 from pops.time.graph import (
     Commit, ProgramGraph, ProgramValue, ResidualEvaluation, ResidualSolve, StateRead, ValueRef,
@@ -129,9 +129,9 @@ def test_residual_solution_preserves_each_unknown_block_and_space():
     model = Module("coupled")
     space = model.state_space("U", ("u",))
     state = model.state_handle(space)
-    problem = Problem("case")
-    left = problem.add_block("left", model)
-    right = problem.add_block("right", model)
+    problem = Case("case")
+    left = problem.block("left", model)
+    right = problem.block("right", model)
     program = Program("coupled-residual")
     left_state = program.state(left, state)
     right_state = program.state(right, state)

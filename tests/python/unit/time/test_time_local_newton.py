@@ -79,11 +79,11 @@ def reaction_program(t, name="implicit_reaction", model=None):
     dt = P.dt
     U = typed_state(P, "blk", model=model)
     endpoint = typed_state(P, "blk", state_name="U", model=model).next
-    guess = P.linear_combine("implicit_guess", U, at=endpoint.point)
+    guess = P.value("implicit_guess", U, at=endpoint.point)
 
     def residual(P, Uit, U0):
         S = P._source("react", state=Uit)  # private name seam; public handle route is tested separately
-        return P.linear_combine(
+        return P.value(
             "r", Uit - U0 - dt * S, at=Uit.point)  # r = U - U0 - dt*S(U)
 
     W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=guess,
@@ -118,7 +118,7 @@ def section_a(t):
         "a non-callable residual is rejected")
 
     def resid(P, Uit, U0):
-        return P.linear_combine(Uit - U0)
+        return P.value(Uit - U0)
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=resid, initial_guess="x")),
         "a non-State initial_guess is rejected")
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=resid, initial_guess=U, max_iter=0)),
@@ -130,7 +130,7 @@ def section_a(t):
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
         R = P._rhs_legacy(state=Uit, sources=["default"])
-        return P.linear_combine(Uit - U0 - P.dt * R, at=Uit.point)
+        return P.value(Uit - U0 - P.dt * R, at=Uit.point)
     chk(raises(ValueError, lambda: P.solve_local_nonlinear(residual=bad_resid, initial_guess=U)),
         "a non-local residual op (P.rhs) is rejected")
 
@@ -150,10 +150,10 @@ def section_a(t):
         dt = Q.dt
         u = typed_state(Q, "blk")
         endpoint = typed_state(Q, "blk", state_name="U").next
-        guess = Q.linear_combine("implicit_guess", u, at=endpoint.point)
+        guess = Q.value("implicit_guess", u, at=endpoint.point)
 
         def r(Q, Uit, U0):
-            return Q.linear_combine(
+            return Q.value(
                 Uit - U0 - dt * Q._source("react", state=Uit), at=Uit.point)
         Q.commit(endpoint, Q.solve_local_nonlinear(
             name="W", residual=r, initial_guess=guess, tol=tol, max_iter=mi))
@@ -188,10 +188,10 @@ def section_a(t):
     Pbig = t.Program("big_nl")
     Ub = typed_state(Pbig, "blk", model=big)
     endpoint = typed_state(Pbig, "blk", state_name="U", model=big).next
-    guess = Pbig.linear_combine("implicit_guess", Ub, at=endpoint.point)
+    guess = Pbig.value("implicit_guess", Ub, at=endpoint.point)
 
     def big_resid(P, Uit, U0):
-        return P.linear_combine(
+        return P.value(
             Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point)
     Pbig.commit(endpoint,
                 Pbig.solve_local_nonlinear(

@@ -24,7 +24,7 @@ try:
     from pops.diagnostics import Norm, Integral, MinMax, ConservationCheck
     from pops.linalg.norms import L1, L2, LInf
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops.time.schedule import every, always, on_start, on_end
     from pops.runtime._diagnostics_driver import (diagnostic_due, measure_reduction,
                                                   fire_diagnostics)
@@ -35,8 +35,8 @@ except Exception as exc:  # noqa: BLE001
 
 fails = 0
 
-_DIAGNOSTIC_PROBLEM = Problem(name="runtime-diagnostics")
-_IONS_BLOCK = _DIAGNOSTIC_PROBLEM.add_block("ions", Module("runtime-diagnostic-model"))
+_DIAGNOSTIC_PROBLEM = Case(name="runtime-diagnostics")
+_IONS_BLOCK = _DIAGNOSTIC_PROBLEM.block("ions", Module("runtime-diagnostic-model"))
 
 
 def chk(cond, label):
@@ -49,7 +49,7 @@ def chk(cond, label):
 def build(n=16):
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("ions",
+    sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                              transport=pops.IsothermalFlux(),
                              source=pops.PotentialForce(charge=1.0),

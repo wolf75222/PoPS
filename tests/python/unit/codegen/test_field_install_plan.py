@@ -24,7 +24,7 @@ from pops.math import laplacian
 from pops.mesh import CartesianMesh
 from pops.mesh.layouts import Uniform
 from pops.physics import Model
-from pops.problem import Problem
+from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG
 
 
@@ -58,11 +58,11 @@ def _case(*conditions: object):
         _field(model, "potential_%d" % index, state[index])
         for index in range(len(conditions))
     ]
-    problem = Problem(name="field-case-%d" % len(conditions))
-    problem.add_block("material", model)
+    problem = Case(name="field-case-%d" % len(conditions))
+    problem.block("material", model)
     handles = []
     for operator, condition in zip(operators, conditions):
-        handles.append(problem.add_field(
+        handles.append(problem.field(
             operator,
             _disc(condition, singular=isinstance(condition, Neumann)),
         ))
@@ -108,12 +108,12 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
         "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
-    problem = Problem(name="dynamic-field-case")
-    problem.add_block("material", model)
+    problem = Case(name="dynamic-field-case")
+    problem.block("material", model)
     from pops.params import RuntimeParam
     boundary_value = RuntimeParam("wall_value")
     problem.param(boundary_value)
-    problem.add_field(operator, FieldDiscretization(
+    problem.field(operator, FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(
             AllPhysicalBoundaries(), Dirichlet(problem.value(boundary_value))),),
@@ -145,10 +145,10 @@ def test_iterate_dependent_boundary_requires_newton_and_emits_exact_jvp() -> Non
         "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
-    problem = Problem(name="nonlinear-boundary-case")
-    problem.add_block("material", model)
+    problem = Case(name="nonlinear-boundary-case")
+    problem.block("material", model)
     u = ValueExpr(unknown)
-    problem.add_field(operator, FieldDiscretization(
+    problem.field(operator, FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(
             AllPhysicalBoundaries(), Mixed(alpha=1.0, beta=1.0, value=u * u)),),
@@ -179,10 +179,10 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
         "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
-    problem = Problem(name="prepared-boundary-case")
-    block = problem.add_block("material", model)
+    problem = Case(name="prepared-boundary-case")
+    block = problem.block("material", model)
     prepared_rho = boundary_value(block[state], "rho")
-    problem.add_field(operator, FieldDiscretization(
+    problem.field(operator, FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(
             AllPhysicalBoundaries(), Dirichlet(prepared_rho + logical_time("time"))),),
@@ -215,9 +215,9 @@ def test_boundary_state_value_requires_explicit_component_contract() -> None:
         "potential", unknown=unknown, equation=(-laplacian(unknown) == rho),
         outputs=(FieldOutput("potential", unknown),),
     )
-    problem = Problem(name="ambiguous-boundary-case")
-    block = problem.add_block("material", model)
-    problem.add_field(operator, FieldDiscretization(
+    problem = Case(name="ambiguous-boundary-case")
+    block = problem.block("material", model)
+    problem.field(operator, FieldDiscretization(
         method=CellCenteredSecondOrder(),
         boundaries=(BoundaryCondition(
             AllPhysicalBoundaries(), Dirichlet(ValueExpr(block[state]))),),

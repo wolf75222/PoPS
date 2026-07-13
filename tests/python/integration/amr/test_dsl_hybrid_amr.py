@@ -83,7 +83,7 @@ def main():
 
         spatial = pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative())
         H = _amr(n, L, lambda s: (s.add_equation("gas", co, spatial=spatial), poisson(s)))
-        N = _amr(n, L, lambda s: (s.add_block("gas", spec, spatial=spatial, time=pops.Explicit()),
+        N = _amr(n, L, lambda s: (s.block("gas", spec, spatial=spatial, time=pops.Explicit()),
                                   poisson(s)))
         assert H.n_patches() == N.n_patches(), "n_patches initial hybride != add_block"
         m0h, m0n = H.mass(), N.mass()

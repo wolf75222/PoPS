@@ -27,7 +27,7 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     rate = model.rate("A", ddt(state) == -div(flux))
 
     case = pops.Problem(name="scalar-advection")
-    tracer = case.add_block(
+    tracer = case.block(
         "tracer",
         model,
         spatial=pops.FiniteVolume(
@@ -45,9 +45,9 @@ def test_scalar_advection_completes_typed_phase_pipeline():
             "predictor", {"explicit": TimePoint(program.clock, Fraction(1, 1))}
         ),
     )
-    stage = program.define(stage_handle, temporal.n + program.dt * k0)
+    stage = program.value(stage_handle, temporal.n + program.dt * k0)
     k1 = rate(stage, name="k1")
-    next_state = program.linear_combine(
+    next_state = program.value(
         "q_next",
         Fraction(1, 2) * temporal.n
         + Fraction(1, 2) * (stage + program.dt * k1),

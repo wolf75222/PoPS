@@ -63,7 +63,7 @@ def gaussian(n):
 
 def build(n=24):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
+    sim.block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_density("ions", gaussian(n).ravel())
@@ -110,7 +110,7 @@ def build_amr(n=24):
     amr = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
-    amr.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
+    amr.block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
     amr.set_density("ions", gaussian(n).ravel())
     return amr
@@ -132,7 +132,7 @@ chk(amr2.last_dt_bound() == "global:cap_amr",
 
 print("== (C2) AMR multi-blocs : borne globale via AmrRuntime ==")
 amr3 = build_amr()
-amr3.add_block("e2", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
+amr3.block("e2", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
 amr3.set_density("e2", gaussian(24).ravel())
 amr3.add_dt_bound("cap_multi", lambda: cap_amr)

@@ -16,7 +16,7 @@ try:
         OPERATOR_FAMILIES, OPERATOR_KINDS, OperatorHandle, operator_family,
     )
     from pops.physics.facade import Model
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops import time as adctime
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_families (pops unavailable: %s)" % exc)
@@ -41,7 +41,7 @@ def build_model():
 def _program_state(model, name):
     """Create a concrete block and bind the model-declared state by typed handle."""
     module = model.module
-    block = Problem(name="%s-case" % name).add_block("plasma", model)
+    block = Case(name="%s-case" % name).block("plasma", model)
     state = module.state_handle(module.state_spaces()["U"])
     program = adctime.Program(name).bind_operators(module)
     return program, program.state(block, state)
@@ -123,7 +123,7 @@ def test_declarers_funnel_into_one_registry():
         U = state.n
         f = P.call(fields_h, U)
         R = P.call(handle, U, f)
-        P.commit(state.next, P.linear_combine("u1", U + P.dt * R, at=state.next.point))
+        P.commit(state.next, P.value("u1", U + P.dt * R, at=state.next.point))
         return P
 
     assert prog(r_math)._ir_hash() == prog(registered_math)._ir_hash()

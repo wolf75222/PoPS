@@ -60,7 +60,7 @@ def _fe(name="fe_dtbound"):
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     endpoint = typed_state(P, "ions", state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         "U1", U + P.dt * R, at=endpoint.point))
     return P
 
@@ -167,7 +167,7 @@ CFL = 0.4
 
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
+    sim.block("ions", transport_model(),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -186,7 +186,7 @@ def fe_program(name, *, factor=None):
     f = P.solve_fields(U)
     R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
     endpoint = typed_state(P, "ions", state_name="U").next
-    P.commit(endpoint, P.linear_combine(
+    P.commit(endpoint, P.value(
         "U1", U + P.dt * R, at=endpoint.point))
     if factor is not None:
         @P.dt_bound

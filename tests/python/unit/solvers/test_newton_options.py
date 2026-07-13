@@ -48,7 +48,7 @@ def gaussian(n):
 
 def run(n=24, steps=4, **imex_kw):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
+    sim.block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.IMEX(**imex_kw))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
     sim.set_density("e", gaussian(n).ravel())
@@ -116,9 +116,9 @@ chk(np.allclose(u1, u_def, rtol=1e-12, atol=1e-13),
 print("== rejets explicites ==")
 sim5 = System(n=16, L=1.0, periodic=True)
 try:
-    sim5.add_block("e", fluid(), time=pops.Explicit(),
+    sim5.block("e", fluid(), time=pops.Explicit(),
                    spatial=pops.FiniteVolume())
-    sim5._s.add_block("e2", fluid(), "minmod", "rusanov", "conservative", "explicit",
+    sim5._s.block("e2", fluid(), "minmod", "rusanov", "conservative", "explicit",
                       1, True, 1, [], [], 5)  # newton_max_iters=5 en explicite
     chk(False, "options Newton en explicite auraient du lever")
 except RuntimeError as e:

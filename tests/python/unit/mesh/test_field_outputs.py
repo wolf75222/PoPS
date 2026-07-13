@@ -30,7 +30,7 @@ from pops.model import (  # noqa: E402
     OwnerPath,
 )
 from pops.output import OutputPolicy  # noqa: E402
-from pops.problem import Problem  # noqa: E402
+from pops.problem import Case  # noqa: E402
 from pops.solvers.elliptic import FFT, GeometricMG  # noqa: E402
 
 
@@ -60,9 +60,9 @@ class _DeclaredModel:
 
 
 def _registered_blocks(*names):
-    problem = Problem(name="field-output-case")
+    problem = Case(name="field-output-case")
     module = _DeclaredModel("charge-model")
-    return problem, module, tuple(problem.add_block(name, module) for name in names)
+    return problem, module, tuple(problem.block(name, module) for name in names)
 
 
 # --- pops.fields.outputs: the typed field-output descriptors ----------------------------------
@@ -186,7 +186,7 @@ def test_duplicate_field_and_runtime_outputs_are_rejected():
         duplicate_fields.validate()
 
     policy = OutputPolicy(fields=[_shared_field("phi")])
-    problem = Problem(name="duplicate-output-case")
+    problem = Case(name="duplicate-output-case")
     problem.output(policy)
     with pytest.raises(ValueError, match="already registered"):
         problem.output(policy)
@@ -194,10 +194,10 @@ def test_duplicate_field_and_runtime_outputs_are_rejected():
 
 def test_problem_rejects_foreign_and_ambiguous_field_output_sources():
     model = _DeclaredModel("transport")
-    ambiguous = Problem(name="ambiguous-field-source")
-    block_a = ambiguous.add_block("a", model)
-    block_b = ambiguous.add_block("b", model)
-    ambiguous.add_field(_problem(
+    ambiguous = Case(name="ambiguous-field-source")
+    block_a = ambiguous.block("a", model)
+    block_b = ambiguous.block("b", model)
+    ambiguous.field(_problem(
         GeometricMG(), outputs=[GradientOutput("E", model.field)]))
 
     report = ambiguous.validate_report()
@@ -207,17 +207,17 @@ def test_problem_rejects_foreign_and_ambiguous_field_output_sources():
     assert str(block_b.instance_owner_path) in issue.message
 
     foreign_model = _DeclaredModel("foreign")
-    foreign = Problem(name="foreign-field-source")
-    foreign.add_block("local", model)
-    foreign.add_field(_problem(
+    foreign = Case(name="foreign-field-source")
+    foreign.block("local", model)
+    foreign.field(_problem(
         GeometricMG(), outputs=[GradientOutput("E", foreign_model.field)]))
     foreign_issue = next(
         item for item in foreign.validate_report().issues if item.code == "field.field_invalid")
     assert "no block in this case instantiates" in foreign_issue.message
 
-    resolved = Problem(name="resolved-field-source")
-    block = resolved.add_block("a", model)
-    resolved.add_field(_problem(
+    resolved = Case(name="resolved-field-source")
+    block = resolved.block("a", model)
+    resolved.field(_problem(
         GeometricMG(), outputs=[GradientOutput("E", block[model.field])]))
     assert resolved.validate_report().ok
 
@@ -238,7 +238,7 @@ def test_field_problem_resolution_is_detached_qualified_and_visible_in_reports()
         outputs=[GradientOutput("E", model.field)],
         solver=GeometricMG(),
     )
-    problem.add_field(descriptor)
+    problem.field(descriptor)
 
     resolved = descriptor.resolve_references(problem.resolve)
     references = resolved.declaration_references()
@@ -269,16 +269,16 @@ def test_field_problem_resolution_is_detached_qualified_and_visible_in_reports()
 
 def test_field_problem_resolution_refuses_ambiguous_and_canonical_foreign_references():
     model = _DeclaredModel("transport")
-    ambiguous = Problem(name="ambiguous-field-problem")
-    ambiguous.add_block("a", model)
-    ambiguous.add_block("b", model)
+    ambiguous = Case(name="ambiguous-field-problem")
+    ambiguous.block("a", model)
+    ambiguous.block("b", model)
     descriptor = _problem(
         GeometricMG(), outputs=[GradientOutput("E", model.field)])
     with pytest.raises(AmbiguousReferenceError, match="matches 2 block instances"):
         descriptor.resolve_references(ambiguous.resolve)
 
-    local = Problem(name="foreign-field-problem")
-    local.add_block("local", model)
+    local = Case(name="foreign-field-problem")
+    local.block("local", model)
     foreign = Handle("phi", kind="field", owner=OwnerPath.model("foreign"))
     forged = _problem(
         GeometricMG(), outputs=[GradientOutput("E", foreign)])

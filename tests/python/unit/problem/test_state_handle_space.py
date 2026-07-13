@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from pops.model import Module, StateHandle
-from pops.problem import Problem
+from pops.problem import Case
 from pops.time import Program
 from pops.time.program_detach import detach_compiled_program
 
@@ -15,7 +15,7 @@ def test_state_handle_carries_its_authoritative_space_without_live_registry_look
     ions = module.state_space("ions", ("ni", "ui", "energy"))
     electron_handle = module.state_handle(electrons)
     ion_handle = module.state_handle(ions)
-    block = Problem(name="plasma").add_block("fluid", module)
+    block = Case(name="plasma").block("fluid", module)
     program = Program("multi-state")
 
     electron_time = program.state(block, electron_handle)
@@ -37,7 +37,7 @@ def test_multi_state_space_identity_survives_serialization_and_detachment():
     module = Module("two-states-detached")
     electrons = module.state_space("electrons", ("ne", "ue"))
     ions = module.state_space("ions", ("ni", "ui", "energy"))
-    block = Problem(name="plasma-detached").add_block("fluid", module)
+    block = Case(name="plasma-detached").block("fluid", module)
     program = Program("multi-state-detached")
     electron_time = program.state(block, module.state_handle(electrons))
     ion_time = program.state(block, module.state_handle(ions))

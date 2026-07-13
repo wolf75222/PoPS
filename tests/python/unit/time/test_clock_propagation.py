@@ -93,18 +93,18 @@ def test_dt_dependent_values_and_commits_require_exact_output_points():
     rate = program._rhs_legacy(state=state.n, sources=[])
 
     with pytest.raises(ValueError, match="cannot infer an evaluation point"):
-        program.linear_combine("ambiguous", state.n + program.dt * rate)
+        program.value("ambiguous", state.n + program.dt * rate)
 
     stage_point = StagePoint(
         "predictor", {"explicit": TimePoint(program.clock, Fraction(1, 2))})
-    stage = program.linear_combine(
+    stage = program.value(
         "stage", state.n + Fraction(1, 2) * program.dt * rate, at=stage_point)
     assert stage.point == stage_point
 
     with pytest.raises(ValueError, match="endpoint is at"):
         program.commit(state.next, stage)
 
-    final = program.linear_combine(
+    final = program.value(
         "final", state.n + program.dt * rate, at=state.next.point)
     program.commit(state.next, final)
     assert program.commits()[state.state].point == state.next.point

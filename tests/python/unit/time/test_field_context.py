@@ -154,7 +154,7 @@ def test_coupled_context_tracks_every_block_source_and_rejects_stale_stage():
     assert P._rhs_legacy(state=Ua, fields=fields, sources=[]).block is block_a
     assert P._rhs_legacy(state=Ub, fields=fields, sources=[]).block is block_b
 
-    Ua_stage = P.linear_combine("a_stage", Ua)
+    Ua_stage = P.value("a_stage", Ua)
     with pytest.raises(ValueError, match="incompatible field context"):
         P._rhs_legacy(state=Ua_stage, fields=fields, sources=[])
 
@@ -164,7 +164,7 @@ def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs(
     U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
-    q = P.linear_combine("q", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
+    q = P.value("q", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
     linear = P._linear_source("relax")
 
     # q carries the exact context through the RHS graph, so the implicit local solve is valid.
@@ -181,7 +181,7 @@ def test_field_consumers_reject_stale_state_but_local_solve_accepts_derived_rhs(
     with pytest.raises(ValueError, match="incompatible field context"):
         P._apply(linear, state=q, fields=fields0)
 
-    plain_stage = P.linear_combine("plain_stage", U0)
+    plain_stage = P.value("plain_stage", U0)
     with pytest.raises(ValueError, match="incompatible field context"):
         P.solve_local_linear(
             "stale", operator=P.I - P.dt * linear, rhs=plain_stage, fields=fields0)
@@ -192,10 +192,10 @@ def test_multistage_provenance_is_explicit_and_operator_context_cannot_be_substi
     U0 = typed_state(P, "plasma")
     fields0 = P.solve_fields(U0)
     R0 = P._rhs_legacy(state=U0, fields=fields0, sources=[])
-    U1 = P.linear_combine("U1", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
+    U1 = P.value("U1", U0 + P.dt * R0, at=TimePoint(P.clock, 1))
     fields1 = P.solve_fields(U1)
     R1 = P._rhs_legacy(state=U1, fields=fields1, sources=[])
-    q = P.linear_combine(
+    q = P.value(
         "q", U0 + P.dt * R0 + P.dt * R1, at=TimePoint(P.clock, step=1))
 
     assert isinstance(q.field_context, FieldReadProvenance)

@@ -9,11 +9,11 @@ from pops.ir import ValueExpr
 from pops.time import FailRun, Program, ProgramValue
 from pops.time.handles import StateEndpointHandle
 from pops.model import Module, StateSpace
-from pops.problem import Problem
+from pops.problem import Case
 
 
 def _at_endpoint(program, state, *, name="final"):
-    return program.linear_combine(name, state.n, at=state.next.point)
+    return program.value(name, state.n, at=state.next.point)
 
 
 def test_next_is_a_cached_owner_qualified_endpoint():
@@ -75,7 +75,7 @@ def test_define_rejects_next_and_points_to_the_commit_door():
     state = typed_state(program, "transport", state_name="tracer")
 
     with pytest.raises(TypeError, match=r"commit-only.*T\.commit"):
-        program.define(state.next, state.n)
+        program.value(state.next, state.n)
 
 
 def test_commit_accepts_endpoint_and_value_as_two_distinct_roles():
@@ -143,7 +143,7 @@ def test_commit_many_rejects_cross_block_as_one_atomic_group():
 
     with pytest.raises(ValueError, match=r"block 'right'.*block 'left'"):
         left_final = _at_endpoint(program, left, name="left_final")
-        wrong_right = program.linear_combine(
+        wrong_right = program.value(
             "wrong_right", left.n, at=right.next.point)
         program.commit_many({left.next: left_final, right.next: wrong_right})
     assert program.commits() == {}, "the valid first entry must not be committed partially"
@@ -166,13 +166,13 @@ def test_commit_many_accepts_distinct_qualified_states_in_the_same_block():
     module = Module("transport_model")
     primary_space = module.state_space("U", ("density",))
     alternate_space = module.state_space("V", ("tracer",))
-    block = Problem(name="multi-state-case").add_block("transport", module)
-    primary = program.state(block, module.state_handle(primary_space))
-    alternate = program.state(block, module.state_handle(alternate_space))
+    block = Case(name="multi-state-case").block("transport", module)
+    primary = program.state(block[module.state_handle(primary_space)])
+    alternate = program.state(block[module.state_handle(alternate_space)])
 
-    primary_final = program.linear_combine(
+    primary_final = program.value(
         "primary_final", primary.n, at=primary.next.point)
-    alternate_final = program.linear_combine(
+    alternate_final = program.value(
         "alternate_final", alternate.n, at=alternate.next.point)
     program.commit_many({primary.next: primary_final, alternate.next: alternate_final})
 
@@ -197,7 +197,7 @@ def test_scalar_field_linear_combine_preserves_the_single_known_block_for_commit
     solved = _block_scalar_field(program, "transport", "solved")
     scratch = program.scalar_field("scratch")
 
-    combined = program.linear_combine(
+    combined = program.value(
         "combined", solved + scratch, at=endpoint.point)
 
     assert solved.block is endpoint.block
@@ -213,4 +213,4 @@ def test_scalar_field_linear_combine_rejects_multiple_known_blocks():
     right = _block_scalar_field(program, "right", "right_solution")
 
     with pytest.raises(ValueError, match=r"different blocks.*left.*right"):
-        program.linear_combine("invalid", left + right)
+        program.value("invalid", left + right)

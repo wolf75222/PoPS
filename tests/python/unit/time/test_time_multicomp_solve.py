@@ -73,7 +73,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     phi = P.solve_linear(
         operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
-    P.commit(endpoint, P.linear_combine("solution_next", 1 * phi, at=endpoint.point))
+    P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
     return P
 
 
@@ -100,7 +100,7 @@ def test_state_operator_builds(t):
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
-    P.commit(endpoint, P.linear_combine("solution_next", 1 * phi, at=endpoint.point))
+    P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
     assert P.validate() is True, "the multi-component Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 

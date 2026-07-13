@@ -74,7 +74,7 @@ def _make_polar_sim():
 def _make_polar_sim_ready(solver="polar"):
     """System polaire minimal avec bloc ExB et densite initiale : pret pour step()."""
     sim = System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
-    sim.add_block("ne", model=_exb_model(),
+    sim.block("ne", model=_exb_model(),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     sim.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
     sim.set_density("ne", [1.0] * (_NR * _NTH))
@@ -95,7 +95,7 @@ def test_polar_rejects_non_exb_transport():
     raised = False
     msg = ""
     try:
-        sim.add_block("fluid", model=_compressible_model(),
+        sim.block("fluid", model=_compressible_model(),
                       spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     except RuntimeError as e:
         raised = True
@@ -123,7 +123,7 @@ def test_polar_rejects_non_rusanov_flux():
     raised = False
     msg = ""
     try:
-        sim.add_block("ne", model=_exb_model(),
+        sim.block("ne", model=_exb_model(),
                       spatial=pops.Spatial(flux=HLLC()), time=pops.Explicit())
     except RuntimeError as e:
         raised = True
@@ -139,7 +139,7 @@ def test_polar_rejects_roe_flux():
     sim = _make_polar_sim()
     raised = False
     try:
-        sim.add_block("ne", model=_exb_model(),
+        sim.block("ne", model=_exb_model(),
                       spatial=pops.Spatial(flux=Roe()), time=pops.Explicit())
     except RuntimeError:
         raised = True
@@ -158,7 +158,7 @@ def test_polar_rejects_hll_on_scalar_exb():
     raised = False
     msg = ""
     try:
-        sim.add_block("ne", model=_exb_model(),
+        sim.block("ne", model=_exb_model(),
                       spatial=pops.Spatial(flux=HLL()), time=pops.Explicit())
     except RuntimeError as e:
         raised = True
@@ -183,7 +183,7 @@ def test_polar_rejects_imex_time():
     raised = False
     msg = ""
     try:
-        sim.add_block("ne", model=_exb_model(),
+        sim.block("ne", model=_exb_model(),
                       spatial=pops.Spatial(minmod=True), time=pops.IMEX())
     except RuntimeError as e:
         raised = True

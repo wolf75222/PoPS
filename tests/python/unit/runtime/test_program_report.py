@@ -48,7 +48,7 @@ def _fresh_system(n=8):
     """Un System n x n periodique avec UN bloc natif (aucun program installe)."""
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("ions", _isothermal_model(),
+    sim.block("ions", _isothermal_model(),
                   spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     return sim
 

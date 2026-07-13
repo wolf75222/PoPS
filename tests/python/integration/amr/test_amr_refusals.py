@@ -45,7 +45,7 @@ def test_imexrk_ars222_on_amr_is_refused_with_precise_message():
     """
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
     with pytest.raises(RuntimeError) as excinfo:
-        sim.add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True),
+        sim.block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True),
                       time=pops.IMEXRK())
     msg = str(excinfo.value)
     for needle in ("imexrk_ars222", "not wired on AMR", "Cartesian System"):

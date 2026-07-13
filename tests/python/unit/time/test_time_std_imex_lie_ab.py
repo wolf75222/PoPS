@@ -157,11 +157,11 @@ def test_lie_chains_two_stages(t):
 
     def half_flow(prog, U, frac, *, at):
         R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
+        return prog.value(None, U + (frac * prog.dt) * R, at=at)
 
     def source(prog, U, frac, *, at):
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["default"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S, at=at)
+        return prog.value(None, U + (frac * prog.dt) * S, at=at)
 
     out = lt.lie(
         P, *state_refs(P, "plasma"), half_flow=half_flow, source=source)
@@ -357,11 +357,11 @@ def _run_lie(t):
     # composition is exactly rho * (1 + dt*_C) per step (H is inert), which an offline ref mirrors.
     def half_flow(prog, U, frac, *, at):
         R = prog._rhs_legacy(state=U, fields=prog.solve_fields(U), flux=True, sources=[])
-        return prog.linear_combine(None, U + (frac * prog.dt) * R, at=at)
+        return prog.value(None, U + (frac * prog.dt) * R, at=at)
 
     def source(prog, U, frac, *, at):
         S = prog._rhs_legacy(state=U, fields=None, flux=False, sources=["reaction"])
-        return prog.linear_combine(None, U + (frac * prog.dt) * S, at=at)
+        return prog.value(None, U + (frac * prog.dt) * S, at=at)
 
     model = _reaction_term_model("lie_prog")
     P = t.Program("lie_step")

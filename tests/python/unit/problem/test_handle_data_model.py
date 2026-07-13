@@ -20,7 +20,7 @@ from pops.model import (
     StateSpace,
     UnresolvedOwnershipError,
 )
-from pops.problem import Problem
+from pops.problem import Case
 from pops.problem.handles import BlockHandle
 from pops.problem.registries import BlockRegistry, FieldRegistry
 
@@ -106,9 +106,9 @@ def test_same_local_name_in_different_canonical_owners_or_kinds_is_distinct():
 
 def test_same_model_instantiated_twice_has_distinct_authenticated_handles():
     model = _DeclaredModel()
-    problem = Problem(name="transport")
-    block_a = problem.add_block("a", model)
-    block_b = problem.add_block("b", model)
+    problem = Case(name="transport")
+    block_a = problem.block("a", model)
+    block_b = problem.block("b", model)
 
     a_u = block_a[model.u]
     b_u = block_b[model.u]
@@ -124,9 +124,9 @@ def test_same_model_instantiated_twice_has_distinct_authenticated_handles():
 def test_qualification_rejects_ghost_foreign_double_and_ambiguous_references():
     model = _DeclaredModel()
     foreign = _DeclaredModel("foreign")
-    problem = Problem(name="transport")
-    block_a = problem.add_block("a", model)
-    block_b = problem.add_block("b", model)
+    problem = Case(name="transport")
+    block_a = problem.block("a", model)
+    block_b = problem.block("b", model)
     ghost = Handle("ghost", kind="state", owner=model.owner_path)
 
     with pytest.raises(MissingOwnershipError, match="not registered"):
@@ -145,9 +145,9 @@ def test_consumer_validation_reports_ambiguous_unqualified_reference_candidates(
     from pops.output import OutputPolicy
 
     model = _DeclaredModel()
-    problem = Problem(name="transport")
-    block_a = problem.add_block("a", model)
-    block_b = problem.add_block("b", model)
+    problem = Case(name="transport")
+    block_a = problem.block("a", model)
+    block_b = problem.block("b", model)
     problem.output(OutputPolicy(fields=[model.u]))
 
     report = problem.validate_report()
@@ -157,8 +157,8 @@ def test_consumer_validation_reports_ambiguous_unqualified_reference_candidates(
     assert str(block_a.instance_owner_path) in issue.message
     assert str(block_b.instance_owner_path) in issue.message
 
-    resolved_problem = Problem(name="transport-resolved")
-    resolved_block = resolved_problem.add_block("a", model)
+    resolved_problem = Case(name="transport-resolved")
+    resolved_block = resolved_problem.block("a", model)
     resolved_problem.output(OutputPolicy(fields=[resolved_block[model.u]]))
     assert resolved_problem.validate_report().ok
 
@@ -166,19 +166,19 @@ def test_consumer_validation_reports_ambiguous_unqualified_reference_candidates(
 def test_same_named_model_authorities_collide_before_lowering():
     first = _DeclaredModel("transport")
     second = _DeclaredModel("transport")
-    problem = Problem(name="case")
-    problem.add_block("a", first)
+    problem = Case(name="case")
+    problem.block("a", first)
     with pytest.raises(IdentityCollisionError, match="same owner"):
-        problem.add_block("b", second)
+        problem.block("b", second)
 
 
 def test_same_named_different_model_definitions_are_distinct_block_owners():
     first, first_state = _state_module("transport", ("rho", "momentum"))
     second, second_state = _state_module("transport", ("rho", "energy"))
-    problem = Problem(name="case")
+    problem = Case(name="case")
 
-    first_block = problem.add_block("first", first)
-    second_block = problem.add_block("second", second)
+    first_block = problem.block("first", first)
+    second_block = problem.block("second", second)
     first_instance = problem.resolve(first_block[first_state])
     second_instance = problem.resolve(second_block[second_state])
 
@@ -191,8 +191,8 @@ def test_same_named_different_model_definitions_are_distinct_block_owners():
 
 def test_resolved_instance_identity_round_trips_without_losing_origin():
     model = _DeclaredModel("m:/unicode-é")
-    problem = Problem(name="case/with:reserved")
-    block = problem.add_block("block/β", model)
+    problem = Case(name="case/with:reserved")
+    block = problem.block("block/β", model)
     resolved = problem.resolve(block[model.u])
     identity = resolved.canonical_identity()
     decoded = Handle.from_canonical_identity(identity)
@@ -209,8 +209,8 @@ def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data()
     from pops.fields import FieldProblem
 
     model = _DeclaredModel("transport")
-    problem = Problem(name="case")
-    block = problem.add_block("fluid", model)
+    problem = Case(name="case")
+    block = problem.block("fluid", model)
 
     canonical_block = problem.resolve(block)
     decoded_block = Handle.from_canonical_identity(canonical_block.canonical_identity())
@@ -220,7 +220,7 @@ def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data()
     assert decoded_block._instance_registry is None
     assert problem.resolve(decoded_block).canonical_identity() == canonical_block.canonical_identity()
 
-    case_field = problem.add_field(FieldProblem(name="phi"))
+    case_field = problem.field(FieldProblem(name="phi"))
     canonical_field = problem.resolve(case_field)
     decoded_field = Handle.from_canonical_identity(canonical_field.canonical_identity())
     assert problem.resolve(decoded_field).canonical_identity() == canonical_field.canonical_identity()
@@ -248,8 +248,8 @@ def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data()
 def test_canonical_block_roundtrip_rejects_forged_or_erased_model_provenance():
     model, _ = _state_module("transport", ("rho", "momentum"))
     foreign, _ = _state_module("transport", ("rho", "energy"))
-    problem = Problem(name="case")
-    block = problem.add_block("fluid", model)
+    problem = Case(name="case")
+    block = problem.block("fluid", model)
     canonical = problem.resolve(block)
 
     identity = canonical.canonical_identity()
@@ -274,8 +274,8 @@ def test_canonical_block_roundtrip_rejects_forged_or_erased_model_provenance():
 
 def test_explicit_shared_owner_is_not_reowned_by_a_block():
     model = _DeclaredModel()
-    problem = Problem(name="case")
-    block = problem.add_block("a", model)
+    problem = Case(name="case")
+    block = problem.block("a", model)
     shared = Handle("gravity", kind="param", owner=OwnerPath.shared("environment"))
 
     assert block[shared] is shared
@@ -412,7 +412,7 @@ def test_block_registry_rejects_non_authoritative_model_owner(owner, error, mess
 
 
 def test_problem_and_registries_share_one_authoring_authority():
-    problem = Problem(name="transport")
+    problem = Case(name="transport")
     for value in (problem, problem._block_registry, problem._field_registry):
         assert value.owner_path == problem.owner_path
         with pytest.raises(AttributeError):
@@ -428,4 +428,4 @@ def test_problem_registry_owner_is_structural(registry_type):
 @pytest.mark.parametrize("name", ["", 3, object()])
 def test_problem_rejects_invalid_names_before_owner_allocation(name):
     with pytest.raises(TypeError, match="non-empty string"):
-        Problem(name=name)
+        Case(name=name)

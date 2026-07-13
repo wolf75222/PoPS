@@ -33,7 +33,7 @@ def _solve_program(preconditioner=None):
     if preconditioner is not None:
         kw["preconditioner"] = preconditioner
     endpoint = typed_state(P, "blk", state_name="U").next
-    kw["rhs"] = P.linear_combine("rhs", U, at=endpoint.point)
+    kw["rhs"] = P.value("rhs", U, at=endpoint.point)
     phi = P.solve_linear(**kw).consume(action=t.FailRun())
     P.commit(endpoint, phi)
     return P

@@ -74,7 +74,7 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
     phi = P.solve_linear(
         operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
-    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
     return P
 
@@ -99,7 +99,7 @@ def test_divergence_records_and_validates(t):
         operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8,
         max_iter=50).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
-    final = P.linear_combine("phi_next", phi, at=endpoint.point)
+    final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"

@@ -232,12 +232,12 @@ def test_install_params_routing():
     """BindSchema rejects ownerless parameter names before install routing."""
     from pops.model import Module
     from pops.model.bind_schema import BindSchema
-    from pops.problem import Problem
+    from pops.problem import Case
 
     module = Module("qualified-routing")
     module.param(RuntimeParam("nu", default=1.0))
-    problem = Problem(name="qualified-routing")
-    problem.add_block("plasma", module)
+    problem = Case(name="qualified-routing")
+    problem.block("plasma", module)
     schema = BindSchema.from_problem(problem)
     try:
         schema.resolve_bind({"nu": 1.0}, compile_values=schema.resolve_compile())
@@ -251,7 +251,7 @@ def test_install_params_routes_declared_runtime_param():
     """A complete qualified mapping projects to the compiled model's native slot order."""
     from pops.model import Module
     from pops.model.bind_schema import BindSchema
-    from pops.problem import Problem
+    from pops.problem import Case
     from pops.runtime._install_param_routing import route_block_params
 
     declarations = {
@@ -261,8 +261,8 @@ def test_install_params_routes_declared_runtime_param():
     }
     module = Module("qualified-routing")
     handles = {name: module.param(declaration) for name, declaration in declarations.items()}
-    problem = Problem(name="qualified-routing")
-    block = problem.add_block("plasma", module)
+    problem = Case(name="qualified-routing")
+    block = problem.block("plasma", module)
     schema = BindSchema.from_problem(problem)
 
     # A RESOLVED model declaring two runtime params + one const (const excluded; names SORTED).
@@ -299,18 +299,18 @@ def _lorentz_model(name="adc466_model"):
 
 def _lie_program(name="adc466_prog"):
     from pops.model import Module
-    from pops.problem import Problem
+    from pops.problem import Case
 
     module = Module(name + "-state")
     state = module.state_space("U", ("rho", "mx", "my"))
-    problem = Problem(name=name + "-case")
-    block = problem.add_block("plasma", module)
+    problem = Case(name=name + "-case")
+    block = problem.block("plasma", module)
     P = adctime.Program(name)
     endpoint = P.state(block, module.state_handle(state))
     u = endpoint.n
     fields = P.solve_fields(u)
     r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(endpoint.next, P.linear_combine("u1", u + P.dt * r, at=endpoint.next.point))
+    P.commit(endpoint.next, P.value("u1", u + P.dt * r, at=endpoint.next.point))
     return P
 
 
@@ -407,10 +407,10 @@ def test_install_routes_runtime_param_kokkos():
         return
 
     from pops.model.bind_schema import BindSchema
-    from pops.problem import Problem
+    from pops.problem import Case
 
-    problem = Problem(name="adc466-runtime")
-    block = problem.add_block("plasma", m)
+    problem = Case(name="adc466-runtime")
+    block = problem.block("plasma", m)
     bind_schema = BindSchema.from_problem(problem)
     bind_values = {block[cs2_param]: 1.0}
 

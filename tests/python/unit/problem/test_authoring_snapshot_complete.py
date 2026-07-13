@@ -98,7 +98,7 @@ _SUBPROCESS_PROBE = textwrap.dedent(
     model = Module("transport")
     state = model.state_space("U", ("u",))
     problem = pops.Problem(name="deterministic")
-    block = problem.add_block("fluid", model)
+    block = problem.block("fluid", model)
     time = libtime.SSPRK2(block, model.state_handle(state))
     snapshot = build_authoring_snapshot(
         problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=time)
@@ -363,7 +363,7 @@ def test_stale_authoring_mutations_cannot_change_an_existing_snapshot():
     before_hash = snapshot.hash
 
     layout.mesh.n = 4096
-    time.linear_combine("late-presentation-node", time._values[0])
+    time.value("late-presentation-node", time._values[0])
     stale_block_spec["spatial"] = {"scheme": "mutated-after-snapshot"}
     caller_copy = snapshot.to_dict()
     caller_copy["compile_context"]["libraries"] = ["mutated-copy"]

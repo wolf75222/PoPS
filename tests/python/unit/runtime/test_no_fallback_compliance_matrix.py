@@ -125,14 +125,14 @@ def _program_with_context():
     state_space = module.state_space("U", components=("rho",))
     state_handle = module.state_handle(state_space)
     problem = pops.Problem(name="adc597-context-case")
-    block = problem.add_block("gas", module)
+    block = problem.block("gas", module)
     program = adctime.Program("adc597_context")
     dt = program.dt
     state = program.state(block, state_handle)
     rhs = program._rhs_legacy(state=state.n, flux=True, sources=["default"])
     program.commit(
         state.next,
-        program.linear_combine("U1", state.n + dt * rhs),
+        program.value("U1", state.n + dt * rhs),
     )
     return program
 
@@ -173,7 +173,7 @@ def test_refusal_matrix_checks_error_type_reason_and_no_warning():
         (
             "HLL without wave speeds",
             RuntimeError,
-            lambda: System(n=8, L=1.0, periodic=True).add_block(
+            lambda: System(n=8, L=1.0, periodic=True).block(
                 "s",
                 _scalar_exb_model(),
                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL()),
@@ -313,7 +313,7 @@ def test_positive_matrix_keeps_supported_native_routes_available():
     # Uniform + FV + HLL typed wave speeds.
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block(
+    sim.block(
         "ions",
         _isothermal_model(),
         spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
@@ -365,7 +365,7 @@ def test_positive_matrix_keeps_supported_native_routes_available():
     module = Module("adc597-runtime-param")
     k = module.param(RuntimeParam("k", default=2.0))
     problem = pops.Problem(name="adc597-runtime-bind")
-    gas = problem.add_block("gas", module)
+    gas = problem.block("gas", module)
     schema = BindSchema.from_problem(problem)
     canonical = problem.resolve(k, block=gas)
     assert schema.resolve()[canonical] == 2.0

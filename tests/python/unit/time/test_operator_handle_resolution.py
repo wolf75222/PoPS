@@ -10,7 +10,7 @@ from pops.model import (
 )
 from pops.numerics.terms import Flux, SourceTerm
 from pops.physics.facade import Model
-from pops.problem import Problem
+from pops.problem import Case
 
 
 def _model(name: str):
@@ -33,8 +33,8 @@ def _references(model: Model | Module, *, case_name: str | None = None):
     state_spaces = module.state_spaces()
     assert tuple(state_spaces) == ("U",)
     state = module.state_handle(state_spaces["U"])
-    case = Problem(name=case_name or "%s-case" % module.name)
-    block = case.add_block("block", module)
+    case = Case(name=case_name or "%s-case" % module.name)
+    block = case.block("block", module)
     return module, block, state
 
 
