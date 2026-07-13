@@ -21,7 +21,7 @@ from pops.runtime.consumer import (
 )
 from pops.runtime.runtime_instance import RuntimeInstance
 from pops.runtime.restart_provider import RestartV3
-from pops.time import AcceptedStep, Clock, Every, FixedDt, Schedule
+from pops.time import AcceptedStep, AtEnd, Clock, Every, FixedDt, Schedule
 from tests.python.unit.runtime.test_runtime_planning import _install
 
 
@@ -155,7 +155,7 @@ class _CustomNPZ:
 
 
 def _with_graph(tmp_path, *, kind=ConsumerKind.SCIENTIFIC_OUTPUT,
-                output_format=None, target_uri=None, operation=None):
+                output_format=None, target_uri=None, operation=None, schedule=None):
     base = _install()
     layout = base.artifact.layout_plan.layouts[0].handle
     clock = Clock("solution", owner=OwnerPath.consumer("adc-687"))
@@ -168,7 +168,7 @@ def _with_graph(tmp_path, *, kind=ConsumerKind.SCIENTIFIC_OUTPUT,
         Handle("density", kind="consumer", owner=OwnerPath.consumer("adc-687")),
         kind,
         (quantity,),
-        Schedule(Every(AcceptedStep(clock), 1)),
+        Schedule(Every(AcceptedStep(clock), 1)) if schedule is None else schedule(clock),
         str(tmp_path) if target_uri is None else str(target_uri),
         NPZ() if output_format is None and kind is ConsumerKind.SCIENTIFIC_OUTPUT
         else output_format,
@@ -244,6 +244,20 @@ def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp
         "consumer_graph": graph.identity.token,
         "runtime_plan": runtime.runtime_plan.identity.token,
     }
+
+
+def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
+    plan, _, manifest = _with_graph(
+        tmp_path, schedule=lambda clock: Schedule(AtEnd(AcceptedStep(clock))))
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
+    with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
+        runtime.run(2.0, max_steps=1)
+
+    assert runtime.time() == 1.0
+    cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
+    assert cursor.committed_samples == 0
+    assert tuple(tmp_path.glob("*.npz")) == ()
 
 
 def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_path):

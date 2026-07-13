@@ -11,11 +11,12 @@ from pops.time import ALL_PROVISIONAL_STORES
 
 
 class _Native:
-    def __init__(self, *, fail_commit=False):
+    def __init__(self, *, fail_begin=False, fail_commit=False):
         self.t = 0.0
         self.step_index = 0
         self._accepted = None
         self._committed = False
+        self.fail_begin = fail_begin
         self.fail_commit = fail_commit
         self.events = []
         self._step_transaction_plan = SimpleNamespace(stores=ALL_PROVISIONAL_STORES)
@@ -39,6 +40,10 @@ class _Native:
         self._accepted = (self.t, self.step_index)
         self._committed = False
         self.events.append("begin")
+        if self.fail_begin:
+            self.t = 0.375
+            self.step_index = 3
+            raise RuntimeError("fault injected during native begin")
 
     def _commit_step_transaction(self):
         if self._accepted is None:
@@ -158,6 +163,21 @@ def test_native_failure_rolls_back_even_when_the_fault_happens_after_mutation():
 
     assert (native.time(), native.macro_step()) == (0.0, 0)
     assert runtime._attempt == 4
+
+
+def test_native_begin_failure_rolls_back_partial_mutation_and_python_envelope():
+    native = _Native(fail_begin=True)
+    runtime = _Runtime(native)
+
+    with pytest.raises(RuntimeError, match="native begin"):
+        runtime._accepted_step_transaction(lambda: (native.step(0.25), 1))
+
+    assert (native.time(), native.macro_step()) == (0.0, 0)
+    assert native._accepted is None
+    assert runtime._attempt == 4
+    assert runtime.consumer_cursors.rows == ()
+    assert runtime.consumer_reports == ()
+    assert native.events == ["begin", "rollback"]
 
 
 def test_native_commit_failure_discards_prepared_outputs_before_they_become_visible():

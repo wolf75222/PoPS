@@ -299,13 +299,21 @@ class RuntimeInstance:
         native = self.native_executor
         begin, commit, finalize, rollback = self._step_transaction_methods()
         snapshot = self._step_envelope_snapshot()
-        begin()
-        phase = "solve"
+        phase = "begin"
         attempts = 1
         failure_report = None
         transactions = ()
-        native_active = True
+        native_active = False
+        begin_entered = False
         try:
+            # ``begin`` is part of the failure boundary: a native backend may
+            # have captured or mutated provisional stores before reporting a
+            # failure.  Once entered, rollback must therefore be attempted even
+            # when ``begin`` itself does not return.
+            begin_entered = True
+            begin()
+            native_active = True
+            phase = "solve"
             result, attempts = advance()
             if isinstance(attempts, bool) or not isinstance(attempts, int) or attempts <= 0:
                 raise RuntimeError("step controller returned an invalid native-attempt count")
@@ -329,8 +337,18 @@ class RuntimeInstance:
             failure_report = getattr(native, "_last_step_transaction_report", None)
             cleanup_error = self._abort_consumers(transactions)
             try:
-                if native_active:
-                    rollback()
+                if native_active or begin_entered:
+                    try:
+                        rollback()
+                    except BaseException as rollback_error:
+                        # Preserve the initiating error.  Backends are required
+                        # to make rollback safe after entering begin; surfacing
+                        # that secondary contract violation as a note avoids
+                        # replacing the actionable root cause.
+                        if hasattr(error, "add_note"):
+                            error.add_note(
+                                "step-transaction rollback also failed: "
+                                f"{rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
             if phase in {"effect", "commit"}:
@@ -375,8 +393,6 @@ class RuntimeInstance:
         try:
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
-                final_slot = steps + 1 >= max_steps
-
                 def advance() -> tuple[Any, int]:
                     report = run_step_attempt(
                         native, native, selected, t_end=float(t_end),
@@ -385,9 +401,14 @@ class RuntimeInstance:
 
                 self._accepted_step_transaction(
                     advance,
-                    at_end=lambda final_slot=final_slot: final_slot or not (native.time() < t_end),
+                    at_end=lambda: not (native.time() < t_end),
                 )
                 steps += 1
+            if native.time() < t_end:
+                raise RuntimeError(
+                    "max_steps exhausted before t_end: "
+                    f"accepted {steps} step(s), reached t={native.time()!r}, "
+                    f"requested t_end={t_end!r}")
             if steps == 0:
                 self._fire_consumers(at_end=True)
         finally:
