@@ -1,6 +1,7 @@
 """Resolve field topology and physical-face laws into exact native records."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pops.codegen.lowering_coverage import (
@@ -18,6 +19,89 @@ from pops.fields.bcs import (
     Periodic,
 )
 from pops.fields.discretization import FieldDiscretization
+
+
+@dataclass(frozen=True, slots=True)
+class FieldLayoutContract:
+    """Small topology interface consumed by field lowering, independent of layout classes."""
+
+    kind: str
+    mesh: Any
+    embedded_boundary: Any
+    levels: int
+    ratio: int
+
+
+def _exact_positive_int(value: Any, *, where: str, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("%s must be an integer, never bool" % where)
+    if value < minimum:
+        raise ValueError("%s must be >= %d" % (where, minimum))
+    return value
+
+
+def field_layout_contract(layout: Any) -> FieldLayoutContract:
+    """Resolve the open layout protocol needed by elliptic field installation.
+
+    The contract is selected by typed capability evidence, never by a concrete layout class.  The
+    mesh provider is structural so an extension can expose the same contract without inheriting a
+    PoPS layout implementation.  Missing or contradictory evidence is rejected rather than filled
+    with uniform/one-level defaults.
+    """
+
+    capabilities = getattr(layout, "capabilities", None)
+    if not callable(capabilities):
+        raise TypeError("field layout must implement capabilities()")
+    evidence = capabilities()
+    to_dict = getattr(evidence, "to_dict", None)
+    if not callable(to_dict):
+        raise TypeError("field layout capabilities must implement to_dict()")
+    data = to_dict()
+    if not isinstance(data, dict):
+        raise TypeError("field layout capability evidence must be a dict")
+    kind = data.get("layout")
+    if kind == "amr":
+        levels = _exact_positive_int(
+            data.get("max_levels"), where="AMR field layout max_levels", minimum=2)
+        ratio = _exact_positive_int(
+            data.get("ratio"), where="AMR field layout ratio", minimum=2)
+        candidates = [
+            value for value in (getattr(layout, "grid", None), getattr(layout, "base", None))
+            if value is not None
+        ]
+        if len(candidates) != 1:
+            raise TypeError(
+                "AMR field layout must expose exactly one grid/base mesh provider")
+        embedded = getattr(layout, "embedded_boundary", None)
+        if embedded is not None:
+            raise TypeError(
+                "AMR field layout advertises an embedded boundary without a typed field "
+                "topology provider")
+        return FieldLayoutContract(kind, candidates[0], None, levels, ratio)
+    if kind == "uniform":
+        levels = _exact_positive_int(
+            data.get("levels"), where="uniform field layout levels")
+        if levels != 1:
+            raise ValueError("uniform field layout must advertise exactly one level")
+        mesh = getattr(layout, "mesh", None)
+        if mesh is None:
+            raise TypeError("uniform field layout must expose its mesh provider")
+        return FieldLayoutContract(
+            kind, mesh, getattr(layout, "embedded_boundary", None), levels, 1)
+    raise ValueError(
+        "field layout capabilities require layout='uniform' or layout='amr'; got %r" % kind)
+
+
+def _mesh_periodic(mesh: Any) -> bool:
+    periodic = getattr(mesh, "periodic", None)
+    if isinstance(periodic, bool):
+        return periodic
+    topology = getattr(mesh, "topology", None)
+    to_dict = getattr(topology, "to_dict", None)
+    data = to_dict() if callable(to_dict) else None
+    if isinstance(data, dict) and data.get("topology_type") == "bounded_cartesian":
+        return False
+    raise TypeError("field topology requires an exact mesh periodicity contract")
 
 
 def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: str) -> None:
@@ -40,7 +124,6 @@ def _native_scalar(value: Any, *, name: str, source: str,
                     "%s must be a finite scalar or a typed symbolic Expr/Handle" % name)
         from pops.fields._references import collect_references
         references = collect_references(value)
-        from pops.fields.boundary_values import BoundaryValue
         unsupported = [reference for reference in references
                        if reference.kind not in {"parameter", "state", "field"} and
                        reference.canonical_identity() != unknown.canonical_identity()]
@@ -148,13 +231,8 @@ def boundary_plan(
 ) -> tuple[str, tuple[dict[str, Any], ...] | None]:
     """Resolve all four Cartesian faces, retaining exact Robin coefficients."""
     if not plan.boundaries:
-        from pops.mesh.layouts import AMR
-        mesh = layout.base if isinstance(layout, AMR) else layout.mesh
-        periodic = getattr(mesh, "periodic", None)
-        if not isinstance(periodic, bool):
-            _reject(rows, "field:%s:boundaries" % name,
-                    "field.boundary.auto_topology_unresolved",
-                    "field %r auto boundary requires a resolved mesh topology" % name)
+        contract = field_layout_contract(layout)
+        periodic = _mesh_periodic(contract.mesh)
         kind = "periodic" if periodic else "dirichlet"
         record = ({"type": kind, "alpha": 0.0 if periodic else 1.0,
                    "beta": 0.0, "value": 0.0, "dynamic": {},
@@ -201,22 +279,19 @@ def boundary_plan(
 
 
 def topology_recipe(layout: Any) -> dict[str, Any]:
-    from pops.mesh.layouts import AMR
-
-    mesh = layout.base if isinstance(layout, AMR) else layout.mesh
-    embedded = None if isinstance(layout, AMR) else layout.embedded_boundary
-    periodic = getattr(mesh, "periodic", None)
-    if not isinstance(periodic, bool):
-        raise TypeError("field topology requires an exact resolved mesh periodicity")
-    hierarchy = ("amr-composite-cell-graph" if isinstance(layout, AMR)
+    contract = field_layout_contract(layout)
+    mesh = contract.mesh
+    embedded = contract.embedded_boundary
+    periodic = _mesh_periodic(mesh)
+    hierarchy = ("amr-composite-cell-graph" if contract.kind == "amr"
                  else "uniform-cell-graph")
     connectivity = {
         "graph": hierarchy,
         "stencil": "axis-neighbor",
         "periodic_identifications": "all-axes" if periodic else "none",
         "coarse_fine_identifications": (
-            "ratio-%d-valid-cell-covering" % layout.ratio
-            if isinstance(layout, AMR) else "none"),
+            "ratio-%d-valid-cell-covering" % contract.ratio
+            if contract.kind == "amr" else "none"),
         "material_predicate": "all-cells" if embedded is None else "embedded-boundary",
     }
     return {
@@ -229,8 +304,8 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
                 "options": strict_field_data(embedded.options()),
             }
         ),
-        "levels": layout.max_levels if isinstance(layout, AMR) else 1,
-        "ratio": layout.ratio if isinstance(layout, AMR) else 1,
+        "levels": contract.levels,
+        "ratio": contract.ratio,
         "connectivity": connectivity,
         "component_derivation": "connected-components-of-resolved-cell-graph",
         "basis_derivation": "one-constant-mode-per-connected-material-component",
@@ -292,4 +367,10 @@ def boundary_dependency_pack(plan: FieldDiscretization, unknown: Any) -> dict[st
     }
 
 
-__all__ = ["boundary_dependency_pack", "boundary_plan", "topology_recipe"]
+__all__ = [
+    "FieldLayoutContract",
+    "boundary_dependency_pack",
+    "boundary_plan",
+    "field_layout_contract",
+    "topology_recipe",
+]

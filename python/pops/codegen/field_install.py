@@ -13,6 +13,7 @@ from pops.codegen.lowering_coverage import (
 from pops.codegen.field_boundary_lowering import (
     boundary_dependency_pack,
     boundary_plan,
+    field_layout_contract,
     topology_recipe,
 )
 from pops.identity import Identity
@@ -125,6 +126,7 @@ def resolve_field_install_plan(
     if not isinstance(operator, FieldOperator) or not isinstance(plan, FieldDiscretization):
         raise TypeError("field registration lost FieldOperator + FieldDiscretization")
     rows: list[LoweringCoverageRow] = []
+    layout_contract = field_layout_contract(layout)
     source = "field:%s:operator" % name
     kinds = principal_kinds(operator.equation.lhs)
     if "laplacian" not in kinds or kinds - {"laplacian"}:
@@ -146,7 +148,7 @@ def resolve_field_install_plan(
                 "coefficient": route["coefficient"],
                 "measure": route["measure"],
             }
-            for provider, route in zip(rhs_providers, provider_route)
+            for provider, route in zip(rhs_providers, provider_route, strict=True)
         ],
     }
     from pops.identity import canonical_bytes
@@ -178,8 +180,7 @@ def resolve_field_install_plan(
     # yet consume Uniform.embedded_boundary, so pretending to materialise connected components here
     # would silently solve a different domain and derive the wrong nullspace dimension.  Refuse that
     # topology explicitly; the accepted recipe below truthfully has exactly one material component.
-    from pops.mesh.layouts import AMR
-    embedded = None if isinstance(layout, AMR) else layout.embedded_boundary
+    embedded = layout_contract.embedded_boundary
     if embedded is not None:
         _reject(rows, "field:%s:topology" % name,
                 "field.topology.embedded_boundary_not_native",
@@ -197,7 +198,8 @@ def resolve_field_install_plan(
                 "field %r has a boundary law depending on another solved field; the AMR "
                 "backend has no exact same-level/composite materialization route for that "
                 "dependency yet" % name)
-    if target == "amr_system" and layout.max_levels > 1 and boundary_dependencies["states"]:
+    if target == "amr_system" and layout_contract.levels > 1 \
+            and boundary_dependencies["states"]:
         _reject(rows, "field:%s:boundaries" % name,
                 "field.boundary.amr_multilevel_state_dependency_not_native",
                 "field %r has a state-dependent boundary law on a multilevel hierarchy; the "
@@ -334,7 +336,8 @@ def resolve_field_install_plan(
         hierarchy = "level_local"
     else:
         hierarchy = "composite" if policy in ("infer_from_layout", "composite") else "level_local"
-    if target == "amr_system" and hierarchy == "level_local" and layout.max_levels > 1:
+    if target == "amr_system" and hierarchy == "level_local" \
+            and layout_contract.levels > 1:
         _reject(rows, "field:%s:hierarchy" % name,
                 "field.hierarchy.level_local_partial_topology_not_native",
                 "field %r requests level-local solves on a refined partial BoxArray; the native "
