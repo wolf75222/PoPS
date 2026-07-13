@@ -21,7 +21,6 @@ from pops.time.program_history import _ProgramHistory
 from pops.time.program_inspect import _ProgramInspect
 from pops.time.program_local import _ProgramLocal
 from pops.time.program_passes import _ProgramPasses
-from pops.time.program_residual import _ProgramResidual
 from pops.time.program_solve import _ProgramSolve
 from pops.time.program_time_handles import _ProgramTimeHandles
 from pops.time.references import bind_program_block, block_name
@@ -37,7 +36,7 @@ from pops.time.values import _Coeff, ProgramValue  # noqa: F401  (ProgramValue u
 
 
 class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondensed,
-              _ProgramHistory, _ProgramSolve, _ProgramResidual,
+              _ProgramHistory, _ProgramSolve,
               _ProgramAuthoring, _ProgramDtBound, _ProgramPasses, _ProgramInspect):
     """A compiled time program (builder mode). Holds the SSA value list and the committed
     blocks. The Python object only BUILDS the IR; it is never executed numerically during

@@ -363,17 +363,17 @@ def build_final_case(*, cells: int = DEFAULT_CELLS) -> FinalMultiphysicsCase:
 
     authoring = build_authoring()
     pops.validate(authoring.case)
-    subjects = authoring.case._materialized_layout_subjects()
+    subjects = authoring.case.layout_subjects()
     provider = Uniform(CartesianMesh(n=cells, L=1.0, periodic=True))
     builder = LayoutPlanBuilder(authoring.case.owner_path.canonical())
     layout = builder.layout("uniform_two_fluid", provider)
-    for block in subjects["blocks"]:
+    for block in subjects.blocks:
         builder.assign_block(block, layout)
-    for state in subjects["states"]:
+    for state in subjects.states:
         builder.assign_state(state, layout)
-    for field in subjects["fields"]:
+    for field in subjects.fields:
         builder.assign_field(field, layout)
-    plan = builder.resolve(**subjects)
+    plan = builder.resolve(**subjects.to_dict())
     return FinalMultiphysicsCase(authoring, plan, layout, provider)
 
 

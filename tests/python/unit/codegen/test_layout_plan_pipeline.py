@@ -54,9 +54,9 @@ def _case(name="layout-pipeline"):
 
 
 def _heterogeneous_plan(case):
-    subjects = case._materialized_layout_subjects()
-    by_block = {value.local_id: value for value in subjects["blocks"]}
-    by_state = {value.block_ref.local_id: value for value in subjects["states"]}
+    subjects = case.layout_subjects()
+    by_block = {value.local_id: value for value in subjects.blocks}
+    by_state = {value.block_ref.local_id: value for value in subjects.states}
     builder = LayoutPlanBuilder(case.owner_path.canonical())
     coarse = builder.layout("coarse", Uniform(CartesianMesh(n=8)))
     fine = builder.layout("fine", Uniform(CartesianMesh(n=16)))
@@ -72,7 +72,7 @@ def _heterogeneous_plan(case):
         _MappingProvider("provider/fine-to-coarse", frozenset((
             (reverse.source.qualified_id, reverse.target.qualified_id),))),
     )
-    return builder.resolve(**subjects, providers=providers)
+    return builder.resolve(**subjects.to_dict(), providers=providers)
 
 
 def test_single_descriptor_is_normalized_through_the_layout_plan_pipeline():
@@ -81,7 +81,7 @@ def test_single_descriptor_is_normalized_through_the_layout_plan_pipeline():
 
     assert len(resolved.layout_plan.layouts) == 1
     assert len(resolved.layout_plan.assignments) == 4
-    resolved.layout_plan.validate_subjects(**case._materialized_layout_subjects())
+    resolved.layout_plan.validate_subjects(**case.layout_subjects().to_dict())
     assert resolved.capabilities["layout_plan"]["layouts"][0]["capabilities"]["layout"] \
         == "uniform"
     assert resolved.lowering_coverage.to_data()["rows"]
@@ -89,15 +89,15 @@ def test_single_descriptor_is_normalized_through_the_layout_plan_pipeline():
 
 def test_explicit_single_plan_uses_the_same_path_with_a_separate_authenticated_provider():
     case, _, _ = _case("single-plan-provider")
-    subjects = case._materialized_layout_subjects()
+    subjects = case.layout_subjects()
     descriptor = Uniform(CartesianMesh(n=8))
     builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("only", descriptor)
-    for block in subjects["blocks"]:
+    for block in subjects.blocks:
         builder.assign_block(block, layout)
-    for state in subjects["states"]:
+    for state in subjects.states:
         builder.assign_state(state, layout)
-    plan = builder.resolve(**subjects)
+    plan = builder.resolve(**subjects.to_dict())
 
     resolved = pops.resolve(
         case, layout=plan, layout_providers={layout: Uniform(CartesianMesh(n=8))})
@@ -109,14 +109,14 @@ def test_explicit_single_plan_uses_the_same_path_with_a_separate_authenticated_p
 
 def test_pipeline_rejects_an_unassigned_materialized_state_before_artifact_creation():
     case, _, _ = _case("unassigned-pipeline")
-    subjects = case._materialized_layout_subjects()
+    subjects = case.layout_subjects()
     builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("only", Uniform(CartesianMesh(n=8)))
-    for block in subjects["blocks"]:
+    for block in subjects.blocks:
         builder.assign_block(block, layout)
-    builder.assign_state(subjects["states"][0], layout)
+    builder.assign_state(subjects.states[0], layout)
     incomplete = builder.resolve(
-        blocks=subjects["blocks"], states=subjects["states"][:1])
+        blocks=subjects.blocks, states=subjects.states[:1])
 
     with pytest.raises(ValueError, match="unassigned layout subjects"):
         pops.resolve(case, layout=incomplete)
@@ -141,9 +141,9 @@ def test_heterogeneous_plan_is_proved_then_refused_with_capability_and_coverage_
 def test_adding_an_independent_layout_does_not_change_existing_assignment_capabilities():
     case, _, _ = _case("independent-capabilities")
     multi = _heterogeneous_plan(case)
-    subjects = case._materialized_layout_subjects()
-    first_block = next(value for value in subjects["blocks"] if value.local_id == "first")
-    first_state = next(value for value in subjects["states"]
+    subjects = case.layout_subjects()
+    first_block = next(value for value in subjects.blocks if value.local_id == "first")
+    first_state = next(value for value in subjects.states
                        if value.block_ref.local_id == "first")
     builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("coarse", Uniform(CartesianMesh(n=8)))

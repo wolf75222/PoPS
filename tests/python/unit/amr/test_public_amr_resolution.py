@@ -46,13 +46,13 @@ def _resolved_target(*, hysteresis=None, conflict_policy=None):
         )
     case = pops.validate(target.authoring.case)
     layout = authored_layout.resolve_for_case(case.resolve)
-    subjects = case._materialized_layout_subjects()
+    subjects = case.layout_subjects()
     layout_plan = normalize_layout_plan(
         layout,
         owner=case.owner_path.canonical(),
-        states=subjects["states"],
-        fields=subjects["fields"],
-        blocks=subjects["blocks"],
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
         handle_resolver=lambda value: value if value.is_resolved else case.resolve(value),
     )
     numerics = tuple(

@@ -4,6 +4,9 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
+from pops.solvers import DenseLU
+from pops.time import FailRun, LocalLinear
+
 from ._factory import call_at, instance_state, operator_handle, program_factory
 from ._helpers import _stage_point
 
@@ -30,12 +33,12 @@ def _build_predictor_corrector(
         program, implicit, fields_initial, name="linear_n", point=predictor)
     predictor_rhs = program.value(
         "predictor_rhs", initial + program.dt * rate_initial, at=predictor)
-    predicted = program.solve_local_linear(
-        "predictor_solve",
-        operator=program.I - program.dt * linear_initial,
-        rhs=predictor_rhs,
-        fields=fields_initial,
-    )
+    predicted = program.solve(
+        LocalLinear(
+            operator=program.I - program.dt * linear_initial,
+            rhs=predictor_rhs, fields=fields_initial),
+        solver=DenseLU(), name="predictor_solve",
+    ).consume(action=FailRun())
     predicted = program.value("predicted_state", predicted, at=predictor)
 
     corrector = _stage_point(
@@ -62,12 +65,12 @@ def _build_predictor_corrector(
         + half * program.dt * applied,
         at=temporal.next.point,
     )
-    corrected = program.solve_local_linear(
-        "corrector_solve",
-        operator=program.I - half * program.dt * linear_predicted,
-        rhs=corrector_rhs,
-        fields=fields_predicted,
-    )
+    corrected = program.solve(
+        LocalLinear(
+            operator=program.I - half * program.dt * linear_predicted,
+            rhs=corrector_rhs, fields=fields_predicted),
+        solver=DenseLU(), name="corrector_solve",
+    ).consume(action=FailRun())
     endpoint = program.value(
         "predictor_corrector_step", corrected, at=temporal.next.point)
     program.commit(temporal.next, endpoint)

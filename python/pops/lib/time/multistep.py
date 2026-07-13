@@ -4,6 +4,9 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
+from pops.solvers import DenseLU
+from pops.time import FailRun, LocalLinear
+
 from ._factory import call_at, instance_state, operator_handle, program_factory
 from ._helpers import _block_label, _stage_point
 
@@ -126,12 +129,10 @@ def _build_bdf(
             rhs_expression = rhs_expression + Fraction(2, 3) * program.dt * explicit_rate
         operator = program.I - Fraction(2, 3) * program.dt * linear
     rhs = program.value("bdf%d_rhs" % order, rhs_expression, at=point)
-    solved = program.solve_local_linear(
-        "bdf%d_solve" % order,
-        operator=operator,
-        rhs=rhs,
-        fields=stage_fields,
-    )
+    solved = program.solve(
+        LocalLinear(operator=operator, rhs=rhs, fields=stage_fields),
+        solver=DenseLU(), name="bdf%d_solve" % order,
+    ).consume(action=FailRun())
     endpoint = program.value(
         "bdf%d_step" % order, solved, at=temporal.next.point)
     program.commit(temporal.next, endpoint)
@@ -147,7 +148,7 @@ def BDF(
 ) -> Any:
     """Return BDF1/BDF2 for one typed local-linear implicit operator.
 
-    Globally coupled nonlinear residuals remain ordinary explicit ``Program.solve_residual``
+    Globally coupled nonlinear problems remain explicit ``Program.solve(problem, solver=...)``
     authoring; this preset does not guess a Jacobian, preconditioner, or field policy.
     """
     return program_factory(

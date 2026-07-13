@@ -11,7 +11,8 @@ from pops._report import DiagnosticError, ReportTree
 from pops.problem.handles import (
     BlockHandle, FieldHandle, OperatorHandle, StateHandle)
 from pops.problem.problem import Case
+from pops.problem.layout_subjects import LayoutSubjects
 from pops.problem._snapshot import AuthoringSnapshot
 
-__all__ = ["Case", "AuthoringSnapshot", "BlockHandle", "StateHandle", "FieldHandle",
+__all__ = ["Case", "LayoutSubjects", "AuthoringSnapshot", "BlockHandle", "StateHandle", "FieldHandle",
            "OperatorHandle", "ReportTree", "DiagnosticError"]

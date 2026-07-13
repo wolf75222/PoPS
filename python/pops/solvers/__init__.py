@@ -33,6 +33,7 @@ from types import SimpleNamespace
 from . import elliptic, krylov, nonlinear, options, requirements, schur, tolerances
 from .elliptic import FFT, GeometricMG
 from .krylov import CG, BiCGStab, GMRES, Richardson
+from .local import DenseLU
 from .nonlinear import LocalNewton, Newton
 from .preconditioners import preconditioners
 from .schur import CondensedSchur, Schur
@@ -47,7 +48,7 @@ from .providers import CompositeTensorFAC, HierarchySolveProvider
 # any DSL / codegen import (no cycle: pops.solvers imports nothing).
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
-    Newton=Newton, LocalNewton=LocalNewton, Schur=Schur,
+    Newton=Newton, LocalNewton=LocalNewton, DenseLU=DenseLU, Schur=Schur,
 )
 
 __all__ = [
@@ -55,7 +56,7 @@ __all__ = [
     "preconditioners", "requirements",
     "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
-    "Newton", "LocalNewton", "Schur", "CondensedSchur",
+    "Newton", "LocalNewton", "DenseLU", "Schur", "CondensedSchur",
     "SolveScope", "Level", "Hierarchy", "HierarchySolveProvider", "CompositeTensorFAC",
     "solvers",
 ]

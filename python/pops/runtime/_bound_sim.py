@@ -11,6 +11,7 @@ hatch for low-level / internal engine tests, not part of the public surface.
 from __future__ import annotations
 
 from typing import Any
+from weakref import WeakKeyDictionary
 
 
 # --- delegation allowlist, grouped by category -------------------------------------------------
@@ -19,9 +20,7 @@ from typing import Any
 # diagnostic / io surface and nothing structural.
 
 # Advance the clock (the whole point of binding a compiled Case).
-_STEPPING = frozenset({
-    "run", "step", "solve_fields",
-})
+_STEPPING = frozenset()
 
 # Mutate runtime DATA (state / fields / clock) -- never parameter carriers or composition.
 _MUTATIONS = frozenset({
@@ -79,9 +78,12 @@ class BoundSimulation:
     the public surface.
     """
 
-    def __init__(self, engine: Any) -> None:
+    def __init__(self, engine: Any, *, _authority: Any = None) -> None:
+        if _authority is not _BIND_AUTHORITY:
+            raise TypeError("BoundSimulation instances are created only by pops.bind")
         # Store on the instance dict directly so __getattr__ is not consulted for _engine itself.
         object.__setattr__(self, "_engine", engine)
+        _BOUND_ENGINES[self] = engine
 
     # The IO capabilities whose engine support is gated at access (ADC-537 gate e / G5): a bound
     # simulation forwards restart / checkpoint only when its engine actually provides them. An engine
@@ -111,7 +113,7 @@ class BoundSimulation:
         # whole surface.
         raise AttributeError(
             "pops.bind: a bound simulation has no %r; its surface is the run / data / diagnostic / "
-            "io methods (run / step / set_state / density / mass / inspect / checkpoint / "
+            "io methods (set_state / density / mass / inspect / checkpoint / "
             "...). Author the composition on the pops.Case and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 
@@ -120,3 +122,21 @@ class BoundSimulation:
 
     def __str__(self) -> Any:
         return self.__repr__()
+
+
+_BIND_AUTHORITY = object()
+_BOUND_ENGINES: WeakKeyDictionary[Any, Any] = WeakKeyDictionary()
+
+
+def _bound_simulation(engine: Any) -> BoundSimulation:
+    """Create and register the sole public runtime phase object."""
+    return BoundSimulation(engine, _authority=_BIND_AUTHORITY)
+
+
+def _run_bound(instance: Any, controls: Any) -> Any:
+    """Advance an authenticated bind result without class-based public dispatch."""
+    try:
+        engine = _BOUND_ENGINES[instance]
+    except (KeyError, TypeError):
+        raise TypeError("pops.run expects the authenticated object returned by pops.bind") from None
+    return engine._run(**dict(controls))

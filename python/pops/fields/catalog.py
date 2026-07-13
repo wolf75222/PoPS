@@ -15,12 +15,9 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pops.descriptors import _native, _planned
+from pops.descriptors import _native
 
 fields = SimpleNamespace(
-    Poisson=lambda **o: _planned("poisson", "poisson", category="field", **o),
-    Helmholtz=lambda **o: _planned("helmholtz", "helmholtz", category="field", **o),
-    EllipticSolve=lambda **o: _planned("elliptic_solve", "elliptic", category="field", **o),
     GeometricMG=lambda **o: _native(
         "geometric_mg", "pops::GeometricMG", "geometric_mg", category="field", **o
     ),

@@ -6,9 +6,6 @@ small and explicit: ``Model / Program / Case -> validate -> resolve -> compile -
 """
 from __future__ import annotations
 
-from importlib import import_module
-from typing import Any
-
 from ._api import bind, compile, resolve, run, validate
 from ._inspect import explain, inspect
 from ._version import __version__
@@ -30,27 +27,3 @@ __all__ = [
     "run",
     "__version__",
 ]
-
-
-_SUBMODULES = frozenset({
-    "amr", "boundary", "codegen", "diagnostics", "domain", "external", "fields", "frames",
-    "identity", "initial", "interfaces", "ir", "layouts", "lib", "linalg", "math", "mesh",
-    "model", "moments", "numerics", "output", "params", "physics", "projection",
-    "representations", "runtime", "solvers", "spaces", "time",
-})
-
-def __getattr__(name: str) -> Any:
-    if name in _SUBMODULES:
-        try:
-            module = import_module("pops." + name)
-        except ModuleNotFoundError as exc:
-            if exc.name == "pops." + name:
-                raise AttributeError("module 'pops' has no public submodule %r" % name) from None
-            raise
-        globals()[name] = module
-        return module
-    raise AttributeError("module 'pops' has no public attribute %r" % name)
-
-
-def __dir__() -> list[str]:
-    return sorted(set(globals()) | _SUBMODULES)

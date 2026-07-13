@@ -62,15 +62,13 @@ def run(instance: Any, **controls: Any) -> Any:
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
     are recorded by the runtime's run identity.
     """
-    from pops.runtime.runtime_instance import RuntimeInstance
-
-    if type(instance) is not RuntimeInstance:
-        raise TypeError("pops.run expects the exact RuntimeInstance returned by pops.bind")
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(
             "pops.run does not accept strategy= or cfl=; declare the controller with "
             "Program.step_strategy(...)")
-    return instance._run(**controls)
+    from pops.runtime._bound_sim import _run_bound
+
+    return _run_bound(instance, controls)
 
 
 __all__ = ["bind", "compile", "resolve", "run", "validate"]

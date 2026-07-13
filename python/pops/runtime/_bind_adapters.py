@@ -14,7 +14,7 @@ def install_plan(install_plan: Any) -> Any:
     """Validate and install one exact plan without target-string dispatch."""
     from pops.codegen._plans import require_install_plan
     from pops.runtime._bind_validation import run_bind_gates
-    from pops.runtime._bound_sim import BoundSimulation
+    from pops.runtime._bound_sim import _bound_simulation
     from pops.runtime.runtime_instance import RuntimeInstance
 
     plan = require_install_plan(install_plan)
@@ -29,7 +29,7 @@ def install_plan(install_plan: Any) -> Any:
         platform_manifest=artifact.platform_manifest,
         execution_context=plan.execution_context,
     )
-    return BoundSimulation(RuntimeInstance(plan))
+    return _bound_simulation(RuntimeInstance(plan))
 
 
 __all__ = ["install_plan"]

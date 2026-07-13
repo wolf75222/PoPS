@@ -43,5 +43,4 @@ solvers.custom = _custom_solver
 solvers.registered = _registered_solvers
 
 __all__ = ["solver", "build_solver_ir", "generate_solver_cpp",
-           "SolverContext", "SolverIR", "solvers",
-           "_as_descriptor", "_custom_solver", "_registered_solvers"]
+           "SolverContext", "SolverIR", "solvers"]

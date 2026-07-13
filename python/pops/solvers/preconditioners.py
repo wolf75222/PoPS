@@ -16,7 +16,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pops.descriptors import _external_descriptor, _native, _planned
+from pops.descriptors import _external_descriptor, _native
 
 # ADC-644: the ONLY V-cycle-SHAPE knobs a geometric-multigrid PRECONDITIONER may carry. A Krylov
 # preconditioner must be a FIXED linear map M^{-1} (the same operator on every apply), so the meaningful
@@ -77,10 +77,8 @@ def _geometric_mg_precond(**o: Any) -> Any:
 
 
 preconditioners = SimpleNamespace(
-    Identity=lambda: _planned("identity", "identity", category="preconditioner"),
-    Jacobi=lambda: _planned("jacobi", "jacobi", category="preconditioner"),
-    BlockJacobi=lambda: _planned("block_jacobi", "block_jacobi",
-                                 category="preconditioner"),
+    Identity=lambda: _native(
+        "identity", "pops::ApplyFn", "identity", category="preconditioner"),
     GeometricMG=_geometric_mg_precond,
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="preconditioner"),
 )

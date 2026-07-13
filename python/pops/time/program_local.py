@@ -28,8 +28,8 @@ else:
 class _ProgramLocal(_ProgramConstants, _ProgramBase):
     """Local solves, matrix-free operators, laplacian/gradient/divergence and the coefficiented apply."""
 
-    def solve_local_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
-                           fields: Any = None) -> Any:
+    def _solve_local_linear(self, *, operator: Any, rhs: Any, prepared: Any,
+                            fields: Any = None, name: Any = None) -> Any:
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
         ``operator = self.I +/- a*L`` for a single model linear source ``L`` (``a`` may depend on dt
         / constants). Returns the solution State. A non-local or non-linear operator is rejected;
@@ -63,12 +63,30 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         lname = op_value.attrs["linear_source"]
         a = (-l_coeff).to_polynomial()  # operator = I - a*L, so L carries coefficient -a
         inputs = (rhs, op_value, fields) if fields is not None else (rhs, op_value)
-        attrs = {"linear_source": lname, "a_coeff": a}
+        identity = getattr(prepared, "identity", None)
+        if not isinstance(getattr(identity, "token", None), str):
+            raise TypeError("solve: DenseLU provider identity is not canonical")
+        attrs = {
+            "linear_source": lname, "a_coeff": a,
+            "solver_identity": identity.token,
+            "problem_kind": "local_linear",
+        }
         if "operator_handle" in op_value.attrs:
             attrs["operator_handle"] = op_value.attrs["operator_handle"]
-        return self._new(
+        token = self._new(
             "state", "solve_local_linear", inputs, attrs, name, rhs.block, space=rhs.space,
-            field_context=field_context)
+            point=rhs.point, field_context=field_context)
+        from pops.time.solve_outcome import SolveOutcome
+
+        outcome_name = name or token.name
+
+        def project(outcome: Any) -> Any:
+            return self._new(
+                "state", "solve_outcome_component", (outcome,), {"index": 0},
+                outcome_name, rhs.block, space=rhs.space, point=rhs.point,
+                field_context=field_context)
+
+        return SolveOutcome(self, token, project, outcome_name)
 
     @atomic_authoring
     def solve(self, problem: Any, *, solver: Any, name: Any = None) -> Any:
@@ -99,7 +117,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
     def _solve_coupled_implicit(self, operator: Any, states: Any, *, prepared: Any,
                                 name: Any = None, at: Any = None, coefficient: Any,
-                                problem_identity: Any) -> Any:
+                                ) -> Any:
         """Solve ``U - U0 - dt * operator(U) = 0`` over owner-qualified blocks.
 
         The typed ``coupled_rate`` signature is the join contract for every input and output.  The
@@ -168,7 +186,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             {"operator": op.name, "operator_handle": operator, "blocks": blocks,
              "method": "newton", "solver_identity": prepared.identity.token,
              "problem_kind": "coupled_implicit_euler",
-             "problem_identity": problem_identity.token, "coefficient": coefficient,
+             "coefficient": coefficient,
              "tol": tol_literal, "max_iter": int(max_iter),
              "fd_eps": fd_eps_literal, "output_count": len(blocks)},
             token_name, blocks[0], point=result_points[0])
@@ -194,7 +212,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
     # / global solve, which a per-cell Newton kernel cannot evaluate at a perturbed stack state).
 
     def _solve_local_nonlinear(self, *, residual: Any, initial_guess: Any, prepared: Any,
-                               name: Any = None, problem_identity: Any) -> Any:
+                               name: Any = None) -> Any:
         """Solve a LOCAL non-linear system ``residual(U) = 0`` cell by cell with a per-cell Newton
         iteration (spec op 10). Returns the converged solution State.
 
@@ -285,7 +303,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
              "residual": r, "iterate": iterate, "guess": guess_ph,
              "tol": tol_literal, "max_iter": int(max_iter), "method": "newton",
              "problem_kind": "local_residual",
-             "problem_identity": problem_identity.token,
+             "solver_identity": prepared.identity.token,
              # ADC-617: the FD Jacobian relative step. None -> the historical 1e-7 literal. Stored on
              # the node so the generic attrs hash (_ir_hash) busts the compile cache when it changes.
             "fd_eps": fd_eps_literal}, name, block,

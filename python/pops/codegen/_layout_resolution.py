@@ -61,10 +61,14 @@ class ResolvedLayoutAuthority:
 
 def materialized_layout_subjects(problem: Any) -> dict[str, tuple[Any, ...]]:
     """Enumerate exact canonical blocks, state instances, and case fields without representatives."""
-    protocol = getattr(problem, "_materialized_layout_subjects", None)
+    protocol = getattr(problem, "layout_subjects", None)
     if not callable(protocol):
         raise TypeError("layout planning requires the Case materialized-subject protocol")
-    return protocol()
+    snapshot = protocol()
+    project = getattr(snapshot, "to_dict", None)
+    if not callable(project):
+        raise TypeError("Case.layout_subjects() must return a typed LayoutSubjects snapshot")
+    return project()
 
 
 def validate_layout(problem: Any, layout: Any) -> None:

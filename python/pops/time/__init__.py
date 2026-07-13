@@ -48,21 +48,14 @@ from pops.time.solve_outcome import (  # noqa: F401
 from pops.time.step_strategy import (  # noqa: F401
     AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
 )
-from pops.time.solve_problem import CoupledImplicitEuler, LocalResidual  # noqa: F401
+from pops.time.solve_problem import (  # noqa: F401
+    CoupledImplicitEuler, LocalLinear, LocalResidual,
+)
 from pops.time.step_transaction import (  # noqa: F401
     ALL_PROVISIONAL_STORES, AcceptanceGuard, BlockProjection, GuardRole,
     ProjectAndRecheck, ProvisionalStore, StepTransactionPlan, StepTransactionReport,
 )
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
-from pops.time.residual import (  # noqa: F401
-    AlgebraicTerm, ApproximateLinearization, AutomaticJVP, Boundary,
-    ConsistentInitialization, Constraint, Coupling, Dt, EquationSpace, ExactJacobian,
-    FieldDependency, FiniteDifferenceJVP, IdentityTerm, Index1DAE,
-    LinearizationFidelity, MassTerm, NoPostStepValidation, PostStepValidation,
-    PreconditionerContract, PreconditionerDomain, ProductSpace,
-    RequireConsistentInitialState, ResidualOperator, ResidualReport, SupportReport, SupportStatus,
-    UnknownSpace, linearization_fidelity,
-)
 from pops.time.schedule import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
     ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
@@ -75,7 +68,7 @@ from pops.time.synchronization import (  # noqa: F401
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
 __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
-           "CoupledImplicitEuler", "LocalResidual",
+           "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",
            "StepStrategy", "FixedDt", "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid",
@@ -99,14 +92,3 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "always", "every", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]
-
-__all__ += [
-    "AlgebraicTerm", "ApproximateLinearization", "AutomaticJVP", "Boundary",
-    "ConsistentInitialization", "Constraint", "Coupling", "Dt",
-    "EquationSpace", "ExactJacobian", "FieldDependency", "FiniteDifferenceJVP", "IdentityTerm",
-    "Index1DAE", "LinearizationFidelity", "MassTerm",
-    "NoPostStepValidation", "PostStepValidation", "PreconditionerContract",
-    "PreconditionerDomain", "ProductSpace", "RequireConsistentInitialState",
-    "ResidualOperator", "ResidualReport", "SupportReport", "SupportStatus", "UnknownSpace",
-    "linearization_fidelity",
-]

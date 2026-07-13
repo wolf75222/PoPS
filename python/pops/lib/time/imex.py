@@ -4,6 +4,8 @@ from __future__ import annotations
 from typing import Any
 
 from pops.time.method_tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+from pops.time import FailRun, LocalLinear
+from pops.solvers import DenseLU
 
 from ._factory import call_at, instance_state, operator_handle, program_factory
 from ._helpers import _stage_point
@@ -62,12 +64,12 @@ def _build_imex(
         diagonal = tableau.implicit_A[i][i]
         stage = predictor
         if diagonal != 0:
-            stage = program.solve_local_linear(
-                "%sstage_solve_%d" % (tag, i),
-                operator=program.I - (program.dt * diagonal) * linear,
-                rhs=predictor,
-                fields=fields,
-            )
+            stage = program.solve(
+                LocalLinear(
+                    operator=program.I - (program.dt * diagonal) * linear,
+                    rhs=predictor, fields=fields),
+                solver=DenseLU(), name="%sstage_solve_%d" % (tag, i),
+            ).consume(action=FailRun())
             stage = program.value("%sstage_%d" % (tag, i), stage, at=point)
         explicit_rates.append(call_at(
             program, explicit_operator, stage, fields,

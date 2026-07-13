@@ -429,10 +429,11 @@ class Case:
         merged["declaration_resolver"] = self.resolve
         return merged
 
-    def _materialized_layout_subjects(self) -> dict[str, tuple[Any, ...]]:
-        """Canonical exact subjects used by the generic LayoutPlan validation protocol."""
+    def layout_subjects(self) -> Any:
+        """Return the immutable exact block/state/field snapshot assigned by a LayoutPlan."""
+        from pops.problem.layout_subjects import LayoutSubjects
         from pops.problem._layout_protocol import materialized_layout_subjects
-        return materialized_layout_subjects(self)
+        return LayoutSubjects(**materialized_layout_subjects(self))
 
     def explain_routes(self) -> Any:
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1)."""

@@ -56,9 +56,6 @@ def _lower_krylov_method(method: Any) -> Any:
 # Preconditioner schemes that lower to REAL C++ in the matrix-free Krylov path (Spec 5 sec.7, ADC-516):
 #   - "identity":     the empty pops::ApplyFn{} (unpreconditioned; the historical default);
 #   - "geometric_mg": one V-cycle of the wired pops::GeometricMG, emitted as a real ApplyFn callback.
-# The planned-but-unwired schemes (jacobi / block_jacobi) carry available=False and have no native
-# kernel yet; they are rejected with an HONEST "planned, not wired" message (a separate issue), never a
-# transitional catch-all.
 _WIRED_PRECOND_SCHEMES = frozenset({"identity", "geometric_mg"})
 
 
@@ -68,9 +65,7 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
     ``preconditioner`` is a :mod:`pops.solvers.preconditioners` descriptor
     (``preconditioners.Identity()`` / ``preconditioners.GeometricMG()`` ...); its ``scheme`` is the
     C++ token. A bare string is REJECTED; ``None`` defaults to ``Identity()`` (the unpreconditioned
-    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn; the planned
-    jacobi / block_jacobi descriptors have no native kernel yet and are rejected with an honest
-    "planned, not wired" message (out of scope -- a separate issue).
+    default). The geometric-multigrid preconditioner lowers to a real V-cycle ApplyFn.
 
     ADC-644: a ``GeometricMG(...)`` with validated V-cycle-shape knobs returns its option dict; a
     default one returns ``None`` (the IR omits ``precond_options`` -> emitted V-cycle byte-identical).
@@ -88,11 +83,9 @@ def _lower_preconditioner(preconditioner: Any) -> Any:
             "solve_linear: preconditioner must be a pops.solvers.preconditioners descriptor "
             "(e.g. Identity() / GeometricMG()); got %r" % (preconditioner,))
     if scheme not in _WIRED_PRECOND_SCHEMES:
-        # A catalogued-but-unwired preconditioner (jacobi / block_jacobi): no native C++ kernel yet.
-        # An HONEST capability limit, not a transitional reject -- wiring it is tracked separately.
         raise NotImplementedError(
-            "solve_linear: the %r preconditioner is planned, not wired yet (it needs a native C++ "
-            "kernel); use preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
+            "solve: the %r preconditioner has no executable Program route; use "
+            "preconditioners.Identity() or preconditioners.GeometricMG()" % (scheme,))
     options = getattr(preconditioner, "options", None)
     precond_options = dict(options) if options else None
     return scheme, precond_options
@@ -105,12 +98,11 @@ def _preconditioners() -> Any:
 
 
 class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
-    """Krylov solve_linear, histories, commits, board sugar (fields/define/solve) and records."""
+    """Private Krylov lowering plus histories, commits and records."""
 
-    def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
-                     initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
-                     tol: Any = None, max_iter: Any = None, restart: Any = None, *,
-                     at: Any = None, scope: Any = None) -> Any:
+    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any,
+                      initial_guess: Any = None, name: Any = None,
+                      at: Any = None, scope: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a field. A state-domain operator with a State rhs returns a State;
         scratch/vector solves return a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
@@ -137,23 +129,24 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);
           - @p restart: GMRES restart length m (a positive int; defaults to 30). Ignored by the other
             methods; passing it to a non-gmres solve is rejected."""
-        # Spec 5 sec.7: method / preconditioner are TYPED descriptors (pops.solvers.krylov /
-        # pops.solvers.preconditioners). They lower to the SAME internal scheme tokens the runtime
-        # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
-        # a bare algorithm-selector string is rejected (the public string form is removed).
         operator = self._canonical_value(operator)
         from pops.solvers.scopes import solve_scope_id
         solve_scope = (operator.attrs.get("scope", "level") if scope is None
                        else solve_scope_id(scope))
         if operator.attrs.get("scope") == "hierarchy" and solve_scope != "hierarchy":
-            raise ValueError("solve_linear: a hierarchy-scoped operator cannot be downgraded to Level()")
-        method, method_options = _lower_krylov_method(method)
-        preconditioner, precond_options = _lower_preconditioner(preconditioner)
-        # ADC-645: the call-site tol stays the authoritative per-op budget; left default (None) it
-        # falls back to the descriptor's optional rel_tol, then to the historical 1e-8 -- so a
-        # default program resolves tol to the same 1e-8 and the IR node is byte-identical.
-        if tol is None:
-            tol = method_options.get("rel_tol", 1e-8)
+            raise ValueError("solve: a hierarchy-scoped operator cannot be downgraded to Level()")
+        method = getattr(prepared, "method", None)
+        tol = getattr(prepared, "tolerance", None)
+        max_iter = getattr(prepared, "max_iterations", None)
+        restart = getattr(prepared, "restart", None)
+        preconditioner_data = getattr(prepared, "preconditioner", None)
+        if not (isinstance(preconditioner_data, tuple) and len(preconditioner_data) == 2):
+            raise TypeError("solve: Krylov provider has an invalid preconditioner contract")
+        preconditioner, precond_options = preconditioner_data
+        omega = getattr(prepared, "omega", None)
+        solver_identity = getattr(prepared, "identity", None)
+        if not isinstance(getattr(solver_identity, "token", None), str):
+            raise TypeError("solve: Krylov provider identity is not canonical")
         if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
         if operator.attrs["apply_block"] is None:
@@ -250,9 +243,11 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             attrs["precond_options"] = precond_options
         # ADC-645: Richardson relaxation factor, added ONLY when the descriptor set it (a default
         # Richardson() program's IR hash / emitted source stays byte-identical: omega = 1 literal).
-        if "omega" in method_options:
+        if omega is not None:
             attrs["omega"] = positive_scalar_literal(
-                method_options["omega"], where="solve_linear: Richardson omega")
+                omega, where="solve_linear: Richardson omega")
+        attrs["solver_identity"] = solver_identity.token
+        attrs["problem_kind"] = "matrix_free_linear"
         # A state-domain solve over a State rhs returns a State, preserving the mathematical unknown's
         # block and StateSpace. Scalar/vector scratch solves remain scalar_field values. This keeps a
         # Newton update ``U + dU`` typed without an implicit scalar-field-to-State conversion.

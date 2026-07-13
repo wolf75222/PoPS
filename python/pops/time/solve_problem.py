@@ -6,8 +6,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from pops.identity import make_identity
-from pops.ir.literals import exact_numeric_scalar, scalar_data
+from pops.ir.literals import exact_numeric_scalar
 
 
 def _frozen_product(value: Any, *, where: str) -> Any:
@@ -18,10 +17,6 @@ def _frozen_product(value: Any, *, where: str) -> Any:
     raise TypeError("%s must be a typed mapping or non-empty sequence" % where)
 
 
-def _problem_identity(kind: str, details: dict[str, Any]) -> Any:
-    return make_identity("program-solve-problem", {"schema_version": 1, "kind": kind, **details})
-
-
 @dataclass(frozen=True, slots=True)
 class CoupledImplicitEuler:
     """The explicit equation ``U = U0 + coefficient * dt * Q(U)``."""
@@ -30,7 +25,6 @@ class CoupledImplicitEuler:
     inputs: Any
     coefficient: Any = 1
     at: Any = None
-    identity: Any = None
 
     def __post_init__(self) -> None:
         from pops.model import OperatorHandle
@@ -50,20 +44,11 @@ class CoupledImplicitEuler:
         elif isinstance(at, Sequence) and not isinstance(at, (str, bytes)):
             at = tuple(at)
         object.__setattr__(self, "at", at)
-        owner = self.operator.owner_path.canonical().to_data()
-        identity = _problem_identity("coupled_implicit_euler", {
-            "operator": {"owner": owner, "kind": self.operator.kind,
-                         "name": self.operator.local_id},
-            "coefficient": scalar_data(coefficient),
-        })
-        if self.identity is not None and self.identity != identity:
-            raise ValueError("CoupledImplicitEuler identity is not canonical")
-        object.__setattr__(self, "identity", identity)
 
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
         return program._solve_coupled_implicit(
             self.operator, self.inputs, prepared=prepared_solver, name=name, at=self.at,
-            coefficient=self.coefficient, problem_identity=self.identity)
+            coefficient=self.coefficient)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,20 +57,30 @@ class LocalResidual:
 
     residual: Any
     initial: Any
-    identity: Any = None
 
     def __post_init__(self) -> None:
         if not callable(self.residual):
             raise TypeError("LocalResidual residual must be an IR-building callable")
-        identity = _problem_identity("local_residual", {})
-        if self.identity is not None and self.identity != identity:
-            raise ValueError("LocalResidual identity is not canonical")
-        object.__setattr__(self, "identity", identity)
 
     def build_with(self, *, program: Any, prepared_solver: Any, name: Any = None) -> Any:
         return program._solve_local_nonlinear(
             residual=self.residual, initial_guess=self.initial,
-            prepared=prepared_solver, name=name, problem_identity=self.identity)
+            prepared=prepared_solver, name=name)
 
 
-__all__ = ["CoupledImplicitEuler", "LocalResidual"]
+@dataclass(frozen=True, slots=True)
+class LocalLinear:
+    """One cell-local linear system with an optional exact field context."""
+
+    operator: Any
+    rhs: Any
+    fields: Any = None
+
+    def build_with(self, *, program: Any, prepared_solver: Any,
+                   name: Any = None) -> Any:
+        return program._solve_local_linear(
+            operator=self.operator, rhs=self.rhs, fields=self.fields,
+            prepared=prepared_solver, name=name)
+
+
+__all__ = ["CoupledImplicitEuler", "LocalLinear", "LocalResidual"]

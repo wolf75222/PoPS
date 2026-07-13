@@ -136,8 +136,9 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
     assert tuple(block.name for block in resolved.blocks) == ("electrons", "ions")
     assert tuple(resolved.field_plans) == ("electrostatic",)
     assert len(resolved.layout_plan.layouts) == 1
-    subjects = core.case._materialized_layout_subjects()
-    assert len(resolved.layout_plan.assignments) == sum(map(len, subjects.values()))
+    subjects = core.case.layout_subjects()
+    assert len(resolved.layout_plan.assignments) == sum(
+        map(len, (subjects.blocks, subjects.states, subjects.fields)))
     assert resolved.consumer_graph.is_resolved
     assert sorted(node.kind.value for node in resolved.consumer_graph.nodes) == [
         "checkpoint", "scientific_output", "scientific_output"]

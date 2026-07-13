@@ -50,13 +50,13 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     case.consumers(graph)
     pops.validate(case)
 
-    subjects = case._materialized_layout_subjects()
+    subjects = case.layout_subjects()
     layout = normalize_layout_plan(
         Uniform(CartesianMesh(n=8)),
         owner=case.owner_path.canonical(),
-        states=subjects["states"],
-        fields=subjects["fields"],
-        blocks=subjects["blocks"],
+        states=subjects.states,
+        fields=subjects.fields,
+        blocks=subjects.blocks,
         handle_resolver=case.resolve,
     )
     resolved = graph.resolve(case.resolve, layout, owner=case.owner_path.canonical())
