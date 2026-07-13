@@ -6,6 +6,8 @@ from typed_program_support import commits_by_block, typed_state
 import pytest
 
 from pops.ir import ValueExpr
+from pops.linalg import LinearProblem
+from pops.solvers import CG
 from pops.time import FailRun, Program, ProgramValue
 from pops.time.handles import StateEndpointHandle
 from pops.model import Module, StateSpace
@@ -166,9 +168,12 @@ def test_commit_many_accepts_distinct_qualified_states_in_the_same_block():
     module = Module("transport_model")
     primary_space = module.state_space("U", ("density",))
     alternate_space = module.state_space("V", ("tracer",))
-    block = Case(name="multi-state-case").block("transport", module)
-    primary = program.state(block[module.state_handle(primary_space)])
-    alternate = program.state(block[module.state_handle(alternate_space)])
+    primary_declaration = module.state_handle(primary_space)
+    alternate_declaration = module.state_handle(alternate_space)
+    block = Case(name="multi-state-case").block(
+        "transport", module, states=(primary_declaration, alternate_declaration))
+    primary = program.state(block[primary_declaration])
+    alternate = program.state(block[alternate_declaration])
 
     primary_final = program.value(
         "primary_final", primary.n, at=primary.next.point)
@@ -187,8 +192,9 @@ def _block_scalar_field(program, block, name):
     state = typed_state(program, block, state_name="U")
     operator = program.matrix_free_operator("A_" + name)
     program.set_apply(operator, lambda _program, _out, value: value)
-    return program.solve_linear(
-        name, operator=operator, rhs=state.n, max_iter=1).consume(action=FailRun())
+    return program.solve(
+        LinearProblem(operator, state.n), solver=CG(max_iter=1), name=name,
+    ).consume(action=FailRun())
 
 
 def test_scalar_field_linear_combine_preserves_the_single_known_block_for_commit():

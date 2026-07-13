@@ -23,7 +23,7 @@ from pops.time.history_persistence import (  # noqa: F401
 )
 from pops.time.graph import (  # noqa: F401
     Branch, Commit, Loop, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
-    Region, RegionCapture, ResidualEvaluation, ResidualSolve, Solve, StateRead, Synchronize,
+    Region, RegionCapture, Solve, StateRead, Synchronize,
     Unknown, ValueRef,
 )
 from pops.time.method_properties import (  # noqa: F401
@@ -75,7 +75,7 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "ALL_PROVISIONAL_STORES", "AcceptanceGuard", "BlockProjection", "GuardRole",
            "ProjectAndRecheck", "ProvisionalStore", "StepTransactionPlan", "StepTransactionReport",
            "ProgramGraph", "GraphProgramValue", "StateRead", "Unknown", "OperatorCall",
-           "ResidualEvaluation", "ResidualSolve", "Solve", "Branch", "Loop", "Region", "RegionCapture",
+           "Solve", "Branch", "Loop", "Region", "RegionCapture",
            "Synchronize", "Commit", "ValueRef",
            "Clock", "TimePoint", "StagePoint",
            "RungeKuttaTableau", "AdditiveRungeKuttaTableau",

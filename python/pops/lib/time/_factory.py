@@ -54,7 +54,9 @@ def call_at(
     from ._helpers import _op_space_arity
 
     arity = _op_space_arity(program, handle)
-    value = handle(*candidate_args[:arity])
+    # A nullary operator has no ProgramValue from which the callable handle could recover the
+    # authoring Program. Presets own that internal lowering boundary explicitly.
+    value = program._call(handle) if arity == 0 else handle(*candidate_args[:arity])
     return program.value(name, value, at=point)
 
 

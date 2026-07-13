@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+from pops.linalg import LinearProblem
+from pops.solvers import CG
 from pops.time import Program, RejectAttempt
 
 
@@ -11,7 +13,8 @@ def _linear_outcome():
     operator = program.matrix_free_operator("identity", ncomp=1)
     program.set_apply(operator, lambda _program, _out, value: value)
     rhs = program.scalar_field("rhs")
-    return program, program.solve_linear(operator=operator, rhs=rhs, max_iter=2)
+    return program, program.solve(
+        LinearProblem(operator, rhs), solver=CG(max_iter=2))
 
 
 def test_reject_attempt_is_explicit_in_the_canonical_program_graph():

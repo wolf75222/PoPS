@@ -76,8 +76,8 @@ class LocalLinear:
     rhs: Any
     fields: Any = None
 
-    def build_with(self, *, program: Any, prepared_solver: Any,
-                   name: Any = None) -> Any:
+    def build_local_linear(self, *, program: Any, prepared_solver: Any,
+                           name: Any = None) -> Any:
         return program._solve_local_linear(
             operator=self.operator, rhs=self.rhs, fields=self.fields,
             prepared=prepared_solver, name=name)

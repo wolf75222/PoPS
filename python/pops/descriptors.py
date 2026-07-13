@@ -208,16 +208,6 @@ def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any 
                            options=options or None)
 
 
-def _planned(name: str, scheme: Any, *, category: str, **options: Any) -> BrickDescriptor:
-    """A catalogued brick with NO native C++ symbol yet (available=False, no id).
-
-    It names the slot in the catalog without overclaiming a symbol; wiring a native
-    type for it is tracked as a follow-up.
-    """
-    return BrickDescriptor(name, "native", category=category, native_id="",
-                           scheme=scheme, options=options or None, available=False)
-
-
 # --- external C++ bricks (Spec 3 section 21-22 / criterion 20) -------------
 # A user ships a brick in a standalone ``.so`` that registers a manifest entry at
 # static-init time (the C++ ``POPS_REGISTER_BRICK`` macro -> ``BrickRegistry``) and exports

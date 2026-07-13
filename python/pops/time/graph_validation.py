@@ -96,6 +96,9 @@ def _solve_arity(node: Any) -> int:
     from pops.time.graph import ProgramValue
     if type(node) is ProgramValue and node.op in ("solve_fields", "solve_fields_from_blocks"):
         return 1
+    if type(node) is ProgramValue and node.op in (
+            "solve_local_linear", "solve_local_nonlinear"):
+        return 1
     if type(node) is ProgramValue and node.op == "solve_coupled_implicit":
         attrs = _payload_attrs(node.attrs.to_data())
         return _int_attr(attrs.get("output_count")) or 0
@@ -108,7 +111,8 @@ def _is_solve_token(node: Any) -> bool:
     return (type(node) in (Solve, ResidualSolve)
             or (type(node) is ProgramValue
                 and node.op in (
-                    "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit")))
+                    "solve_fields", "solve_fields_from_blocks", "solve_local_linear",
+                    "solve_local_nonlinear", "solve_coupled_implicit")))
 
 
 def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where: str) -> None:
@@ -193,7 +197,7 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             source = available[node.inputs[0].node_id]
             if not _is_solve_token(source):
                 raise ValueError(
-                    "solve_outcome must consume a linear, residual, or field solve token")
+                        "solve_outcome must consume an executable solve token")
             solve_id = node.inputs[0].node_id
             consumed_solves[solve_id] = consumed_solves.get(solve_id, 0) + 1
             _solve_outcome_action(node.attrs.to_data())

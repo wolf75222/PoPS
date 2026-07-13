@@ -80,7 +80,7 @@ class LocalLinearOperator:
     Domain and range retain their complete immutable :class:`Space` descriptors.
     A space name is presentation metadata, never evidence of type compatibility.
     Used to type ``linear_source`` operators and to check
-    ``solve_local_linear(I - dt*L, rhs)``.
+    ``Program.solve(LocalLinear(I - dt*L, rhs), solver=DenseLU())``.
     """
 
     __pops_ir_immutable__ = True

@@ -14,9 +14,9 @@ class _PreparedDenseLU:
 
     def build_program_solve(self, *, program: Any, problem: Any,
                             name: Any = None) -> Any:
-        build = getattr(problem, "build_with", None)
+        build = getattr(problem, "build_local_linear", None)
         if not callable(build):
-            raise TypeError("DenseLU requires a typed Program solve problem")
+            raise TypeError("DenseLU requires a pops.time.LocalLinear problem")
         return build(program=program, prepared_solver=self, name=name)
 
 

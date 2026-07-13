@@ -103,10 +103,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise TypeError(
                 "solve: solver must implement prepare_program_solve(); got %r"
                 % type(solver).__name__)
-        if not callable(getattr(problem, "build_with", None)):
-            raise TypeError(
-                "solve: problem must implement build_with(program=, prepared_solver=); got %r"
-                % type(problem).__name__)
         prepared = prepare()
         build = getattr(prepared, "build_program_solve", None)
         if not callable(build):

@@ -245,7 +245,8 @@ def program_to_graph(program: Any) -> Any:
                 attrs=attrs,
             )
         elif value.op in (
-                "solve_fields", "solve_fields_from_blocks", "solve_coupled_implicit"):
+                "solve_fields", "solve_fields_from_blocks", "solve_local_linear",
+                "solve_local_nonlinear", "solve_coupled_implicit"):
             # Solve tokens remain generic unreadable ProgramValue graph nodes until an explicit
             # solve_outcome consumes them.  Their operator handle is metadata, not an ordinary
             # readable OperatorCall result.

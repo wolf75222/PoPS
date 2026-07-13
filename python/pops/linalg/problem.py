@@ -20,8 +20,8 @@ class LinearProblem:
     at: Any = None
     scope: Any = None
 
-    def build_with(self, *, program: Any, prepared_solver: Any,
-                   name: Any = None) -> Any:
+    def build_matrix_free_linear(self, *, program: Any, prepared_solver: Any,
+                                 name: Any = None) -> Any:
         return program._solve_linear(
             operator=self.operator, rhs=self.rhs,
             initial_guess=self.initial_guess, prepared=prepared_solver,

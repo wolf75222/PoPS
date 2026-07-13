@@ -10,7 +10,8 @@ import pops.lib.time as libtime
 from pops.identity.semantic import program_semantic_data, semantic_identity_of
 from pops.physics.facade import Model
 from pops.problem import Case
-from pops.time import Program, StagePoint, TimePoint
+from pops.solvers import DenseLU
+from pops.time import FailRun, LocalLinear, Program, StagePoint, TimePoint
 from pops.time.method_properties import certify_program_graph
 from pops.time.method_tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 
@@ -56,12 +57,10 @@ def _manual_imex_euler(state, explicit, implicit):
     })
     predictor = program.value("imex-euler_predictor_0", 1 * u0, at=point)
     linear = program.value("imex-euler_L_0", program._call(implicit), at=point)
-    stage = program.solve_local_linear(
-        "imex-euler_stage_solve_0",
-        operator=program.I - program.dt * linear,
-        rhs=predictor,
-        fields=None,
-    )
+    stage = program.solve(
+        LocalLinear(operator=program.I - program.dt * linear, rhs=predictor),
+        solver=DenseLU(), name="imex-euler_stage_solve_0",
+    ).consume(action=FailRun())
     stage = program.value("imex-euler_stage_0", stage, at=point)
     explicit_rate = program.value(
         "imex-euler_k_exp_0", explicit(stage), at=point)
@@ -243,5 +242,6 @@ def test_final_time_namespace_has_no_legacy_aliases_or_specialized_runtime_prese
         assert not hasattr(libtime, name)
 
     program = Program("final-surface")
-    for name in ("bind_operators", "linear_combine", "define", "fields", "op", "solve"):
+    for name in ("bind_operators", "linear_combine", "define", "fields", "op"):
         assert not hasattr(program, name)
+    assert callable(program.solve)

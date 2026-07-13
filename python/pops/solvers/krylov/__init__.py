@@ -65,8 +65,7 @@ def _check_max_iter(name: str, max_iter: Any) -> int:
 def _check_rel_tol(name: str, rel_tol: Any) -> Any:
     """Validate an optional per-descriptor relative tolerance (ADC-645): a finite number in (0, 1).
 
-    ``None`` (the default) means "no descriptor tolerance" -- the ``P.solve_linear(tol=)`` call-site
-    default stays authoritative and the descriptor identity is unchanged (omit-when-default)."""
+    ``None`` (the default) means the executable descriptor uses the canonical ``1e-8`` tolerance."""
     if rel_tol is None:
         return None
     try:
@@ -93,9 +92,9 @@ class _PreparedKrylov:
 
     def build_program_solve(self, *, program: Any, problem: Any,
                             name: Any = None) -> Any:
-        build = getattr(problem, "build_with", None)
+        build = getattr(problem, "build_matrix_free_linear", None)
         if not callable(build):
-            raise TypeError("Krylov solvers require a typed Program solve problem")
+            raise TypeError("Krylov solvers require a pops.linalg.LinearProblem")
         return build(program=program, prepared_solver=self, name=name)
 
 
