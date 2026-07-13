@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable
+import json
+from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.identity import Identity, semantic_identity
@@ -19,12 +20,58 @@ def _callable_projection(value: Any, where: str) -> dict[str, Any]:
             if not isinstance(result, dict):
                 raise TypeError("%s.%s() must return a mapping" % (where, name))
             return result
-    inspect = getattr(value, "inspect", None)
-    if callable(inspect):
-        result = inspect()
-        if isinstance(result, dict):
-            return result
-    raise TypeError("%s has no canonical data projection" % where)
+    raise TypeError(
+        "%s has no canonical data projection; numerical extensions must implement "
+        "to_data() or canonical_identity()" % where)
+
+
+def _is_typed_authority(value: Any) -> bool:
+    return isinstance(value, Handle) or any(
+        callable(getattr(value, name, None)) for name in ("to_data", "canonical_identity")
+    )
+
+
+def _authority_key(value: Any) -> tuple[Any, ...]:
+    """Identity-only duplicate key; never invokes overloaded symbolic equality."""
+    if isinstance(value, Handle):
+        return ("handle", value)
+    return ("authority", type(value), id(value))
+
+
+def _resolve_value(value: Any, resolver: Any, *, where: str) -> Any:
+    """Resolve typed references through one deliberately small extension protocol."""
+    if isinstance(value, Handle):
+        return resolver(value)
+    protocol = getattr(value, "resolve_references", None)
+    if callable(protocol):
+        return protocol(resolver)
+    if isinstance(value, Mapping):
+        return {
+            key: _resolve_value(item, resolver, where="%s[%r]" % (where, key))
+            for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return tuple(
+            _resolve_value(item, resolver, where="%s[%d]" % (where, index))
+            for index, item in enumerate(value)
+        )
+    if isinstance(value, list):
+        return [
+            _resolve_value(item, resolver, where="%s[%d]" % (where, index))
+            for index, item in enumerate(value)
+        ]
+    if _is_typed_authority(value):
+        return value
+    raise TypeError(
+        "%s is not a typed numerical authority; implement resolve_references(resolver) "
+        "and to_data()" % where)
+
+
+def _projection_sort_key(value: Any, where: str) -> str:
+    return json.dumps(
+        _callable_projection(value, where), sort_keys=True, separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 class _RateFamily:
@@ -68,9 +115,13 @@ class _PairFamily:
     def add(self, subject: Any, method: Any) -> None:
         if self._frozen:
             raise RuntimeError("DiscretizationPlan.%s is frozen" % self.family)
-        if subject is None or method is None:
-            raise TypeError("%s.add requires an explicit subject and method" % self.family)
-        if any(existing == subject for existing, _ in self._rows):
+        if not _is_typed_authority(subject) or not _is_typed_authority(method):
+            raise TypeError(
+                "%s.add requires typed subject/method authorities with canonical projections"
+                % self.family)
+        subject_key = _authority_key(subject)
+        if any(_authority_key(existing) == subject_key
+               for existing, _ in self._rows):
             raise ValueError("%s subject already has a numerical method" % self.family)
         self._rows.append((subject, method))
 
@@ -100,10 +151,12 @@ class _ValueFamily:
     def add(self, value: Any) -> None:
         if self._frozen:
             raise RuntimeError("DiscretizationPlan.%s is frozen" % self.family)
-        if value is None or not any(callable(getattr(value, name, None)) for name in (
-                "to_data", "canonical_identity", "inspect")):
-            raise TypeError("%s.add requires a typed inspectable descriptor" % self.family)
-        if any(existing is value or existing == value for existing in self._rows):
+        if not _is_typed_authority(value):
+            raise TypeError(
+                "%s.add requires a typed authority with to_data() or canonical_identity()"
+                % self.family)
+        value_key = _authority_key(value)
+        if any(_authority_key(existing) == value_key for existing in self._rows):
             raise ValueError("duplicate %s authority" % self.family)
         self._rows.append(value)
 
@@ -138,12 +191,30 @@ class ResolvedRateMethod:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedNumericalBinding:
+    """One canonical physical-subject to numerical-method binding."""
+
+    subject: Any
+    method: Any
+
+    def __post_init__(self) -> None:
+        _callable_projection(self.subject, "resolved numerical subject")
+        _callable_projection(self.method, "resolved numerical method")
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "subject": _callable_projection(self.subject, "resolved numerical subject"),
+            "method": _callable_projection(self.method, "resolved numerical method"),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedDiscretizationPlan:
     block: Handle
     rates: tuple[ResolvedRateMethod, ...]
-    fields: tuple[Any, ...]
+    fields: tuple[ResolvedNumericalBinding, ...]
     boundaries: tuple[Any, ...]
-    sources: tuple[Any, ...]
+    sources: tuple[ResolvedNumericalBinding, ...]
     interfaces: tuple[Any, ...]
     identity: Identity = field(init=False)
 
@@ -155,6 +226,16 @@ class ResolvedDiscretizationPlan:
         for name in ("rates", "fields", "boundaries", "sources", "interfaces"):
             if not isinstance(getattr(self, name), tuple):
                 raise TypeError("ResolvedDiscretizationPlan.%s must be a tuple" % name)
+        if any(type(row) is not ResolvedRateMethod for row in self.rates):
+            raise TypeError("ResolvedDiscretizationPlan.rates must contain ResolvedRateMethod")
+        for family in ("fields", "sources"):
+            if any(type(row) is not ResolvedNumericalBinding for row in getattr(self, family)):
+                raise TypeError(
+                    "ResolvedDiscretizationPlan.%s must contain ResolvedNumericalBinding"
+                    % family)
+        for family in ("boundaries", "interfaces"):
+            for row in getattr(self, family):
+                _callable_projection(row, "resolved %s authority" % family)
         object.__setattr__(self, "identity", semantic_identity(self._payload()))
 
     def _payload(self) -> dict[str, Any]:
@@ -162,9 +243,9 @@ class ResolvedDiscretizationPlan:
             "schema_version": 1,
             "block": self.block.canonical_identity(),
             "rates": [row.to_data() for row in self.rates],
-            "fields": [_callable_projection(row, "resolved field") for row in self.fields],
+            "fields": [row.to_data() for row in self.fields],
             "boundaries": [_callable_projection(row, "resolved boundary") for row in self.boundaries],
-            "sources": [_callable_projection(row, "resolved source") for row in self.sources],
+            "sources": [row.to_data() for row in self.sources],
             "interfaces": [_callable_projection(row, "resolved interface") for row in self.interfaces],
         }
 
@@ -261,14 +342,38 @@ class DiscretizationPlan(Descriptor):
                 continue
             rates.append(ResolvedRateMethod(
                 case.resolve(rate, block=block), method.resolve_references(resolve_handle)))
+        def resolve_pairs(rows: Any, family: str) -> tuple[ResolvedNumericalBinding, ...]:
+            resolved = [
+                ResolvedNumericalBinding(
+                    _resolve_value(subject, resolve_handle, where="%s subject" % family),
+                    _resolve_value(method, resolve_handle, where="%s method" % family),
+                )
+                for subject, method in rows
+            ]
+            return tuple(sorted(
+                resolved,
+                key=lambda row: json.dumps(
+                    row.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False),
+            ))
+
+        def resolve_values(rows: Any, family: str) -> tuple[Any, ...]:
+            resolved = [
+                _resolve_value(value, resolve_handle, where="%s authority" % family)
+                for value in rows
+            ]
+            return tuple(sorted(
+                resolved,
+                key=lambda value: _projection_sort_key(value, "resolved %s" % family),
+            ))
+
         resolved_block = case.resolve(block)
         return ResolvedDiscretizationPlan(
             resolved_block,
             tuple(sorted(rates, key=lambda row: row.rate.qualified_id)),
-            tuple(self.fields.items()),
-            tuple(self.boundaries.values()),
-            tuple(self.sources.items()),
-            tuple(self.interfaces.values()),
+            resolve_pairs(self.fields.items(), "fields"),
+            resolve_values(self.boundaries.values(), "boundaries"),
+            resolve_pairs(self.sources.items(), "sources"),
+            resolve_values(self.interfaces.values(), "interfaces"),
         )
 
     def inspect(self) -> dict[str, Any]:
@@ -287,5 +392,6 @@ class DiscretizationPlan(Descriptor):
 
 
 __all__ = [
-    "DiscretizationPlan", "ResolvedDiscretizationPlan", "ResolvedRateMethod",
+    "DiscretizationPlan", "ResolvedDiscretizationPlan", "ResolvedNumericalBinding",
+    "ResolvedRateMethod",
 ]
