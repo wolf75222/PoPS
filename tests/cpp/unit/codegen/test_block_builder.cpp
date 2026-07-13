@@ -133,14 +133,25 @@ TEST(test_block_builder, generic_flux_bit_identical_to_explicit_on_composite_eul
   RoeFlux groe;
   EulerRoeFlux2D eroe;
   const Model::State UL{1.0, 0.1, 0.02, 2.5}, UR{1.3, 0.05, -0.01, 2.7};
-  const Aux A{};
+  FluxProviderValues<Model> provider_values{};
+  const auto providers = bind_flux_providers<Model>(provider_values);
   double dh = 0, dr = 0;
   for (int d = 0; d < 2; ++d) {
     const FaceContext face = FaceContext::axis_aligned(d);
-    const auto fh_g = evaluate_numerical_flux(ghllc, model, UL, A, UR, A, face).density.value;
-    const auto fh_e = evaluate_numerical_flux(ehllc, model, UL, A, UR, A, face).density.value;
-    const auto fr_g = evaluate_numerical_flux(groe, model, UL, A, UR, A, face).density.value;
-    const auto fr_e = evaluate_numerical_flux(eroe, model, UL, A, UR, A, face).density.value;
+    const auto fh_g =
+        evaluate_numerical_flux(ghllc, model, UL, providers, UR, providers, face)
+            .checked_density()
+            .value;
+    const auto fh_e =
+        evaluate_numerical_flux(ehllc, model, UL, providers, UR, providers, face)
+            .checked_density()
+            .value;
+    const auto fr_g = evaluate_numerical_flux(groe, model, UL, providers, UR, providers, face)
+                          .checked_density()
+                          .value;
+    const auto fr_e = evaluate_numerical_flux(eroe, model, UL, providers, UR, providers, face)
+                          .checked_density()
+                          .value;
     for (int c = 0; c < 4; ++c) {
       dh = std::fmax(dh, std::fabs(fh_g[c] - fh_e[c]));
       dr = std::fmax(dr, std::fabs(fr_g[c] - fr_e[c]));

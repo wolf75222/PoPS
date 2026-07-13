@@ -17,12 +17,6 @@ namespace pops {
 namespace detail {
 
 template <class State>
-POPS_HD void negate(State& value) {
-  for (int component = 0; component < State::size(); ++component)
-    value[component] = -value[component];
-}
-
-template <class State>
 POPS_HD StabilityBound max_bound(const StabilityBound& left, const StabilityBound& right) {
   (void)sizeof(State);
   return {left.value > right.value ? left.value : right.value, StabilityUnit::kLengthPerTime,
@@ -35,8 +29,7 @@ POPS_HD FluxEvaluation<typename Physical::State> canonical_evaluation(
     const typename Physical::Trace& right, const FaceContext& face) {
   const FaceContext canonical = face.canonical_orientation();
   auto result = policy(physical, right, left, canonical);
-  if (result.status == EvaluationStatus::kOk)
-    negate(result.density.value);
+  result.reverse_orientation();
   return result;
 }
 

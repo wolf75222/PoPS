@@ -103,29 +103,71 @@ POPS_HD constexpr TransactionFailureAction transaction_action(EvaluationStatus s
 template <class Model>
 struct PhysicalFluxView;
 
+template <class Model>
+inline constexpr int flux_provider_count = [] {
+  if constexpr (requires { Model::n_aux; })
+    return static_cast<int>(Model::n_aux);
+  return kAuxBaseComps;
+}();
+
+/// Exact, model-qualified values before they are sealed into a bound device pack.
+///
+/// Unlike the historical global Aux object this type has exactly the width requested by Model.
+/// The model type is part of the ABI, so values for two unrelated physical providers cannot be
+/// exchanged accidentally.  The values are populated only by resolve/bind or by a typed test
+/// fixture; a missing component cannot be requested through this interface.
+template <class Model>
+struct FluxProviderValues {
+  static constexpr int size = flux_provider_count<Model>;
+  static_assert(size >= kAuxBaseComps,
+                "physical flux provider packs must declare the required base providers");
+  static_assert(size <= kAuxMaxComps,
+                "physical flux provider pack exceeds the native model capability");
+
+  Real values[size]{};
+
+  POPS_HD Real& operator[](int component) { return values[component]; }
+  POPS_HD Real operator[](int component) const { return values[component]; }
+};
+
 /// Opaque, model-qualified provider values used by the native pointwise bridge.
 ///
 /// The public/provider ABI is the exact qualified ProviderPack generated from the Module.  This
-/// small native value is its device representation after resolve/bind.  The underlying Aux value
-/// is private: numerical fluxes cannot inspect fixed slots, named extras, or missing-value
-/// sentinels.  Only the narrow PhysicalFluxView for the same Model type can consume it.
+/// small native value is its device representation after resolve/bind.  It stores exactly the
+/// model-qualified values, never the process-global Aux representation: numerical fluxes cannot
+/// inspect fixed slots, named extras, or missing-value sentinels.  Only the narrow
+/// PhysicalFluxView for the same Model type can consume it.
 template <class Model>
 class BoundFluxProviders {
  public:
+  static constexpr int value_count = FluxProviderValues<Model>::size;
   BoundFluxProviders() = delete;
+  POPS_HD BoundFluxProviders(const BoundFluxProviders&) = default;
+  BoundFluxProviders& operator=(const BoundFluxProviders&) = delete;
 
  private:
-  Aux values_;
+  FluxProviderValues<Model> values_;
 
-  POPS_HD explicit BoundFluxProviders(const Aux& values) : values_(values) {}
+  POPS_HD explicit BoundFluxProviders(const FluxProviderValues<Model>& values) : values_(values) {}
   friend struct PhysicalFluxView<Model>;
   template <class M>
-  friend POPS_HD BoundFluxProviders<M> bind_flux_providers(const Aux&);
+  friend POPS_HD BoundFluxProviders<M> bind_flux_providers(const FluxProviderValues<M>&);
 };
 
 template <class Model>
-POPS_HD BoundFluxProviders<Model> bind_flux_providers(const Aux& values) {
+POPS_HD BoundFluxProviders<Model> bind_flux_providers(const FluxProviderValues<Model>& values) {
   return BoundFluxProviders<Model>(values);
+}
+
+/// Bind one exact provider pack directly from native field storage.  The caller supplies a
+/// model-qualified component count at compile time; there is no global Aux object, truncation, or
+/// zero-on-missing branch on this path.
+template <class Model, class Storage>
+POPS_HD BoundFluxProviders<Model> bind_flux_providers_at(const Storage& storage, int i, int j) {
+  FluxProviderValues<Model> values{};
+  for (int component = 0; component < FluxProviderValues<Model>::size; ++component)
+    values[component] = storage(i, j, component);
+  return bind_flux_providers<Model>(values);
 }
 
 template <class State, class ProviderPack>
@@ -136,8 +178,14 @@ struct FaceTrace {
 
 template <class Model>
 POPS_HD FaceTrace<typename Model::State, BoundFluxProviders<Model>> make_face_trace(
-    const typename Model::State& state, const Aux& providers) {
-  return {state, bind_flux_providers<Model>(providers)};
+    const typename Model::State& state, const BoundFluxProviders<Model>& providers) {
+  return {state, providers};
+}
+
+template <class Model, class Storage>
+POPS_HD FaceTrace<typename Model::State, BoundFluxProviders<Model>> make_face_trace_at(
+    const typename Model::State& state, const Storage& providers, int i, int j) {
+  return {state, bind_flux_providers_at<Model>(providers, i, j)};
 }
 
 template <class State>
@@ -153,24 +201,48 @@ struct IntegratedFaceFlux {
 template <class State>
 struct FluxEvaluation {
   EvaluationStatus status = EvaluationStatus::kFailed;
-  FluxDensity<State> density{};
   StabilityBound stability{};
   std::uint32_t reason_code = 0;
 
   POPS_HD static FluxEvaluation ok(const State& value, StabilityBound bound) {
-    return {EvaluationStatus::kOk, FluxDensity<State>{value}, bound, 0};
+    return FluxEvaluation(EvaluationStatus::kOk, bound, 0, FluxDensity<State>{value});
   }
   POPS_HD static FluxEvaluation retry(std::uint32_t reason) {
-    return {EvaluationStatus::kRetry, invalid_density(), {}, reason};
+    return FluxEvaluation(EvaluationStatus::kRetry, {}, reason, invalid_density());
   }
   POPS_HD static FluxEvaluation reject(std::uint32_t reason) {
-    return {EvaluationStatus::kReject, invalid_density(), {}, reason};
+    return FluxEvaluation(EvaluationStatus::kReject, {}, reason, invalid_density());
   }
   POPS_HD static FluxEvaluation failed(std::uint32_t reason) {
-    return {EvaluationStatus::kFailed, invalid_density(), {}, reason};
+    return FluxEvaluation(EvaluationStatus::kFailed, {}, reason, invalid_density());
+  }
+
+  POPS_HD bool succeeded() const { return status == EvaluationStatus::kOk; }
+  POPS_HD TransactionFailureAction failure_action() const { return transaction_action(status); }
+
+  /// Sole access to a flux density.  A failed evaluator can never smuggle a plausible value into
+  /// a spatial kernel: every non-success status produces an invalid density independently of the
+  /// payload supplied by an external implementation.
+  POPS_HD FluxDensity<State> checked_density() const {
+    return succeeded() ? density_ : invalid_density();
+  }
+
+  /// Orientation reversal is meaningful only for a successful evaluation.  Failure status,
+  /// action and qualified reason remain byte-for-byte unchanged.
+  POPS_HD void reverse_orientation() {
+    if (!succeeded())
+      return;
+    for (int component = 0; component < State::size(); ++component)
+      density_.value[component] = -density_.value[component];
   }
 
  private:
+  FluxDensity<State> density_{};
+
+  POPS_HD FluxEvaluation(EvaluationStatus status_, StabilityBound stability_,
+                         std::uint32_t reason_code_, FluxDensity<State> density)
+      : status(status_), stability(stability_), reason_code(reason_code_), density_(density) {}
+
   POPS_HD static FluxDensity<State> invalid_density() {
     State value{};
     for (int component = 0; component < State::size(); ++component)
@@ -203,8 +275,30 @@ struct PhysicalFluxView {
 
   Model physical;
 
+ private:
+  POPS_HD static Aux physical_providers(const ProviderPack& providers) {
+    Aux result{};
+    if constexpr (ProviderPack::value_count > 0)
+      result.phi = providers.values_[0];
+    if constexpr (ProviderPack::value_count > 1)
+      result.grad_x = providers.values_[1];
+    if constexpr (ProviderPack::value_count > 2)
+      result.grad_y = providers.values_[2];
+#define POPS_FLUX_PROVIDER_ASSIGN(name, index) \
+  if constexpr (ProviderPack::value_count > index) result.name = providers.values_[index];
+    POPS_AUX_FIELDS(POPS_FLUX_PROVIDER_ASSIGN)
+#undef POPS_FLUX_PROVIDER_ASSIGN
+    if constexpr (ProviderPack::value_count > kAuxNamedBase) {
+      for (int component = kAuxNamedBase; component < ProviderPack::value_count; ++component)
+        result.extra[component - kAuxNamedBase] = providers.values_[component];
+    }
+    return result;
+  }
+
+ public:
   POPS_HD FluxDensity<State> evaluate(const Trace& trace, const FaceContext& face) const {
-    State result = physical.flux(trace.state, trace.providers.values_, face.axis);
+    const Aux providers = physical_providers(trace.providers);
+    State result = physical.flux(trace.state, providers, face.axis);
     const Real sign = face.orientation_sign();
     if (sign < Real(0)) {
       for (int component = 0; component < n_vars; ++component)
@@ -214,7 +308,8 @@ struct PhysicalFluxView {
   }
 
   POPS_HD StabilityBound stability(const Trace& trace, const FaceContext& face) const {
-    return {physical.max_wave_speed(trace.state, trace.providers.values_, face.axis),
+    const Aux providers = physical_providers(trace.providers);
+    return {physical.max_wave_speed(trace.state, providers, face.axis),
             StabilityUnit::kLengthPerTime, StabilityConvention::kNormalSpectralRadius};
   }
 
@@ -225,7 +320,8 @@ struct PhysicalFluxView {
       model.wave_speeds(state, providers, axis, lo, hi);
     }
   {
-    physical.wave_speeds(trace.state, trace.providers.values_, face.axis, lower, upper);
+    const Aux providers = physical_providers(trace.providers);
+    physical.wave_speeds(trace.state, providers, face.axis, lower, upper);
     if (face.orientation == FaceOrientation::kNegative) {
       const Real old_lower = lower;
       lower = -upper;
@@ -267,8 +363,9 @@ struct PhysicalFluxView {
       model.roe_dissipation(l, lp, r, rp, axis);
     }
   {
-    return physical.roe_dissipation(left.state, left.providers.values_, right.state,
-                                    right.providers.values_, face.axis);
+    const Aux left_values = physical_providers(left.providers);
+    const Aux right_values = physical_providers(right.providers);
+    return physical.roe_dissipation(left.state, left_values, right.state, right_values, face.axis);
   }
 };
 
@@ -316,14 +413,26 @@ concept HasRoeDissipation =
 template <class Numerical, class Model>
 POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux(
     const Numerical& numerical, const Model& model, const typename Model::State& left_state,
-    const Aux& left_providers, const typename Model::State& right_state,
-    const Aux& right_providers, const FaceContext& face) {
+    const BoundFluxProviders<Model>& left_providers, const typename Model::State& right_state,
+    const BoundFluxProviders<Model>& right_providers, const FaceContext& face) {
   const PhysicalFluxView<Model> physical{model};
   const auto left = make_face_trace<Model>(left_state, left_providers);
   const auto right = make_face_trace<Model>(right_state, right_providers);
   static_assert(NumericalFlux<Numerical, PhysicalFluxView<Model>>,
                 "numerical flux does not satisfy the typed two-trace contract");
   return numerical(physical, left, right, face);
+}
+
+template <class Numerical, class Model, class Storage>
+POPS_HD FluxEvaluation<typename Model::State> evaluate_numerical_flux_at(
+    const Numerical& numerical, const Model& model, const typename Model::State& left_state,
+    const Storage& left_providers, int left_i, int left_j,
+    const typename Model::State& right_state, const Storage& right_providers, int right_i,
+    int right_j, const FaceContext& face) {
+  return evaluate_numerical_flux(
+      numerical, model, left_state,
+      bind_flux_providers_at<Model>(left_providers, left_i, left_j), right_state,
+      bind_flux_providers_at<Model>(right_providers, right_i, right_j), face);
 }
 
 }  // namespace pops

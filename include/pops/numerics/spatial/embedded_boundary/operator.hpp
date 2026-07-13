@@ -189,10 +189,9 @@ struct EbFaceFluxXKernel {
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const FaceContext face = FaceContext::axis_aligned(0, alpha);
-    const auto evaluation = evaluate_numerical_flux(
-        nflux, model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
-        load_aux<aux_comps<Model>()>(ax, i, j), face);
-    const auto F = apply_face_measure(evaluation.density, face).value;
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fx(i, j, c) = F[c];
   }
@@ -238,10 +237,9 @@ struct EbFaceFluxYKernel {
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const FaceContext face = FaceContext::axis_aligned(1, alpha);
-    const auto evaluation = evaluate_numerical_flux(
-        nflux, model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
-        load_aux<aux_comps<Model>()>(ax, i, j), face);
-    const auto F = apply_face_measure(evaluation.density, face).value;
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       fy(i, j, c) = F[c];
   }

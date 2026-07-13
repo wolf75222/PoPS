@@ -50,10 +50,6 @@ struct AssembleRhsKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   POPS_HD void operator()(int i, int j) const {
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
-    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
-    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
-    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // x faces: reconstruction of the states on either side of each face
     const auto Lxm =
@@ -65,13 +61,17 @@ struct AssembleRhsKernel {
     const auto Rxp =
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
     const FaceContext xface = FaceContext::axis_aligned(0);
-    const auto Fxm =
-        apply_face_measure(evaluate_numerical_flux(nflux, model, Lxm, Axm, Rxm, Ac, xface).density,
-                           xface)
+    const auto Fxm = apply_face_measure(
+                         evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i,
+                                                    j, xface)
+                             .checked_density(),
+                         xface)
             .value;
-    const auto Fxp =
-        apply_face_measure(evaluate_numerical_flux(nflux, model, Lxp, Ac, Rxp, Axp, xface).density,
-                           xface)
+    const auto Fxp = apply_face_measure(
+                         evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1,
+                                                    j, xface)
+                             .checked_density(),
+                         xface)
             .value;
 
     // y faces
@@ -84,13 +84,17 @@ struct AssembleRhsKernel {
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
     const FaceContext yface = FaceContext::axis_aligned(1);
-    const auto Fym =
-        apply_face_measure(evaluate_numerical_flux(nflux, model, Lym, Aym, Rym, Ac, yface).density,
-                           yface)
+    const auto Fym = apply_face_measure(
+                         evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i,
+                                                    j, yface)
+                             .checked_density(),
+                         yface)
             .value;
-    const auto Fyp =
-        apply_face_measure(evaluate_numerical_flux(nflux, model, Lyp, Ac, Ryp, Ayp, yface).density,
-                           yface)
+    const auto Fyp = apply_face_measure(
+                         evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i,
+                                                    j + 1, yface)
+                             .checked_density(),
+                         yface)
             .value;
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
@@ -159,10 +163,6 @@ struct AssembleRhsHllCachedKernel {
   int pos_comp = 0;          ///< Density role component (resolved by the host caller)
   POPS_HD void operator()(int i, int j) const {
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
-    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
-    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
-    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // x faces: reconstruction of the states on both sides of each face
     const auto Lxm =
@@ -182,15 +182,17 @@ struct AssembleRhsHllCachedKernel {
     const FaceContext xface = FaceContext::axis_aligned(0);
     const PhysicalFluxView<Model> physical{model};
     const auto Fxm = apply_face_measure(
-                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lxm, Axm),
-                                              make_face_trace<Model>(Rxm, Ac), xface, sLxm, sRxm)
-                             .density,
+                         hll_flux_with_speeds(
+                             physical, make_face_trace_at<Model>(Lxm, ax, i - 1, j),
+                             make_face_trace_at<Model>(Rxm, ax, i, j), xface, sLxm, sRxm)
+                             .checked_density(),
                          xface)
                          .value;
     const auto Fxp = apply_face_measure(
-                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lxp, Ac),
-                                              make_face_trace<Model>(Rxp, Axp), xface, sLxp, sRxp)
-                             .density,
+                         hll_flux_with_speeds(
+                             physical, make_face_trace_at<Model>(Lxp, ax, i, j),
+                             make_face_trace_at<Model>(Rxp, ax, i + 1, j), xface, sLxp, sRxp)
+                             .checked_density(),
                          xface)
                          .value;
 
@@ -209,15 +211,17 @@ struct AssembleRhsHllCachedKernel {
     const Real sRyp = ws(i, j, 3) > ws(i, j + 1, 3) ? ws(i, j, 3) : ws(i, j + 1, 3);
     const FaceContext yface = FaceContext::axis_aligned(1);
     const auto Fym = apply_face_measure(
-                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lym, Aym),
-                                              make_face_trace<Model>(Rym, Ac), yface, sLym, sRym)
-                             .density,
+                         hll_flux_with_speeds(
+                             physical, make_face_trace_at<Model>(Lym, ax, i, j - 1),
+                             make_face_trace_at<Model>(Rym, ax, i, j), yface, sLym, sRym)
+                             .checked_density(),
                          yface)
                          .value;
     const auto Fyp = apply_face_measure(
-                         hll_flux_with_speeds(physical, make_face_trace<Model>(Lyp, Ac),
-                                              make_face_trace<Model>(Ryp, Ayp), yface, sLyp, sRyp)
-                             .density,
+                         hll_flux_with_speeds(
+                             physical, make_face_trace_at<Model>(Lyp, ax, i, j),
+                             make_face_trace_at<Model>(Ryp, ax, i, j + 1), yface, sLyp, sRyp)
+                             .checked_density(),
                          yface)
                          .value;
 

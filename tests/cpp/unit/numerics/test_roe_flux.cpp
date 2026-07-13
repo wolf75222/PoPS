@@ -34,9 +34,19 @@ template <class Policy>
 State face_density(const Policy& policy, const pops::Euler& model, const State& left,
                    const pops::Aux& left_providers, const State& right,
                    const pops::Aux& right_providers, int axis) {
-  return pops::evaluate_numerical_flux(policy, model, left, left_providers, right,
-                                       right_providers, pops::FaceContext::axis_aligned(axis))
-      .density.value;
+  pops::FluxProviderValues<pops::Euler> left_values{}, right_values{};
+  left_values[0] = left_providers.phi;
+  left_values[1] = left_providers.grad_x;
+  left_values[2] = left_providers.grad_y;
+  right_values[0] = right_providers.phi;
+  right_values[1] = right_providers.grad_x;
+  right_values[2] = right_providers.grad_y;
+  return pops::evaluate_numerical_flux(
+             policy, model, left, pops::bind_flux_providers<pops::Euler>(left_values), right,
+             pops::bind_flux_providers<pops::Euler>(right_values),
+             pops::FaceContext::axis_aligned(axis))
+      .checked_density()
+      .value;
 }
 
 }  // namespace
