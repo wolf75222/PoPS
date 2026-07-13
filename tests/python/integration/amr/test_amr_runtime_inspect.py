@@ -18,6 +18,7 @@ import sys
 import numpy as np
 import pytest
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.layout_plan import resolved_layout_contract
 
 pops = pytest.importorskip("pops")
 
@@ -255,11 +256,14 @@ def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
                   refine=Refine.on(rho).above(0.1))
     snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
     schema = BindSchema()
+    layout_plan, layout_coverage = resolved_layout_contract(
+        carried, target="amr_system", block_names=("ne",))
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
         backend="aot",
         layout=carried,
+        layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock("ne", {"kind": "amr-runtime-inspect-stub"}, None, "aot"),),
         bind_schema=schema,
@@ -270,6 +274,7 @@ def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
         libraries=(),
         requirements={"amr": True},
         capabilities={"amr": True},
+        lowering_coverage=layout_coverage,
     )
     artifact = CompiledSimulationArtifact(
         plan=resolved,

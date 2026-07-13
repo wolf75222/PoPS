@@ -330,6 +330,54 @@ class LayoutPlan:
             raise KeyError("no exact %s layout assignment for %s" % key)
         return matches[0]
 
+    def normalized(self, handle: Any) -> NormalizedLayout:
+        """Return the one authenticated normalized row for a plan-owned layout handle."""
+        if not isinstance(handle, LayoutHandle):
+            raise TypeError("normalized layout lookup requires a LayoutHandle")
+        matches = [row for row in self.layouts if row.handle == handle]
+        if len(matches) != 1:
+            raise KeyError("layout %s is not declared by this LayoutPlan" % handle.qualified_id)
+        return matches[0]
+
+    def validate_subjects(self, *, states: Any = (), fields: Any = (), blocks: Any = ()) -> None:
+        """Prove every materialized subject has exactly one assignment and no extras."""
+        expected = set()
+        for kind, values in (("state", states), ("field", fields), ("block", blocks)):
+            for value in values:
+                key = (kind, handle_identity(value, where="expected %s" % kind, kind=kind))
+                if key in expected:
+                    raise ValueError("duplicate materialized layout subject %s" % (key,))
+                expected.add(key)
+        authored = {(row.subject_kind, row.subject_id) for row in self.assignments}
+        missing, extra = sorted(expected - authored), sorted(authored - expected)
+        if missing:
+            raise ValueError("unassigned layout subjects: %s" % missing)
+        if extra:
+            raise ValueError("layout assignments are not exact; unexpected subjects: %s" % extra)
+
+    def capability_evidence(self) -> dict[str, Any]:
+        """Detached per-layout evidence; independent layouts never contaminate another assignment."""
+        rows = {row.handle.qualified_id: row for row in self.layouts}
+        return {
+            "layouts": [
+                {"layout": row.handle.canonical_identity(),
+                 "capabilities": thaw(row.capabilities),
+                 "requirements": thaw(row.requirements)}
+                for row in self.layouts
+            ],
+            "assignments": [
+                {**assignment.to_data(),
+                 "capabilities": thaw(rows[assignment.layout.qualified_id].capabilities)}
+                for assignment in self.assignments
+            ],
+            "mappings": [mapping.to_data() for mapping in self.mappings],
+        }
+
+    def resource_requirements(self) -> tuple[dict[str, Any], ...]:
+        """Exact directional mapping resources consumed by lowering/runtime planning."""
+        return tuple({"kind": "layout_mapping", **mapping.to_data()}
+                     for mapping in self.mappings)
+
 
 __all__ = [
     "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingProvider",

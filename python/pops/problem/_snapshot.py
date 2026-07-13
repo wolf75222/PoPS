@@ -219,9 +219,20 @@ def build_authoring_snapshot(
     }
     full["compile_context"] = context
     artifact["compile_context"] = context
+    def resolve_compile_handle(value: Any) -> Any:
+        from pops.mesh import LayoutHandle, LayoutPlan
+
+        if isinstance(layout, LayoutPlan) and isinstance(value, LayoutHandle):
+            matches = [row.handle for row in layout.layouts if row.handle == value]
+            if len(matches) != 1:
+                raise ValueError(
+                    "compile snapshot references a layout handle absent from its LayoutPlan")
+            return matches[0]
+        return problem.resolve(value)
+
     return AuthoringSnapshot(
         full,
-        handle_resolver=problem.resolve,
+        handle_resolver=resolve_compile_handle,
         artifact_payload=artifact,
         semantic_payload=semantic,
     )

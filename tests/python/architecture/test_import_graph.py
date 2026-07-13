@@ -6,7 +6,7 @@ The sub-packages form a directed acyclic dependency stack:
     model     -> ir, params
     physics   -> ir, model, params
     time      -> ir, model, params
-    mesh      -> params                           (typed structural parameter use sites)
+    mesh      -> model, params                    (owner-qualified layout subjects + parameters)
     numerics  -> params                           (typed stencil/ghost parameter use sites)
     linalg    -> (nothing)                       (Spec 5: abstract algebra descriptors)
     solvers   -> (nothing)                       (Spec 5: linear/nonlinear/elliptic solvers)
@@ -40,7 +40,9 @@ ALLOWED = {
     "model": {"ir", "params"},
     "physics": {"ir", "model", "params"},
     "time": {"ir", "model", "params"},
-    "mesh": {"params"},
+    # ADC-673: LayoutPlan assigns canonical model Handle subjects and therefore depends on the
+    # dependency-free identity/data-model portion of pops.model. Model still has no mesh edge.
+    "mesh": {"model", "params"},
     # Spec 5 central packages: inert descriptor catalogs. numerics/diagnostics/params/output/
     # external/fields import only the flat pops.descriptors / pops.math modules (not tracked
     # layers); moments imports the symbolic pops.ir. None import the runtime.

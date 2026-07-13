@@ -29,6 +29,7 @@ from pops.identity import make_identity  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
+from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
 # --- 1 + 2: the field exists and round-trips ---------------------------------------------------
@@ -80,11 +81,14 @@ def _compiled(blocks):
         "artifact", {"fixture": "ghost-depth-model", "blocks": list(blocks)})
     schema = BindSchema.from_problem(problem)
     snapshot = problem.freeze()
+    layout_plan, layout_coverage = resolved_layout_contract(
+        None, target="system", block_names=blocks)
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",
         backend="production",
         layout=None,
+        layout_plan=layout_plan,
         time={"program": "gas_program"},
         blocks=tuple(
             ResolvedBlock(name, {"model": "ghost-depth-model"}, None, "production")
@@ -98,6 +102,7 @@ def _compiled(blocks):
         libraries=(),
         requirements={},
         capabilities={"cpu": True},
+        lowering_coverage=layout_coverage,
     )
 
     class _CompiledProgram:

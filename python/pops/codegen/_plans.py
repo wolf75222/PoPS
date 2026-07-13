@@ -183,6 +183,7 @@ class ResolvedSimulationPlan:
     target: str
     backend: str
     layout: Any
+    layout_plan: Any
     time: Any
     blocks: tuple[ResolvedBlock, ...]
     bind_schema: Any
@@ -193,12 +194,15 @@ class ResolvedSimulationPlan:
     libraries: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
+    lowering_coverage: Any
     compile_options: Mapping[str, Any] = field(default_factory=dict)
     plan_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
         from pops.problem._snapshot import AuthoringSnapshot
         from pops.model.bind_schema import BindSchema
+        from pops.mesh import LayoutPlan
+        from pops.codegen.lowering_coverage import LoweringCoverageReport
 
         if type(self.snapshot) is not AuthoringSnapshot:
             raise TypeError("ResolvedSimulationPlan.snapshot must be an AuthoringSnapshot")
@@ -206,6 +210,11 @@ class ResolvedSimulationPlan:
             raise ValueError("ResolvedSimulationPlan target must be 'system' or 'amr_system'")
         if not isinstance(self.backend, str) or not self.backend:
             raise TypeError("ResolvedSimulationPlan backend must be a resolved non-empty string")
+        if type(self.layout_plan) is not LayoutPlan:
+            raise TypeError("ResolvedSimulationPlan.layout_plan must be an exact LayoutPlan")
+        if type(self.lowering_coverage) is not LoweringCoverageReport:
+            raise TypeError(
+                "ResolvedSimulationPlan.lowering_coverage must be a LoweringCoverageReport")
         if type(self.bind_schema) is not BindSchema:
             raise TypeError("ResolvedSimulationPlan.bind_schema must be an exact BindSchema")
         blocks = tuple(self.blocks)
@@ -248,6 +257,7 @@ class ResolvedSimulationPlan:
             "bind_schema_artifact_hash": self.bind_schema.artifact_hash,
             "compile_values": _evidence(self.compile_values, where="plan.compile_values"),
             "layout": _evidence(self.layout, where="plan.layout"),
+            "layout_plan": _evidence(self.layout_plan, where="plan.layout_plan"),
             "time": _evidence(self.time, where="plan.time") if self.time is not None else None,
             "blocks": [{
                 "name": block.name,
@@ -261,6 +271,8 @@ class ResolvedSimulationPlan:
             "libraries": _evidence(self.libraries, where="plan.libraries"),
             "requirements": _evidence(self.requirements, where="plan.requirements"),
             "capabilities": _evidence(self.capabilities, where="plan.capabilities"),
+            "lowering_coverage": _evidence(
+                self.lowering_coverage, where="plan.lowering_coverage"),
             "compile_options": _evidence(self.compile_options, where="plan.compile_options"),
         }
 

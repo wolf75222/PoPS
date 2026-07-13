@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 
-CAPABILITY_EVIDENCE_SCHEMA_VERSION = 1
+CAPABILITY_EVIDENCE_SCHEMA_VERSION = 2
 
 
 class CapabilityResolutionError(ValueError):
@@ -73,6 +73,8 @@ def resolve_capability_evidence(
         "requirements": sorted(required),
         "external_bricks": sorted(external_evidence, key=lambda row: row["id"]),
         "amr_program": amr_evidence,
+        "layout_plan": _layout_plan_evidence(layout),
+        "layout_resources": _layout_resources(layout),
     }
     # Round-trip through the strict encoder now.  This rejects opaque values/NaN here rather than
     # allowing a later compile/cache layer to invent a representation.
@@ -247,7 +249,15 @@ def _resolve_amr_program(layout_name: str, time: Any) -> dict[str, Any]:
 def _layout_name(layout: Any) -> str:
     if layout is None:
         raise CapabilityResolutionError("resolved layout evidence is missing")
-    caps = _projection(getattr(layout, "capabilities", None))
+    from pops.mesh import LayoutPlan
+
+    if isinstance(layout, LayoutPlan):
+        if len(layout.layouts) != 1:
+            raise CapabilityResolutionError(
+                "runtime capability resolution requires exactly one normalized layout")
+        caps = layout.layouts[0].capabilities
+    else:
+        caps = _projection(getattr(layout, "capabilities", None))
     token = caps.get("layout") if isinstance(caps, Mapping) else None
     if token is None:
         name = type(layout).__name__.lower()
@@ -256,6 +266,18 @@ def _layout_name(layout: Any) -> str:
     if token not in ("uniform", "amr"):
         raise CapabilityResolutionError("resolved layout has unknown capability identity")
     return token
+
+
+def _layout_plan_evidence(layout: Any) -> Any:
+    from pops.mesh import LayoutPlan
+
+    return layout.capability_evidence() if isinstance(layout, LayoutPlan) else None
+
+
+def _layout_resources(layout: Any) -> list[dict[str, Any]]:
+    from pops.mesh import LayoutPlan
+
+    return list(layout.resource_requirements()) if isinstance(layout, LayoutPlan) else []
 
 
 def _projection(value: Any) -> Mapping:

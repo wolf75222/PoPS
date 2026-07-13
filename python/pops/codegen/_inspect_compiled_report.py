@@ -287,41 +287,56 @@ def _compiled_options(compiled: Any) -> dict:
     from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
 
     defaults = numerical_defaults_report()
-    from pops.codegen._artifact_models import component_model_metadata, primary_artifact_model
+    from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
     from pops.codegen.compiled_artifact import CompiledSimulationArtifact
 
     if type(compiled) is CompiledSimulationArtifact:
-        model = primary_artifact_model(compiled)
+        model_rows = artifact_model_metadata(compiled)
     else:
-        rows = component_model_metadata(compiled)
-        model = rows[0].model if rows else None
-    params = dict(getattr(model, "params", {}) or {})
+        model_rows = component_model_metadata(compiled)
+    models = tuple(row.model for row in model_rows)
 
     def param_kind(param: Any) -> str:
         kind = getattr(param, "kind", "const")
         return getattr(kind, "value", kind)
 
-    const_params = sorted(name for name, param in params.items()
+    def qualified_param(block_name: Any, name: str) -> str:
+        return "%s.%s" % (block_name, name) if len(model_rows) > 1 else name
+
+    parameter_entries = tuple(
+        (row.block_name, name, param)
+        for row in model_rows for name, param in row.params.items())
+    const_params = sorted(qualified_param(block, name) for block, name, param in parameter_entries
                           if param_kind(param) == "const")
-    runtime_params = sorted(name for name, param in params.items()
-                            if param_kind(param) == "runtime")
-    derived_params = sorted(name for name, param in params.items()
-                            if param_kind(param) == "derived")
+    runtime_params = sorted(
+        qualified_param(block, name) for block, name, param in parameter_entries
+        if param_kind(param) == "runtime")
+    derived_params = sorted(
+        qualified_param(block, name) for block, name, param in parameter_entries
+        if param_kind(param) == "derived")
 
     default_gamma = defaults.get("physical", {}).get("gamma", PHYSICAL_DEFAULT_GAMMA)
-    model_gamma = getattr(model, "gamma", None)
-    gamma_source = "compiled_model_metadata" if model_gamma is not None else "legacy_fallback"
-    gamma_value = model_gamma if model_gamma is not None else default_gamma
+    gamma_by_block = {row.block_name: getattr(row.model, "gamma", None) for row in model_rows}
+    explicit_gamma = {value for value in gamma_by_block.values() if value is not None}
+    if len(explicit_gamma) == 1 and len(explicit_gamma) == len(set(gamma_by_block.values())):
+        gamma_value = next(iter(explicit_gamma))
+        gamma_source = "compiled_model_metadata"
+    elif not explicit_gamma:
+        gamma_value = default_gamma
+        gamma_source = "legacy_fallback"
+    else:
+        gamma_value = None
+        gamma_source = "heterogeneous_block_metadata"
 
     param_rows = []
-    for name in sorted(params):
-        param = params[name]
+    for block, name, param in sorted(parameter_entries, key=lambda row: (str(row[0]), row[1])):
         kind = param_kind(param)
         value = (getattr(param, "value", None) if kind == "const" else
                  getattr(param, "default", None) if getattr(param, "has_default", False)
                  else None)
         param_rows.append({
             "name": name,
+            "block": block,
             "kind": kind,
             "value": value,
             "affects_cache_key": kind != "runtime",
@@ -334,7 +349,8 @@ def _compiled_options(compiled: Any) -> dict:
             "gamma": {
                 "value": gamma_value,
                 "source": gamma_source,
-                "affects_cache_key": model_gamma is not None,
+                "affects_cache_key": bool(explicit_gamma),
+                "by_block": gamma_by_block,
             },
             "params": param_rows,
         },
@@ -344,7 +360,12 @@ def _compiled_options(compiled: Any) -> dict:
             "program_hash": getattr(compiled, "program_hash", None),
             "problem_snapshot_hash": getattr(
                 getattr(compiled, "_problem_snapshot", None), "hash", None),
-            "model_hash": getattr(model, "model_hash", None),
+            "model_hash": (
+                next(iter({getattr(model, "model_hash", None) for model in models}))
+                if len({getattr(model, "model_hash", None) for model in models}) == 1
+                else None),
+            "model_hashes": {
+                row.block_name: getattr(row.model, "model_hash", None) for row in model_rows},
             "abi_key": getattr(compiled, "abi_key", None),
             "participates": [
                 "program_source",

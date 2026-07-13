@@ -378,6 +378,16 @@ def _layout_semantic_data(layout: Any) -> Any:
     """Project scientific mesh structure without backend, ABI, route or target facts."""
     if layout is None:
         return None
+    from pops.mesh import LayoutPlan
+
+    if isinstance(layout, LayoutPlan):
+        return {
+            "kind": "layout_plan",
+            "owner": layout.owner.to_data(),
+            "layouts": [row.to_data() for row in layout.layouts],
+            "assignments": [row.to_data() for row in layout.assignments],
+            "mappings": [row.to_data() for row in layout.mappings],
+        }
     from pops.mesh.layouts import AMR, Uniform
 
     if isinstance(layout, Uniform):

@@ -48,6 +48,7 @@ from pops.params import ConstParam, RuntimeParam
 from pops.problem._snapshot import AuthoringSnapshot
 from pops.runtime.system import AmrSystem
 from tests.python.support.typed_program import program_states, synthetic_module
+from tests.python.support.layout_plan import resolved_layout_contract
 
 
 # --------------------------------------------------------------------------------------------------
@@ -118,11 +119,14 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
                  regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
     snapshot = AuthoringSnapshot({"kind": "spec6-matrix-stub"})
     schema = BindSchema()
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout, target="amr_system", block_names=("ne",))
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
         backend="production",
         layout=layout,
+        layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock(
             "ne", {"model": "spec6-matrix-model"}, None, "production"),),
@@ -134,6 +138,7 @@ def _amr_route_handle(*, n_aux=1, mpi=True):
         libraries=(),
         requirements={"amr": True},
         capabilities={"cpu": True, "amr": True, "mpi": mpi},
+        lowering_coverage=layout_coverage,
     )
     return CompiledSimulationArtifact(
         plan=plan,

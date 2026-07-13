@@ -20,6 +20,7 @@ from .library import LibraryManifest, compile_library, read_library_manifest  # 
 # ADC-660: one exact compiled artifact record plus exact resolve/bind/install phase values.
 from .compiled_artifact import CompiledSimulationArtifact  # noqa: F401
 from ._plans import BindInputs, InstallPlan, ResolvedSimulationPlan  # noqa: F401
+from ._layout_resolution import LayoutCapabilityError  # noqa: F401
 from .library_codegen import emit_library_cpp  # noqa: F401
 # Spec 5 (sec.12.2 / 12.3): inert introspection of a compiled artifact (bind arguments + memory).
 from .inspect_compiled import Arguments, MemoryEstimate  # noqa: F401
@@ -55,6 +56,7 @@ __all__ = [
     "check_compiled_matches_module",
     "LibraryManifest", "compile_library", "read_library_manifest",
     "CompiledSimulationArtifact", "ResolvedSimulationPlan", "BindInputs", "InstallPlan",
+    "LayoutCapabilityError",
     "Arguments", "MemoryEstimate",
     "ScratchPlan", "build_scratch_plan",
     "CompiledReport", "RequirementsReport", "BindReport",

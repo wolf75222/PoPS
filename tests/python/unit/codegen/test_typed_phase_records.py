@@ -7,8 +7,12 @@ import numpy as np
 import pytest
 
 from pops.codegen import _plans as plans
+from pops.codegen._layout_resolution import layout_lowering_coverage
 from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 from pops.identity import make_identity
+from pops.mesh import CartesianMesh, normalize_layout_plan
+from pops.mesh.layouts import Uniform
+from pops.model import OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
 
@@ -46,11 +50,14 @@ class _Compiled:
 
 def _resolved_plan():
     nested_layout = {"mesh": {"shape": [16, 16]}}
+    layout_plan = normalize_layout_plan(
+        Uniform(CartesianMesh(n=16)), owner=OwnerPath.case("typed-phases"))
     plan = plans.ResolvedSimulationPlan(
         snapshot=AuthoringSnapshot({"case": "typed-phases"}),
         target="system",
         backend="production",
         layout=nested_layout,
+        layout_plan=layout_plan,
         time=_Canonical("rk2"),
         blocks=(plans.ResolvedBlock(
             "fluid", _Canonical("model"), {"flux": ["hll"]}, "production"),),
@@ -62,6 +69,7 @@ def _resolved_plan():
         libraries=({"name": "kernels", "symbols": ["flux"]},),
         requirements={"mpi": False},
         capabilities={"cpu": True, "gpu": False},
+        lowering_coverage=layout_lowering_coverage(layout_plan),
         compile_options={"std": "c++20"},
     )
     return plan, nested_layout

@@ -25,6 +25,7 @@ except Exception as exc:  # noqa: BLE001
 
 
 from tests.python.support.assertions import _check
+from tests.python.support.layout_plan import resolved_layout_contract
 
 
 def _compiled_model(*fields):
@@ -44,11 +45,14 @@ def _install_instances(**models):
     snapshot = AuthoringSnapshot({"kind": "named-field-system", "blocks": tuple(models)})
     schema = BindSchema()
     source = {"kind": "named-field-system", "blocks": tuple(models)}
+    layout_plan, layout_coverage = resolved_layout_contract(
+        None, target="system", block_names=models)
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",
         backend="production",
         layout=None,
+        layout_plan=layout_plan,
         time={"method": "inert"},
         blocks=tuple(ResolvedBlock(name, source, None, "production") for name in models),
         bind_schema=schema,
@@ -59,6 +63,7 @@ def _install_instances(**models):
         libraries=(),
         requirements={},
         capabilities={},
+        lowering_coverage=layout_coverage,
     )
     artifact = CompiledSimulationArtifact(
         plan=resolved,
