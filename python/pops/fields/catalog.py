@@ -5,10 +5,8 @@ the physical :class:`pops.fields.FieldOperator` and numerical
 :class:`pops.fields.FieldDiscretization`: it is a flat namespace of inert BrickDescriptor
 factories (the brick-id metadata the codegen / capability matrix consume).
 
-The default Poisson coupling is solved by ``pops::GeometricMG`` (geometric_mg.hpp); there is no
-standalone ``pops::Poisson`` / ``Helmholtz`` / ``FieldSolver`` type yet, so those are catalogued as
-planned (``available=False``). The rich typed elliptic-solver descriptor lives in
-:class:`pops.solvers.GeometricMG`.
+The executable geometric multigrid route is the only catalog entry. Equation families are typed
+field problems, not unavailable brick-name placeholders.
 """
 
 from __future__ import annotations

@@ -1,9 +1,8 @@
 """pops.solvers.preconditioners -- the preconditioner brick catalog (Spec 5 sec.5.7).
 
-Only the geometric-multigrid preconditioner has a native type (``pops::GeometricMG``);
-identity / jacobi / block-jacobi have none yet (the polar solver has its own PolarPrecond
-enum), so they are catalogued as PLANNED descriptors. :func:`User` surfaces a loaded external
-preconditioner brick. This is the ONE public home of the catalog formerly parked under
+Identity lowers to the native empty ``pops::ApplyFn`` and geometric multigrid lowers to
+``pops::GeometricMG``. Unwired Jacobi placeholders are absent. :func:`User` surfaces a loaded
+external preconditioner brick. This is the ONE public home of the catalog formerly parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
 
 ADC-502 RATIFIES ``pops.solvers.preconditioners`` as that single home: a preconditioner configures

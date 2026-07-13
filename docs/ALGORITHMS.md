@@ -1935,17 +1935,14 @@ function dispatch_model(spec, visitor):              # model_factory.hpp
           visitor( CompositeModel<TR, Src, Ell>{TR, Src, Ell} ))))
     # combinaison invalide (source fluide sur transport scalaire) -> throw
 
-function System.step(dt):                            # runtime/system.hpp
-    solve_fields()                                    # Poisson partage : f = sum_b elliptic_rhs_b
-    fill aux (phi, grad phi[, B_z, T_e])
-    for b in blocks:
-        if not b.evolve: continue                     # espece gelee : vue par Poisson, non avancee
-        if b held by stride this macro-step: continue # multirate hold-then-catch-up
-        advance b (explicit SSPRK / IMEX, b.substeps sous-pas)
+Program.step_strategy(controller):                   # authoring, before compile
+    declare the typed dt/CFL/error controller
+    declare provisional stores and acceptance guards
 
-function System.step_cfl(cfl):
-    dt = cfl * h * min_b( substeps_b / (stride_b * w_b) )   # honore substeps + stride
-    step(dt) ; return dt
+pops.run(bound_instance, t_end=..., max_steps=...): # sole execution transition
+    authenticate the instance produced by pops.bind
+    execute the compiled Program transaction
+    publish states, fields and consumers only after accepted attempts
 ```
 
 **Code.** [`runtime/system.hpp`](../include/pops/runtime/system.hpp) and

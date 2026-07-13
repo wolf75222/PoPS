@@ -1,7 +1,7 @@
 """pops.numerics.projections -- the cell-wise projection brick catalog (Spec 3 / Spec 5).
 
-Positivity is the pops::zhang_shu_scale free function (positivity.hpp); the others have
-no native symbol yet (a generated brick or a planned native type).
+Positivity is the ``pops::zhang_shu_scale`` native function. Generated conservative and
+divergence projections carry executable builders; unavailable placeholders are not exported.
 
 Spec 5 (sec.4) homes these post-step projection bricks under ``pops.numerics`` (formerly
 ``pops.lib.operators``).

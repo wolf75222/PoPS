@@ -12,8 +12,7 @@ Sub-packages:
 * :mod:`pops.solvers.krylov` -- matrix-free Krylov solvers (CG / BiCGStab / GMRES / Richardson);
 * :mod:`pops.solvers.nonlinear` -- executable global ``Newton`` and cell-local ``LocalNewton``;
 * :mod:`pops.solvers.schur` -- the Schur-condensation solver (``pops::SchurCondensationOperator``);
-* :mod:`pops.solvers.elliptic` -- the RICH GeometricMG (typed smoother / coarse / tolerance /
-  max_cycles + capabilities) and the planned FFT spectral Poisson solver;
+* :mod:`pops.solvers.elliptic` -- executable GeometricMG and constrained FFT field solvers;
 * :mod:`pops.solvers.preconditioners` -- Identity / Jacobi / BlockJacobi / GeometricMG / User;
 * :mod:`pops.solvers.options` / :mod:`pops.solvers.tolerances` -- the typed smoother / coarse /
   tolerance sub-descriptors the elliptic solver takes;

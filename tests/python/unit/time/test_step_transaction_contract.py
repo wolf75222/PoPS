@@ -46,7 +46,8 @@ def test_program_step_strategy_owns_typed_stores_and_is_serialized():
 
 def test_project_and_recheck_is_lazy_lowered_and_visible_in_transaction_identity():
     program = Program("guarded")
-    state = typed_state(program, "fluid")
+    temporal = typed_state(program, "fluid", state_name="U")
+    state = program.value("candidate", temporal.n, at=temporal.next.point)
     error = program.norm_inf(state)
     strategy = _error_strategy()
     condition = error <= strategy.atol + strategy.rtol * program.norm_inf(state)
@@ -59,7 +60,7 @@ def test_project_and_recheck_is_lazy_lowered_and_visible_in_transaction_identity
         recheck=lambda P, projected: P.norm_inf(projected)
         <= strategy.atol + strategy.rtol * P.norm_inf(projected),
     )
-    program.commit(typed_state(program, "fluid").next, guarded)
+    program.commit(temporal.next, guarded)
     program.step_strategy(strategy)
 
     plan = program.transaction_plan()
@@ -122,9 +123,10 @@ def test_compiled_time_is_removed_instead_of_aliased():
 
 def test_fail_run_guard_is_typed_and_lowered_as_fatal():
     program = Program("fatal_guard")
-    state = typed_state(program, "fluid")
+    temporal = typed_state(program, "fluid", state_name="U")
+    state = program.value("candidate", temporal.n, at=temporal.next.point)
     guarded = program.guard(
         "finite_state", state, program.norm_inf(state) >= 0.0, action=FailRun())
-    program.commit(typed_state(program, "fluid").next, guarded)
+    program.commit(temporal.next, guarded)
     program.step_strategy(FixedDt(0.1))
     assert "throw std::runtime_error" in program.emit_cpp_program()

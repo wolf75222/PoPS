@@ -1,8 +1,4 @@
-"""pops.numerics.reconstruction.limiters -- the slope-limiter brick catalog (Spec 3 / Spec 5).
-
-Minmod / VanLeer have native types; MC / Superbee are catalogued but have no
-native type yet (available=False).
-"""
+"""Executable slope-limiter descriptors exposed by the final catalog."""
 from __future__ import annotations
 
 from types import SimpleNamespace

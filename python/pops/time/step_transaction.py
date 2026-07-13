@@ -40,6 +40,7 @@ class BlockProjection:
     """Apply the exact native pointwise projection declared by the value's owning block."""
 
     kind: str = field(default="block_projection", init=False)
+    __pops_ir_immutable__ = True
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind}
@@ -51,6 +52,7 @@ class ProjectAndRecheck:
 
     projection: BlockProjection
     on_failure: SolveAction = field(default_factory=RejectAttempt)
+    __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if type(self.projection) is not BlockProjection:
@@ -73,6 +75,7 @@ class AcceptanceGuard:
     name: str
     role: GuardRole
     action: SolveAction | ProjectAndRecheck
+    __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -142,6 +145,7 @@ class StepTransactionPlan:
     strategy: StepStrategy
     stores: tuple[ProvisionalStore, ...] = ALL_PROVISIONAL_STORES
     guards: tuple[AcceptanceGuard, ...] = ()
+    __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         ensure_step_strategy(self.strategy)

@@ -17,31 +17,30 @@ deriving the published version from this same `project(VERSION)` value.
 
 What a version bump is allowed to break is exactly this surface:
 
-- C++ runtime facade: `pops::System`, `pops::AmrSystem` and their public methods (block
-  composition, `set_poisson`, `set_refinement`, stepping).
-- The concepts a model composes against: `PhysicalModel`, `PhysicalFlux`, `NumericalFlux`,
-  `SpatialOperator`, `EllipticSolver`,
-  and the named generic bricks in `include/pops/physics/`.
-- Python root: exactly `Model`, `Program`, `Case`, `validate`, `inspect`, `explain`, `resolve`,
-  `compile`, `bind`, `run`, and `__version__`, plus the documented typed descriptors in public
-  subpackages. Runtime diagnostics and execution controls live under `pops.runtime`; they are not
-  aliases at package root. The runtime engines `System` /
-  `AmrSystem` are internal seams behind `pops.compile` / `pops.bind` (reachable as
-  `pops.runtime.system.*`); they carry no SemVer guarantee and may change.
-- DSL surface: the fixed aux names (`phi`, `grad_x`, `grad_y`, `B_z`, `T_e`) and the
-  documented builders.
-- Component interchange: the current `ComponentManifest` schema, canonical identity domains, and
-  generated builtin component catalog. New optional component capabilities are additive; changing
-  the meaning or required shape of an existing semantic field is breaking.
+- Python lifecycle: exactly `Model`, `Program`, `Case`, `validate`, `inspect`, `explain`, `resolve`,
+  `compile`, `bind`, `run`, and `__version__` at package root. `pops.run` is the sole execution
+  transition; native engines and imperative stepping methods are implementation details.
+- Documented typed authoring protocols: qualified handles, immutable expressions, component
+  interfaces, numerical/layout descriptors, `Program.solve(problem, solver=...)`, and the
+  consumer/checkpoint declarations used by the final examples. A catalog row is public only when
+  it has an executable lowering; unavailable or planned placeholders are not API.
+- C++ component interchange: the current `ComponentManifest` schema, generated component-interface
+  vocabulary, canonical identity domains, external package contract, and generated builtin
+  component catalog. New optional component capabilities are additive; changing the meaning or
+  required shape of an existing semantic field is breaking.
+- Consumable generic C++ concepts and component interfaces documented for external implementations.
+  Concrete runtime engines (`System`, `AmrSystem`, AMR couplers), their builders, and their stepping
+  or block-registration methods are internal seams behind the Python lifecycle and carry no SemVer
+  guarantee.
 - Consumable CMake: the `pops::pops` target, `find_package(pops)`, and the documented options
   (`POPS_USE_MPI`, `POPS_USE_HDF5`, `POPS_USE_KOKKOS`, ...) and presets.
 
 ## Internal (no guarantee, may change in any release)
 
-Private helpers, memory layouts and `Fab` / `MultiFab` internals, the DSL code-generation
-internals and the production `.so` ABI key, test harnesses, benchmarks, and anything not in
-the list above. The ABI key intentionally invalidates the DSL cache across toolchains; that
-is not a SemVer-relevant break.
+Private helpers, native runtime facades, memory layouts and `Fab` / `MultiFab` internals, fixed
+model-specific auxiliary names, code-generation internals and the production `.so` ABI key, test
+harnesses, benchmarks, and anything not in the list above. The ABI key intentionally invalidates
+the compiled cache across toolchains; that is not a SemVer-relevant break.
 
 ## Bump rules
 
