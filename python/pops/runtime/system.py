@@ -132,6 +132,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         self._lifecycle = "assembling"
         self._bound_snapshot = None
         self._last_run_manifest = self._last_run_identity = self._last_restart_identity = None
+        from pops.runtime._temporal_restart import TemporalRestartState
+        self._temporal_restart_state = TemporalRestartState()
 
     def run(self, t_end: Any, cfl: Any = None, max_steps: int = 1_000_000,
             output_dir: Any = None, strategy: Any = None) -> Any:
@@ -147,9 +149,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         are present and output_dir is omitted. Returns the number of steps taken.
         cf. DSL_MODEL_DESIGN.md section 6."""
         from pops.runtime._step_strategy import (
-            AdaptiveCFL, resolve_run_strategy, run_step_attempt)
+            AdaptiveCFL, resolve_run_strategy, run_control_payload, run_step_attempt)
         strategy = resolve_run_strategy(self, strategy, cfl)
-        manifest_cfl = strategy.cfl if isinstance(strategy, AdaptiveCFL) else 0.0
+        control_payload = run_control_payload(strategy)
+        manifest_cfl = control_payload["cfl"] if isinstance(strategy, AdaptiveCFL) else 0.0
+        self._temporal_restart_state.begin_run(
+            control_payload, time=self.time(), macro_step=self.macro_step())
         from pops.runtime._run_manifest import begin_run
         begin_run(self, t_end=t_end, cfl=manifest_cfl, max_steps=max_steps, output_dir=output_dir)
         policies = getattr(self, "_output_policies", [])

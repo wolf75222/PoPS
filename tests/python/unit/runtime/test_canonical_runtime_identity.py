@@ -98,7 +98,7 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
     owner = SimpleNamespace(
         bound_snapshot=snapshot, last_run_identity=run.run_identity)
     payload = {
-        "pops_checkpoint_version": 2, "t": 0.5, "macro_step": 2,
+        "pops_checkpoint_version": 3, "t": 0.5, "macro_step": 2,
         "abi_key": "test-abi", "state_tracer": np.arange(4, dtype=np.float64),
     }
     monkeypatch.setattr("pops.runtime.bricks.abi_key", lambda: "test-abi")

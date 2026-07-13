@@ -255,7 +255,8 @@ def test_restart_on_bound_sim_restores_state():
         engine.checkpoint(path)
         raise AssertionError("checkpoint bas niveau sans bind/run doit etre refuse")
     except RuntimeError as exc:
-        _check("compiled Program" in str(exc) or "pops.bind" in str(exc),
+        _check("declared step strategy" in str(exc) or "compiled Program" in str(exc)
+               or "pops.bind" in str(exc),
                "le checkpoint exige un artefact compile et une identite de bind")
     print("ok test_low_level_checkpoint_without_identity_rejected")
 
