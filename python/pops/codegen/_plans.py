@@ -166,6 +166,7 @@ class ResolvedBlock:
     model: Any
     spatial: Any
     backend: str
+    state_spaces: tuple[str, ...]
     numerics: Any = None
 
     def __post_init__(self) -> None:
@@ -173,6 +174,13 @@ class ResolvedBlock:
             raise TypeError("ResolvedBlock name must be a non-empty string")
         if not isinstance(self.backend, str) or not self.backend:
             raise TypeError("ResolvedBlock backend must be a resolved non-empty string")
+        state_spaces = tuple(self.state_spaces)
+        if not state_spaces or any(
+                not isinstance(name, str) or not name for name in state_spaces):
+            raise TypeError("ResolvedBlock state_spaces must contain non-empty strings")
+        if len(set(state_spaces)) != len(state_spaces):
+            raise ValueError("ResolvedBlock state_spaces contains a duplicate")
+        object.__setattr__(self, "state_spaces", state_spaces)
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")
@@ -296,6 +304,7 @@ class ResolvedSimulationPlan:
             "blocks": [{
                 "name": block.name,
                 "backend": block.backend,
+                "state_spaces": block.state_spaces,
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
             } for block in self.blocks],

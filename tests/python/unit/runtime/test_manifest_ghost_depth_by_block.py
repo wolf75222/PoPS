@@ -91,7 +91,8 @@ def _compiled(blocks):
         layout_plan=layout_plan,
         time={"program": "gas_program"},
         blocks=tuple(
-            ResolvedBlock(name, {"model": "ghost-depth-model"}, None, "production")
+            ResolvedBlock(
+                name, {"model": "ghost-depth-model"}, None, "production", ("U",))
             for name in blocks
         ),
         bind_schema=schema,
@@ -136,7 +137,8 @@ def _compiled(blocks):
     artifact = CompiledSimulationArtifact(
         plan=plan,
         program=compiled_program,
-        blocks=tuple(CompiledBlockArtifact(name, model, None) for name in blocks),
+        blocks=tuple(
+            CompiledBlockArtifact(name, model, None, ("U",)) for name in blocks),
     )
     compiled_program.artifact = artifact
     return artifact

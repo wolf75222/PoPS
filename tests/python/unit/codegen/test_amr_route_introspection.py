@@ -68,7 +68,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         layout=layout,
         layout_plan=layout_plan,
         time=None,
-        blocks=(ResolvedBlock("block", source, None, "production"),),
+        blocks=(ResolvedBlock("block", source, None, "production", ("U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -80,7 +80,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
     artifact = CompiledSimulationArtifact(
         plan=plan,
         program=None,
-        blocks=(CompiledBlockArtifact("block", component, None),),
+        blocks=(CompiledBlockArtifact("block", component, None, ("U",)),),
     )
     return artifact
 

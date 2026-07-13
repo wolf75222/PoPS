@@ -44,8 +44,8 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     )
 
     graph = ProgramModelGraph.from_resolved_blocks((
-        ResolvedBlock("first", first, None, "production"),
-        ResolvedBlock("second", second, None, "production"),
+        ResolvedBlock("first", first, None, "production", ("U",)),
+        ResolvedBlock("second", second, None, "production", ("U",)),
     ))
     source = program.emit_cpp_program(model_graph=graph)
 

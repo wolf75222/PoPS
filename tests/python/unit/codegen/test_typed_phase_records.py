@@ -61,7 +61,7 @@ def _resolved_plan():
         layout_plan=layout_plan,
         time=_Canonical("rk2"),
         blocks=(plans.ResolvedBlock(
-            "fluid", _Canonical("model"), {"flux": ["hll"]}, "production"),),
+            "fluid", _Canonical("model"), {"flux": ["hll"]}, "production", ("U",)),),
         bind_schema=BindSchema(),
         compile_values={},
         field_plans={},
@@ -85,7 +85,8 @@ def _artifact(tmp_path):
     artifact = CompiledSimulationArtifact(
         plan,
         program,
-        (CompiledBlockArtifact("fluid", block, plan.blocks[0].spatial),),
+        (CompiledBlockArtifact(
+            "fluid", block, plan.blocks[0].spatial, plan.blocks[0].state_spaces),),
     )
     return artifact, program_path
 

@@ -68,7 +68,12 @@ def _artifact(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",))
         layout={"kind": "runtime-planning"},
         layout_plan=layout_plan,
         time=CanonicalValue("rk2"),
-        blocks=tuple(ResolvedBlock(name, CanonicalValue("source-" + name), {"mesh": name}, "production") for name in names),
+        blocks=tuple(
+            ResolvedBlock(
+                name, CanonicalValue("source-" + name), {"mesh": name},
+                "production", ("U",))
+            for name in names
+        ),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -80,7 +85,10 @@ def _artifact(names=("fluid",), *, heterogeneous=False, memory_spaces=("host",))
     components = tuple(CompiledComponent(name, target="system") for name in names)
     for component in components:
         component.memory_spaces = memory_spaces
-    blocks = tuple(CompiledBlockArtifact(name, component, planned.spatial) for name, component, planned in zip(names, components, resolved.blocks, strict=True))
+    blocks = tuple(
+        CompiledBlockArtifact(name, component, planned.spatial, planned.state_spaces)
+        for name, component, planned in zip(names, components, resolved.blocks, strict=True)
+    )
     return CompiledSimulationArtifact(resolved, CompiledComponent("program", target="system"), blocks)
 
 

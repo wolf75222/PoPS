@@ -134,6 +134,8 @@ def test_case_resolves_explicit_layout_consumers_and_two_provider_field() -> Non
     )
 
     assert tuple(block.name for block in resolved.blocks) == ("electrons", "ions")
+    assert tuple(block.state_spaces for block in resolved.blocks) == (
+        ("electrons",), ("ions",))
     assert tuple(resolved.field_plans) == ("electrostatic",)
     assert len(resolved.layout_plan.layouts) == 1
     subjects = core.case.layout_subjects()

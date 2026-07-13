@@ -19,12 +19,18 @@ class CompiledPlanBlock:
     name: str
     backend: str
     spatial: Any
+    state_spaces: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
             raise TypeError("CompiledPlanBlock name must be a non-empty string")
         if not isinstance(self.backend, str) or not self.backend:
             raise TypeError("CompiledPlanBlock backend must be a non-empty string")
+        state_spaces = tuple(self.state_spaces)
+        if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) \
+                or not state_spaces[0]:
+            raise TypeError("CompiledPlanBlock requires exactly one named state space")
+        object.__setattr__(self, "state_spaces", state_spaces)
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="CompiledPlanBlock.spatial")
 
@@ -75,7 +81,8 @@ class CompiledPlanRecord:
             capabilities=plan.capabilities,
             lowering_coverage=plan.lowering_coverage,
             blocks=tuple(
-                CompiledPlanBlock(block.name, block.backend, block.spatial)
+                CompiledPlanBlock(
+                    block.name, block.backend, block.spatial, block.state_spaces)
                 for block in plan.blocks
             ),
             time_identity=(
@@ -176,6 +183,7 @@ class CompiledPlanRecord:
                 {
                     "name": block.name,
                     "backend": block.backend,
+                    "state_spaces": block.state_spaces,
                     "spatial": _evidence(
                         block.spatial, where="compiled plan block spatial"),
                 }
@@ -239,10 +247,16 @@ class CompiledBlockArtifact:
     name: str
     model: Any
     spatial: Any
+    state_spaces: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
             raise TypeError("CompiledBlockArtifact name must be a non-empty string")
+        state_spaces = tuple(self.state_spaces)
+        if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) \
+                or not state_spaces[0]:
+            raise TypeError("CompiledBlockArtifact requires exactly one named state space")
+        object.__setattr__(self, "state_spaces", state_spaces)
         _binary_evidence(self.model, where="CompiledBlockArtifact.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="CompiledBlockArtifact.spatial")
@@ -282,6 +296,9 @@ class CompiledSimulationArtifact:
             raise ValueError(
                 "CompiledSimulationArtifact blocks must match resolved plan order exactly")
         for compiled, resolved in zip(blocks, self.plan.blocks, strict=True):
+            if compiled.state_spaces != resolved.state_spaces:
+                raise ValueError(
+                    "compiled block %r changed the resolved state-space route" % compiled.name)
             if _evidence(compiled.spatial, where="compiled spatial") != _evidence(
                     resolved.spatial, where="resolved spatial"):
                 raise ValueError(
@@ -435,6 +452,7 @@ class CompiledSimulationArtifact:
             "blocks": [
                 {
                     "name": block.name,
+                    "state_spaces": block.state_spaces,
                     "binary": _binary_evidence(
                         block.model, where="artifact.block[%r]" % block.name),
                     "spatial": _evidence(block.spatial, where="artifact.block.spatial"),

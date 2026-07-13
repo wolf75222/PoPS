@@ -88,6 +88,13 @@ def resolve(
 
     resolved_blocks = []
     for name, spec in problem._blocks.items():
+        state_spaces = tuple(state.local_id for state in spec["states"])
+        if len(state_spaces) != 1:
+            raise ValueError(
+                "block %r selects %d state spaces; the installed native block contract requires "
+                "exactly one. Split independently evolved states into qualified Case blocks."
+                % (name, len(state_spaces))
+            )
         numerics = problem._resolved_numerics_for(name)
         spatial = spec["spatial"]
         if numerics is not None:
@@ -99,6 +106,7 @@ def resolve(
             model=_resolve_problem_model(spec["model"]),
             spatial=detached_frozen(spatial),
             backend=block_backend(name),
+            state_spaces=state_spaces,
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
@@ -226,7 +234,8 @@ def compile(plan: Any) -> Any:
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 
     blocks = tuple(
-        CompiledBlockArtifact(block.name, models[block.name], block.spatial)
+        CompiledBlockArtifact(
+            block.name, models[block.name], block.spatial, block.state_spaces)
         for block in plan.blocks)
     artifact = CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)
     artifact.verify()

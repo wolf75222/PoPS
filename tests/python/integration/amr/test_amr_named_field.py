@@ -133,7 +133,10 @@ def _install_instances(**models):
         layout=None,
         layout_plan=layout_plan,
         time=None,
-        blocks=tuple(ResolvedBlock(name, source, None, "production") for name in models),
+        blocks=tuple(
+            ResolvedBlock(name, source, None, "production", ("U",))
+            for name in models
+        ),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -146,7 +149,8 @@ def _install_instances(**models):
         plan=resolved,
         program=None,
         blocks=tuple(
-            CompiledBlockArtifact(name, model, None) for name, model in models.items()
+            CompiledBlockArtifact(name, model, None, ("U",))
+            for name, model in models.items()
         ),
     )
     inputs = BindInputs()

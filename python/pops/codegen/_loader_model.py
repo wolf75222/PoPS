@@ -31,7 +31,8 @@ class CompiledModel:
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
-                 bind_schema: Any = None, definition_identity: Any = None) -> None:
+                 bind_schema: Any = None, definition_identity: Any = None,
+                 state_spaces: Any = ("U",)) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -40,6 +41,7 @@ class CompiledModel:
         self.target = target         # "system" | "amr_system": targeted facade (native AMR loader if amr_system)
         self.adder = adder           # method name (Amr)System: add_dynamic_block / add_compiled_block / add_native_block
         self.cons_names = list(cons_names)
+        self.state_spaces = list(state_spaces)
         self.cons_roles = list(cons_roles)
         self.prim_names = list(prim_names)
         self.n_vars = int(n_vars)
@@ -111,6 +113,19 @@ class CompiledModel:
         speeds (no silent None)."""
         from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: loader <-> numerics edge
         return _CapabilityHandles(self)
+
+    def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
+        """Exact report data; consumers never probe optional model attributes."""
+        return {
+            "schema_version": 1,
+            "state_spaces": tuple(self.state_spaces),
+            "cons_names": tuple(self.cons_names),
+            "n_vars": self.n_vars,
+            "params": dict(self.params),
+            "aux_names": tuple(self.aux_extra_names),
+            "n_aux": self.n_aux,
+            "capabilities": dict(self.caps),
+        }
 
     @property
     def runtime_param_names(self) -> list:

@@ -64,7 +64,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         layout_plan=layout_plan,
         time=None if target == "amr_system" else CanonicalValue("rk2"),
         blocks=tuple(
-            ResolvedBlock(name, model, block_spatial, "production")
+            ResolvedBlock(name, model, block_spatial, "production", ("U",))
             for name, model, block_spatial in zip(
                 block_names, source_models, spatial, strict=True)
         ),
@@ -78,7 +78,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
     )
     components = tuple(CompiledComponent(name, target=target) for name in block_names)
     blocks = tuple(
-        CompiledBlockArtifact(name, component, resolved.spatial)
+        CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
         for name, component, resolved in zip(block_names, components, plan.blocks, strict=True)
     )
     program = None if target == "amr_system" else CompiledComponent("program", target=target)

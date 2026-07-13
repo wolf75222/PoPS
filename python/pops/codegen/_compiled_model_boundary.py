@@ -12,6 +12,7 @@ from typing import Any
 _ATOMIC = (type(None), bool, int, float, complex, str, bytes, Decimal, Fraction, Enum)
 _SEQUENCE_FIELDS = (
     "cons_names", "cons_roles", "prim_names", "aux_extra_names", "elliptic_field_names",
+    "state_spaces",
 )
 _SCALAR_FIELDS = (
     "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target", "adder",

@@ -83,7 +83,7 @@ def _amr_route_handle():
         layout=layout,
         layout_plan=layout_plan,
         time=None,
-        blocks=(ResolvedBlock("ne", module, None, "production"),),
+        blocks=(ResolvedBlock("ne", module, None, "production", ("U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -95,7 +95,7 @@ def _amr_route_handle():
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
-        blocks=(CompiledBlockArtifact("ne", handle, None),),
+        blocks=(CompiledBlockArtifact("ne", handle, None, ("U",)),),
     )
     inputs = BindInputs()
     InstallPlan(

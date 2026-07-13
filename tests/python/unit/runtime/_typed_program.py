@@ -160,7 +160,7 @@ def typed_compiled_artifact(
         layout_plan=layout_plan,
         time=program if has_program else None,
         blocks=tuple(
-            ResolvedBlock(name, schema_modules[name], None, backend)
+            ResolvedBlock(name, schema_modules[name], None, backend, ("U",))
             for name in names
         ),
         bind_schema=schema,
@@ -180,7 +180,7 @@ def typed_compiled_artifact(
         plan=plan,
         program=compiled if has_program else None,
         blocks=tuple(
-            CompiledBlockArtifact(name, by_name[name], None)
+            CompiledBlockArtifact(name, by_name[name], None, ("U",))
             for name in names
         ),
     )

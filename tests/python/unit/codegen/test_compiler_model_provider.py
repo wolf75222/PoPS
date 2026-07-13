@@ -82,6 +82,17 @@ def test_module_is_a_real_compiler_provider_adapter():
     assert _resolve_problem_model(module) is module
 
 
+def test_frozen_module_remains_the_canonical_compiler_ir():
+    model = _facade_model("frozen-provider")
+    module = model.module
+    model.freeze()
+
+    assert type(module) is not Module
+    lowering = require_compiler_lowering(model)
+    assert isinstance(lowering.source_module, Module)
+    assert lowering.source_module is module
+
+
 class _MissingProtocol:
     pass
 
@@ -109,7 +120,7 @@ class _WrongSourceModule:
         (_MissingProtocol(), "does not implement the CompilerLowerable protocol"),
         (_WrongReturn(), "must return an exact CompilerLowering"),
         (_WrongEmitter(), "emit_model must implement check"),
-        (_WrongSourceModule(), "source_module must be an exact pops.model.Module"),
+        (_WrongSourceModule(), "source_module must be a pops.model.Module"),
     ],
 )
 def test_incomplete_or_false_compiler_provider_is_rejected_before_compile(provider, message):

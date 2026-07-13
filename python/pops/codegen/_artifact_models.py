@@ -1,8 +1,28 @@
-"""Read-only model metadata for one compiled artifact and every installed block."""
+"""Exact model metadata for compiled artifacts, obtained through one small provider protocol."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
+
+_METADATA_KEYS = frozenset({
+    "schema_version",
+    "state_spaces",
+    "cons_names",
+    "n_vars",
+    "params",
+    "aux_names",
+    "n_aux",
+    "capabilities",
+})
+
+
+@runtime_checkable
+class ArtifactModelMetadataProvider(Protocol):
+    """Structural report interface implemented by compiled and low-level model providers."""
+
+    def __pops_artifact_model_metadata__(self) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +37,7 @@ class ArtifactModelMetadata:
     aux_names: tuple[str, ...]
     n_aux: int
     state_space: str
+    capabilities: dict[str, bool]
 
 
 def artifact_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
@@ -25,22 +46,24 @@ def artifact_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
 
     if type(compiled) is not CompiledSimulationArtifact:
         raise TypeError("artifact_model_metadata requires a CompiledSimulationArtifact")
-    return tuple(_metadata(block.name, block.model) for block in compiled.blocks)
+    return tuple(
+        _metadata(block.name, block.model, expected_state_spaces=block.state_spaces)
+        for block in compiled.blocks
+    )
 
 
 def component_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
-    """Metadata for an explicitly low-level compiled component, never a public artifact."""
+    """Metadata for one explicitly low-level compiled component."""
     from pops.codegen.loader import CompiledModel, CompiledProblem
 
     if type(compiled) is CompiledModel:
-        return (_metadata(getattr(compiled, "name", None), compiled),)
+        return (_metadata(None, compiled),)
     if type(compiled) is not CompiledProblem:
         raise TypeError("component metadata requires exact CompiledModel/CompiledProblem")
     model = compiled.model
     if model is None:
         return ()
-    name = compiled.program_name or getattr(model, "name", None)
-    return (_metadata(name, model),)
+    return (_metadata(compiled.program_name, model),)
 
 
 def primary_artifact_model(compiled: Any) -> Any:
@@ -50,11 +73,7 @@ def primary_artifact_model(compiled: Any) -> Any:
 
 
 def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
-    """Return aggregate counts used by whole-artifact memory formulas.
-
-    Component and anonymous-aux counts are summed across blocks. Names are retained in block order;
-    the per-instance authoring surface uses :func:`artifact_model_metadata` directly.
-    """
+    """Return aggregate counts used by whole-artifact memory formulas."""
     rows = artifact_model_metadata(compiled)
     if not rows:
         return [], 0, {}, [], 0, "U"
@@ -72,35 +91,53 @@ def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
 
 
 def aggregate_capability(compiled: Any, name: str) -> bool | None:
-    """Return the intersection of one capability across all installed models.
-
-    A multi-block artifact supports a runtime route only when every block loader does. Missing
-    capability metadata remains honestly unknown instead of being fabricated as supported.
-    """
+    """Return the proven intersection of one capability across every installed model."""
     rows = artifact_model_metadata(compiled)
-    if not rows:
+    if not rows or any(name not in row.capabilities for row in rows):
         return None
-    values = []
-    for row in rows:
-        caps = getattr(row.model, "caps", None)
-        if not caps or name not in caps:
-            return None
-        values.append(bool(caps[name]))
-    return all(values)
+    return all(row.capabilities[name] for row in rows)
 
 
-def _metadata(block_name: str | None, model: Any) -> ArtifactModelMetadata:
-    cons_names = tuple(getattr(model, "cons_names", ()) or ())
-    n_vars = int(getattr(model, "n_vars", len(cons_names)) or len(cons_names))
-    params = dict(getattr(model, "params", {}) or {})
-    aux_names = tuple(getattr(model, "aux_extra_names", ()) or ())
-    n_aux = int(getattr(model, "n_aux", len(aux_names)) or len(aux_names))
-    state_space = "U"
-    spaces = getattr(model, "list_state_spaces", None)
-    if callable(spaces):
-        names = spaces()
-        if names:
-            state_space = names[0]
+def _metadata(
+    block_name: str | None,
+    model: Any,
+    *,
+    expected_state_spaces: tuple[str, ...] | None = None,
+) -> ArtifactModelMetadata:
+    if not isinstance(model, ArtifactModelMetadataProvider):
+        raise TypeError(
+            "compiled model metadata requires __pops_artifact_model_metadata__(); got %s.%s"
+            % (type(model).__module__, type(model).__qualname__)
+        )
+    data = model.__pops_artifact_model_metadata__()
+    if not isinstance(data, dict) or set(data) != _METADATA_KEYS:
+        raise TypeError("artifact model metadata provider returned an unknown schema")
+    if data["schema_version"] != 1:
+        raise ValueError("artifact model metadata provider uses an unsupported schema")
+    state_spaces = _strings(data["state_spaces"], where="state_spaces")
+    if len(state_spaces) != 1:
+        raise ValueError("compiled runtime model metadata requires exactly one state space")
+    if expected_state_spaces is not None and state_spaces != tuple(expected_state_spaces):
+        raise ValueError("compiled model metadata disagrees with the resolved state-space route")
+    cons_names = _strings(data["cons_names"], where="cons_names")
+    n_vars = data["n_vars"]
+    if not isinstance(n_vars, int) or isinstance(n_vars, bool) or n_vars != len(cons_names):
+        raise ValueError("compiled model n_vars must exactly match cons_names")
+    if not isinstance(data["params"], Mapping):
+        raise TypeError("compiled model params metadata must be a mapping")
+    params = dict(data["params"])
+    if any(not isinstance(name, str) or not name for name in params):
+        raise TypeError("compiled model parameter names must be non-empty strings")
+    aux_names = _strings(data["aux_names"], where="aux_names")
+    n_aux = data["n_aux"]
+    if not isinstance(n_aux, int) or isinstance(n_aux, bool) or n_aux < len(aux_names):
+        raise ValueError("compiled model n_aux cannot be smaller than its named aux metadata")
+    if not isinstance(data["capabilities"], Mapping):
+        raise TypeError("compiled model capabilities metadata must be a mapping")
+    capabilities = dict(data["capabilities"])
+    if any(not isinstance(key, str) or not key or not isinstance(value, bool)
+           for key, value in capabilities.items()):
+        raise TypeError("compiled model capabilities must map non-empty strings to bool")
     return ArtifactModelMetadata(
         block_name=block_name,
         model=model,
@@ -109,11 +146,27 @@ def _metadata(block_name: str | None, model: Any) -> ArtifactModelMetadata:
         params=params,
         aux_names=aux_names,
         n_aux=n_aux,
-        state_space=state_space,
+        state_space=state_spaces[0],
+        capabilities=capabilities,
     )
 
 
+def _strings(value: Any, *, where: str) -> tuple[str, ...]:
+    try:
+        result = tuple(value)
+    except TypeError:
+        raise TypeError("compiled model %s must be a sequence of strings" % where) from None
+    if any(not isinstance(item, str) or not item for item in result):
+        raise TypeError("compiled model %s must contain non-empty strings" % where)
+    return result
+
+
 __all__ = [
-    "ArtifactModelMetadata", "aggregate_capability", "aggregate_model_metadata",
-    "artifact_model_metadata", "component_model_metadata", "primary_artifact_model",
+    "ArtifactModelMetadata",
+    "ArtifactModelMetadataProvider",
+    "aggregate_capability",
+    "aggregate_model_metadata",
+    "artifact_model_metadata",
+    "component_model_metadata",
+    "primary_artifact_model",
 ]

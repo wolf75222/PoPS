@@ -42,8 +42,13 @@ def require_compiler_lowering(value: Any) -> CompilerLowering:
         raise TypeError("__pops_compiler_lowering__() must return an exact CompilerLowering")
     if not isinstance(lowering.emit_model, _CompilerEmitter):
         raise TypeError("CompilerLowering.emit_model must implement check()")
-    if type(lowering.source_module) is not Module:
-        raise TypeError("CompilerLowering.source_module must be an exact pops.model.Module")
+    # Physics authoring seals a Module by moving the same object to a framework-owned,
+    # layout-compatible frozen subclass.  The canonical IR boundary is therefore nominal
+    # (Module and its immutable framework subtype), not an exact-type check.  We deliberately do
+    # not accept a structural lookalike here: extension happens through CompilerLowerable, whose
+    # lowering must still nominate the one canonical operator-first Module authority.
+    if not isinstance(lowering.source_module, Module):
+        raise TypeError("CompilerLowering.source_module must be a pops.model.Module")
     return lowering
 
 

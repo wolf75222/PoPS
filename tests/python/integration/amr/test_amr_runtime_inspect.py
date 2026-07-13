@@ -252,7 +252,8 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         layout=carried,
         layout_plan=layout_plan,
         time=None,
-        blocks=(ResolvedBlock("ne", {"kind": "amr-runtime-inspect-stub"}, None, "aot"),),
+        blocks=(ResolvedBlock(
+            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "aot", ("U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -264,7 +265,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
-        blocks=(CompiledBlockArtifact("ne", cm, None),),
+        blocks=(CompiledBlockArtifact("ne", cm, None, ("U",)),),
     )
 
     assert not hasattr(artifact, "inspect_amr")

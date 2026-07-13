@@ -255,12 +255,16 @@ def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
     by_block = {row.block_name: row for row in model_rows if row.block_name is not None}
     for state_ref in sorted(commits, key=lambda item: item.qualified_id):
         name = _block_name(state_ref.block_ref)
-        row = by_block.get(name, primary)
+        row = by_block.get(name)
+        if row is None:
+            raise ValueError(
+                "compiled Program references block %r without exact model metadata" % name
+            )
         instances[name] = {
-            "state": row.state_space if row is not None else "U",
-            "components": row.n_vars if row is not None else 0,
+            "state": row.state_space,
+            "components": row.n_vars,
             "required": True,
-            "conservative": list(row.cons_names) if row is not None else [],
+            "conservative": list(row.cons_names),
             "block_identity": handle_data(state_ref.block_ref),
             "state_identity": handle_data(state_ref),
         }
@@ -268,8 +272,7 @@ def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
         # AMR without a whole-system Program advances every native InstallPlan block. The plan, not
         # the first returned CompiledModel, is therefore the complete instance authority.
         for row in model_rows:
-            name = (row.block_name or getattr(compiled, "program_name", None)
-                    or getattr(row.model, "name", None) or "block")
+            name = row.block_name or "block"
             instances[name] = {
                 "state": row.state_space,
                 "components": row.n_vars,

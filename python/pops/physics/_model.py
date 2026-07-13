@@ -75,6 +75,28 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
             "component_digest": self._model_hash(),
         }
 
+    def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
+        """Exact low-level report projection used before a formula model is discarded."""
+        from pops.codegen._compile_emit import _aux_total_n_aux
+
+        runtime_params = self.runtime_param_nodes()
+        if any(node.handle is None for node in runtime_params):
+            raise TypeError(
+                "artifact metadata refuses unowned low-level RuntimeParamRef values; "
+                "declare typed parameters through Model.param"
+            )
+        params = {node.name: node.handle for node in runtime_params}
+        return {
+            "schema_version": 1,
+            "state_spaces": ("U",),
+            "cons_names": tuple(self.cons_names),
+            "n_vars": self.n_vars,
+            "params": params,
+            "aux_names": tuple(self.aux_extra_names),
+            "n_aux": _aux_total_n_aux(self.aux_names, self.aux_extra_names),
+            "capabilities": {},
+        }
+
     def __init__(self, name: Any) -> None:
         if not isinstance(name, str) or not name:
             raise TypeError("HyperbolicModel: name must be a non-empty string")

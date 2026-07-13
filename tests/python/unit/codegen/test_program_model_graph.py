@@ -31,15 +31,16 @@ class _EmitModel:
 
 
 def _block(name, model):
-    return ResolvedBlock(name, model, None, "production")
+    return ResolvedBlock(name, model, None, "production", (model.name,))
 
 
 @pytest.fixture
 def lowered(monkeypatch):
     calls = []
 
-    def lower(model, *, facade):
+    def lower(model, *, facade, state_space):
         assert facade is model
+        assert state_space == model.name
         calls.append(model)
         return _EmitModel(model), {"module": model.name}
 

@@ -9,7 +9,8 @@ def compile_install_models(plan: Any, options: Any) -> dict[str, Any]:
     compile_options = {key: value for key, value in options.items()
                        if key in ("include", "cxx", "std")}
     return {block.name: compile_install_model(
-        block.name, block.model, block.backend, plan.target, compile_options)
+        block.name, block.model, block.backend, plan.target, compile_options,
+        state_spaces=block.state_spaces)
             for block in plan.blocks}
 
 
@@ -25,20 +26,26 @@ def build_program_model_graph(plan: Any) -> Any:
 
 
 def compile_install_model(name: str, model: Any, backend: str, target: str,
-                          compile_options: Any) -> Any:
+                          compile_options: Any, *, state_spaces: Any = ("U",)) -> Any:
     from pops.codegen.loader import CompiledModel
     from pops.codegen._compiled_model_boundary import validate_compiled_model_result
     from pops.codegen._compiled_model_identity import authenticate_compiled_model
 
+    state_spaces = tuple(state_spaces)
+    if len(state_spaces) != 1 or not isinstance(state_spaces[0], str) or not state_spaces[0]:
+        raise TypeError("compiled block %r requires exactly one named state space" % name)
     if isinstance(model, CompiledModel):
         validate_compiled_model_result(model)
+        if tuple(model.state_spaces) != state_spaces:
+            raise ValueError("resolved compiled model state-space route disagrees with its plan")
         if model.target != target or model.backend != backend:
             raise ValueError("resolved compiled model route disagrees with its plan")
         return model
     from pops.codegen.module_lowering import lower_and_validate
 
     facade = model
-    model, source_module = lower_and_validate(model, facade=facade, state_space=name)
+    model, source_module = lower_and_validate(
+        model, facade=facade, state_space=state_spaces[0])
     source_module_hash = (
         source_module.module_hash() if source_module is not None else None
     )
@@ -48,6 +55,7 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
     compiled = compile_model(backend=backend, target=target, **compile_options)
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
+    compiled.state_spaces = state_spaces
     validate_compiled_model_result(compiled)
     authenticate_compiled_model(model, compiled, module_hash=source_module_hash)
     if compiled.target != target or compiled.backend != backend:
