@@ -1,4 +1,5 @@
 """Small reference-resolution protocol shared by field descriptors."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -15,7 +16,8 @@ def resolve_handle(reference: Any, resolver: Any, *, where: str) -> Any:
     if not callable(resolve):
         raise TypeError(
             "%s reference resolution requires a callable resolver or an object exposing "
-            "resolve(handle)" % where)
+            "resolve(handle)" % where
+        )
     resolved = resolve(reference)
     if not isinstance(resolved, Handle) or not resolved.is_resolved:
         raise TypeError("%s resolver must return a canonical Handle" % where)
@@ -34,23 +36,22 @@ def resolve_value(value: Any, resolver: Any, *, where: str) -> Any:
     if isinstance(value, Mapping):
         return {
             key: resolve_value(item, resolver, where="%s[%r]" % (where, key))
-            for key, item in value.items()}
+            for key, item in value.items()
+        }
     if isinstance(value, tuple):
         return tuple(
             resolve_value(item, resolver, where="%s[%d]" % (where, index))
-            for index, item in enumerate(value))
+            for index, item in enumerate(value)
+        )
     if isinstance(value, list):
         return [
             resolve_value(item, resolver, where="%s[%d]" % (where, index))
-            for index, item in enumerate(value)]
+            for index, item in enumerate(value)
+        ]
     if isinstance(value, set):
-        return {
-            resolve_value(item, resolver, where="%s[]" % where)
-            for item in value}
+        return {resolve_value(item, resolver, where="%s[]" % where) for item in value}
     if isinstance(value, frozenset):
-        return frozenset(
-            resolve_value(item, resolver, where="%s[]" % where)
-            for item in value)
+        return frozenset(resolve_value(item, resolver, where="%s[]" % where) for item in value)
     return value
 
 
@@ -71,7 +72,8 @@ def collect_references(value: Any) -> tuple[Any, ...]:
                 if not isinstance(reference, Handle):
                     raise TypeError(
                         "%s.declaration_references() must return only Handle values"
-                        % type(item).__name__)
+                        % type(item).__name__
+                    )
                 if reference not in references:
                     references.append(reference)
             return
@@ -108,7 +110,10 @@ def reference_label(reference: Any, *, where: str) -> str:
     if reference.is_resolved:
         return reference.qualified_id
     return "pops.handle.unresolved::%s::%s::%s" % (
-        reference.owner_path.presentation(), reference.kind, reference.local_id)
+        reference.owner_path.presentation(),
+        reference.kind,
+        reference.local_id,
+    )
 
 
 __all__ = [

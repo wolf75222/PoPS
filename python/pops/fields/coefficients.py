@@ -7,6 +7,7 @@ names an aux field that supplies the coefficient values; the runtime reads them.
 
 Inert descriptors; they compute nothing.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -26,9 +27,11 @@ class _ImmutableCoefficient(Descriptor):
 
     def __init__(self, field: Any) -> None:
         from pops.model import Handle
+
         if not isinstance(field, Handle):
             raise TypeError(
-                "coefficient field must be a declaration Handle; names/strings are not references")
+                "coefficient field must be a declaration Handle; names/strings are not references"
+            )
         object.__setattr__(self, "_field", field)
 
     @property
@@ -40,16 +43,18 @@ class _ImmutableCoefficient(Descriptor):
         return self._field
 
     def options(self) -> dict:
-        return {"field": reference_label(self._field, where="coefficient field"),
-                "role": self._role}
+        return {
+            "field": reference_label(self._field, where="coefficient field"),
+            "role": self._role,
+        }
 
     def requirements(self) -> Any:
-        return RequirementSet({
-            "aux_field": reference_label(self._field, where="coefficient field")})
+        return RequirementSet(
+            {"aux_field": reference_label(self._field, where="coefficient field")}
+        )
 
     def resolve_references(self, resolver: Any) -> _ImmutableCoefficient:
-        return type(self)(resolve_handle(
-            self._field, resolver, where="coefficient field"))
+        return type(self)(resolve_handle(self._field, resolver, where="coefficient field"))
 
     def declaration_references(self) -> tuple[Any, ...]:
         return (self._field,)

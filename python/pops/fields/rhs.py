@@ -9,6 +9,7 @@ single multi-block / multi-source right-hand side (``ChargeDensity(...) + FixedS
 
 Inert descriptors; the runtime assembles the actual density field.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -50,12 +51,14 @@ class ChargeDensity(_RHS):
 
     def __init__(self, blocks: Any = ()) -> None:
         from pops.problem.handles import BlockHandle
+
         refs = tuple(blocks)
         invalid = [block for block in refs if not isinstance(block, BlockHandle)]
         if invalid:
             raise TypeError(
                 "ChargeDensity blocks must be BlockHandle values; names/strings are not "
-                "references (got %r)" % type(invalid[0]).__name__)
+                "references (got %r)" % type(invalid[0]).__name__
+            )
         object.__setattr__(self, "blocks", refs)
 
     @classmethod
@@ -64,25 +67,38 @@ class ChargeDensity(_RHS):
 
         Accepts block handles either as varargs or as a single iterable.
         """
-        if len(blocks) == 1 and not hasattr(blocks[0], "qualified_id") \
-                and hasattr(blocks[0], "__iter__"):
+        if (
+            len(blocks) == 1
+            and not hasattr(blocks[0], "qualified_id")
+            and hasattr(blocks[0], "__iter__")
+        ):
             blocks = tuple(blocks[0])
         return cls(blocks=blocks)
 
     def options(self) -> dict:
-        return {"rhs": "charge_density",
-                "blocks": [reference_label(block, where="ChargeDensity block")
-                           for block in self.blocks]}
+        return {
+            "rhs": "charge_density",
+            "blocks": [
+                reference_label(block, where="ChargeDensity block") for block in self.blocks
+            ],
+        }
 
     def requirements(self) -> Any:
-        return RequirementSet({
-            "blocks": [reference_label(block, where="ChargeDensity block")
-                       for block in self.blocks]})
+        return RequirementSet(
+            {
+                "blocks": [
+                    reference_label(block, where="ChargeDensity block") for block in self.blocks
+                ]
+            }
+        )
 
     def resolve_references(self, resolver: Any) -> ChargeDensity:
-        return type(self)(blocks=tuple(
-            resolve_handle(block, resolver, where="ChargeDensity block")
-            for block in self.blocks))
+        return type(self)(
+            blocks=tuple(
+                resolve_handle(block, resolver, where="ChargeDensity block")
+                for block in self.blocks
+            )
+        )
 
     def declaration_references(self) -> tuple[Any, ...]:
         return self.blocks
@@ -97,10 +113,12 @@ class FixedSource(_RHS):
 
     def __init__(self, aux_field: Any) -> None:
         from pops.model import Handle
+
         if not isinstance(aux_field, Handle):
             raise TypeError(
                 "FixedSource aux_field must be a declaration Handle; names/strings are not "
-                "references (got %r)" % type(aux_field).__name__)
+                "references (got %r)" % type(aux_field).__name__
+            )
         object.__setattr__(self, "aux_field", aux_field)
 
     @property
@@ -108,17 +126,18 @@ class FixedSource(_RHS):
         return self.aux_field.local_id
 
     def options(self) -> dict:
-        return {"rhs": "fixed_source",
-                "aux_field": reference_label(
-                    self.aux_field, where="FixedSource aux_field")}
+        return {
+            "rhs": "fixed_source",
+            "aux_field": reference_label(self.aux_field, where="FixedSource aux_field"),
+        }
 
     def requirements(self) -> Any:
-        return RequirementSet({"aux_field": reference_label(
-            self.aux_field, where="FixedSource aux_field")})
+        return RequirementSet(
+            {"aux_field": reference_label(self.aux_field, where="FixedSource aux_field")}
+        )
 
     def resolve_references(self, resolver: Any) -> FixedSource:
-        return type(self)(resolve_handle(
-            self.aux_field, resolver, where="FixedSource aux_field"))
+        return type(self)(resolve_handle(self.aux_field, resolver, where="FixedSource aux_field"))
 
     def declaration_references(self) -> tuple[Any, ...]:
         return (self.aux_field,)
@@ -142,17 +161,22 @@ class SumRHS(_RHS):
             else:
                 raise TypeError(
                     "SumRHS: every term must be a typed pops.fields.rhs descriptor "
-                    "(ChargeDensity / FixedSource / SumRHS); got %r" % (type(term).__name__,))
+                    "(ChargeDensity / FixedSource / SumRHS); got %r" % (type(term).__name__,)
+                )
         if not flat:
             raise ValueError("SumRHS: needs at least one RHS term")
         object.__setattr__(self, "terms", tuple(flat))
 
     def options(self) -> dict:
-        return {"rhs": "sum", "n_terms": len(self.terms),
-                "terms": [t.options().get("rhs") for t in self.terms]}
+        return {
+            "rhs": "sum",
+            "n_terms": len(self.terms),
+            "terms": [t.options().get("rhs") for t in self.terms],
+        }
 
     def requirements(self) -> Any:
         from pops.descriptors_report import RequirementSet
+
         blocks, aux = [], []
         for term in self.terms:
             req = term.requirements().to_dict()
@@ -171,9 +195,8 @@ class SumRHS(_RHS):
 
     def declaration_references(self) -> tuple[Any, ...]:
         return tuple(
-            reference
-            for term in self.terms
-            for reference in term.declaration_references())
+            reference for term in self.terms for reference in term.declaration_references()
+        )
 
 
 __all__ = ["ChargeDensity", "FixedSource", "SumRHS"]
