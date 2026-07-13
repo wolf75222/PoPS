@@ -368,6 +368,9 @@ jobs:
           pip install --upgrade pip pytest pyright numpy
           python3 -m pytest tests/python/architecture -q
 
+      - name: M2 temporal gate manifest
+        run: python3 scripts/run_m2_gate.py --check-only
+
       - name: Pyright
         run: pyright
 
