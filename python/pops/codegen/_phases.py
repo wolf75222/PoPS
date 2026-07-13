@@ -309,14 +309,10 @@ def install(plan: Any) -> Any:
 
 
 def _resolve_problem_model(model: Any) -> Any:
-    from pops.model import Module
-    from pops.physics import Model as PhysicsModel
+    from pops.codegen._compiler_lowering import require_compiler_lowering
 
-    if isinstance(model, (Module, PhysicsModel)):
-        return model
-    raise TypeError(
-        "Case block physics must be a pops.physics.Model or pops.model.Module, got %s"
-        % type(model).__name__)
+    require_compiler_lowering(model)
+    return model
 
 
 __all__ = ["bind", "compile", "install", "resolve", "validate"]

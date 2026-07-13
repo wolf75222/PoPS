@@ -103,6 +103,22 @@ Les responsabilités sont strictes :
 `pops.*` fournit les protocoles de construction. `pops.lib.*` fournit des implémentations et
 compositions configurables qui retournent ces mêmes types publics.
 
+### 3.1 Fournisseur de modèle pour la compilation
+
+Un bloc de `Case` entre en compilation par le protocole public
+`pops.codegen.CompilerLowerable`. Son unique méthode
+`__pops_compiler_lowering__()` retourne un `pops.codegen.CompilerLowering` exact avec :
+
+- `emit_model`, l'émetteur compilable qui valide ses dépendances par `check()` ;
+- `source_module`, un `pops.model.Module` exact, autorité canonique de l'IR et de son identité ;
+- `facade`, la valeur d'authoring à citer dans les diagnostics.
+
+`pops.model.Module` et les façades physiques implémentent ce protocole. Un fournisseur tiers le
+fait de la même manière : il délègue son IR à un `Module` et son émission à un émetteur explicite.
+Les phases centrales ne sélectionnent jamais un fournisseur par `isinstance` sur sa classe ; une
+méthode absente, un retour non exact, un émetteur incomplet ou une autre autorité IR sont refusés
+avant la compilation. Il n'existe pas de fallback par attributs `check` ou `module`.
+
 ## 4. Modèle de données Python
 
 ### 4.1 Handle et Expr sont deux familles distinctes

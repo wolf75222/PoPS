@@ -359,46 +359,31 @@ def lower_and_validate(model: Any, facade: Any = None, state_space: Any = None) 
 
     Validates @p model ONCE and returns ``(emit_model, source_module)``:
 
-      - ``emit_model`` is the model the kernel emitters consume: a raw :class:`pops.model.Module` is
-        lowered to a dsl model via :func:`_module_to_model` (whose embedded checks ARE the validation);
-        a dsl / physics ``Model`` is consumed as-is (byte-identical emit) after its ``check()``
-        dependency validation runs -- the ONE validation, replacing the removed divergent
-        ``model.check()`` compile step.
-      - ``source_module`` is the operator-first :class:`pops.model.Module` -- the canonical compile-IR
-        authority: the raw Module itself, or the dsl / physics model's ``.module`` view. It is what
-        ``compiled.inspect()`` carries as the lowered-module trace and what ``module_hash`` drifts
-        against. ``None`` only for a bare dsl model with no backing Module.
+      - every model provider supplies :class:`CompilerLowering`; its ``emit_model`` is the model the
+        kernel emitters consume and its ``source_module`` is the exact operator-first canonical IR.
+        ``pops.model.Module`` is itself such a provider and adapts to a dsl emitter; the physics
+        facades return their existing emitter directly.
+      - ``source_module`` is the operator-first :class:`pops.model.Module` authority carried by
+        ``compiled.inspect()`` and used for ``module_hash`` drift detection.
 
     @p facade is the physics Model the user wrote (for the error remap); pass it when @p model was
     resolved FROM a facade so a lowering error cites the user's handles (:func:`remap_lowering_error`).
     A lowering / validation ``ValueError`` is remapped through @p facade and re-raised.
     """
+    diagnostic_facade = facade
     try:
-        from pops import model as _model_pkg
-    except ImportError:
-        _model_pkg = None
-    try:
-        if _model_pkg is not None and isinstance(model, _model_pkg.Module):
-            source_module = model
-            emit_model = _module_to_model(model, state_space=state_space)
-            return emit_model, source_module
-        from pops.codegen._compiler_lowering import CompilerLowerable, require_compiler_lowering
+        from pops.codegen._compiler_lowering import require_compiler_lowering
 
-        if isinstance(model, CompilerLowerable):
-            lowering = require_compiler_lowering(model)
-            states = lowering.source_module.state_spaces()
-            if len(states) > 1:
-                emit_model = _module_to_model(
-                    lowering.source_module, state_space=state_space)
-                emit_model.check()
-                return emit_model, lowering.source_module
-            lowering.emit_model.check()
-            return lowering.emit_model, lowering.source_module
-        # A dsl / physics Model: the ONE dependency validation is its own check() (fail-loud); the
-        # operator-first Module view is the canonical trace authority.
-        if model is not None and hasattr(model, "check"):
-            model.check()
-        source_module = getattr(model, "module", None)
-        return model, source_module
+        lowering = require_compiler_lowering(model)
+        if diagnostic_facade is None:
+            diagnostic_facade = lowering.facade
+        states = lowering.source_module.state_spaces()
+        if len(states) > 1:
+            emit_model = _module_to_model(
+                lowering.source_module, state_space=state_space)
+            emit_model.check()
+            return emit_model, lowering.source_module
+        lowering.emit_model.check()
+        return lowering.emit_model, lowering.source_module
     except ValueError as exc:
-        remap_lowering_error(exc, facade)
+        remap_lowering_error(exc, diagnostic_facade)

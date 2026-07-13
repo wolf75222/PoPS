@@ -353,6 +353,17 @@ class Module(ModuleFreezable):
         from pops.codegen._compile import _module_to_model
         return _module_to_model(self)
 
+    def __pops_compiler_lowering__(self) -> Any:
+        """Provide the explicit compiler-provider boundary for this canonical IR."""
+        from pops.codegen import CompilerLowering
+        from pops.codegen.module_lowering import _module_to_model
+
+        return CompilerLowering(
+            emit_model=_module_to_model(self),
+            source_module=self,
+            facade=self,
+        )
+
     # --- introspection (Spec 2, S2-5) ---
     def state_spaces(self) -> Any:
         return dict(self._state_spaces)

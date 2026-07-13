@@ -4,14 +4,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
+from pops.model import Module
+
+
+@runtime_checkable
+class _CompilerEmitter(Protocol):
+    """Minimal executable half of a compiler lowering."""
+
+    def check(self) -> object: ...
+
 
 @dataclass(frozen=True, slots=True)
 class CompilerLowering:
     """One total lowering: executable emitter plus its canonical IR authority."""
 
-    emit_model: Any
-    source_module: Any
-    facade: Any
+    emit_model: _CompilerEmitter
+    source_module: Module
+    facade: object
 
 
 @runtime_checkable
@@ -31,8 +40,10 @@ def require_compiler_lowering(value: Any) -> CompilerLowering:
     lowering = value.__pops_compiler_lowering__()
     if type(lowering) is not CompilerLowering:
         raise TypeError("__pops_compiler_lowering__() must return an exact CompilerLowering")
-    if lowering.emit_model is None or lowering.source_module is None:
-        raise ValueError("CompilerLowering requires an emitter and a source Module")
+    if not isinstance(lowering.emit_model, _CompilerEmitter):
+        raise TypeError("CompilerLowering.emit_model must implement check()")
+    if type(lowering.source_module) is not Module:
+        raise TypeError("CompilerLowering.source_module must be an exact pops.model.Module")
     return lowering
 
 

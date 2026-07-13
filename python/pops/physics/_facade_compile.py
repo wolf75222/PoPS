@@ -22,6 +22,16 @@ else:
 class _FacadeCompileMixin(_FacadeModel):
     """Model-hash + compile half of the PDE facade (lazy codegen)."""
 
+    def __pops_compiler_lowering__(self) -> Any:
+        """Provide the explicit compiler-provider boundary for this PDE facade."""
+        from pops.codegen import CompilerLowering
+
+        return CompilerLowering(
+            emit_model=self,
+            source_module=self.module,
+            facade=self,
+        )
+
     def _model_hash(self) -> Any:
         """Stable hash of the model: formulas (flux/eig/source/elliptic/primitives/cons_from) + roles +
         n_aux + NAMED params (m.params). Used to identify/reuse an already-compiled .so (cache key)
