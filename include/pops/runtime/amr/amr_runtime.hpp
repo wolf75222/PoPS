@@ -1061,12 +1061,12 @@ class AmrRuntime {
   /// predicate, D1) + the phi tags (on |grad phi|, D4), followed by ONE SINGLE Berger-Rigoutsos
   /// clustering -> ONE SINGLE new fine layout applied to ALL blocks (including those held by their
   /// stride, D3) AND to the shared aux. Maintains the shared-layout PRECONDITION (same_layout_or_throw)
-  /// after the regrid. v1 with 2 LEVELS (coarse + 1 fine, D5): no-op if nlev < 2. No-op (grid
-  /// unchanged) if the union of the tags is empty (nothing to refine).
+  /// after the regrid. For an N-level hierarchy, only the finest level is rebuilt from tags on its
+  /// immediate parent; no-op if nlev < 2 or if the union of tags is empty.
   void regrid() {
     if (nlev_ < 2)
-      return;  // 2 levels required (D5): nothing to re-grid in single-level
-    const int fk = nlev_ - 1, pk = fk - 1;  // fine + its parent (pk == 0 in v1 with 2 levels)
+      return;  // nothing to re-grid in a single-level hierarchy
+    const int fk = nlev_ - 1, pk = fk - 1;  // finest level + its immediate parent
 
     // AMR PROFILING (Spec 5 criterion 43): time the WHOLE regrid attempt (tag + cluster + prolong +
     // re-solve) into the "regrid" scope. RAII -> the scope covers EVERY early-return path below (empty
@@ -1116,9 +1116,8 @@ class AmrRuntime {
     }
 
     // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
-    // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for distributed
-    // pk==0: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank (otherwise MPI
-    // desync).
+    // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
+    // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
     auto [fb, dmap] = regrid_compute_fine_layout(std::move(grown), pdom, pk, regrid_margin_,
                                                  replicated_coarse_, cluster_);  // ADC-616 params
 #ifdef POPS_HAS_MPI
@@ -1570,15 +1569,17 @@ class AmrRuntime {
 
   int n_patches() const {
     const auto& L = *blocks_[0].levels;
-    return L.size() >= 2 ? static_cast<int>(L[1].U.box_array().size()) : 0;
+    int count = 0;
+    for (std::size_t k = 1; k < L.size(); ++k)
+      count += L[k].U.box_array().size();
+    return count;
   }
 
   // Index-space signatures of the fine patches (level + inclusive lo/hi corners), for ALL fine levels.
   // Read-only of the GLOBAL BoxArray (all boxes/all ranks) already stored -> rank-independent, zero
   // communication, NO hot-path cost (query between steps). Mirror of n_patches(): the same box_array()
   // that gives the COUNT gives the BOXES. Block 0 representative (SHARED layout, same_layout_or_throw
-  // guard). Loop k = 1..nlev-1: a single fine level today (ratio 2), correct if a future adds levels
-  // (the level field disambiguates the spacing dx = L / (n << level) Python-side).
+  // guard). Loop k = 1..nlev-1; the level field disambiguates the ratio-2 spacing.
   std::vector<PatchBox> patch_boxes() const {
     const auto& L = *blocks_[0].levels;
     std::vector<PatchBox> out;

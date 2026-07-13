@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from pops.identity import Identity, make_identity
-from pops.model import Handle
-from pops.time import AcceptedStep, EventHandle, Schedule
+
+from ._contracts import canonical_handle, event_data, schedule_data
 
 
 _SCHEMA_VERSION = 1
@@ -18,13 +18,8 @@ class HierarchyPhaseError(ValueError):
     """A runtime hierarchy effect was requested outside an accepted commit phase."""
 
 
-def _handle(value: Any, *, where: str, kind: str) -> Handle:
-    if not isinstance(value, Handle) or not value.is_resolved:
-        raise TypeError("%s requires a canonical owner-qualified Handle" % where)
-    if value.kind != kind:
-        raise TypeError("%s requires Handle.kind=%r, got %r" % (where, kind, value.kind))
-    value.canonical_identity()
-    return value
+def _handle(value: Any, *, where: str, kind: str) -> Any:
+    return canonical_handle(value, where=where, kinds=kind)
 
 
 def _positive_int(value: Any, *, where: str, minimum: int = 1) -> int:
@@ -99,7 +94,7 @@ class CanonicalOptions:
 
 @dataclass(frozen=True, slots=True)
 class ClusteringPolicy:
-    provider: Handle
+    provider: Any
     options: CanonicalOptions
     __pops_ir_immutable__ = True
 
@@ -114,7 +109,7 @@ class ClusteringPolicy:
 
 @dataclass(frozen=True, slots=True)
 class PatchGenerationPolicy:
-    provider: Handle
+    provider: Any
     options: CanonicalOptions
     __pops_ir_immutable__ = True
 
@@ -133,7 +128,7 @@ class PatchGenerationPolicy:
 
 @dataclass(frozen=True, slots=True)
 class LoadBalancePolicy:
-    provider: Handle
+    provider: Any
     options: CanonicalOptions
     __pops_ir_immutable__ = True
 
@@ -150,7 +145,7 @@ class LoadBalancePolicy:
 class NestingRequirementSource:
     """Canonical provider manifest contributing a derived nesting need."""
 
-    provider: Handle
+    provider: Any
     minimum_buffer: tuple[int, ...]
     minimum_lookahead: int
     __pops_ir_immutable__ = True
@@ -162,13 +157,11 @@ class NestingRequirementSource:
             "amr_reflux_requirement",
             "amr_boundary_requirement",
         }
-        if not isinstance(self.provider, Handle) or not self.provider.is_resolved:
-            raise TypeError("NestingRequirementSource.provider must be a canonical Handle")
-        if self.provider.kind not in allowed:
-            raise TypeError(
-                "NestingRequirementSource provider has unsupported kind %r" % self.provider.kind
-            )
-        self.provider.canonical_identity()
+        canonical_handle(
+            self.provider,
+            where="NestingRequirementSource.provider",
+            kinds=frozenset(allowed),
+        )
         object.__setattr__(
             self, "minimum_buffer", _axes(self.minimum_buffer, where="minimum_buffer", minimum=0)
         )
@@ -292,24 +285,20 @@ class LevelTransition:
 class RegridSchedule:
     """A Program-owned regrid cadence bound to committed AcceptedStep time."""
 
-    schedule: Schedule
-    due_event: EventHandle
+    schedule: Any
+    due_event: Any
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.schedule) is not Schedule:
-            raise TypeError("RegridSchedule.schedule must be an exact Schedule")
-        if type(self.schedule.domain) is not AcceptedStep:
+        data = schedule_data(self.schedule, where="RegridSchedule.schedule")
+        if data["domain"].get("type") != "accepted_step":
             raise ValueError("regrid schedules must use the AcceptedStep domain")
-        if self.schedule.off is not None:
-            raise ValueError("regrid schedules are event cadences and cannot define an off policy")
-        if self.schedule.clock.owner is None:
-            raise ValueError("regrid schedule clock must be owner-qualified")
-        if type(self.due_event) is not EventHandle:
-            raise TypeError("RegridSchedule.due_event must be an exact EventHandle")
+        if data["trigger"].get("type") not in {"always", "every"}:
+            raise ValueError("regrid schedules support only Always or Every accepted-step triggers")
+        event_data(self.due_event, where="RegridSchedule.due_event")
         if self.due_event.owner != self.schedule.clock.owner:
             raise ValueError("regrid due event and schedule clock must share one Program owner")
-        _freeze_data(self.schedule.to_data(), where="RegridSchedule.schedule")
+        _freeze_data(data, where="RegridSchedule.schedule")
 
     @property
     def identity(self) -> Identity:

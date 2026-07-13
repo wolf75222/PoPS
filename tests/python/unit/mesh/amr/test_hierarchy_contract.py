@@ -23,7 +23,7 @@ from pops.mesh.amr import (
     resolve_hierarchy,
 )
 from pops.model import Handle, OwnerPath
-from pops.time import Attempt, Clock, EventHandle, Every, Schedule, every
+from pops.time import Attempt, Clock, EventHandle, Every, Schedule, every, when
 
 
 OWNER = OwnerPath.shared("amr-contract-tests")
@@ -209,6 +209,8 @@ def test_resolution_is_pre_runtime_and_requires_a_synchronized_dynamic_schedule(
     attempt_schedule = Schedule(Every(Attempt(_clock()), 4))
     with pytest.raises(ValueError, match="AcceptedStep"):
         RegridSchedule(attempt_schedule, _due_event())
+    with pytest.raises(ValueError, match="Always or Every"):
+        RegridSchedule(when(True, clock=_clock()), _due_event())
     with pytest.raises(ValueError, match="one Program owner"):
         RegridSchedule(
             every(4, clock=_clock()), EventHandle(OwnerPath.shared("other-owner"), "due")

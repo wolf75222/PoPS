@@ -440,7 +440,10 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   h.base.mass = [cpl] { return static_cast<double>(cpl->mass()); };
   h.base.n_patches = [cpl] {
     auto& L = cpl->levels();
-    return L.size() >= 2 ? static_cast<int>(L[1].U.box_array().size()) : 0;
+    int count = 0;
+    for (std::size_t k = 1; k < L.size(); ++k)
+      count += L[k].U.box_array().size();
+    return count;
   };
   // Index-space signatures of the fine patches (mono-block counterpart of AmrRuntime::patch_boxes).
   // Captures the SAME cpl as the other hooks (no new lifetime concern), reads the already materialized
@@ -502,10 +505,11 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   return h;
 }
 
-/// SHARED layout of a multi-block AMR hierarchy (PR1 capstone), frozen at construction. All
+/// SHARED layout of a multi-block AMR hierarchy, frozen at construction. All
 /// blocks allocate their levels on EXACTLY this layout (same BoxArray + DistributionMapping +
-/// dx/dy per level) -> same_layout_or_throw passes by construction. PR1: coarse + ONE central FIXED
-/// fine patch (placement by union of tags is a later PR). We expose the BoxArrays /
+/// dx/dy per level) -> same_layout_or_throw passes by construction. The default facade preserves its
+/// historical coarse + one central fine seed; the explicit bootstrap can carry any supported count.
+/// We expose the BoxArrays /
 /// dmaps / dx/dy per level, the coarse grid (Geometry + ba) for the Poisson, and the ownership
 /// policy. build_amr_block allocates the block on top of it.
 struct SharedAmrLayout {
@@ -524,54 +528,59 @@ struct SharedAmrLayout {
   int nlev() const { return static_cast<int>(ba.size()); }
 };
 
-/// Builds the SHARED layout (PR1): coarse (per the ownership policy) + ONE central FIXED
-/// fine patch (the seed of build_amr_compiled, BEFORE its regrid). Identical to the geometry of the
-/// mono-block path, but WITHOUT the initial regrid (multi-block PR1 = frozen hierarchy). All blocks
-/// then settle onto it via build_amr_block.
-inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool single_level = false) {
+/// Builds a ratio-2 shared hierarchy with an explicit level count.  Every fine seed is the central
+/// half of its parent patch, refined into the child's index space.  This is the native bootstrap for
+/// already N-level-generic transport/reflux/runtime kernels; public hierarchy lowering owns the
+/// eventual authored BoxArrays and may replace these deterministic seeds before execution.
+inline SharedAmrLayout make_shared_amr_layout_levels(const AmrBuildParams& bp, int level_count) {
+  if (level_count < 1)
+    throw std::runtime_error(
+        "make_shared_amr_layout_levels: level_count must be >= 1");
   SharedAmrLayout S;
   S.geom = Geometry{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
   S.n = bp.mesh.n;
   S.replicated_coarse = !bp.mesh.distribute_coarse;
   S.poisson_bc = bp.poisson.bc;
   S.wall = bp.poisson.wall;
-  const double dxc = bp.mesh.L / bp.mesh.n, dxf = dxc / 2;
+  const double dxc = bp.mesh.L / bp.mesh.n;
   const auto [bac, dmc] =
       detail::coupler_make_coarse_layout(bp.mesh.n, bp.mesh.distribute_coarse,
                                          bp.mesh.coarse_max_grid);
   S.ba_coarse = bac;
   S.dm_coarse = dmc;
-  // SINGLE-LEVEL layout (epic ADC-508, compiled-Program AMR driver opt-in): a coarse-only hierarchy,
-  // no fine seed. Used when a compiled time Program is installed on a SINGLE block with no refinement
-  // (the AmrProgramContext driver then runs one level), which makes a single-level AMR Program
-  // BIT-IDENTICAL to the same Program on System (the must-pass parity gate, 4.1a). It does NOT touch
-  // the native multi-block path (single_level defaults false there -> the historical 2-level seed).
-  if (single_level) {
-    S.ba = {bac};
-    S.dm = {dmc};
-    S.dx = {dxc};
-    S.dy = {dxc};
-    return S;
+  S.ba = {bac};
+  S.dm = {dmc};
+  S.dx = {dxc};
+  S.dy = {dxc};
+  Box2D parent_seed = S.geom.domain;
+  double spacing = dxc;
+  for (int level = 1; level < level_count; ++level) {
+    const int nx = parent_seed.nx(), ny = parent_seed.ny();
+    if (nx < 4 || ny < 4)
+      throw std::runtime_error(
+          "make_shared_amr_layout_levels: cannot create level " + std::to_string(level) +
+          " because the parent seed is smaller than 4 cells per axis");
+    const Box2D selected{{parent_seed.lo[0] + nx / 4, parent_seed.lo[1] + ny / 4},
+                         {parent_seed.lo[0] + (3 * nx) / 4 - 1,
+                          parent_seed.lo[1] + (3 * ny) / 4 - 1}};
+    const Box2D fine_seed = selected.refine(kAmrRefRatio);
+    BoxArray fine_ba(std::vector<Box2D>{fine_seed});
+    DistributionMapping fine_dm(fine_ba.size(), n_ranks());
+    spacing /= static_cast<double>(kAmrRefRatio);
+    S.ba.push_back(fine_ba);
+    S.dm.push_back(fine_dm);
+    S.dx.push_back(spacing);
+    S.dy.push_back(spacing);
+    parent_seed = fine_seed;
   }
-  // Central FIXED fine patch: same signatures as build_amr_compiled (coarse cells
-  // [n/4 .. 3n/4-1]^2, refined x2). DISTRIBUTED round-robin DistributionMapping(nfine, n_ranks()),
-  // EXACTLY like the regrid of the mono-block path (amr_regrid_finest): the fine patches are
-  // distributed over the ranks (one per GPU). This is ESSENTIAL under MPI: on the REPLICATED coarse,
-  // if the fine were placed on the same replicated dmap ({my_rank()}), EACH rank would hold a copy
-  // of the fine box and the reflux (all_reduce_sum_inplace of the flux registers) would sum the SAME
-  // contribution n_ranks() times -> mass over-counted (grows with np). In serial (np=1) the round-robin
-  // dmap places the box on rank 0, identical to {my_rank()}: bit-identical.
-  const int I0 = bp.mesh.n / 4, I1 = 3 * bp.mesh.n / 4 - 1, J0 = bp.mesh.n / 4,
-            J1 = 3 * bp.mesh.n / 4 - 1;
-  const Box2D fb{{2 * I0, 2 * J0}, {2 * I1 + 1, 2 * J1 + 1}};
-  BoxArray baf(std::vector<Box2D>{fb});
-  DistributionMapping dmf(baf.size(),
-                          n_ranks());  // fine distributed round-robin (one patch per rank)
-  S.ba = {bac, baf};
-  S.dm = {dmc, dmf};
-  S.dx = {dxc, dxf};
-  S.dy = {dxc, dxf};
   return S;
+}
+
+/// Historical facade: one level for the Program parity route, otherwise the unchanged two-level
+/// seed.  Keeping this wrapper preserves every existing caller while the final hierarchy lowering
+/// adopts make_shared_amr_layout_levels with its resolved transition count.
+inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool single_level = false) {
+  return make_shared_amr_layout_levels(bp, single_level ? 1 : 2);
 }
 
 /// Builds ONE type-erased AMR block (AmrRuntimeBlock) on the SHARED layout @p S, for a composite
@@ -624,7 +633,8 @@ AmrRuntimeBlock build_amr_block(
   else if (has_density)
     detail::coupler_write_coarse((*levels)[0].U, density, S.n, nc, gamma);
   for (int k = 1; k < nlev; ++k)
-    detail::coupler_inject_coarse_to_fine_mb((*levels)[0].U, (*levels)[k].U, S.replicated_coarse);
+    detail::coupler_inject_coarse_to_fine_mb((*levels)[k - 1].U, (*levels)[k].U,
+                                              (k == 1) && S.replicated_coarse);
 
   AmrRuntimeBlock b;
   b.name = name;

@@ -6,21 +6,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from pops.identity import Identity
-from pops.model import Handle
-from pops.time import Always, EventHandle, Every, StepTransactionReport, TimePoint
 
+from ._contracts import canonical_handle, event_data, schedule_data, time_point_data, transaction_data
 from .hierarchy import FrozenHierarchy, HierarchyPhaseError, RegridSchedule
 from .hierarchy_resolution import ResolvedHierarchy
 
 
-def _events(values: Any, *, where: str, kind: str) -> tuple[Handle, ...]:
+def _events(values: Any, *, where: str, kind: str) -> tuple[Any, ...]:
     result = tuple(values)
     for value in result:
-        if not isinstance(value, Handle) or not value.is_resolved:
-            raise TypeError("%s requires canonical owner-qualified Handle values" % where)
-        if value.kind != kind:
-            raise TypeError("%s requires Handle.kind=%r" % (where, kind))
-        value.canonical_identity()
+        canonical_handle(value, where=where, kinds=kind)
     if len(result) != len(set(result)):
         raise ValueError("%s event handles must be unique" % where)
     return result
@@ -30,9 +25,9 @@ def _events(values: Any, *, where: str, kind: str) -> tuple[Handle, ...]:
 class HierarchyLifecycleEvents:
     """Exact patch create/destroy/rebalance effects produced by one regrid."""
 
-    create: tuple[Handle, ...] = ()
-    destroy: tuple[Handle, ...] = ()
-    rebalance: tuple[Handle, ...] = ()
+    create: tuple[Any, ...] = ()
+    destroy: tuple[Any, ...] = ()
+    rebalance: tuple[Any, ...] = ()
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -72,22 +67,20 @@ class HierarchyLifecycleEvents:
 class RegridDueToken:
     """Program-produced proof that one exact regrid schedule is due at an accepted cycle."""
 
-    event: EventHandle
+    event: Any
     schedule_identity: Identity
-    point: TimePoint
+    point: Any
     accepted_cycle: int
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.event) is not EventHandle:
-            raise TypeError("RegridDueToken.event must be an exact EventHandle")
+        event_data(self.event, where="RegridDueToken.event")
         if (
             not isinstance(self.schedule_identity, Identity)
             or self.schedule_identity.domain != "amr-regrid-schedule"
         ):
             raise TypeError("RegridDueToken.schedule_identity must identify an AMR regrid schedule")
-        if type(self.point) is not TimePoint:
-            raise TypeError("RegridDueToken.point must be an exact TimePoint")
+        time_point_data(self.point, where="RegridDueToken.point")
         if (
             isinstance(self.accepted_cycle, bool)
             or not isinstance(self.accepted_cycle, int)
@@ -170,20 +163,18 @@ class RegridTransactionGate:
     def evaluate(
         self,
         request: RegridRequest | None,
-        transaction: StepTransactionReport,
+        transaction: Any,
         *,
-        at: TimePoint,
+        at: Any,
     ) -> RegridTransactionDecision:
-        if type(transaction) is not StepTransactionReport:
-            raise TypeError("regrid gate transaction must be StepTransactionReport")
+        transaction_data(transaction, where="regrid gate transaction")
         # This guard intentionally precedes request inspection: rejected/failed attempts cannot
         # even plan a regrid, including when their provisional request is malformed or stale.
         if transaction.status != "accepted":
             return RegridTransactionDecision(None, None)
         if transaction.phase != "commit":
             raise HierarchyPhaseError("accepted regrid evaluation requires commit phase")
-        if type(at) is not TimePoint:
-            raise TypeError("accepted regrid evaluation requires an exact TimePoint")
+        time_point_data(at, where="accepted regrid evaluation")
         schedule = self.hierarchy.plan.regrid
         if type(schedule) is FrozenHierarchy:
             if request is not None:
@@ -204,11 +195,11 @@ class RegridTransactionGate:
             raise ValueError("RegridRequest point is not synchronized with the regrid clock")
         if due.point != at:
             raise ValueError("RegridDueToken is stale for the current commit point")
-        trigger = schedule.schedule.trigger
+        trigger = schedule_data(schedule.schedule, where="resolved regrid schedule")["trigger"]
         decision = RegridTransactionDecision(request.lifecycle, request.lifecycle)
-        if type(trigger) is Always:
+        if trigger["type"] == "always":
             return decision
-        if type(trigger) is Every and at.step % trigger.n != 0:
+        if trigger["type"] == "every" and at.step % trigger["n"] != 0:
             raise ValueError("RegridDueToken is not due at the current Every cadence")
         return decision
 

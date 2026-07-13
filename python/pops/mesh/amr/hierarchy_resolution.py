@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from pops.identity import Identity, make_identity
-from pops.model import Handle
-from pops.time import Clock
+
+from ._contracts import clock_data
 
 from .hierarchy import (
     _SCHEMA_VERSION,
@@ -29,7 +29,7 @@ class HierarchyCapabilityError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class HierarchyProviderCapabilities:
-    provider: Handle
+    provider: Any
     supported_dimensions: tuple[int, ...]
     supports_anisotropic_ratio: bool
     max_materialized_level_count: int
@@ -78,12 +78,11 @@ class HierarchyProviderCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class HierarchyResolutionContext:
-    clock: Clock
+    clock: Any
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
-        if type(self.clock) is not Clock or self.clock.owner is None:
-            raise TypeError("HierarchyResolutionContext.clock must be owner-qualified")
+        clock_data(self.clock, where="HierarchyResolutionContext.clock")
 
 
 @dataclass(frozen=True, slots=True)

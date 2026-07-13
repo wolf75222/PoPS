@@ -5,7 +5,8 @@
 // hierarchie partagee est re-grillee a partir de l'UNION (OU cellule a cellule) des tags de TOUS les
 // blocs (predicat PAR BLOC, D1) + des tags de phi (sur |grad phi|, D4), suivie d'UN clustering
 // Berger-Rigoutsos -> UN nouveau layout fin applique a TOUS les blocs (y compris ceux tenus par leur
-// stride, D3) ET a l'aux partage, en maintenant same_layout_or_throw apres regrid. v1 a 2 niveaux (D5).
+// stride, D3) ET a l'aux partage, en maintenant same_layout_or_throw apres regrid. Le meme moteur est
+// verrouille ici sur trois niveaux : transport, regrid du niveau le plus fin et rollback transactionnel.
 //
 // Ce que ce test verrouille (les cas demandes a-e) :
 //   (a) HIERARCHIE QUI EVOLUE : avec regrid_every > 0, le layout fin CHANGE quand la structure taguee
@@ -109,6 +110,22 @@ static bool all_finite(const std::vector<double>& v) {
   return true;
 }
 
+static bool all_level_states_finite(AmrRuntime& rt) {
+  device_fence();
+  for (std::size_t block = 0; block < rt.n_blocks(); ++block)
+    for (const AmrLevelMP& level : rt.levels(block))
+      for (int li = 0; li < level.U.local_size(); ++li) {
+        const ConstArray4 state = level.U.fab(li).const_array();
+        const Box2D valid = level.U.box(li);
+        for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+          for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+            for (int component = 0; component < level.U.ncomp(); ++component)
+              if (!std::isfinite(state(i, j, component)))
+                return false;
+      }
+  return true;
+}
+
 template <class F>
 static bool raises(F&& f) {
   try {
@@ -177,12 +194,89 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
                     S.replicated_coarse, S.wall);
 }
 
+static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& rho) {
+  AmrBuildParams bp;
+  bp.mesh.n = N;
+  bp.mesh.L = 1.0;
+  bp.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, 3);
+  std::vector<AmrRuntimeBlock> blocks;
+  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto m) {
+    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "positive", rho,
+                                                /*has_density=*/true, 1.4, 1, false, false, 1));
+  });
+  detail::dispatch_model(exb_charge(-1.0, 1.0), [&](auto m) {
+    blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "negative", rho,
+                                                /*has_density=*/true, 1.4, 1, false, false, 1));
+  });
+  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+                    S.replicated_coarse, S.wall);
+}
+
+static void check_three_level_bootstrap_step_regrid_and_rollback() {
+  const int N = 32;
+  AmrRuntime rt =
+      make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.levels(0).size(), 3u);
+  EXPECT_EQ(rt.patch_boxes().size(), 2u);
+  EXPECT_EQ(rt.n_patches(), 2) << "all fine levels contribute to the patch count";
+  EXPECT_TRUE(same_box_list(rt.levels(0)[1].U.box_array().boxes(),
+                            rt.levels(1)[1].U.box_array().boxes()));
+  EXPECT_TRUE(same_box_list(rt.levels(0)[2].U.box_array().boxes(),
+                            rt.levels(1)[2].U.box_array().boxes()));
+  {
+    const MultiFab& parent = rt.levels(0)[1].U;
+    const MultiFab& child = rt.levels(0)[2].U;
+    const Box2D fine = child.box(0);
+    const int i = fine.lo[0], j = fine.lo[1];
+    const int ci = coarsen_index(i, kAmrRefRatio), cj = coarsen_index(j, kAmrRefRatio);
+    const int parent_box = mf_find_box(parent, ci, cj);
+    ASSERT_GE(parent_box, 0);
+    EXPECT_EQ(child.fab(0)(i, j, 0), parent.fab(parent_box)(ci, cj, 0))
+        << "level-2 initialization is injected from its immediate parent";
+  }
+
+  rt.set_regrid(/*every=*/1, /*grow=*/2, /*margin=*/2);
+  rt.set_block_tag_predicate(0, TagDensityAbove{Real(1.25)});
+  rt.set_block_tag_predicate(1, TagDensityAbove{Real(1.25)});
+  rt.step(Real(1e-4));  // macro step zero never regrids
+  EXPECT_EQ(rt.regrid_count(), 0);
+
+  const AmrRuntime::StepSnapshot accepted = rt.step_snapshot();
+  const std::vector<Box2D> accepted_finest = rt.levels(0)[2].U.box_array().boxes();
+  rt.step(Real(1e-4));  // regrids the finest level from tags on its level-1 parent
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.regrid_count(), 1);
+  EXPECT_FALSE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
+  EXPECT_TRUE(all_level_states_finite(rt));
+
+  // This is the exact engine operation the AmrSystem accepted-attempt coordinator invokes after a
+  // StepAttemptRejected.  Topology, cadence and every level return to the accepted image.
+  rt.restore_step_snapshot(accepted);
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.regrid_count(), 0);
+  EXPECT_TRUE(same_box_list(accepted_finest, rt.levels(0)[2].U.box_array().boxes()));
+
+  rt.step(Real(1e-4));
+  EXPECT_EQ(rt.nlev(), 3);
+  EXPECT_EQ(rt.regrid_count(), 1) << "the accepted retry commits one regrid exactly once";
+
+  AmrBuildParams invalid;
+  invalid.mesh.n = N;
+  EXPECT_THROW(detail::make_shared_amr_layout_levels(invalid, 0), std::runtime_error);
+  invalid.mesh.n = 2;
+  EXPECT_THROW(detail::make_shared_amr_layout_levels(invalid, 3), std::runtime_error);
+}
+
 TEST(test_amr_multiblock_regrid_union, Runs) {
 #if defined(POPS_HAS_KOKKOS)
   int argc = 0;
   char** argv = nullptr;
   Kokkos::ScopeGuard guard(argc, argv);
 #endif
+
+  check_three_level_bootstrap_step_regrid_and_rollback();
 
   const int N = 32;
   const double L = 1.0, B0 = 1.0;

@@ -45,20 +45,18 @@ namespace pops {
 // ------------------------------------------------------------------------------------------------
 
 /// Compute the fine layout (BoxArray + DistributionMapping) of a Berger-Rigoutsos regrid from the
-/// @p grown tags ALREADY dilated (grow_tags) on the PARENT domain @p pdom. @p pk: parent level (the
-/// cross-rank MPI reduction only happens for pk==0 distributed); @p margin: nesting; @p coarse_replicated:
-/// ownership policy of level 0. Fine level coords = parent x2. Returns an EMPTY BoxArray if there is nothing
-/// to refine (the caller then keeps the current grid). MPI-safe: under a distributed coarse level, the global OR
-/// of the tags (all_reduce_or) guarantees IDENTICAL patches on all ranks (otherwise incompatible dmaps).
+/// @p grown tags ALREADY dilated (grow_tags) on the PARENT domain @p pdom. @p pk: parent level;
+/// @p margin: nesting; @p coarse_replicated: ownership policy of level 0. Fine level coords =
+/// parent x2. Returns an EMPTY BoxArray if there is nothing to refine. MPI-safe: every distributed
+/// parent (all levels above zero, plus a de-replicated level zero) globally ORs its tags before
+/// clustering so every rank constructs the identical layout.
 inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true,
     const ClusterParams& cluster = ClusterParams{}) {
   const int PNX = pdom.nx(), PNY = pdom.ny();
-  // DISTRIBUTED COARSE (pk == 0 && !coarse_replicated): each rank only tagged its LOCAL boxes.
-  // Global OR before the clustering -> all ranks start from the SAME tag grid (otherwise the
-  // fine BoxArray would differ per rank -> incompatible dmaps, MPI desynchronized). Replicated: the
-  // grid is already complete on each rank (no-op, all_reduce_or would be the identity).
-  if (pk == 0 && !coarse_replicated)
+  // Only a replicated level zero is complete locally. Every intermediate parent is distributed.
+  const bool parent_replicated = (pk == 0) && coarse_replicated;
+  if (!parent_replicated)
     all_reduce_or_inplace(grown.t.data(), static_cast<int>(grown.t.size()));
   // ADC-616: the Berger-Rigoutsos clustering params (min_efficiency / min_box_size / max_box_size)
   // are a PARAMETER now. Default ClusterParams{} == the historical {0.7, 1, 32} -> bit-identical.
@@ -85,7 +83,7 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
 /// patch covers the new one. @p ngf: fine ghost width (inherited from the old level being replaced);
 /// @p coarse_replicated: ownership policy of level 0 (distributed parent -> parallel_copy + fence).
 /// This is the BODY of the old amr_regrid_finest, without the layout computation. The parent's pk is passed
-/// to decide whether the parent is replicated (pk != 0 -> always distributed). Returns the new MultiFab.
+/// to decide whether the parent is replicated (only pk == 0 may be replicated). Returns the new MultiFab.
 inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMapping& dmap,
                                        const MultiFab& par, const MultiFab& old, int pk, int ngf,
                                        bool coarse_replicated = true) {
@@ -96,7 +94,7 @@ inline MultiFab regrid_field_on_layout(const BoxArray& fb, const DistributionMap
   // would stay uninitialized there. We bring the needed parent regions onto a LOCAL
   // child-coarsen grid (coarsen of the fine BoxArray) via parallel_copy, then interpolate from
   // it. Replicated parent: par is entirely local, direct read via mf_find_box.
-  const bool par_replicated = (pk != 0) || coarse_replicated;
+  const bool par_replicated = (pk == 0) && coarse_replicated;
   MultiFab parloc;
   if (!par_replicated) {
     parloc = MultiFab(coarsen(nU.box_array(), kAmrRefRatio), nU.dmap(), par.ncomp(), 0);

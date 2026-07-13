@@ -40,7 +40,7 @@ try:
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.mesh.cartesian import CartesianMesh
     from pops.mesh.layouts import AMR
-    from pops.mesh.amr import RegridEvery, PatchLayout
+    from pops.mesh.amr import PatchLayout, ProperNesting, RegridEvery
 except Exception as exc:  # noqa: BLE001
     print("skip test_bind_adapters (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -219,6 +219,19 @@ def test_amr_config_from_layout_mapping():
     _check(cfg.distribute_coarse is True, "distribute_coarse depuis PatchLayout")
     _check(cfg.coarse_max_grid == 16, "coarse_max_grid depuis PatchLayout")
     print("ok test_amr_config_from_layout_mapping")
+
+
+def test_amr_config_refuses_untransported_hierarchy_semantics():
+    """Level-count and nesting intent must never disappear in the legacy config adapter."""
+    for layout, expected in (
+        (AMR(CartesianMesh(n=32), max_levels=1), "no silent level-count substitution"),
+        (AMR(CartesianMesh(n=32), nesting=ProperNesting(buffer=3)), "buffer/lookahead"),
+    ):
+        try:
+            _amr_config_from_layout(layout)
+            raise AssertionError("untransported AMR hierarchy semantics must be refused")
+        except NotImplementedError as exc:
+            _check(expected in str(exc), "structured pre-runtime hierarchy refusal")
 
 
 # --- Gated compilateur : le flux complet Problem -> compile -> bind sur Uniform ------------------
