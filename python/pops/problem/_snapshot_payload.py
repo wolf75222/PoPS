@@ -76,10 +76,6 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
         ],
         "layout": _layout_semantic_data(layout),
         "time": None if effective_time is None else program_semantic_data(effective_time),
-        "constraints": {
-            name: _descriptor_semantic_data(item, where="problem constraint %s" % name)
-            for name, item in sorted(problem._constraint_registry.refinement.items())
-        },
     }
     return semantic_value(payload, where="Problem semantic payload")
 
@@ -113,7 +109,6 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
             None if problem._consumer_graph is None
             else problem._consumer_graph.authoring_data(problem.resolve)
         ),
-        "constraints": problem._constraint_registry.refinement,
         "numerics": {
             name: problem._resolved_numerics_for(name).to_data()
             for name in sorted(problem._numerics_assignments)

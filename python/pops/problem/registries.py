@@ -1,21 +1,17 @@
 """Typed Problem registries, split by declaration family.
 
 This module is the stable import surface.  Implementation modules separate model-instance
-qualification, case declarations, runtime consumers, and structural constraints so no registry
-family can grow back into the former monolith.
+qualification and case declarations so no registry family can grow back into a monolith.
 """
 
 from pops.problem._block_registry import BlockRegistry
 from pops.problem._declaration_registries import FieldRegistry, ParamRegistry, TimeRegistry
 from pops.problem._initial_registry import InitialConditionRegistry
-from pops.problem._runtime_registries import ConstraintRegistry, RuntimePolicyRegistry
 
 __all__ = [
     "BlockRegistry",
-    "ConstraintRegistry",
     "FieldRegistry",
     "InitialConditionRegistry",
     "ParamRegistry",
-    "RuntimePolicyRegistry",
     "TimeRegistry",
 ]

@@ -1,7 +1,7 @@
 """Typed, inert inspection report for a :class:`pops.Case`.
 
 ``Case.inspect()`` returns a :class:`CaseReport`: a typed :class:`pops.Report` carrying the
-assembly's name / blocks / fields / params / consumers / constraints / requirements /
+assembly's name / blocks / fields / params / consumers / requirements /
 capabilities as ATTRIBUTES, with :meth:`to_dict` the JSON bridge. It is inert -- built from the
 registries' metadata, it triggers no validation and no compilation. This is distinct from the
 per-registry ``inspect()`` dicts it composes and from ``Problem.to_dict()`` (the array-free
@@ -19,7 +19,7 @@ class CaseReport(Report):
 
     Attributes (all read directly): ``name`` / ``category`` / ``native_id`` / ``options`` /
     ``requirements`` / ``capabilities`` / ``blocks`` / ``fields`` / ``params`` /
-    ``consumers`` / ``constraints`` / ``time``. :meth:`to_dict` is the JSON bridge (its keys
+    ``consumers`` / ``time``. :meth:`to_dict` is the JSON bridge (its keys
     match the historical ``inspect()`` dict byte-for-byte so a ``to_dict()`` consumer is unchanged).
     """
 

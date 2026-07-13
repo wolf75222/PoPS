@@ -9,8 +9,7 @@ from typing import Any
 
 from pops.descriptors import Availability
 from pops.problem.registries import (
-    BlockRegistry, ConstraintRegistry, FieldRegistry, InitialConditionRegistry, ParamRegistry,
-    TimeRegistry)
+    BlockRegistry, FieldRegistry, InitialConditionRegistry, ParamRegistry, TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
 from pops.problem._validation import account_block_plan_fields
 from pops._report import ReportTree
@@ -73,7 +72,6 @@ class Case:
         self._time_registry = TimeRegistry()
         self._param_registry = ParamRegistry(self.owner_path)
         self._initial_registry = InitialConditionRegistry(self.owner_path, self.resolve)
-        self._constraint_registry = ConstraintRegistry()
         self._numerics_assignments = {}
         self._consumer_graph = None
 
@@ -144,10 +142,6 @@ class Case:
     @property
     def _fields(self) -> Any:
         return self._field_registry
-
-    @property
-    def _constraints(self) -> Any:
-        return self._constraint_registry
 
     @property
     def initials(self) -> Any:
@@ -395,7 +389,6 @@ class Case:
             self._field_registry.validate(self._field_validation_context(context)))
         report = report.extend(self._param_registry.validate(context))
         report = report.extend(self._initial_registry.validate(context))
-        report = report.extend(self._constraint_registry.validate(context))
         if self._consumer_graph is not None:
             try:
                 self._consumer_graph.validate_references(self.resolve)
@@ -440,7 +433,7 @@ class Case:
         """A typed :class:`~pops.problem.report_view.CaseReport` of the assembly (ADC-564).
 
         Attributes + ``to_dict()`` (never a dict subclass), carrying the name / blocks / fields /
-        params / aux / outputs / constraints / requirements / capabilities. Inert: no build, no
+        params / consumers / requirements / capabilities. Inert: no build, no
         compile, no validation. ``pops.inspect(problem)`` is the explicit dict bridge over its
         ``to_dict()``.
         """

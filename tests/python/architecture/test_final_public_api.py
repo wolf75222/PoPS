@@ -63,3 +63,11 @@ def test_case_has_one_registration_spelling_per_family() -> None:
     assert hasattr(case, "field") and not hasattr(case, "add_field")
     assert hasattr(case, "program") and not hasattr(case, "time")
 
+
+def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
+    from pops import output
+
+    assert hasattr(output, "ScientificOutput")
+    assert hasattr(output, "Checkpoint")
+    for removed in ("RuntimePolicies", "OutputPolicy", "CheckpointPolicy"):
+        assert not hasattr(output, removed)

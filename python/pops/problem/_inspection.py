@@ -22,7 +22,6 @@ def inspect_payload(problem: Any) -> dict[str, Any]:
     info["consumers"] = (
         None if problem._consumer_graph is None else problem._consumer_graph.inspect()
     )
-    info["constraints"] = problem._constraint_registry.inspect()
     info["numerics"] = {
         block: plan.inspect() for block, plan in sorted(problem._numerics_assignments.items())
     }
