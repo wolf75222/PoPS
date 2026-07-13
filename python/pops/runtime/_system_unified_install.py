@@ -203,6 +203,10 @@ class _SystemUnifiedInstall(_System):
             self._step_strategy = getattr(authored, "_step_strategy", None)
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)
+            if authored is not None:
+                self._temporal_restart_state.configure_program(
+                    authored.temporal_manifest(),
+                    time=self.time(), macro_step=self.macro_step())
 
         if outputs or diagnostics:
             raise ValueError(

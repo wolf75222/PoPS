@@ -151,20 +151,26 @@ class RuntimeInstance:
 
     def _moments(self, *, at_start: bool = False, at_end: bool = False) -> tuple[ConsumerMoment, ...]:
         clocks = {row.schedule.domain.clock for row in self.consumer_graph.nodes}
-        step = int(self.native_executor.macro_step())
-        return tuple(
-            ConsumerMoment(
-                TimePoint(clock, step=step),
-                accepted_step=step,
+        native = self.native_executor
+        temporal = getattr(native, "_temporal_restart_state", None)
+        if clocks and temporal is None:
+            raise RuntimeError(
+                "RuntimeInstance consumers require accepted qualified temporal clock state")
+        accepted_step = int(native.macro_step())
+        moments = []
+        for clock in sorted(clocks, key=lambda value: value.qualified_id):
+            cursor = temporal.cursor_for_clock(clock)
+            moments.append(ConsumerMoment(
+                TimePoint(clock, step=int(cursor["tick"])),
+                accepted_step=accepted_step,
                 attempt=self._attempt,
-                clock_tick=step,
-                wall_tick=step,
+                clock_tick=int(cursor["tick"]),
+                wall_tick=accepted_step,
                 layouts=self._layout_bindings(),
                 at_start=at_start,
                 at_end=at_end,
-            )
-            for clock in sorted(clocks, key=lambda value: value.qualified_id)
-        )
+            ))
+        return tuple(moments)
 
     def _stage_consumers(
         self, *, at_start: bool = False, at_end: bool = False,

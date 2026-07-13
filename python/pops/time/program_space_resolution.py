@@ -71,7 +71,8 @@ def _walk(program: Any) -> Any:
             return
         seen.add(value.id)
         yield value
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
+        for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                    "true_block", "false_block"):
             for nested in value.attrs.get(key) or ():
                 yield from visit(nested)
 

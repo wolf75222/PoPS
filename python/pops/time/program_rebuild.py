@@ -244,7 +244,9 @@ def rebuild_program(
     def clone_attrs(v: Any) -> Any:
         attrs = {}
         for key, val in v.attrs.items():
-            if key in ("cond_block", "body_block", "apply_block", "residual_block",
+            if key in ("parent_clock", "child_clock"):
+                attrs[key] = remap_clock(val)
+            elif key in ("cond_block", "body_block", "apply_block", "residual_block",
                        "true_block", "false_block"):
                 region_key = key.replace("_block", "_region")
                 attrs[key] = (clone_block(val, v.attrs.get(region_key))

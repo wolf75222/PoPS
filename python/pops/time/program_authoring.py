@@ -498,6 +498,56 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
                          None, state.block, space=state.space)
 
     @atomic_authoring
+    def subcycle(self, state: Any, *, clock: Any, within: Any,
+                 count: Any, body_fn: Any, name: Any = None) -> Any:
+        """Advance ``state`` on ``clock`` exactly ``count`` ticks inside one ``within`` tick.
+
+        ``state`` must already belong to the child clock, normally through an explicit
+        :meth:`Program.synchronize`.  The recorded body sees ``P.dt`` as the active child-tick
+        duration at lowering time; nested subcycles therefore divide the enclosing duration without
+        changing authoring coefficients.  Returning to the parent clock is another explicit
+        synchronization, never an implicit cast.
+        """
+        from pops.time.points import Clock, TimePoint
+
+        state = _resolve_handle(state)
+        if not (isinstance(state, ProgramValue) and state.vtype == "state"):
+            raise TypeError("subcycle: state must be a State ProgramValue")
+        if type(clock) is not Clock or type(within) is not Clock:
+            raise TypeError("subcycle: clock= and within= must be exact Clock values")
+        if clock == within:
+            raise ValueError("subcycle: child and parent clocks must be distinct")
+        if state.clock != clock:
+            raise ValueError(
+                "subcycle: state belongs to clock %r, not child clock %r; synchronize it first"
+                % (state.clock.name, clock.name))
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("subcycle: count must be a positive Python int")
+        if not callable(body_fn):
+            raise TypeError("subcycle: body_fn must be callable as body_fn(P, state)")
+        parent_region = self._current_region()
+        body_block, next_state = self._record(body_fn, state)
+        body_region = self._region_for_block(body_block)
+        if parent_region:
+            self._allow_region_capture(parent_region, body_region)
+        if not (isinstance(next_state, ProgramValue) and next_state.vtype == "state"):
+            raise TypeError("subcycle: body_fn must return a State ProgramValue")
+        if next_state.block != state.block or next_state.state_ref != state.state_ref:
+            raise ValueError("subcycle: body_fn must preserve the exact block/state identity")
+        if next_state.clock != clock:
+            raise ValueError("subcycle: body_fn result must remain on the child clock")
+        require_region(
+            self, next_state, body_region, "subcycle body", vtype="state", allow=(state,))
+        require_compatible_spaces(state.space, next_state.space, "subcycle body", typed_pair=True)
+        return self._new(
+            "state", "subcycle", (state,),
+            {"count": int(count), "parent_clock": within,
+             "child_clock": clock, "body_block": body_block,
+             "body_region": body_region, "body": next_state},
+            name, state.block, space=state.space, state_ref=state.state_ref,
+            point=TimePoint(clock, step=int(count)))
+
+    @atomic_authoring
     def branch(self, condition: Any, when_true: Any, when_false: Any,
                name: Any = None) -> Any:
         """Select one lazily-authored typed value at runtime.
@@ -568,6 +618,10 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         ops it builds into a sub-block (returned with the value fn produced). The sub-block ops are NOT
         appended to self._values (they belong to the owning control-flow op)."""
         sub = []
+        destination = self._region_for_block(sub)
+        source = getattr(x, "region", 0)
+        if source not in (0, destination):
+            self._allow_region_capture(source, destination)
         self._recording.append(sub)
         try:
             out = fn(self, x)

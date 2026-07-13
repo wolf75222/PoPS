@@ -317,7 +317,10 @@ MultiFab System::alloc_scalar_field(int n_comp, int n_ghost) {
 // field across macro-steps (Adams-Bashforth), reaching the SYSTEM-OWNED ring buffers through these
 // accessors. The rings live in Impl::program_.hist_ (the extracted Program subsystem, ADC-594) so a
 // later checkpoint slice (ADC-406b) can serialize them without touching the .so ABI.
-MultiFab& System::register_history(const std::string& name, int lag, int ncomp) {
+MultiFab& System::register_history(
+    const std::string& name, int lag, int ncomp, int owner,
+    const std::string& state_identity, const std::string& space_identity,
+    const std::string& clock_identity, const std::string& interpolation_identity) {
   if (lag < 1)
     throw std::runtime_error("System::register_history: lag must be >= 1 (got " +
                              std::to_string(lag) + ") for history '" + name + "'");
@@ -325,9 +328,39 @@ MultiFab& System::register_history(const std::string& name, int lag, int ncomp) 
     throw std::runtime_error(
         "System::register_history: no block exists yet; a history is co-distributed with block 0's "
         "state (add the block before installing the program)");
+  const bool qualified = owner >= 0 || !state_identity.empty() || !space_identity.empty() ||
+                         !clock_identity.empty() || !interpolation_identity.empty();
+  if (qualified && (owner < 0 || owner >= static_cast<int>(p_->sp.size()) ||
+                    state_identity.empty() || space_identity.empty() || clock_identity.empty() ||
+                    interpolation_identity.empty()))
+    throw std::runtime_error(
+        "System::register_history: qualified registration requires owner/state/space/clock/"
+        "interpolation identities for history '" + name + "'");
   const int want_depth = lag + 1;
   auto it = p_->program_.hist_.histories.find(name);
   if (it != p_->program_.hist_.histories.end()) {
+    if (qualified) {
+      auto& histories = p_->program_.hist_;
+      const auto prior = histories.clock_identity.find(name);
+      if (prior == histories.clock_identity.end()) {
+        histories.owner[name] = owner;
+        histories.state_identity[name] = state_identity;
+        histories.space_identity[name] = space_identity;
+        histories.clock_identity[name] = clock_identity;
+        histories.interpolation_identity[name] = interpolation_identity;
+      } else if (histories.owner.at(name) != owner ||
+                 histories.state_identity.at(name) != state_identity ||
+                 histories.space_identity.at(name) != space_identity ||
+                 prior->second != clock_identity ||
+                 histories.interpolation_identity.at(name) != interpolation_identity) {
+        throw std::runtime_error(
+            "System::register_history: history '" + name +
+            "' cannot be re-registered with a different qualified identity");
+      }
+    }
+    if (ncomp >= 1 && it->second[0].ncomp() != ncomp)
+      throw std::runtime_error(
+          "System::register_history: ncomp mismatch for history '" + name + "'");
     // Idempotent re-registration: the ring depth is the MAX lag any caller requests. A read at the
     // declared max lag and the store (which only needs the current slot, register_history(name, 1))
     // can register in EITHER order without conflict -- a smaller request is a no-op (returns the
@@ -353,7 +386,7 @@ MultiFab& System::register_history(const std::string& name, int lag, int ncomp) 
   // ncomp -- so a slot can carry a full RHS / state, byte-identical to the historical multistep ring
   // (ADC-406a); a caller that needs a narrower ring (ADC-427: the 1-component condensed-Schur phi^n
   // carry) passes an explicit ncomp >= 1.
-  const int resolved_ncomp = ncomp < 0 ? p_->sp[0].ncomp : ncomp;
+  const int resolved_ncomp = ncomp < 0 ? p_->sp[qualified ? owner : 0].ncomp : ncomp;
   if (resolved_ncomp < 1)
     throw std::runtime_error("System::register_history: ncomp must be >= 1 (got " +
                              std::to_string(ncomp) + ") for history '" + name + "'");
@@ -367,6 +400,13 @@ MultiFab& System::register_history(const std::string& name, int lag, int ncomp) 
   auto& stored = p_->program_.hist_.histories.emplace(name, std::move(ring)).first->second;
   p_->program_.hist_.depth[name] = want_depth;
   p_->program_.hist_.initialized[name] = false;
+  p_->program_.hist_.owner[name] = qualified ? owner : -1;
+  if (qualified) {
+    p_->program_.hist_.state_identity[name] = state_identity;
+    p_->program_.hist_.space_identity[name] = space_identity;
+    p_->program_.hist_.clock_identity[name] = clock_identity;
+    p_->program_.hist_.interpolation_identity[name] = interpolation_identity;
+  }
   return stored[0];
 }
 

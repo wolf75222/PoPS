@@ -38,6 +38,7 @@ from pops.codegen.program_emit_control import (
     _coupled_rate_components,
     _emit_branch,
     _emit_range,
+    _emit_subcycle,
     _emit_while,
 )
 from pops.codegen.program_emit_solve import (
@@ -113,6 +114,22 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     if v.op == "state":
         var[v.id] = "u%d" % v.id
         lines.append("pops::MultiFab& %s = ctx.state(%d);" % (var[v.id], bidx))
+    elif v.op == "synchronize":
+        (source,) = v.inputs
+        relation = v.attrs.get("relation")
+        from pops.time.synchronization import SampleAndHold, relation_data
+
+        expected = relation_data(SampleAndHold())
+        if relation != expected:
+            raise NotImplementedError(
+                "synchronization provider %r has no native lowering; supported provider: "
+                "SampleAndHold()" % relation)
+        point = v.point.time if hasattr(v.point, "time") else v.point
+        lines.append(
+            "ctx.synchronize_sample_and_hold(%s, %s, %d, %s);"
+            % (json.dumps(source.clock.qualified_id), json.dumps(v.clock.qualified_id),
+               int(point.step), scalar_cpp(point.offset)))
+        var[v.id] = var[source.id]
     elif v.op == "solve_fields":
         # Per-stage field solve (ADC-409): P.solve_fields(state=...) re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
@@ -546,11 +563,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         lines.append("}")
         var[v.id] = var[value.id]
     elif v.op == "while":
-        _emit_while(program, v, base, var, model, lines, block_idx, field_plans)
+        _emit_while(
+            program, v, base, var, model, lines, block_idx, field_plans, target=target)
     elif v.op == "range":
-        _emit_range(program, v, base, var, model, lines, block_idx, field_plans)
+        _emit_range(
+            program, v, base, var, model, lines, block_idx, field_plans, target=target)
+    elif v.op == "subcycle":
+        _emit_subcycle(
+            program, v, base, var, model, lines, block_idx, field_plans, target=target)
     elif v.op == "branch":
-        _emit_branch(program, v, base, var, model, lines, block_idx, field_plans)
+        _emit_branch(
+            program, v, base, var, model, lines, block_idx, field_plans, target=target)
     elif v.op == "linear_combine":
         terms = list(zip(v.inputs, v.attrs["coeffs"], strict=True))
         if v.id in committed_ids:

@@ -11,7 +11,7 @@ from pops.runtime._step_strategy import run_control_payload, run_step_attempt
 from pops.runtime._system_io import _SystemIO
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
-from pops.time import FixedDt
+from pops.time import Clock, FixedDt, TimePoint
 
 
 class _Native:
@@ -48,6 +48,32 @@ def _bound_state(strategy=None):
     return state
 
 
+def _nested_schedule():
+    macro = Clock("macro")
+    child = Clock("chemistry")
+    return macro, child, {
+        "schema_version": 1,
+        "kind": "pops.temporal-program-schedule",
+        "primary_clock": macro.qualified_id,
+        "clocks": [
+            {"id": macro.qualified_id, "descriptor": macro.to_data(), "ticks_per_macro": 1},
+            {"id": child.qualified_id, "descriptor": child.to_data(), "ticks_per_macro": 3},
+        ],
+        "subcycles": [{
+            "node_id": 7, "parent_clock": macro.qualified_id,
+            "child_clock": child.qualified_id, "count": 3,
+        }],
+        "synchronizations": [{
+            "node_id": 8, "source_clock": macro.qualified_id,
+            "target_clock": child.qualified_id,
+            "relation": {"kind": "sample_and_hold", "schema_version": 1},
+            "point": TimePoint(child).to_data(),
+        }],
+        "schedules": [],
+        "histories": [],
+    }
+
+
 def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state():
     native = _Native()
     state = _bound_state()
@@ -57,7 +83,9 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
     restored = TemporalRestartState.from_json(
         np.array(payload), time=native.time(), macro_step=native.macro_step())
     data = restored.to_data()
-    assert data["schedule_cursors"] == {"macro_step": 1}
+    assert data["schedule_cursors"] == {
+        "macro_step": {"macro_step": 1, "phase": "accepted"},
+    }
     assert data["controller_state"]["last_accepted_dt"] == (0.125).hex()
     assert data["transaction_stats"] == {"accepted": 1, "rejected": 0, "failed": 0}
     restored.begin_run(
@@ -65,6 +93,42 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
     with pytest.raises(RuntimeError, match="checkpointed step strategy"):
         restored.begin_run(
             run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
+
+
+def test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary():
+    macro, child, schedule = _nested_schedule()
+    state = TemporalRestartState()
+    state.configure_program(schedule, time=0.0, macro_step=0)
+    state.begin_run(run_control_payload(FixedDt(0.125)), time=0.0, macro_step=0)
+    state.accept(before_time=0.0, before_step=0, time=0.125, macro_step=1)
+
+    assert state.cursor_for_clock(macro)["tick"] == 1
+    assert state.cursor_for_clock(child)["tick"] == 3
+    assert state.schedule_cursors["subcycle:7"]["next_iteration"] == 0
+    assert state.synchronization_cursors["8"] == {
+        "macro_step": 1, "source_tick": 1, "target_tick": 3, "phase": "accepted",
+    }
+
+    payload = state.checkpoint_json(time=0.125, macro_step=1)
+    restored = TemporalRestartState.from_json(
+        payload, time=0.125, macro_step=1, program_schedule=schedule)
+    assert restored.cursor_for_clock(child) == state.cursor_for_clock(child)
+    with pytest.raises(RuntimeError, match="no cursor for qualified clock"):
+        restored.cursor_for_clock(Clock("unrelated"))
+
+
+def test_restart_rejects_a_different_installed_nested_clock_schedule():
+    _, _, schedule = _nested_schedule()
+    state = TemporalRestartState()
+    state.configure_program(schedule, time=0.0, macro_step=0)
+    state.begin_run(run_control_payload(FixedDt(0.125)), time=0.0, macro_step=0)
+    payload = state.checkpoint_json(time=0.0, macro_step=0)
+    changed = json.loads(json.dumps(schedule))
+    changed["subcycles"][0]["count"] = 2
+    changed["clocks"][1]["ticks_per_macro"] = 2
+    with pytest.raises(ValueError, match="differs from installed program"):
+        TemporalRestartState.from_json(
+            payload, time=0.0, macro_step=0, program_schedule=changed)
 
 
 def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(tmp_path):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.time.points import StagePoint, TimePoint
+from pops.time.points import StagePoint, TimePoint, point_clock
 from pops.time.program_value_validation import require_owned
 from pops.time.synchronization import relation_data
 from pops.time.values import _resolve_handle
@@ -18,6 +18,13 @@ class _ProgramClocks:
         require_owned(self, value, "Program.synchronize")
         if type(at) not in (TimePoint, StagePoint):
             raise TypeError("Program.synchronize at= must be an exact TimePoint or StagePoint")
+        # A partitioned stage with distinct explicit/implicit abscissae is not one transfer point.
+        # Force the caller to select ``stage.time_for(partition)`` instead of silently choosing one.
+        if type(at) is StagePoint:
+            at.time
+        target_clock = point_clock(at, "Program.synchronize")
+        if value.clock == target_clock:
+            raise ValueError("Program.synchronize requires distinct source and target clocks")
         return self._new(
             value.vtype,
             "synchronize",
@@ -33,6 +40,12 @@ class _ProgramClocks:
             state_ref=value.state_ref,
             point=at,
         )
+
+    def temporal_manifest(self) -> dict[str, Any]:
+        """Return the canonical clock/history/schedule contract required by strict restart."""
+        from pops.time.program_temporal_manifest import build_temporal_manifest
+
+        return build_temporal_manifest(self)
 
 
 __all__ = ["_ProgramClocks"]

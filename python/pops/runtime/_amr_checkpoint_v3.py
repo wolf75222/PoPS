@@ -140,8 +140,11 @@ def restart_v3(owner, sim, d, L):
     program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
     if "temporal_restart_state" not in d:
         raise ValueError("restart: AMR checkpoint lacks its strict temporal state")
+    installed_schedule = getattr(
+        getattr(owner, "_temporal_restart_state", None), "program_schedule", None)
     restored_temporal = TemporalRestartState.from_json(
-        d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"])
+        d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"],
+        program_schedule=installed_schedule)
 
     # (2) GUARDS.
     if int(d["n"]) != sim.nx():

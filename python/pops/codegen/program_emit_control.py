@@ -180,6 +180,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # rejected during lowering instead of silently binding block zero.  AMR registration also
     # carries the logical state and field-space identities used by clock-qualified history slots.
     histories_ncomp = getattr(program, "_histories_ncomp", {})
+    temporal = program.temporal_manifest()
+    history_manifest = {row["name"]: row for row in temporal["histories"]}
     for name, lag in sorted(program._histories.items()):
         ncomp = histories_ncomp.get(name)
         owner = getattr(program, "_history_blocks", {}).get(name)
@@ -187,22 +189,20 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         if target == "amr_system" and owner_index is None:
             raise ValueError(
                 "AMR history %r requires explicit block owner provenance" % name)
-        if target == "amr_system":
-            state_ref = getattr(program, "_history_state_refs", {}).get(name)
-            state_identity = (state_ref.qualified_id if state_ref is not None
-                              else "scalar-history:" + name)
-            space = getattr(program, "_history_spaces", {}).get(name)
-            space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
-                              if space is not None else "scalar-field")
-            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s);"
-                         % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
-                            int(owner_index), json.dumps(state_identity),
-                            json.dumps(space_identity)))
-        elif ncomp is None:
-            lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
-        else:
-            lines.append("ctx.register_history(%s, %d, %d);"
-                         % (json.dumps(name), int(lag), int(ncomp)))
+        state_ref = getattr(program, "_history_state_refs", {}).get(name)
+        state_identity = (state_ref.qualified_id if state_ref is not None
+                          else "scalar-history:" + name)
+        space = getattr(program, "_history_spaces", {}).get(name)
+        space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
+                          if space is not None else "scalar-field")
+        row = history_manifest[name]
+        interpolation = json.dumps(
+            row["interpolation"], sort_keys=True, separators=(",", ":"))
+        lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+                     % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
+                        -1 if owner_index is None else int(owner_index),
+                        json.dumps(state_identity), json.dumps(space_identity),
+                        json.dumps(row["clock"]), json.dumps(interpolation)))
     for v in program._values:
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
@@ -218,8 +218,8 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
         lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
     # Rotate the history rings ONCE at the very end of the step (after the commit), so the next step
     # reads lag k as the value k stores ago. Only emitted when the Program uses histories.
-    if program._histories:
-        lines.append("ctx.rotate_histories();")
+    if any(row["clock"] == program.clock.qualified_id for row in temporal["histories"]):
+        lines.append("ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
     prelude_src = "\n".join("  " + ln for ln in prelude)
     body_src = "\n".join("    " + ln for ln in lines)
     return prelude_src, body_src
@@ -297,13 +297,27 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
     def registrations() -> list[str]:
         lines = []
         ncomps = getattr(program, "_histories_ncomp", {})
+        manifests = {
+            row["name"]: row for row in program.temporal_manifest()["histories"]}
         for name, lag in sorted(program._histories.items()):
             ncomp = ncomps.get(name)
-            if ncomp is None:
-                lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
-            else:
-                lines.append("ctx.register_history(%s, %d, %d);"
-                             % (json.dumps(name), int(lag), int(ncomp)))
+            owner = program._history_blocks.get(name)
+            if owner is None or owner not in block_idx:
+                raise ValueError("AMR history %r requires explicit block owner provenance" % name)
+            state_ref = program._history_state_refs.get(name)
+            state_identity = (state_ref.qualified_id if state_ref is not None
+                              else "scalar-history:" + name)
+            space = program._history_spaces.get(name)
+            space_identity = (json.dumps(space.to_data(), sort_keys=True, separators=(",", ":"))
+                              if space is not None else "scalar-field")
+            row = manifests[name]
+            interpolation = json.dumps(
+                row["interpolation"], sort_keys=True, separators=(",", ":"))
+            lines.append("ctx.register_history(%s, %d, %d, %d, %s, %s, %s, %s);"
+                         % (json.dumps(name), int(lag), -1 if ncomp is None else int(ncomp),
+                            int(block_idx[owner]), json.dumps(state_identity),
+                            json.dumps(space_identity), json.dumps(row["clock"]),
+                            json.dumps(interpolation)))
         return lines
 
     def emit_phase(phase: str) -> str:
@@ -341,15 +355,18 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
                 commit_pairs.append("{&%s, &%s}" % (var[base.id], var[committed.id]))
             if commit_pairs:
                 lines.append("ctx.commit_many({%s});" % ", ".join(commit_pairs))
-            if program._histories:
-                lines.append("ctx.rotate_histories();")
+            histories = program.temporal_manifest()["histories"]
+            if any(row["clock"] == program.clock.qualified_id for row in histories):
+                lines.append(
+                    "ctx.rotate_histories(%s);" % json.dumps(program.clock.qualified_id))
         return "\n".join("    " + line for line in lines)
 
     return emit_phase("gather"), emit_phase("solve"), emit_phase("publish")
 
 
 def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
-                block_idx: Any = None, field_plans: Any = None) -> None:
+                block_idx: Any = None, field_plans: Any = None,
+                *, target: str = "system") -> None:
     """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
     The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-
     blocks re-run the per-op lowering each pass, with the loop-variable value id seeded to the loop
@@ -371,12 +388,12 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     body_lines = []
     for w in v.attrs["cond_block"]:
         _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans)
+                 field_plans=field_plans, target=target)
     cond_expr = sub[v.attrs["cond"].id]
     body_lines.append("if (!(%s)) break;" % cond_expr)
     for w in v.attrs["body_block"]:
         _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans)
+                 field_plans=field_plans, target=target)
     # Write the next state into the loop variable in place (x <- body result).
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
@@ -384,7 +401,8 @@ def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     lines.append("}")
 
 def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
-                block_idx: Any = None, field_plans: Any = None) -> None:
+                block_idx: Any = None, field_plans: Any = None,
+                *, target: str = "system") -> None:
     """Lower a range op to a C++ ``for`` over a fixed count. Like a while, the loop variable is one
     MultiFab mutated in place and the body sub-block is emitted ONCE inside the loop (re-run each
     pass at runtime); the loop-variable value id is seeded to the loop var for the sub-block."""
@@ -402,14 +420,85 @@ def _emit_range(program: Any, v: Any, base: Any, var: Any, model: Any, lines: An
     body_lines = []
     for w in v.attrs["body_block"]:
         _emit_op(program, w, base, frozenset(), sub, model, body_lines, block_idx=block_idx,
-                 field_plans=field_plans)
+                 field_plans=field_plans, target=target)
     body_lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, static_cast<pops::Real>(1), %s);"
                       % (x, x, sub[v.attrs["body"].id]))
     lines += ["  " + ln for ln in body_lines]
     lines.append("}")
 
+
+def _emit_subcycle(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
+                   block_idx: Any = None, field_plans: Any = None,
+                   *, target: str = "system") -> None:
+    """Lower one exact parent/child clock relation with an exception-safe native cursor scope."""
+    from pops.codegen.program_emit_ops import _emit_op
+    from pops.time.references import block_name, state_name
+
+    loop_in = v.inputs[0]
+    child = v.clock
+    parent = v.attrs["parent_clock"]
+    count = int(v.attrs["count"])
+    child_histories = [
+        row for row in program.temporal_manifest()["histories"]
+        if row["clock"] == child.qualified_id]
+    if target == "amr_system" and child_histories:
+        raise NotImplementedError(
+            "AMR logical-clock subcycling with child-clock histories requires a composed "
+            "AMR-level/logical-clock dense-output provider; refusing an incorrect ring cadence")
+    x = "x%d" % v.id
+    i = "i%d" % v.id
+    scope = "subcycle_scope_%d" % v.id
+    parent_dt = "parent_dt_%d" % v.id
+    var[v.id] = x
+    lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (x, var[base.id]))
+    lines.append("ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
+                 "static_cast<pops::Real>(1), %s);" % (x, x, var[loop_in.id]))
+    lines.append("{")
+    lines.append("  auto %s = ctx.subcycle_scope(%s, %s, %d);"
+                 % (scope, json.dumps(parent.qualified_id),
+                    json.dumps(child.qualified_id), count))
+    lines.append("  const pops::Real %s = dt;" % parent_dt)
+    lines.append("  for (int %s = 0; %s < %d; ++%s) {" % (i, i, count, i))
+    lines.append("    %s.iteration(%s);" % (scope, i))
+    lines.append("    const pops::Real dt = %s / static_cast<pops::Real>(%d);"
+                 % (parent_dt, count))
+
+    # ``keep_history`` owns a state history. Store the loop input at every child tick so lag one in
+    # the body means the immediately preceding child-clock value, not the enclosing macro value.
+    for state, _config in sorted(
+            getattr(program, "_time_history_configs", {}).items(),
+            key=lambda item: item[0].qualified_id):
+        if (state.clock != child or state.block != loop_in.block
+                or state.state != loop_in.state_ref):
+            continue
+        history_name = "%s.%s" % (block_name(state.block), state_name(state.state))
+        owner = block_idx[state.block]
+        if target == "amr_system":
+            lines.append("    ctx.store_history(%s, %s, %d);"
+                         % (json.dumps(history_name), x, owner))
+        else:
+            lines.append("    ctx.store_history(%s, %s);" % (json.dumps(history_name), x))
+
+    sub = dict(var)
+    sub[loop_in.id] = x
+    body_lines = []
+    for w in v.attrs["body_block"]:
+        _emit_op(
+            program, w, base, frozenset(), sub, model, body_lines,
+            block_idx=block_idx, field_plans=field_plans, target=target)
+    body_lines.append(
+        "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
+        "static_cast<pops::Real>(1), %s);" % (x, x, sub[v.attrs["body"].id]))
+    if child_histories:
+        body_lines.append("ctx.rotate_histories(%s);" % json.dumps(child.qualified_id))
+    lines += ["    " + line for line in body_lines]
+    lines.append("  }")
+    lines.append("  %s.finish();" % scope)
+    lines.append("}")
+
 def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any,
-                 block_idx: Any = None, field_plans: Any = None) -> None:
+                 block_idx: Any = None, field_plans: Any = None,
+                 *, target: str = "system") -> None:
     """Lower two captured regions to a genuinely lazy C++ ``if``/``else`` value branch."""
     (cond,) = v.inputs
     x = ("b%d" if v.vtype == "bool" else "s%d") % v.id
@@ -428,17 +517,17 @@ def _emit_branch(program: Any, v: Any, base: Any, var: Any, model: Any, lines: A
     lines.append("if (%s) {" % var[cond.id])
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["true_block"], v.attrs["true_result"], x, is_field,
-        base, var, model, block_idx, field_plans)]
+        base, var, model, block_idx, field_plans, target=target)]
     lines.append("} else {")
     lines += ["  " + line for line in _emit_branch_arm(
         program, v.attrs["false_block"], v.attrs["false_result"], x, is_field,
-        base, var, model, block_idx, field_plans)]
+        base, var, model, block_idx, field_plans, target=target)]
     lines.append("}")
 
 
 def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_field: bool,
                      base: Any, outer_var: Any, model: Any, block_idx: Any,
-                     field_plans: Any = None) -> list[str]:
+                     field_plans: Any = None, *, target: str = "system") -> list[str]:
     from pops.codegen.program_emit_ops import _emit_op
 
     sub = dict(outer_var)
@@ -446,7 +535,7 @@ def _emit_branch_arm(program: Any, block: Any, result: Any, output: str, is_fiel
     for value in block:
         _emit_op(
             program, value, base, frozenset(), sub, model, arm_lines,
-            block_idx=block_idx, field_plans=field_plans)
+            block_idx=block_idx, field_plans=field_plans, target=target)
     token = sub[result.id]
     if is_field:
         arm_lines.append(

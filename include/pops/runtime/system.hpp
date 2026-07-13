@@ -824,7 +824,11 @@ class System {
   /// Re-registering returns the existing current slot and grows the ring for a larger @p lag. Returns
   /// the current slot [0] -- the read target for lag = 1 after one rotate. @throws if @p lag < 1,
   /// @p ncomp == 0, or no block exists yet.
-  POPS_EXPORT MultiFab& register_history(const std::string& name, int lag, int ncomp = -1);
+  POPS_EXPORT MultiFab& register_history(
+      const std::string& name, int lag, int ncomp = -1, int owner = -1,
+      const std::string& state_identity = "", const std::string& space_identity = "",
+      const std::string& clock_identity = "",
+      const std::string& interpolation_identity = "");
   /// The history slot @p lag macro-steps back (lag 0 = the current slot, lag 1 = the previous step's
   /// stored value, ...). @throws if @p name is unknown, @p lag exceeds the registered depth, or the
   /// history has not been stored yet ("history '<name>' with lag=<lag> was requested but not
@@ -842,6 +846,7 @@ class System {
   /// current slot [0] is recycled (it gets the oldest buffer; the next store overwrites it before any
   /// read). O(1) handle swaps -- no deep copy. No-op when no history exists.
   POPS_EXPORT void rotate_histories();
+  POPS_EXPORT void rotate_histories(const std::string& clock_identity);
   /// @name Multistep history checkpoint/restart (epic ADC-399 / ADC-406b)
   /// SERIALIZE / RESTORE the System-owned history rings across a checkpoint. The history lives in the
   /// System (HistoryManager in Impl), so the checkpoint facade (sim.checkpoint / sim.restart) gathers

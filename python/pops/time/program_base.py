@@ -56,7 +56,7 @@ class _ProgramConstants:
     # every value they (or their sub-blocks) read is conservatively kept. They are simply absent from
     # the allow-list above (hence live); listed here only to drive the sub-block reference walk.
     _SUBBLOCK_OPS = frozenset({
-        "while", "branch", "range", "matrix_free_operator", "solve_local_nonlinear",
+        "while", "branch", "range", "subcycle", "matrix_free_operator", "solve_local_nonlinear",
     })
 
     # Ops PROVEN PURE for common-subexpression elimination (Spec 3 s28, ADC-465): each allocates a

@@ -28,6 +28,7 @@
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
+#include <pops/runtime/program/clock_schedule.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
 #include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
 
@@ -133,6 +134,14 @@ class AmrProgramContext {
     stage_time_ = amr::Rational(numerator, denominator);
     if (stage_time_ < amr::Rational(0, 1) || amr::Rational(1, 1) < stage_time_)
       throw std::runtime_error("Program stage time is outside [0,1]");
+  }
+  ClockScheduleState::SubcycleScope subcycle_scope(
+      const std::string& parent, const std::string& child, int count) const {
+    return clock_schedule_.subcycle(parent, child, count);
+  }
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
+                                   int step, Real offset) const {
+    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
   /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
@@ -502,14 +511,30 @@ class AmrProgramContext {
   void register_history(const std::string& name, int lag, int ncomp, int owner,
                         const std::string& state_identity,
                         const std::string& space_identity) const {
+    register_history(name, lag, ncomp, owner, state_identity, space_identity,
+                     "legacy:macro", "exact");
+  }
+  void register_history(const std::string& name, int lag, int ncomp, int owner,
+                        const std::string& state_identity,
+                        const std::string& space_identity,
+                        const std::string& clock_identity,
+                        const std::string& interpolation_identity) const {
     if (state_identity.empty() || space_identity.empty())
       throw std::runtime_error("AMR history requires qualified state and space identities");
+    if (clock_identity.empty() || interpolation_identity.empty())
+      throw std::runtime_error(
+          "AMR history requires qualified logical-clock and interpolation identities");
     const auto prior_owner = history_owners_.find(name);
     const auto prior_state = history_state_ids_.find(name);
     const auto prior_space = history_space_ids_.find(name);
+    const auto prior_clock = history_clock_ids_.find(name);
+    const auto prior_interpolation = history_interpolation_ids_.find(name);
     if ((prior_owner != history_owners_.end() && prior_owner->second != owner) ||
         (prior_state != history_state_ids_.end() && prior_state->second != state_identity) ||
-        (prior_space != history_space_ids_.end() && prior_space->second != space_identity))
+        (prior_space != history_space_ids_.end() && prior_space->second != space_identity) ||
+        (prior_clock != history_clock_ids_.end() && prior_clock->second != clock_identity) ||
+        (prior_interpolation != history_interpolation_ids_.end() &&
+         prior_interpolation->second != interpolation_identity))
       throw std::runtime_error("AMR history '" + name +
                                "' cannot be re-registered with a different identity");
     pops::detail::AmrHistoryOps::register_history(
@@ -517,6 +542,8 @@ class AmrProgramContext {
     history_owners_[name] = owner;
     history_state_ids_[name] = state_identity;
     history_space_ids_[name] = space_identity;
+    history_clock_ids_[name] = clock_identity;
+    history_interpolation_ids_[name] = interpolation_identity;
   }
   MultiFab& history(const std::string& name, int lag, int owner) const {
     require_history_owner_(name, owner);
@@ -565,6 +592,21 @@ class AmrProgramContext {
       return;
     }
     pops::detail::AmrHistoryOps::rotate_histories(*eng_);
+  }
+  void rotate_histories(const std::string& clock_identity) const {
+    if (clock_identity.empty())
+      throw std::runtime_error("AMR history rotation requires a logical-clock identity");
+    bool found = false;
+    for (const auto& [name, identity] : history_clock_ids_)
+      if (identity == clock_identity)
+        found = true;
+    if (!found)
+      return;
+    for (const auto& [name, identity] : history_clock_ids_)
+      if (identity != clock_identity)
+        throw std::runtime_error(
+            "AMR selective history rotation cannot mix logical clocks in one hierarchy step");
+    rotate_histories();
   }
 
   // --- diagnostics / runtime params (forward to the facade store) -----------------------------------
@@ -1395,6 +1437,8 @@ class AmrProgramContext {
   mutable std::map<std::string, int> history_owners_;
   mutable std::map<std::string, std::string> history_state_ids_;
   mutable std::map<std::string, std::string> history_space_ids_;
+  mutable std::map<std::string, std::string> history_clock_ids_;
+  mutable std::map<std::string, std::string> history_interpolation_ids_;
   mutable std::map<std::string, std::vector<std::vector<amr::ClockStamp>>> ring_clocks_;
   mutable std::map<
       std::string,
@@ -1405,6 +1449,7 @@ class AmrProgramContext {
   // pre-reflux ring slot against a post-reflux live state. On nlev==1 the deferral collapses to the
   // original store->rotate order -> bit-identical to Uniform / v1.
   mutable bool rotate_pending_ = false;
+  mutable ClockScheduleState clock_schedule_;
   // Per-step record of (level, ring name) whose slot-0 was written FROM the live level state this step:
   // after the reflux corrects that live state, couple_levels re-copies it into slot 0 so the stored state
   // and the live state stay consistent. A ring storing a non-live buffer (AB2 stores the RHS) is absent.

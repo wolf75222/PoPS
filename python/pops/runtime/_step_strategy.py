@@ -195,7 +195,8 @@ def resolve_run_strategy(engine: Any) -> StepStrategy:
         selected = ensure_step_strategy(selected)
     except TypeError:
         raise TypeError(
-            "run requires a Program.step_strategy(...) contract authenticated at installation"
+            "run requires an exact registered StepStrategy from a Program.step_strategy(...) "
+            "contract authenticated at installation"
         ) from None
     return selected
 
@@ -250,18 +251,11 @@ def run_control_payload(
     strategy: StepStrategy, controls: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Stable execution manifest preserving the exact strategy and runtime controls."""
-    from pops.ir.literals import scalar_data
-
     strategy.validate_runtime_controls(controls)
     values = {} if controls is None else dict(controls)
-    canonical_controls = {
-        name: [scalar_data(float(item)) for item in value]
-        if isinstance(value, (tuple, list)) else scalar_data(float(value))
-        for name, value in values.items()
-    }
     return {
         "strategy": strategy.to_data(),
-        "controls": canonical_controls,
+        "controls": strategy.runtime_controls_data(values),
     }
 
 

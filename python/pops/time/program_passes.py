@@ -317,7 +317,7 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             if v.op == "while":
                 self._validate_block(v.attrs["cond_block"], seen)
                 self._validate_block(v.attrs["body_block"], seen)
-            elif v.op == "range":
+            elif v.op in ("range", "subcycle"):
                 self._validate_block(v.attrs["body_block"], seen)
             elif v.op == "branch":
                 self._validate_block(v.attrs["true_block"], seen)

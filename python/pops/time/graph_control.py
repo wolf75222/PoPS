@@ -200,7 +200,7 @@ class Branch(_Node):
 
 @dataclass(frozen=True, slots=True, init=False)
 class Loop(_Node):
-    """Structured ``while`` or fixed-count ``range`` with immutable recursive regions."""
+    """Structured while/range or fixed-ratio child-clock subcycle."""
 
     kind: ClassVar[str] = "loop"
     node_id: int
@@ -209,15 +209,17 @@ class Loop(_Node):
     body: Region
     condition: Region | None
     count: int | None
+    parent_clock: Clock | None
     clock: Clock
     point: TimePoint | StagePoint
     name: str
 
     def __init__(self, node_id: int, loop_kind: str, initial: ValueRef, body: Region,
                  clock: Clock, point: TimePoint | StagePoint, *, condition: Region | None = None,
-                 count: int | None = None, name: str = "loop") -> None:
-        if loop_kind not in {"while", "range"}:
-            raise ValueError("Loop loop_kind must be 'while' or 'range'")
+                 count: int | None = None, parent_clock: Clock | None = None,
+                 name: str = "loop") -> None:
+        if loop_kind not in {"while", "range", "subcycle"}:
+            raise ValueError("Loop loop_kind must be 'while', 'range', or 'subcycle'")
         if type(initial) is not ValueRef:
             raise TypeError("Loop initial must be an exact ValueRef")
         if type(body) is not Region:
@@ -230,12 +232,20 @@ class Loop(_Node):
                 condition is not None or isinstance(count, bool) or not isinstance(count, int)
                 or count < 0):
             raise ValueError("range Loop requires a non-negative Python int count and no condition")
+        if loop_kind == "subcycle" and (
+                condition is not None or isinstance(count, bool) or not isinstance(count, int)
+                or count <= 0 or type(parent_clock) is not Clock or parent_clock == clock):
+            raise ValueError(
+                "subcycle Loop requires a positive count and one distinct exact parent_clock")
+        if loop_kind != "subcycle" and parent_clock is not None:
+            raise ValueError("only a subcycle Loop may declare parent_clock")
         object.__setattr__(self, "node_id", _node_id(node_id))
         object.__setattr__(self, "loop_kind", loop_kind)
         object.__setattr__(self, "initial", initial)
         object.__setattr__(self, "body", body)
         object.__setattr__(self, "condition", condition)
         object.__setattr__(self, "count", count)
+        object.__setattr__(self, "parent_clock", parent_clock)
         object.__setattr__(self, "clock", clock)
         object.__setattr__(self, "point", _point(point))
         object.__setattr__(self, "name", _nonempty(name, where="Loop name"))
@@ -245,11 +255,14 @@ class Loop(_Node):
         return (self.initial,) + tuple(ref for ref in captures if ref != self.initial)
 
     def to_data(self) -> dict[str, Any]:
-        return _node_data(
+        data = _node_data(
             self, loop_kind=self.loop_kind, initial=self.initial.to_data(),
             body=self.body.to_data(),
             condition=self.condition.to_data() if self.condition is not None else None,
             count=self.count, name=self.name)
+        if self.parent_clock is not None:
+            data["parent_clock"] = self.parent_clock.to_data()
+        return data
 
 
 __all__ = ["Branch", "Loop", "Region", "RegionCapture"]

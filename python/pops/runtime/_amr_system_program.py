@@ -57,6 +57,10 @@ class _AmrSystemProgram(_AmrSystem):
             self._step_strategy = getattr(authored, "_step_strategy", None)
             self._step_transaction_plan = (
                 authored.transaction_plan() if authored is not None else None)
+            if authored is not None:
+                self._temporal_restart_state.configure_program(
+                    authored.temporal_manifest(),
+                    time=self._s.time(), macro_step=self._s.macro_step())
 
     def _install_program_params(self, compiled: Any, schema: Any, params: Any) -> None:
         """Install complete owner-qualified Program vectors from BindSchema."""

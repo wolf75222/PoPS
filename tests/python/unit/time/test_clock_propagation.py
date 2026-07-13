@@ -1,4 +1,5 @@
 """ADC-662: exact clock and evaluation-point ownership in the Program graph."""
+import json
 from fractions import Fraction
 
 import pytest
@@ -85,6 +86,62 @@ def test_cross_clock_edge_requires_a_synchronize_node():
         value, at=TimePoint(fast), relation=SampleAndHold(), name="synced")
     validate_input_clocks(
         (synchronized,), TimePoint(fast), "test synchronized edge")
+
+
+def test_fixed_ratio_subcycle_has_an_explicit_schedule_and_native_sync_lowering():
+    program = Program("nested_clock")
+    state = typed_state(program, "fluid", state_name="U")
+    fast = Clock("fast", owner=program.owner_path)
+    child = program.synchronize(
+        state.n, at=TimePoint(fast), relation=SampleAndHold(), name="to_fast")
+    advanced = program.subcycle(
+        child, clock=fast, within=program.clock, count=3,
+        body_fn=lambda P, value: P.value("child_copy", 1 * value),
+        name="fast_ticks",
+    )
+    returned = program.synchronize(
+        advanced, at=state.next.point, relation=SampleAndHold(), name="to_macro")
+    program.commit(state.next, returned)
+
+    temporal = program.temporal_manifest()
+    assert json.loads(json.dumps(temporal)) == temporal
+    assert temporal["primary_clock"] == program.clock.qualified_id
+    assert {row["id"]: row["ticks_per_macro"] for row in temporal["clocks"]} == {
+        program.clock.qualified_id: 1,
+        fast.qualified_id: 3,
+    }
+    assert temporal["subcycles"] == [{
+        "node_id": advanced.id,
+        "parent_clock": program.clock.qualified_id,
+        "child_clock": fast.qualified_id,
+        "count": 3,
+    }]
+    graph_loop = next(
+        node for node in program.to_graph().nodes
+        if getattr(node, "loop_kind", None) == "subcycle")
+    assert graph_loop.parent_clock == program.clock
+    assert graph_loop.clock == fast and graph_loop.count == 3
+    source = program.emit_cpp_program()
+    assert json.loads(json.dumps(program.temporal_manifest())) == temporal
+    from pops.runtime._temporal_restart import TemporalRestartState
+
+    accepted = TemporalRestartState()
+    accepted.configure_program(temporal, time=0.0, macro_step=0)
+    assert accepted.cursor_for_clock(fast)["tick"] == 0
+    assert "ctx.subcycle_scope" in source
+    assert "synchronize_sample_and_hold" in source
+    assert "for (int i" in source and "< 3" in source
+
+
+def test_clock_schedule_refuses_an_unrelated_cross_clock_without_an_execution_relation():
+    program = Program("orphan_clock")
+    state = typed_state(program, "fluid", state_name="U")
+    orphan = Clock("orphan", owner=program.owner_path)
+    program.synchronize(
+        state.n, at=TimePoint(orphan), relation=SampleAndHold(), name="orphan")
+
+    with pytest.raises(ValueError, match="has no subcycle relation"):
+        program.temporal_manifest()
 
 
 def test_dt_dependent_values_and_commits_require_exact_output_points():

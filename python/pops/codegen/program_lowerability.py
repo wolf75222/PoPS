@@ -120,20 +120,24 @@ def check_schedules_lowerable(program: Any) -> None:
             raise ValueError(
                 "scheduled value %r is committed to %r but has no explicit OffPolicy"
                 % (scheduled_source.name, endpoint))
+    temporal_clocks = {row["id"] for row in program.temporal_manifest()["clocks"]}
     for value in all_ops(program):
-        if value.clock != program.clock:
-            raise NotImplementedError(
-                "compiled Program runtime currently advances only clock %r; node %r belongs to "
-                "clock %r. Keep the immutable ProgramGraph for a multi-clock backend or provide "
-                "an explicit backend synchronization lowering."
-                % (program.clock.name, value.name, value.clock.name))
+        if value.clock.qualified_id not in temporal_clocks:
+            raise ValueError(
+                "node %r belongs to a clock absent from the temporal execution schedule"
+                % value.name)
         schedule = value.attrs.get("schedule")
         if schedule is None:
             continue
+        if schedule.clock != value.clock:
+            raise ValueError(
+                "schedule on node %r belongs to clock %r, not the node clock %r"
+                % (value.name, schedule.clock.name, value.clock.name))
         if schedule.clock != program.clock:
             raise NotImplementedError(
-                "schedule on node %r belongs to clock %r, but this native runtime advances %r"
-                % (value.name, schedule.clock.name, program.clock.name))
+                "schedule on child-clock node %r requires a clock-tick scheduler provider; "
+                "the native cache cadence is macro-clock only"
+                % value.name)
         if type(schedule.domain) is not AcceptedStep:
             raise NotImplementedError(
                 "schedule domain %s on node %r is typed and preserved, but this runtime only "

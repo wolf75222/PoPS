@@ -366,9 +366,25 @@ Une horloge est un handle qualifié. Un sous-cycle crée un domaine d'horloge en
 pas. Une lecture cross-clock est interdite sans `synchronize` et sans politique d'échantillonnage
 explicite. Les schedules ciblent leur horloge ; ils ne lisent jamais implicitement le macro-step global.
 
-Le restart temporel sauvegarde la version de schéma, les clocks qualifiées, leurs compteurs/phases, les
-schedules, les historiques qualifiés, les points de synchronisation et l'état du contrôleur. Une clock
-attendue mais absente fait échouer le restart ; elle n'est pas reconstruite depuis `macro_step`.
+`Program.subcycle(state, clock=child, within=parent, count=N, body_fn=...)` est un contrôle structuré :
+`child` et `parent` sont distinctes, `N` est strictement positif, le corps conserve le state qualifié et
+voit exactement `parent_dt / N`. Les sous-cycles imbriqués composent leurs ratios. L'entrée et la sortie
+du domaine enfant restent deux appels explicites à `synchronize`. `SampleAndHold()` est le premier
+provider natif ; tout autre provider sans lowering déclaré est refusé avant publication de l'artefact.
+
+`Program.temporal_manifest()` authentifie la clock primaire, les ratios et parents, les points de
+synchronisation, les schedules/caches et, pour chaque historique, owner, state, espace, clock, lag,
+taille de ring, interpolation, domaine de validité et politique de checkpoint. Toute clock non primaire
+doit avoir une route unique vers la clock primaire. Un historique AMR sur clock enfant exige une
+capacité composée AMR-level/clock et un provider de dense output ; sans cette preuve il est refusé, il
+n'est jamais exécuté à une fausse cadence macro.
+
+Le restart temporel schema v2 sauvegarde le manifeste exact, les clocks qualifiées et leurs
+compteurs/phases acceptés, les cursors de sous-cycles/schedules/synchronisations, la validité des
+historiques et caches, l'event queue, les statistiques et l'état du contrôleur. Il n'est sérialisable
+qu'à un point accepté et entièrement synchronisé. Une clock attendue mais absente fait échouer le
+restart et les consommateurs ; elle n'est jamais reconstruite depuis `macro_step`. Les anciens schemas
+sont des entrées de migration offline, pas des branches du runtime.
 
 ### 7.4 Transaction d'un pas
 
@@ -628,6 +644,7 @@ les lanes de toolchain explicitement non disponibles peuvent être conditionnels
 - `docs/VERSIONING.md` : surfaces versionnées et politique de rupture ;
 - `docs/design/native-capability-matrix.md` : capacités providers/plateformes ;
 - `docs/design/consumer_graph_transaction_contract.md` : effets acceptés et rollback ;
+- `docs/design/temporal-execution-contract.md` : clocks, sous-cycles et restart temporel v2 ;
 - `docs/design/external-component-packages.md` : extension C++ externe ;
 - `schemas/release_contract.v1.json` : versions de schémas, ABI et matrice supportée ;
 - `schemas/component_catalog.v2.json` : composants builtin et routes natives ;

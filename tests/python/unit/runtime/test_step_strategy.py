@@ -15,8 +15,10 @@ from pops.runtime._step_strategy import (
     run_control_payload,
     run_step_attempt,
 )
+from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
 from pops.time.step_strategy import register_step_strategy_type
+from pops.time.step_strategy import validate_step_strategy_manifest
 
 
 class _Engine:
@@ -162,9 +164,10 @@ def test_controller_identity_normalizes_external_grid_list_and_tuple():
 
 def test_error_controller_restores_the_exact_next_proposal_after_restart():
     strategy = _error_strategy()
-    temporal = SimpleNamespace(
-        _restored_pending=True,
+    temporal = TemporalRestartState(
+        strategy=run_control_payload(strategy),
         controller_state={"last_accepted_dt": (0.1).hex()},
+        _restored_pending=True,
     )
     engine = SimpleNamespace(
         _step_controller=None,
@@ -213,3 +216,35 @@ def test_registered_strategy_and_controller_own_extension_and_restart_protocols(
     assert resolve_run_strategy(engine) is strategy
     controller = prepare_step_controller(engine, strategy)
     assert controller.restored is True
+
+
+def test_registered_strategy_provider_owns_strict_restart_reconstruction():
+    from pops.ir.literals import scalar_data
+
+    @register_step_strategy_type
+    @dataclass(frozen=True, slots=True)
+    class Restartable(StepStrategy):
+        dt: float
+        kind: ClassVar[str] = "test_restartable_strategy"
+
+        def to_data(self):
+            return {"kind": self.kind, "dt": scalar_data(self.dt)}
+
+        @classmethod
+        def from_data(cls, payload):
+            if set(payload) != {"kind", "dt"} or payload["kind"] != cls.kind:
+                raise ValueError("invalid Restartable manifest")
+            value = payload["dt"]
+            if set(value) != {"kind", "value"} or value["kind"] != "binary64":
+                raise ValueError("invalid Restartable dt")
+            return cls(float.fromhex(value["value"]))
+
+        def runtime_controller(self, controls=None):
+            self.validate_runtime_controls(controls)
+            raise NotImplementedError
+
+    payload = run_control_payload(Restartable(0.25))
+    assert validate_step_strategy_manifest(payload) == payload
+    forged = {"strategy": {**payload["strategy"], "extra": True}, "controls": {}}
+    with pytest.raises(ValueError, match="invalid Restartable manifest"):
+        validate_step_strategy_manifest(forged)

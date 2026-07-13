@@ -396,8 +396,11 @@ class _SystemIO(_System):
         if "temporal_restart_state" not in d:
             raise ValueError("restart : checkpoint lacks its strict Uniform temporal state")
         from pops.runtime._temporal_restart import TemporalRestartState
+        installed_schedule = getattr(
+            getattr(self, "_temporal_restart_state", None), "program_schedule", None)
         restored_temporal = TemporalRestartState.from_json(
-            d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"])
+            d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"],
+            program_schedule=installed_schedule)
         if int(d["nx"]) != self._s.nx() or int(d["ny"]) != self._s.ny():
             raise ValueError("restart : checkpoint grid (%d x %d) != system (%d x %d)"
                              % (int(d["nx"]), int(d["ny"]), self._s.nx(), self._s.ny()))

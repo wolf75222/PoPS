@@ -21,6 +21,7 @@ from pops.runtime.consumer import (
 )
 from pops.runtime.runtime_instance import RuntimeInstance
 from pops.runtime.restart_provider import RestartV3
+from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AcceptedStep, AtEnd, Clock, Every, FixedDt, Schedule
 from tests.python.unit.runtime.test_runtime_planning import _install
 
@@ -44,6 +45,27 @@ class _Executor:
             artifact_identity=plan.artifact.artifact_identity,
             bind_identity=plan.bind_identity,
         )
+        graph = plan.artifact.plan.consumer_graph
+        clocks = sorted(
+            {node.schedule.domain.clock for node in graph.nodes},
+            key=lambda clock: clock.qualified_id,
+        ) if graph is not None else []
+        self._temporal_restart_state = TemporalRestartState()
+        if clocks:
+            if len(clocks) != 1:
+                raise ValueError("test executor requires one authored consumer clock")
+            clock = clocks[0]
+            self._temporal_restart_state.configure_program({
+                "schema_version": 1,
+                "kind": "pops.temporal-program-schedule",
+                "primary_clock": clock.qualified_id,
+                "clocks": [{
+                    "id": clock.qualified_id,
+                    "descriptor": clock.to_data(),
+                    "ticks_per_macro": 1,
+                }],
+                "subcycles": [], "synchronizations": [], "schedules": [], "histories": [],
+            }, time=0.0, macro_step=0)
 
     @property
     def last_run_identity(self):
@@ -226,6 +248,60 @@ def test_runtime_instance_has_one_authored_execution_route():
     assert not hasattr(runtime, "run")
     with pytest.raises(TypeError, match="does not accept strategy= or cfl="):
         pops.run(runtime, t_end=1.0, max_steps=1, strategy=FixedDt(1.0))
+
+
+def test_consumer_moment_uses_the_accepted_qualified_child_clock_cursor(tmp_path):
+    plan, _, manifest = _with_graph(tmp_path)
+    executor = _Executor(plan)
+    runtime = RuntimeInstance(plan, executor=executor)
+    child = manifest.schedule.domain.clock
+    macro = Clock("macro", owner=child.owner)
+    temporal = TemporalRestartState()
+    temporal.configure_program({
+        "schema_version": 1,
+        "kind": "pops.temporal-program-schedule",
+        "primary_clock": macro.qualified_id,
+        "clocks": [
+            {"id": macro.qualified_id, "descriptor": macro.to_data(), "ticks_per_macro": 1},
+            {"id": child.qualified_id, "descriptor": child.to_data(), "ticks_per_macro": 4},
+        ],
+        "subcycles": [{
+            "node_id": 3, "parent_clock": macro.qualified_id,
+            "child_clock": child.qualified_id, "count": 4,
+        }],
+        "synchronizations": [], "schedules": [], "histories": [],
+    }, time=0.0, macro_step=0)
+    executor._temporal_restart_state = temporal
+    executor._time, executor._step = 0.25, 1
+    temporal.accept(before_time=0.0, before_step=0, time=0.25, macro_step=1)
+
+    (moment,) = runtime._moments()
+    assert moment.point.step == 4
+    assert moment.clock_tick == 4
+    assert moment.accepted_step == 1 and moment.wall_tick == 1
+
+
+def test_consumer_moment_refuses_an_absent_qualified_clock(tmp_path):
+    plan, _, _ = _with_graph(tmp_path)
+    executor = _Executor(plan)
+    runtime = RuntimeInstance(plan, executor=executor)
+    unrelated = Clock("unrelated")
+    temporal = TemporalRestartState()
+    temporal.configure_program({
+        "schema_version": 1,
+        "kind": "pops.temporal-program-schedule",
+        "primary_clock": unrelated.qualified_id,
+        "clocks": [{
+            "id": unrelated.qualified_id,
+            "descriptor": unrelated.to_data(),
+            "ticks_per_macro": 1,
+        }],
+        "subcycles": [], "synchronizations": [], "schedules": [], "histories": [],
+    }, time=0.0, macro_step=0)
+    executor._temporal_restart_state = temporal
+
+    with pytest.raises(RuntimeError, match="no cursor for qualified clock"):
+        runtime._moments()
 
 
 def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp_path):

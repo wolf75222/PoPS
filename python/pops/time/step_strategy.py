@@ -44,6 +44,19 @@ def _controls(value: Mapping[str, Any] | None) -> dict[str, Any]:
     return dict(value)
 
 
+def _binary64(value: Any, *, where: str) -> float:
+    if (not isinstance(value, Mapping) or set(value) != {"kind", "value"}
+            or value.get("kind") != "binary64" or not isinstance(value.get("value"), str)):
+        raise TypeError("%s must be a canonical binary64 scalar literal" % where)
+    try:
+        result = float.fromhex(value["value"])
+    except ValueError:
+        raise ValueError("%s has an invalid binary64 value" % where) from None
+    if not math.isfinite(result) or result.hex() != value["value"]:
+        raise ValueError("%s must be canonical and finite" % where)
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class StepStrategy:
     """Registered strategy-provider protocol for macro-step attempt controllers."""
@@ -62,6 +75,31 @@ class StepStrategy:
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind}
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> StepStrategy:
+        """Reconstruct this provider's exact descriptor for strict next-attempt restart."""
+        if not isinstance(payload, Mapping) or dict(payload) != {"kind": cls.kind}:
+            raise ValueError("%s strategy manifest has invalid keys" % cls.kind)
+        return cls()
+
+    def restore_runtime_controls(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        """Decode canonical restart controls; providers may override for non-numeric controls."""
+        if not isinstance(payload, Mapping):
+            raise TypeError("step strategy restart controls must be a mapping")
+        return {
+            name: [_binary64(item, where="controls.%s" % name) for item in value]
+            if isinstance(value, list) else _binary64(value, where="controls.%s" % name)
+            for name, value in payload.items()
+        }
+
+    def runtime_controls_data(self, controls: Mapping[str, Any]) -> dict[str, Any]:
+        """Canonical inverse of :meth:`restore_runtime_controls`."""
+        return {
+            name: [scalar_data(float(item)) for item in value]
+            if isinstance(value, (tuple, list)) else scalar_data(float(value))
+            for name, value in controls.items()
+        }
 
     def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
         values = _controls(controls)
@@ -93,6 +131,30 @@ def registered_step_strategy_type(kind: str) -> type[StepStrategy] | None:
     return _STRATEGY_TYPES.get(kind)
 
 
+def validate_step_strategy_manifest(value: Any) -> dict[str, Any]:
+    """Validate a restart strategy through its registered provider, without a central kind switch."""
+    if not isinstance(value, Mapping) or set(value) != {"strategy", "controls"}:
+        raise TypeError("step strategy manifest must contain exact strategy/controls mappings")
+    descriptor = value["strategy"]
+    if not isinstance(descriptor, Mapping) or not isinstance(descriptor.get("kind"), str):
+        raise TypeError("step strategy descriptor must contain a non-empty kind")
+    provider = registered_step_strategy_type(descriptor["kind"])
+    if provider is None:
+        raise ValueError("unregistered step strategy kind %r" % descriptor["kind"])
+    strategy = provider.from_data(descriptor)
+    if type(strategy) is not provider:
+        raise TypeError("step strategy provider from_data() returned the wrong concrete type")
+    controls = strategy.restore_runtime_controls(value["controls"])
+    strategy.validate_runtime_controls(controls)
+    canonical = {
+        "strategy": strategy.to_data(),
+        "controls": strategy.runtime_controls_data(controls),
+    }
+    if canonical != dict(value):
+        raise ValueError("step strategy manifest is not the provider's canonical representation")
+    return canonical
+
+
 @register_step_strategy_type
 @dataclass(frozen=True, slots=True)
 class FixedDt(StepStrategy):
@@ -106,6 +168,13 @@ class FixedDt(StepStrategy):
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind, "dt": scalar_data(self.dt)}
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> FixedDt:
+        if not isinstance(payload, Mapping) or set(payload) != {"kind", "dt"} \
+                or payload.get("kind") != cls.kind:
+            raise ValueError("FixedDt strategy manifest has invalid keys")
+        return cls(_binary64(payload["dt"], where="FixedDt.dt"))
 
     def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
         self.validate_runtime_controls(controls)
@@ -133,6 +202,16 @@ class AdaptiveCFL(StepStrategy):
         if self.max_dt is not None:
             data["max_dt"] = scalar_data(self.max_dt)
         return data
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> AdaptiveCFL:
+        if (not isinstance(payload, Mapping) or payload.get("kind") != cls.kind
+                or set(payload) not in ({"kind", "cfl"}, {"kind", "cfl", "max_dt"})):
+            raise ValueError("AdaptiveCFL strategy manifest has invalid keys")
+        return cls(
+            _binary64(payload["cfl"], where="AdaptiveCFL.cfl"),
+            _binary64(payload["max_dt"], where="AdaptiveCFL.max_dt")
+            if "max_dt" in payload else None)
 
     def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
         values = _controls(controls)
@@ -193,6 +272,17 @@ class ErrorControlledDt(StepStrategy):
             "max_rejections": self.max_rejections,
         }
 
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> ErrorControlledDt:
+        names = {"dt_init", "rtol", "atol", "dt_min", "dt_max", "shrink", "growth"}
+        if (not isinstance(payload, Mapping) or payload.get("kind") != cls.kind
+                or set(payload) != names | {"kind", "max_rejections"}):
+            raise ValueError("ErrorControlledDt strategy manifest has invalid keys")
+        return cls(
+            **{name: _binary64(payload[name], where="ErrorControlledDt.%s" % name)
+               for name in names},
+            max_rejections=payload["max_rejections"])
+
     def runtime_controller(self, controls: Mapping[str, Any] | None = None) -> Any:
         self.validate_runtime_controls(controls)
         from pops.runtime._step_strategy import ErrorControlledDtController
@@ -213,6 +303,13 @@ class ExternalTimeGrid(StepStrategy):
 
     def to_data(self) -> dict[str, Any]:
         return {"kind": self.kind, "grid_id": self.grid_id}
+
+    @classmethod
+    def from_data(cls, payload: Mapping[str, Any]) -> ExternalTimeGrid:
+        if not isinstance(payload, Mapping) or set(payload) != {"kind", "grid_id"} \
+                or payload.get("kind") != cls.kind:
+            raise ValueError("ExternalTimeGrid strategy manifest has invalid keys")
+        return cls(payload["grid_id"])
 
     def validate_runtime_controls(self, controls: Mapping[str, Any] | None = None) -> None:
         values = _controls(controls)
@@ -238,4 +335,5 @@ class ExternalTimeGrid(StepStrategy):
 __all__ = [
     "AdaptiveCFL", "ErrorControlledDt", "ExternalTimeGrid", "FixedDt", "StepStrategy",
     "register_step_strategy_type", "registered_step_strategy_type",
+    "validate_step_strategy_manifest",
 ]

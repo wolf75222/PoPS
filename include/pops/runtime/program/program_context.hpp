@@ -29,6 +29,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
 #include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache, ADC-458)
+#include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
 #include <pops/runtime/system.hpp>                 // System (the runtime this facade forwards to)
 
 /// @file
@@ -75,6 +76,15 @@ class ProgramContext {
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::runtime_error("Program stage time is outside [0,1]");
+  }
+
+  ClockScheduleState::SubcycleScope subcycle_scope(
+      const std::string& parent, const std::string& child, int count) const {
+    return clock_schedule_.subcycle(parent, child, count);
+  }
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target,
+                                   int step, Real offset) const {
+    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
   }
 
   /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
@@ -542,6 +552,15 @@ class ProgramContext {
   void register_history(const std::string& name, int lag, int ncomp = -1) const {
     sys_->register_history(name, lag, ncomp);
   }
+  void register_history(const std::string& name, int lag, int ncomp, int owner,
+                        const std::string& state_identity,
+                        const std::string& space_identity,
+                        const std::string& clock_identity,
+                        const std::string& interpolation_identity) const {
+    sys_->register_history(
+        name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity, space_identity,
+        clock_identity, interpolation_identity);
+  }
 
   /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
   /// previous step's stored value (e.g. R_{n-1} for Adams-Bashforth), lag 0 = the current slot. The
@@ -583,6 +602,9 @@ class ProgramContext {
   /// System::rotate_histories. The codegen emits ``ctx.rotate_histories()`` as the LAST statement of
   /// the step body (after the commit), so the next step reads lag k as the value k stores ago.
   void rotate_histories() const { sys_->rotate_histories(); }
+  void rotate_histories(const std::string& clock_identity) const {
+    sys_->rotate_histories(clock_identity);
+  }
 
   /// @name Reductions (spec op 16)
   /// COLLECTIVE all_reduce over one component of a field (sum / signed max / signed min). The codegen
@@ -773,6 +795,7 @@ class ProgramContext {
     return std::runtime_error(std::move(message));
   }
 
+  mutable ClockScheduleState clock_schedule_;
   mutable std::array<MultiFab*, 4> polar_coeffs_{{nullptr, nullptr, nullptr, nullptr}};
   mutable std::shared_ptr<PolarTensorKrylovSolver> polar_tensor_;
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;

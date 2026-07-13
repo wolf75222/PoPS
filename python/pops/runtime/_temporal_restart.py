@@ -1,129 +1,226 @@
-"""Strict Uniform temporal state persisted for exact next-attempt restart."""
+"""Strict accepted-boundary temporal state for exact next-attempt restart.
+
+The native checkpoint owns field values, history buffers and held cache values.  This module owns
+the data-only temporal envelope around them: the installed logical-clock schedule, accepted clock
+and schedule cursors, controller state and event queue.  Only an accepted, fully synchronized
+boundary is serializable; an older schema is an offline-migration input, never a runtime fallback.
+"""
 from __future__ import annotations
 
 import json
 import math
+import operator
 from dataclasses import dataclass, field
 from typing import Any
 
 from pops._manifest_protocol import strict_json_loads
+from pops.time.step_strategy import validate_step_strategy_manifest
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _STATUSES = frozenset(("accepted", "rejected", "failed"))
 _EVENT_KEYS = frozenset(("kind", "time", "cursor", "payload"))
+_PROGRAM_KEYS = frozenset((
+    "schema_version", "kind", "primary_clock", "clocks", "subcycles",
+    "synchronizations", "schedules", "histories",
+))
+_UNSPECIFIED = object()
 
 
 def _clock(time: Any, macro_step: Any) -> tuple[str, int]:
     value = float(time)
     if not math.isfinite(value):
         raise ValueError("temporal restart time must be finite")
-    step = int(macro_step)
-    if step < 0:
-        raise ValueError("temporal restart macro_step must be >= 0")
+    try:
+        step = operator.index(macro_step)
+    except TypeError:
+        raise ValueError("temporal restart macro_step must be a non-negative integer") from None
+    if isinstance(macro_step, bool) or step < 0:
+        raise ValueError("temporal restart macro_step must be a non-negative integer")
     return value.hex(), step
 
 
-def _finite_literal(value: Any, *, where: str, positive: bool = False) -> float:
-    if not isinstance(value, dict) or set(value) != {"kind", "value"} \
-            or value["kind"] != "binary64" or not isinstance(value["value"], str):
-        raise TypeError("%s must be a canonical binary64 scalar literal" % where)
+def _json_copy(value: Any, *, where: str) -> Any:
+    """Detach one manifest through the exact JSON value model and reject NaN/opaque values."""
     try:
-        result = float.fromhex(value["value"])
-    except ValueError:
-        raise ValueError("%s binary64 value is invalid" % where) from None
-    if not math.isfinite(result) or result.hex() != value["value"]:
-        raise ValueError("%s must be canonical and finite" % where)
-    if positive and result <= 0.0:
-        raise ValueError("%s must be > 0" % where)
-    return result
+        payload = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as error:
+        raise TypeError("%s must contain canonical JSON values" % where) from error
+    return strict_json_loads(payload, where=where)
 
 
-def _positive_literal(value: Any, *, where: str) -> float:
-    return _finite_literal(value, where=where, positive=True)
+def _positive_int(value: Any, *, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError("%s must be a positive integer" % where)
+    return value
 
 
-def _validate_strategy(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {"strategy", "controls"}:
-        raise TypeError(
-            "Uniform temporal restart strategy must contain exact strategy/controls mappings")
-    strategy, controls = value["strategy"], value["controls"]
-    if not isinstance(strategy, dict) or not isinstance(strategy.get("kind"), str):
-        raise TypeError("Uniform temporal restart strategy descriptor is invalid")
-    if not isinstance(controls, dict):
-        raise TypeError("Uniform temporal restart controls must be a mapping")
-    kind = strategy["kind"]
-    expected = {
-        "fixed_dt": {"kind", "dt"},
-        "error_controlled_dt": {
-            "kind", "dt_init", "rtol", "atol", "dt_min", "dt_max", "max_rejections",
-            "shrink", "growth",
-        },
-        "external_time_grid": {"kind", "grid_id"},
-    }
-    if kind == "adaptive_cfl":
-        if set(strategy) not in ({"kind", "cfl"}, {"kind", "cfl", "max_dt"}):
-            raise ValueError("Uniform temporal restart AdaptiveCFL descriptor has invalid keys")
-    elif kind not in expected or set(strategy) != expected[kind]:
-        raise ValueError("Uniform temporal restart strategy has unknown or incomplete keys")
-    if kind == "adaptive_cfl":
-        _positive_literal(strategy["cfl"], where="AdaptiveCFL.cfl")
-        if "max_dt" in strategy:
-            _positive_literal(strategy["max_dt"], where="AdaptiveCFL.max_dt")
-        if not set(controls) <= {"dt_min", "dt_max"}:
-            raise ValueError("AdaptiveCFL restart controls are dt_min/dt_max only")
-        bounds = {
-            name: _positive_literal(item, where="AdaptiveCFL.controls.%s" % name)
-            for name, item in controls.items()
+def _node_id(value: Any, *, where: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("%s must be a non-negative integer" % where)
+    return value
+
+
+def _clock_identity(descriptor: Any, *, where: str) -> str:
+    from pops.model.ownership import OwnerPath
+    from pops.time.points import Clock
+
+    if not isinstance(descriptor, dict) or set(descriptor) != {
+            "schema_version", "name", "owner"}:
+        raise ValueError("%s has an incomplete clock descriptor" % where)
+    if descriptor["schema_version"] != 1:
+        raise ValueError("%s has an unsupported clock schema_version" % where)
+    if not isinstance(descriptor["name"], str) or not descriptor["name"]:
+        raise ValueError("%s clock name must be non-empty text" % where)
+    owner = None if descriptor["owner"] is None else OwnerPath.from_data(descriptor["owner"])
+    clock = Clock(descriptor["name"], owner=owner)
+    if clock.to_data() != descriptor:
+        raise ValueError("%s clock descriptor is not canonical" % where)
+    return clock.qualified_id
+
+
+def _schedule_clock_identity(schedule: Any, *, where: str) -> str:
+    if not isinstance(schedule, dict) or set(schedule) != {
+            "schema_version", "domain", "trigger", "off"}:
+        raise ValueError("%s has an incomplete typed schedule" % where)
+    if schedule["schema_version"] != 1 or not isinstance(schedule["domain"], dict):
+        raise ValueError("%s has an unsupported typed schedule" % where)
+    domain = schedule["domain"]
+    required = {"type", "clock", "at"}
+    if not required <= set(domain) or not isinstance(domain["type"], str):
+        raise ValueError("%s schedule domain is incomplete" % where)
+    return _clock_identity(domain["clock"], where=where + ".domain")
+
+
+def _validate_program_schedule(value: Any) -> dict[str, Any]:
+    """Validate the generic temporal-program protocol and its clock topology."""
+    data = _json_copy(value, where="temporal program schedule")
+    if not isinstance(data, dict) or set(data) != _PROGRAM_KEYS:
+        raise ValueError("temporal program schedule has an incomplete strict manifest")
+    if data["schema_version"] != 1 or data["kind"] != "pops.temporal-program-schedule":
+        raise ValueError("unsupported temporal program schedule schema or kind")
+    if not isinstance(data["primary_clock"], str) or not data["primary_clock"]:
+        raise ValueError("temporal program schedule primary_clock must be qualified text")
+
+    if not isinstance(data["clocks"], list) or not data["clocks"]:
+        raise ValueError("temporal program schedule must declare at least one clock")
+    clocks: dict[str, int] = {}
+    for index, row in enumerate(data["clocks"]):
+        if not isinstance(row, dict) or set(row) != {"id", "descriptor", "ticks_per_macro"}:
+            raise ValueError("temporal program clock %d has incomplete keys" % index)
+        identity = _clock_identity(row["descriptor"], where="temporal clock %d" % index)
+        if row["id"] != identity:
+            raise ValueError("temporal program clock %d identity is not canonical" % index)
+        if identity in clocks:
+            raise ValueError("temporal program schedule declares clock %s twice" % identity)
+        clocks[identity] = _positive_int(
+            row["ticks_per_macro"], where="temporal clock ticks_per_macro")
+    primary = data["primary_clock"]
+    if clocks.get(primary) != 1:
+        raise ValueError("primary temporal clock must exist with ticks_per_macro=1")
+
+    if not isinstance(data["subcycles"], list):
+        raise TypeError("temporal program subcycles must be a list")
+    child_relations: dict[str, tuple[str, int]] = {}
+    subcycle_nodes: set[int] = set()
+    for index, row in enumerate(data["subcycles"]):
+        if not isinstance(row, dict) or set(row) != {
+                "node_id", "parent_clock", "child_clock", "count"}:
+            raise ValueError("temporal subcycle %d has incomplete keys" % index)
+        node = _node_id(row["node_id"], where="temporal subcycle node_id")
+        if node in subcycle_nodes:
+            raise ValueError("temporal subcycle node_id %d is duplicated" % node)
+        subcycle_nodes.add(node)
+        parent, child = row["parent_clock"], row["child_clock"]
+        count = _positive_int(row["count"], where="temporal subcycle count")
+        if parent not in clocks or child not in clocks or parent == child:
+            raise ValueError("temporal subcycle references invalid qualified clocks")
+        relation = (parent, count)
+        if child in child_relations and child_relations[child] != relation:
+            raise ValueError("temporal child clock has conflicting subcycle parents")
+        child_relations[child] = relation
+        if clocks[child] != clocks[parent] * count:
+            raise ValueError("temporal subcycle ticks_per_macro is inconsistent with count")
+    if set(clocks) - {primary} != set(child_relations):
+        raise ValueError("every non-primary temporal clock requires one subcycle parent")
+
+    if not isinstance(data["synchronizations"], list):
+        raise TypeError("temporal program synchronizations must be a list")
+    sync_nodes: set[int] = set()
+    for index, row in enumerate(data["synchronizations"]):
+        if not isinstance(row, dict) or set(row) != {
+                "node_id", "source_clock", "target_clock", "relation", "point"}:
+            raise ValueError("temporal synchronization %d has incomplete keys" % index)
+        node = _node_id(row["node_id"], where="temporal synchronization node_id")
+        if node in sync_nodes:
+            raise ValueError("temporal synchronization node_id %d is duplicated" % node)
+        sync_nodes.add(node)
+        if (row["source_clock"] not in clocks or row["target_clock"] not in clocks
+                or row["source_clock"] == row["target_clock"]):
+            raise ValueError("temporal synchronization references invalid qualified clocks")
+        relation = row["relation"]
+        if not isinstance(relation, dict) or not isinstance(relation.get("kind"), str) \
+                or not relation["kind"]:
+            raise ValueError("temporal synchronization relation is not a typed provider")
+        if not isinstance(row["point"], dict):
+            raise TypeError("temporal synchronization point must be typed data")
+
+    if not isinstance(data["schedules"], list):
+        raise TypeError("temporal program schedules must be a list")
+    schedule_nodes: set[int] = set()
+    for index, row in enumerate(data["schedules"]):
+        if not isinstance(row, dict) or set(row) != {
+                "node_id", "schedule", "cache_required"}:
+            raise ValueError("temporal schedule %d has incomplete keys" % index)
+        node = _node_id(row["node_id"], where="temporal schedule node_id")
+        if node in schedule_nodes:
+            raise ValueError("temporal schedule node_id %d is duplicated" % node)
+        schedule_nodes.add(node)
+        clock_id = _schedule_clock_identity(
+            row["schedule"], where="temporal schedule %d" % index)
+        if clock_id not in clocks:
+            raise ValueError("temporal schedule references an undeclared clock")
+        if type(row["cache_required"]) is not bool:
+            raise TypeError("temporal schedule cache_required must be bool")
+
+    if not isinstance(data["histories"], list):
+        raise TypeError("temporal program histories must be a list")
+    history_names: set[str] = set()
+    for index, row in enumerate(data["histories"]):
+        expected = {
+            "name", "owner", "state", "space", "clock", "depth", "ring_slots", "ncomp",
+            "validity", "interpolation", "checkpoint_policy",
         }
-        if bounds.get("dt_min", 0.0) > bounds.get("dt_max", float("inf")):
-            raise ValueError("AdaptiveCFL restart dt_min must be <= dt_max")
-    elif kind == "fixed_dt":
-        _positive_literal(strategy["dt"], where="FixedDt.dt")
-        if controls:
-            raise ValueError("FixedDt restart controls must be empty")
-    elif kind == "error_controlled_dt":
-        scalars = {
-            name: _positive_literal(strategy[name], where="ErrorControlledDt.%s" % name)
-            for name in ("dt_init", "rtol", "atol", "dt_min", "dt_max", "shrink", "growth")
-        }
-        rejections = strategy["max_rejections"]
-        if isinstance(rejections, bool) or not isinstance(rejections, int) or rejections <= 0:
-            raise ValueError("ErrorControlledDt.max_rejections must be a positive integer")
-        if not scalars["dt_min"] <= scalars["dt_init"] <= scalars["dt_max"]:
-            raise ValueError("ErrorControlledDt restart bounds are inconsistent")
-        if not scalars["shrink"] < 1.0 or scalars["growth"] < 1.0:
-            raise ValueError("ErrorControlledDt restart shrink/growth are inconsistent")
-        if controls:
-            raise ValueError("ErrorControlledDt restart controls must be empty")
-    else:
-        grid_id = strategy["grid_id"]
-        if not isinstance(grid_id, str) or not grid_id:
-            raise ValueError("ExternalTimeGrid.grid_id must be a non-empty string")
-        if set(controls) != {grid_id}:
-            raise ValueError("ExternalTimeGrid restart controls must contain its exact grid_id")
-        grid = controls[grid_id]
-        if not isinstance(grid, list) or len(grid) < 2:
-            raise ValueError("ExternalTimeGrid restart grid must contain at least two times")
-        points = [
-            _finite_literal(item, where="ExternalTimeGrid.controls.%s" % grid_id)
-            for item in grid
-        ]
-        if any(right <= left for left, right in zip(points, points[1:], strict=False)):
-            raise ValueError("ExternalTimeGrid restart grid must be strictly increasing")
-    return {
-        "strategy": {name: item for name, item in strategy.items()},
-        "controls": {
-            name: [dict(item) for item in item_value]
-            if isinstance(item_value, list) else dict(item_value)
-            for name, item_value in controls.items()
-        },
-    }
+        if not isinstance(row, dict) or set(row) != expected:
+            raise ValueError("temporal history %d has incomplete keys" % index)
+        name = row["name"]
+        if not isinstance(name, str) or not name or name in history_names:
+            raise ValueError("temporal history names must be unique non-empty text")
+        history_names.add(name)
+        if row["clock"] not in clocks:
+            raise ValueError("temporal history %r references an undeclared clock" % name)
+        depth = _positive_int(row["depth"], where="temporal history depth")
+        if row["ring_slots"] != depth + 1:
+            raise ValueError("temporal history ring_slots must equal depth + 1")
+        ncomp = row["ncomp"]
+        if ncomp is not None:
+            _positive_int(ncomp, where="temporal history ncomp")
+        if not isinstance(row["state"], dict) or not isinstance(row["space"], dict):
+            raise TypeError("temporal history state/space must be typed data")
+        if row["owner"] is not None and not isinstance(row["owner"], dict):
+            raise TypeError("temporal history owner must be typed data or null")
+        if not isinstance(row["validity"], dict) or not isinstance(row["interpolation"], dict):
+            raise TypeError("temporal history validity/interpolation must be typed data")
+        if row["checkpoint_policy"] is not None \
+                and not isinstance(row["checkpoint_policy"], dict):
+            raise TypeError("temporal history checkpoint policy must be typed data or null")
+    return data
 
 
 def _validate_controller_state(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != {"last_accepted_dt"}:
-        raise ValueError("Uniform temporal controller state has incomplete keys")
+        raise ValueError("temporal controller state has incomplete keys")
     last_dt = value["last_accepted_dt"]
     if last_dt is not None:
         if not isinstance(last_dt, str):
@@ -139,45 +236,110 @@ def _validate_controller_state(value: Any) -> dict[str, Any]:
 
 def _validate_event_queue(value: Any) -> list[dict[str, Any]]:
     if not isinstance(value, list):
-        raise TypeError("Uniform temporal event queue must be a list")
+        raise TypeError("temporal event queue must be a list")
     result = []
     for index, event in enumerate(value):
         if not isinstance(event, dict) or set(event) != _EVENT_KEYS:
-            raise ValueError("Uniform temporal event %d has incomplete keys" % index)
+            raise ValueError("temporal event %d has incomplete keys" % index)
         if not isinstance(event["kind"], str) or not event["kind"]:
-            raise ValueError("Uniform temporal event kind must be a non-empty string")
+            raise ValueError("temporal event kind must be a non-empty string")
         if not isinstance(event["time"], str):
-            raise ValueError("Uniform temporal event time must be a canonical hexadecimal float")
+            raise ValueError("temporal event time must be a canonical hexadecimal float")
         try:
             event_value = float.fromhex(event["time"])
         except ValueError:
-            raise ValueError("Uniform temporal event time is not hexadecimal") from None
+            raise ValueError("temporal event time is not hexadecimal") from None
         if not math.isfinite(event_value) or event_value.hex() != event["time"]:
-            raise ValueError("Uniform temporal event time must be a canonical hexadecimal float")
-        cursor = int(event["cursor"])
-        if isinstance(event["cursor"], bool) or cursor != event["cursor"] or cursor < 0:
-            raise ValueError("Uniform temporal event cursor must be a non-negative integer")
+            raise ValueError("temporal event time must be a canonical hexadecimal float")
+        cursor = event["cursor"]
+        if isinstance(cursor, bool) or not isinstance(cursor, int) or cursor < 0:
+            raise ValueError("temporal event cursor must be a non-negative integer")
         if not isinstance(event["payload"], dict):
-            raise TypeError("Uniform temporal event payload must be a mapping")
-        result.append({"kind": event["kind"], "time": event["time"], "cursor": cursor,
-                       "payload": dict(event["payload"])})
+            raise TypeError("temporal event payload must be a mapping")
+        result.append({
+            "kind": event["kind"], "time": event["time"], "cursor": cursor,
+            "payload": _json_copy(event["payload"], where="temporal event payload"),
+        })
     return result
+
+
+def _boundary_cursors(
+    schedule: dict[str, Any] | None, *, time_hex: str, macro_step: int,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Derive every accepted-boundary cursor from the immutable program schedule."""
+    schedule_cursors: dict[str, Any] = {
+        "macro_step": {"macro_step": macro_step, "phase": "accepted"},
+    }
+    if schedule is None:
+        return {}, schedule_cursors, {}, {}, {}
+    clock_ticks = {
+        row["id"]: macro_step * row["ticks_per_macro"] for row in schedule["clocks"]
+    }
+    clock_cursors = {
+        identity: {"time": time_hex, "tick": tick, "phase": "accepted"}
+        for identity, tick in clock_ticks.items()
+    }
+    for row in schedule["subcycles"]:
+        schedule_cursors["subcycle:%d" % row["node_id"]] = {
+            "macro_step": macro_step, "next_iteration": 0, "phase": "accepted",
+        }
+    for row in schedule["schedules"]:
+        clock_id = _schedule_clock_identity(
+            row["schedule"], where="temporal schedule cursor")
+        schedule_cursors["schedule:%d" % row["node_id"]] = {
+            "macro_step": macro_step, "clock_tick": clock_ticks[clock_id],
+            "phase": "accepted",
+        }
+    synchronization_cursors = {
+        str(row["node_id"]): {
+            "macro_step": macro_step,
+            "source_tick": clock_ticks[row["source_clock"]],
+            "target_tick": clock_ticks[row["target_clock"]],
+            "phase": "accepted",
+        }
+        for row in schedule["synchronizations"]
+    }
+    history_cursors = {
+        row["name"]: {
+            "clock": row["clock"], "newest_tick": clock_ticks[row["clock"]],
+            "oldest_tick": max(0, clock_ticks[row["clock"]] - row["depth"]),
+            "valid_lags": row["depth"] if macro_step > 0 else 0,
+            "cold_start_extended": (
+                macro_step > 0 and clock_ticks[row["clock"]] < row["depth"]),
+            "initialized": macro_step > 0,
+        }
+        for row in schedule["histories"]
+    }
+    cache_cursors = {}
+    for row in schedule["schedules"]:
+        if not row["cache_required"]:
+            continue
+        clock_id = _schedule_clock_identity(row["schedule"], where="temporal cache cursor")
+        cache_cursors[str(row["node_id"])] = {
+            "clock": clock_id, "valid_through_tick": clock_ticks[clock_id],
+            "initialized": macro_step > 0,
+        }
+    return (
+        clock_cursors, schedule_cursors, synchronization_cursors,
+        history_cursors, cache_cursors,
+    )
 
 
 @dataclass
 class TemporalRestartState:
-    """Runtime-owned state needed to reproduce the next Uniform step attempt.
-
-    Native fields, history rings and held values stay in their existing stores.  This
-    object owns the controller/cursor envelope around them and records only committed
-    attempt boundaries.  A rejected/failed attempt deliberately makes checkpointing
-    ineligible until another attempt is accepted.
-    """
+    """Runtime-owned temporal envelope committed only at accepted synchronized boundaries."""
 
     strategy: dict[str, Any] | None = None
+    program_schedule: dict[str, Any] | None = None
     time_hex: str = float(0).hex()
     macro_step: int = 0
-    schedule_cursors: dict[str, int] = field(default_factory=lambda: {"macro_step": 0})
+    clock_cursors: dict[str, Any] = field(default_factory=dict)
+    schedule_cursors: dict[str, Any] = field(default_factory=lambda: {
+        "macro_step": {"macro_step": 0, "phase": "accepted"},
+    })
+    synchronization_cursors: dict[str, Any] = field(default_factory=dict)
+    history_cursors: dict[str, Any] = field(default_factory=dict)
+    cache_cursors: dict[str, Any] = field(default_factory=dict)
     controller_state: dict[str, Any] = field(
         default_factory=lambda: {"last_accepted_dt": None})
     event_queue: list[dict[str, Any]] = field(default_factory=list)
@@ -187,15 +349,37 @@ class TemporalRestartState:
     synchronized: bool = True
     _restored_pending: bool = field(default=False, repr=False)
 
+    def configure_program(self, schedule: Any, *, time: Any, macro_step: Any) -> None:
+        """Bind one immutable nested-clock contract before execution or restart."""
+        now, step = _clock(time, macro_step)
+        self._require_live_clock(now, step)
+        candidate = _validate_program_schedule(schedule)
+        if self.program_schedule is not None and candidate != self.program_schedule:
+            raise RuntimeError("installed temporal program schedule differs from restored schedule")
+        self.program_schedule = candidate
+        cursors = _boundary_cursors(candidate, time_hex=now, macro_step=step)
+        if self._restored_pending:
+            existing = (
+                self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
+                self.history_cursors, self.cache_cursors,
+            )
+            if existing != cursors:
+                raise RuntimeError("restored temporal cursors differ from the installed schedule")
+        else:
+            (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
+             self.history_cursors, self.cache_cursors) = cursors
+
     def begin_run(self, strategy: dict[str, Any], *, time: Any, macro_step: Any) -> None:
         """Bind the controller for this run, enforcing the first post-restart attempt."""
         now, step = _clock(time, macro_step)
         if self.strategy is None and not self._restored_pending:
             self.time_hex = now
             self.macro_step = step
-            self.schedule_cursors = {"macro_step": step}
+            (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
+             self.history_cursors, self.cache_cursors) = _boundary_cursors(
+                 self.program_schedule, time_hex=now, macro_step=step)
         self._require_live_clock(now, step)
-        candidate = _validate_strategy(strategy)
+        candidate = validate_step_strategy_manifest(strategy)
         if self._restored_pending and candidate != self.strategy:
             raise RuntimeError(
                 "restart requires the checkpointed step strategy for the exact next attempt")
@@ -212,10 +396,12 @@ class TemporalRestartState:
         now, step = _clock(time, macro_step)
         if step != old_step + 1 or float.fromhex(now) <= float.fromhex(before):
             raise RuntimeError(
-                "accepted Uniform attempt must advance time and macro_step exactly once")
+                "accepted temporal attempt must advance time and macro_step exactly once")
         self.time_hex = now
         self.macro_step = step
-        self.schedule_cursors = {"macro_step": step}
+        (self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
+         self.history_cursors, self.cache_cursors) = _boundary_cursors(
+             self.program_schedule, time_hex=now, macro_step=step)
         self.controller_state = {
             "last_accepted_dt": (float.fromhex(now) - float.fromhex(before)).hex(),
         }
@@ -230,8 +416,26 @@ class TemporalRestartState:
     def fail(self, *, time: Any, macro_step: Any) -> None:
         self._record_unsuccessful("failed", time=time, macro_step=macro_step)
 
+    def cursor_for_clock(self, clock: Any) -> dict[str, Any]:
+        """Return one accepted qualified cursor; never infer it from the macro clock."""
+        from pops.time.points import Clock
+
+        if type(clock) is not Clock:
+            raise TypeError("temporal cursor lookup requires an exact Clock")
+        if self.status != "accepted" or not self.synchronized:
+            raise RuntimeError("temporal cursor lookup requires an accepted synchronized boundary")
+        identity = clock.qualified_id
+        try:
+            cursor = self.clock_cursors[identity]
+        except KeyError:
+            raise RuntimeError(
+                "accepted temporal state has no cursor for qualified clock %s" % identity) from None
+        if cursor.get("phase") != "accepted" or cursor.get("time") != self.time_hex:
+            raise RuntimeError("qualified temporal clock cursor is not at the accepted boundary")
+        return dict(cursor)
+
     def checkpoint_json(self, *, time: Any, macro_step: Any) -> str:
-        """Return the strict payload, refusing an uncommitted or unsynchronized point."""
+        """Return schema v2, refusing an uncommitted or unsynchronized point."""
         now, step = _clock(time, macro_step)
         self._require_live_clock(now, step)
         if self.status != "accepted" or not self.synchronized:
@@ -240,11 +444,18 @@ class TemporalRestartState:
                 "the last attempt was %s" % self.status)
         if self.strategy is None:
             raise RuntimeError("checkpoint requires a declared step strategy")
-        _validate_strategy(self.strategy)
+        validate_step_strategy_manifest(self.strategy)
+        if self.program_schedule is not None:
+            _validate_program_schedule(self.program_schedule)
+        expected = _boundary_cursors(self.program_schedule, time_hex=now, macro_step=step)
+        actual = (
+            self.clock_cursors, self.schedule_cursors, self.synchronization_cursors,
+            self.history_cursors, self.cache_cursors,
+        )
+        if actual != expected:
+            raise RuntimeError("checkpoint temporal cursors are not at one synchronized boundary")
         _validate_controller_state(self.controller_state)
         _validate_event_queue(self.event_queue)
-        if self.schedule_cursors != {"macro_step": step}:
-            raise RuntimeError("checkpoint schedule cursor is not synchronized with macro_step")
         if (set(self.transaction_stats) != _STATUSES
                 or any(isinstance(value, bool) or not isinstance(value, int) or value < 0
                        for value in self.transaction_stats.values())):
@@ -255,58 +466,85 @@ class TemporalRestartState:
         return {
             "schema_version": _SCHEMA_VERSION,
             "strategy": self.strategy,
+            "program_schedule": self.program_schedule,
             "clock": {"time": self.time_hex, "macro_step": self.macro_step},
-            "schedule_cursors": dict(self.schedule_cursors),
+            "clock_cursors": _json_copy(self.clock_cursors, where="clock cursors"),
+            "schedule_cursors": _json_copy(self.schedule_cursors, where="schedule cursors"),
+            "synchronization_cursors": _json_copy(
+                self.synchronization_cursors, where="synchronization cursors"),
+            "history_cursors": _json_copy(self.history_cursors, where="history cursors"),
+            "cache_cursors": _json_copy(self.cache_cursors, where="cache cursors"),
             "controller_state": dict(self.controller_state),
-            "event_queue": list(self.event_queue),
+            "event_queue": _json_copy(self.event_queue, where="event queue"),
             "transaction_stats": dict(self.transaction_stats),
             "status": self.status,
             "synchronized": self.synchronized,
         }
 
     @classmethod
-    def from_json(cls, payload: Any, *, time: Any, macro_step: Any) -> TemporalRestartState:
-        data = strict_json_loads(str(payload), where="Uniform temporal restart state")
+    def from_json(
+        cls, payload: Any, *, time: Any, macro_step: Any,
+        program_schedule: Any = _UNSPECIFIED,
+    ) -> TemporalRestartState:
+        data = strict_json_loads(str(payload), where="temporal restart state")
         expected = {
-            "schema_version", "strategy", "clock", "schedule_cursors", "controller_state",
-            "event_queue", "transaction_stats", "status", "synchronized",
+            "schema_version", "strategy", "program_schedule", "clock", "clock_cursors",
+            "schedule_cursors", "synchronization_cursors", "history_cursors", "cache_cursors",
+            "controller_state", "event_queue", "transaction_stats", "status", "synchronized",
         }
         if not isinstance(data, dict) or set(data) != expected:
-            raise ValueError("Uniform temporal restart state has an incomplete strict manifest")
+            raise ValueError("temporal restart state has an incomplete strict manifest")
         if (isinstance(data["schema_version"], bool)
                 or not isinstance(data["schema_version"], int)
                 or data["schema_version"] != _SCHEMA_VERSION):
-            raise ValueError("unsupported Uniform temporal restart schema_version")
-        strategy = _validate_strategy(data["strategy"])
+            raise ValueError(
+                "unsupported temporal restart schema_version; historical payloads require "
+                "offline migration")
+        strategy = validate_step_strategy_manifest(data["strategy"])
+        schedule = (None if data["program_schedule"] is None
+                    else _validate_program_schedule(data["program_schedule"]))
+        if program_schedule is not _UNSPECIFIED:
+            installed = (None if program_schedule is None
+                         else _validate_program_schedule(program_schedule))
+            if schedule != installed:
+                raise ValueError(
+                    "checkpoint temporal program schedule differs from installed program")
         clock = data["clock"]
         if not isinstance(clock, dict) or set(clock) != {"time", "macro_step"}:
-            raise ValueError("Uniform temporal restart clock is incomplete")
+            raise ValueError("temporal restart clock is incomplete")
         now, step = _clock(time, macro_step)
         if (not isinstance(clock["time"], str)
                 or isinstance(clock["macro_step"], bool)
                 or not isinstance(clock["macro_step"], int)):
-            raise TypeError("Uniform temporal restart clock has invalid field types")
+            raise TypeError("temporal restart clock has invalid field types")
         if clock != {"time": now, "macro_step": step}:
-            raise ValueError("Uniform temporal restart clock differs from the checkpoint clock")
-        cursors = data["schedule_cursors"]
-        if (not isinstance(cursors, dict) or set(cursors) != {"macro_step"}
-                or isinstance(cursors["macro_step"], bool)
-                or not isinstance(cursors["macro_step"], int)
-                or cursors["macro_step"] != step):
-            raise ValueError("Uniform schedule cursor is not synchronized with macro_step")
+            raise ValueError("temporal restart clock differs from the checkpoint clock")
+        cursor_sections = (
+            data["clock_cursors"], data["schedule_cursors"],
+            data["synchronization_cursors"], data["history_cursors"], data["cache_cursors"],
+        )
+        if any(not isinstance(section, dict) for section in cursor_sections):
+            raise TypeError("temporal cursor sections must be mappings")
+        if cursor_sections != _boundary_cursors(schedule, time_hex=now, macro_step=step):
+            raise ValueError("temporal restart cursors are not at one synchronized boundary")
         stats = data["transaction_stats"]
         if (not isinstance(stats, dict) or set(stats) != _STATUSES
-                or any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in stats.values())):
-            raise ValueError("Uniform temporal transaction statistics are invalid")
+                or any(isinstance(v, bool) or not isinstance(v, int) or v < 0
+                       for v in stats.values())):
+            raise ValueError("temporal transaction statistics are invalid")
         if data["status"] != "accepted" or data["synchronized"] is not True:
             raise ValueError("checkpoint temporal state is not an accepted synchronized point")
         controller = _validate_controller_state(data["controller_state"])
         events = _validate_event_queue(data["event_queue"])
         out = cls(
-            strategy=strategy, time_hex=now, macro_step=step,
-            schedule_cursors=dict(cursors), controller_state=controller,
-            event_queue=events, transaction_stats=dict(stats),
-            status="accepted", synchronized=True,
+            strategy=strategy, program_schedule=schedule, time_hex=now, macro_step=step,
+            clock_cursors=dict(data["clock_cursors"]),
+            schedule_cursors=dict(data["schedule_cursors"]),
+            synchronization_cursors=dict(data["synchronization_cursors"]),
+            history_cursors=dict(data["history_cursors"]),
+            cache_cursors=dict(data["cache_cursors"]),
+            controller_state=controller, event_queue=events,
+            transaction_stats=dict(stats), status="accepted", synchronized=True,
         )
         out._restored_pending = True
         return out
@@ -322,7 +560,7 @@ class TemporalRestartState:
     def _require_live_clock(self, time_hex: str, macro_step: int) -> None:
         if time_hex != self.time_hex or macro_step != self.macro_step:
             raise RuntimeError(
-                "Uniform temporal state is desynchronized from the native runtime clock")
+                "temporal state is desynchronized from the native runtime clock")
 
 
 def is_rejected_attempt(error: BaseException) -> bool:

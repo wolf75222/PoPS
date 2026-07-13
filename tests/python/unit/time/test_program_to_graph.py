@@ -31,7 +31,7 @@ def _program(*, with_operator=False):
     problem = Case(name="case")
     block = problem.block("fluid", model)
     program = Program("step")._bind_operators(model)
-    state = program.state(block, state_declaration)
+    state = program.state(block[state_declaration])
     if rate is None:
         result = program.value("u_next", state.n, at=state.next.point)
     else:
@@ -50,8 +50,8 @@ def test_to_graph_detaches_values_handles_and_write_only_commit():
 
     assert program._ir_hash() == before
     assert graph.name == "step"
-    assert [type(node) for node in graph.nodes] == [StateRead, ProgramValue, Commit]
-    assert graph.nodes[1].inputs == (graph.ref(graph.nodes[0]),)
+    assert [type(node) for node in graph.nodes] == [StateRead, Commit]
+    assert graph.nodes[-1].value == graph.ref(graph.nodes[0])
     assert graph.nodes[-1].target.to_data()["endpoint"] == "next"
     assert graph.nodes[-1].point == TimePoint(graph.nodes[-1].clock, step=1)
     assert not hasattr(graph, "_values")
@@ -78,7 +78,7 @@ def test_to_graph_preserves_exact_cross_clock_synchronization():
     problem = Case(name="case")
     block = problem.block("fluid", model)
     program = Program("clock-transfer")
-    state = program.state(block, model.state_handle(space))
+    state = program.state(block[model.state_handle(space)])
     fast = Clock("fast", owner=program.owner_path)
     target = TimePoint(fast, Fraction(1, 3))
     from pops.time.synchronization import SampleAndHold
@@ -111,7 +111,7 @@ def test_to_graph_converts_branch_range_and_while_blocks_to_structured_regions()
     space = model.state_space("U", ("u",))
     block = Case(name="case").block("fluid", model)
     program = Program("structured-control")
-    state = program.state(block, model.state_handle(space))
+    state = program.state(block[model.state_handle(space)])
 
     condition = program.norm2(state.n) > 0
 

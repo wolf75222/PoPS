@@ -26,6 +26,8 @@ def _declared_clocks(nodes: Any, primary: Any) -> tuple[Any, ...]:
         candidates = [node.clock]
         if node.kind == "synchronize":
             candidates.append(node.source_clock)
+        if node.kind == "loop" and node.loop_kind == "subcycle":
+            candidates.append(node.parent_clock)
         if node.kind == "branch":
             for arm in (node.when_true, node.when_false):
                 candidates.extend(arm.clocks)
@@ -172,6 +174,20 @@ def program_to_graph(program: Any) -> Any:
                 value.clock,
                 value.point,
                 count=value.attrs["count"],
+                name=_name(value),
+            ),)
+        if value.op == "subcycle":
+            body = convert_region(
+                value.attrs["body_block"], value.attrs["body"], "%s/body" % _name(value))
+            return (Loop(
+                value.id,
+                "subcycle",
+                inputs[0],
+                body,
+                value.clock,
+                value.point,
+                count=value.attrs["count"],
+                parent_clock=value.attrs["parent_clock"],
                 name=_name(value),
             ),)
         if value.op == "while":

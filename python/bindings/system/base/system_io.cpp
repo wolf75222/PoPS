@@ -49,6 +49,12 @@ void System::rotate_histories() {
   p_->program_.hist_.rotate();
 }
 
+void System::rotate_histories(const std::string& clock_identity) {
+  if (clock_identity.empty())
+    throw std::runtime_error("System::rotate_histories: clock identity must be non-empty");
+  p_->program_.hist_.rotate(clock_identity);
+}
+
 // Multistep history checkpoint/restart seam (ADC-406b): the System owns the rings, so the checkpoint
 // facade (sim.checkpoint / sim.restart) gathers and restores them DIRECTLY -- reusing the SAME global
 // gather (gather_global) / scatter (write_state) machinery as the block state, so the round-trip is

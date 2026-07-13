@@ -34,7 +34,7 @@ _KNOWN_DETERMINISTIC_OPS = frozenset({
     "solve_outcome", "solve_outcome_component",
     "schur_coeffs", "schur_energy", "schur_reconstruct", "schur_explicit_flux", "schur_rhs",
     "cfl", "hmin", "max_wave_speed", "record_scalar", "reduce", "scalar_op", "compare",
-    "while", "range", "branch", "solve_local_nonlinear",
+    "while", "range", "subcycle", "branch", "synchronize", "solve_local_nonlinear",
 })
 
 #: The capability tag an external brick clears to declare it is NOT a deterministic function of its

@@ -85,6 +85,7 @@ def test_current_checkpoint_envelope_roundtrips(_t):
         authenticate_checkpoint_payload, seal_checkpoint_payload)
     from pops.runtime._run_manifest import RunManifest
     from pops.runtime._step_strategy import run_control_payload
+    from pops.runtime._temporal_restart import TemporalRestartState
     from pops.runtime.bricks import abi_key
     from pops.time import FixedDt
 
@@ -102,16 +103,12 @@ def test_current_checkpoint_envelope_roundtrips(_t):
                   "max_steps": 10,
                   "output_mode": "current-directory"})
     owner = SimpleNamespace(bound_snapshot=snapshot, last_run_identity=run.run_identity)
-    temporal = {
-        "schema_version": 1,
-        "strategy": run_control_payload(FixedDt(0.05)),
-        "clock": {"time": (0.1).hex(), "macro_step": 2},
-        "schedule_cursors": {"macro_step": 2},
-        "controller_state": {"last_accepted_dt": (0.05).hex()},
-        "event_queue": [],
-        "transaction_stats": {"accepted": 2, "rejected": 0, "failed": 0},
-        "status": "accepted", "synchronized": True,
-    }
+    temporal_state = TemporalRestartState()
+    temporal_state.begin_run(
+        run_control_payload(FixedDt(0.05)), time=0.0, macro_step=0)
+    temporal_state.accept(before_time=0.0, before_step=0, time=0.05, macro_step=1)
+    temporal_state.accept(before_time=0.05, before_step=1, time=0.1, macro_step=2)
+    temporal = temporal_state.to_data()
     out = {
         "pops_checkpoint_version": 3, "t": 0.1, "macro_step": 2,
         "abi_key": abi_key(), "program_hash": "deadbeef" * 8,

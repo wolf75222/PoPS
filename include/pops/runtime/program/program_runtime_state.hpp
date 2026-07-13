@@ -59,6 +59,11 @@ struct HistoryManager {
   std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
   std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
   std::map<std::string, bool> initialized;                 // name -> stored at least once
+  std::map<std::string, int> owner;                        // runtime block index (-1 legacy)
+  std::map<std::string, std::string> state_identity;
+  std::map<std::string, std::string> space_identity;
+  std::map<std::string, std::string> clock_identity;
+  std::map<std::string, std::string> interpolation_identity;
   /// PER-SLOT dt (ADC-626). slot_dt[name][s] = the macro-step dt whose commit produced the value now
   /// in slot s (slot 0 = newest). Filled by the runtime's store_history (which knows the current dt via
   /// ProgramRuntimeState::last_dt_) and rotated ALONGSIDE the ring, so a selective-persistence restart
@@ -75,6 +80,24 @@ struct HistoryManager {
   /// the ring it annotates.
   void rotate() {
     for (auto& [name, ring] : histories) {
+      for (std::size_t k = ring.size(); k-- > 1;)
+        std::swap(ring[k], ring[k - 1]);
+      auto dt_it = slot_dt.find(name);
+      if (dt_it != slot_dt.end()) {
+        std::vector<Real>& dts = dt_it->second;
+        for (std::size_t k = dts.size(); k-- > 1;)
+          std::swap(dts[k], dts[k - 1]);
+      }
+    }
+  }
+
+  /// Rotate only rings owned by one qualified logical clock. Generated multirate Programs use this
+  /// overload; the unqualified rotate above remains the internal legacy seam.
+  void rotate(const std::string& clock) {
+    for (auto& [name, ring] : histories) {
+      const auto qualified = clock_identity.find(name);
+      if (qualified == clock_identity.end() || qualified->second != clock)
+        continue;
       for (std::size_t k = ring.size(); k-- > 1;)
         std::swap(ring[k], ring[k - 1]);
       auto dt_it = slot_dt.find(name);

@@ -95,7 +95,7 @@ class _ProgramSerialization:
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]
             attrs["cond"], attrs["body"] = attrs["cond"].id, attrs["body"].id
-        elif value.op == "range":
+        elif value.op in ("range", "subcycle"):
             attrs["body_block"] = [
                 _ProgramSerialization._serialize_node(
                     node, include_provenance=include_provenance) for node in attrs["body_block"]]

@@ -65,7 +65,7 @@ def validate_program_regions(program: Any) -> None:
                 require_region(
                     program, attrs["body"], regions["body_block"], "while body",
                     allow=value.inputs)
-        elif value.op == "range":
+        elif value.op in ("range", "subcycle"):
             require_region(
                 program, attrs["body"], regions["body_block"], "%s body" % value.op,
                 allow=value.inputs)
