@@ -113,7 +113,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         raise TypeError("semantic program identity requires a pops.time.Program")
     serialized = program._serialize(include_provenance=False)
     expected = {"name", "version", "clock", "nodes", "commits", "block_order"}
-    optional = {"histories", "history_persistence", "dt_bound"}
+    optional = {"histories", "history_persistence", "dt_bound", "step_transaction"}
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
     result = {
@@ -123,7 +123,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
         "commits": serialized["commits"],
         "block_order": serialized["block_order"],
     }
-    for key in ("histories", "history_persistence"):
+    for key in ("histories", "history_persistence", "step_transaction"):
         if key in serialized:
             result[key] = serialized[key]
     if "dt_bound" in serialized:

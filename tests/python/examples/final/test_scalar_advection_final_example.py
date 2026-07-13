@@ -20,7 +20,8 @@ def _load_example():
 
 
 def test_supported_authoring_core_is_genuine_and_inert():
-    from pops.time import Commit
+    from pops.identity.semantic import program_semantic_data, semantic_identity_of
+    from pops.time import Commit, FixedDt
 
     module = _load_example()
     core = module.build_authoring()
@@ -48,6 +49,18 @@ def test_supported_authoring_core_is_genuine_and_inert():
     assert sum(isinstance(node, Commit) for node in graph.nodes) == 1
     assert core.program.transaction_plan().strategy.kind == "adaptive_cfl"
     assert set(core.run_controls) == {"t_end", "max_steps", "output_dir"}
+
+    preset = module.build_authoring(program_builder=module.preset_ssprk2)
+    assert preset.program.to_graph().to_data() == core.program.to_graph().to_data()
+    assert preset.program.to_graph().graph_hash == core.program.to_graph().graph_hash
+    assert program_semantic_data(preset.program) == program_semantic_data(core.program)
+    assert semantic_identity_of(program=preset.program) == \
+        semantic_identity_of(program=core.program)
+
+    different_controller = module.explicit_ssprk2(core.tracer_state, core.rate)
+    different_controller.step_strategy(FixedDt(1.0e-2))
+    assert semantic_identity_of(program=different_controller) != \
+        semantic_identity_of(program=core.program)
 
 
 def test_target_has_one_authority_per_concern_and_no_legacy_path():
@@ -91,19 +104,27 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
     ]
     assert len(state_calls) == 1
     assert isinstance(state_calls[0].args[0], ast.Name)
-    assert state_calls[0].args[0].id == "tracer_state"
+    assert state_calls[0].args[0].id == "state"
+    assert "program_builder(tracer_state, rate)" in source
 
     assert sum(
         isinstance(node.func, ast.Attribute) and node.func.attr == "value"
         and isinstance(node.func.value, ast.Name) and node.func.value.id == "program"
         for node in calls
-    ) == 2
+    ) == 4
     assert "StagePoint(" in source
     assert "StateTransfer()" in source
-    assert "pops.run(simulation, **target.authoring.run_controls)" in source
+    assert "pops.run(simulation, **controls)" in source
+    assert "pops.run(\n        simulation," in source
     assert "AMRTransfer.conservative(order=" not in source
     assert "ScientificOutput(" in source
     assert "Checkpoint(" in source
+    assert "def explicit_ssprk2(" in source
+    assert "def preset_ssprk2(" in source
+    assert "read_hdf5(" in source
+    assert "read_paraview(" in source
+    assert "simulation.checkpoint(" in source
+    assert "resumed.restart(" in source
 
 
 def test_handle_reads_are_explicit_before_symbolic_parameter_algebra():

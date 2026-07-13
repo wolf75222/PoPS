@@ -8,11 +8,13 @@ hook: an unavailable join must fail where it is authored, not silently change th
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pops
 from pops.domain import Rectangle, RectangleBoundaryNames
 from pops.frames import Cartesian2D
@@ -28,6 +30,7 @@ from pops.time import AdaptiveCFL, StagePoint, TimePoint
 
 
 OUTPUT_ROOT = Path("outputs/scalar_advection")
+ProgramBuilder = Callable[[Any, Any], pops.Program]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +71,85 @@ class FinalScalarAdvectionCase:
     layout: Any
 
 
-def build_authoring() -> ScalarAdvectionAuthoring:
+@dataclass(frozen=True, slots=True)
+class ScalarRuntimeSnapshot:
+    """Restart-sensitive evidence retained without exposing native implementation objects."""
+
+    time: float
+    macro_step: int
+    state: np.ndarray
+    patch_boxes: tuple[tuple[int, ...], ...]
+    program_hash: str
+    consumer_graph_identity: str
+    consumer_cursors: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ScalarExecutionEvidence:
+    """Artifacts and snapshots proving manual execution, strict restart and continuation."""
+
+    hdf5_path: Path
+    paraview_path: Path
+    checkpoint_path: Path
+    hdf5_identity: str
+    paraview_identity: str
+    accepted: ScalarRuntimeSnapshot
+    restored: ScalarRuntimeSnapshot
+    continuous: ScalarRuntimeSnapshot
+    restarted: ScalarRuntimeSnapshot
+
+
+def explicit_ssprk2(state: Any, rate: Any) -> pops.Program:
+    """Spell SSPRK2 entirely with generic Program operations.
+
+    Node names and algebra intentionally match the canonical factory expansion so presentation-only
+    provenance is the only difference between this function and ``pops.lib.time.SSPRK2``.
+    """
+
+    program = pops.Program("SSPRK2")
+    q = program.state(state)
+    stage_0 = StagePoint(
+        "ssprk2_stage_0",
+        {"main": TimePoint(program.clock, 0)},
+    )
+    k0 = program.value("ssprk2_k_0", rate(q.n), at=stage_0)
+    stage_1 = StagePoint(
+        "ssprk2_stage_1",
+        {"main": TimePoint(program.clock, 1)},
+    )
+    q_stage = program.value(
+        "ssprk2_U1",
+        q.n + program.dt * 1 * k0,
+        at=stage_1,
+    )
+    k1 = program.value("ssprk2_k_1", rate(q_stage), at=stage_1)
+    half = Fraction(1, 2)
+    q_next = program.value(
+        "ssprk2_step",
+        q.n + program.dt * half * k0 + program.dt * half * k1,
+        at=q.next.point,
+    )
+    program.commit(q.next, q_next)
+    return program
+
+
+def preset_ssprk2(state: Any, rate: Any) -> pops.Program:
+    """Return the library spelling of exactly the same canonical Program graph."""
+
+    from pops.lib.time import SSPRK2
+
+    return SSPRK2(state, rate=rate)
+
+
+def build_authoring(
+    *,
+    program_builder: ProgramBuilder = explicit_ssprk2,
+    output_root: Any = OUTPUT_ROOT,
+) -> ScalarAdvectionAuthoring:
     """Build the pure operator-first declarations without importing native code."""
+
+    if not callable(program_builder):
+        raise TypeError("program_builder must construct one ordinary pops.Program")
 
     domain = Rectangle(
         "unit_square",
@@ -154,36 +234,18 @@ def build_authoring() -> ScalarAdvectionAuthoring:
         RuntimeParam("coarsen_u_gradient", default=0.04, domain=Positive())
     )
 
-    # Explicit SSPRK2/Heun program.  The qualified state is the sole block/model authority.  A
-    # pops.lib.time.SSPRK2 preset may expand to this graph; it never replaces the generic spelling.
-    program = pops.Program("rk2_heun_advection")
-    q = program.state(tracer_state)
-    predictor = StagePoint(
-        "predictor",
-        {"explicit": TimePoint(program.clock, 1)},
-    )
-    k0 = rate(q.n)
-    q_stage = program.value(
-        "q_stage",
-        q.n + program.dt * k0,
-        at=predictor,
-    )
-    k1 = rate(q_stage)
-    q_next = program.value(
-        "q_next",
-        Fraction(1, 2) * q.n
-        + Fraction(1, 2) * q_stage
-        + Fraction(1, 2) * program.dt * k1,
-        at=q.next.point,
-    )
-    program.commit(q.next, q_next)
+    # The explicit builder remains the normative spelling. pops.lib.time.SSPRK2 is only a factory
+    # for the same graph and is executed independently by the acceptance proof below.
+    program = program_builder(tracer_state, rate)
+    if type(program) is not pops.Program:
+        raise TypeError("program_builder must return an exact pops.Program")
     program.step_strategy(AdaptiveCFL(cfl=0.45, max_dt=1.0e-2))
 
     # Run controls do not select physics, a spatial method, a time method or a CFL strategy.
     run_controls = {
         "t_end": 1.0,
         "max_steps": 100_000,
-        "output_dir": OUTPUT_ROOT,
+        "output_dir": Path(output_root),
     }
 
     return ScalarAdvectionAuthoring(
@@ -339,10 +401,14 @@ def build_consumer_graph(core: ScalarAdvectionAuthoring) -> Any:
     return ConsumerGraph.from_consumers(consumers)
 
 
-def build_final_case() -> FinalScalarAdvectionCase:
+def build_final_case(
+    *,
+    program_builder: ProgramBuilder = explicit_ssprk2,
+    output_root: Any = OUTPUT_ROOT,
+) -> FinalScalarAdvectionCase:
     """Assemble every public authority exactly once."""
 
-    core = build_authoring()
+    core = build_authoring(program_builder=program_builder, output_root=output_root)
     core.numerics.boundaries.add(build_transport_boundaries(core))
     core.case.numerics(core.numerics, block=core.tracer)
     core.case.initials.add(build_initial_condition(core))
@@ -367,15 +433,190 @@ def build_bind_params(core: ScalarAdvectionAuthoring) -> dict[Any, float]:
     }
 
 
-def main() -> None:
-    """Run the one final lifecycle: Case -> validate -> resolve -> compile -> bind -> run."""
+def compile_final_case(
+    *,
+    program_builder: ProgramBuilder = explicit_ssprk2,
+    output_root: Any = OUTPUT_ROOT,
+) -> tuple[FinalScalarAdvectionCase, Any]:
+    """Resolve and compile one exact manual or factory-authored target."""
 
-    target = build_final_case()
+    target = build_final_case(program_builder=program_builder, output_root=output_root)
     validated = pops.validate(target.authoring.case)
     resolved = pops.resolve(validated, layout=target.layout)
-    artifact = pops.compile(resolved)
-    simulation = pops.bind(artifact, params=build_bind_params(target.authoring))
-    pops.run(simulation, **target.authoring.run_controls)
+    return target, pops.compile(resolved)
+
+
+def _snapshot(simulation: Any) -> ScalarRuntimeSnapshot:
+    """Capture every state item required for strict AMR continuation parity."""
+
+    blocks = tuple(simulation.block_names())
+    if blocks != ("tracer",):
+        raise RuntimeError("scalar acceptance expected exactly the qualified tracer block")
+    return ScalarRuntimeSnapshot(
+        time=float(simulation.time()),
+        macro_step=int(simulation.macro_step()),
+        state=np.asarray(simulation.state_global("tracer"), dtype=np.float64).copy(),
+        patch_boxes=tuple(
+            tuple(int(value) for value in row)
+            for row in simulation.patch_boxes()
+        ),
+        program_hash=str(simulation.installed_program_hash()),
+        consumer_graph_identity=simulation.consumer_graph.identity.token,
+        consumer_cursors=simulation.consumer_cursors.to_data(),
+    )
+
+
+def _require_same_snapshot(
+    left: ScalarRuntimeSnapshot,
+    right: ScalarRuntimeSnapshot,
+    *,
+    where: str,
+) -> None:
+    """Reject any hidden state, topology, identity, clock or schedule drift."""
+
+    exact = {
+        "time": (left.time, right.time),
+        "macro_step": (left.macro_step, right.macro_step),
+        "patch_boxes": (left.patch_boxes, right.patch_boxes),
+        "program_hash": (left.program_hash, right.program_hash),
+        "consumer_graph_identity": (
+            left.consumer_graph_identity,
+            right.consumer_graph_identity,
+        ),
+        "consumer_cursors": (left.consumer_cursors, right.consumer_cursors),
+    }
+    for name, (expected, actual) in exact.items():
+        if expected != actual:
+            raise RuntimeError("%s changed %s" % (where, name))
+    if not np.array_equal(left.state, right.state):
+        raise RuntimeError("%s changed the conservative tracer state" % where)
+
+
+def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
+    """Reopen one independently persisted HDF5 and ParaView artifact."""
+
+    from pops.output.writers import read_hdf5, read_paraview
+
+    hdf5_paths = tuple(sorted(root.rglob("*.h5")))
+    paraview_paths = tuple(sorted(root.rglob("*.vtu")))
+    if not hdf5_paths or not paraview_paths:
+        raise RuntimeError("accepted scalar run did not publish both HDF5 and ParaView artifacts")
+    hdf5_path, paraview_path = hdf5_paths[-1], paraview_paths[-1]
+    hdf5 = read_hdf5(hdf5_path)
+    paraview = read_paraview(paraview_path)
+    return (
+        hdf5_path,
+        paraview_path,
+        hdf5.output_identity.token,
+        paraview.output_identity.token,
+    )
+
+
+def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
+    """Execute the explicit Program, reopen outputs, restart, then continue bit-identically."""
+
+    root = Path(output_dir)
+    accepted_root = root / "accepted"
+    target, artifact = compile_final_case(
+        program_builder=explicit_ssprk2,
+        output_root=accepted_root,
+    )
+    params = build_bind_params(target.authoring)
+    simulation = pops.bind(artifact, params=params)
+    controls = dict(target.authoring.run_controls)
+    if pops.run(simulation, **controls) <= 0:
+        raise RuntimeError("the explicit scalar Program executed no accepted macro-step")
+
+    hdf5_path, paraview_path, hdf5_identity, paraview_identity = \
+        _reopen_scientific_outputs(accepted_root)
+    checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
+    accepted = _snapshot(simulation)
+
+    resumed = pops.bind(artifact, params=params)
+    resumed.restart(checkpoint_path)
+    restored = _snapshot(resumed)
+    _require_same_snapshot(accepted, restored, where="independent strict restart")
+    if simulation.bind_identity != resumed.bind_identity:
+        raise RuntimeError("fresh bind changed the authenticated scalar install identity")
+    if resumed.last_restart_identity is None:
+        raise RuntimeError("restart did not publish an authenticated checkpoint identity")
+
+    final_time = 2.0 * float(controls["t_end"])
+    pops.run(
+        simulation,
+        t_end=final_time,
+        max_steps=int(controls["max_steps"]),
+        output_dir=root / "continuous",
+    )
+    pops.run(
+        resumed,
+        t_end=final_time,
+        max_steps=int(controls["max_steps"]),
+        output_dir=root / "restarted",
+    )
+    continuous, restarted = _snapshot(simulation), _snapshot(resumed)
+    _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    return ScalarExecutionEvidence(
+        hdf5_path=hdf5_path,
+        paraview_path=paraview_path,
+        checkpoint_path=checkpoint_path,
+        hdf5_identity=hdf5_identity,
+        paraview_identity=paraview_identity,
+        accepted=accepted,
+        restored=restored,
+        continuous=continuous,
+        restarted=restarted,
+    )
+
+
+def run_preset_parity(output_dir: Any, expected: ScalarRuntimeSnapshot) -> ScalarRuntimeSnapshot:
+    """Prove factory graph/hash parity and execute it to the same accepted state."""
+
+    from pops.identity.semantic import program_semantic_data, semantic_identity_of
+
+    manual = build_final_case(program_builder=explicit_ssprk2, output_root=output_dir)
+    preset, artifact = compile_final_case(
+        program_builder=preset_ssprk2,
+        output_root=output_dir,
+    )
+    manual_program = manual.authoring.program
+    preset_program = preset.authoring.program
+    if manual_program.to_graph().to_data() != preset_program.to_graph().to_data():
+        raise RuntimeError("pops.lib.time.SSPRK2 changed the explicit Program graph")
+    if program_semantic_data(manual_program) != program_semantic_data(preset_program):
+        raise RuntimeError("pops.lib.time.SSPRK2 changed normalized Program semantics")
+    if semantic_identity_of(program=manual_program) != semantic_identity_of(program=preset_program):
+        raise RuntimeError("pops.lib.time.SSPRK2 changed the semantic Program identity")
+
+    simulation = pops.bind(artifact, params=build_bind_params(preset.authoring))
+    pops.run(
+        simulation,
+        t_end=expected.time,
+        max_steps=int(preset.authoring.run_controls["max_steps"]),
+        output_dir=output_dir,
+    )
+    actual = _snapshot(simulation)
+    _require_same_snapshot(expected, actual, where="manual/pops.lib.time.SSPRK2 parity")
+    return actual
+
+
+def main() -> None:
+    """Run the final lifecycle, strict restart and manual/factory parity proof."""
+
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=OUTPUT_ROOT)
+    args = parser.parse_args()
+
+    evidence = run_manual_and_restart(args.output_dir / "manual")
+    preset = run_preset_parity(args.output_dir / "preset", evidence.continuous)
+    print("PoPS final scalar-advection acceptance:")
+    print("  HDF5: %s" % evidence.hdf5_identity)
+    print("  ParaView: %s" % evidence.paraview_identity)
+    print("  checkpoint: %s" % evidence.checkpoint_path)
+    print("  bit-identical restart: step %d" % evidence.restarted.macro_step)
+    print("  explicit/pops.lib.time.SSPRK2 parity: %s" % preset.program_hash)
 
 
 if __name__ == "__main__":
