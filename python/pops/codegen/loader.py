@@ -455,19 +455,6 @@ class CompiledProblem(CompiledProblemDumpMixin):
     _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
                               "solver", "field")
 
-    def inspect_amr(self, layout: Any = None) -> Any:
-        """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
-
-        A whole-system Program compiled for the AMR target carries its compile-time layout in the
-        immutable ``InstallPlan``. A bare call reports that hierarchy (including refine / regrid /
-        patches tags), mirroring ``CompiledModel.inspect_amr``. An explicit @p layout always wins;
-        an advanced handle with no InstallPlan falls back to the native AMR envelope report.
-        """
-        from pops import inspect_amr
-        if layout is None:
-            layout = self.layout
-        return inspect_amr(layout)
-
     def __str__(self) -> str:
         """A short, deterministic, array-free summary (Spec 5 sec.12.1, #40-41).
 

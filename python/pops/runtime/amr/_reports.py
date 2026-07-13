@@ -247,7 +247,7 @@ class HierarchySnapshot:
     """A single inert snapshot of the live AMR hierarchy (Spec 5 sec.8.4 / sec.8.12).
 
     Composes the config envelope (levels / ratio / regrid cadence / patch layout / native
-    limitations, reusing :func:`pops.inspect_amr` for the config-level metadata) with the LIVE
+    limitations, reusing the internal native AMR envelope for config-level metadata) with the LIVE
     patch census (:class:`PatchReport`). It is a value object: a deterministic, array-free picture
     of the hierarchy at the moment it was taken, suitable to ``print()`` or diff between snapshots.
     """

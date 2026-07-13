@@ -62,7 +62,7 @@ def test_system_has_no_amr_handle_with_a_clear_error():
     sim = System(n=16, L=1.0, periodic=True)
     assert not hasattr(sim, "amr")
     # The remedy speaks the bind vocabulary (layout=AMR on the Case), not the native engine.
-    with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect_amr"):
+    with pytest.raises(AttributeError, match=r"layout=AMR\(.*inspect\(layout\)"):
         operator.attrgetter("amr")(sim)
 
 
@@ -105,10 +105,10 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
     sim = _built_amr(regrid_every=2)
     snap = sim.amr.hierarchy_snapshot()
     assert isinstance(snap, HierarchySnapshot)
-    # Config envelope reused from inspect_amr (the native max_levels / ratio).
-    assert snap.max_levels == 2 and snap.ratio == 2
+    # Config envelope comes from the native descriptor-free capability facts.
+    assert snap.max_levels == "resource_policy" and snap.ratio == 2
     assert snap.config_available == "yes"
-    assert any("max_levels" in note for note in snap.limitations)
+    assert any("resource-policy" in note for note in snap.limitations)
     # Live parts: the block registry + the patch table.
     assert snap.blocks == ["ne"]
     assert snap.frozen is False and snap.regrid_every == 2
@@ -210,29 +210,18 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
 
 
 # --- compiled static delegation ------------------------------------------------
-def test_compiled_inspect_amr_delegates_to_top_level():
-    # A stub CompiledModel with no carried layout; its inspect_amr delegates to pops.inspect_amr.
-    # Build a tiny stub CompiledModel (no .so dlopen needed for the inert delegation path).
+def test_compiled_model_has_no_competing_layout_inspector():
+    # A tiny stub CompiledModel (no .so dlopen needed) exposes no retired AMR-specific inspector.
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(
         so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
-    rep = cm.inspect_amr()
-    # Default (no layout carried, none passed) -> the native envelope (never a fabricated hierarchy).
-    assert rep.to_dict()["layout"] == "native-envelope"
-    # An explicit AMR layout is reported through the same top-level inspector.
-    from pops.mesh import CartesianMesh
-    from pops.mesh.layouts import AMR
-    rep2 = cm.inspect_amr(AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2))
-    assert rep2.to_dict()["layout"] == "amr" and rep2.to_dict()["max_levels"] == 2
+    assert not hasattr(cm, "inspect_amr")
 
 
-def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
-    # ADC-555 criterion: the refine/regrid/... tags appear in compiled.inspect_amr(), not just
-    # layout.inspect(). pops.compile's AMR route retains the resolved layout in its exact artifact;
-    # a bare inspect_amr() call must report THAT
-    # layout (with its tags), not silently fall back to the generic native envelope.
+def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
+    # The artifact retains the exact resolved layout; the sole public inspector reports its tags.
     from pops.codegen.loader import CompiledModel
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
@@ -280,16 +269,16 @@ def test_compiled_inspect_amr_surfaces_the_carried_layout_by_default():
         blocks=(CompiledBlockArtifact("ne", cm, None),),
     )
 
-    rep = artifact.inspect_amr()
-    payload = rep.to_dict()
+    assert not hasattr(artifact, "inspect_amr")
+    payload = pops.inspect(artifact.layout)["amr_report"]
     assert payload["layout"] == "amr"
     slots = {row["slot"] for row in payload["policies"]}
     assert "refine" in slots and "regrid" in slots
 
-    # An explicit argument still overrides the carried layout.
-    override = artifact.inspect_amr(AMR(base=CartesianMesh(n=32)))
-    assert override.to_dict()["max_levels"] == 2 and "policies" in override.to_dict()
-    assert {row["slot"] for row in override.to_dict()["policies"]} == set()
+    # A separately authored layout is inspected directly, with no artifact-specific override API.
+    override = pops.inspect(AMR(base=CartesianMesh(n=32)))["amr_report"]
+    assert override["max_levels"] == 2 and "policies" in override
+    assert {row["slot"] for row in override["policies"]} == set()
 
 
 # The CI python runner invokes each test file as `python3 <file>`; run pytest on this

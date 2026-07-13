@@ -235,24 +235,6 @@ class CompiledModel:
                                          self.install_plan.layout
                                          if self.install_plan is not None else None))
 
-    def inspect_amr(self, layout: Any = None) -> Any:
-        """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
-
-        A ``CompiledModel`` produced off the AMR route (``pops.compile(problem, layout=AMR(...))``)
-        carries the compile-time layout in ``self.install_plan`` (the refine/regrid/patches
-        tags must appear in ``compiled.inspect_amr()``, not just ``layout.inspect()``), so a bare
-        call with no argument reports THAT layout when one is attached, rather than the generic
-        native envelope. An explicit @p layout argument always wins (it overrides the carried
-        one); a handle with no ``InstallPlan`` (a ``target='system'`` model, or a stub built outside
-        ``pops.compile``) falls back to the native envelope, same as before. Delegates to the
-        top-level :func:`pops.inspect_amr`; never fabricates a hierarchy.
-        """
-        from pops import inspect_amr
-        if layout is None:
-            layout = (self.install_plan.layout
-                      if self.install_plan is not None else None)
-        return inspect_amr(layout)
-
     def capability_matrix(self) -> Any:
         """The ADC-549 native route matrix for this compiled model handle."""
         from pops._capabilities import native_capability_matrix

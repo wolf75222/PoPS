@@ -17,7 +17,7 @@ ADC-591 adds a versioned native report above the route rows:
   (the non-available rows of the same native report, filtered to `status != "available"`).
 - Compiled artifacts: `compiled.inspect().to_dict()["capabilities"]` carries the same route IDs and
   statuses, projected from the artifact manifest without loading or recompiling the `.so`. On the
-  AMR route, `CompiledModel.inspect_amr()` (ADC-555) reports the layout `pops.compile` actually
+  AMR route, `pops.inspect(compiled.layout)` reports the layout `pops.compile` actually
   attached (`compiled._layout`, with its refine/regrid/... tags) by default; an explicit `layout=`
   argument still overrides, and a handle with no carried layout falls back to the native envelope.
 

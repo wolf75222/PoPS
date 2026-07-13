@@ -5,7 +5,7 @@ The introspection side of the capability layer: the descriptor-catalog walk
 native cross-check (``_cross_check`` / :class:`CapabilityMismatchError` /
 ``_native_rows``) that adjudicates descriptor availability against the C++ facts,
 the public :func:`inspect_capabilities`, and the AMR hierarchy report
-(:class:`AmrReport` / :func:`inspect_amr` / ``_amr_policy_rows``). Split out of
+(:class:`AmrReport` / the private layout-adaptivity protocol / ``_amr_policy_rows``). Split out of
 ``_capabilities`` for the 500-line cap; ``pops._capabilities`` re-exports every
 public name. The descriptor walk is PURE; ``_pops`` is only reached lazily through
 ``_module_capabilities`` for the optional cross-check.
@@ -237,7 +237,7 @@ def inspect_capabilities():
 
 
 class AmrReport:
-    """The structured, printable result of :func:`inspect_amr` (Spec 5 sec.5.11 / sec.8).
+    """The structured AMR section embedded by ``pops.inspect(layout)``.
 
     A plain record of an AMR hierarchy's declared metadata -- the level / ratio envelope, the
     regrid / patch / nesting / refinement policies, the runtime requirements (reflux, tag
@@ -320,56 +320,41 @@ def _amr_policy_rows(layout):
     return rows
 
 
-def inspect_amr(layout_or_context=None):
-    """Return a printable :class:`AmrReport` of an AMR hierarchy (Spec 5 sec.5.11 / sec.8).
-
-    The introspectable counterpart of :func:`inspect_capabilities` for the adaptive-mesh
-    route. PURE: it imports only the inert :mod:`pops.mesh` authoring descriptors and reads
-    their declared metadata (levels / ratio, the regrid / patch / nesting / refine policies, the
-    runtime requirements such as reflux / tag reduction, and the explainable route limitations);
-    it NEVER imports ``_pops`` / the runtime / codegen and runs no numeric loop.
-
-    Args:
-        layout_or_context: an :class:`pops.mesh.layouts.AMR` (or :class:`Uniform`) descriptor to
-            report on, or ``None`` to report current native AMR ratio capabilities. Hierarchy
-            depth is governed by the resolved resource policy, not a hardcoded maximum.
-    """
+def _native_amr_context():
+    """Return the immutable native facts shared by layout-owned AMR reports."""
     from pops.mesh.amr import NATIVE_RATIOS
-    from pops.mesh.layouts import AMR, Uniform
 
     native_depth = "resource_policy"
     native_note = (
         "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s"
         % ", ".join(map(str, NATIVE_RATIOS))
     )
+    return native_depth, tuple(NATIVE_RATIOS), native_note
 
-    if layout_or_context is None:
-        return AmrReport(
-            layout="native-envelope", max_levels=native_depth, ratio=NATIVE_RATIOS[0],
-            native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
-            available="yes", limitations=[native_note], requirements={}, policies=[])
 
-    if isinstance(layout_or_context, Uniform):
-        caps = layout_or_context.capabilities()
-        return AmrReport(
-            layout="uniform", max_levels=caps.get("levels", 1), ratio=1,
-            native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
-            available="yes",
-            limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
-            requirements={}, policies=[])
-
-    if not isinstance(layout_or_context, AMR):
-        raise TypeError(
-            "inspect_amr expects a pops.mesh.layouts.AMR / Uniform descriptor (or None for the "
-            "native envelope); got %r" % (type(layout_or_context).__name__,))
-
-    layout = layout_or_context
-    status = layout.available()
-    limitations = [native_note]
-    if not status.ok and status.reason:
-        limitations.append(status.reason)
+def _native_amr_envelope():
+    """Build the runtime's descriptor-free native AMR capability envelope."""
+    native_depth, native_ratios, native_note = _native_amr_context()
     return AmrReport(
-        layout="amr", max_levels=layout.max_levels, ratio=layout.ratio,
-        native_max_levels=native_depth, native_ratios=NATIVE_RATIOS,
-        available=status.status, limitations=limitations,
-        requirements=layout.requirements().to_dict(), policies=_amr_policy_rows(layout))
+        layout="native-envelope", max_levels=native_depth, ratio=native_ratios[0],
+        native_max_levels=native_depth, native_ratios=native_ratios,
+        available="yes", limitations=[native_note], requirements={}, policies=[])
+
+
+def _layout_amr_report(layout):
+    """Ask a layout for its AMR report through the open, branch-free layout protocol.
+
+    This helper deliberately knows no concrete layout class. New layout kinds participate by
+    implementing ``_amr_report()``; the public inspection path remains ``pops.inspect(layout)``.
+    """
+    provider = getattr(layout, "_amr_report", None)
+    if not callable(provider):
+        raise TypeError(
+            "%s must implement the layout adaptivity protocol _amr_report()"
+            % type(layout).__qualname__)
+    report = provider()
+    if not isinstance(report, AmrReport):
+        raise TypeError(
+            "%s._amr_report() must return AmrReport, got %s"
+            % (type(layout).__qualname__, type(report).__qualname__))
+    return report

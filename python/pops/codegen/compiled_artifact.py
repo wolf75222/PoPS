@@ -509,11 +509,6 @@ class CompiledSimulationArtifact:
         return build_memory_estimate(
             self, mesh, platform=platform, layout=layout or self.layout)
 
-    def inspect_amr(self, layout: Any = None) -> Any:
-        from pops import inspect_amr
-
-        return inspect_amr(layout or self.layout)
-
     def scratch_plan(self) -> Any:
         if self.program is None:
             raise ValueError("compiled artifact has no whole-system Program to analyze")

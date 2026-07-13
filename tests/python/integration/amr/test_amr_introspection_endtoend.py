@@ -7,7 +7,8 @@ surface (``profile`` / ``step_cfl`` / ``amr.patch_table``):
 
   * INERT metadata on the AMR-route handle: ``arguments()`` reports ``layout='amr'`` with the block
     instance / named aux / typed params, ``estimate_memory(mesh)`` is a conservative patch-budget
-    FORMULA, and ``inspect_amr()`` surfaces the carried refine / regrid tags. These run on a stub
+    FORMULA, and ``pops.inspect(artifact.layout)`` surfaces the carried refine / regrid tags. These
+    run on a stub
     exact ``CompiledSimulationArtifact`` carrying the resolved AMR layout -- no ``.so`` dlopen, so
     the inert surface is
     validated locally without the Kokkos AOT compile the real per-block AMR loader needs.
@@ -51,7 +52,7 @@ def _amr_route_handle():
 
     This mirrors ``pops.compile(problem, layout=AMR(...))``: an exact artifact owns the resolved
     AMR layout and a target-specific compiled block. No ``.so`` is dlopened -- the arguments /
-    estimate_memory / inspect_amr surface is
+    estimate_memory / generic layout-inspection surface is
     pure metadata + formula, so it is validated here without the Kokkos AOT per-block loader compile.
     """
     alpha = RuntimeParam("alpha", default=1.0)
@@ -135,8 +136,10 @@ def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
     assert amr_est.assumptions and any("CONSERVATIVE" in a for a in amr_est.assumptions)
 
 
-def test_inspect_amr_surfaces_the_carried_refine_regrid_tags():
-    rep = _amr_route_handle().inspect_amr().to_dict()
+def test_generic_inspection_surfaces_the_carried_refine_regrid_tags():
+    artifact = _amr_route_handle()
+    assert not hasattr(artifact, "inspect_amr")
+    rep = pops.inspect(artifact.layout)["amr_report"]
     assert rep["layout"] == "amr" and rep["max_levels"] == 2
     slots = {row["slot"] for row in rep["policies"]}
     assert "refine" in slots and "regrid" in slots

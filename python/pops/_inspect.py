@@ -3,9 +3,9 @@
 ``pops.inspect(obj)`` is the ONE stable, serialisable structured view of any descriptor / Problem /
 report. It dispatches to ``obj.inspect()`` when the object exposes it (every DescriptorProtocol
 member and the Problem assembly do); otherwise it builds the base dict from the protocol members it
-can read. It runs NO numerics and touches no runtime -- it is metadata only. It is DISTINCT from
-``pops.inspect_capabilities()`` / ``pops.inspect_amr()`` (those build the native capability matrix
-from the C++ core); this one is the per-object introspection entry point.
+can read. It runs NO numerics and touches no runtime -- it is metadata only. Layout inspection
+embeds its adaptive hierarchy declaration and relevant native capability rows in the same result;
+there is no competing layout-specific public inspector.
 """
 from __future__ import annotations
 

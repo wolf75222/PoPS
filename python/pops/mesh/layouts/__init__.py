@@ -142,12 +142,24 @@ class Uniform(MeshDescriptor):
         return super().validate(context)
 
     def inspect(self) -> dict:
-        from pops._capabilities_inspect import inspect_amr
+        from pops._capabilities_inspect import _layout_amr_report
 
         return _layout_inspect_dict(
             self,
             native_features=("layout:Uniform", "layout:AMR", "mesh:2d_storage_arithmetic"),
-            amr_report=inspect_amr(self))
+            amr_report=_layout_amr_report(self))
+
+    def _amr_report(self) -> Any:
+        """Implement the private adaptivity-report protocol for a single-level layout."""
+        from pops._capabilities_inspect import AmrReport, _native_amr_context
+
+        native_depth, native_ratios, _ = _native_amr_context()
+        return AmrReport(
+            layout="uniform", max_levels=self.capabilities().get("levels", 1), ratio=1,
+            native_max_levels=native_depth, native_ratios=native_ratios,
+            available="yes",
+            limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
+            requirements={}, policies=[])
 
 
 class AMR(MeshDescriptor):
@@ -241,13 +253,32 @@ class AMR(MeshDescriptor):
         return super().validate(context)
 
     def inspect(self) -> dict:
-        from pops._capabilities_inspect import inspect_amr
+        from pops._capabilities_inspect import _layout_amr_report
 
         return _layout_inspect_dict(
             self,
             native_features=("layout:AMR", "amr:refinement_ratio",
                              "mesh:2d_storage_arithmetic"),
-            amr_report=inspect_amr(self))
+            amr_report=_layout_amr_report(self))
+
+    def _amr_report(self) -> Any:
+        """Implement the private adaptivity-report protocol without central class dispatch."""
+        from pops._capabilities_inspect import (
+            AmrReport,
+            _amr_policy_rows,
+            _native_amr_context,
+        )
+
+        native_depth, native_ratios, native_note = _native_amr_context()
+        status = self.available()
+        limitations = [native_note]
+        if not status.ok and status.reason:
+            limitations.append(status.reason)
+        return AmrReport(
+            layout="amr", max_levels=self.max_levels, ratio=self.ratio,
+            native_max_levels=native_depth, native_ratios=native_ratios,
+            available=status.status, limitations=limitations,
+            requirements=self.requirements().to_dict(), policies=_amr_policy_rows(self))
 
 
 from ..layout_plan import (  # noqa: E402

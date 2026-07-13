@@ -54,14 +54,16 @@ from pops._capabilities_inspect import (  # noqa: F401  (re-exported at the hist
     _amr_policy_rows,
     _cross_check,
     _entry_from_brick,
+    _layout_amr_report,
+    _native_amr_context,
+    _native_amr_envelope,
     _native_rows,
     _walk_brick_catalog,
     _walk_class_catalog,
-    inspect_amr,
     inspect_capabilities,
 )
 
 __all__ = ["inspect_capabilities", "CapabilityMatrix", "CapabilityEntry",
-           "CapabilityMismatchError", "inspect_amr", "AmrReport",
+           "CapabilityMismatchError", "AmrReport",
            "CapabilityRouteRow", "CapabilityRouteMatrix", "NativeCapabilityReport",
            "native_capability_report", "native_capability_matrix"]
