@@ -24,7 +24,7 @@ state -> aux -> phi -> clock. The clock is LAST so the next step's regrid_if_due
 uninterrupted clock.
 """
 
-_V3 = 3
+from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _V3
 
 
 def write_v3(owner, sim, path, L, regrid_every, persistence=None):

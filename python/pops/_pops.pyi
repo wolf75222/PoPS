@@ -6,6 +6,12 @@ from typing import Any
 
 __version__: str
 __abi_version__: int
+__release_contract_sha256__: str
+__public_api_version__: int
+__semantic_ir_version__: int
+__normalization_version__: int
+__component_registry_version__: int
+__checkpoint_schema_version__: int
 __cxx_std__: int
 __cxx_compiler__: str
 __has_kokkos__: bool

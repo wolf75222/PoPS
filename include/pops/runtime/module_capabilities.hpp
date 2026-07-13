@@ -24,6 +24,7 @@
 
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/config/generated_component_catalog.hpp>
+#include <pops/runtime/config/generated_release_contract.hpp>
 #include <pops/runtime/runtime_environment.hpp>
 
 #include <string>
@@ -37,6 +38,8 @@ namespace pops {
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
 inline constexpr int kAbiVersion = 3;
+static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
+              "native ABI and generated release contract drifted");
 
 /// Version of the structured capability-report schema exposed by native_capability_report().
 /// This versions the report envelope independently from the capability vocabulary above.

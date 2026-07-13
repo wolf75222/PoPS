@@ -8,9 +8,9 @@ from typing import Any
 
 from pops.identity import Identity, canonical_bytes, make_identity
 from pops._manifest_protocol import strict_json_loads
-
-
-CHECKPOINT_SCHEMA_VERSION = 1
+from pops._generated_release_contract import (
+    CHECKPOINT_ENVELOPE_SCHEMA_VERSION as CHECKPOINT_SCHEMA_VERSION,
+)
 MANIFEST_KEY = "pops_checkpoint_manifest"
 IDENTITY_KEY = "pops_restart_identity"
 

@@ -1,12 +1,14 @@
 # Versioning
 
-`PoPS` follows [Semantic Versioning 2.0.0](https://semver.org). This document declares
-the public API that the version number tracks, and the rules for bumping it.
+`PoPS` follows [Semantic Versioning 2.0.0](https://semver.org). Package SemVer and the independently
+evolving API, semantic IR, normalization, component registry, native ABI, and checkpoint schema
+revisions are recorded by `schemas/release_contract.v1.json` and generated for Python/C++.
 
 ## Single source of the version number
 
 The version lives in one place: `project(VERSION x.y.z)` in `CMakeLists.txt`. Everything
-derives from it: `pops.__version__` (baked as `POPS_VERSION` into `_pops`), the pip wheel
+derives from it: `pops.__version__` (available before native loading and authenticated against the
+`POPS_VERSION` baked into `_pops`), the pip wheel
 (scikit-build-core regex on `pyproject.toml`), and `adcConfigVersion.cmake`. Do not
 duplicate the number elsewhere. When the generated documentation site is rebuilt, it must keep
 deriving the published version from this same `project(VERSION)` value.
@@ -47,8 +49,21 @@ is not a SemVer-relevant break.
   options, new Python surface, or a new versioned extension schema).
 - MAJOR (`X.0.0`, post-1.0): a break of the public API or of the production DSL ABI.
 
-While in `0.y.z` initial development the public API may still change; a `0.y` bump can carry
-breaking changes until `1.0.0`.
+While in `0.y.z` initial development, `0.y` is the compatibility boundary: `0.3.z` may satisfy a
+`0.3` consumer, while `0.4.0` must not. The generated CMake package therefore uses
+`SameMinorVersion` before 1.0 and `SameMajorVersion` from 1.0 onward.
+
+Schema and ABI compatibility is exact unless the owning protocol explicitly defines a migration.
+Runtime loaders never infer compatibility from package SemVer. Historical artifacts may be handled
+only by an offline migration tool that emits a complete current artifact.
+
+## Supported release matrix
+
+The normative matrix is the generated `SUPPORTED_MATRIX` projection of
+`schemas/release_contract.v1.json`. It currently promises Python 3.12, C++20, Kokkos 4.4.01 Serial
+and OpenMP source builds, a Serial OpenMPI source lane, and a macOS arm64 CPython 3.12 Serial wheel.
+CUDA/HIP, MPI and Windows wheels are explicitly not promised. A release may narrow or extend this
+matrix only by changing the versioned contract and proving every declared lane.
 
 ## Releasing
 
@@ -56,5 +71,7 @@ breaking changes until `1.0.0`.
    wheel derive from it automatically; nothing else is edited by hand.
 2. Move the `## [Unreleased]` entries of [CHANGELOG.md](../CHANGELOG.md) into a
    `## [x.y.z] - YYYY-MM-DD` section.
-3. Merge, then `git tag vx.y.z` on master and `git push --tags`. The `release.yml` workflow
+3. Run `python scripts/generate_release_contract.py --check` and the release preflight; a missing
+   build/codesign/example/conformance evidence record blocks tagging.
+4. Merge, then `git tag vx.y.z` on master and `git push --tags`. The `release.yml` workflow
    turns the tag into a GitHub Release built from that CHANGELOG section.

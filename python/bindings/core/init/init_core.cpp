@@ -258,6 +258,13 @@ void init_core(py::module_& m) {
 #else
   m.attr("__version__") = "unknown";
 #endif
+  m.attr("__release_contract_sha256__") = pops::release_contract::kContractSha256;
+  m.attr("__public_api_version__") = pops::release_contract::kPublicApiVersion;
+  m.attr("__semantic_ir_version__") = pops::release_contract::kSemanticIrVersion;
+  m.attr("__normalization_version__") = pops::release_contract::kNormalizationVersion;
+  m.attr("__component_registry_version__") = pops::release_contract::kComponentRegistryVersion;
+  m.attr("__checkpoint_schema_version__") =
+      pops::release_contract::kCheckpointEnvelopeSchemaVersion;
 
   // AUTHORITATIVE STATIC capability facts (Spec 5 sec.13.12 / sec.13.12.1, criteria #36/#37). The
   // (backend, layout, platform) transport capabilities the built module ACTUALLY provides, sourced from

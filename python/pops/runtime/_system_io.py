@@ -294,7 +294,9 @@ class _SystemIO(_System):
         temporal_json = temporal.checkpoint_json(
             time=self._s.time(), macro_step=self._s.macro_step())
         blocks = list(self._s.block_names())
-        out = {"pops_checkpoint_version": 3,
+        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+
+        out = {"pops_checkpoint_version": UNIFORM_CHECKPOINT_PAYLOAD_VERSION,
                "t": self._s.time(), "macro_step": self._s.macro_step(),
                "nx": self._s.nx(), "ny": self._s.ny(),
                "abi_key": abi_key(), "blocks": np.array(blocks),
@@ -380,11 +382,14 @@ class _SystemIO(_System):
         from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
         self._last_restart_identity = authenticate_checkpoint_payload(
             self, d, runtime_kind="uniform")
+        from pops._generated_release_contract import UNIFORM_CHECKPOINT_PAYLOAD_VERSION
+
         ckpt_version = int(d["pops_checkpoint_version"])
-        if ckpt_version != 3:
-            raise ValueError("restart : checkpoint version %r not supported (expected exactly 3; "
+        if ckpt_version != UNIFORM_CHECKPOINT_PAYLOAD_VERSION:
+            raise ValueError("restart : checkpoint version %r not supported (expected exactly %d; "
                              "historical checkpoints require offline migration)"
-                             % (d["pops_checkpoint_version"],))
+                             % (d["pops_checkpoint_version"],
+                                UNIFORM_CHECKPOINT_PAYLOAD_VERSION))
         from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
         preflight_uniform_restart(d)
         if "temporal_restart_state" not in d:

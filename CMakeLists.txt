@@ -377,8 +377,15 @@ if(POPS_INSTALL)
   configure_package_config_file(cmake/popsConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/popsConfig.cmake
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/pops)
+  # SemVer before 1.0: 0.y is the breaking-version boundary. SameMajorVersion would incorrectly
+  # accept every 0.x package for every other 0.x consumer. At 1.0+, the major is the boundary.
+  if(PROJECT_VERSION_MAJOR EQUAL 0)
+    set(_pops_cmake_compatibility SameMinorVersion)
+  else()
+    set(_pops_cmake_compatibility SameMajorVersion)
+  endif()
   write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/popsConfigVersion.cmake
-    COMPATIBILITY SameMajorVersion ARCH_INDEPENDENT)  # header-only : version arch-independante
+    COMPATIBILITY ${_pops_cmake_compatibility} ARCH_INDEPENDENT)
   install(FILES ${CMAKE_CURRENT_BINARY_DIR}/popsConfig.cmake
                 ${CMAKE_CURRENT_BINARY_DIR}/popsConfigVersion.cmake
           DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/pops)

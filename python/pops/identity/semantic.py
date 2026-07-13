@@ -11,9 +11,7 @@ from typing import Any
 
 from .digest import Identity, make_identity
 from .encoding import canonical_bytes
-
-
-SEMANTIC_SCHEMA_VERSION = 1
+from pops._generated_release_contract import SEMANTIC_IR_VERSION as SEMANTIC_SCHEMA_VERSION
 
 
 def semantic_identity(payload: Any) -> Identity:

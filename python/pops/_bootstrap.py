@@ -71,4 +71,9 @@ else:
     except ImportError as _e:
         raise _explain_missing_extension(_e) from _e
 
-del _os, _sys
+from . import _pops as _native_module
+from ._version import authenticate_native_version as _authenticate_native_version
+
+_authenticate_native_version(_native_module)
+
+del _authenticate_native_version, _native_module, _os, _sys
