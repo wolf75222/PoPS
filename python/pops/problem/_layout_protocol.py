@@ -53,8 +53,6 @@ def validate_layout_report(problem: Any, report: Any, layout: Any, context: Any)
         except Exception as exc:  # noqa: BLE001 -- aggregate typed validation evidence
             return report.error("layout", "layout_plan_invalid", str(exc))
         return report
-    from pops.problem._validation import refuse_uniform_with_amr_criteria
-    report = refuse_uniform_with_amr_criteria(report, layout)
     try:
         layout.validate(context)
     except Exception as exc:  # noqa: BLE001 -- surface descriptor validation evidence

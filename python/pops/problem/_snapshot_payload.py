@@ -377,25 +377,8 @@ def _spatial_semantic_data(value: Any) -> Any:
     return _semantic_option_data(value.to_data(), where="block spatial")
 
 
-def _mesh_semantic_data(mesh: Any) -> dict[str, Any]:
-    """Closed projection of the scientific domain and topology of supported meshes."""
-    from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.polar import PolarMesh
-
-    if isinstance(mesh, CartesianMesh):
-        return {"geometry": "cartesian", "dimension": mesh.dim, "cells": [mesh.n, mesh.n],
-                "extent": [[0.0, mesh.L], [0.0, mesh.L]],
-                "periodic": [mesh.periodic, mesh.periodic]}
-    if isinstance(mesh, PolarMesh):
-        return {"geometry": "polar", "dimension": mesh.dim,
-                "cells": [mesh.nr, mesh.ntheta],
-                "extent": [[mesh.r_min, mesh.r_max], [0.0, "2*pi"]],
-                "periodic": [False, True], "theta_boxes": mesh.theta_boxes}
-    raise TypeError("semantic layout requires a supported typed mesh, got %s" % type(mesh).__name__)
-
-
 def _layout_semantic_data(layout: Any) -> Any:
-    """Project scientific mesh structure without backend, ABI, route or target facts."""
+    """Project a layout through one small descriptor protocol, never concrete class dispatch."""
     if layout is None:
         return None
     from pops.mesh import LayoutPlan
@@ -408,32 +391,7 @@ def _layout_semantic_data(layout: Any) -> Any:
             "assignments": [row.to_data() for row in layout.assignments],
             "mappings": [row.to_data() for row in layout.mappings],
         }
-    from pops.mesh.layouts import AMR, Uniform
-
-    if isinstance(layout, Uniform):
-        return {
-            "kind": "uniform",
-            "domain": _mesh_semantic_data(layout.mesh),
-            "embedded_boundary": _descriptor_semantic_data(
-                layout.embedded_boundary, where="uniform embedded boundary"),
-            "refinement": _descriptor_semantic_data(
-                layout.refine, where="uniform refinement criterion"),
-        }
-    if isinstance(layout, AMR):
-        policies = {}
-        for name in ("regrid", "patches", "refine", "nesting", "clustering"):
-            item = getattr(layout, name)
-            if item is not None:
-                policies[name] = _descriptor_semantic_data(item, where="AMR %s" % name)
-        return {
-            "kind": "amr",
-            "domain": _mesh_semantic_data(layout.base),
-            "max_levels": layout.max_levels,
-            "ratio": layout.ratio,
-            "policies": policies,
-        }
-    raise TypeError("semantic identity requires Uniform or AMR layout, got %s"
-                    % type(layout).__name__)
+    return _descriptor_semantic_data(layout, where="layout")
 
 
 __all__ = [

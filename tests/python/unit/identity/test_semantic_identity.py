@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pops.identity import Identity, canonical_sha256
 from pops.identity.semantic import semantic_identity, semantic_identity_of
+from pops.descriptors import Descriptor
 from pops.mesh import CartesianMesh
 from pops.mesh.layouts import Uniform
 from pops.model import Module
@@ -10,16 +11,29 @@ from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot
 
 
 def _snapshot(*, representation="conservative", centering="cell", units=("kg/m3",),
-              frame="model", clock="simulation", roles=None):
+              frame="model", clock="simulation", roles=None, layout=None):
     module = Module("transport")
     module.state_space(
         "U", ("rho",), roles=roles or {"density": "rho"},
         representation=representation, centering=centering, units=units,
         frame=frame, clock=clock,
     )
-    problem = Case(name="case").block("fluid", module)
-    return build_authoring_snapshot(
-        problem, layout=Uniform(CartesianMesh(n=16, L=1.0)), time=None)
+    problem = Case(name="case")
+    problem.block("fluid", module)
+    selected_layout = layout or Uniform(CartesianMesh(n=16, L=1.0))
+    return build_authoring_snapshot(problem, layout=selected_layout, time=None)
+
+
+class _ForeignLayout(Descriptor):
+    """Test-only extension: accepted without adding a branch to the snapshotter."""
+
+    category = "layout"
+
+    def __init__(self, mesh):
+        self.mesh = mesh
+
+    def options(self):
+        return {"mesh": self.mesh, "partition": "third-party"}
 
 
 def test_authoring_snapshot_exposes_exact_typed_semantic_identity():
@@ -49,6 +63,15 @@ def test_mapping_insertion_order_is_not_semantic():
     left = semantic_identity({"outer": {"a": 1, "b": 2}})
     right = semantic_identity({"outer": {"b": 2, "a": 1}})
     assert left == right
+
+
+def test_third_party_layout_uses_the_descriptor_semantic_protocol() -> None:
+    baseline = _snapshot(layout=_ForeignLayout(CartesianMesh(n=8, L=1.0)))
+    equivalent = _snapshot(layout=_ForeignLayout(CartesianMesh(n=8, L=1.0)))
+    changed = _snapshot(layout=_ForeignLayout(CartesianMesh(n=16, L=1.0)))
+
+    assert baseline.semantic_identity == equivalent.semantic_identity
+    assert baseline.semantic_identity != changed.semantic_identity
 
 
 def test_artifact_hash_is_not_the_semantic_identity_alias():

@@ -111,6 +111,16 @@ class Uniform(MeshDescriptor):
             opt["ignore_amr"] = self.ignore_amr is not None
         return opt
 
+    def semantic_data(self) -> dict[str, Any]:
+        """Scientific single-level structure, independent of runtime/provider facts."""
+        return {
+            "kind": "uniform",
+            "mesh": self.mesh,
+            "embedded_boundary": self.embedded_boundary,
+            "refinement": self.refine,
+            "ignore_amr": self.ignore_amr is not None,
+        }
+
     def capabilities(self) -> Any:
         return CapabilitySet({"layout": "uniform", "levels": 1, "supports_amr": False})
 
@@ -197,6 +207,20 @@ class AMR(MeshDescriptor):
         return {"base": self.base.name, "max_levels": self.max_levels, "ratio": self.ratio,
                 "regrid": self.regrid.name if self.regrid else None,
                 "refine": self.refine.name if self.refine else None}
+
+    def semantic_data(self) -> dict[str, Any]:
+        """Scientific hierarchy and policies exposed through the common descriptor protocol."""
+        return {
+            "kind": "amr",
+            "base": self.base,
+            "max_levels": self.max_levels,
+            "ratio": self.ratio,
+            "policies": {
+                name: value
+                for name in ("regrid", "patches", "refine", "nesting", "clustering")
+                if (value := getattr(self, name)) is not None
+            },
+        }
 
     def capabilities(self) -> Any:
         base_capabilities = self.base.capabilities().to_dict()

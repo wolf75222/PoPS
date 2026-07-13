@@ -123,6 +123,10 @@ class AMR(MeshDescriptor):
             "execution": self.execution.to_data(),
         }
 
+    def semantic_data(self) -> dict[str, Any]:
+        """Scientific adaptive structure without backend, ABI or runtime availability facts."""
+        return {"kind": "amr", **self.options()}
+
     def available(self, context: Any = None) -> Availability:
         del context
         self._validate_authorities()
