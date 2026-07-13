@@ -92,6 +92,15 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """Read-only owner anchor delegated to the underlying typed model."""
         return self._dsl._m.owner_path
 
+    @property
+    def frame(self) -> Any:
+        """The immutable physical frame authored for this model, or ``None``.
+
+        Numerical authorities use this public semantic value to resolve typed geometric
+        boundaries; they never inspect the model's private storage or infer axes from strings.
+        """
+        return self._frame
+
     # --- escape hatches ---
     @property
     def dsl(self) -> Any:

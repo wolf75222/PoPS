@@ -23,10 +23,13 @@ from .reconstruction import limiters
 # resolves, mirroring the former ``pops.lib.spatial.FiniteVolume()``.
 from .spatial import FiniteVolume, spatial
 from .plan import (
-    DiscretizationPlan, ResolvedDiscretizationPlan, ResolvedNumericalBinding,
+    BoundaryResolutionContext,
+    DiscretizationPlan,
+    ResolvedDiscretizationPlan,
+    ResolvedNumericalBinding,
     ResolvedRateMethod,
 )
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
            "spatial", "FiniteVolume", "DiscretizationPlan", "ResolvedDiscretizationPlan",
-           "ResolvedNumericalBinding", "ResolvedRateMethod"]
+           "ResolvedNumericalBinding", "ResolvedRateMethod", "BoundaryResolutionContext"]

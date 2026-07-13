@@ -69,14 +69,13 @@ def materialized_layout_subjects(problem: Any) -> dict[str, tuple[Any, ...]]:
 
 def validate_layout(problem: Any, layout: Any) -> None:
     """Validate the one runtime provider selected after LayoutPlan resolution."""
-    criteria = problem._constraints.refinement
     capabilities = layout.capabilities()
     to_dict = getattr(capabilities, "to_dict", None)
     capabilities = to_dict() if callable(to_dict) else capabilities
     if not isinstance(capabilities, Mapping):
         raise TypeError("layout capabilities() must project to a mapping")
     supports_amr = bool(capabilities.get("supports_amr", False))
-    if criteria.get("refine") is not None and not supports_amr \
+    if getattr(layout, "refine", None) is not None and not supports_amr \
             and getattr(layout, "ignore_amr", None) is None:
         raise ValueError(
             "pops.resolve: selected layout cannot consume active AMR refinement criteria")
@@ -222,23 +221,13 @@ def _resolve_descriptor(problem: Any, selected: Any) -> Any:
     if not isinstance(selected, AMR):
         raise TypeError("pops.resolve layout must be a typed descriptor or LayoutPlan")
 
-    criteria = problem._constraints.refinement
-    policies = {}
-    for slot in ("refine", "regrid", "nesting", "patches"):
-        layout_value = getattr(selected, slot)
-        problem_value = criteria.get(slot)
-        if layout_value is not None and problem_value is not None:
-            raise ValueError("pops.resolve: AMR %s has two competing authorities" % slot)
-        policies[slot] = problem_value if problem_value is not None else layout_value
-    refine = policies["refine"]
-    if refine is not None and criteria.get("refine") is None:
-        refine = resolved(refine)
+    refine = resolved(selected.refine)
     if refine is not None and not getattr(refine, "references_authenticated", False):
         raise ValueError("pops.resolve: AMR refinement references are not authenticated")
     return AMR(
         base=selected.base, max_levels=selected.max_levels, ratio=selected.ratio,
-        regrid=policies["regrid"], patches=policies["patches"], refine=refine,
-        nesting=policies["nesting"], checkpoint=selected.checkpoint,
+        regrid=selected.regrid, patches=selected.patches, refine=refine,
+        nesting=selected.nesting, checkpoint=selected.checkpoint,
         output=resolved(selected.output), clustering=selected.clustering)
 
 

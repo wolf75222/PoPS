@@ -1,14 +1,14 @@
 """Family-organized numerical authoring and its owner-qualified resolved value."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import json
 from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.identity import Identity, semantic_identity
-from pops.model import Handle, OperatorHandle
+from pops.model import Handle, OperatorHandle, OwnerKind
 from pops.numerics.spatial import FiniteVolume
 
 
@@ -27,7 +27,8 @@ def _callable_projection(value: Any, where: str) -> dict[str, Any]:
 
 def _is_typed_authority(value: Any) -> bool:
     return isinstance(value, Handle) or any(
-        callable(getattr(value, name, None)) for name in ("to_data", "canonical_identity")
+        callable(getattr(value, name, None))
+        for name in ("to_data", "canonical_identity", "resolve_for_numerics")
     )
 
 
@@ -153,7 +154,8 @@ class _ValueFamily:
             raise RuntimeError("DiscretizationPlan.%s is frozen" % self.family)
         if not _is_typed_authority(value):
             raise TypeError(
-                "%s.add requires a typed authority with to_data() or canonical_identity()"
+                "%s.add requires a typed authority with a canonical projection or "
+                "resolve_for_numerics() protocol"
                 % self.family)
         value_key = _authority_key(value)
         if any(_authority_key(existing) == value_key for existing in self._rows):
@@ -206,6 +208,35 @@ class ResolvedNumericalBinding:
             "subject": _callable_projection(self.subject, "resolved numerical subject"),
             "method": _callable_projection(self.method, "resolved numerical method"),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class BoundaryResolutionContext:
+    """The small, immutable protocol exposed to numerical boundary authorities.
+
+    Boundary families consume resolved physics and intrinsic stencil requirements without
+    importing ``Case`` or branching on concrete boundary classes.  Third-party authorities can
+    implement ``resolve_for_numerics(context)`` against this same value.
+    """
+
+    owner: Any
+    block: Handle
+    frame: Any
+    rates: tuple[ResolvedRateMethod, ...]
+    resolve: Callable[[Handle], Handle]
+
+    def __post_init__(self) -> None:
+        if not getattr(self.owner, "is_canonical", False):
+            raise TypeError("BoundaryResolutionContext.owner must be a canonical OwnerPath")
+        if not isinstance(self.block, Handle) or self.block.kind != "block" \
+                or not self.block.is_resolved:
+            raise TypeError("BoundaryResolutionContext.block must be a canonical BlockHandle")
+        if not isinstance(self.rates, tuple) or not self.rates:
+            raise TypeError("BoundaryResolutionContext.rates must contain resolved rate methods")
+        if any(not isinstance(row, ResolvedRateMethod) for row in self.rates):
+            raise TypeError("BoundaryResolutionContext.rates contains an unresolved rate method")
+        if not callable(self.resolve):
+            raise TypeError("BoundaryResolutionContext.resolve must be callable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,7 +320,7 @@ class DiscretizationPlan(Descriptor):
             "interfaces": self.interfaces.values(),
         }
 
-    def freeze(self) -> "DiscretizationPlan":
+    def freeze(self) -> DiscretizationPlan:
         if getattr(self, "_frozen", False):
             return self
         for family in (self.rates, self.fields, self.boundaries, self.sources, self.interfaces):
@@ -331,10 +362,12 @@ class DiscretizationPlan(Descriptor):
         self.validate_for(model)
 
         def resolve_handle(value: Handle) -> Handle:
-            try:
-                return case.resolve(value, block=block)
-            except TypeError:
+            if not isinstance(value, Handle):
+                raise TypeError("numerical reference resolution requires a typed Handle")
+            root_kind = value.owner_path.nodes[0].kind
+            if root_kind in (OwnerKind.CASE, OwnerKind.SHARED):
                 return case.resolve(value)
+            return case.resolve(value, block=block)
 
         rates = []
         for rate, method in self.rates.items():
@@ -367,11 +400,33 @@ class DiscretizationPlan(Descriptor):
             ))
 
         resolved_block = case.resolve(block)
+        resolved_rates = tuple(sorted(rates, key=lambda row: row.rate.qualified_id))
+        boundary_context = BoundaryResolutionContext(
+            owner=case.owner_path.canonical(),
+            block=resolved_block,
+            frame=model.frame,
+            rates=resolved_rates,
+            resolve=resolve_handle,
+        )
+        boundaries = []
+        for authority in self.boundaries.values():
+            resolve_boundary = getattr(authority, "resolve_for_numerics", None)
+            if not callable(resolve_boundary):
+                raise TypeError(
+                    "numerical boundary authorities must expose "
+                    "resolve_for_numerics(BoundaryResolutionContext)"
+                )
+            resolved_boundary = resolve_boundary(boundary_context)
+            _callable_projection(resolved_boundary, "resolved boundary authority")
+            boundaries.append(resolved_boundary)
         return ResolvedDiscretizationPlan(
             resolved_block,
-            tuple(sorted(rates, key=lambda row: row.rate.qualified_id)),
+            resolved_rates,
             resolve_pairs(self.fields.items(), "fields"),
-            resolve_values(self.boundaries.values(), "boundaries"),
+            tuple(sorted(
+                boundaries,
+                key=lambda value: _projection_sort_key(value, "resolved boundaries"),
+            )),
             resolve_pairs(self.sources.items(), "sources"),
             resolve_values(self.interfaces.values(), "interfaces"),
         )
@@ -392,6 +447,7 @@ class DiscretizationPlan(Descriptor):
 
 
 __all__ = [
-    "DiscretizationPlan", "ResolvedDiscretizationPlan", "ResolvedNumericalBinding",
+    "BoundaryResolutionContext", "DiscretizationPlan", "ResolvedDiscretizationPlan",
+    "ResolvedNumericalBinding",
     "ResolvedRateMethod",
 ]

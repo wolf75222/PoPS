@@ -117,6 +117,14 @@ class _ReferenceAuthority:
         return {"role": self.role, "reference": self.reference.canonical_identity()}
 
 
+@dataclass(frozen=True)
+class _BoundaryAuthority:
+    reference: object
+
+    def resolve_for_numerics(self, context):
+        return _ReferenceAuthority("boundary", context.resolve(self.reference))
+
+
 def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None:
     _, model, state, flux, rate, method = _declarations()
     plan = DiscretizationPlan()
@@ -129,7 +137,7 @@ def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None
         _ReferenceAuthority("source-subject", flux),
         _ReferenceAuthority("source-method", flux),
     )
-    plan.boundaries.add(_ReferenceAuthority("boundary", state))
+    plan.boundaries.add(_BoundaryAuthority(state))
     plan.interfaces.add(_ReferenceAuthority("interface", flux))
 
     case = pops.Case("all-families")
