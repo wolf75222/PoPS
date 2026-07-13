@@ -123,6 +123,11 @@ echo "--- python -m pip ${pip_args[*]} ${EXTRA_PIP[*]} ---"
 python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
 
 # --- diagnose ---------------------------------------------------------------------------------------
+# ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
+# output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
+# verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
+PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
 echo ""
 echo "--- import pops; pops.doctor() ---"
-python -c "import pops; print('pops', pops.__version__); pops.doctor()"
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python -c "import pops; print('pops', pops.__version__); pops.doctor()"

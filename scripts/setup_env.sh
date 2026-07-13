@@ -172,9 +172,16 @@ echo "Manual heavy-TU pool (build_python.sh does this for you):"
 echo "    pip install . -v -C cmake.define.POPS_HEAVY_TU_POOL=$_ncpu      # or a C++ preset: -DPOPS_HEAVY_TU_POOL=$_ncpu"
 echo "    (leave it at the default 1 on memory-constrained machines / CI -- it is the OOM guard.)"
 echo ""
-if conda run -n "$ENV_NAME" python -c "import pops" >/dev/null 2>&1; then
+# ADC-647: a previous wheel install may already exist. On Darwin, authenticate the exact extension
+# a clean `import pops` will resolve before the probe below can load it. A missing package is normal
+# during first-time setup; a present package with a missing/bad extension is not.
+conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/codesign_pops_extensions.py" --if-present
+if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+    python -c "import pops" >/dev/null 2>&1; then
   echo "--- pops.doctor() ---"
-  conda run -n "$ENV_NAME" python -c "import pops; pops.doctor()" || true
+  conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+    python -c "import pops; pops.doctor()" || true
 else
   echo "pops is not installed in '$ENV_NAME' yet. Install it, then check the environment:"
   echo "    conda activate $ENV_NAME"
