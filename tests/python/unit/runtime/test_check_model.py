@@ -20,6 +20,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
@@ -87,7 +88,7 @@ sim.block("ions",
                         source=pops.PotentialForce(charge=1.0),
                         elliptic=pops.ChargeDensity(charge=1.0)),
               spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="xy")
 rho0 = 1.0 + 0.5 * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))

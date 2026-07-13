@@ -19,6 +19,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -35,7 +36,7 @@ def build(n=16):
     """Deux blocs couples par le Poisson, le second a STRIDE=2 (cadence hold-then-catch-up) :
     le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
     sim = System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),

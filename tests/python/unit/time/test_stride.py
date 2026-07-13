@@ -23,6 +23,7 @@ Semantique verifiee = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre) :
 import sys
 import numpy as np
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.codegen.loader import CompiledModel
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
@@ -69,12 +70,12 @@ rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, 1))
 
 s_ref = System(n=n, periodic=False)
 s_ref.block("ne", diocotron_model(), time=pops.Explicit(substeps=1))
-s_ref.set_poisson(bc="dirichlet")
+s_ref.set_poisson(bc=Dirichlet())
 s_ref.set_density("ne", rho0)
 
 s_s1 = System(n=n, periodic=False)
 s_s1.block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
-s_s1.set_poisson(bc="dirichlet")
+s_s1.set_poisson(bc=Dirichlet())
 s_s1.set_density("ne", rho0)
 
 for _ in range(5):
@@ -97,7 +98,7 @@ rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim = System(n=n, periodic=False)
 sim.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim.set_poisson(bc="dirichlet")
+sim.set_poisson(bc=Dirichlet())
 sim.set_density("ne", rho0)
 
 # macro_step 0 : (0+1)%3 != 0 -> TENU (etat inchange)
@@ -146,14 +147,14 @@ rho_init = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_slow = System(n=n, periodic=False)
 sim_slow.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim_slow.set_poisson(bc="dirichlet")
+sim_slow.set_poisson(bc=Dirichlet())
 sim_slow.set_density("ne", rho_init.copy())
 for _ in range(M):
     sim_slow.step(dt)  # 5 pas : le bloc rattrape UNE fois (macro_step 4) avec dt_eff=5*dt
 
 sim_direct = System(n=n, periodic=False)
 sim_direct.block("ne", diocotron_model(), time=pops.Explicit(stride=1))
-sim_direct.set_poisson(bc="dirichlet")
+sim_direct.set_poisson(bc=Dirichlet())
 sim_direct.set_density("ne", rho_init.copy())
 sim_direct.step(M * dt)  # un seul pas de M*dt
 
@@ -172,13 +173,13 @@ M = 4
 
 sim_cfl1 = System(n=n, periodic=False)
 sim_cfl1.block("ne", diocotron_model(), time=pops.Explicit(stride=1))
-sim_cfl1.set_poisson(bc="dirichlet")
+sim_cfl1.set_poisson(bc=Dirichlet())
 sim_cfl1.set_density("ne", rho_cfl.copy())
 dt1 = sim_cfl1.step_cfl(cfl)
 
 sim_cflM = System(n=n, periodic=False)
 sim_cflM.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
-sim_cflM.set_poisson(bc="dirichlet")
+sim_cflM.set_poisson(bc=Dirichlet())
 sim_cflM.set_density("ne", rho_cfl.copy())
 dtM = sim_cflM.step_cfl(cfl)
 
@@ -235,7 +236,7 @@ rho_b = 1.0 + 0.01 * np.sin(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 sim_mb = System(n=n, periodic=False)
 sim_mb.block("a", diocotron_model(), time=pops.Explicit(stride=1))
 sim_mb.block("b", diocotron_model(), time=pops.Explicit(stride=3))
-sim_mb.set_poisson(bc="dirichlet")
+sim_mb.set_poisson(bc=Dirichlet())
 sim_mb.set_density("a", rho_a)
 sim_mb.set_density("b", rho_b)
 
@@ -275,7 +276,7 @@ rho_e = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_imex = System(n=n, periodic=False)
 sim_imex.block("ne", diocotron_model(), time=pops.IMEX(substeps=2, stride=2))
-sim_imex.set_poisson(bc="dirichlet")
+sim_imex.set_poisson(bc=Dirichlet())
 sim_imex.set_density("ne", rho_e)
 
 state_before = sim_imex.density("ne").copy()
@@ -361,14 +362,14 @@ h_cfl = 1.0 / n_cfl  # domaine [0,1]^2 : h = dx = dy = 1/n
 # substeps=1 (referent) : dt_ref = cfl*h/w
 sim_sub1 = System(n=n_cfl, periodic=False)
 sim_sub1.block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
-sim_sub1.set_poisson(bc="dirichlet")
+sim_sub1.set_poisson(bc=Dirichlet())
 sim_sub1.set_density("ne", rho_sub.copy())
 dt_sub1 = sim_sub1.step_cfl(cfl_sub)  # avance le systeme d'un pas -> macro_step=1 apres
 
 # substeps=S (test) : systeme identique en etat initial, aussi a macro_step=0 au debut
 sim_subS = System(n=n_cfl, periodic=False)
 sim_subS.block("ne", diocotron_model(), time=pops.Explicit(substeps=S_cfl, stride=1))
-sim_subS.set_poisson(bc="dirichlet")
+sim_subS.set_poisson(bc=Dirichlet())
 sim_subS.set_density("ne", rho_sub.copy())
 dt_subS = sim_subS.step_cfl(cfl_sub)
 

@@ -20,6 +20,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -43,7 +44,7 @@ sim.block("e",
                         source=pops.MagneticLorentzForce(charge=q),
                         elliptic=pops.ChargeDensity(charge=0.0)),  # pas de couplage Poisson
               spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sim.set_magnetic_field(B0 * np.ones(n * n))
 rho0, v0 = 1.0, 0.7
 ones = np.ones((n, n))
@@ -71,7 +72,7 @@ sim2.block("e",
                          source=pops.PotentialMagneticForce(charge=q),
                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=1.0)),
                spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim2.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim2.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sim2.set_magnetic_field(B0 * np.ones(n * n))
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="xy")

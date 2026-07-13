@@ -29,6 +29,7 @@ from pops.numerics.reconstruction.limiters import Minmod
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
@@ -73,7 +74,7 @@ pytest = _SkipModule()
 
 def _build(n=16):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                             transport=pops.IsothermalFlux(),

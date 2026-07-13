@@ -31,9 +31,9 @@ from pops.numerics.riemann import HLL
 from pops.numerics.riemann import HLLC
 from pops.numerics.riemann import Roe
 import numpy as np
-import pytest
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
@@ -76,7 +76,7 @@ def _make_polar_sim_ready(solver="polar"):
     sim = System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
     sim.block("ne", model=_exb_model(),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
     sim.set_density("ne", [1.0] * (_NR * _NTH))
     return sim
 

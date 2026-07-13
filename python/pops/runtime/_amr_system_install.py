@@ -27,7 +27,6 @@ class _AmrSystemInstall(_AmrSystem):
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, field_plans: Any = None,
-                          outputs: Any = None, diagnostics: Any = None,
                           bind_schema: Any = None, initial_values: Any = (),
                           bootstrap_plan: Any = None, amr_transfer: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
@@ -90,12 +89,6 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
-        if outputs or diagnostics:
-            raise ValueError(
-                "native AMR install does not accept free output/diagnostic lists; "
-                "declare exact ConsumerGraph nodes on the compiled plan"
-            )
-
         # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
         # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
         # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
@@ -429,10 +422,12 @@ class _AmrSystemInstall(_AmrSystem):
         # native composite FAC path. None (default) forwards NOTHING extra, so the native call is
         # byte-identical to the historical set_poisson(solver=token) (Option A).
         composite = getattr(solver_brick, "amr_composite", None)
-        if composite is not None:
-            self.set_poisson(solver=token, **composite.set_poisson_kwargs())
-        else:
-            self.set_poisson(solver=token)
+        kwargs = {} if composite is None else composite.set_poisson_kwargs()
+        # The resolved plan already owns native tokens. Keep them behind the private seam; the
+        # public AMR method accepts typed bc/wall descriptors only.
+        self._set_poisson_native(
+            rhs="charge_density", solver=token, bc="auto", wall="none", wall_radius=0.0,
+            **kwargs)
 
     @staticmethod
     def _declared_elliptic_fields(instances: Any) -> Any:

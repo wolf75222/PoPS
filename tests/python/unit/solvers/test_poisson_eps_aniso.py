@@ -9,6 +9,7 @@ coherence (l'anisotropie modifie REELLEMENT phi vs l'isotrope), et le refus avec
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
@@ -42,7 +43,7 @@ def anisotropic_epsilon_tests():
     def solve(eps_xy, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
         s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
-        s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+        s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if eps_xy is not None:
             s.set_epsilon_anisotropic_field(eps_xy[0], eps_xy[1])
@@ -60,7 +61,7 @@ def anisotropic_epsilon_tests():
     # donc phi doit differer franchement (eps_x et eps_y sont distincts).
     s_iso = System(n=n, L=1.0, periodic=False)
     s_iso.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
-    s_iso.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
+    s_iso.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Dirichlet())
     s_iso.set_density("q", f)
     s_iso.set_epsilon_field(eps_x)
     s_iso.solve_fields()

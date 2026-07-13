@@ -20,6 +20,7 @@ import sys
 try:
     import numpy as np
     import pops
+    from pops.runtime.bricks import Periodic
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.diagnostics import Norm, Integral, MinMax, ConservationCheck
     from pops.linalg.norms import L1, L2, LInf
@@ -48,7 +49,7 @@ def chk(cond, label):
 
 def build(n=16):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("ions",
                   pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
                              transport=pops.IsothermalFlux(),

@@ -17,6 +17,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -37,7 +38,7 @@ def _build(n=32, regrid_every=0):
                   spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.block("electrons", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
     return sim
@@ -76,7 +77,7 @@ def main():
     def run_mono():
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s.block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-        s.set_poisson(bc="periodic")
+        s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.001, 10)
         return np.asarray(s.density())

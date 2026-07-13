@@ -1,41 +1,42 @@
-"""pops.mesh.masks -- transport-mask descriptors for embedded boundaries (Spec 5 sec.8.16.1).
+"""Typed transport-mask descriptors for embedded boundaries.
 
-The typed replacement for the ``set_disc_domain(..., mode="none"|"staircase"|"cutcell")``
-string. A mask says HOW transport is masked at an embedded boundary; the runtime applies
-it. Inert descriptors.
-
-Each mask carries the native disc-transport token (``none`` / ``staircase`` / ``cutcell``) that
-the C++ ``set_disc_domain`` / ``set_geometry_mode`` consume, exposed via :meth:`lower` (and the
-shared :func:`lower_disc_mode`, which also passes a legacy string through unchanged). The lowered
-token is byte-identical to what a user passes today in the string form.
+The public selector is always a descriptor: :class:`NoMask`, :class:`Staircase`,
+or :class:`CutCell`. Native string tokens exist only as lowering output and are never accepted as
+authoring input. This keeps validation, capabilities, and cut-cell thresholds attached to the
+selected policy instead of allowing untyped values to bypass the descriptor contract.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from .._descriptor import MeshDescriptor
 from ...descriptors_report import RequirementSet, CapabilitySet
 
-#: The native disc-transport tokens (single source). A typed mask lowers to one of these.
-DISC_MODE_TOKENS = ("none", "staircase", "cutcell")
+# Native-only tokens consumed by the C++ runtime. They are deliberately not exported.
+_DISC_MODE_TOKENS = ("none", "staircase", "cutcell")
 
 
-class _TransportMask(MeshDescriptor):
-    """Base of the disc-transport masks: carries the native token via :attr:`mode_token`."""
+class TransportMask(MeshDescriptor):
+    """Extensible typed interface for a disc-transport policy.
+
+    Implementations provide a native token through :meth:`lower`; callers select the policy with
+    the descriptor itself, never with that token.
+    """
 
     category = "transport_mask"
     #: The native ``set_disc_domain`` / ``set_geometry_mode`` token this mask selects.
-    mode_token = "none"
+    mode_token = ""
 
     def options(self) -> dict:
         return {"mode": self.mode_token}
 
     def lower(self, context: Any = None) -> Any:
-        """The native disc-transport token (byte-identical to the legacy ``mode=`` string)."""
+        """Return the private native disc-transport token."""
         return self.mode_token
 
 
-class NoMask(_TransportMask):
+class NoMask(TransportMask):
     """No masking: the embedded geometry is ignored by transport (mode='none')."""
 
     mode_token = "none"
@@ -44,7 +45,7 @@ class NoMask(_TransportMask):
         return CapabilitySet({"masked_transport": False})
 
 
-class Staircase(_TransportMask):
+class Staircase(TransportMask):
     """Staircase masking: cells fully inside the wall are excluded (mode='staircase')."""
 
     mode_token = "staircase"
@@ -53,14 +54,14 @@ class Staircase(_TransportMask):
         return CapabilitySet({"masked_transport": True, "conservative": False})
 
 
-class CutCell(_TransportMask):
+class CutCell(TransportMask):
     """Cut-cell masking: conservative masked transport on cut cells (mode='cutcell').
 
     ADC-615 exposes the cut-cell numeric thresholds, previously hardcoded native constants:
 
     * ``kappa_min`` -- small-cell volume-fraction floor (default 1e-2): bounds the 1/kappa
       amplification so an arbitrarily cut cell keeps a finite, stable explicit step;
-    * ``face_open_eps`` -- aperture below which a face is treated as CLOSED (default 1e-6);
+    * ``face_open_eps`` -- aperture in ``(0, 1]`` below which a face is CLOSED (default 1e-6);
     * ``cut_theta_min`` -- the cut-fraction clamp (default 1e-3) SHARED with the elliptic
       Shortley-Weller wall, so the finite-volume aperture stays bit-consistent with the wall.
 
@@ -72,7 +73,7 @@ class CutCell(_TransportMask):
     def __init__(self, kappa_min: Any = None, face_open_eps: Any = None,
                  cut_theta_min: Any = None) -> None:
         self.kappa_min = self._check(kappa_min, "kappa_min", unit_interval=True)
-        self.face_open_eps = self._check(face_open_eps, "face_open_eps", unit_interval=False)
+        self.face_open_eps = self._check(face_open_eps, "face_open_eps", unit_interval=True)
         self.cut_theta_min = self._check(cut_theta_min, "cut_theta_min", unit_interval=True)
 
     @staticmethod
@@ -82,8 +83,10 @@ class CutCell(_TransportMask):
         if value is None:
             return 0.0
         if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("CutCell(%s=) must be a number or None; got %r" % (name, value))
+            raise TypeError("CutCell(%s=) must be a real number or None; got %r" % (name, value))
         v = float(value)
+        if not math.isfinite(v):
+            raise ValueError("CutCell(%s=) must be finite; got %r" % (name, value))
         if v <= 0.0:
             raise ValueError("CutCell(%s=) must be > 0 (or None for the default); got %r"
                              % (name, value))
@@ -108,50 +111,27 @@ class CutCell(_TransportMask):
         return CapabilitySet({"masked_transport": True, "conservative": True})
 
 
-def lower_disc_mode(mode: Any) -> Any:
-    """Lower a disc-transport ``mode`` to its native token (Spec 5 sec.8.16).
+def lower_disc_mode(mode: Any) -> str:
+    """Lower a typed transport mask to its native token.
 
-    Accepts a typed :class:`_TransportMask` (``NoMask`` / ``Staircase`` / ``CutCell``) -> its
-    ``mode_token``, OR the legacy string (``"none"`` / ``"staircase"`` / ``"cutcell"``), which is
-    validated and passed through unchanged. Any other type is a clear :class:`TypeError`; an
-    unknown string is a :class:`ValueError` naming the accepted tokens. Mirrors the
-    string-or-typed coercion used elsewhere (the string path stays byte-identical).
-
-    Args:
-        mode: A ``pops.mesh.masks`` descriptor or a legacy disc-mode string.
-
-    Returns:
-        The native disc-transport token (``"none"`` / ``"staircase"`` / ``"cutcell"``).
+    This function is an implementation seam, not a coercion layer: strings are rejected even when
+    they spell a valid native token. Subclassing :class:`TransportMask` is the extension protocol.
     """
-    if isinstance(mode, str):
-        if mode not in DISC_MODE_TOKENS:
-            raise ValueError(
-                "set_disc_domain: unknown mode %r (expected one of %s, or a typed "
-                "pops.mesh.masks.NoMask() / Staircase() / CutCell())"
-                % (mode, ", ".join(DISC_MODE_TOKENS)))
-        return mode
-    token = getattr(mode, "mode_token", None)
-    if token is None or getattr(mode, "category", None) != "transport_mask":
+    if not isinstance(mode, TransportMask):
         raise TypeError(
-            "set_disc_domain: mode must be a pops.mesh.masks transport mask "
-            "(NoMask / Staircase / CutCell) or a disc-mode string (none / staircase / "
-            "cutcell), got %r" % (type(mode).__name__,))
+            "transport mode must be a pops.mesh.masks.TransportMask descriptor "
+            "(NoMask / Staircase / CutCell), got %s" % type(mode).__name__)
+    token = mode.lower()
+    if not isinstance(token, str) or token not in _DISC_MODE_TOKENS:
+        raise ValueError(
+            "%s.lower() returned unsupported native transport token %r"
+            % (type(mode).__name__, token))
     return token
 
 
 def disc_mode_thresholds(mode: Any) -> dict:
-    """The resolved cut-cell numeric thresholds carried by a disc-transport ``mode`` (ADC-615).
-
-    A typed :class:`CutCell` returns its ``kappa_min`` / ``face_open_eps`` / ``cut_theta_min`` (0.0 =
-    keep the native default). Any other mask, a legacy string, or a non-mask returns ``{}`` (the
-    native ``set_disc_domain`` then keeps every kEb* default, bit-identical).
-
-    Args:
-        mode: A ``pops.mesh.masks`` descriptor or a legacy disc-mode string.
-
-    Returns:
-        A dict with ``kappa_min`` / ``face_open_eps`` / ``cut_theta_min``, or ``{}``.
-    """
+    """Return numeric thresholds carried by a validated typed transport mask."""
+    lower_disc_mode(mode)
     thresholds = getattr(mode, "thresholds", None)
     if callable(thresholds):
         resolved = thresholds()
@@ -160,5 +140,5 @@ def disc_mode_thresholds(mode: Any) -> dict:
     return {}
 
 
-__all__ = ["NoMask", "Staircase", "CutCell", "DISC_MODE_TOKENS", "lower_disc_mode",
+__all__ = ["TransportMask", "NoMask", "Staircase", "CutCell", "lower_disc_mode",
            "disc_mode_thresholds"]

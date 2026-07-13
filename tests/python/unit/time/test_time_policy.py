@@ -15,6 +15,7 @@ import sys
 import warnings
 import numpy as np
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -94,7 +95,7 @@ for label, policy in policies.items():
     s = System(n=n, periodic=False)
     s.block("ne", electron_model(),
                 spatial=pops.Spatial(minmod=True), time=policy)
-    s.set_poisson(bc="dirichlet")
+    s.set_poisson(bc=Dirichlet())
     rho_e = 1.0 + 0.04 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, n))
     s.set_density("ne", rho_e)
     s.advance(dt, 4)

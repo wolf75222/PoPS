@@ -24,6 +24,7 @@ import sys
 try:
     import numpy as np
     import pops
+    from pops.runtime.bricks import Periodic
     from pops.runtime._bound_sim import BoundSimulation
     from pops.numerics.reconstruction.limiters import Minmod
 except Exception as exc:  # noqa: BLE001
@@ -46,7 +47,7 @@ def _isothermal_model():
 def _fresh_system(n=8):
     """Un System n x n periodique avec UN bloc natif (aucun program installe)."""
     sim = System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("ions", _isothermal_model(),
                   spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
     return sim

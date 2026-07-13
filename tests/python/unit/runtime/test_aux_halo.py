@@ -24,6 +24,7 @@ import numpy as np
 
 import pops
 from pops.physics._facade import Model
+from pops.runtime.bricks import Dirichlet
 
 from tests.python.support.requirements import repo_include
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
@@ -78,7 +79,7 @@ def _cart_rhs(compiled, n, vx2d, halo):
     sim.add_equation("a", model=compiled,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Dirichlet())
     sim.set_density("a", np.ones((n, n)))
     sim.set_aux_field("a", "vx", vx2d, halo=halo)
     sim.solve_fields()
@@ -175,7 +176,7 @@ def test_amr_halo():
         def stepped_density(halo):
             s = AmrSystem(n=n, L=1.0, periodic=False)
             s.add_equation("a", model=compiled, spatial=sp, time=pops.Explicit())
-            s.set_poisson(bc="dirichlet")
+            s.set_poisson(bc=Dirichlet())
             s.set_density("a", np.ones((n, n)))
             s.set_aux_field("a", "vx", vx, halo=halo)
             s.step(1e-3)

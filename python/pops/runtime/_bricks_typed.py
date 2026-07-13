@@ -1,17 +1,12 @@
 """Typed native-brick constructors (Spec 5 sec.14.2.5).
 
-The native bricks are NAMED by typed constructors instead of magic ``kind=`` / ``bc=`` strings,
-ADDITIVELY (the string path keeps working). This module homes the sec.14.2.5 typed ctors that do
-not belong to a state/source/time module :
+The native bricks are named by typed constructors instead of magic ``bc=`` strings. This module
+homes the elliptic boundary selectors that do not belong to a state/source/time module:
 
 * the typed native ELLIPTIC boundary bricks ``Dirichlet`` / ``Neumann`` / ``Periodic``.
 
-The native elliptic (Poisson) boundary is selected today by a magic ``bc=`` string token on
-``System.set_poisson`` / ``System.add_elliptic_model`` : ``"auto" | "periodic" | "dirichlet" |
-"neumann"`` (cf. the C++ binding ``System::set_poisson``). The typed constructors NAME that choice
-with a type instead of a string : ``pops.Dirichlet()`` lowers to the SAME ``bc="dirichlet"`` token,
-``pops.Neumann()`` to ``bc="neumann"``, ``pops.Periodic()`` to ``bc="periodic"``. The ``.bc``
-attribute carries the token so a consumer can pass it straight through (``set_poisson(bc=b.bc)``).
+``System.set_poisson`` and ``AmrSystem.set_poisson`` accept these objects exclusively. Their
+``.bc`` value is consumed only by the private Python/native lowering seam.
 
 The boundary bricks are the NATIVE elliptic-solver boundary (the homogeneous BC of the system
 Poisson solve), and are DISTINCT from two other typed boundary surfaces already in the package :
@@ -38,12 +33,7 @@ _BC_NEUMANN = "neumann"
 
 
 class _Boundary:
-    """Base of the native elliptic (Poisson) boundary bricks : carries a ``bc=`` token.
-
-    ``bc`` is the string consumed by ``System.set_poisson(bc=...)`` / ``add_elliptic_model(bc=...)``.
-    ``lower()`` returns it so the install / runtime path can route the typed object to the existing
-    string argument without a new C++ entry point (additive, inert).
-    """
+    """Base of the native elliptic boundary bricks and their private lowering token."""
 
     bc = ""
 
@@ -62,9 +52,9 @@ class _Boundary:
 
 
 class Periodic(_Boundary):
-    """Native PERIODIC elliptic boundary : lowers to ``bc="periodic"`` (the Poisson solve wraps).
+    """Native periodic elliptic boundary (the Poisson solve wraps).
 
-    Typed equivalent of ``set_poisson(bc="periodic")``. The mesh-topology counterpart is
+    The mesh-topology counterpart is
     ``pops.mesh.boundaries.Periodic`` ; this brick is the native ELLIPTIC-solver boundary token.
     """
 
@@ -72,11 +62,11 @@ class Periodic(_Boundary):
 
 
 class Dirichlet(_Boundary):
-    """Native DIRICHLET elliptic boundary : lowers to ``bc="dirichlet"`` (homogeneous phi=0 wall).
+    """Native Dirichlet elliptic boundary (homogeneous ``phi=0`` wall).
 
-    Typed equivalent of ``set_poisson(bc="dirichlet")``. The native Poisson solve imposes a
-    homogeneous Dirichlet value on the physical faces (a conducting wall is added via
-    ``set_poisson(wall="circle", wall_radius=...)``). The field-VALUE per-face Dirichlet of a
+    The native Poisson solve imposes a
+    homogeneous Dirichlet value on the physical faces (a conducting wall is selected with a typed
+    ``pops.mesh.geometry.Disc``). The field-VALUE per-face Dirichlet of a
     ``pops.fields`` problem (with a non-zero value) lives in ``pops.fields.bcs.Dirichlet``.
     """
 
@@ -84,9 +74,9 @@ class Dirichlet(_Boundary):
 
 
 class Neumann(_Boundary):
-    """Native NEUMANN elliptic boundary : lowers to ``bc="neumann"`` (homogeneous zero-flux wall).
+    """Native Neumann elliptic boundary (homogeneous zero-flux wall).
 
-    Typed equivalent of ``set_poisson(bc="neumann")``. The native Poisson solve imposes a
+    The native Poisson solve imposes a
     homogeneous Neumann (zero normal derivative) condition on the physical faces.
     """
 

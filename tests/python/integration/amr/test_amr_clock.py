@@ -26,6 +26,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -49,7 +50,7 @@ def _build_stride(n=32):
     sim.block("slow", _scalar_charge(-1.0),
                   spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=pops.Explicit(stride=2))  # bloc lent : cadence stride=2
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))
     return sim

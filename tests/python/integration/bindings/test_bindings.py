@@ -13,7 +13,9 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
+from pops.mesh.geometry import Disc
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -90,7 +92,7 @@ print("== diocotron compose par briques (ExB + BackgroundDensity) + paroi ==")
 n = 96
 dio = System(n=n, L=1.0, periodic=False)
 dio.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
-dio.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
+dio.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.40))
 xx, yy = np.meshgrid(meshx(n), meshx(n), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
 th = np.arctan2(yy - 0.5, xx - 0.5)
@@ -109,7 +111,7 @@ chk(abs(dio.mass("ne") - m0) < 1e-9, "diocotron : masse conservee")
 print("== integrateur temporel ecrit en Python (primitives eval_rhs/get_state/set_state) ==")
 pd = System(n=64, L=1.0, periodic=False)
 pd.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
-pd.set_poisson(bc="dirichlet", wall="circle", wall_radius=0.40)
+pd.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.40))
 xx, yy = np.meshgrid(meshx(64), meshx(64), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
 ne = np.full((64, 64), 1e-3)
@@ -284,8 +286,8 @@ ep = System(n=48, L=1.0, periodic=False)
 ep.block("ne", model=diocotron(B0=1.0, alpha=1.0, n_i0=0.0), spatial=pops.Spatial(minmod=True))
 ep.add_elliptic_model("phi", model=pops.elliptic(operator=pops.div_eps_grad(1.0),
                       rhs=pops.charge_density(), output=pops.electric_field_from_potential()),
-                      solver=pops.EllipticSolver("geometric_mg"), bc="dirichlet",
-                      wall="circle", wall_radius=0.40)
+                      solver=pops.EllipticSolver("geometric_mg"), bc=Dirichlet(),
+                      wall=Disc(radius=0.40))
 xx, yy = np.meshgrid(meshx(48), meshx(48), indexing="xy")
 r = np.hypot(xx - 0.5, yy - 0.5)
 ne_ring = np.full((48, 48), 1e-3)

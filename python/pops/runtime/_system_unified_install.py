@@ -52,8 +52,7 @@ class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, field_plans=None, outputs=None,
-                          diagnostics=None):
+                          solvers=None, field_plans=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
@@ -90,8 +89,6 @@ class _SystemUnifiedInstall(_System):
             set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
             any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
             through the shared system elliptic solver; a field name no model declares raises (typo).
-        @param outputs must be empty; exact publications are compiled ConsumerGraph nodes owned by
-            RuntimeInstance after an accepted step.
         @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
             Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
         """
@@ -207,12 +204,6 @@ class _SystemUnifiedInstall(_System):
                 self._temporal_restart_state.configure_program(
                     authored.temporal_manifest(),
                     time=self.time(), macro_step=self.macro_step())
-
-        if outputs or diagnostics:
-            raise ValueError(
-                "native install does not accept free output/diagnostic lists; "
-                "declare exact ConsumerGraph nodes on the compiled plan"
-            )
 
         # (8) FREEZE (ADC-592): the composition is fully lowered -- snapshot WHAT was bound, then
         # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the
@@ -443,14 +434,17 @@ class _SystemUnifiedInstall(_System):
         opts = self._solver_option_dict(solver_brick)
         mg = self._solver_mg_options(solver_brick)  # ADC-613: resolved V-cycle scalars (or {})
         from pops.solvers._numeric import native_float
-        self.set_poisson(rhs=opts.get("rhs", "charge_density"), solver=token,
-                         bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
-                         wall_radius=float(opts.get("wall_radius", 0.0)),
-                         epsilon=float(opts.get("epsilon", 1.0)),
-                         abs_tol=native_float(
-                             mg.get("abs_tol", opts.get("abs_tol", 0.0)),
-                             where="GeometricMG absolute tolerance"),
-                         **_mg_set_poisson_kwargs(mg))
+        # Solver plans are already resolved and carry native route tokens. Keep that representation
+        # behind the private seam; public set_poisson accepts typed bc/wall descriptors only.
+        self._set_poisson_native(
+            rhs=opts.get("rhs", "charge_density"), solver=token,
+            bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
+            wall_radius=float(opts.get("wall_radius", 0.0)),
+            epsilon=float(opts.get("epsilon", 1.0)),
+            abs_tol=native_float(
+                mg.get("abs_tol", opts.get("abs_tol", 0.0)),
+                where="GeometricMG absolute tolerance"),
+            **_mg_set_poisson_kwargs(mg))
 
     @staticmethod
     def _solver_option_dict(solver_brick: Any) -> Any:

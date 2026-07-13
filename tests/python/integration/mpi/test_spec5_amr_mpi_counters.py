@@ -28,6 +28,7 @@ import pytest
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+from pops.runtime.bricks import Periodic
 
 from pops.runtime.profile import PerformanceSummary, Profile  # noqa: E402
 
@@ -59,7 +60,7 @@ def _built_multiblock(n=64, regrid_every=1):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     sim.block("gas0", _comp(), time=pops.Explicit())
     sim.block("gas1", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniform background

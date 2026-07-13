@@ -32,6 +32,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.codegen.loader import CompiledModel
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
@@ -64,7 +65,7 @@ def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
     s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     s.set_refinement(1e30)
     s.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
     s.set_density("e", gaussian(16).ravel())
@@ -92,7 +93,7 @@ chk(np.all(np.isfinite(d_a)),
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))

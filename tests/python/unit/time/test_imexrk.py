@@ -32,6 +32,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -57,7 +58,7 @@ def build(time_policy, q, B0, rho0=1.0, u0=1.0, v0=0.0, n=8):
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("e", cyclotron_model(q), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=time_policy)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_magnetic_field(B0 * np.ones(n * n))
     ones = np.ones((n, n))
     sim.set_primitive_state("e", rho=rho0 * ones, u=u0 * ones, v=v0 * ones)

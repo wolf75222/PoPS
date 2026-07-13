@@ -23,7 +23,6 @@ Mono-rang (le Poisson polaire direct refuse MPI) : ce n'est pas un test MPI.
 import subprocess
 import sys
 import textwrap
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Scenario INSTABLE execute dans un sous-processus isole. nr != ntheta est le declencheur deterministe
 # du debordement de tampon ; la Gaussienne raide + BackgroundDensity(n0=0) reproduit le run instable
@@ -32,6 +31,7 @@ _CHILD = textwrap.dedent(
     """
     import math
     import pops
+    from pops.runtime.bricks import Dirichlet
     from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon
@@ -58,7 +58,7 @@ _CHILD = textwrap.dedent(
                         source=pops.NoSource(),
                         elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
         spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", steep_gaussian())
 
     # Quelques pas a GROS dt fixe -> le profil raide devient instable (NaN/Inf), comme le run signale.

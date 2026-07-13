@@ -21,6 +21,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -50,7 +51,7 @@ def run(n=24, steps=4, **imex_kw):
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.IMEX(**imex_kw))
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("e", gaussian(n).ravel())
     for _ in range(steps):
         sim.step_cfl(0.3)

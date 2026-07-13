@@ -8,6 +8,7 @@ non-regression (kappa=0 == Poisson), le refus de kappa < 0 et le refus avec le s
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
@@ -33,7 +34,7 @@ def main():
     def solve(kappa_field, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
         s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
-        s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+        s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if kappa_field is not None:
             s.set_reaction_field(kappa_field)

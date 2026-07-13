@@ -41,6 +41,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -196,7 +197,7 @@ def _build_multiblock(n=32, regrid_every=0):
                       spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
                       time=pops.Explicit())
     sim.set_refinement(threshold=1.5)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("ions", rho_i)
     sim.set_density("elec", rho_e)
     return sim

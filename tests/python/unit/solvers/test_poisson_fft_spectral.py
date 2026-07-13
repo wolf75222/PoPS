@@ -34,6 +34,8 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet, Periodic
+from pops.mesh.geometry import Disc
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -64,7 +66,7 @@ def solve_phi(n, solver, eps=1e-3):
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver=solver, bc=Periodic())
     x = (np.arange(n) + 0.5) / n
     rho = eps * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n))
     sim.set_state("ions", np.stack([rho, np.zeros_like(rho), np.zeros_like(rho)]))
@@ -102,8 +104,8 @@ sim.block("ions",
                         elliptic=pops.ChargeDensity(charge=1.0)),
               spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
               time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc="dirichlet",
-                wall="circle", wall_radius=0.4)
+sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc=Dirichlet(),
+                wall=Disc(radius=0.4))
 msg = err_msg(sim.solve_fields)
 chk("fft_spectral" in msg and "wall" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
 sim2 = System(n=32, L=1.0, periodic=True)
@@ -116,7 +118,7 @@ sim2.block("ions",
                time=pops.Explicit())
 # ADC-599/584: an unknown solver token is now refused PRE-BIND by set_poisson itself (typed
 # route validation), before any solve; the refusal still lists the valid set incl. fft_spectral.
-msg = err_msg(lambda: sim2.set_poisson(rhs="charge_density", solver="dct", bc="periodic"))
+msg = err_msg(lambda: sim2.set_poisson(rhs="charge_density", solver="dct", bc=Periodic()))
 chk("fft_spectral" in msg, f"solver inconnu : la liste inclut fft_spectral ({msg[:60]}...)")
 
 print("== (5) ghosts de phi : le chemin source complet fft == MG ==")
@@ -132,7 +134,7 @@ def rhs_with(solver):
                             elliptic=pops.ChargeDensity(charge=1.0)),
                   spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver=solver, bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver=solver, bc=Periodic())
     x = (np.arange(n) + 0.5) / n
     rho = 1e-3 * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n)) + 1e-3 * np.sin(
         2.0 * np.pi * x)[:, None] * np.ones((n, n))

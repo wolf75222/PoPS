@@ -30,6 +30,7 @@ import numpy as np
 
 import pops
 from pops.physics._facade import Model
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -65,7 +66,7 @@ def build(n=24):
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("ions", gaussian(n).ravel())
     return sim
 
@@ -108,7 +109,7 @@ print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 def build_amr(n=24):
     amr = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
     amr.block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                   time=pops.Explicit())
@@ -230,7 +231,7 @@ try:
     cm_dt_amr = scalar_model("scal_dt_amr", stab_dt=1e-4).compile(
         os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
     amr_dsl = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr_dsl.set_refinement(1e30)
     amr_dsl.add_equation("s", model=cm_dt_amr, spatial=pops.FiniteVolume(limiter=Minmod()),
                          time=pops.Explicit())

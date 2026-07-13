@@ -24,6 +24,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -56,7 +57,7 @@ sim = System(n=n, L=1.0, periodic=True)
 sim.block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),
               time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 rho0 = gaussian(n)
 sim.set_density("ions", rho0.ravel())
 m0 = sim.mass("ions")
@@ -90,7 +91,7 @@ except RuntimeError as e:
 # --- 4. AmrSystem : hll + minmod accepte (alignement de surface System/AMR) ------
 print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
 amr.block("ions", iso_model(),
               spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLL(), variables=Primitive()),

@@ -1,13 +1,11 @@
 """Spec 5 sec.14.2.5: typed native-brick constructors (ADC-504).
 
-The native bricks are NAMED by typed constructors instead of magic ``kind=`` / ``bc=`` strings,
-ADDITIVELY (the string path keeps working). This test pins the EQUIVALENCE of the typed forms to
-the existing string forms:
+The native bricks are named by typed constructors. This test pins their lowering contract:
 
 * ``pops.FluidState.compressible(gamma)`` / ``pops.FluidState.isothermal(cs2, vacuum_floor)`` build
   the SAME inert state as ``pops.FluidState(kind=...)`` and produce a bit-identical ``ModelSpec``
   through ``pops.Model(...)``.
-* the native ``pops.Dirichlet()`` / ``pops.Neumann()`` / ``pops.Periodic()`` boundary bricks lower
+* the native ``Dirichlet()`` / ``Neumann()`` / ``Periodic()`` boundary bricks lower
   to the ``bc=`` tokens ``"dirichlet"`` / ``"neumann"`` / ``"periodic"`` consumed by
   ``set_poisson`` ; they are DISTINCT objects from the ``pops.fields.bcs`` field-value descriptors.
 
@@ -21,6 +19,7 @@ import pytest
 
 pytest.importorskip("pops")
 import pops  # noqa: E402
+from pops.runtime.bricks import Dirichlet, Neumann, Periodic
 
 
 _SPEC_ATTRS = ("transport", "gamma", "cs2", "vacuum_floor", "source", "elliptic")
@@ -61,23 +60,22 @@ def test_fluidstate_isothermal_default_vacuum_floor_is_inactive():
 
 
 def test_native_boundary_bricks_lower_to_tokens():
-    cases = ((pops.Dirichlet, "dirichlet"), (pops.Neumann, "neumann"),
-             (pops.Periodic, "periodic"))
+    cases = ((Dirichlet, "dirichlet"), (Neumann, "neumann"), (Periodic, "periodic"))
     for ctor, token in cases:
         brick = ctor()
         assert brick.bc == token
         assert brick.lower() == token
         assert brick == ctor()  # value equality
-        assert brick != pops.Dirichlet() or token == "dirichlet"
+        assert brick != Dirichlet() or token == "dirichlet"
 
 
 def test_native_boundary_bricks_are_distinct_from_fields_bcs():
     import pops.fields.bcs as field_bcs
     # The native elliptic-boundary brick and the field-VALUE descriptor share a name but are
     # different objects (different concern: Poisson bc= token vs per-face field value).
-    assert pops.Dirichlet is not field_bcs.Dirichlet
-    assert pops.Periodic is not field_bcs.Periodic
-    assert not hasattr(pops.Dirichlet(), "value")  # native brick carries only a bc token
+    assert Dirichlet is not field_bcs.Dirichlet
+    assert Periodic is not field_bcs.Periodic
+    assert not hasattr(Dirichlet(), "value")  # native brick carries only a bc token
 
 
 if __name__ == "__main__":

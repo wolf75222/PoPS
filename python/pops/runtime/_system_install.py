@@ -30,8 +30,7 @@ from pops.runtime.routes import (
     resolve as _resolve_route,
 )
 
-# The Poisson wall / bc lowerers are split into ``_system_install_lowering`` for the 500-line cap
-# (ADC-550) and re-imported so ``set_poisson`` below and the direct-import tests are unchanged.
+# Typed Poisson wall / bc lowerers are split out for the 500-line cap (ADC-550).
 from pops.runtime._system_install_lowering import (  # noqa: F401
     _lower_bc, _lower_wall, _mg_kwargs, _weno_kwargs,
 )
@@ -325,50 +324,45 @@ class _SystemInstall(_System):
         self.set_density(name, density)
 
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg",
-                    bc: Any = "auto", wall: Any = "none", wall_radius: float = 0.0,
+                    bc: Any = None, wall: Any = None,
                     epsilon: float = 1.0, abs_tol: float = 0.0, rel_tol: Any = None,
                     max_cycles: Any = None, min_coarse: Any = None, pre_smooth: Any = None,
                     post_smooth: Any = None, bottom_sweeps: Any = None,
                     coarse_threshold: Any = None) -> Any:
-        """Configure the shared system Poisson solve (thin wrapper over the native binding).
+        """Configure the shared Poisson solve with typed boundary and wall selectors.
 
-        Low-level runtime seam. The documented PUBLIC elliptic surface is the typed
-        ``pops.fields.PoissonProblem(unknown="phi", equation=(-laplacian(phi) == rhs),
-        solver=GeometricMG(), bcs=[Dirichlet()])`` attached with ``case.field(...)`` and lowered
-        by ``pops.compile`` / ``pops.bind`` (which call this method internally); ``set_poisson``
-        stays for that seam, the native/AMR runtime, and the tests.
+        ``bc`` accepts the typed selectors from :mod:`pops.runtime.bricks`; omission
+        keeps automatic boundary selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
+        :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Strings and a separate
+        ``wall_radius`` are deliberately absent: every public selector owns its complete data.
 
-        Spec 5 sec.8.16 / sec.14.2.6 let ``bc`` and ``wall`` be TYPED objects in addition to the
-        legacy strings::
+        Example::
 
-            from pops import Dirichlet, Neumann, Periodic
+            from pops.runtime.bricks import Dirichlet
             from pops.mesh.geometry import Disc, NoWall
-            sim.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))   # == bc="dirichlet", wall="circle"
-            sim.set_poisson(bc="dirichlet", wall=NoWall())           # == bc="dirichlet", wall="none"
 
-        A typed boundary brick (:class:`pops.Dirichlet` / :class:`pops.Neumann` /
-        :class:`pops.Periodic`) lowers to its ``bc`` token. A typed
-        :class:`pops.mesh.geometry.Disc` lowers to ``wall="circle"`` + its radius (the
-        ``wall_radius=`` argument is then ignored in favour of the disc's radius); a
-        :class:`pops.mesh.geometry.NoWall` lowers to ``wall="none"``. The legacy string forms are
-        passed through unchanged (byte-identical native call). All the other arguments mirror the
-        native ``set_poisson`` defaults verbatim.
-
-        ADC-613 adds the GeometricMG V-cycle knobs ``rel_tol`` / ``max_cycles`` / ``min_coarse`` /
-        ``pre_smooth`` / ``post_smooth`` / ``bottom_sweeps``; ADC-644 adds ``coarse_threshold`` (a
-        total-cell coarsening ceiling, distinct from the per-axis ``min_coarse``). Left ``None`` they
-        are NOT forwarded, so the native solver keeps its ``kMG*`` defaults (bit-identical historical
-        V-cycle); the typed :class:`pops.solvers.elliptic.GeometricMG` descriptor lowers its resolved
-        scalars through here. They are inert for the FFT solver (direct, no iterative tolerance).
+            sim.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
+            sim.set_poisson(bc=Dirichlet(), wall=NoWall())
         """
-        _guard_assembling(self, "set_poisson")  # frozen once pops.bind completes (ADC-592)
-        bc = _lower_bc(bc)
-        lowered = _lower_wall(wall)
-        if lowered is not None:
-            wall, wall_radius = lowered  # typed wall overrides the wall string + radius
-        # PRE-BIND route validation (ADC-584): unknown tokens are refused here (family +
-        # requested token + valid set), never defaulted; a valid Route IS its wire token
-        # (str subclass), so the native call below stays byte-identical.
+        bc_token = "auto" if bc is None else _lower_bc(bc)
+        wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
+        self._set_poisson_native(
+            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
+            wall_radius=wall_radius, epsilon=epsilon, abs_tol=abs_tol, rel_tol=rel_tol,
+            max_cycles=max_cycles, min_coarse=min_coarse, pre_smooth=pre_smooth,
+            post_smooth=post_smooth, bottom_sweeps=bottom_sweeps,
+            coarse_threshold=coarse_threshold)
+
+    def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
+                            wall_radius: Any = 0.0, epsilon: Any = 1.0,
+                            abs_tol: Any = 0.0, rel_tol: Any = None,
+                            max_cycles: Any = None, min_coarse: Any = None,
+                            pre_smooth: Any = None, post_smooth: Any = None,
+                            bottom_sweeps: Any = None, coarse_threshold: Any = None) -> Any:
+        """Private token-level seam used only after typed authoring has been lowered."""
+        _guard_assembling(self, "set_poisson")
+        if not isinstance(bc, str) or not isinstance(wall, str):
+            raise TypeError("_set_poisson_native requires native bc and wall tokens")
         rhs = _resolve_route("poisson_rhs", rhs, context="set_poisson")
         solver = _resolve_route("field_solver", solver, context="set_poisson")
         bc = _resolve_route("poisson_bc", bc, context="set_poisson")
@@ -381,8 +375,8 @@ class _SystemInstall(_System):
                             **_mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth,
                                          post_smooth, bottom_sweeps, coarse_threshold))
 
-    def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = "auto",
-                           wall: Any = "none", wall_radius: float = 0.0) -> Any:
+    def add_elliptic_model(self, name: Any, model: Any, solver: Any = None, bc: Any = None,
+                           wall: Any = None) -> Any:
         """EPM: configures the system elliptic model (Poisson is its current instance).
         model = pops.elliptic(operator=pops.div_eps_grad(eps), rhs=pops.composite_rhs(),
         output=pops.electric_field_from_potential()). set_poisson(...) remains the equivalent shortcut.
@@ -403,7 +397,7 @@ class _SystemInstall(_System):
         # bit-identical) when all blocks carry a charge density. Both take the
         # SAME numerical path on the C++ side (sum of each block's elliptic bricks).
         rhs_tok = "charge_density" if type(model.rhs) is ChargeDensitySource else "composite"
-        self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall, wall_radius=wall_radius,
+        self.set_poisson(rhs=rhs_tok, solver=kind, bc=bc, wall=wall,
                          epsilon=model.operator.epsilon)
 
     def add_coupling(self, coupling: Any) -> Any:

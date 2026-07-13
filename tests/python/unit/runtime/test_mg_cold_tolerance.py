@@ -16,6 +16,7 @@ Couvre :
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
@@ -29,9 +30,9 @@ def build(n=64, abs_tol=None):
                         source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
         spatial=pops.Spatial(minmod=True), time=pops.Explicit())
     if abs_tol is None:
-        sim.set_poisson(bc="dirichlet")
+        sim.set_poisson(bc=Dirichlet())
     else:
-        sim.set_poisson(bc="dirichlet", abs_tol=abs_tol)
+        sim.set_poisson(bc=Dirichlet(), abs_tol=abs_tol)
     xs = (np.arange(n) + 0.5) / n - 0.5
     X, Y = np.meshgrid(xs, xs, indexing="xy")
     dens = np.exp(-(X * X + Y * Y) / 0.02)

@@ -26,6 +26,7 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
+from pops.runtime.bricks import Periodic
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._plans import (  # noqa: E402
@@ -149,7 +150,7 @@ def _built_amr(n=32):
     sim.block("ne", pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
                                    pops.ChargeDensity(charge=1.0)),
                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_refinement(threshold=1.05)
     xs = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(xs, xs)

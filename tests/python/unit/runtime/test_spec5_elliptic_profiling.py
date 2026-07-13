@@ -35,6 +35,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.runtime.bricks import Periodic
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -58,7 +59,7 @@ def _zero_mean_bump(n, amp):
 def _build(n=32):
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("ne", model=_charge_model(q=1.0), spatial=pops.Spatial(minmod=True))
-    sim.set_poisson(bc="periodic")  # default solver = geometric_mg -> multigrid V-cycles
+    sim.set_poisson(bc=Periodic())  # default solver = geometric_mg -> multigrid V-cycles
     sim.set_density("ne", _zero_mean_bump(n, 0.40))
     return sim
 

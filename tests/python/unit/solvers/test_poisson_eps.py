@@ -11,6 +11,7 @@ from pops.numerics.riemann import Rusanov
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
@@ -90,7 +91,7 @@ def variable_epsilon_tests():
     def solve(eps_field, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
         s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
-        s.set_poisson(rhs="charge_density", solver=solver, bc="dirichlet")
+        s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if eps_field is not None:
             s.set_epsilon_field(eps_field)

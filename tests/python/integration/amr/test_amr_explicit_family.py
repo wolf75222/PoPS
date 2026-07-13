@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
+from pops.runtime.bricks import Periodic
 
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 
@@ -42,7 +43,7 @@ def _run_amr_explicit_family(time_brick, *, multi, n=32):
     if multi:
         sim.block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
                       time=time_brick)
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # low threshold -> the bump tags + refines (live fine patches)
     sim.set_density("ions", _bump(n, 0.40))
     if multi:

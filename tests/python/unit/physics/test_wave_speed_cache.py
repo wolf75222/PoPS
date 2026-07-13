@@ -28,11 +28,15 @@ Modele natif IsothermalFlux (expose wave_speeds) : aucun compilateur requis.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import HLL, Rusanov
+from pops.mesh.geometry import DiscDomain
+from pops.mesh.masks import CutCell, Staircase
 import sys
 
 import numpy as np
 
-import pops
+from pops.runtime.bricks import (
+    BackgroundDensity, Explicit, FluidState, IMEX, IsothermalFlux, Model, NoSource, Spatial,
+)
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -61,14 +65,12 @@ def make_sim(cache, riemann=None, limiter=None, time=None):
     riemann = riemann if riemann is not None else HLL()
     limiter = limiter if limiter is not None else FirstOrder()
     sim = System(n=N, L=1.0, periodic=True)
-    sim.block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.NoSource(),
-                            elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-                  spatial=pops.FiniteVolume(limiter=limiter, riemann=riemann,
-                                           wave_speed_cache=cache),
-                  time=time if time is not None else pops.Explicit())
+    sim.add_block("ions",
+                  Model(state=FluidState("isothermal", cs2=CS2),
+                        transport=IsothermalFlux(), source=NoSource(),
+                        elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                  spatial=Spatial(limiter=limiter, flux=riemann, wave_speed_cache=cache),
+                  time=time if time is not None else Explicit())
     return sim
 
 
@@ -93,13 +95,12 @@ chk(np.array_equal(A_off, A_on), "cache ON et OFF bit-identiques (0 ulp) sur l'e
 
 print("== (2) defaut inchange : sans wave_speed_cache == cache OFF ==")
 s_def = System(n=N, L=1.0, periodic=True)
-s_def.block("ions",
-                pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
-                          transport=pops.IsothermalFlux(),
-                          source=pops.NoSource(),
-                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-                spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-                time=pops.Explicit())
+s_def.add_block("ions",
+                Model(state=FluidState("isothermal", cs2=CS2),
+                      transport=IsothermalFlux(), source=NoSource(),
+                      elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                spatial=Spatial(limiter=FirstOrder(), flux=HLL()),
+                time=Explicit())
 s_def.set_state("ions", U0)
 for _ in range(20):
     s_def.step_cfl(0.4)
@@ -112,7 +113,7 @@ chk("wave_speed_cache" in msg and "hll" in msg,
     f"rusanov + cache rejete ({msg[:60]}...)")
 
 print("== (4) garde temps : cache + IMEX -> erreur ==")
-msg = err_msg(lambda: make_sim(cache=True, riemann=HLL(), time=pops.IMEX()))
+msg = err_msg(lambda: make_sim(cache=True, riemann=HLL(), time=IMEX()))
 chk("wave_speed_cache" in msg,
     f"IMEX + cache rejete ({msg[:60]}...)")
 
@@ -124,20 +125,20 @@ print("== (5) garde geometrie disque : cache + transport staircase/cutcell -> er
 
 def make_disc_sim_then_mode():
     sim = make_sim(cache=True)  # bloc cache (cartesien plein)
-    sim.set_disc_domain(0.5, 0.5, 0.3, mode="staircase")  # doit lever (cache deja actif)
+    sim.set_disc_domain(
+        DiscDomain(center=(0.5, 0.5), radius=0.3, mode=Staircase()))
 
 
 def make_mode_then_cache():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.set_disc_domain(0.5, 0.5, 0.3, mode="cutcell")  # mode disque d'abord
-    sim.block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.NoSource(),
-                            elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL(),
-                                           wave_speed_cache=True),  # doit lever (mode disque actif)
-                  time=pops.Explicit())
+    sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.3, mode=CutCell()))
+    sim.add_block("ions",
+                  Model(state=FluidState("isothermal", cs2=CS2),
+                        transport=IsothermalFlux(), source=NoSource(),
+                        elliptic=BackgroundDensity(alpha=1.0, n0=0.0)),
+                  spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
+                                  wave_speed_cache=True),  # doit lever (mode disque actif)
+                  time=Explicit())
 
 
 msg = err_msg(make_disc_sim_then_mode)
@@ -168,9 +169,9 @@ for backend, adder in (("aot", "add_compiled_block"),
 
     def add_eq_cache(fk=fake):
         s = System(n=16, L=1.0, periodic=True)
-        s.add_equation("g", fk, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL(),
-                                                         wave_speed_cache=True),
-                       time=pops.Explicit())
+        s.add_equation("g", fk, spatial=Spatial(limiter=FirstOrder(), flux=HLL(),
+                                                 wave_speed_cache=True),
+                       time=Explicit())
     m6 = err_msg(add_eq_cache)
     chk("wave_speed_cache" in m6, f"backend {backend} + cache rejete ({m6[:55]}...)")
 

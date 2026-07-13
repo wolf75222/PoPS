@@ -25,6 +25,7 @@ from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)
+from pops.runtime.bricks import Periodic
 
 
 N = 8
@@ -81,7 +82,7 @@ def _isothermal():
 
 def test_collision_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("a", _compressible(1.4), spatial=pops.FiniteVolume())
     sim.block("b", _compressible(1.4), spatial=pops.FiniteVolume())
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.5), v=_uni(0.2), p=_uni(1.0))
@@ -102,7 +103,7 @@ def test_collision_preset_matches_deleted_helper():
 
 def test_ionization_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     for name in ("e", "i", "g"):
         sim.block(name, _isothermal(), spatial=pops.FiniteVolume())
     sim.set_primitive_state("e", rho=_uni(0.3), u=_uni(0.0), v=_uni(0.0))
@@ -127,7 +128,7 @@ def test_ionization_preset_matches_deleted_helper():
 
 def test_thermal_exchange_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("a", _compressible(1.4), spatial=pops.FiniteVolume())
     sim.block("b", _compressible(1.6667), spatial=pops.FiniteVolume())
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0), p=_uni(2.0))

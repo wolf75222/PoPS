@@ -16,6 +16,7 @@ import math
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 48
@@ -52,7 +53,7 @@ def test_polar_diocotron_mode_grows_and_conserves():
         model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
                         source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),
         spatial=pops.Spatial(weno5=True), time=pops.Explicit(method="ssprk3"))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _hollow_ring_density())
 
     m0 = sim.mass("ne")

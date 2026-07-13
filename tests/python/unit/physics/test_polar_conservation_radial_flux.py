@@ -49,6 +49,7 @@ import math
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Parametres geometriques
@@ -140,7 +141,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
         spatial=pops.Spatial(minmod=True),
         time=pops.Explicit(),
     )
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
 
     # --- etat initial ---
@@ -202,8 +203,6 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
 if __name__ == "__main__":
     import pops as _pops_mod
-    import numpy as _np2
-    import math as _math2
 
     _sim = _pops_mod.System(mesh=_pops_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     _sim.block(
@@ -217,7 +216,7 @@ if __name__ == "__main__":
         spatial=_pops_mod.Spatial(minmod=True),
         time=_pops_mod.Explicit(),
     )
-    _sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    _sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     _sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
     _m0 = _sim.mass("ne")
     _var0 = _radial_variance(_sim, "ne", NR, NTH)

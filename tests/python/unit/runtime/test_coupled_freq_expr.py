@@ -20,6 +20,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.ir.expr import Var
 from pops.physics.multispecies import CoupledSource
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
@@ -58,7 +59,7 @@ N = 16
 
 def make_system():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
     sim.block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
     return sim
@@ -139,7 +140,7 @@ chk(raised, "compile() leve ValueError sur la frequence-Expr a registre inconnu"
 print("== (e) AMR multi-blocs : frequence-Expr mu(U)=k*rho sur le grossier ==")
 KA = 300.0
 amr = AmrSystem(n=N, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 amr.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))

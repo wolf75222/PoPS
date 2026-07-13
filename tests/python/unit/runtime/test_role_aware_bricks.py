@@ -32,6 +32,7 @@ import sys
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -57,7 +58,7 @@ sim.block("e",
                         source=pops.MagneticLorentzForce(charge=q),
                         elliptic=pops.ChargeDensity(charge=0.0)),  # pas de couplage Poisson
               spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sim.set_magnetic_field(B0 * np.ones(n * n))
 # etat uniforme rho=1, m=(0, rho*v0) -> div F = 0 -> R == source magnetique.
 sim.set_primitive_state("e", rho=rho0 * ones, u=0.0 * ones, v=v0 * ones)
@@ -77,7 +78,7 @@ sE.block("g",
                        source=pops.MagneticLorentzForce(charge=q),
                        elliptic=pops.ChargeDensity(charge=0.0)),
              spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-sE.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sE.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sE.set_magnetic_field(B0 * np.ones(n * n))
 sE.set_primitive_state("g", rho=rho0 * ones, u=0.0 * ones, v=v0 * ones, p=1.0 * ones)
 sE.solve_fields()
@@ -103,7 +104,7 @@ def run_potential():
                           source=pops.PotentialForce(charge=-1.0),   # lit c_rho, ecrit c_mx/c_my
                           elliptic=pops.ChargeDensity(charge=-1.0)),  # second membre Poisson = q*u[c_rho]
                 spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     s.set_density("e", rho_bump.copy())
     for _ in range(8):
         s.step_cfl(0.3)

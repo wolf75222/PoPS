@@ -13,7 +13,7 @@ checks pin the layer at the pure pops-package level, without stepping a System o
   5  an unknown route is refused, never defaulted (resolve raises, listing the valid set).
   6  historical alias spellings resolve to their canonical route.
   7  the routes() inspection surface reports the chosen routes and their limitations.
-  8  set_poisson pre-validates every behavior token BEFORE the C++ boundary.
+  8  set_poisson pre-validates route tokens and rejects untyped BC/wall selectors before C++.
   9  the external-flux "user" token stays a plain token (no native route).
 
 The System construction in group 8 needs the compiled _pops extension, so the whole module is
@@ -25,6 +25,7 @@ import pytest
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+from pops.runtime.bricks import Periodic
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 from pops.runtime._bricks_scheme import _FLUX_SCHEMES  # noqa: E402
@@ -126,23 +127,21 @@ def test_routes_inspection_surface():
     assert pops.Explicit().routes()["time"]["id"] == "time.explicit"
 
 
-def test_set_poisson_refuses_unknown_routes_before_bind():
-    # Group 8: set_poisson resolves every behavior token to its typed route BEFORE the C++
-    # boundary, so an unknown token is refused (with the family + the token) and never binds.
+def test_set_poisson_refuses_unknown_routes_and_untyped_selectors_before_bind():
     def system():
         return System(n=8, L=1.0, periodic=True)
 
     with pytest.raises(ValueError, match="field_solver") as exc:
         system().set_poisson(solver="bogus_solver")
     assert "bogus_solver" in str(exc.value)
-    with pytest.raises(ValueError, match="poisson_bc"):
+    with pytest.raises(TypeError, match="string selectors"):
         system().set_poisson(bc="bogus")
     with pytest.raises(ValueError, match="poisson_rhs"):
         system().set_poisson(rhs="bogus")
-    with pytest.raises(ValueError, match="wall"):
+    with pytest.raises(TypeError, match="string selectors"):
         system().set_poisson(wall="bogus")
-    # A fully valid configuration lowers every token and reaches the native call unchanged.
-    system().set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    # A valid typed boundary lowers before the private native call.
+    system().set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 
 
 def test_user_flux_stays_a_plain_token():

@@ -1,34 +1,30 @@
-"""pops.mesh.geometry -- embedded-geometry descriptors (Spec 5 sec.5.9 / sec.8.16.1).
+"""Typed embedded-geometry and wall descriptors.
 
-Typed replacements for the string ``set_disc_domain(..., mode=...)`` form: a geometry
-object (Disc / HalfPlane / LevelSet) provides a boundary predicate / level set, and
-:class:`EmbeddedBoundary` pairs it with a transport mask. Inert descriptors; the runtime
-builds the actual cut-cell / staircase geometry after validation.
-
-Spec 5 sec.8.16 makes the disc DOMAIN itself a typed object: :class:`DiscDomain` carries the
-circle ``center`` + ``radius`` AND the transport ``mode`` (a :mod:`pops.mesh.masks` descriptor),
-replacing ``sim.set_disc_domain(cx, cy, R, mode="cutcell")`` with
-``sim.set_disc_domain(DiscDomain(center=(cx, cy), radius=R, mode=CutCell()))``. The disc / Poisson
-walls also lower to the legacy native tokens (``wall="circle"`` + ``wall_radius`` for a
-:class:`Disc`, ``wall="none"`` for :class:`NoWall`) so a typed ``set_poisson(wall=...)`` is
-byte-identical to the historical string form.
-
-The ``geometry -> masks`` import below is an INTRA-mesh edge (same layer), so it does not add a
-cross-layer dependency; the package stays inert and runtime-free at module scope.
+:class:`DiscDomain` owns the complete transport-domain selection: geometry plus a typed
+:class:`~pops.mesh.masks.TransportMask`. :class:`Disc` and :class:`NoWall` are the typed wall
+selectors consumed by the elliptic runtime seam. Native tokens are lowering details and are never
+accepted as public authoring input.
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
-from .._descriptor import Availability, MeshDescriptor
-from ..masks import lower_disc_mode
+from .._descriptor import MeshDescriptor
+from ..masks import TransportMask, lower_disc_mode
 from ...descriptors_report import CapabilitySet, RequirementSet
 from pops.params.use_sites import ParamUse, resolve_param_use
 
 
 def _geometry_scalar(value: Any, *, where: str) -> float:
     """Resolve a structural geometry coordinate before numeric coercion."""
-    return float(resolve_param_use(value, ParamUse.MESH_EXTENT, where=where))
+    raw = resolve_param_use(value, ParamUse.MESH_EXTENT, where=where)
+    if isinstance(raw, bool):
+        raise TypeError("%s must be a real number, not bool" % where)
+    resolved = float(raw)
+    if not math.isfinite(resolved):
+        raise ValueError("%s must be finite (got %r)" % (where, value))
+    return resolved
 
 
 def _geometry_coordinates(values: Any, *, where: str) -> tuple[float, ...]:
@@ -52,7 +48,9 @@ class _Boundary(MeshDescriptor):
         return {"of": self.geometry.name}
 
 
-class _Geometry(MeshDescriptor):
+class Geometry(MeshDescriptor):
+    """Extensible descriptor interface for an embedded geometry."""
+
     category = "geometry"
 
     def boundary(self) -> _Boundary:
@@ -70,32 +68,36 @@ class _Geometry(MeshDescriptor):
         emitting an inert wall; subclasses that ARE a wall override this.
         """
         raise TypeError(
-            "%s cannot be used as a Poisson wall (the Problem field problem's wall= accepts a "
-            "pops.mesh.geometry.Disc / NoWall or the legacy 'circle' / 'none' string)"
+            "%s cannot be used as a Poisson wall; wall= requires "
+            "pops.mesh.geometry.Disc or NoWall"
             % self.name)
 
 
-class NoWall(_Geometry):
-    """No conducting wall: the elliptic solve sees the full Cartesian square (wall='none')."""
+class NoWall(Geometry):
+    """No conducting wall: the elliptic solve sees the full Cartesian domain."""
 
     def capabilities(self) -> Any:
         return CapabilitySet({"provides": "level_set", "wall": False})
 
     def lower_wall(self) -> Any:
-        """Lower to the native no-wall tokens (byte-identical to ``wall='none'``)."""
+        """Lower to the private native no-wall representation."""
         return ("none", 0.0)
 
 
-class Disc(_Geometry):
-    """A disc wall: center + radius (the embedded boundary is the circle).
+class Disc(Geometry):
+    """A disc geometry and the centered circular-wall selector.
 
-    As a Poisson wall it lowers to ``wall="circle"`` + ``wall_radius=radius`` (the native
-    conducting-wall predicate is centered at (L/2, L/2); the center is carried for the disc
-    TRANSPORT domain, cf. :class:`DiscDomain`).
+    ``center=None`` means the center of the owning domain and is the only form supported by the
+    current elliptic wall provider. An explicit center remains valid embedded-geometry metadata but
+    :meth:`lower_wall` rejects it instead of silently discarding it. A transport disc with an
+    explicit center is represented by :class:`DiscDomain`.
     """
 
-    def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5) -> None:
-        self.center = _geometry_coordinates(center, where="Disc(center=)")
+    def __init__(self, center: Any = None, radius: Any = 0.5) -> None:
+        self.center = (None if center is None else
+                       _geometry_coordinates(center, where="Disc(center=)"))
+        if self.center is not None and len(self.center) != 2:
+            raise ValueError("Disc: center must contain exactly two coordinates")
         self.radius = _geometry_scalar(radius, where="Disc(radius=)")
         if self.radius <= 0.0:
             raise ValueError("Disc: radius must be > 0 (got %r)" % (self.radius,))
@@ -105,10 +107,14 @@ class Disc(_Geometry):
 
     def lower_wall(self) -> Any:
         """Lower to the native conducting-wall tokens ``("circle", radius)``."""
+        if self.center is not None:
+            raise ValueError(
+                "Disc used as a Poisson wall must use center=None (the owning domain center); "
+                "an explicit center is not supported by the native wall provider")
         return ("circle", self.radius)
 
 
-class HalfPlane(_Geometry):
+class HalfPlane(Geometry):
     """A half-plane wall: a point on the plane + an outward normal."""
 
     def __init__(self, point: Any = (0.0, 0.0), normal: Any = (1.0, 0.0)) -> None:
@@ -119,7 +125,7 @@ class HalfPlane(_Geometry):
         return {"point": self.point, "normal": self.normal}
 
 
-class LevelSet(_Geometry):
+class LevelSet(Geometry):
     """A generic level-set geometry (the wall is {phi(x) == 0})."""
 
     def __init__(self, expression: Any) -> None:
@@ -132,22 +138,18 @@ class LevelSet(_Geometry):
 class DiscDomain(MeshDescriptor):
     """A typed DISC TRANSPORT domain (Spec 5 sec.8.16): center + radius + transport mode.
 
-    The typed replacement for ``sim.set_disc_domain(cx, cy, R, mode="cutcell")``::
-
-        from pops.mesh.geometry import DiscDomain
-        from pops.mesh.masks import CutCell
-        sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell()))
-
-    ``mode`` is a :mod:`pops.mesh.masks` descriptor (``NoMask`` / ``Staircase`` / ``CutCell``)
-    OR the legacy string (``"none"`` / ``"staircase"`` / ``"cutcell"``); :meth:`lower` returns
-    the ``(cx, cy, R, mode_token)`` tuple the native ``set_disc_domain`` consumes, byte-identical
-    to the four-argument string form. Inert: the runtime materialises the mask after validation.
+    ``mode`` must implement :class:`pops.mesh.masks.TransportMask`; strings are rejected at
+    construction. Inert: the runtime materialises the mask only after validation.
     """
 
     category = "disc_domain"
 
     def __init__(self, center: Any = (0.0, 0.0), radius: Any = 0.5, mode: Any = None) -> None:
         self.center = _geometry_coordinates(center, where="DiscDomain(center=)")
+        if len(self.center) != 2:
+            raise ValueError(
+                "DiscDomain: center must contain exactly two coordinates (got %d)"
+                % len(self.center))
         self.radius = _geometry_scalar(radius, where="DiscDomain(radius=)")
         if self.radius <= 0.0:
             raise ValueError("DiscDomain: radius must be > 0 (got %r)" % (self.radius,))
@@ -155,25 +157,20 @@ class DiscDomain(MeshDescriptor):
         if mode is None:
             from ..masks import NoMask  # local: avoid importing the class set into this namespace
             mode = NoMask()
+        lower_disc_mode(mode)
         self.mode = mode
 
     def options(self) -> dict:
-        return {"center": self.center, "radius": self.radius,
-                "mode": self.mode if isinstance(self.mode, str) else self.mode.name}
+        return {"center": self.center, "radius": self.radius, "mode": self.mode.name}
 
     def capabilities(self) -> Any:
         return CapabilitySet({"transport_domain": "disc"})
 
     def requirements(self) -> Any:
-        # A cut-cell disc needs embedded-boundary support; surface the mode's own requirements.
-        if isinstance(self.mode, str):
-            return RequirementSet()
         return self.mode.requirements()
 
     def available(self, context: Any = None) -> Any:
-        """Defer to the chosen transport mode's availability (a typed mask explains itself)."""
-        if isinstance(self.mode, str):
-            return Availability.yes()
+        """Defer to the chosen transport mode's explainable availability."""
         return self.mode.available(context)
 
     def lower(self, context: Any = None) -> Any:
@@ -193,6 +190,15 @@ class EmbeddedBoundary(MeshDescriptor):
     category = "mesh_feature"
 
     def __init__(self, domain: Any, transport: Any) -> None:
+        if not isinstance(domain, Geometry):
+            raise TypeError(
+                "EmbeddedBoundary: domain must be a pops.mesh.geometry.Geometry descriptor, got %s"
+                % type(domain).__name__)
+        if not isinstance(transport, TransportMask):
+            raise TypeError(
+                "EmbeddedBoundary: transport must be a pops.mesh.masks.TransportMask descriptor, "
+                "got %s" % type(transport).__name__)
+        lower_disc_mode(transport)
         self.domain = domain
         self.transport = transport
 
@@ -204,4 +210,7 @@ class EmbeddedBoundary(MeshDescriptor):
                                "geometry": self.domain.name, "transport_mask": self.transport.name})
 
 
-__all__ = ["Disc", "NoWall", "HalfPlane", "LevelSet", "DiscDomain", "EmbeddedBoundary"]
+__all__ = [
+    "Geometry", "Disc", "NoWall", "HalfPlane", "LevelSet", "DiscDomain",
+    "EmbeddedBoundary",
+]

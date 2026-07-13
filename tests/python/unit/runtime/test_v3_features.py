@@ -26,6 +26,7 @@ import tempfile
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.ir.ops import sqrt
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
@@ -64,7 +65,7 @@ def gaussian(n):
 print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
 sim = System(n=n, L=1.0, periodic=True)
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 sim.block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 sim.block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 sim.set_density("a", gaussian(n).ravel())
@@ -96,7 +97,7 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
 # --- (B) options Newton sur AMR ------------------------------------------------------
 print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
               time=pops.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
@@ -109,7 +110,7 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 mono.set_refinement(1e30)
 mono.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
@@ -119,7 +120,7 @@ chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
 # newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
 amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amrd.set_refinement(1e30)
 amrd.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
                time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
@@ -134,7 +135,7 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
     f"converged {rep['converged']})")
 # newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
 monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 monod.set_refinement(1e30)
 monod.block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
                 time=pops.IMEX(newton_diagnostics=True))
@@ -148,7 +149,7 @@ except RuntimeError as e:
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
 amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr3.set_refinement(1e30)
 amr3.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
 amr3.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))

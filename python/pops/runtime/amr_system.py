@@ -133,6 +133,47 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.runtime._temporal_restart import TemporalRestartState
         self._temporal_restart_state = TemporalRestartState()
 
+    def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg", *,
+                    bc: Any = None, wall: Any = None, composite: bool = False,
+                    fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
+                    fac_tol: float = 0.0, fac_coarse_rel_tol: float = 0.0,
+                    fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
+        """Configure AMR Poisson with typed boundary and wall selectors.
+
+        ``bc`` accepts the typed selectors from :mod:`pops.runtime.bricks`; omission
+        keeps automatic selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
+        :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Native string tokens and the
+        separate wall radius remain confined to :meth:`_set_poisson_native`.
+        """
+        from pops.runtime._system_install_lowering import _lower_bc, _lower_wall
+        bc_token = "auto" if bc is None else _lower_bc(bc)
+        wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
+        self._set_poisson_native(
+            rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
+            wall_radius=wall_radius, composite=composite,
+            fac_max_iters=fac_max_iters, fac_fine_sweeps=fac_fine_sweeps,
+            fac_tol=fac_tol, fac_coarse_rel_tol=fac_coarse_rel_tol,
+            fac_coarse_cycles=fac_coarse_cycles, fac_verbose=fac_verbose)
+
+    def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
+                            wall_radius: Any = 0.0, composite: bool = False,
+                            fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
+                            fac_tol: float = 0.0, fac_coarse_rel_tol: float = 0.0,
+                            fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
+        """Private token-level seam used by resolved AMR installation."""
+        _guard_assembling(self, "set_poisson")
+        if not isinstance(bc, str) or not isinstance(wall, str):
+            raise TypeError("_set_poisson_native requires native bc and wall tokens")
+        self._s.set_poisson(
+            rhs=rhs, solver=solver, bc=bc, wall=wall,
+            wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"),
+            composite=bool(composite), fac_max_iters=int(fac_max_iters),
+            fac_fine_sweeps=int(fac_fine_sweeps),
+            fac_tol=native_real(fac_tol, where="AmrSystem.set_poisson.fac_tol"),
+            fac_coarse_rel_tol=native_real(
+                fac_coarse_rel_tol, where="AmrSystem.set_poisson.fac_coarse_rel_tol"),
+            fac_coarse_cycles=int(fac_coarse_cycles), fac_verbose=bool(fac_verbose))
+
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
         from pops.runtime._step_strategy import (

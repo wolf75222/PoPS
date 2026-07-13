@@ -30,6 +30,7 @@ import numpy as np
 
 try:
     import pops
+    from pops.runtime.bricks import Dirichlet
     from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
     print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
@@ -223,7 +224,7 @@ def test_rejections_divisibility_and_direct_poisson():
 
     # (c3) Poisson polaire DIRECT + theta_boxes>1 -> message AMONT clair (avant la construction du solveur).
     sim = _exb_system(2)
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _scalar_density())
     raised = False
     msg = ""

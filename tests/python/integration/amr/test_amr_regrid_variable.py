@@ -13,6 +13,7 @@ Chemin natif (pops.Model) : aucun compilateur requis (cf. test_amr_conservative_
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Periodic
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -60,7 +61,7 @@ def _run(n, thr, variable, role, s0):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
     sim.block("gas0", _comp(), time=pops.Explicit())
     sim.block("gas1", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_refinement(thr, variable=variable, role=role)
     sim.set_conservative_state("gas0", s0)
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))  # uniforme
@@ -98,7 +99,7 @@ def _solo_with_selector():
     # build (pas de repli silencieux vers la composante 0).
     sim = AmrSystem(n=N, L=1.0, periodic=True, regrid_every=1)
     sim.block("solo", _comp(), time=pops.Explicit())
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     sim.set_refinement(6.0, role="energy")
     sim.set_density("solo", np.full((N, N), 1.0))
     sim.n_patches()  # declenche le build -> refus

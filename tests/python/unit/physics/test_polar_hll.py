@@ -25,6 +25,7 @@ import math
 import numpy as np
 
 import pops
+from pops.runtime.bricks import Dirichlet
 from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 RMIN, RMAX = 0.3, 1.0
@@ -69,7 +70,7 @@ def _annular_state(nr, nth):
 def _build(nr, nth, riemann, cs2=1.0):
     """System polaire isotherme avec le flux Riemann demande, etat initial pose, pret a stepper."""
     sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=nr, ntheta=nth))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.add_equation(
         "ions",
         model=iso_polar_model(cs2=cs2),
