@@ -10,7 +10,7 @@ from pops.problem import Case
 from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot
 
 
-def _snapshot(*, representation="conservative", centering="cell", units=("kg/m3",),
+def _snapshot(*, representation="conservative", centering="cell", units=None,
               frame="model", clock="simulation", roles=None, layout=None):
     module = Module("transport")
     module.state_space(
@@ -50,13 +50,19 @@ def test_space_physics_and_owner_are_semantic():
     changes = [
         _snapshot(representation="primitive"),
         _snapshot(centering="face"),
-        _snapshot(units=("1",)),
         _snapshot(frame="laboratory"),
         _snapshot(clock="material"),
         _snapshot(roles={"mass": "rho"}),
     ]
     assert all(item.semantic_identity != baseline.semantic_identity for item in changes)
     assert _snapshot().semantic_identity == baseline.semantic_identity
+
+
+def test_opaque_space_units_are_rejected_before_semantic_identity():
+    import pytest
+
+    with pytest.raises(TypeError, match="Space units are unsupported"):
+        _snapshot(units=("kg/m3",))
 
 
 def test_mapping_insertion_order_is_not_semantic():

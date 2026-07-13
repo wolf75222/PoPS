@@ -45,8 +45,8 @@ def _semantic_tag(value: Any, where: str) -> str:
     return value
 
 
-def _component_units(components: tuple[str, ...], units: Any) -> tuple[str | None, ...]:
-    """Normalize units into component order; mapping insertion order is never semantic."""
+def _component_units(components: tuple[str, ...], units: Any) -> tuple[None, ...]:
+    """Accept only the explicit unitless representation until a typed unit protocol exists."""
     if units is None:
         return (None,) * len(components)
     if isinstance(units, Mapping):
@@ -62,9 +62,11 @@ def _component_units(components: tuple[str, ...], units: Any) -> tuple[str | Non
         values = tuple(units)
         if len(values) != len(components):
             raise ValueError("Space units must have one entry per component")
-    for value in values:
-        if value is not None and (not isinstance(value, str) or not value):
-            raise ValueError("Space units entries must be non-empty strings or None")
+    if any(value is not None for value in values):
+        raise TypeError(
+            "Space units are unsupported until a typed unit protocol participates in "
+            "validation, identity, lowering, and runtime reports"
+        )
     return values
 
 

@@ -93,9 +93,8 @@ def test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atom
 
 def test_module_lowering_retains_typed_contract_producer_and_availability():
     module = Module("typed")
-    state = module.state_space("U", ("rho",), units=("kg/m3",))
-    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"),
-                                units=("V", "V/m", "V/m"))
+    state = module.state_space("U", ("rho",))
+    fields = module.field_space("electric", ("phi", "grad_x", "grad_y"))
     module.operator("solve_electric", state >> fields, "field_operator", expr=1.0)
     lowered = _module_to_model(module)
     pack = lowered._component_provider_pack
@@ -103,9 +102,21 @@ def test_module_lowering_retains_typed_contract_producer_and_availability():
     phi = next(row for row in rows if row["key"]["component"] == "phi")
     assert phi["key"]["space_kind"] == "field"
     assert phi["key"]["space_name"] == "electric"
-    assert phi["contract"]["unit"] == "V"
+    assert phi["contract"]["unit"] is None
     assert "solve_electric" in phi["provider"]["producer"]
     assert phi["provider"]["availability"] is True
+
+
+@pytest.mark.parametrize(
+    "declare",
+    (
+        lambda module: module.state_space("U", ("rho",), units=("kg/m3",)),
+        lambda module: module.field_space("electric", ("phi",), units=("V",)),
+    ),
+)
+def test_module_spaces_refuse_opaque_units_until_a_typed_protocol_exists(declare):
+    with pytest.raises(TypeError, match="Space units are unsupported"):
+        declare(Module("opaque-units"))
 
 
 def test_same_component_spelling_in_distinct_typed_spaces_never_merges():

@@ -253,7 +253,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             raise ValueError(
                 "compile_problem: field_operator %r must declare at least one output" % op.name)
         for output in outputs:
-            if output not in m._m.aux_extra_names:
+            # FieldSpace lowering above has already installed every output.  Canonical auxiliary
+            # names use their dedicated slots and must never be redeclared as named extras.
+            if output not in AUX_CANONICAL and output not in m._m.aux_extra_names:
                 m.aux_field(output)
         m.elliptic_field(
             op.name, _body_for_state(op.body), operator="poisson", aux=outputs)
