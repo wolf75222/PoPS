@@ -70,6 +70,10 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
         "blocks": blocks,
         "fields": fields,
         "parameters": _semantic_parameter_rows(problem),
+        "initials": [
+            initial.canonical_identity()
+            for initial in problem._initial_registry.resolved()
+        ],
         "layout": _layout_semantic_data(layout),
         "time": None if effective_time is None else program_semantic_data(effective_time),
         "constraints": {
@@ -104,6 +108,7 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
         "blocks": blocks,
         "fields": fields,
         "params": params,
+        "initials": tuple(problem._initial_registry),
         "consumers": (
             None if problem._consumer_graph is None else problem._consumer_graph.to_data()
         ),

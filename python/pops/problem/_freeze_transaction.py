@@ -128,7 +128,7 @@ def freeze_problem_graph(problem: Any) -> None:
     """Freeze every registry/member/layout in one transaction."""
     registries = (
         problem._block_registry, problem._field_registry, problem._time_registry,
-        problem._param_registry, problem._constraint_registry,
+        problem._param_registry, problem._initial_registry, problem._constraint_registry,
     )
     participants = []
     for registry in registries:

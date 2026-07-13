@@ -9,7 +9,7 @@ from typing import Any
 
 from pops.descriptors import Availability
 from pops.problem.registries import (
-    BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
+    BlockRegistry, ConstraintRegistry, FieldRegistry, InitialConditionRegistry, ParamRegistry,
     TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
 from pops.problem._validation import account_block_plan_fields
@@ -72,6 +72,7 @@ class Case:
         self._field_registry = FieldRegistry(self.owner_path)
         self._time_registry = TimeRegistry()
         self._param_registry = ParamRegistry(self.owner_path)
+        self._initial_registry = InitialConditionRegistry(self.owner_path, self.resolve)
         self._constraint_registry = ConstraintRegistry()
         self._numerics_assignments = {}
         self._consumer_graph = None
@@ -147,6 +148,11 @@ class Case:
     @property
     def _constraints(self) -> Any:
         return self._constraint_registry
+
+    @property
+    def initials(self) -> Any:
+        """The sole registry for typed initial conditions."""
+        return self._initial_registry
 
     # --- assembly -----------------------------------------------------------------------
     def block(
@@ -258,6 +264,10 @@ class Case:
         return self._consumer_graph
 
     @property
+    def _initials(self) -> Any:
+        return self._initial_registry
+
+    @property
     def _numerics(self) -> Any:
         return dict(self._numerics_assignments)
 
@@ -316,6 +326,7 @@ class Case:
         return {"name": self._name,
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
                 "n_params": len(self._param_registry),
+                "n_initials": len(self._initial_registry),
                 "n_numerical_plans": len(self._numerics_assignments),
                 "has_consumers": self._consumer_graph is not None,
                 "has_time": self._time_registry.program is not None}
@@ -383,6 +394,7 @@ class Case:
         report = report.extend(
             self._field_registry.validate(self._field_validation_context(context)))
         report = report.extend(self._param_registry.validate(context))
+        report = report.extend(self._initial_registry.validate(context))
         report = report.extend(self._constraint_registry.validate(context))
         for block_name, plan in sorted(self._numerics_assignments.items()):
             try:

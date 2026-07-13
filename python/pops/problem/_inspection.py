@@ -18,6 +18,7 @@ def inspect_payload(problem: Any) -> dict[str, Any]:
     info["blocks"] = problem._block_registry.inspect()
     info["fields"] = problem._field_registry.inspect(problem.resolve)
     info["params"] = problem._param_registry.inspect()
+    info["initials"] = problem._initial_registry.inspect()
     info["consumers"] = (
         None if problem._consumer_graph is None else problem._consumer_graph.to_data()
     )

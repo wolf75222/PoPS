@@ -7,12 +7,14 @@ family can grow back into the former monolith.
 
 from pops.problem._block_registry import BlockRegistry
 from pops.problem._declaration_registries import FieldRegistry, ParamRegistry, TimeRegistry
+from pops.problem._initial_registry import InitialConditionRegistry
 from pops.problem._runtime_registries import ConstraintRegistry, RuntimePolicyRegistry
 
 __all__ = [
     "BlockRegistry",
     "ConstraintRegistry",
     "FieldRegistry",
+    "InitialConditionRegistry",
     "ParamRegistry",
     "RuntimePolicyRegistry",
     "TimeRegistry",
