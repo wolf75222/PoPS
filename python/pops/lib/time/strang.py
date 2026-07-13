@@ -1,224 +1,93 @@
-"""pops.lib.time.strang -- Strang and Lie splitting macros, and the condensed Schur source stage.
-
-Exports: strang, lie, CondensedSchur.
-"""
+"""Generic sequential splitting as ordinary Program factories."""
 from __future__ import annotations
 
 from fractions import Fraction
 from typing import Any
 
-from ._helpers import (
-    _at_point, _block_label, _commit, _exact_coefficient, _exact_product, _exact_reciprocal,
-    _operator_handle, _stage_point, _time_state, program_macro,
-)
+from ._factory import instance_state, program_factory
+from ._helpers import _stage_point
 
 
-def _subflow(flow: Any, P: Any, state: Any, fraction: Any, point: Any, where: Any) -> Any:
-    """Build one split sub-flow and require it to honor the combinator's exact endpoint."""
+def _subflow(
+    flow: Any,
+    program: Any,
+    state: Any,
+    fraction: Any,
+    point: Any,
+    where: str,
+) -> Any:
+    """Author one exact sub-flow and authenticate its declared endpoint."""
     from pops.time.values import ProgramValue
 
-    value = flow(P, state, fraction, at=point)
+    if not callable(flow):
+        raise TypeError("%s must be a callable Program IR builder" % where)
+    value = flow(program, state, fraction, at=point)
     if not isinstance(value, ProgramValue) or value.vtype != "state":
-        raise TypeError("%s must return a Program State value" % where)
+        raise TypeError("%s must return a Program state value" % where)
+    if value.prog is not program:
+        raise ValueError("%s returned a value owned by another Program" % where)
     if value.point != point:
         raise ValueError(
-            "%s returned point %r instead of its declared split endpoint %r; "
-            "materialize the sub-flow with linear_combine(..., at=at)" %
-            (where, value.point, point))
+            "%s returned point %r instead of %r; materialize the sub-flow "
+            "with program.value(..., at=at)" % (where, value.point, point)
+        )
     return value
 
 
-@program_macro
-def strang(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
-           commit: Any = True) -> Any:
-    """Strang splitting macro H(dt/2); S(dt); H(dt/2), lowering directly to Program IR. @p half_flow
-    and @p source are IR-building callables
-    ``(prog, state, frac, *, at) -> state`` that advance their sub-flow by ``frac*dt`` and materialize
-    the result at the exact supplied endpoint. Returns the final state (committed when @p commit)."""
-    temporal = _time_state(P, block, state)
-    U = temporal.n
-    midpoint = _stage_point(P, "strang_midpoint", Fraction(1, 2))
-    U1 = _subflow(half_flow, P, U, Fraction(1, 2), midpoint, "strang half_flow[0]")
-    U2 = _subflow(source, P, U1, 1, midpoint, "strang source")
-    U3 = _subflow(
-        half_flow, P, U2, Fraction(1, 2), temporal.next.point, "strang half_flow[1]")
-    if commit:
-        _commit(P, temporal, U3)
-    return U3
+def _build_strang(program: Any, state: Any, first: Any, second: Any) -> None:
+    temporal = instance_state(program, state, "Strang")
+    initial = temporal.n
+    after_first_half = _stage_point(
+        program,
+        "strang_first_half",
+        partitions={"first": Fraction(1, 2), "second": 0},
+    )
+    after_second = _stage_point(
+        program,
+        "strang_second",
+        partitions={"first": Fraction(1, 2), "second": 1},
+    )
+    stage = _subflow(
+        first, program, initial, Fraction(1, 2), after_first_half, "Strang first[0]")
+    stage = _subflow(second, program, stage, 1, after_second, "Strang second")
+    endpoint = _subflow(
+        first,
+        program,
+        stage,
+        Fraction(1, 2),
+        temporal.next.point,
+        "Strang first[1]",
+    )
+    program.commit(temporal.next, endpoint)
 
 
-@program_macro
-def lie(P: Any, block: Any, state: Any = None, *, half_flow: Any, source: Any,
-        commit: Any = True) -> Any:
-    """Lie (Godunov) splitting macro H(dt); S(dt) -- the sequential first-order sibling of `strang`
-    (ADC-423). @p half_flow and @p source are the SAME IR-building callables `strang` takes
-    ``(prog, state, frac) -> state`` (each advances its sub-flow by a fraction @p frac of dt); Lie
-    just composes them sequentially over the FULL step (H over dt, then S over dt) with no half-steps.
-    Each callable receives the exact keyword-only endpoint ``at`` and must materialize its result there.
-    Lowers to the SAME IR primitives as `strang` (no scheme-specific class). Returns the final state
-    (committed when @p commit)."""
-    temporal = _time_state(P, block, state)
-    U = temporal.n
-    U1 = _subflow(half_flow, P, U, 1, temporal.next.point, "lie half_flow")
-    U2 = _subflow(source, P, U1, 1, temporal.next.point, "lie source")
-    if commit:
-        _commit(P, temporal, U2)
-    return U2
+def Strang(state: Any, *, first: Any, second: Any) -> Any:
+    """Return ``first(dt/2) -> second(dt) -> first(dt/2)``.
+
+    ``first`` and ``second`` are authoring-time callables with signature
+    ``(program, state, fraction, *, at) -> ProgramValue``.  They build only
+    public Program IR and must materialize their result at the supplied exact
+    endpoint.  Partitioned stage coordinates retain both sub-flow clocks.
+    """
+    return program_factory("Strang", _build_strang, state, first, second)
 
 
-@program_macro
-def CondensedSchur(P: Any, block: Any, state: Any = None, *,
-                    alpha: Any, theta: Any = 1, c_rho: Any = 0,
-                    c_mx: Any = 1, c_my: Any = 2, c_E: Any = None,
-                    method: Any = None, tol: Any = 1e-10, max_iter: Any = 400,
-                    linear_operator: Any, commit: Any = True) -> Any:
-    """Condensed-implicit electrostatic-Lorentz source Program preset (epic ADC-399,
-    acceptance 32), authored ENTIRELY in the DSL and emitted to C++ with no Schur vocabulary (ADC-637).
-    Authors the complete generated condensed-source sequence:
+def _build_lie(program: Any, state: Any, first: Any, second: Any) -> None:
+    temporal = instance_state(program, state, "Lie")
+    after_first = _stage_point(
+        program,
+        "lie_first",
+        partitions={"first": 1, "second": 0},
+    )
+    stage = _subflow(first, program, temporal.n, 1, after_first, "Lie first")
+    endpoint = _subflow(
+        second, program, stage, 1, temporal.next.point, "Lie second")
+    program.commit(temporal.next, endpoint)
 
-      1. assemble the anisotropic tensor coefficient ``A = I + c*rho*M^{-1}`` (``P.condensed_coeffs``,
-         ``M = I - theta*dt*J``, ``c = theta^2 dt^2 alpha``);
-      2. assemble the fused RHS ``-Lap(phi^n) - theta*dt*alpha*div(M^{-1}(mx,my))``
-         (``P.condensed_rhs``);
-      3. solve ``-div(A grad phi^{n+theta}) = RHS`` matrix-free (``P.matrix_free_operator`` +
-         ``P.apply_laplacian_coeff`` negated, ``P.solve_linear``), warm-started from phi^n;
-      4. reconstruct ``v^{n+theta} = M^{-1}(v^n - theta*dt*grad phi)`` and write ``mom = rho*v``
-         (``P.condensed_reconstruct``, the closed block inverse); rho stays frozen;
-      5. (``theta < 1``) extrapolate the theta-stage state to ``n+1`` by the native factor ``1/theta``:
-         ``U^{n+1} = U^n + (1/theta)(U^{n+theta} - U^n)`` (the affine algebra, see THETA below);
-      6. (``c_E`` given) update the total energy ``E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2)``
-         (``P.condensed_energy``, the kinetic-energy increment).
 
-    The per-cell block linearization ``J`` is the electrostatic-Lorentz rotation generator
-    ``J = [[0, B_z], [-B_z, 0]]`` on the coupled momentum subset ``(c_mx, c_my)``. The compiling model
-    MUST carry it -- author it with ``pops.lib.models.author_electrostatic_lorentz(m)`` and pass the
-    returned typed local-linear ``OperatorHandle`` as @p linear_operator. ``B_z`` enters through J's
-    aux (canonical component 3), not a separate ``c_bz``. No global name/default is guessed: the
-    Program must be bound to the exact declaring model before this macro is authored.
+def Lie(state: Any, *, first: Any, second: Any) -> Any:
+    """Return the first-order sequential composition ``first(dt) -> second(dt)``."""
+    return program_factory("Lie", _build_lie, state, first, second)
 
-    phi^n handling depends on theta. At ``theta == 1`` (the sanctioned backward-Euler electrostatic
-    push) phi^n is a fresh ZERO scalar field each step: the ``-Lap(phi^n)`` RHS term vanishes and the
-    solve warm starts from zero. At ``theta < 1`` phi^n is CARRIED across steps (ADC-427): last
-    step's phi^{n+1} is this step's phi^n, kept in a lag-1, 1-component System history ring (the
-    ncomp-aware ``register_history``). The ring's cold-start fill seeds phi^n = 0 at step 0. Every
-    numerical kernel is emitted from the authored operator and metric-aware Program primitives; there
-    is no native condensed-source dispatcher.
 
-    THETA != 1 (ADC-427). The theta scheme takes the implicit stage at ``n+theta`` and extrapolates
-    phi AND the MOMENTUM (not rho) to ``n+1`` by the factor ``1/theta``. This macro lowers BOTH with the
-    EXISTING affine algebra, no component-restricted IR op. State: ``condensed_reconstruct`` freezes rho
-    (and energy), so ``rho^{n+theta} = rho^n`` and ``mom^{n+theta} = rho v^{n+theta}``,
-    ``mom^n = rho v^n``. The plain STATE affine ``U^n + (1/theta)(U^{n+theta} - U^n)`` therefore leaves
-    rho (and a yet-unwritten energy) untouched -- ``rho^{n+1} = (1-1/theta)rho^n + (1/theta)rho^n =
-    rho^n`` -- and on the momentum it equals the native ``mom^{n+1} = mom^n + (1/theta)(mom^{n+theta} -
-    mom^n) = rho(v^n + (1/theta)(v^{n+theta} - v^n))``. Phi: the SCALAR affine ``phi^n + (1/theta)(
-    phi^{n+theta} - phi^n)`` (a ``linear_combine`` of 1-component fields) equals the native
-    scalar affine extrapolation; the result is stored into the history ring so it is the NEXT step's
-    phi^n. This carry is what lifts theta = 0.5 to second-order (Crank-Nicolson) temporal accuracy. It is
-    GATED to ``theta != 1`` so the theta == 1 golden (the fresh-zero phi path) stays byte-identical;
-    a user selects theta = 1 or theta = 0.5, never sweeps continuously through 1.
-
-    @p alpha is the electrostatic coupling constant; @p theta the theta-scheme implicitness in ``(0, 1]``;
-    @p c_rho / @p c_mx / @p c_my the conserved-variable components and @p c_E the OPTIONAL energy
-    component (None = no energy update, like a rho/mx/my isothermal block). @p method (a TYPED
-    pops.solvers.krylov descriptor; None defaults to BiCGStab()) / @p tol / @p max_iter configure the
-    Krylov phi solve.
-
-    Uniform layouts use the runtime matrix-free solver; refined layouts route the same authored solve
-    through the declared composite hierarchy provider. ``tests/python/unit/time/test_time_condensed_schur.py``
-    checks the assemble / solve / reconstruct / extrapolate sequence against an offline reference."""
-    theta = _exact_coefficient(theta, "CondensedSchur: theta")
-    alpha = _exact_coefficient(alpha, "CondensedSchur: alpha")
-    if not (0 < theta <= 1):
-        raise ValueError("CondensedSchur: theta must be in (0, 1] (got %r)" % (theta,))
-    if c_E is not None and (isinstance(c_E, bool) or not isinstance(c_E, int) or c_E < 0):
-        raise ValueError("CondensedSchur: c_E must be None or a Python int >= 0 (got %r)" % (c_E,))
-    linear_operator = _operator_handle(linear_operator, "linear_operator")
-    subset = (c_mx, c_my)  # the coupled momentum block the condensed solve eliminates (2D core invariant)
-    temporal = _time_state(P, block, state)
-    label = _block_label(temporal)
-    U = temporal.n
-    P.solve_fields(U)  # fill the shared aux (B_z at component 3) from the current state, like the native stage
-    # phi^n. theta == 1 (the sanctioned backward-Euler push) keeps a fresh ZERO scalar field each step:
-    # the -Lap(phi^n) RHS term vanishes and the solve warm starts from zero, so the historical IR /
-    # trajectory is byte-identical. theta < 1 CARRIES phi^n across steps through a lag-1, 1-component
-    # System history ring (ADC-427): last step's phi^{n+1} is this step's phi^n, exactly as the native
-    # Program history carries it across steps; the cold-start fill seeds phi^n = 0 at step 0.
-    carry = theta != 1
-    if carry:
-        phi_n = P.history(
-            label + ".schur_phi", lag=1, ncomp=1, block=block)  # owner-qualified scalar carry
-    else:
-        phi_n = P.scalar_field(label + ".schur_phi_n")           # UNCHANGED: fresh zero each step
-    theta_alpha = _exact_product(theta, alpha, where="CondensedSchur: theta * alpha")
-    c_coeff = _exact_product(
-        theta, theta_alpha, where="CondensedSchur: theta^2 * alpha") * P.dt * P.dt
-    th_dt = theta * P.dt
-    g = theta_alpha * P.dt
-    # The three per-cell stages carry the authored J + the coupled momentum subset; B_z enters through J's
-    # aux, emitted inline via the closed-form block_inverse intrinsic with no Schur vocabulary.
-    coeffs = P.condensed_coeffs(state=U, linear_operator=linear_operator, subset=subset,
-                                c=c_coeff, th_dt=th_dt, c_rho=c_rho)
-    rhs = P.scalar_field(label + ".schur_rhs")
-    P.condensed_rhs(rhs, phi_n, U, linear_operator=linear_operator, subset=subset, th_dt=th_dt, g=g)
-    # A condensed solve is one mathematical solve over the complete hierarchy.  Keep that execution
-    # contract on the operator itself (rather than inferring it from a captured coefficient node): the
-    # generic Program scheduler can then hoist the barrier without recognizing this preset or its
-    # physics.  On a Uniform/flat layout the same operator specializes to the declared matrix-free
-    # method; on a refined AMR layout the explicit provider owns the composite tensor solve.
-    from pops.solvers import CompositeTensorFAC, Hierarchy
-    A = P.matrix_free_operator(
-        label + ".schur_op", scope=Hierarchy(), provider=CompositeTensorFAC())
-
-    def apply(P: Any, out: Any, x: Any) -> Any:  # out <- A(x) = -div((I + c rho M^{-1}) grad x) = -apply_laplacian_coeff(x)
-        lap = P.scalar_field("schur_lap")
-        P.apply_laplacian_coeff(lap, x, coeffs)
-        return -1 * lap  # the condensed operator -div(A grad phi); the affine is the lowered result
-
-    # Spec 5 sec.7: method is a TYPED pops.solvers.krylov descriptor (default BiCGStab(), the
-    # condensed Program solver). A bare string is rejected by P.solve_linear with a clear
-    # message naming the typed alternative; None defaults here byte-identically to the old
-    # "bicgstab" string.
-    if method is None:
-        from pops.solvers.krylov import BiCGStab
-        method = BiCGStab(max_iter=max_iter)
-    P.set_apply(A, apply)
-    # theta < 1 warm-starts the Krylov solve from phi^n (the carried potential);
-    # theta == 1 keeps the zero warm start (initial_guess=None) so the IR is byte-identical.
-    from pops.time import FailRun
-    phi = P.solve_linear(operator=A, rhs=rhs, method=method, tol=tol, max_iter=max_iter,
-                         initial_guess=phi_n if carry else None).consume(action=FailRun())
-    # The reconstruction overwrites the MOMENTUM in place. theta == 1 with no energy keeps the historical
-    # IR byte-identical (reconstruct directly on U). For theta < 1 OR an energy update we need U^n
-    # (mom^n / E^n) AFTER the reconstruction, so reconstruct on a fresh COPY of U^n and keep U^n intact.
-    needs_un = theta != 1 or c_E is not None
-    target = P.linear_combine(label + ".schur_un_copy", 1 * U) if needs_un else U
-    out = P.condensed_reconstruct(state=target, phi=phi, linear_operator=linear_operator,
-                                  subset=subset, th_dt=th_dt, c_rho=c_rho)
-    # 5) theta-stage -> n+1 extrapolation (ADC-427). theta < 1 lowers U^n + (1/theta)(U^{n+theta} - U^n)
-    # with the affine algebra (out is the theta-stage on the copy, U^n is the untouched original). rho is
-    # frozen by the reconstruction, so this affine leaves rho (and the not-yet-written energy) at U^n.
-    if theta != 1:
-        inv_theta = _exact_reciprocal(theta, "CondensedSchur: theta")
-        out = P.linear_combine(
-            label + ".schur_extrap", U + inv_theta * (out - U), at=temporal.next.point)
-    # 6) energy role (ADC-427). E^{n+1} = E^n + (1/2)rho(|v^{n+1}|^2 - |v^n|^2): the kinetic-energy
-    # increment from v^n (= mom^n/rho, read from U^n) to v^{n+1} (= mom^{n+1}/rho, in `out`). Skipped
-    # for an isothermal rho/mx/my block (c_E is None). Emitted generically (no Schur kernel).
-    if c_E is not None:
-        out = P.condensed_energy(state=out, state_old=U, c_rho=c_rho, c_mx=c_mx, c_my=c_my, c_E=c_E)
-    # PERSISTENT phi^n carry (ADC-427, theta < 1 only). Extrapolate phi to n+1 by the SAME 1/theta
-    # factor as the state: phi^{n+1} = phi^n + (1/theta)(
-    # phi^{n+theta} - phi^n)) and store it so the next step reads it as phi^n. A scalar-field affine
-    # (all terms 1-component), lowered through the same axpy/lincomb idiom as a State combine. Every op
-    # here is gated by `carry`, so theta == 1 emits none of it and stays byte-identical.
-    if carry:
-        inv_theta = _exact_reciprocal(theta, "CondensedSchur: theta")
-        phi_np1 = P.linear_combine(
-            label + ".schur_phi_np1", phi_n + inv_theta * (phi - phi_n),
-            at=temporal.next.point)
-        P.store_history(label + ".schur_phi", phi_np1)  # rotated to lag 1 for the next step
-    if commit:
-        out = _at_point(P, out, temporal.next.point)
-        _commit(P, temporal, out)
-    return out
+__all__ = ["Lie", "Strang"]

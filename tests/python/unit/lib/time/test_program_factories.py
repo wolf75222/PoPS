@@ -154,3 +154,90 @@ def test_factories_reject_legacy_shapes_and_free_operator_names():
     assert not hasattr(libtime, "imex_local")
     assert not hasattr(libtime, "imex_local_linear")
     assert not hasattr(libtime, "ark_local_linear")
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_order"),
+    [
+        (libtime.ForwardEuler, 1),
+        (libtime.SSPRK2, 2),
+        (libtime.SSPRK3, 3),
+        (libtime.RK4, 4),
+    ],
+)
+def test_explicit_factories_are_valid_ordinary_programs(factory, expected_order):
+    state, _, rate, _ = _authoring()
+    program = factory(state, rate=rate)
+
+    assert type(program) is Program
+    assert program.validate() is True
+    assert certify_program_graph(program.to_graph()).properties.order == expected_order
+
+
+def test_generic_runge_kutta_and_multistep_factories_take_complete_typed_choices():
+    state, _, rate, implicit = _authoring()
+    heun = RungeKuttaTableau(
+        A=[[], [1]],
+        b=[Fraction(1, 2), Fraction(1, 2)],
+        c=[0, 1],
+        name="heun",
+    )
+
+    assert libtime.RungeKutta(state, rate=rate, tableau=heun).validate() is True
+    assert libtime.AdamsBashforth(state, rate=rate, order=2).validate() is True
+    assert libtime.BDF(state, implicit=implicit, explicit=rate, order=1).validate() is True
+
+
+def _identity_subflow(program, state, fraction, *, at):
+    return program.value(getattr(at, "name", "endpoint") + "_value", 1 * state, at=at)
+
+
+def test_splitting_factories_retain_exact_partition_coordinates():
+    state, _, _, _ = _authoring()
+    strang = libtime.Strang(
+        state, first=_identity_subflow, second=_identity_subflow)
+    lie = libtime.Lie(
+        state, first=_identity_subflow, second=_identity_subflow)
+
+    assert strang.validate() is True
+    assert lie.validate() is True
+    stage_points = {
+        value.point.name: value.point
+        for value in strang._values
+        if isinstance(value.point, StagePoint)
+    }
+    first = stage_points["strang_first_half"]
+    second = stage_points["strang_second"]
+    assert first.time_for("first") == TimePoint(strang.clock, Fraction(1, 2))
+    assert first.time_for("second") == TimePoint(strang.clock, 0)
+    assert second.time_for("first") == TimePoint(strang.clock, Fraction(1, 2))
+    assert second.time_for("second") == TimePoint(strang.clock, 1)
+
+
+def test_splitting_rejects_a_subflow_that_lies_about_its_endpoint():
+    state, _, _, _ = _authoring()
+
+    def wrong_endpoint(program, current, fraction, *, at):
+        return program.value("wrong", 1 * current)
+
+    with pytest.raises(ValueError, match="instead of"):
+        libtime.Strang(
+            state, first=wrong_endpoint, second=_identity_subflow)
+
+
+def test_final_time_namespace_has_no_legacy_aliases_or_specialized_runtime_preset():
+    for name in (
+        "forward_euler",
+        "ssprk3",
+        "rk4",
+        "rk",
+        "explicit_rk",
+        "strang",
+        "lie",
+        "adams_bashforth",
+        "adams_bashforth2",
+        "bdf",
+        "predictor_corrector_local_linear",
+        "CondensedSchur",
+    ):
+        assert not hasattr(libtime, name)
