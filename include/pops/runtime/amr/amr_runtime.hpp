@@ -571,6 +571,9 @@ class AmrRuntime {
       throw std::runtime_error("AmrRuntime::parent_child_temporal_ratio level out of bounds");
     return hierarchy_.refinement_ratios[static_cast<std::size_t>(child_level - 1)];
   }
+  const std::vector<int>& checkpoint_temporal_ratios() const {
+    return hierarchy_.refinement_ratios;
+  }
   static runtime::amr::SpatialTransferContext bootstrap_transfer_context(
       const MultiFab& coarse, const MultiFab& fine, int coarse_level, int fine_level,
       int refinement_ratio, bool replicated_parent = false) {
@@ -930,6 +933,12 @@ class AmrRuntime {
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
   std::uint64_t topology_epoch() const { return topology_epoch_; }
+  void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch) {
+    if (regrid_count < 0)
+      throw std::runtime_error("AMR checkpoint regrid count must be non-negative");
+    regrid_count_ = regrid_count;
+    topology_epoch_ = topology_epoch;
+  }
 
   /// Capture/restore the accepted AMR state around one public step attempt.  The snapshot includes
   /// fine layouts, every block/level, shared aux and elliptic warm starts, history rings, diagnostics
@@ -2897,7 +2906,7 @@ class AmrRuntime {
       fine_boxes.reserve(static_cast<std::size_t>(nlev_ - 1));
       for (int k = 1; k < nlev_; ++k)
         fine_boxes.push_back((*blocks_[0].levels)[static_cast<std::size_t>(k)].U.box_array());
-      nf.fac = std::make_shared<CompositeFacPoisson>(geom_, ba_coarse_, boundary, fine_boxes);
+      nf.fac = std::make_shared<CompositeFacPoisson>(geom_, hierarchy_.ba[0], boundary, fine_boxes);
       if (nf.plan.has_boundary_kernel)
         nf.fac->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
       if (nf.plan.has_newton)

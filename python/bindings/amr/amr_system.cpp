@@ -8,6 +8,7 @@
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/program/step_transaction.hpp>  // StepAttemptRejected: atomic public AMR attempts
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_blocks / required_solver: install-time validation (ADC-508)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
@@ -270,6 +271,8 @@ struct AmrSystem::Impl {
   std::map<std::pair<std::string, std::string>, std::string> bootstrap_subject_routes;
   std::unordered_map<std::string, std::string> bootstrap_block_subjects;
   std::unordered_map<std::string, std::array<std::string, 2>> bootstrap_face_vectors;
+  std::vector<std::uint8_t> program_accepted_state_;
+  std::uint64_t program_accepted_state_revision_ = 0;
 
   // Coupled inter-species sources (compiled pops.dsl.CoupledSource, flat P5 bytecode ABI) FROZEN at
   // add_coupled_source and injected into the AmrRuntime runtime engine at lazy build (build_multi).
@@ -475,6 +478,8 @@ struct AmrSystem::Impl {
       pops::runtime::program::Profiler profiler;
       std::string last_dt_reason;
       std::vector<int> replay_regrid_steps;
+      std::vector<std::uint8_t> program_accepted_state;
+      std::uint64_t program_accepted_state_revision;
 
       explicit AcceptedSnapshot(Impl& impl)
           : time(impl.t),
@@ -486,7 +491,9 @@ struct AmrSystem::Impl {
             history(impl.program_.hist_),
             profiler(impl.program_.profiler_),
             last_dt_reason(impl.last_dt_reason),
-            replay_regrid_steps(impl.last_replay_regrid_steps_) {
+            replay_regrid_steps(impl.last_replay_regrid_steps_),
+            program_accepted_state(impl.program_accepted_state_),
+            program_accepted_state_revision(impl.program_accepted_state_revision_) {
         if (impl.runtime)
           runtime = std::make_unique<AmrRuntime::StepSnapshot>(impl.runtime->step_snapshot());
         else if (impl.n_levels_fn && impl.level_state_fn && impl.level_potential_fn) {
@@ -525,6 +532,8 @@ struct AmrSystem::Impl {
         impl.program_.profiler_ = profiler;
         impl.last_dt_reason = last_dt_reason;
         impl.last_replay_regrid_steps_ = replay_regrid_steps;
+        impl.program_accepted_state_ = program_accepted_state;
+        impl.program_accepted_state_revision_ = program_accepted_state_revision;
       }
   };
 
@@ -2610,6 +2619,34 @@ std::string AmrSystem::installed_program_hash() const {
 double AmrSystem::program_last_dt() const {
   return static_cast<double>(p_->program_.last_dt_);
 }
+std::vector<std::uint8_t> AmrSystem::program_accepted_state() const {
+  return p_->program_accepted_state_;
+}
+void AmrSystem::restore_program_accepted_state(const std::vector<std::uint8_t>& state) {
+  p_->program_accepted_state_ = state;
+  ++p_->program_accepted_state_revision_;
+}
+std::uint64_t AmrSystem::program_accepted_state_revision() const {
+  return p_->program_accepted_state_revision_;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_accepted_state_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state = runtime::program::deserialize_amr_program_accepted_state(
+      p_->program_accepted_state_);
+  rows.reserve(state.history_owners.size());
+  for (const auto& [name, owner] : state.history_owners) {
+    const auto ring = state.ring_clocks.find(name);
+    const int depth = ring == state.ring_clocks.end()
+                          ? (p_->runtime ? detail::AmrHistoryOps::depth(*p_->runtime, name) : 0)
+                          : static_cast<int>(ring->second.size());
+    rows.push_back({name, "program.block." + std::to_string(owner),
+                    state.history_states.at(name), state.history_spaces.at(name),
+                    std::to_string(depth), std::to_string(state.level_clocks.size())});
+  }
+  return rows;
+}
 // RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
 // frozen state; the Python bind flow calls it LAST (after every install call), so the install sequence
 // itself never trips require_assembling_amr. A second call throws. lifecycle_state() reports
@@ -3264,6 +3301,46 @@ void AmrSystem::rollback_restart_transaction() {
   // rather than leaving an unusable nested transaction that masks the original exception.
   std::unique_ptr<Impl::AcceptedSnapshot> accepted = std::move(p_->restart_transaction_);
   accepted->restore(*p_);
+}
+
+int AmrSystem::checkpoint_regrid_count() const {
+  return p_->runtime ? p_->runtime->regrid_count() : 0;
+}
+std::uint64_t AmrSystem::checkpoint_topology_epoch() const {
+  return p_->runtime ? p_->runtime->topology_epoch() : 0;
+}
+void AmrSystem::restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch) {
+  if (!p_->runtime) {
+    if (regrid_count != 0 || topology_epoch != 0)
+      throw std::runtime_error("single-block AMR checkpoint cannot restore runtime regrid counters");
+    return;
+  }
+  p_->runtime->restore_checkpoint_counters(regrid_count, topology_epoch);
+}
+std::vector<int> AmrSystem::checkpoint_temporal_ratios() const {
+  p_->ensure_built();
+  if (!p_->runtime)
+    return {};
+  return p_->runtime->checkpoint_temporal_ratios();
+}
+std::vector<std::vector<std::string>> AmrSystem::checkpoint_transfer_routes() const {
+  std::vector<std::vector<std::string>> rows;
+  rows.reserve(p_->bootstrap_subject_routes.size());
+  for (const auto& [key, route_identity] : p_->bootstrap_subject_routes) {
+    const auto& route = p_->bootstrap_transfer_routes.at(route_identity);
+    std::string ghosts;
+    for (std::size_t index = 0; index < route.descriptor.ghost_depth.size(); ++index) {
+      if (index) ghosts += ",";
+      ghosts += std::to_string(route.descriptor.ghost_depth[index]);
+    }
+    rows.push_back({key.first, key.second, route_identity, route.provider_identity,
+                    route.kernel_identity, route.descriptor.space, route.descriptor.centering,
+                    route.descriptor.representation, route.descriptor.storage,
+                    route.descriptor.operation, std::to_string(route.descriptor.order), ghosts,
+                    std::to_string(route.descriptor.dimension),
+                    std::to_string(route.descriptor.refinement_ratio)});
+  }
+  return rows;
 }
 
 // --- MULTI-BLOCK per-BLOCK per-level checkpoint accessors (ADC-509) --------------------------------

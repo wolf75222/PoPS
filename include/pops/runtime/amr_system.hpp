@@ -659,6 +659,13 @@ class AmrSystem {
   void begin_restart_transaction();
   void commit_restart_transaction();
   void rollback_restart_transaction();
+  int checkpoint_regrid_count() const;
+  std::uint64_t checkpoint_topology_epoch() const;
+  void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
+  std::vector<int> checkpoint_temporal_ratios() const;
+  /// Canonical rows for every required bootstrap transfer route: subject, operation, route identity,
+  /// provider, kernel, descriptor fields.  The sealed checkpoint compares these rows byte-for-byte.
+  std::vector<std::vector<std::string>> checkpoint_transfer_routes() const;
   /// @}
 
   /// Registers an inter-species COUPLED SOURCE (compiled pops.dsl.CoupledSource, flat bytecode ABI
@@ -757,6 +764,16 @@ class AmrSystem {
   /// so a history ring's store_history tags the per-slot dt (variable-dt replay). POPS_EXPORT for the
   /// dlopen boundary (the generated AMR Program .so reads it via the AmrProgramContext).
   POPS_EXPORT double program_last_dt() const;
+  /// Authenticated accepted-state image owned by the compiled AMR Program context.  This is distinct
+  /// from the dense field/history arrays: it preserves exact level clocks, qualified history-slot
+  /// identities and lagged effective-flux publications required for conservative multistep restart.
+  POPS_EXPORT std::vector<std::uint8_t> program_accepted_state() const;
+  /// Replace the accepted image during strict restart.  Each replacement advances a revision observed
+  /// by the persistent AmrProgramContext before its next attempt; no stale context state is reused.
+  POPS_EXPORT void restore_program_accepted_state(const std::vector<std::uint8_t>& state);
+  POPS_EXPORT std::uint64_t program_accepted_state_revision() const;
+  /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
+  POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)
   /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is

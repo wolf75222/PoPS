@@ -208,11 +208,9 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the native AMR v1 checkpoint envelope (sec.8.11): bit-identical resume is wired for a
-    SINGLE block, a SINGLE rank, and a FROZEN hierarchy (regrid_every == 0). For the live system it
-    reports whether the current configuration is RESTARTABLE under that envelope and, if not, which
-    constraint(s) it violates -- the same constraints ``AmrSystem.checkpoint`` rejects at call time,
-    surfaced here as an inert explanation rather than a raised error.
+    Surfaces the strict AMR v3 accepted-state envelope: exact hierarchy and ownership, every block and
+    level, field/history state, regrid metadata, rational clocks and transfer-plan provenance. Active
+    regridding and multi-block layouts are supported under the same authenticated bound composition.
     """
 
     def __init__(self, *, restartable: Any, constraints: Any, violations: Any, notes: Any) -> None:
@@ -234,9 +232,8 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (bit-identical v1 envelope)" % head]
-        lines.append("  envelope: single block, single rank, frozen hierarchy "
-                     "(regrid_every == 0)")
+        lines = ["AMR checkpoint policy: %s (strict bit-identical v3 envelope)" % head]
+        lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")
             for v in self.violations:

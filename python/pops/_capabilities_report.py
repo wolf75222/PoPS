@@ -460,11 +460,10 @@ def _inventory_rows(flags: Any, source: Any) -> list:
              requested="checkpoint(parallel=True)",
              available_route="checkpoint(parallel=False) or write(format='hdf5', parallel=True)",
              alternative="use checkpoint(parallel=False)", source=source),
-        _row("checkpoint:amr_dynamic_regrid", layout="amr", backend="none", status="unavailable",
-             limitation="bit-identical AMR checkpoint requires a frozen hierarchy (regrid_every=0)",
-             requested="AMR checkpoint with dynamic regrid",
-             available_route="AMR checkpoint with regrid_every=0",
-             alternative="use AmrSystem.write for visualization or freeze regrid", source=source),
+        _row("checkpoint:amr_dynamic_regrid", layout="amr", backend="runtime", platform="host",
+             mpi=mpi,
+             limitation="strict v3 accepted-state restart; non-Dense history replay keeps rank count",
+             source=source),
     ]
 
 

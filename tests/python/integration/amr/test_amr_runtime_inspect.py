@@ -161,17 +161,15 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
-    assert "single block" in str(rep)
+    assert "bit-identical v3" in str(rep)
 
 
-def test_explain_checkpoint_flags_dynamic_regrid_violation():
+def test_explain_checkpoint_supports_dynamic_regrid():
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=3)
     sim.add_block("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
-    assert rep.restartable is False
-    assert any("regrid_every=3" in v for v in rep.violations)
-    # The composite multi-level Poisson restart is declared unavailable, not faked.
-    assert any("composite multi-level Poisson" in n for n in rep.notes)
+    assert rep.restartable is True and rep.violations == []
+    assert any("active regridding is supported" in n for n in rep.notes)
 
 
 # --- inspect() (ADC-589/555 criterion #34: the unified hierarchy/patch/regrid/limitations view) --

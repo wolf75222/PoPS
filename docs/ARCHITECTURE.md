@@ -415,6 +415,11 @@ reader validates topology, ownership maps, state, aux, potentials, provider slot
 before its first write, then restores the hierarchy through the final clock update inside one native
 accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
 histories, diagnostics and cadence counters; a partially restored simulation is never observable.
+The sealed accepted-state contract also records the topology epoch and regrid count, exact rational
+level clocks, owner/state/space-qualified ring slots, lagged effective-flux publications, parent/child
+temporal relations and every required transfer route.  Restart compares the bound identities and this
+provenance before mutation.  Multi-block and active-regrid layouts use this same strict route; PoPS does
+not silently degrade to a weaker regrid-on-restart guarantee.
 
 The transport of a block, in turn, reads this aux:
 `advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and

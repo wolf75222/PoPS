@@ -1,27 +1,10 @@
-"""Strict AMR checkpoint payload -- restartable under frozen or active regridding.
+"""Strict v3 AMR checkpoint: exact topology, fields, histories and accepted Program state.
 
-The current format imposes the recorded hierarchy rather than reconstructing it from defaults. By the
-determinism theorem (addendum B.2) the regrid is a PURE function of (state, composition, macro_step):
-restore the hierarchy (BoxArrays + owner-rank DistributionMappings), the full per-level per-block
-state (covered cells included), the shared phi warm-start, and the clock EXACTLY, and every
-post-restart regrid reproduces the uninterrupted layout sequence.
-
-The core reader accepts only this schema. Its payload keys include:
-  - ``pops_amr_checkpoint_version = 3``
-  - ``dmap_<k>``: owner rank per box of level k, aligned with the level-k rows of ``patch_boxes``
-    (bit-identity requires the box->rank map: it fixes the local-fab aggregation order).
-  - ``aux_<k>``: the FULL shared aux of level k, ALL components (phi comp 0, gradients, named aux),
-    flat c*nf*nf+j*nf+i; an engine with no shared aux records an explicit empty array.
-  - ``regrid_count``, ``regrid_every``: regrid metadata (report parity + the cadence guard).
-  - ``program_hash``: the installed compiled-Program hash (a compiled AMR Program must restart under
-    the SAME program; absent for a native composition -- the guard is skipped, like the uniform writer).
-  - ``n_ranks`` + ``history_*`` (ADC-631): the rank count and the multistep history-ring payload
-    (per ring: depth / ncomp / init / policy manifest / stored slots / per-slot dt + the policy-
-    selected slots' flat buffers). Replaying a non-Dense ring across a rank-count change is refused.
-
-Restore order (addendum B.6): guards -> rebuild_hierarchy (impose the mid-run hierarchy) -> per-level
-state -> aux -> phi -> clock. The clock is LAST so the next step's regrid_if_due sees the
-uninterrupted clock.
+The sealed payload preserves owner-rank mappings, all block/level state, aux and elliptic warm starts,
+regrid counters, qualified history rings, rational clocks, lagged flux publications, level relations
+and transfer-plan provenance. Restore is transactional and the public route has one guarantee only:
+bit-identical continuation under the same bound composition. Historical or weaker fallback formats
+are refused.
 """
 
 from pops._generated_release_contract import AMR_CHECKPOINT_PAYLOAD_VERSION as _V3
@@ -68,6 +51,12 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
            "n_ranks": int(_pops.n_ranks()),
            "patch_boxes": (np.asarray(pb, dtype=np.int64) if pb
                            else np.zeros((0, 5), dtype=np.int64))}
+    from pops.runtime._amr_checkpoint_contract import encode_contract
+    out["regrid_count"] = int(sim.checkpoint_regrid_count())
+    out["topology_epoch"] = int(sim.checkpoint_topology_epoch())
+    out["program_accepted_state"] = np.frombuffer(
+        sim.program_accepted_state(), dtype=np.uint8).copy()
+    out["amr_accepted_contract"] = encode_contract(sim)
     # program-hash guard (m5): a compiled AMR Program must restart under the SAME program. Absent for a
     # native composition (the guard is skipped, like the uniform writer).
     phash = sim.installed_program_hash() if hasattr(sim, "installed_program_hash") else ""
@@ -140,6 +129,9 @@ def restart_v3(sim, d, L):
     """
     import numpy as np
     from pops import _pops
+    from pops.runtime._amr_checkpoint_contract import preflight_contract
+
+    program_state, regrid_count, topology_epoch = preflight_contract(sim, d)
 
     # (2) GUARDS.
     if int(d["n"]) != sim.nx():
@@ -240,7 +232,8 @@ def restart_v3(sim, d, L):
 
     owner_ranks = []
     if multi:
-        owner_ranks = _owner_ranks_for_boxes(d, boxes, nlev)
+        from pops.runtime._amr_checkpoint_topology import owner_ranks_for_boxes
+        owner_ranks = owner_ranks_for_boxes(d, boxes, nlev)
         nranks = int(_pops.n_ranks())
         for level in range(1, nlev):
             key = "dmap_%d" % level
@@ -333,6 +326,12 @@ def restart_v3(sim, d, L):
 
         # (6) Histories may replay the Program and regrid; they are inside the same native transaction.
         report = _restore_histories_v3(sim, d)
+
+        # (7) Replay is allowed to mutate Program clocks/ring publications and regrid counters while it
+        # reconstructs policy-omitted dense values. Replace those temporary values with the checkpoint's
+        # exact accepted semantic state before exposing the runtime again.
+        sim.restore_program_accepted_state(program_state)
+        sim.restore_checkpoint_counters(regrid_count, topology_epoch)
 
         # (8) Clock last: the next cadence decision is identical to the uninterrupted run.
         sim.set_clock(float(d["t"]), int(d["macro_step"]))
@@ -488,30 +487,6 @@ def _restore_histories_v3(sim, d):
                 "the restart composition is inconsistent with the recorded in-window regrid schedule."
                 % (hname, off, recorded, m, regrid_every))
     return report
-
-
-def _owner_ranks_for_boxes(d, boxes, nlev):
-    """The per-box owner rank aligned with @p boxes, read from the per-level ``dmap_<k>`` arrays.
-
-    ``patch_boxes`` lists boxes grouped by level (level 1, then 2, ...); ``dmap_<k>`` is the owner-rank
-    array of level k aligned with that level's box order. Level 0 is implicit in patch_boxes (only fine
-    levels appear), so the mapping walks the fine-level boxes in order.
-    """
-    import numpy as np
-    per_level_ranks = {k: list(np.asarray(d["dmap_%d" % k], dtype=np.int64)) for k in range(nlev)
-                       if ("dmap_%d" % k) in d}
-    cursor = {k: 0 for k in range(nlev)}
-    owners = []
-    for (lvl, _ilo, _jlo, _ihi, _jhi) in boxes:
-        if lvl not in per_level_ranks:
-            raise ValueError("restart: checkpoint lacks owner-rank map for AMR level %d" % lvl)
-        ranks = per_level_ranks[lvl]
-        idx = cursor.get(lvl, 0)
-        if idx >= len(ranks):
-            raise ValueError("restart: owner-rank map for AMR level %d is truncated" % lvl)
-        owners.append(int(ranks[idx]))
-        cursor[lvl] = idx + 1
-    return owners
 
 
 __all__ = ["write_v3", "restart_v3"]

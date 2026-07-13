@@ -248,6 +248,11 @@ inline void AmrRuntime::rebuild_hierarchy(const std::vector<std::vector<PatchBox
       boxes.push_back(Box2D{{pb.ilo, pb.jlo}, {pb.ihi, pb.jhi}});
     BoxArray fb(boxes);
     DistributionMapping dmap(level_owner_ranks[k]);
+    // The hierarchy is the unique topology/ownership authority used by patch inspection, composite
+    // masks, transfer contexts and the next regrid. Reallocating only the block MultiFabs would leave
+    // those consumers on the seed layout even though checkpoint data was written onto the saved one.
+    hierarchy_.ba[static_cast<std::size_t>(k)] = fb;
+    hierarchy_.dm[static_cast<std::size_t>(k)] = dmap;
 
     // (R6) reallocate each block's level-k MultiFab on (fb, dmap) with its INHERITED ghost width.
     for (auto& b : blocks_) {

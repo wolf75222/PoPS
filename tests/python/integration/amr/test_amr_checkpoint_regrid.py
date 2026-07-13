@@ -47,6 +47,26 @@ def _build(n, regrid_every):
     # A moving energy bump so the hierarchy ACTUALLY changes over the run (regrid fires repeatedly).
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, 3, 14.0, 4, 20))
     sim.set_conservative_state("gas1", _state(n, 1.0, 2.0, 0, 1.0, 0, 0))
+    # This fixture intentionally exercises the low-level AmrSystem seam. Attach the same canonical
+    # identity boundary pops.bind would provide so the strict checkpoint envelope remains honest.
+    from pops.identity import make_identity
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from pops.runtime._run_manifest import RunManifest
+    identity_data = {"fixture": "amr-checkpoint-regrid", "n": n,
+                     "regrid_every": regrid_every, "blocks": ["gas0", "gas1"]}
+    snapshot = BoundSnapshot(
+        semantic_identity=make_identity("semantic", identity_data),
+        artifact_identity=make_identity("artifact", identity_data),
+        layout={"kind": "amr"}, blocks=[{"name": "gas0"}, {"name": "gas1"}], solvers={},
+        cadence={"kind": "native", "substeps": 1, "stride": 1, "cfl": "manual"},
+        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+    )
+    sim._finalize_bind(snapshot)
+    run = RunManifest(bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
+                      controls={"t_end": STEPS * DT, "cfl": 0.0, "max_steps": STEPS,
+                                "output_mode": "test"})
+    sim._last_run_identity = run.run_identity
     return sim
 
 
@@ -68,11 +88,14 @@ def _snapshot(sim):
 
 def _eq(a, b):
     if a["boxes"] != b["boxes"]:
+        print("  topology mismatch:", a["boxes"], b["boxes"])
         return False
     for key in a:
         if key in ("t", "macro_step", "boxes"):
             continue
         if not np.array_equal(a[key], b[key]):
+            print("  payload mismatch %s: max|d|=%.3e" %
+                  (key, float(np.max(np.abs(a[key] - b[key])))))
             return False
     return True
 

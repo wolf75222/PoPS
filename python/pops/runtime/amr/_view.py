@@ -150,24 +150,23 @@ class AmrRuntimeView:
 
     def explain_checkpoint(self) -> Any:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
-        constraints = ["single block", "single rank", "frozen hierarchy (regrid_every == 0)"]
+        constraints = ["same bound composition and compiled Program",
+                       "authenticated v3 accepted-state payload",
+                       "same rank count when a non-Dense history policy requires replay"]
         violations = []
-        # Block count: a multi-block AmrRuntime engine is not checkpointable in v1.
         try:
             n_blocks = int(self._sim._s.n_blocks())
         except RuntimeError:
             n_blocks = len(self._block_names())
-        if n_blocks > 1:
-            violations.append("multi-block (n_blocks=%d): the v1 checkpoint is single-block "
-                              "(AmrRuntime engine carries no per-block restart yet)." % n_blocks)
-        if int(self._sim._regrid_every) != 0:
-            violations.append("regrid_every=%d != 0: a bit-identical resume requires a frozen "
-                              "hierarchy (the post-restart regrid would re-diverge)."
-                              % int(self._sim._regrid_every))
-        notes = ["MPI np>1 is rejected at checkpoint time (single-rank v1); rank count is a "
-                 "runtime property, not read here.",
-                 "composite multi-level Poisson restart: unavailable (single-level System has "
-                 "bit-identical checkpoint/restart including under MPI)."]
+        if n_blocks == 0:
+            violations.append("no block is installed, so there is no accepted hierarchy to persist")
+        notes = [
+            "v3 persists every block/level, owner-rank map, aux and qualified field warm start.",
+            "active regridding is supported: topology epoch, regrid count, exact level clocks, "
+            "history identities and lagged conservative flux publications are restored.",
+            "the public restart guarantee is bit-identical accepted-state continuation; there is "
+            "no implicit weaker regrid-on-restart fallback.",
+        ]
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes)
 

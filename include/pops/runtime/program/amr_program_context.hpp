@@ -26,6 +26,7 @@
 #include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite provider
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
+#include <pops/runtime/program/amr_program_checkpoint.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams
 #include <pops/runtime/program/wire_ids.hpp>       // stable compiled-Program numeric protocol
 
@@ -46,8 +47,6 @@
 namespace pops {
 namespace runtime {
 namespace program {
-
-namespace amr = ::pops::amr;
 
 class AmrProgramContext {
  public:
@@ -138,6 +137,9 @@ class AmrProgramContext {
   /// Register the macro-step body (forwards to AmrSystem::install_program_step). @p step is the per-level
   /// loop wrapper the codegen emits; it runs ONE macro-step over dt.
   void install(std::function<void(double)> step) const {
+    ensure_level_clocks_();
+    if (facade_->program_accepted_state().empty())
+      publish_program_accepted_state_();
     facade_->install_program_step(std::move(step));
   }
 
@@ -797,7 +799,8 @@ class AmrProgramContext {
   void ensure_level_clocks_() const {
     if (static_cast<int>(level_clocks_.size()) == nlev())
       return;
-    const double accepted_time = level_clocks_.empty() ? 0.0 : level_clocks_[0].physical_time;
+    const double accepted_time =
+        level_clocks_.empty() ? facade_->time() : level_clocks_[0].physical_time;
     level_clocks_.clear();
     level_clocks_.reserve(static_cast<std::size_t>(nlev()));
     for (int k = 0; k < nlev(); ++k)
@@ -808,6 +811,7 @@ class AmrProgramContext {
   void advance_attempt_(double dt, const char* operation, Advance&& advance) const {
     if (!(dt > 0.0))
       throw std::invalid_argument(std::string(operation) + " requires dt > 0");
+    import_program_accepted_state_();
     const auto saved_flux = flux_ledger_;
     const auto saved_sync = synchronized_flux_;
     const auto saved_rate_provenance = rate_provenance_;
@@ -848,6 +852,7 @@ class AmrProgramContext {
       active_parent_ = saved_active_parent;
       current_window_ = saved_window;
       current_level_dt_ = saved_level_dt;
+      publish_program_accepted_state_();
     } catch (...) {
       conservative_ledger_.rollback();
       flux_ledger_ = saved_flux;
@@ -872,6 +877,122 @@ class AmrProgramContext {
       current_level_dt_ = saved_level_dt;
       throw;
     }
+  }
+
+  void validate_program_accepted_state_(const AmrProgramAcceptedState& state) const {
+    if (state.level_clocks.size() != static_cast<std::size_t>(nlev()))
+      throw std::runtime_error(
+          "AMR Program accepted state does not match the restored hierarchy level count");
+    for (int level = 0; level < nlev(); ++level) {
+      const amr::ClockStamp& clock = state.level_clocks[static_cast<std::size_t>(level)];
+      if (clock.level != level || clock.phase != amr::Rational(0, 1))
+        throw std::runtime_error(
+            "AMR Program accepted state contains a non-accepted or misqualified level clock");
+    }
+    if (state.history_owners.size() != state.history_states.size() ||
+        state.history_owners.size() != state.history_spaces.size() ||
+        state.history_owners.size() != state.ring_clocks.size() ||
+        state.history_owners.size() != state.ring_identities.size() ||
+        state.history_owners.size() != state.ring_flux.size() ||
+        state.history_owners.size() != state.ring_flux_initialized.size())
+      throw std::runtime_error(
+          "AMR Program accepted state has inconsistent qualified history registries");
+    for (const auto& [name, owner] : state.history_owners) {
+      const auto clocks = state.ring_clocks.find(name);
+      const auto identities = state.ring_identities.find(name);
+      const auto fluxes = state.ring_flux.find(name);
+      const auto initialized = state.ring_flux_initialized.find(name);
+      if (state.history_states.count(name) == 0 || state.history_spaces.count(name) == 0 ||
+          clocks == state.ring_clocks.end() || identities == state.ring_identities.end() ||
+          fluxes == state.ring_flux.end() || initialized == state.ring_flux_initialized.end())
+        throw std::runtime_error("AMR Program accepted state lacks history qualification for '" +
+                                 name + "'");
+      (void)sys_block(owner);  // prove the qualified owner is still installed by name.
+      const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
+      if (static_cast<int>(clocks->second.size()) != depth ||
+          static_cast<int>(identities->second.size()) != depth ||
+          static_cast<int>(fluxes->second.size()) != depth ||
+          initialized->second.size() != static_cast<std::size_t>(nlev()))
+        throw std::runtime_error("AMR Program accepted state has wrong ring depth for '" + name +
+                                 "'");
+      for (int slot = 0; slot < depth; ++slot) {
+        const auto& slot_clocks = clocks->second[static_cast<std::size_t>(slot)];
+        const auto& slot_identities = identities->second[static_cast<std::size_t>(slot)];
+        const auto& slot_fluxes = fluxes->second[static_cast<std::size_t>(slot)];
+        if (slot_clocks.size() != static_cast<std::size_t>(nlev()) ||
+            slot_identities.size() != static_cast<std::size_t>(nlev()) ||
+            slot_fluxes.size() != static_cast<std::size_t>(nlev()))
+          throw std::runtime_error("AMR Program accepted state has wrong level axis for history '" +
+                                   name + "'");
+        for (int level = 0; level < nlev(); ++level) {
+          const auto& identity = slot_identities[static_cast<std::size_t>(level)];
+          if (!identity)
+            continue;
+          const amr::ClockStamp& clock = slot_clocks[static_cast<std::size_t>(level)];
+          if (identity->owner != "program.block." + std::to_string(owner) ||
+              identity->state != state.history_states.at(name) ||
+              identity->space != state.history_spaces.at(name) || identity->level != level ||
+              !(identity->clock == clock))
+            throw std::runtime_error("AMR Program accepted state has mismatched identity for history '" +
+                                     name + "'");
+        }
+      }
+    }
+  }
+
+  AmrProgramAcceptedState accepted_state_() const {
+    AmrProgramAcceptedState state{
+        level_clocks_, history_owners_, history_state_ids_, history_space_ids_, ring_clocks_,
+        ring_identities_, ring_flux_, ring_flux_init_};
+    // A flat hierarchy captures no C/F flux strips, and a declared ring may still be cold. Persist
+    // those cases as explicit zero/empty axes rather than omitting semantic registry entries: strict
+    // restore can then distinguish "no flux exists" from a truncated checkpoint.
+    for (const auto& [name, owner] : history_owners_) {
+      (void)owner;
+      const int depth = pops::detail::AmrHistoryOps::depth(*eng_, name);
+      auto& clocks = state.ring_clocks[name];
+      auto& identities = state.ring_identities[name];
+      auto& fluxes = state.ring_flux[name];
+      clocks.resize(static_cast<std::size_t>(depth));
+      identities.resize(static_cast<std::size_t>(depth));
+      fluxes.resize(static_cast<std::size_t>(depth));
+      for (int slot = 0; slot < depth; ++slot) {
+        clocks[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
+        identities[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
+        fluxes[static_cast<std::size_t>(slot)].resize(static_cast<std::size_t>(nlev()));
+      }
+      state.ring_flux_initialized[name].resize(static_cast<std::size_t>(nlev()), 0);
+    }
+    return state;
+  }
+
+  void import_program_accepted_state_() const {
+    const std::uint64_t revision = facade_->program_accepted_state_revision();
+    if (revision == accepted_state_revision_)
+      return;
+    const std::vector<std::uint8_t> bytes = facade_->program_accepted_state();
+    if (bytes.empty())
+      throw std::runtime_error(
+          "compiled AMR Program restart lacks its accepted clock/history/flux state");
+    AmrProgramAcceptedState state = deserialize_amr_program_accepted_state(bytes);
+    validate_program_accepted_state_(state);
+    level_clocks_ = std::move(state.level_clocks);
+    history_owners_ = std::move(state.history_owners);
+    history_state_ids_ = std::move(state.history_states);
+    history_space_ids_ = std::move(state.history_spaces);
+    ring_clocks_ = std::move(state.ring_clocks);
+    ring_identities_ = std::move(state.ring_identities);
+    ring_flux_ = std::move(state.ring_flux);
+    ring_flux_init_ = std::move(state.ring_flux_initialized);
+    accepted_state_revision_ = revision;
+  }
+
+  void publish_program_accepted_state_() const {
+    if (conservative_ledger_.in_transaction() || !conservative_ledger_.empty())
+      throw std::runtime_error("cannot checkpoint a non-accepted AMR conservative ledger");
+    facade_->restore_program_accepted_state(
+        serialize_amr_program_accepted_state(accepted_state_()));
+    accepted_state_revision_ = facade_->program_accepted_state_revision();
   }
 
   struct ActiveParentWindow {
@@ -1226,6 +1347,7 @@ class AmrProgramContext {
   mutable std::vector<SyncEvent> sync_report_;
   mutable amr::TransactionalFluxLedger<EdgeFlux> conservative_ledger_;
   mutable std::vector<amr::ClockStamp> level_clocks_;
+  mutable std::uint64_t accepted_state_revision_ = 0;
   mutable amr::Rational stage_time_{0, 1};
   mutable std::optional<ActiveParentWindow> active_parent_;
   mutable std::optional<amr::ClockWindow> current_window_;

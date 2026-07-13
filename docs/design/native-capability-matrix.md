@@ -68,7 +68,8 @@ Supported native routes include:
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
 - Runtime output routes: npz, VTK, HDF5, plus AMR coarse/patch metadata output.
-- Runtime checkpoint v1: npz rank-0 gather, with AMR bit-identical restart only for the frozen hierarchy route.
+- Runtime checkpoints: Uniform v1 and strict AMR v3. AMR v3 preserves multi-block/multi-level accepted
+  state under active regridding, including topology ownership, clocks, histories and transfer provenance.
 
 Explicit unsupported rows include:
 
@@ -76,7 +77,8 @@ Explicit unsupported rows include:
 - `elliptic:fft_amr`: FFT requires a single uniform periodic mesh; AMR uses GeometricMG.
 - `output:plotfile_uniform`: Plotfile is an AMR per-level format, not a Uniform System writer.
 - `checkpoint:parallel_hdf5`: parallel HDF5 is an output route, not a restartable checkpoint route.
-- `checkpoint:amr_dynamic_regrid`: bit-identical AMR checkpoint requires `regrid_every == 0`.
+- `checkpoint:amr_dynamic_regrid` is available through the strict v3 accepted-state route. A non-Dense
+  history policy that reconstructs omitted slots by replay requires the restart to keep the rank count.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
 

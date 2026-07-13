@@ -434,6 +434,16 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // IR hash of the installed compiled Program (the .so's pops_program_hash), or "" if none. Parity
       // System::installed_program_hash (the checkpoint guard).
       .def("installed_program_hash", &AmrSystem::installed_program_hash)
+      .def("program_accepted_state", [](const AmrSystem& s) {
+        const auto bytes = s.program_accepted_state();
+        return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      })
+      .def("restore_program_accepted_state", [](AmrSystem& s, py::bytes payload) {
+        std::string bytes = payload;
+        s.restore_program_accepted_state(
+            std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+      }, py::arg("payload"))
+      .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
       // ADC-631: True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE
       // block), False on the single-block coupler. The v3 checkpoint routes per-block vs mono state I/O
       // on this (n_blocks()==1 does not imply the coupler under a Program).
@@ -625,6 +635,12 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("begin_restart_transaction", &AmrSystem::begin_restart_transaction)
       .def("commit_restart_transaction", &AmrSystem::commit_restart_transaction)
       .def("rollback_restart_transaction", &AmrSystem::rollback_restart_transaction)
+      .def("checkpoint_regrid_count", &AmrSystem::checkpoint_regrid_count)
+      .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
+      .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
+           py::arg("regrid_count"), py::arg("topology_epoch"))
+      .def("checkpoint_temporal_ratios", &AmrSystem::checkpoint_temporal_ratios)
+      .def("checkpoint_transfer_routes", &AmrSystem::checkpoint_transfer_routes)
       // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
       // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.
       // history_global returns the per-level slices concatenated into ONE flat buffer (level axis

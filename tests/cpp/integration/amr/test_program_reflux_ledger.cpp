@@ -236,3 +236,50 @@ TEST(test_program_reflux_ledger, exact_rk_weights_are_distinct_and_transactional
   rk3.rollback();
   EXPECT_TRUE(rk3.empty()) << "outer rejection leaves zero residual";
 }
+
+TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonically) {
+  runtime::program::AmrProgramAcceptedState state;
+  state.level_clocks = {{0, 9, amr::Rational(0, 1), 0.9},
+                        {1, 9, amr::Rational(0, 1), 0.9}};
+  state.history_owners["rhs"] = 0;
+  state.history_states["rhs"] = "fluid.U";
+  state.history_spaces["rhs"] = "cell.conservative";
+  state.ring_clocks["rhs"] = {
+      {{0, 9, amr::Rational(0, 1), 0.9}, {1, 9, amr::Rational(0, 1), 0.9}},
+      {{0, 8, amr::Rational(0, 1), 0.8}, {1, 8, amr::Rational(0, 1), 0.8}}};
+  state.ring_identities["rhs"].resize(2, std::vector<std::optional<amr::HistoryIdentity>>(2));
+  for (int slot = 0; slot < 2; ++slot)
+    for (int level = 0; level < 2; ++level) {
+      const auto clock = state.ring_clocks["rhs"][static_cast<std::size_t>(slot)]
+                                                [static_cast<std::size_t>(level)];
+      state.ring_identities["rhs"][static_cast<std::size_t>(slot)]
+                                    [static_cast<std::size_t>(level)] =
+          amr::HistoryIdentity{"program.block.0", "fluid.U", "cell.conservative", level, clock};
+    }
+  state.ring_flux["rhs"] = {{fine_flux(Real(7)), fine_flux(Real(8))},
+                             {fine_flux(Real(5)), fine_flux(Real(6))}};
+  state.ring_flux_initialized["rhs"] = {1, 1};
+
+  const auto encoded = runtime::program::serialize_amr_program_accepted_state(state);
+  const auto decoded = runtime::program::deserialize_amr_program_accepted_state(encoded);
+  EXPECT_EQ(decoded.level_clocks, state.level_clocks);
+  EXPECT_EQ(decoded.history_owners, state.history_owners);
+  EXPECT_EQ(decoded.history_states, state.history_states);
+  EXPECT_EQ(decoded.history_spaces, state.history_spaces);
+  EXPECT_EQ(decoded.ring_flux.at("rhs")[1][0].fine[0].fL[0], Real(5));
+  EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(decoded), encoded)
+      << "the accepted-state byte protocol is deterministic";
+}
+
+TEST(test_program_reflux_ledger, accepted_checkpoint_state_refuses_corruption) {
+  runtime::program::AmrProgramAcceptedState state;
+  state.level_clocks = {{0, 1, amr::Rational(0, 1), 0.1}};
+  auto encoded = runtime::program::serialize_amr_program_accepted_state(state);
+  encoded[0] ^= 0xffU;
+  EXPECT_THROW(runtime::program::deserialize_amr_program_accepted_state(encoded),
+               std::runtime_error);
+  encoded = runtime::program::serialize_amr_program_accepted_state(state);
+  encoded.pop_back();
+  EXPECT_THROW(runtime::program::deserialize_amr_program_accepted_state(encoded),
+               std::runtime_error);
+}
