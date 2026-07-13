@@ -156,18 +156,36 @@ class _AmrSystemInstall(_AmrSystem):
         seen_initial = set()
         for subject_id, name, initial, space, centering, method, source in initial_rows:
             if method == "analytic":
-                if source.get("native_route") != "constant_field":
-                    raise NotImplementedError(
-                        "pops.bind: native analytic bootstrap requires constant_field"
+                route = source.get("native_route")
+                if route == "constant_field":
+                    components = [
+                        float.fromhex(value["binary64"])
+                        if isinstance(value, Mapping) and "binary64" in value else float(value)
+                        for value in source.get("components", ())
+                    ]
+                    self._s._register_analytic_constant(
+                        subject_id, name or "", space, centering, components
                     )
-                components = [
-                    float.fromhex(value["binary64"])
-                    if isinstance(value, Mapping) and "binary64" in value else float(value)
-                    for value in source.get("components", ())
-                ]
-                self._s._register_analytic_constant(
-                    subject_id, name or "", space, centering, components
-                )
+                elif route == "gaussian_field":
+                    center = source.get("center", {})
+                    if space != "cell" or set(center) != {"x", "y"}:
+                        raise ValueError(
+                            "pops.bind: gaussian_field requires one cell state and x/y center"
+                        )
+                    def native_float(value: Any) -> float:
+                        return float.fromhex(value["binary64"]) \
+                            if isinstance(value, Mapping) and "binary64" in value \
+                            else float(value)
+
+                    self._s._register_analytic_gaussian(
+                        subject_id, name or "", native_float(center["x"]),
+                        native_float(center["y"]), native_float(source["background"]),
+                        native_float(source["amplitude"]),
+                        native_float(source["inverse_width"]),
+                    )
+                else:
+                    raise NotImplementedError(
+                        "pops.bind: no native analytic provider for route %r" % route)
                 continue
             if space == "cell":
                 if name not in instances:

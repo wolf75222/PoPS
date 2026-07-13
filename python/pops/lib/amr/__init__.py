@@ -9,8 +9,14 @@ from dataclasses import dataclass, field
 from typing import ClassVar
 
 
+class _ImmutableTransferPolicy:
+    """Marker shared by constructor-only, frozen transfer policy values."""
+
+    __pops_ir_immutable__: ClassVar[bool] = True
+
+
 @dataclass(frozen=True, slots=True)
-class ConservativeLinear:
+class ConservativeLinear(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "conservative_linear"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (1,)
@@ -21,7 +27,7 @@ class ConservativeLinear:
 
 
 @dataclass(frozen=True, slots=True)
-class VolumeAverage:
+class VolumeAverage(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "volume_average"
     order: ClassVar[int] = 1
     ghost_depth: ClassVar[tuple[int, ...]] = (0,)
@@ -32,7 +38,7 @@ class VolumeAverage:
 
 
 @dataclass(frozen=True, slots=True)
-class ConservativeCoarseFine:
+class ConservativeCoarseFine(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "conservative_coarse_fine"
     order: ClassVar[int] = 1
     ghost_depth: ClassVar[tuple[int, ...]] = (1,)
@@ -43,7 +49,7 @@ class ConservativeCoarseFine:
 
 
 @dataclass(frozen=True, slots=True)
-class LinearTimeInterpolation:
+class LinearTimeInterpolation(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "linear_time_interpolation"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (0,)
@@ -54,7 +60,7 @@ class LinearTimeInterpolation:
 
 
 @dataclass(frozen=True, slots=True)
-class DivergencePreservingFace:
+class DivergencePreservingFace(_ImmutableTransferPolicy):
     """Coupled normal-face vector prolongation; never an independent scalar interpolation."""
 
     native_route: ClassVar[str] = "face_divergence_preserving"
@@ -67,7 +73,7 @@ class DivergencePreservingFace:
 
 
 @dataclass(frozen=True, slots=True)
-class BilinearNode:
+class BilinearNode(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "node_bilinear"
     order: ClassVar[int] = 2
     ghost_depth: ClassVar[tuple[int, ...]] = (1,)
@@ -78,7 +84,7 @@ class BilinearNode:
 
 
 @dataclass(frozen=True, slots=True)
-class StateTransfer:
+class StateTransfer(_ImmutableTransferPolicy):
     prolongation: ConservativeLinear = field(default_factory=ConservativeLinear)
     restriction: VolumeAverage = field(default_factory=VolumeAverage)
     coarse_fine: ConservativeCoarseFine = field(default_factory=ConservativeCoarseFine)
@@ -88,24 +94,24 @@ class StateTransfer:
 
 
 @dataclass(frozen=True, slots=True)
-class FaceTransfer:
+class FaceTransfer(_ImmutableTransferPolicy):
     prolongation: DivergencePreservingFace = field(
         default_factory=DivergencePreservingFace
     )
 
 
 @dataclass(frozen=True, slots=True)
-class NodeTransfer:
+class NodeTransfer(_ImmutableTransferPolicy):
     prolongation: BilinearNode = field(default_factory=BilinearNode)
 
 
 @dataclass(frozen=True, slots=True)
-class EllipticRecompute:
+class EllipticRecompute(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "elliptic_solve"
 
 
 @dataclass(frozen=True, slots=True)
-class PatchTopologyRebuild:
+class PatchTopologyRebuild(_ImmutableTransferPolicy):
     native_route: ClassVar[str] = "patch_topology"
 
 

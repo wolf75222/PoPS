@@ -474,6 +474,15 @@ class AmrSystem {
                       const std::string& role = std::string());
   void set_bootstrap_refinement(const std::string& block, const std::string& variable,
                                 double threshold, const std::string& provider_identity);
+  void set_bootstrap_tagging(
+      const std::vector<std::string>& leaf_blocks,
+      const std::vector<std::string>& leaf_variables,
+      const std::vector<int>& leaf_ops,
+      const std::vector<double>& leaf_thresholds,
+      const std::vector<int>& refine_ops, const std::vector<int>& refine_args,
+      const std::vector<int>& coarsen_ops, const std::vector<int>& coarsen_args,
+      int min_cycles, const std::string& equality_policy,
+      const std::string& conflict_policy, const std::string& provider_identity);
 
   /// Adds to the regrid criterion the PHI tag on |grad phi| (D4 of the design
   /// docs/AMR_REGRID_UNION_TAGS_DESIGN.md): also refines the cells where the norm of the gradient of the
@@ -586,6 +595,9 @@ class AmrSystem {
   void register_analytic_constant(const std::string& subject, const std::string& block,
                                   const std::string& space, const std::string& centering,
                                   const std::vector<double>& components);
+  void register_analytic_gaussian(const std::string& subject, const std::string& block,
+                                  double center_x, double center_y, double background,
+                                  double amplitude, double inverse_width);
   std::int64_t bootstrap_analytic_reproject(const std::string& subject, int level);
   int apply_bootstrap_component_floor(const std::string& subject, int level,
                                       int component, double floor);

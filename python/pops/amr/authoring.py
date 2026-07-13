@@ -122,6 +122,7 @@ class AMRExecution:
         return {"schema_version": 1, "authority_type": "amr_execution", "mode": self.mode}
 
     inspect = to_data
+    runtime_execution_data = to_data
 
 
 @dataclass(frozen=True, slots=True)

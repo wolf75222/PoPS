@@ -77,6 +77,50 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert authorities.bootstrap.tagging == authorities.tagging.graph
 
 
+def test_public_resolve_derives_every_amr_authority_without_manual_injection():
+    from pops.codegen import Production
+
+    target = _example().build_final_case()
+    resolved = pops.resolve(
+        pops.validate(target.authoring.case),
+        layout=target.layout,
+        backend=Production(),
+    )
+
+    assert resolved.resolved_hierarchy.plan.level_count == 3
+    assert resolved.bootstrap_plan.hierarchy_identity == resolved.resolved_hierarchy.identity
+    assert resolved.bootstrap_plan.transfer_identity == resolved.amr_transfer.identity
+    assert resolved.bootstrap_plan.initial_identity == resolved.initial_condition_plan.identity
+    assert resolved.amr_execution.mode == "subcycled"
+
+
+def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
+    from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging
+
+    target, _, _, authorities = _resolved_target()
+    inputs = _example().build_bind_inputs(target.authoring)
+
+    class NativeProbe:
+        call = None
+
+        def _set_bootstrap_tagging(self, *args):
+            self.call = args
+
+    native = NativeProbe()
+    flow_bootstrap_tagging(native, authorities.bootstrap, inputs.params)
+    assert native.call is not None
+    (blocks, variables, leaf_ops, thresholds, refine_ops, refine_args,
+     coarsen_ops, coarsen_args, min_cycles, equality, conflict, provider) = native.call
+    assert blocks == ["tracer", "tracer"]
+    assert variables == ["U", "U"]
+    assert leaf_ops == [4, 5]
+    assert thresholds == [0.10, 0.04]
+    assert (refine_ops, refine_args) == ([4], [0])
+    assert (coarsen_ops, coarsen_args) == ([5], [1])
+    assert (min_cycles, equality, conflict) == (0, "hold", "refine_wins")
+    assert provider == authorities.tagging.graph.qualified_id
+
+
 def test_layout_refuses_unrepresentable_transition_ratios_without_substitution():
     from pops.amr import AMRHierarchy
     from pops.layouts import AMR

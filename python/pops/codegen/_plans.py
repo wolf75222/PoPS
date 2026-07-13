@@ -206,6 +206,7 @@ class ResolvedSimulationPlan:
     amr_transfer: Any = None
     initial_condition_plan: Any = None
     bootstrap_plan: Any = None
+    amr_execution: Any = None
     plan_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -320,6 +321,9 @@ class ResolvedSimulationPlan:
             "bootstrap_plan": _evidence(
                 self.bootstrap_plan, where="plan.bootstrap_plan"
             ) if self.bootstrap_plan is not None else None,
+            "amr_execution": _evidence(
+                self.amr_execution, where="plan.amr_execution"
+            ) if self.amr_execution is not None else None,
         }
 
     def verify(self) -> None:
@@ -484,6 +488,10 @@ class InstallPlan:
     @property
     def bootstrap_plan(self) -> Any:
         return self.artifact.plan.bootstrap_plan
+
+    @property
+    def amr_execution(self) -> Any:
+        return self.artifact.plan.amr_execution
 
     @property
     def initial_values(self) -> Mapping[Any, Any]:

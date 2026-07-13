@@ -183,5 +183,16 @@ class AMR(MeshDescriptor):
             context=context,
         )
 
+    def runtime_layout_data(self) -> dict[str, Any]:
+        """Project exact geometry/cadence/execution facts for a runtime provider."""
+        self._validate_authorities()
+        return {
+            "schema_version": 1,
+            "layout_type": "adaptive_cartesian",
+            "grid": self.grid.to_dict(),
+            "regrid": self.regrid.to_data(),
+            "execution": self.execution.to_data(),
+        }
+
 
 __all__ = ["AMR", "Uniform"]

@@ -54,6 +54,7 @@ class CompiledPlanRecord:
     amr_transfer: Any = None
     initial_condition_plan: Any = None
     bootstrap_plan: Any = None
+    amr_execution: Any = None
     contract_identity: Identity = field(init=False)
 
     @classmethod
@@ -89,6 +90,7 @@ class CompiledPlanRecord:
             amr_transfer=plan.amr_transfer,
             initial_condition_plan=plan.initial_condition_plan,
             bootstrap_plan=plan.bootstrap_plan,
+            amr_execution=plan.amr_execution,
         )
 
     def __post_init__(self) -> None:
@@ -127,6 +129,7 @@ class CompiledPlanRecord:
             self.amr_transfer,
             self.initial_condition_plan,
             self.bootstrap_plan,
+            self.amr_execution,
         )
         if any(value is not None for value in authorities):
             if self.target != "amr_system" or any(value is None for value in authorities):
@@ -137,11 +140,13 @@ class CompiledPlanRecord:
                 ResolvedHierarchy,
             )
             from pops.mesh.amr.transfer import ResolvedAMRTransfer
+            from pops.amr import AMRExecution
             expected = (
                 ResolvedHierarchy,
                 ResolvedAMRTransfer,
                 InitialConditionPlan,
                 BootstrapPlan,
+                AMRExecution,
             )
             if any(
                 type(value) is not kind
@@ -199,6 +204,9 @@ class CompiledPlanRecord:
             "bootstrap_plan": _evidence(
                 self.bootstrap_plan, where="compiled plan bootstrap"
             ) if self.bootstrap_plan is not None else None,
+            "amr_execution": _evidence(
+                self.amr_execution, where="compiled plan AMR execution"
+            ) if self.amr_execution is not None else None,
         }
 
     def verify(self) -> None:

@@ -211,6 +211,12 @@ class ResolvedTaggingGraph:
                 "canonical_id": self.canonical_id, "qualified_id": self.qualified_id,
                 **self.canonical_identity()}
 
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        """Return provider-authenticated runtime data without dispatching on node classes."""
+        data = self.graph.runtime_tagging_data(params)
+        data["lowerings"] = [row.canonical_identity() for row in self.registrations]
+        return data
+
 
 def resolve_tagging_graph(graph: Any, *, registry: Any = None) -> ResolvedTaggingGraph:
     if not isinstance(graph, TaggingGraph):

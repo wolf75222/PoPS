@@ -43,26 +43,106 @@ def flow_amr_layout(
 
 
 def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
-    """Lower the resolved owner-qualified threshold indicator without heuristics."""
-    from pops.mesh.amr import Above
+    """Compile one authenticated tagging graph to the native data-only VM."""
+    data = bootstrap.tagging.runtime_tagging_data(params)
+    if type(data) is not dict or data.get("schema_version") != 1 \
+            or data.get("graph_type") != "amr_tagging_runtime":
+        raise ValueError("pops.bind: tagging provider returned an unsupported runtime manifest")
 
-    graph = bootstrap.tagging.graph
-    if type(graph.refine) is not Above or graph.coarsen is not None:
-        raise NotImplementedError(
-            "pops.bind: native bootstrap currently lowers Above(density, threshold) "
-            "without a coarsen root"
-        )
-    predicate = graph.refine
-    if predicate.threshold not in params:
-        raise ValueError("pops.bind: bootstrap tagging threshold is missing from resolved params")
-    if predicate.indicator.block_ref is None:
-        raise ValueError("pops.bind: bootstrap tag indicator must be block-qualified")
-    sim._set_bootstrap_refinement(
-        predicate.indicator.block_ref.local_id,
-        predicate.indicator.local_id,
-        float(params[predicate.threshold]),
+    registrations = {}
+    for row in data.get("lowerings", ()):
+        if type(row) is not dict or row.get("schema_version") != 1:
+            raise ValueError("pops.bind: malformed tagging lowering registration")
+        node_type = row.get("node_type")
+        lowering = row.get("lowering", {})
+        if not isinstance(node_type, str) or not node_type \
+                or lowering.get("kind") != "tag_lowering" \
+                or lowering.get("local_id") != node_type:
+            raise ValueError("pops.bind: unauthenticated tagging lowering registration")
+        if node_type in registrations:
+            raise ValueError("pops.bind: duplicate tagging lowering registration")
+        registrations[node_type] = lowering.get("qualified_id")
+
+    leaves: list[tuple[str, str, int, float]] = []
+
+    def compile_node(node: Any) -> tuple[list[int], list[int]]:
+        if type(node) is not dict or node.get("schema_version") != 1:
+            raise ValueError("pops.bind: malformed tagging expression node")
+        node_type = node.get("node_type")
+        if node_type not in registrations:
+            raise ValueError("pops.bind: tagging node lacks an authenticated lowering")
+        leaf_op = _TAG_LEAF_OPS.get(node_type)
+        if leaf_op is not None:
+            indicator = node.get("indicator")
+            if type(indicator) is not dict or indicator.get("kind") not in {"state", "field"}:
+                raise TypeError("pops.bind: native tag leaves require a state/field Handle")
+            block = indicator.get("block_ref")
+            if type(block) is not dict or not isinstance(block.get("local_id"), str):
+                raise ValueError("pops.bind: native tag leaves must be block-qualified")
+            variable = indicator.get("local_id")
+            threshold = node.get("threshold")
+            if not isinstance(variable, str) or not variable \
+                    or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+                raise TypeError("pops.bind: malformed native tag leaf")
+            leaves.append((block["local_id"], variable, leaf_op, float(threshold)))
+            return [leaf_op], [len(leaves) - 1]
+
+        logical_op = _TAG_LOGICAL_OPS.get(node_type)
+        if logical_op is None:
+            raise NotImplementedError(
+                "pops.bind: native tagging provider %r is registered but has no VM opcode"
+                % node_type
+            )
+        children = node.get("children")
+        if node_type == "not":
+            children = (node.get("child"),)
+        if not isinstance(children, (list, tuple)) or not children:
+            raise ValueError("pops.bind: logical tagging node has no children")
+        ops: list[int] = []
+        args: list[int] = []
+        for child in children:
+            child_ops, child_args = compile_node(child)
+            ops.extend(child_ops)
+            args.extend(child_args)
+        ops.append(logical_op)
+        args.append(len(children))
+        return ops, args
+
+    refine_ops, refine_args = compile_node(data["refine"])
+    coarsen = data.get("coarsen")
+    coarsen_ops, coarsen_args = ([], []) if coarsen is None else compile_node(coarsen)
+    hysteresis = data.get("hysteresis")
+    if type(hysteresis) is not dict or hysteresis.get("hysteresis_type") != "min_cycles":
+        raise ValueError("pops.bind: unsupported AMR hysteresis manifest")
+    min_cycles = hysteresis.get("min_cycles")
+    if isinstance(min_cycles, bool) or not isinstance(min_cycles, int) or min_cycles < 0:
+        raise ValueError("pops.bind: AMR hysteresis min_cycles must be an integer >= 0")
+    sim._set_bootstrap_tagging(
+        [row[0] for row in leaves],
+        [row[1] for row in leaves],
+        [row[2] for row in leaves],
+        [row[3] for row in leaves],
+        refine_ops,
+        refine_args,
+        coarsen_ops,
+        coarsen_args,
+        min_cycles,
+        str(hysteresis.get("equality")),
+        str(data.get("conflict_policy")),
         bootstrap.tagging.qualified_id,
     )
+
+
+# Stable native VM ABI. New node implementations register one opcode here; the graph compiler never
+# dispatches on Python classes and the native loop never calls Python.
+_TAG_LEAF_OPS = {
+    "above": 1,
+    "below": 2,
+    "magnitude_above": 3,
+    "gradient_above": 4,
+    "gradient_below": 5,
+}
+_TAG_LOGICAL_OPS = {"any_of": 16, "all_of": 17, "not": 18}
 
 
 def _apply_refine_criterion(

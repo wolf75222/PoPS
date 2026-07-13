@@ -35,6 +35,7 @@
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions
 
 #include <algorithm>  // std::max (substeps/stride-aware CFL step)
+#include <array>
 #include <chrono>  // AmrPhaseScope wall-clock timing (Spec 5 criterion 43)
 #include <cmath>      // std::isfinite (reject a degenerate dt)
 #include <cstddef>
@@ -174,6 +175,24 @@ struct BootstrapConstantKernel {
   int component;
   Real value;
   POPS_HD void operator()(int i, int j) const { values(i, j, component) = value; }
+};
+
+struct BootstrapGaussianKernel {
+  Array4 values;
+  Real xlo, ylo, dx, dy, center_x, center_y, background, amplitude, inverse_width;
+  POPS_HD void operator()(int i, int j) const {
+    const Real root = ::sqrt(inverse_width);
+    const Real ax = root * (xlo + static_cast<Real>(i) * dx - center_x);
+    const Real bx = root * (xlo + static_cast<Real>(i + 1) * dx - center_x);
+    const Real ay = root * (ylo + static_cast<Real>(j) * dy - center_y);
+    const Real by = root * (ylo + static_cast<Real>(j + 1) * dy - center_y);
+    const Real scale_x = ::sqrt(Real(3.141592653589793238462643383279502884)) /
+                         (Real(2) * root * dx);
+    const Real scale_y = ::sqrt(Real(3.141592653589793238462643383279502884)) /
+                         (Real(2) * root * dy);
+    values(i, j, 0) = background + amplitude * scale_x * (::erf(bx) - ::erf(ax)) *
+                                               scale_y * (::erf(by) - ::erf(ay));
+  }
 };
 
 struct BootstrapFloorKernel {
@@ -426,6 +445,27 @@ class AmrRuntime {
     bool prepared = false;
   };
 
+  /// Data-only AMR tagging program installed from the resolved Python provider graph.  The VM is a
+  /// compact post-order boolean stack: leaf instructions read one owner-qualified block component;
+  /// logical instructions combine already-produced values.  No Python callback or class-name switch
+  /// survives into the runtime loop.
+  struct TaggingProgram {
+    struct Leaf {
+      std::size_t block = 0;
+      int component = 0;
+      int opcode = 0;
+      Real threshold = Real(0);
+    };
+    std::vector<Leaf> leaves;
+    std::vector<int> refine_ops, refine_args;
+    std::vector<int> coarsen_ops, coarsen_args;
+    int equality_policy = 0;  ///< 0 hold, 1 refine, 2 coarsen
+    int conflict_policy = 0;  ///< 0 error, 1 hold, 2 refine wins, 3 coarsen wins
+    int min_cycles = 0;
+    std::string provider_identity;
+    bool prepared = false;
+  };
+
   /// Deep, move-independent image of every runtime-owned value a macro-step may mutate.  MultiFab
   /// copies retain their BoxArray/DistributionMapping, so the snapshot carries the hierarchy itself,
   /// not merely field values on the current topology.  The facade uses this as the accepted-state
@@ -607,6 +647,66 @@ class AmrRuntime {
         std::move(provider_identity), component, threshold, true};
   }
 
+  void set_tagging_program(std::vector<TaggingProgram::Leaf> leaves,
+                           std::vector<int> refine_ops, std::vector<int> refine_args,
+                           std::vector<int> coarsen_ops, std::vector<int> coarsen_args,
+                           int min_cycles, int equality_policy, int conflict_policy,
+                           std::string provider_identity) {
+    if (bootstrap_pending_ || provider_identity.empty() || leaves.empty() ||
+        refine_ops.empty() || refine_ops.size() != refine_args.size() ||
+        coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 ||
+        equality_policy < 0 || equality_policy > 2 || conflict_policy < 0 ||
+        conflict_policy > 3)
+      throw std::runtime_error("AmrRuntime::set_tagging_program invalid manifest");
+    if (min_cycles != 0)
+      throw std::runtime_error(
+          "AmrRuntime::set_tagging_program min_cycles requires a persistent tagging-state provider");
+    for (const auto& leaf : leaves)
+      if (leaf.block >= blocks_.size() || leaf.component < 0 ||
+          leaf.component >= blocks_[leaf.block].ncomp || leaf.opcode < 1 || leaf.opcode > 5 ||
+          !std::isfinite(static_cast<double>(leaf.threshold)))
+        throw std::runtime_error("AmrRuntime::set_tagging_program invalid leaf");
+    const auto validate_program = [&leaves](const std::vector<int>& ops,
+                                            const std::vector<int>& args,
+                                            bool required) {
+      if (ops.empty()) {
+        if (required)
+          throw std::runtime_error("AMR tagging program has no refine root");
+        return;
+      }
+      if (ops.size() > 128)
+        throw std::runtime_error("AMR tagging program exceeds the native 128-node bound");
+      int depth = 0;
+      for (std::size_t index = 0; index < ops.size(); ++index) {
+        const int op = ops[index], arg = args[index];
+        if (op >= 1 && op <= 5) {
+          if (arg < 0 || static_cast<std::size_t>(arg) >= leaves.size() ||
+              leaves[static_cast<std::size_t>(arg)].opcode != op)
+            throw std::runtime_error("AMR tagging leaf opcode/index mismatch");
+          ++depth;
+        } else if (op == 16 || op == 17) {
+          if (arg < 2 || depth < arg)
+            throw std::runtime_error("AMR tagging n-ary stack underflow");
+          depth -= arg - 1;
+        } else if (op == 18) {
+          if (arg != 1 || depth < 1)
+            throw std::runtime_error("AMR tagging not stack underflow");
+        } else {
+          throw std::runtime_error("AMR tagging program has an unknown opcode");
+        }
+      }
+      if (depth != 1)
+        throw std::runtime_error("AMR tagging program must leave exactly one result");
+    };
+    validate_program(refine_ops, refine_args, true);
+    validate_program(coarsen_ops, coarsen_args, false);
+    tagging_program_ = TaggingProgram{std::move(leaves), std::move(refine_ops),
+                                     std::move(refine_args), std::move(coarsen_ops),
+                                     std::move(coarsen_args), equality_policy,
+                                     conflict_policy, min_cycles,
+                                     std::move(provider_identity), true};
+  }
+
   void register_bootstrap_staggered_field(
       const std::string& subject, runtime::amr::TransferCentering centering, int ncomp,
       const std::vector<double>& values) {
@@ -687,6 +787,24 @@ class AmrRuntime {
                                            values.fab(li).array(), component,
                                            static_cast<Real>(components[component])});
     return values.box_array().num_cells() * values.ncomp();
+  }
+
+  std::int64_t fill_bootstrap_block_gaussian(
+      std::size_t block, int level, Real center_x, Real center_y, Real background,
+      Real amplitude, Real inverse_width) {
+    if (!bootstrap_pending_ || block >= blocks_.size() || level < 0 || level >= nlev_ ||
+        blocks_[block].ncomp != 1 || !(inverse_width > Real(0)))
+      throw std::runtime_error("AmrRuntime::fill_bootstrap_block_gaussian invalid target/profile");
+    MultiFab& values = (*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
+    const Box2D domain = dom_.refine(level_refinement(level));
+    const Real dx = static_cast<Real>(geom_.xhi - geom_.xlo) / domain.nx();
+    const Real dy = static_cast<Real>(geom_.yhi - geom_.ylo) / domain.ny();
+    for (int li = 0; li < values.local_size(); ++li)
+      for_each_cell(values.box(li), detail::BootstrapGaussianKernel{
+          values.fab(li).array(), static_cast<Real>(geom_.xlo),
+          static_cast<Real>(geom_.ylo), dx, dy, center_x, center_y, background,
+          amplitude, inverse_width});
+    return values.box_array().num_cells();
   }
 
   void synchronize_bootstrap_block(
@@ -1960,6 +2078,169 @@ class AmrRuntime {
     }
   }
 
+  struct TagVmValue {
+    bool matches = false;
+    bool equality = false;
+  };
+
+  TagVmValue evaluate_tagging_program(const TaggingProgram& program,
+                                      const std::vector<ConstArray4>& values,
+                                      const std::vector<int>& ops,
+                                      const std::vector<int>& args,
+                                      const Box2D& domain, Real dx, Real dy,
+                                      int i, int j) const {
+    std::array<TagVmValue, 128> stack{};
+    std::size_t depth = 0;
+    for (std::size_t index = 0; index < ops.size(); ++index) {
+      const int op = ops[index], arg = args[index];
+      if (op >= 1 && op <= 5) {
+        const auto& leaf = program.leaves[static_cast<std::size_t>(arg)];
+        const ConstArray4& a = values[leaf.block];
+        Real sample = a(i, j, leaf.component);
+        if (op == 3) {
+          sample = std::abs(sample);
+        } else if (op == 4 || op == 5) {
+          const Real gx = (!base_per_.x && i == domain.lo[0])
+                              ? (a(i + 1, j, leaf.component) - sample) / dx
+                              : (!base_per_.x && i == domain.hi[0])
+                                    ? (sample - a(i - 1, j, leaf.component)) / dx
+                                    : (a(i + 1, j, leaf.component) -
+                                       a(i - 1, j, leaf.component)) /
+                                          (Real(2) * dx);
+          const Real gy = (!base_per_.y && j == domain.lo[1])
+                              ? (a(i, j + 1, leaf.component) - sample) / dy
+                              : (!base_per_.y && j == domain.hi[1])
+                                    ? (sample - a(i, j - 1, leaf.component)) / dy
+                                    : (a(i, j + 1, leaf.component) -
+                                       a(i, j - 1, leaf.component)) /
+                                          (Real(2) * dy);
+          sample = std::sqrt(gx * gx + gy * gy);
+        }
+        const bool greater = op == 1 || op == 3 || op == 4;
+        stack[depth++] = TagVmValue{
+            greater ? sample > leaf.threshold : sample < leaf.threshold,
+            sample == leaf.threshold};
+        continue;
+      }
+      if (op == 18) {
+        TagVmValue value = stack[depth - 1];
+        stack[depth - 1] = TagVmValue{!value.matches, value.equality};
+        continue;
+      }
+      const std::size_t begin = depth - static_cast<std::size_t>(arg);
+      TagVmValue combined{op == 17, false};
+      for (std::size_t child = begin; child < depth; ++child) {
+        combined.equality = combined.equality || stack[child].equality;
+        if (op == 16)
+          combined.matches = combined.matches || stack[child].matches;
+        else
+          combined.matches = combined.matches && stack[child].matches;
+      }
+      depth = begin;
+      stack[depth++] = combined;
+    }
+    return stack[0];
+  }
+
+  struct TagVmGrid {
+    TagBox matches;
+    TagBox equalities;
+  };
+
+  TagVmGrid execute_tagging_root(int level, const Box2D& domain,
+                                 const std::vector<int>& ops,
+                                 const std::vector<int>& args) {
+    TagVmGrid out{TagBox(domain), TagBox(domain)};
+    if (ops.empty())
+      return out;
+    for (auto& block : blocks_) {
+      MultiFab& state = (*block.levels)[level].U;
+      fill_boundary(state, domain, base_per_);
+      state.sync_host();
+    }
+    MultiFab& reference = (*blocks_[0].levels)[level].U;
+    const Geometry geometry = geom_.refine(level_refinement(level));
+    for (int li = 0; li < reference.local_size(); ++li) {
+      std::vector<ConstArray4> arrays;
+      arrays.reserve(blocks_.size());
+      for (const auto& block : blocks_)
+        arrays.push_back((*block.levels)[level].U.fab(li).const_array());
+      const Box2D valid = reference.box(li);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+          const TagVmValue value = evaluate_tagging_program(
+              tagging_program_, arrays, ops, args, domain,
+              geometry.dx(), geometry.dy(), i, j);
+          out.matches(i, j) = value.matches ? 1 : 0;
+          out.equalities(i, j) = value.equality ? 1 : 0;
+        }
+    }
+    if (n_ranks() > 1) {
+      all_reduce_or_inplace(out.matches.t.data(), static_cast<int>(out.matches.t.size()));
+      all_reduce_or_inplace(out.equalities.t.data(), static_cast<int>(out.equalities.t.size()));
+    }
+    return out;
+  }
+
+  TagBox current_fine_coverage(const Box2D& parent_domain, int fine_level,
+                               int refinement_ratio) const {
+    TagBox current(parent_domain);
+    for (const Box2D& fine : hierarchy_.ba[static_cast<std::size_t>(fine_level)].boxes()) {
+      const Box2D parent = fine.coarsen(refinement_ratio).intersect(parent_domain);
+      for (int j = parent.lo[1]; j <= parent.hi[1]; ++j)
+        for (int i = parent.lo[0]; i <= parent.hi[0]; ++i)
+          current(i, j) = 1;
+    }
+    return current;
+  }
+
+  TagBox execute_runtime_tagging_program(int parent_level, int fine_level,
+                                        const Box2D& parent_domain,
+                                        int refinement_ratio) {
+    TagVmGrid refine = execute_tagging_root(
+        parent_level, parent_domain, tagging_program_.refine_ops,
+        tagging_program_.refine_args);
+    TagVmGrid coarsen = execute_tagging_root(
+        parent_level, parent_domain, tagging_program_.coarsen_ops,
+        tagging_program_.coarsen_args);
+    TagBox result = current_fine_coverage(parent_domain, fine_level, refinement_ratio);
+    for (int j = parent_domain.lo[1]; j <= parent_domain.hi[1]; ++j)
+      for (int i = parent_domain.lo[0]; i <= parent_domain.hi[0]; ++i) {
+        bool refine_cell = refine.matches(i, j) != 0;
+        bool coarsen_cell = coarsen.matches(i, j) != 0;
+        if (refine_cell && coarsen_cell) {
+          if (tagging_program_.conflict_policy == 0)
+            throw std::runtime_error(
+                "AMR tagging refine/coarsen conflict under ConflictPolicy.ERROR");
+          if (tagging_program_.conflict_policy == 1)
+            refine_cell = coarsen_cell = false;
+          else if (tagging_program_.conflict_policy == 2)
+            coarsen_cell = false;
+          else
+            refine_cell = false;
+        }
+        if (!refine_cell && !coarsen_cell &&
+            (refine.equalities(i, j) != 0 || coarsen.equalities(i, j) != 0)) {
+          refine_cell = tagging_program_.equality_policy == 1;
+          coarsen_cell = tagging_program_.equality_policy == 2;
+        }
+        if (refine_cell)
+          result(i, j) = 1;
+        else if (coarsen_cell)
+          result(i, j) = 0;
+      }
+    return result;
+  }
+
+  TagBox execute_bootstrap_tagging_program(int level, const Box2D& domain) {
+    TagVmGrid refine = execute_tagging_root(
+        level, domain, tagging_program_.refine_ops, tagging_program_.refine_args);
+    if (tagging_program_.equality_policy == 1)
+      for (std::size_t index = 0; index < refine.matches.t.size(); ++index)
+        refine.matches.t[index] = refine.matches.t[index] || refine.equalities.t[index];
+    return std::move(refine.matches);
+  }
+
   TagBox execute_bootstrap_tag_program(const MultiFab& values, const Box2D& domain,
                                        const BootstrapTagProgram& program) {
     if (!program.prepared)
@@ -2010,10 +2291,14 @@ class AmrRuntime {
     const Box2D pdom = dom_.refine(level_refinement(pk));
     std::vector<TagBox> parts;
     parts.reserve(blocks_.size() + 1);
-    for (std::size_t b = 0; b < blocks_.size(); ++b)
-      if (bootstrap_tag_programs_[b].prepared)
-        parts.push_back(execute_bootstrap_tag_program(
-            (*blocks_[b].levels)[pk].U, pdom, bootstrap_tag_programs_[b]));
+    if (tagging_program_.prepared) {
+      parts.push_back(execute_bootstrap_tagging_program(pk, pdom));
+    } else {
+      for (std::size_t b = 0; b < blocks_.size(); ++b)
+        if (bootstrap_tag_programs_[b].prepared)
+          parts.push_back(execute_bootstrap_tag_program(
+              (*blocks_[b].levels)[pk].U, pdom, bootstrap_tag_programs_[b]));
+    }
     if (parts.empty())
       throw std::runtime_error(
           "AmrRuntime::bootstrap_next_level : no resolved tagging predicate");
@@ -2133,18 +2418,26 @@ class AmrRuntime {
     // mass snapshot is NOT needed by the engine (conservation is checked test-side V1).
     solve_fields();
 
-    // (R1)+(R2) PER-BLOCK TAGS (on the block U at the parent level) + PHI TAGS (on the shared aux).
+    // (R1)+(R2) Resolved tagging VM, or the legacy per-block/phi predicates for callers that have not
+    // installed a final provider graph. The resolved path evaluates refine + coarsen roots and keeps
+    // HOLD cells from the current fine coverage; it never flattens coarsening to a refine-only test.
     const Box2D pdom = dom_.refine(level_refinement(pk));
     std::vector<TagBox> parts;
     parts.reserve(blocks_.size() + 1);
-    for (std::size_t b = 0; b < blocks_.size(); ++b) {
-      const TagPredicate& crit = block_tag_[b];
-      if (!crit)
-        continue;  // block without a criterion: tags nothing on its side (re-gridded as background)
-      parts.push_back(tag_cells((*blocks_[b].levels)[pk].U, pdom, crit));
+    const int refinement_ratio =
+        hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
+    if (tagging_program_.prepared) {
+      parts.push_back(execute_runtime_tagging_program(pk, fk, pdom, refinement_ratio));
+    } else {
+      for (std::size_t b = 0; b < blocks_.size(); ++b) {
+        const TagPredicate& crit = block_tag_[b];
+        if (!crit)
+          continue;
+        parts.push_back(tag_cells((*blocks_[b].levels)[pk].U, pdom, crit));
+      }
+      if (phi_tag_)
+        parts.push_back(tag_cells(aux_[pk], pdom, phi_tag_));
     }
-    if (phi_tag_)
-      parts.push_back(tag_cells(aux_[pk], pdom, phi_tag_));
     if (parts.empty())
       return;  // no active criterion -> no tagged cell -> grid unchanged
 
@@ -2164,8 +2457,6 @@ class AmrRuntime {
     // (R4)+(R5) cross-rank collective reduction (if coarse distributed) + UNIQUE clustering -> SHARED
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
     // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
-    const int refinement_ratio =
-        hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
     auto [fb, dmap] = regrid_compute_fine_layout(
         std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
         refinement_ratio);  // ADC-616 params
@@ -3168,6 +3459,7 @@ class AmrRuntime {
   // contribute to the union).
   std::vector<TagPredicate> block_tag_;
   std::vector<BootstrapTagProgram> bootstrap_tag_programs_;
+  TaggingProgram tagging_program_;
   struct BlockTransferAuthority {
     runtime::amr::PreparedTransferKernel coarse_fine;
     runtime::amr::PreparedTransferKernel temporal;

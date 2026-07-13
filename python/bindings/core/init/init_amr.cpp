@@ -122,6 +122,12 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement,
            py::arg("block"), py::arg("variable"), py::arg("threshold"),
            py::arg("provider_identity"))
+      .def("_set_bootstrap_tagging", &AmrSystem::set_bootstrap_tagging,
+           py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
+           py::arg("leaf_thresholds"), py::arg("refine_ops"), py::arg("refine_args"),
+           py::arg("coarsen_ops"), py::arg("coarsen_args"), py::arg("min_cycles"),
+           py::arg("equality_policy"), py::arg("conflict_policy"),
+           py::arg("provider_identity"))
       // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
       // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
       // + regrid_every > 0. <= 0 (default) -> phi DISABLED (bit-identical). cf. AmrSystem::set_phi_refinement.
@@ -258,6 +264,10 @@ void bind_amr_physics(py::class_<AmrSystem>& cls) {
       .def("_register_analytic_constant", &AmrSystem::register_analytic_constant,
            py::arg("subject"), py::arg("block"), py::arg("space"),
            py::arg("centering"), py::arg("components"))
+      .def("_register_analytic_gaussian", &AmrSystem::register_analytic_gaussian,
+           py::arg("subject"), py::arg("block"), py::arg("center_x"),
+           py::arg("center_y"), py::arg("background"), py::arg("amplitude"),
+           py::arg("inverse_width"))
       .def("_bootstrap_analytic_reproject", &AmrSystem::bootstrap_analytic_reproject,
            py::arg("subject"), py::arg("level"))
       .def("_apply_bootstrap_component_floor", &AmrSystem::apply_bootstrap_component_floor,

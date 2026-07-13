@@ -59,6 +59,7 @@ class CartesianGrid:
     """
 
     category: ClassVar[str] = "mesh"
+    __pops_ir_immutable__: ClassVar[bool] = True
     frame: RectangleFrame
     cells: tuple[int, int]
 

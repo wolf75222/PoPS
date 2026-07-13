@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
+import math
 from typing import TYPE_CHECKING, Any, ClassVar
 
 if TYPE_CHECKING:
@@ -111,6 +112,11 @@ class TagExpr(ABC):
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "amr_tag_expression", **self.canonical_identity()}
 
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        """Project this node through the open runtime-tagging protocol."""
+        raise NotImplementedError(
+            "%s has no runtime_tagging_data(params) provider" % type(self).__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class _ThresholdPredicate(TagExpr):
@@ -136,6 +142,32 @@ class _ThresholdPredicate(TagExpr):
 
     def operands(self) -> tuple[TagExpr, ...]:
         return ()
+
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        threshold: Any = self.threshold.canonical_identity()
+        if params is not None:
+            if self.threshold not in params:
+                raise ValueError(
+                    "runtime tagging threshold %s is missing" % self.threshold.qualified_id)
+            threshold = params[self.threshold]
+            if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) \
+                    or not math.isfinite(float(threshold)):
+                raise TypeError("runtime tagging thresholds must be finite scalars")
+            threshold = float(threshold)
+        data = {
+            "schema_version": _SCHEMA_VERSION,
+            "node_type": self.node_type,
+            "comparison": self.comparison,
+            "transform": self.transform,
+            "polarity": self.polarity,
+            "equality_matches": self.equality_matches,
+            "indicator": self.indicator.canonical_identity(),
+            "threshold": threshold,
+        }
+        context = getattr(self, "context", None)
+        if context is not None:
+            data["discrete_context"] = context.canonical_identity()
+        return data
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +261,13 @@ class _Nary(TagExpr):
     def operands(self) -> tuple[TagExpr, ...]:
         return self.children
 
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "node_type": self.node_type,
+            "children": [child.runtime_tagging_data(params) for child in self.children],
+        }
+
 
 @dataclass(frozen=True, slots=True, init=False)
 class AnyOf(_Nary):
@@ -259,6 +298,13 @@ class Not(TagExpr):
 
     def operands(self) -> tuple[TagExpr, ...]:
         return (self.child,)
+
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "node_type": self.node_type,
+            "child": self.child.runtime_tagging_data(params),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,6 +373,17 @@ class TaggingGraph:
         from .tagging_resolution import resolve_tagging_graph
 
         return resolve_tagging_graph(self, registry=registry)
+
+    def runtime_tagging_data(self, params: Any = None) -> dict[str, Any]:
+        return {
+            "schema_version": _SCHEMA_VERSION,
+            "graph_type": "amr_tagging_runtime",
+            "refine": self.refine.runtime_tagging_data(params),
+            "coarsen": (
+                None if self.coarsen is None else self.coarsen.runtime_tagging_data(params)),
+            "hysteresis": self.hysteresis.canonical_identity(),
+            "conflict_policy": self.conflict_policy.value,
+        }
 
 
 __all__ = [

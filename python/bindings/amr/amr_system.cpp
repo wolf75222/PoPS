@@ -266,6 +266,10 @@ struct AmrSystem::Impl {
   };
   std::unordered_map<std::string, BootstrapArray> bootstrap_arrays;
   std::unordered_map<std::string, std::vector<double>> bootstrap_analytic_constants;
+  struct BootstrapGaussian {
+    double center_x, center_y, background, amplitude, inverse_width;
+  };
+  std::unordered_map<std::string, BootstrapGaussian> bootstrap_analytic_gaussians;
   runtime::amr::TransferRouteRegistry bootstrap_transfer_routes{
       bootstrap_transfer_kernels()};
   std::map<std::pair<std::string, std::string>, std::string> bootstrap_subject_routes;
@@ -310,6 +314,19 @@ struct AmrSystem::Impl {
     std::string provider_identity;
   };
   std::unique_ptr<BootstrapTagSpec> bootstrap_tag_spec;
+  struct TaggingSpec {
+    std::vector<std::string> leaf_blocks;
+    std::vector<std::string> leaf_variables;
+    std::vector<int> leaf_ops;
+    std::vector<double> leaf_thresholds;
+    std::vector<int> refine_ops, refine_args;
+    std::vector<int> coarsen_ops, coarsen_args;
+    int min_cycles = 0;
+    int equality_policy = 0;
+    int conflict_policy = 0;
+    std::string provider_identity;
+  };
+  std::unique_ptr<TaggingSpec> tagging_spec;
   // PHI tag threshold on |grad phi| (D4): <= 0 => phi does NOT contribute to the tag union (default,
   // bit-identical). > 0 => in multi-block + regrid_every > 0, build_multi sets the engine's phi predicate
   // (set_phi_tag_predicate): refines where |grad phi| (components 1,2 of the shared aux) exceeds this threshold.
@@ -726,7 +743,7 @@ struct AmrSystem::Impl {
     // refine_threshold stays the sentinel -> coarse-only -> the System parity gate is untouched.
     const bool refinement_active =
         refine_threshold < static_cast<double>(kAmrRefinementDisabledThreshold) ||
-        phi_grad_threshold > 0.0 || bootstrap_tag_spec != nullptr;
+        phi_grad_threshold > 0.0 || bootstrap_tag_spec != nullptr || tagging_spec != nullptr;
     const bool program_single_level = force_runtime_ && blocks.size() == 1 && !refinement_active;
     const int initial_levels = cfg.explicit_bootstrap ? 1 : (program_single_level ? 1 : 2);
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
@@ -853,8 +870,32 @@ struct AmrSystem::Impl {
     for (const auto& [subject, array] : bootstrap_arrays)
       runtime->register_bootstrap_staggered_field(
           subject, bootstrap_centering(array.centering), array.ncomp, array.initial_values);
+    if (tagging_spec) {
+      std::vector<AmrRuntime::TaggingProgram::Leaf> leaves;
+      leaves.reserve(tagging_spec->leaf_ops.size());
+      for (std::size_t index = 0; index < tagging_spec->leaf_ops.size(); ++index) {
+        const int block = block_index(tagging_spec->leaf_blocks[index]);
+        if (block < 0 || blocks[static_cast<std::size_t>(block)].is_compiled)
+          throw std::runtime_error(
+              "resolved AMR tagging names an unknown or compiled block");
+        const int component = detail::resolve_selected_component(
+            "AmrSystem::resolved tagging", tagging_spec->leaf_blocks[index],
+            runtime->block_cons_vars(static_cast<std::size_t>(block)),
+            tagging_spec->leaf_variables[index], "");
+        leaves.push_back(AmrRuntime::TaggingProgram::Leaf{
+            static_cast<std::size_t>(block), component, tagging_spec->leaf_ops[index],
+            static_cast<Real>(tagging_spec->leaf_thresholds[index])});
+      }
+      runtime->set_tagging_program(
+          std::move(leaves), tagging_spec->refine_ops, tagging_spec->refine_args,
+          tagging_spec->coarsen_ops, tagging_spec->coarsen_args,
+          tagging_spec->min_cycles, tagging_spec->equality_policy,
+          tagging_spec->conflict_policy, tagging_spec->provider_identity);
+    }
     if (cfg.explicit_bootstrap) {
-      if (bootstrap_tag_spec) {
+      if (tagging_spec) {
+        // The resolved data-only graph was installed above and is shared by bootstrap and regrid.
+      } else if (bootstrap_tag_spec) {
         const int b = block_index(bootstrap_tag_spec->block);
         if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
           throw std::runtime_error(
@@ -944,7 +985,9 @@ struct AmrSystem::Impl {
       runtime->set_clustering(eff, minb, maxb);
     }
     if (cfg.regrid_every > 0) {
-      if (bootstrap_tag_spec) {
+      if (tagging_spec) {
+        // The engine evaluates the installed refine/coarsen graph directly.
+      } else if (bootstrap_tag_spec) {
         const int b = block_index(bootstrap_tag_spec->block);
         if (b < 0 || blocks[static_cast<std::size_t>(b)].is_compiled)
           throw std::runtime_error(
@@ -1622,6 +1665,49 @@ void AmrSystem::set_bootstrap_refinement(
   p_->refine_threshold = threshold;
 }
 
+void AmrSystem::set_bootstrap_tagging(
+    const std::vector<std::string>& leaf_blocks,
+    const std::vector<std::string>& leaf_variables,
+    const std::vector<int>& leaf_ops,
+    const std::vector<double>& leaf_thresholds,
+    const std::vector<int>& refine_ops, const std::vector<int>& refine_args,
+    const std::vector<int>& coarsen_ops, const std::vector<int>& coarsen_args,
+    int min_cycles, const std::string& equality_policy,
+    const std::string& conflict_policy, const std::string& provider_identity) {
+  require_assembling_amr(p_->bound_, "set_bootstrap_tagging");
+  const std::size_t leaf_count = leaf_blocks.size();
+  if (p_->built || p_->tagging_spec || p_->bootstrap_tag_spec || leaf_count == 0 ||
+      leaf_variables.size() != leaf_count || leaf_ops.size() != leaf_count ||
+      leaf_thresholds.size() != leaf_count || refine_ops.empty() ||
+      refine_ops.size() != refine_args.size() ||
+      coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 ||
+      provider_identity.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_bootstrap_tagging requires one exact pre-build graph manifest");
+  if (std::any_of(leaf_blocks.begin(), leaf_blocks.end(),
+                  [](const std::string& value) { return value.empty(); }) ||
+      std::any_of(leaf_variables.begin(), leaf_variables.end(),
+                  [](const std::string& value) { return value.empty(); }) ||
+      std::any_of(leaf_thresholds.begin(), leaf_thresholds.end(),
+                  [](double value) { return !std::isfinite(value); }))
+    throw std::runtime_error("AmrSystem::set_bootstrap_tagging has an invalid leaf");
+  const auto equality = equality_policy == "hold"      ? 0
+                        : equality_policy == "refine"  ? 1
+                        : equality_policy == "coarsen" ? 2
+                                                       : -1;
+  const auto conflict = conflict_policy == "error"          ? 0
+                        : conflict_policy == "hold"          ? 1
+                        : conflict_policy == "refine_wins"   ? 2
+                        : conflict_policy == "coarsen_wins"  ? 3
+                                                             : -1;
+  if (equality < 0 || conflict < 0)
+    throw std::runtime_error("AmrSystem::set_bootstrap_tagging has an unknown policy");
+  p_->tagging_spec = std::make_unique<Impl::TaggingSpec>(Impl::TaggingSpec{
+      leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
+      refine_ops, refine_args, coarsen_ops, coarsen_args,
+      min_cycles, equality, conflict, provider_identity});
+}
+
 void AmrSystem::set_phi_refinement(double grad_threshold) {
   require_assembling_amr(p_->bound_,
                          "set_phi_refinement");  // frozen once pops.bind completes (ADC-592)
@@ -2149,14 +2235,41 @@ void AmrSystem::register_analytic_constant(const std::string& subject,
   p_->bootstrap_analytic_constants.emplace(subject, components);
 }
 
+void AmrSystem::register_analytic_gaussian(
+    const std::string& subject, const std::string& block, double center_x,
+    double center_y, double background, double amplitude, double inverse_width) {
+  require_assembling_amr(p_->bound_, "register_analytic_gaussian");
+  const bool finite = std::isfinite(center_x) && std::isfinite(center_y) &&
+                      std::isfinite(background) && std::isfinite(amplitude) &&
+                      std::isfinite(inverse_width);
+  if (p_->built || subject.empty() || block.empty() || !finite || inverse_width <= 0.0 ||
+      p_->bootstrap_analytic_gaussians.count(subject) != 0 ||
+      p_->bootstrap_analytic_constants.count(subject) != 0)
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_gaussian requires one finite unique scalar profile");
+  const auto route_found = p_->bootstrap_subject_routes.find({subject, "prolongation"});
+  if (route_found == p_->bootstrap_subject_routes.end())
+    throw std::runtime_error(
+        "AmrSystem::register_analytic_gaussian requires an exact registered route");
+  const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
+  if (route.descriptor.space != "cell" || route.descriptor.centering != "cell")
+    throw std::runtime_error("gaussian bootstrap source requires a cell-centered route");
+  bind_bootstrap_block_subject(subject, block);
+  p_->bootstrap_analytic_gaussians.emplace(
+      subject, Impl::BootstrapGaussian{
+          center_x, center_y, background, amplitude, inverse_width});
+}
+
 std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject, int level) {
   if (!p_->runtime || level < 0 || level >= p_->runtime->nlev())
     throw std::runtime_error(
         "AmrSystem::bootstrap_analytic_reproject requires a pending hierarchy level");
   const auto constants = p_->bootstrap_analytic_constants.find(subject);
+  const auto gaussian = p_->bootstrap_analytic_gaussians.find(subject);
   const auto route_found = p_->bootstrap_subject_routes.find(
       {subject, "prolongation"});
-  if (constants == p_->bootstrap_analytic_constants.end() ||
+  if ((constants == p_->bootstrap_analytic_constants.end()) ==
+          (gaussian == p_->bootstrap_analytic_gaussians.end()) ||
       route_found == p_->bootstrap_subject_routes.end())
     throw std::runtime_error("analytic bootstrap source/route is not registered");
   const auto& route = p_->bootstrap_transfer_routes.at(route_found->second);
@@ -2164,9 +2277,15 @@ std::int64_t AmrSystem::bootstrap_analytic_reproject(const std::string& subject,
     const auto block = p_->bootstrap_block_subjects.find(subject);
     if (block == p_->bootstrap_block_subjects.end())
       throw std::runtime_error("analytic cell source has no bound block");
-    return p_->runtime->fill_bootstrap_block_constant(
-        static_cast<std::size_t>(p_->block_index(block->second)), level,
-        constants->second);
+    const std::size_t index = static_cast<std::size_t>(p_->block_index(block->second));
+    if (gaussian != p_->bootstrap_analytic_gaussians.end())
+      return p_->runtime->fill_bootstrap_block_gaussian(
+          index, level, static_cast<Real>(gaussian->second.center_x),
+          static_cast<Real>(gaussian->second.center_y),
+          static_cast<Real>(gaussian->second.background),
+          static_cast<Real>(gaussian->second.amplitude),
+          static_cast<Real>(gaussian->second.inverse_width));
+    return p_->runtime->fill_bootstrap_block_constant(index, level, constants->second);
   }
   if (p_->bootstrap_arrays.count(subject) == 0)
     throw std::runtime_error("analytic centered source has no exact parent payload");

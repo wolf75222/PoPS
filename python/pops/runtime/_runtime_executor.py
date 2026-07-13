@@ -49,6 +49,8 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
 
         engine = System(system_config_from_layout(plan.layout))
         engine._execution_context = plan.execution_context
+        from pops.runtime._runtime_authorities import install_runtime_authorities
+        install_runtime_authorities(engine, plan)
         artifact = plan.artifact
         if artifact.program is None:
             raise ValueError("RuntimeInstance uniform execution requires the compiled Program")
@@ -74,10 +76,7 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         _require_native_geometry(plan)
         from pops.runtime.system import AmrSystem
         from pops.runtime._amr_bind_lowering import amr_config_from_layout
-        from pops.runtime._runtime_mesh_lowering import (
-            flow_amr_layout,
-            flow_bootstrap_tagging,
-        )
+        from pops.runtime._runtime_mesh_lowering import flow_amr_layout
 
         artifact = plan.artifact
         if artifact.program is None:
@@ -85,6 +84,8 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
         engine = AmrSystem(amr_config_from_layout(
             plan.layout, hierarchy=plan.resolved_hierarchy))
         engine._execution_context = plan.execution_context
+        from pops.runtime._runtime_authorities import install_runtime_authorities
+        install_runtime_authorities(engine, plan)
         schema = artifact.bind_schema
         by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
         initial_rows = []
@@ -127,8 +128,6 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
                 bind_schema=schema,
                 params=plan.params,
             )
-        else:
-            flow_bootstrap_tagging(engine, plan.bootstrap_plan, plan.params)
         engine._install_compiled(
             compiled=artifact,
             instances=plan.instances,

@@ -66,6 +66,14 @@ class ProgramContext {
     sys_->install_program_step(std::move(step));
   }
 
+  /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
+  /// interpolation to update, but the shared generated body must retain and validate the same temporal
+  /// contract as its AMR entry point. This is therefore a validated semantic no-op, not a fallback.
+  void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
+    if (denominator <= 0 || numerator < 0 || numerator > denominator)
+      throw std::runtime_error("Program stage time is outside [0,1]");
+  }
+
   /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
   /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stores the explicit
   /// name-matched map before the generated entry point constructs this context. Direct C++ users must

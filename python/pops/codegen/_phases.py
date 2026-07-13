@@ -27,10 +27,6 @@ def resolve(
     time: Any = None,
     libraries: Any = (),
     compile_options: Mapping[str, Any] | None = None,
-    resolved_hierarchy: Any = None,
-    amr_transfer: Any = None,
-    initial_condition_plan: Any = None,
-    bootstrap_plan: Any = None,
 ) -> Any:
     """Resolve a frozen Case into the only value accepted by :func:`compile`."""
     from pops.problem import Case
@@ -49,18 +45,6 @@ def resolve(
     layout_authority = resolve_layout(problem, layout, providers=layout_providers)
     layout_plan = layout_authority.plan
     target = "amr_system" if layout_plan.layouts[0].adaptive else "system"
-    authorities = (
-        resolved_hierarchy,
-        amr_transfer,
-        initial_condition_plan,
-        bootstrap_plan,
-    )
-    if any(value is not None for value in authorities):
-        if target != "amr_system" or any(value is None for value in authorities):
-            raise ValueError(
-                "AMR hierarchy, transfer, initial-condition, and bootstrap authorities "
-                "must be passed together for an AMR layout"
-            )
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -123,6 +107,40 @@ def resolve(
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
+    resolved_hierarchy = None
+    amr_transfer = None
+    initial_condition_plan = None
+    bootstrap_plan = None
+    amr_execution = None
+    if target == "amr_system":
+        protocol = getattr(detached_layout, "resolve_amr_authorities", None)
+        if not callable(protocol):
+            raise TypeError(
+                "adaptive layout providers must implement "
+                "resolve_amr_authorities(AMRResolutionContext)"
+            )
+        from pops.amr import AMRResolutionContext, ResolvedAMRAuthorities
+
+        context = AMRResolutionContext(
+            owner=problem.owner_path.canonical(),
+            layout_plan=layout_plan,
+            numerics=tuple(
+                block.numerics for block in blocks if block.numerics is not None),
+            initials=problem.initials,
+            program=resolved_time,
+            resolve=lambda value: (
+                value if getattr(value, "is_resolved", False) else problem.resolve(value)),
+        )
+        resolved_amr = protocol(context)
+        if type(resolved_amr) is not ResolvedAMRAuthorities:
+            raise TypeError(
+                "layout resolve_amr_authorities() must return exact ResolvedAMRAuthorities"
+            )
+        resolved_hierarchy = resolved_amr.hierarchy
+        amr_transfer = resolved_amr.transfer
+        initial_condition_plan = resolved_amr.initial_conditions
+        bootstrap_plan = resolved_amr.bootstrap
+        amr_execution = resolved_amr.execution
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
     outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)
@@ -175,7 +193,8 @@ def resolve(
                       "requested_platform": platform_evidence},
         lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
-        initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan)
+        initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
+        amr_execution=amr_execution)
 
 
 def compile(plan: Any) -> Any:

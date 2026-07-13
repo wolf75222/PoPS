@@ -10,12 +10,13 @@ def validate_amr_authorities(plan: Any) -> None:
         plan.amr_transfer,
         plan.initial_condition_plan,
         plan.bootstrap_plan,
+        plan.amr_execution,
     )
     if not any(value is not None for value in authorities):
         return
     if plan.target != "amr_system" or any(value is None for value in authorities):
         raise ValueError(
-            "AMR hierarchy, transfer, initial-condition, and bootstrap authorities "
+            "AMR hierarchy, transfer, initial-condition, bootstrap, and execution authorities "
             "must be supplied together on an AMR target"
         )
     from pops.mesh.amr import (
@@ -26,7 +27,14 @@ def validate_amr_authorities(plan: Any) -> None:
     )
     from pops.mesh.amr.transfer import ResolvedAMRTransfer
 
-    expected = (ResolvedHierarchy, ResolvedAMRTransfer, InitialConditionPlan, BootstrapPlan)
+    from pops.amr import AMRExecution
+    expected = (
+        ResolvedHierarchy,
+        ResolvedAMRTransfer,
+        InitialConditionPlan,
+        BootstrapPlan,
+        AMRExecution,
+    )
     if any(type(value) is not kind for value, kind in zip(authorities, expected, strict=True)):
         raise TypeError("ResolvedSimulationPlan contains a non-exact AMR authority")
     if plan.amr_transfer.layout_plan_id != plan.layout_plan.qualified_id \
@@ -84,9 +92,6 @@ def validate_amr_authorities(plan: Any) -> None:
             "native AMR currently exposes one conservative state space per block; "
             "multiple state Handles are refused before artifact creation"
         )
-    from pops.mesh.amr import (
-        Above,
-    )
     from pops.mesh.amr.transfer import (
         ApplyTransferProvider,
         CACHE,
@@ -110,27 +115,14 @@ def validate_amr_authorities(plan: Any) -> None:
         InvalidateThenRebuild,
     )
 
-    graph = plan.bootstrap_plan.tagging.graph
-    if type(graph.refine) is not Above or graph.coarsen is not None \
-            or graph.refine.indicator.kind != "state" \
-            or graph.refine.indicator.block_ref is None:
-        raise NotImplementedError(
-            "native AMR artifact bootstrap lowers only an owner-qualified block-state "
-            "Above(indicator, threshold) without a coarsen root; field indicators require "
-            "a backend TagIndicator provider"
-        )
-    from pops.mesh.amr import TagNodeRegistry
-    builtin_above = TagNodeRegistry.builtins().registration_for(graph.refine)
-    resolved_above = tuple(
-        row for row in plan.bootstrap_plan.tagging.registrations
-        if row.node_type == graph.refine.node_type
-    )
-    if len(resolved_above) != 1 \
-            or resolved_above[0].canonical_identity() != builtin_above.canonical_identity():
-        raise NotImplementedError(
-            "native AMR tagging has no prepared kernel manifest for the selected "
-            "owner-qualified TagIndicator provider"
-        )
+    tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
+    if not callable(tagging_provider):
+        raise TypeError("resolved AMR tagging must implement runtime_tagging_data(params)")
+    tagging_manifest = tagging_provider()
+    if type(tagging_manifest) is not dict \
+            or tagging_manifest.get("graph_type") != "amr_tagging_runtime" \
+            or not tagging_manifest.get("lowerings"):
+        raise TypeError("resolved AMR tagging returned an incomplete runtime provider manifest")
     initial_ids = {row.subject.qualified_id for row in plan.initial_condition_plan.bindings}
     for constraint in plan.bootstrap_plan.constraints:
         options = constraint.options.to_data()
@@ -152,11 +144,11 @@ def validate_amr_authorities(plan: Any) -> None:
         analytic = type(selections[binding.subject.qualified_id]) is AnalyticReprojection
         if analytic and (
             binding.subject.kind == "particle"
-            or options.get("native_route") != "constant_field"
-            or not options.get("components")
+            or not isinstance(options.get("native_route"), str)
+            or not options.get("native_route")
         ):
             raise NotImplementedError(
-                "native analytic AMR bootstrap requires a cell/face/node constant_field source"
+                "native analytic AMR bootstrap requires a registered data-only source provider"
             )
         if not analytic and options.get("native_route") != "bound_level_zero":
             raise NotImplementedError(
