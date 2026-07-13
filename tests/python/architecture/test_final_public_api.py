@@ -71,3 +71,12 @@ def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
     assert hasattr(output, "Checkpoint")
     for removed in ("RuntimePolicies", "OutputPolicy", "CheckpointPolicy"):
         assert not hasattr(output, removed)
+
+
+def test_physics_has_no_competing_model_facade() -> None:
+    from pops import physics
+
+    assert physics.__all__ == ["Model"]
+    assert physics.Model is pops.Model
+    for removed in ("PdeModel", "HyperbolicModel", "PhysicsModel", "HybridModel"):
+        assert not hasattr(physics, removed)
