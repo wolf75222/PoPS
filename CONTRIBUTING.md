@@ -49,17 +49,12 @@ paths also fall back to full coverage rather than skipping tests silently. Use `
 the full Serial Kokkos gate when validating CI/test infrastructure, and `ci-full` when
 MPI/OpenMP coverage is required.
 
-If a full Sphinx/Doxygen site is reintroduced, keep it opt-in: use a PR label such as
-`docs-full` for pre-merge validation and a master commit token such as `[docs]` for publish.
-Do not make normal docs-only pushes compile Kokkos.
-
 ## Documentation
 
-`bash scripts/build_docs.sh` runs the transitional documentation lint. The Sphinx/Doxygen
-site was removed during the reset; the retained corpus and rebuild rules are described in
-[docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). The docs CI lanes now validate this reduced
-corpus until the new documentation structure is introduced; they do not compile `_pops` or
-Kokkos.
+`bash scripts/build_docs.sh` runs the deterministic documentation conformance gate. The maintained
+corpus, canonical final specification, source dependencies and freshness rules are described in
+[docs/DOC_QUALITY.md](docs/DOC_QUALITY.md). A docs-only check does not compile `_pops` or Kokkos;
+the authenticated final release gate combines it with the installed-package and native suites.
 
 ## Standards
 

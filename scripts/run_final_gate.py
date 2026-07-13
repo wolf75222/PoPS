@@ -16,8 +16,10 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shlex
 import subprocess
+import sys
 import tempfile
 from typing import Any, Sequence
 import xml.etree.ElementTree as ET
@@ -25,6 +27,7 @@ import xml.etree.ElementTree as ET
 from final_release_contract import (
     FINAL_EXAMPLES,
     FINAL_SPECIFICATION,
+    PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
     require_source_contract,
@@ -77,17 +80,15 @@ def _conda_command(arguments: Sequence[str]) -> list[str]:
 
 
 def _resolve_ctest_dir(requested: Path | None) -> Path:
-    if requested is not None:
-        candidate = requested.resolve()
-        if not (candidate / "CTestTestfile.cmake").is_file():
-            raise FinalGateError("--ctest-dir is not a configured CTest tree: %s" % candidate)
-        return candidate
-    candidates = sorted((ROOT / "build").glob("**/CTestTestfile.cmake"))
-    if len(candidates) != 1:
-        raise FinalGateError(
-            "expected exactly one configured CTest tree under build/; found %s" %
-            [str(path.parent.relative_to(ROOT)) for path in candidates])
-    return candidates[0].parent
+    candidate = (ROOT / "build") if requested is None else requested.resolve()
+    if not (candidate / "CTestTestfile.cmake").is_file() \
+            or not (candidate / "CMakeCache.txt").is_file():
+        label = "native preset build" if requested is None else "--ctest-dir"
+        raise FinalGateError("%s is not a configured top-level CTest tree: %s" % (label, candidate))
+    cache = (candidate / "CMakeCache.txt").read_text(encoding="utf-8", errors="replace")
+    if "POPS_BUILD_TESTS:BOOL=ON" not in cache:
+        raise FinalGateError("CTest tree was configured without POPS_BUILD_TESTS=ON: %s" % candidate)
+    return candidate
 
 
 def _runtime_provenance() -> dict[str, str]:
@@ -198,6 +199,41 @@ def _tree_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _junit_summary(path: Path) -> dict[str, Any]:
+    """Read one JUnit report and reject an empty, failed, skipped or xfailed lane."""
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError) as exc:
+        raise FinalGateError("invalid JUnit report %s: %s" % (path, exc)) from exc
+    cases = tuple(root.iter("testcase"))
+    if not cases:
+        raise FinalGateError("JUnit report contains no executed tests: %s" % path)
+    skipped = tuple(case for case in cases if case.find("skipped") is not None)
+    failed = tuple(case for case in cases
+                   if case.find("failure") is not None or case.find("error") is not None)
+    if failed or skipped:
+        raise FinalGateError(
+            "required conformance lane is not all-pass: tests=%d failures=%d skips_or_xfails=%d" %
+            (len(cases), len(failed), len(skipped)))
+    return {
+        "path": str(path),
+        "sha256": _sha256(path),
+        "tests": len(cases),
+        "failures": 0,
+        "skips_or_xfails": 0,
+    }
+
+
+def _require_no_hidden_skip(stdout: str) -> None:
+    """Reject script-style tests which print a skip reason but return success."""
+    matches = [line.strip() for line in stdout.splitlines()
+               if re.search(r"\bskip(?:ped|s)?\b", line, flags=re.IGNORECASE)]
+    if matches:
+        raise FinalGateError(
+            "required Python conformance printed a hidden skip while returning success:\n%s" %
+            "\n".join(matches[:20]))
+
+
 def _reopen_outputs(output_dir: Path, *, example: Path) -> tuple[dict[str, Any], tuple[Path, ...]]:
     hdf5_paths = sorted(path for path in output_dir.rglob("*.h5") if path.is_file() and path.stat().st_size)
     paraview_paths = sorted(path for path in output_dir.rglob("*.vtu") if path.is_file() and path.stat().st_size)
@@ -292,9 +328,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         recorder.run("official_build", ["bash", "scripts/setup_env.sh"])
         recorder.run("official_build", ["bash", "scripts/build_python.sh"])
+        recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
+        recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         doctor_code = (
             "import pops; from pops.runtime.doctor import doctor; "
-            "report = doctor(verbose=False); assert report is not None; "
+            "report = doctor(verbose=False); "
+            "failed = {name: detail for name, (ok, detail) in report.items() if not ok}; "
+            "assert not failed, failed; "
             "print('doctor package=' + pops.__version__)"
         )
         recorder.run("doctor", _conda_command(["python", "-c", doctor_code]))
@@ -302,10 +342,27 @@ def main(argv: Sequence[str] | None = None) -> int:
             ["python", "scripts/codesign_pops_extensions.py"]))
 
         ctest_dir = _resolve_ctest_dir(args.ctest_dir)
-        recorder.run("native_conformance", _conda_command(
-            ["ctest", "--test-dir", str(ctest_dir), "--output-on-failure"]))
+        native_junit = evidence_root / "reports" / "native-conformance.xml"
+        native_junit.parent.mkdir(parents=True, exist_ok=True)
+        recorder.run("native_conformance", _conda_command([
+            "ctest", "--test-dir", str(ctest_dir), "--output-on-failure",
+            "--output-junit", str(native_junit),
+        ]))
+        recorder.rows["native_conformance"]["evidence"] = {
+            "required_lane": _junit_summary(native_junit),
+        }
         recorder.run("python_conformance", _conda_command(
             ["python", "-m", "pytest", "-q"]))
+        python_junit = evidence_root / "reports" / "python-required-conformance.xml"
+        required_stdout = recorder.run("python_conformance", _conda_command([
+            "python", "-m", "pytest", "-q", "-s", "-m", PYTHON_REQUIRED_SELECTION,
+            "--junitxml", str(python_junit),
+        ]))
+        _require_no_hidden_skip(required_stdout)
+        recorder.rows["python_conformance"]["evidence"] = {
+            "required_lane": _junit_summary(python_junit),
+            "selection": PYTHON_REQUIRED_SELECTION,
+        }
         examples, reopened, restarted = _run_examples(recorder)
         recorder.rows["examples"]["evidence"] = {"examples": examples}
         recorder.rows["artifact_reopen"]["evidence"] = {"examples": reopened}
@@ -331,6 +388,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "commit_sha": _git("rev-parse", "HEAD"),
             "package_version": package_version,
             "contract_sha256": contract_sha256,
+            "artifact_directory": evidence_root.name,
             "runtime": runtime,
             "gates": recorder.rows,
         }

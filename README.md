@@ -157,15 +157,21 @@ Its final lifecycle is exactly `Case -> validate -> resolve -> compile -> bind -
 `resources=`, `initial_values=`); users never construct an install plan or runtime engine. See the
 [complete source](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py) for explicit
 SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and checkpointing.
+The same acceptance corpus also executes the
+[multiphysics](examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py),
+[IMEX-AMR](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py), and
+[HyQMOM15](examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py) cases.
 
 ## Documentation
 
 The documentation corpus describes the final public lifecycle and its current implementation:
 
 - [Architecture](docs/ARCHITECTURE.md): current technical map of the core.
+- [Final technical specification](docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md):
+  normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
-- [Documentation quality](docs/DOC_QUALITY.md): rules for rebuilding the docs.
+- [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.
 - [Security](SECURITY.md): vulnerability reporting policy.
 - [Changelog](CHANGELOG.md): notable changes.

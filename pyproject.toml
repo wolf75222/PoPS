@@ -8,8 +8,9 @@
 #
 # Backends are chosen by ENVIRONMENT VARIABLES (POPS_USE_KOKKOS / POPS_USE_MPI / POPS_USE_OPENMP /
 # POPS_USE_HDF5, read by the CMakeLists; <Pkg>_ROOT is read natively by find_package). The developer
-# flow presets+PYTHONPATH (cmake --preset python...) stays available and unchanged. Runtime threads:
-# pops.set_threads().
+# flow presets+PYTHONPATH (cmake --preset python...) stays available and unchanged. Thread/device
+# resources are selected before native initialization; standard OMP/Kokkos environment variables
+# remain honored.
 [build-system]
 requires = ["scikit-build-core>=0.10", "pybind11>=2.13"]
 build-backend = "scikit_build_core.build"

@@ -89,10 +89,9 @@ class Case:
         """Raise when a mutating setter runs after :meth:`freeze` (ADC-563), naming the Case."""
         if self._frozen:
             raise RuntimeError(
-                "pops.Case %r is frozen (ADC-563): cannot %s after pops.compile froze it. A "
-                "compiled artifact is frozen to exactly the assembly it was compiled from; author a "
-                "fresh Case (or edit BEFORE compile) and recompile -- a post-compile mutation "
-                "cannot change a bound artifact." % (self._name, what))
+                "pops.Case %r is frozen: cannot %s after pops.validate accepted it. Author a "
+                "fresh Case, edit it before validation, then repeat resolve/compile; a post-validation "
+                "mutation cannot change a resolved plan or bound artifact." % (self._name, what))
 
     def freeze(self) -> Any:
         """Validate, freeze, and return the stable authoring snapshot.
@@ -376,10 +375,8 @@ class Case:
     def validate_report(self, context: Any = None) -> Any:
         """Aggregate the per-family validation reports into ONE report (no raise; ADC-553).
 
-        When the Case carries NO layout (the ADC-526 default), the layout-specific checks
-        (the layout's own ``validate`` and the Uniform-with-AMR-criteria refusal) DEFER to
-        ``pops.compile(problem, layout=...)``, where the layout is finally known; the structural
-        registry checks always run.
+        Layout-independent registry checks run here. Layout/provider compatibility is proved by
+        ``pops.resolve(validated_case, layout=...)``, where that separate authority is finally known.
         """
         report = ReportTree(
             phase="validation", severity="info", code="validation.problem.root",

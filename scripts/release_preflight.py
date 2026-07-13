@@ -20,6 +20,7 @@ from typing import Any
 
 from final_release_contract import (
     FINAL_EXAMPLES,
+    PYTHON_REQUIRED_SELECTION,
     REQUIRED_PROOF_MARKERS,
     REQUIRED_RELEASE_GATES,
     require_source_contract,
@@ -255,7 +256,7 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
 def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     expected = {"schema_version", "producer", "commit_sha", "package_version", "contract_sha256",
-                "runtime", "gates"}
+                "artifact_directory", "runtime", "gates"}
     if not isinstance(payload, dict) or set(payload) != expected \
             or payload["schema_version"] != EVIDENCE_SCHEMA_VERSION:
         raise PreflightError("release evidence has an unknown or incomplete schema")
@@ -280,7 +281,13 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
             raise PreflightError("release evidence %s has an invalid row" % name)
         if row["status"] != "passed":
             raise PreflightError("release gate %s did not produce passing evidence" % name)
-    directory = path.resolve().parent
+    artifact_relative = Path(payload["artifact_directory"])
+    if artifact_relative.is_absolute() or len(artifact_relative.parts) != 1 \
+            or artifact_relative.name in {"", ".", ".."}:
+        raise PreflightError("release evidence artifact directory is invalid")
+    directory = (path.resolve().parent / artifact_relative).resolve()
+    if not _inside(path.resolve().parent, directory) or not directory.is_dir():
+        raise PreflightError("release evidence artifact directory is absent")
     for name in REQUIRED_GATES:
         commands = gates[name]["commands"]
         if name == "strict_restart":
@@ -288,6 +295,26 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
                 raise PreflightError("derived release gate %s must not invent a command" % name)
         else:
             _command_evidence(directory, commands, gate=name)
+    for name in ("native_conformance", "python_conformance"):
+        evidence = gates[name]["evidence"]
+        expected = {"required_lane"} if name == "native_conformance" \
+            else {"required_lane", "selection"}
+        if not isinstance(evidence, dict) or set(evidence) != expected:
+            raise PreflightError("release evidence %s lane is malformed" % name)
+        lane = evidence["required_lane"]
+        if not isinstance(lane, dict) or set(lane) != {
+                "path", "sha256", "tests", "failures", "skips_or_xfails"}:
+            raise PreflightError("release evidence %s JUnit summary is malformed" % name)
+        if not isinstance(lane["tests"], int) or lane["tests"] <= 0 \
+                or lane["failures"] != 0 or lane["skips_or_xfails"] != 0:
+            raise PreflightError("release evidence %s required lane is not all-pass" % name)
+        report = Path(lane["path"]).resolve()
+        if not _inside(directory, report):
+            raise PreflightError("release evidence %s JUnit path escapes its directory" % name)
+        _artifact_file(directory, report.relative_to(directory), lane["sha256"],
+                       label="%s JUnit" % name)
+    if gates["python_conformance"]["evidence"]["selection"] != PYTHON_REQUIRED_SELECTION:
+        raise PreflightError("release evidence Python required-lane selection drifted")
     _examples_evidence(directory, gates)
 
 

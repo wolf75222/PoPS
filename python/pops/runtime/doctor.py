@@ -115,8 +115,8 @@ def doctor(verbose: bool = True) -> Any:
     # 3. compiled compute backend
     hk = has_kokkos()
     checks["kokkos"] = (hk is not False,
-                        {True: "Kokkos module (multi-thread possible ; pops.set_threads active)",
-                         False: "SERIAL module (set_threads has no effect ; rebuild preset python-parallel)",
+                        {True: "Kokkos module (thread/device resources selected before initialization)",
+                         False: "SERIAL module (rebuild preset python-parallel for threaded execution)",
                          None: "undetermined (old module without __has_kokkos__)"}[hk])
 
     # 4. runtime DSL compiler (the link of the -std=c++23 bug)

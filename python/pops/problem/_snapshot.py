@@ -34,9 +34,9 @@ class AuthoringSnapshot:
     A plain inert value: :attr:`to_dict` is the canonical dict (deep, array-free, no runtime object)
     and :attr:`hash` is its stable sha256. Two snapshots of the same assembly have the same hash; a
     mutation before freeze changes it, a mutation after freeze is impossible (the Case raises).
-    ``pops.compile`` attaches it to the compiled handle (``compiled._problem_snapshot``) after the
-    compile driver has included :attr:`artifact_hash` in the artifact hash, cache key, path and
-    sidecar. :attr:`hash` remains the exact authored/reproducibility identity.
+    ``pops.resolve`` captures it in the immutable simulation plan; compilation includes
+    :attr:`artifact_hash` in the artifact hash, cache key, path and sidecar. :attr:`hash` remains the
+    exact authored/reproducibility identity.
     """
 
     schema_version = SNAPSHOT_SCHEMA_VERSION

@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Transitional documentation lint for the PoPS documentation reset.
+"""Deterministic lint and freshness gate for the maintained PoPS documentation.
 
-The old Sphinx/Doxygen site has been removed. This script only protects the
-small retained corpus while the new documentation is rebuilt:
+The check protects the active corpus and its executable/source dependencies:
 
   - retained active docs are listed in docs/docmap.toml;
   - docmap depends_on / tested_by paths must exist;
@@ -225,7 +224,7 @@ def check(freshness_warn_only: bool = False, root: pathlib.Path = ROOT) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Transitional PoPS documentation lint.")
+    parser = argparse.ArgumentParser(description="PoPS documentation conformance lint.")
     parser.add_argument(
         "--freshness-warn-only",
         action="store_true",

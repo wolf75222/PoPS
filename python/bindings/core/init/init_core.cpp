@@ -214,8 +214,8 @@ void init_core(py::module_& m) {
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
-  // pops.set_threads / pops.parallel_info use it to warn that a SERIAL module ignores the thread
-  // setting. A serial build exposes False; no false negative.
+  // Runtime diagnostics use it to report whether threaded/device execution is available. A serial
+  // build exposes False; no false negative.
 #ifdef POPS_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
 #else
@@ -344,8 +344,8 @@ void init_core(py::module_& m) {
   }
 
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
-  // System, AmrSystem, DSL .so...). pops.set_threads relies on this rather than on a Python
-  // flag that only saw System/AmrSystem: the "too late" warning becomes reliable.
+  // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
+  // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
   // Serial build: always False (nothing to initialize, the thread setting is moot).
   m.def(
       "kokkos_is_initialized",
@@ -356,8 +356,7 @@ void init_core(py::module_& m) {
         return false;
 #endif
       },
-      "True if the module's Kokkos runtime is already initialized (set_threads then arrives too "
-      "late).");
+      "True if the module's Kokkos runtime is already initialized.");
 
   py::class_<SystemConfig>(m, "SystemConfig")
       .def(py::init<>())

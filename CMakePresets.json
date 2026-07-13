@@ -41,7 +41,7 @@
       "name": "python-parallel",
       "inherits": "python",
       "displayName": "Module Python _pops (PARALLELE, dispatch Kokkos)",
-      "description": "Comme 'python' mais via Kokkos ($CONDA_PREFIX). ATTENTION : le kokkos conda-forge est souvent Serial-only -> verifier 'Kokkos found ... = (OPENMP...)' au configure ; sinon `bash scripts/kokkos_openmp_conda.sh` installe un Kokkos OpenMP dans l'env (~2 min). Threads au runtime : pops.set_threads().",
+      "description": "Comme 'python' mais via Kokkos ($CONDA_PREFIX). ATTENTION : le kokkos conda-forge est souvent Serial-only -> verifier 'Kokkos found ... = (OPENMP...)' au configure ; sinon `bash scripts/kokkos_openmp_conda.sh` installe un Kokkos OpenMP dans l'env (~2 min). Les ressources et variables de threads sont fixees avant l'initialisation native.",
       "binaryDir": "${sourceDir}/build-py-kokkos",
       "cacheVariables": {
         "POPS_USE_KOKKOS": "ON",

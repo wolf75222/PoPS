@@ -5,6 +5,8 @@ import importlib.util
 from pathlib import Path
 import sys
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPTS = ROOT / "scripts"
@@ -19,7 +21,8 @@ def _load(name: str, path: Path):
     return module
 
 
-contract = _load("_final_release_contract_test", SCRIPTS / "final_release_contract.py")
+contract = _load("final_release_contract", SCRIPTS / "final_release_contract.py")
+gate = _load("_final_release_gate_test", SCRIPTS / "run_final_gate.py")
 
 
 def _write_final_source_tree(root: Path) -> None:
@@ -63,3 +66,28 @@ def test_final_release_source_contract_requires_executable_restart_output_proof(
 
     assert any("--output-dir" in error for error in errors)
     assert any("lacks final proof markers" in error for error in errors)
+
+
+def test_required_junit_lane_rejects_skips_xfails_failures_and_empty_reports(tmp_path):
+    report = tmp_path / "report.xml"
+    report.write_text(
+        '<testsuite tests="1"><testcase name="ok"/></testsuite>', encoding="utf-8")
+    assert gate._junit_summary(report)["tests"] == 1
+
+    for child in ('<skipped type="pytest.xfail"/>', '<failure/>', '<error/>'):
+        report.write_text(
+            '<testsuite tests="1"><testcase name="bad">%s</testcase></testsuite>' % child,
+            encoding="utf-8",
+        )
+        with pytest.raises(gate.FinalGateError):
+            gate._junit_summary(report)
+
+    report.write_text('<testsuite tests="0"/>', encoding="utf-8")
+    with pytest.raises(gate.FinalGateError):
+        gate._junit_summary(report)
+
+
+def test_required_python_lane_rejects_script_style_hidden_skips():
+    gate._require_no_hidden_skip("42 tests passed")
+    with pytest.raises(gate.FinalGateError, match="hidden skip"):
+        gate._require_no_hidden_skip("skip (native engine unavailable)\n1 passed")

@@ -274,7 +274,7 @@ class BindSchema:
                 aliases[live_handle] = canonical
         elif case_registry is not None and len(case_registry):
             raise ValueError(
-                "BindSchema cannot consume the transitional ownerless Case parameter registry; "
+                "BindSchema cannot consume an ownerless Case parameter registry; "
                 "migrate it to the canonical CASE-owned ParamRegistry"
             )
         return cls(slots, aliases=aliases)

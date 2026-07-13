@@ -23,6 +23,9 @@ REQUIRED_PROOF_MARKERS = (
     "checkpoint:",
     "bit-identical restart:",
 )
+# The published wheel matrix is CPU/Kokkos Serial without MPI or parallel HDF5. The full suite still
+# runs; this supported-platform subset is repeated with a strict all-pass/no-hidden-skip policy.
+PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
 REQUIRED_RELEASE_GATES = (
     "official_build",
     "doctor",

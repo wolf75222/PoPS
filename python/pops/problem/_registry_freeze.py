@@ -80,8 +80,8 @@ class FreezableRegistry:
     def _guard_frozen(self, what: Any) -> None:
         if self._frozen:
             raise RuntimeError(
-                "pops.Case registry is frozen (ADC-563): cannot %s after pops.compile froze the "
-                "Case; author a fresh Case and recompile." % what)
+                "pops.Case registry is frozen: cannot %s after pops.validate accepted the Case; "
+                "author a fresh Case and repeat resolve/compile." % what)
 
 
 def _immutable_copy(value: Any) -> Any:

@@ -1,6 +1,7 @@
 """ADC-689: one pure-Python public front door and qualified instance handles."""
 from __future__ import annotations
 
+import importlib
 import sys
 from inspect import signature
 
@@ -115,7 +116,7 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
 
 def test_public_run_accepts_only_the_bound_runtime_instance() -> None:
     assert tuple(signature(pops.run).parameters) == ("instance", "controls")
-    with pytest.raises(TypeError, match="exact RuntimeInstance"):
+    with pytest.raises(TypeError, match="authenticated object returned by pops.bind"):
         pops.run(object(), t_end=1.0)
     from pops.runtime.runtime_instance import RuntimeInstance
 
@@ -137,6 +138,8 @@ def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
     for removed in _retired_names()[4:7]:
         assert removed not in runtime.__all__
         assert not hasattr(runtime, removed)
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.runtime.mesh")
 
 
 def test_physics_has_no_competing_model_facade() -> None:
