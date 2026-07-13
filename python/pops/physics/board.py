@@ -341,18 +341,48 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     def field_spaces(self) -> Any:
         """Return the exact solved-field declarations owned by this blackboard model.
 
-        The generic field compiler consumes this protocol directly.  A scalar
-        ``model.field(name)`` is therefore a one-component field space instead
-        of being confused with the separate auxiliary ``fields`` context.
+        The generic field compiler consumes this protocol directly.  Before an
+        operator is attached, a scalar ``model.field(name)`` is a one-component
+        field space.  Once exactly one field operator materializes that unknown,
+        the operator outputs become the storage components: a ``FieldOutput``
+        contributes one scalar and a ``GradientOutput`` contributes its two
+        Cartesian components.  The derivation is structural and applies to any
+        model; no physics-family or field-name branch participates.
         """
         if self._multi_module is not None:
             return self._multi_module.field_spaces()
         from pops.model import FieldSpace
+        from pops.fields import FieldOutput, GradientOutput
 
-        return {
-            name: FieldSpace(name=name, components=(name,), layout="cell")
-            for name in self._fields
-        }
+        result = {}
+        for name, declaration in self._fields.items():
+            operators = tuple(
+                operator
+                for operator in self._field_operators.values()
+                if operator.unknown == declaration
+            )
+            if len(operators) > 1:
+                raise ValueError(
+                    "field %r is materialized by multiple field operators" % name)
+            components = (name,)
+            if operators:
+                values = []
+                for output in operators[0].outputs:
+                    if isinstance(output, FieldOutput):
+                        values.append(output.name)
+                    elif isinstance(output, GradientOutput):
+                        values.extend((output.name + "_x", output.name + "_y"))
+                    else:
+                        raise TypeError(
+                            "field %r output %s has no solved-field storage protocol"
+                            % (name, type(output).__name__))
+                if not values or len(values) != len(set(values)):
+                    raise ValueError(
+                        "field %r outputs must define unique storage components" % name)
+                components = tuple(values)
+            result[name] = FieldSpace(
+                name=name, components=components, layout="cell")
+        return result
 
     def vector(self, name: Any, *, frame: Any, components: Any) -> Any:
         """Define a physical vector by the typed axes of its frame."""

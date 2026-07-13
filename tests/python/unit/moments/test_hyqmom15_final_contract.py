@@ -1,14 +1,28 @@
-"""ADC-694 canonical HyQMOM15 model, closure and Case acceptance contract."""
+"""ADC-694 canonical HyQMOM15 model, closure and final authoring contract."""
 from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 
 import pytest
 
 from pops.lib.models.moments import HyQMOM15
 from pops.moments import LocalClosure, closure, moment_names
 from pops.physics import Model
+
+
+ROOT = Path(__file__).resolve().parents[4]
+EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"
+
+
+def _load_example():
+    spec = importlib.util.spec_from_file_location("pops_final_hyqmom15", EXAMPLE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_hyqmom15_is_a_real_model_with_exact_generic_handles() -> None:
@@ -51,28 +65,30 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
             closure=wrong_order, exact_speeds=False)
 
 
-def test_final_example_resolves_and_declares_complete_rollback_surface() -> None:
-    root = Path(__file__).resolve().parents[4]
-    path = root / "EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py"
-    spec = importlib.util.spec_from_file_location("hyqmom15_final_example", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    case, physics = module.build_case()
+def test_final_authoring_derives_field_storage_and_complete_generic_program() -> None:
+    target = _load_example().build_authoring()
 
-    import pops
-    from pops.mesh import CartesianMesh
-    from pops.layouts import Uniform
+    assert type(target.model) is Model
+    assert target.components == tuple(moment_names(4))
+    assert target.model.field_spaces()[target.field.local_id].components == (
+        "phi", "grad_x", "grad_y")
+    assert target.field_provider == target.model.operators["fields"]
+    assert target.program.transaction_plan() is not None
+    assert len(target.case._consumers.inspect()["nodes"]) == 3
+    local_map = target.implicit_operator.signature.output
+    assert len(local_map.domain.components) == 15
+    assert local_map.domain == local_map.range
 
-    resolved = pops.resolve(
-        pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))
-    assert len(resolved.blocks) == 1
-    assert len(physics.states["U"].components) == 15
-    transaction = case._time.transaction_plan()
-    assert transaction.guards == ("moments.realizable(order=4)",)
-    assert set(transaction.staged_effects) == {
-        "state", "fields", "flux_ledgers", "histories", "schedules", "consumers"}
-    assert len(case._consumers.inspect()["nodes"]) == 2
-    emitted = case._time.emit_cpp_program(model=physics._dsl)
-    assert "pops::detail::mat_inverse<15>(" in emitted
-    assert "pops::Real M_[15][15];" in emitted
+
+def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> None:
+    source = EXAMPLE.read_text(encoding="utf-8")
+    assert "from pops.layouts import Uniform" in source
+    assert "pops.mesh.layouts" not in source
+    assert "BindInputs" not in source
+    assert "simulation.run(" not in source
+    assert "from pops.runtime import System" not in source
+    assert "from pops.runtime import AmrSystem" not in source
+    for call in (
+        "pops.validate(", "pops.resolve(", "pops.compile(", "pops.bind(", "pops.run(",
+    ):
+        assert call in source

@@ -12,7 +12,7 @@ from pops.moments.model_builder import moment_flux_expressions, moment_names
 from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
-from pops.physics import Model
+from pops.physics import Density, Model
 
 
 def _order(value: Any) -> int:
@@ -57,7 +57,7 @@ def _author(
     frame = Cartesian2D()
     model = Model(name, frame=frame)
     state = model.state(
-        "U", components=tuple(moment_names(order)), roles={"M00": "density"})
+        "U", components=tuple(moment_names(order)), roles={"M00": Density()})
     projection = RealizabilityProjection(robust=robust)
     expressions = moment_flux_expressions(
         model,

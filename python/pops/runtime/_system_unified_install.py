@@ -400,17 +400,17 @@ class _SystemUnifiedInstall(_System):
         model = models.get(block)
         if model is None:
             raise ValueError("field output route names unknown block %r" % block)
-        from pops.physics.aux import AUX_NAMED_BASE
+        from pops.physics.aux import aux_component_index
 
-        declared = list(getattr(model, "aux_extra_names", ()) or ())
+        declared = tuple(getattr(model, "aux_extra_names", ()) or ())
         components = tuple(route["components"])
-        missing = [component for component in components if component not in declared]
-        if missing:
+        try:
+            indices = [aux_component_index(component, declared) for component in components]
+        except ValueError as error:
             raise ValueError(
                 "field output route %r is absent from block %r native aux layout: %s"
-                % (field_plan.name, block, ", ".join(missing))
-            )
-        indices = [AUX_NAMED_BASE + declared.index(component) for component in components]
+                % (field_plan.name, block, ", ".join(components))
+            ) from error
         indices.extend([-1] * (3 - len(indices)))
         self._s.register_elliptic_field(
             block, route["key"], indices[0], indices[1], indices[2])

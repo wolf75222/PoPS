@@ -10,6 +10,12 @@ two-level subcycled AMR, conservative transfers and accepted-state consumers. It
 contract note is
 [`docs/design/final-advection-imex-amr.md`](../../docs/design/final-advection-imex-amr.md).
 
+[`EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py`](EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py)
+composes the provided plain `HyQMOM15` model with a periodic Poisson field, conservative HLL
+transport, an inspectable IMEX Program, scientific artifacts and exact restart continuation. Its
+matching contract note is
+[`docs/design/hyqmom15-final-contract.md`](../../docs/design/hyqmom15-final-contract.md).
+
 ## Public contract
 
 - immutable typed rectangle, Cartesian frame, boundary handles and grid;

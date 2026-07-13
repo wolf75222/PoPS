@@ -84,7 +84,14 @@ def _build_imex(
             stage = program.value("%sstage_%d" % (tag, i), stage, at=point)
         fields = None
         if fields_operator is not None:
-            outcome = program.call(fields_operator, stage)
+            # A split StagePoint may carry different explicit/implicit abscissae. The field is
+            # solved from the actual implicit stage state, so give the solve one unambiguous
+            # logical TimePoint before lifting its FieldContext back onto the joint stage.
+            field_state = program.value(
+                "%sfield_state_%d" % (tag, i), stage,
+                at=point.time_for("implicit"),
+            )
+            outcome = fields_operator(field_state)
             fields = outcome.consume(action=solve_action)
             fields = program.value("%sfields_%d" % (tag, i), fields, at=point)
         explicit_rates.append(call_at(

@@ -79,6 +79,19 @@ def aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
     return w
 
 
+def aux_component_index(name: Any, aux_extra_names: Any = ()) -> int:
+    """Return the native channel index of a declared canonical or named aux field."""
+    if name in AUX_CANONICAL:
+        return AUX_CANONICAL[name]
+    extra = tuple(aux_extra_names or ())
+    if name in extra:
+        return AUX_NAMED_BASE + extra.index(name)
+    raise ValueError(
+        "aux field %r is neither canonical nor present in the model's named aux layout"
+        % name
+    )
+
+
 # --- Physical roles: variable name -> VariableRole -------------------------
 # CANONICAL mapping name -> physical role (cf. pops::VariableRole / role_name on the C++ side). Lets a
 # generated brick DECLARE the MEANING of its components (density, momentum, energy...) instead of
@@ -114,5 +127,4 @@ def roles_for(names: Any, override: Any = None) -> Any:
     if len(override) != len(names):
         raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
     return [(r if r is not None else role_of(nm)) for nm, r in zip(names, override, strict=True)]
-
 

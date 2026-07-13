@@ -65,8 +65,13 @@ class _EllipticAuthoringMixin(_BoardModel):
             with atomic_attrs(
                     (model, "_elliptic_fields"), (model, "aux_extra_names"),
                     (self, "_module_cache"), (self, "_field_operators")):
+                from .aux import AUX_CANONICAL
                 for aux_name in aux_names:
-                    if aux_name not in model.aux_extra_names:
+                    if aux_name in model.aux_names or aux_name in model.aux_extra_names:
+                        continue
+                    if aux_name in AUX_CANONICAL:
+                        self._dsl.aux(aux_name)
+                    else:
                         self._dsl.aux_field(aux_name)
                 self._dsl.elliptic_field(
                     name, rhs, operator="poisson", aux=aux_names)

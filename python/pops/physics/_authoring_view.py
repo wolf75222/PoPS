@@ -53,9 +53,15 @@ class _OperatorViewMixin(_HyperbolicModel):
 
     def field_space(self, name: str = "fields") -> Any:
         """Typed :class:`pops.model.FieldSpace` view of the auxiliary surface the model
-        reads (canonical aux + named aux fields, in read order, de-duplicated)."""
-        comps = []
-        for nm in list(self.aux_names) + list(self.aux_extra_names):
+        reads (canonical aux in ABI order, then named fields in declaration order).
+
+        Formula authoring order cannot determine storage identity: a source may read gradients
+        before a later Poisson declaration materializes the potential.  Canonical components
+        therefore retain the single ``AUX_CANONICAL`` order shared with the native ABI.
+        """
+        read = set(self.aux_names)
+        comps = [nm for nm in AUX_CANONICAL if nm in read]
+        for nm in self.aux_extra_names:
             if nm not in comps:
                 comps.append(nm)
         return _model.FieldSpace(name=name, components=tuple(comps), layout="cell")

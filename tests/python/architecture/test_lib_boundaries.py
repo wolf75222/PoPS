@@ -1,7 +1,7 @@
 """ADC-566/ADC-693: pops.lib is a leaf of ready implementations.
 
-``pops.lib`` holds ONLY ready-to-use things (provided models, provided time schemes, compose-and-go
-presets). It must stay a leaf of the import graph and must never become a second home for a central
+``pops.lib`` holds ONLY ready-to-use things (provided models, initializers, AMR policies and time
+schemes). It must stay a leaf of the import graph and must never become a second home for a central
 object (a flux, a solver, a field problem, an AMR descriptor, a runtime param). This file fences all
 four boundaries.
 
@@ -31,7 +31,7 @@ LIB = REPO_ROOT / "python" / "pops" / "lib"
 # The strict directory allow: pops.lib has exactly these immediate child packages. A new
 # python/pops/lib/riemann/ or .../solvers/ would grow this set and fail (an ALLOW of 3 named dirs,
 # not a broad pattern).
-_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "time", "presets"}
+_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "time"}
 
 # The HARD refusal list: lib is a leaf, so it must import none of these at ANY scope (module-scope OR
 # lazily inside a function). This is the delta over test_no_runtime_imports.py (module-scope only).
@@ -39,9 +39,9 @@ _FORBIDDEN_IMPORT_ROOTS = ("_pops", "pops.codegen", "pops.runtime", "pops._pops"
 
 # The descriptor/authoring packages lib MAY import (compose descriptors). Everything under pops.* that
 # is NOT in this set and NOT forbidden is flagged: a new pops.<other> edge from lib must be reviewed.
-# (numerics / solvers / mesh are descriptor catalogs used by the time schemes and presets.)
+# (numerics / solvers / mesh are descriptor catalogs used by provided implementations.)
 _ALLOWED_POPS_IMPORT_ROOTS = (
-    "pops",  # the facade (import pops) -- presets compose through it
+    "pops",  # the public facade used by ready-to-use compositions
     "pops.ir",
     "pops.math",
     "pops.model",

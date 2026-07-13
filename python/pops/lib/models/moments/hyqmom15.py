@@ -14,7 +14,7 @@ from pops.moments.model_builder import (
 from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam as _RuntimeParam
-from pops.physics import Model
+from pops.physics import Density, Model
 
 
 _HYQMOM15_ORDER = 4
@@ -81,7 +81,7 @@ class HyQMOM15:
         model = Model(name, frame=frame)
         names = tuple(moment_names(_HYQMOM15_ORDER))
         state = model.state(
-            "U", components=names, roles={"M00": "density"})
+            "U", components=names, roles={"M00": Density()})
         variables = tuple(state)
         expressions = moment_flux_expressions(
             model,
@@ -132,11 +132,6 @@ class HyQMOM15:
             "transport",
             equation=ddt(state) == -div(flux) + electric,
         )
-        # Materialize the final declaration-owned manifest after every operator and
-        # parameter exists.  Case registration must observe the settled definition
-        # fingerprint, never the intermediate fingerprint issued while the registry was
-        # still being assembled.
-        model.module.manifest()
         # Keep local variables explicit while authoring so the registry captures every dependency.
         # The public return is nevertheless the one canonical Model, not an ad-hoc handle bundle.
         del flux, electric, magnetic, explicit_rate
