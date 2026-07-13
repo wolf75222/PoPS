@@ -241,6 +241,37 @@ struct AmrRuntimeBlock {
 /// AmrSystemCoupler algorithm (solve_fields + step) over closures rather than a CoupledSystem.
 class AmrRuntime {
  public:
+  /// Deep, move-independent image of every runtime-owned value a macro-step may mutate.  MultiFab
+  /// copies retain their BoxArray/DistributionMapping, so the snapshot carries the hierarchy itself,
+  /// not merely field values on the current topology.  The facade uses this as the accepted-state
+  /// boundary for a StepAttemptRejected rollback.
+  struct StepSnapshot {
+    struct NamedFieldSnapshot {
+      bool allocated = false;
+      MultiFab phi;
+      MultiFab rhs;
+    };
+
+    std::vector<std::vector<AmrLevelMP>> block_levels;
+    std::vector<MultiFab> aux;
+    MultiFab phi;
+    MultiFab poisson_rhs;
+    std::map<std::string, NamedFieldSnapshot> named_fields;
+    std::map<std::string, std::vector<std::vector<MultiFab>>> history_rings;
+    std::map<std::string, int> history_depth;
+    std::map<std::string, std::vector<char>> history_initialized;
+    std::map<std::string, std::vector<Real>> history_slot_dt;
+    std::vector<NewtonReport> newton_reports;
+    std::vector<char> has_newton_report;
+    std::string last_dt_reason;
+    int nlev = 0;
+    int macro_step = 0;
+    int solve_count = 0;
+    int regrid_count = 0;
+    bool has_profiler = false;
+    runtime::program::Profiler profiler;
+  };
+
   /// @param geom        geometry of the coarse level (domain + physical extents).
   /// @param ba_coarse   BoxArray of the coarse (the coarse Poisson lives on it).
   /// @param bcPhi       BC of the coarse Poisson.
@@ -337,6 +368,101 @@ class AmrRuntime {
   std::vector<double> density(std::size_t b) const { return blocks_[b].density(); }
   int solve_count() const { return solve_count_; }
   int regrid_count() const { return regrid_count_; }
+
+  /// Capture/restore the accepted AMR state around one public step attempt.  The snapshot includes
+  /// fine layouts, every block/level, shared aux and elliptic warm starts, history rings, diagnostics
+  /// and cadence counters.  Restore also rewires every AmrLevelMP::aux pointer after replacing the
+  /// topology-carrying MultiFabs.
+  StepSnapshot step_snapshot() {
+    StepSnapshot out;
+    out.block_levels.reserve(blocks_.size());
+    for (const auto& block : blocks_) {
+      out.block_levels.push_back(*block.levels);
+      out.has_newton_report.push_back(block.newton_report ? char(1) : char(0));
+      out.newton_reports.push_back(block.newton_report ? *block.newton_report : NewtonReport{});
+    }
+    out.aux = aux_;
+    out.phi = mg_.phi();
+    out.poisson_rhs = mg_.rhs();
+    for (auto& [name, field] : named_fields_) {
+      StepSnapshot::NamedFieldSnapshot saved;
+      saved.allocated = static_cast<bool>(field.mg);
+      if (field.mg) {
+        saved.phi = field.mg->phi();
+        saved.rhs = field.mg->rhs();
+      }
+      out.named_fields.emplace(name, std::move(saved));
+    }
+    out.history_rings = hist_rings_;
+    out.history_depth = hist_depth_;
+    out.history_initialized = hist_init_;
+    out.history_slot_dt = hist_slot_dt_;
+    out.last_dt_reason = last_dt_reason_;
+    out.nlev = nlev_;
+    out.macro_step = macro_step_;
+    out.solve_count = solve_count_;
+    out.regrid_count = regrid_count_;
+    out.has_profiler = profiler_ != nullptr;
+    if (profiler_ != nullptr)
+      out.profiler = *profiler_;
+    return out;
+  }
+
+  void restore_step_snapshot(const StepSnapshot& saved) {
+    if (saved.block_levels.size() != blocks_.size())
+      throw std::runtime_error(
+          "AmrRuntime::restore_step_snapshot: snapshot/runtime composition mismatch");
+    for (std::size_t b = 0; b < blocks_.size(); ++b) {
+      *blocks_[b].levels = saved.block_levels[b];
+      const bool had_report = b < saved.has_newton_report.size() && saved.has_newton_report[b];
+      if (!had_report) {
+        blocks_[b].newton_report.reset();
+      } else {
+        if (!blocks_[b].newton_report)
+          blocks_[b].newton_report = std::make_shared<NewtonReport>();
+        *blocks_[b].newton_report = saved.newton_reports[b];
+      }
+    }
+    nlev_ = saved.nlev;
+    aux_ = saved.aux;
+    for (auto& block : blocks_)
+      for (int k = 0; k < nlev_; ++k)
+        (*block.levels)[static_cast<std::size_t>(k)].aux = &aux_[static_cast<std::size_t>(k)];
+    mg_.phi() = saved.phi;
+    mg_.rhs() = saved.poisson_rhs;
+    for (auto it = named_fields_.begin(); it != named_fields_.end();) {
+      const auto accepted = saved.named_fields.find(it->first);
+      if (accepted == saved.named_fields.end()) {
+        it = named_fields_.erase(it);  // field registered provisionally during the rejected attempt
+        continue;
+      }
+      auto& field = it->second;
+      if (!accepted->second.allocated) {
+        field.mg.reset();
+      } else {
+        ensure_named_elliptic(field);
+        field.mg->phi() = accepted->second.phi;
+        field.mg->rhs() = accepted->second.rhs;
+      }
+      ++it;
+    }
+    hist_rings_ = saved.history_rings;
+    hist_depth_ = saved.history_depth;
+    hist_init_ = saved.history_initialized;
+    hist_slot_dt_ = saved.history_slot_dt;
+    last_dt_reason_ = saved.last_dt_reason;
+    macro_step_ = saved.macro_step;
+    solve_count_ = saved.solve_count;
+    regrid_count_ = saved.regrid_count;
+    if (saved.has_profiler && profiler_ != nullptr)
+      *profiler_ = saved.profiler;
+
+    std::vector<std::vector<AmrLevelMP>> layouts;
+    layouts.reserve(blocks_.size());
+    for (const auto& block : blocks_)
+      layouts.push_back(*block.levels);
+    detail::same_layout_or_throw(layouts);
+  }
 
   /// @name Compiled time-Program AMR driver seam (epic ADC-508): per-level primitives exposing the
   /// engine internals an AmrProgramContext composes into a per-level macro-step. APPEND-ONLY: these

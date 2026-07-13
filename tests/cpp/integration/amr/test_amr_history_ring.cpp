@@ -15,6 +15,8 @@
 
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
 #include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime + detail::AmrHistoryOps
+#include <pops/runtime/amr_system.hpp>                       // facade transaction boundary
+#include <pops/runtime/program/step_transaction.hpp>         // StepAttemptRejected fault signal
 #include <pops/runtime/builders/factory/model_factory.hpp>   // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -69,6 +71,16 @@ static double dmax(const std::vector<double>& a, const std::vector<double>& b) {
   for (std::size_t i = 0; i < nn; ++i)
     d = std::max(d, std::fabs(a[i] - b[i]));
   return d;
+}
+
+static bool same_patches(const std::vector<PatchBox>& a, const std::vector<PatchBox>& b) {
+  if (a.size() != b.size())
+    return false;
+  for (std::size_t k = 0; k < a.size(); ++k)
+    if (a[k].level != b[k].level || a[k].ilo != b[k].ilo || a[k].jlo != b[k].jlo ||
+        a[k].ihi != b[k].ihi || a[k].jhi != b[k].jhi)
+      return false;
+  return true;
 }
 
 static AmrRuntime make_two_block(int N, double L, double B0) {
@@ -224,4 +236,80 @@ TEST(test_amr_history_ring, RegridRemapKeepsSlotsConsistent) {
   EXPECT_TRUE(coarse_identical) << "coarse_ring_slot_untouched_by_regrid";
   // The fine slice is the new fine extent (n<<1 squared * ncomp) and finite.
   EXPECT_EQ(global0.size() - ncoarse, nfine) << "fine_slice_matches_fine_extent";
+}
+
+TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock) {
+  constexpr int n = 32;
+  AmrSystemConfig cfg;
+  cfg.n = n;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  cfg.regrid_every = 1;
+
+  AmrSystem sim(cfg);
+  sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
+  sim.set_poisson("charge_density", "geometric_mg", "periodic");
+  sim.set_refinement(1.2);
+  sim.set_density("a", blob(n, 0.25, 0.5, 1.0, 1.0, 0.06));
+  sim.set_density("b", blob(n, 0.75, 0.5, 1.0, 1.0, 0.06));
+  ASSERT_TRUE(sim.uses_runtime_engine());
+  AmrRuntime* rt = sim.engine();
+  ASSERT_NE(rt, nullptr);
+  rt->set_block_tag_predicate(0, TagDensityAbove{Real(1.2)});
+  rt->set_block_tag_predicate(1, TagDensityAbove{Real(1.2)});
+  detail::AmrHistoryOps::register_history(*rt, "R", 1);
+  sim.set_clock(0.25, 1);  // next native engine step is regrid-due
+
+  const std::vector<PatchBox> patches_before = rt->patch_boxes();
+  const std::vector<int> owners_before = rt->level_owner_ranks(1);
+  const std::vector<double> state_a_before = rt->block_level_state(0, 0);
+  const std::vector<double> state_b_before = rt->block_level_state(1, 1);
+  const std::vector<double> aux_before = rt->level_aux_flat(1);
+  const int solves_before = rt->solve_count();
+  const int regrids_before = rt->regrid_count();
+  bool topology_changed_during_attempt = false;
+
+  sim.install_program_step([&](double dt) {
+    rt->step(static_cast<Real>(dt));  // includes due regrid + multi-block advance
+    topology_changed_during_attempt = !same_patches(rt->patch_boxes(), patches_before);
+    for (int k = 0; k < rt->nlev(); ++k)
+      detail::AmrHistoryOps::store_history(*rt, "R", k, rt->level_state(0, k), Real(dt));
+    detail::AmrHistoryOps::rotate_histories(*rt);
+    sim.record_program_diagnostic("provisional", 42.0);
+    throw runtime::program::StepAttemptRejected(
+        SolveStatus::kIterationLimit, "solve", "AMR fault after regrid and provisional publications");
+  });
+
+  EXPECT_THROW(sim.step(0.01), runtime::program::StepAttemptRejected);
+  EXPECT_TRUE(topology_changed_during_attempt) << "fault must happen after a real topology change";
+  EXPECT_DOUBLE_EQ(sim.time(), 0.25);
+  EXPECT_EQ(sim.macro_step(), 1);
+  EXPECT_EQ(rt->macro_step(), 1);
+  EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
+  EXPECT_EQ(rt->level_owner_ranks(1), owners_before);
+  EXPECT_EQ(rt->block_level_state(0, 0), state_a_before);
+  EXPECT_EQ(rt->block_level_state(1, 1), state_b_before);
+  EXPECT_EQ(rt->level_aux_flat(1), aux_before);
+  EXPECT_EQ(rt->solve_count(), solves_before);
+  EXPECT_EQ(rt->regrid_count(), regrids_before);
+  EXPECT_FALSE(detail::AmrHistoryOps::initialized(*rt, "R"));
+  EXPECT_TRUE(sim.program_diagnostics().empty());
+
+  // The CFL entry point brackets its preliminary field solve and active-bound publication too.
+  topology_changed_during_attempt = false;
+  EXPECT_THROW(sim.step_cfl(0.4), runtime::program::StepAttemptRejected);
+  EXPECT_TRUE(topology_changed_during_attempt);
+  EXPECT_DOUBLE_EQ(sim.time(), 0.25);
+  EXPECT_EQ(sim.macro_step(), 1);
+  EXPECT_EQ(rt->macro_step(), 1);
+  EXPECT_TRUE(same_patches(rt->patch_boxes(), patches_before));
+  EXPECT_EQ(rt->level_owner_ranks(1), owners_before);
+  EXPECT_EQ(rt->block_level_state(0, 0), state_a_before);
+  EXPECT_EQ(rt->block_level_state(1, 1), state_b_before);
+  EXPECT_EQ(rt->level_aux_flat(1), aux_before);
+  EXPECT_EQ(rt->solve_count(), solves_before);
+  EXPECT_EQ(rt->regrid_count(), regrids_before);
+  EXPECT_FALSE(detail::AmrHistoryOps::initialized(*rt, "R"));
+  EXPECT_TRUE(sim.program_diagnostics().empty());
 }

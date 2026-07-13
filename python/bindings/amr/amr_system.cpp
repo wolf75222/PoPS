@@ -6,6 +6,7 @@
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
+#include <pops/runtime/program/step_transaction.hpp>  // StepAttemptRejected: atomic public AMR attempts
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_blocks / required_solver: install-time validation (ADC-508)
 #include <pops/runtime/builders/block/amr_block_seam.hpp>  // ADC-335: per-transport AMR build seam (build_amr_block/_compiled_<transport>)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model + compiled bricks
@@ -317,6 +318,65 @@ struct AmrSystem::Impl {
       runtime->set_macro_step(macro_step_);
     else if (set_macro_step_fn)
       set_macro_step_fn(macro_step_);
+  }
+
+  /// Execute one public AMR macro-step against an accepted snapshot.  The AmrRuntime snapshot owns
+  /// topology + multi-block/per-level data; this facade layer adds its authoritative clock and the
+  /// Program-owned publications that live outside the engine.  Any exception rolls both layers back
+  /// before propagating (RejectAttempt remains observable to the Python retry policy).
+  template <class Body>
+  decltype(auto) execute_step_transaction(Body&& body) {
+    struct Snapshot {
+      std::unique_ptr<AmrRuntime::StepSnapshot> runtime;
+      double time;
+      int macro_step;
+      bool clock_restore_pending;
+      Real last_program_dt;
+      std::map<std::string, Real> program_diagnostics;
+      pops::runtime::program::CacheManager cache;
+      pops::runtime::program::HistoryManager history;
+      pops::runtime::program::Profiler profiler;
+      std::string last_dt_reason;
+      std::vector<int> replay_regrid_steps;
+
+      explicit Snapshot(Impl& impl)
+          : time(impl.t),
+            macro_step(impl.macro_step_),
+            clock_restore_pending(impl.clock_restore_pending_),
+            last_program_dt(impl.program_.last_dt_),
+            program_diagnostics(impl.program_.diagnostics_),
+            cache(impl.program_.cache_),
+            history(impl.program_.hist_),
+            profiler(impl.program_.profiler_),
+            last_dt_reason(impl.last_dt_reason),
+            replay_regrid_steps(impl.last_replay_regrid_steps_) {
+        if (impl.runtime)
+          runtime = std::make_unique<AmrRuntime::StepSnapshot>(impl.runtime->step_snapshot());
+      }
+
+      void restore(Impl& impl) const {
+        if (runtime && impl.runtime)
+          impl.runtime->restore_step_snapshot(*runtime);
+        impl.t = time;
+        impl.macro_step_ = macro_step;
+        impl.clock_restore_pending_ = clock_restore_pending;
+        impl.program_.last_dt_ = last_program_dt;
+        impl.program_.diagnostics_ = program_diagnostics;
+        impl.program_.cache_ = cache;
+        impl.program_.hist_ = history;
+        impl.program_.profiler_ = profiler;
+        impl.last_dt_reason = last_dt_reason;
+        impl.last_replay_regrid_steps_ = replay_regrid_steps;
+      }
+    };
+
+    Snapshot accepted(*this);
+    try {
+      return std::forward<Body>(body)();
+    } catch (...) {
+      accepted.restore(*this);
+      throw;
+    }
   }
 
   // Index of the block named @p name in the registry (-1 if absent). Empty name -> first block (compat
@@ -1573,24 +1633,26 @@ const std::vector<CouplingOperatorView>& AmrSystem::coupled_operators() const {
 
 void AmrSystem::step(double dt) {
   p_->ensure_built();
-  // PENDING cadence phase restoration (set_clock before the 1st step): now that the
-  // engine exists (ensure_built), we push macro_step_ to its regrid/stride counter.
-  if (p_->clock_restore_pending_) {
-    p_->push_macro_step_to_engine();
-    p_->clock_restore_pending_ = false;
-  }
-  // COMPILED time-program path (epic ADC-511 / ADC-508): when a Program is installed, its macro-step
-  // closure REPLACES the native AmrRuntime::step body (parity SystemStepper::step routing to program_
-  // step_), wrapped by the GLOBAL substeps/stride cadence. The closure drives the per-level Lie/Strang
-  // macro-step through the AmrProgramContext. Empty (no program installed) -> the historical path.
-  if (p_->program_.step_)
-    p_->run_program_cadence_(dt);
-  else if (p_->runtime)
-    p_->runtime->step(static_cast<Real>(dt));
-  else
-    p_->step_fn(dt);
-  p_->t += dt;
-  ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
+  p_->execute_step_transaction([&] {
+    // PENDING cadence phase restoration (set_clock before the 1st step): now that the
+    // engine exists (ensure_built), we push macro_step_ to its regrid/stride counter.
+    if (p_->clock_restore_pending_) {
+      p_->push_macro_step_to_engine();
+      p_->clock_restore_pending_ = false;
+    }
+    // COMPILED time-program path (epic ADC-511 / ADC-508): when a Program is installed, its macro-step
+    // closure REPLACES the native AmrRuntime::step body (parity SystemStepper::step routing to program_
+    // step_), wrapped by the GLOBAL substeps/stride cadence. The closure drives the per-level Lie/Strang
+    // macro-step through the AmrProgramContext. Empty (no program installed) -> the historical path.
+    if (p_->program_.step_)
+      p_->run_program_cadence_(dt);
+    else if (p_->runtime)
+      p_->runtime->step(static_cast<Real>(dt));
+    else
+      p_->step_fn(dt);
+    p_->t += dt;
+    ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
+  });
 }
 void AmrSystem::advance(double dt, int nsteps) {
   for (int s = 0; s < nsteps; ++s)
@@ -1598,94 +1660,76 @@ void AmrSystem::advance(double dt, int nsteps) {
 }
 double AmrSystem::step_cfl(double cfl, double speed_floor) {
   p_->ensure_built();
-  if (p_->clock_restore_pending_) {  // pending phase restoration (cf. step)
-    p_->push_macro_step_to_engine();
-    p_->clock_restore_pending_ = false;
-  }
-  const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
-  // COMPILED time-program path (epic ADC-508 / ADC-511): when a Program is installed, its macro-step
-  // closure REPLACES the native engine step here too (parity AmrSystem::step and SystemStepper::step_cfl,
-  // which both route to program_.step_). install_program forces the multi-block runtime build, so a
-  // Program is ALWAYS on the runtime path: we take the SAME CFL dt the native step would (runtime->cfl_dt,
-  // the computation half of step_cfl WITHOUT the native advance), then drive the macro-step through the
-  // Program (run_program_cadence_ + the clock tick), never the native scheme. Without this branch the
-  // installed Program was SILENTLY bypassed and the native engine advanced instead -- a silent-wrong step
-  // contradicting AmrSystem::step / System::step_cfl. The native paths below stay UNCHANGED.
-  if (p_->program_.step_) {
-    const double dt = static_cast<double>(p_->runtime->cfl_dt(
-        static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
-    p_->run_program_cadence_(dt);
-    p_->t += dt;
-    ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
-    return dt;
-  }
-  if (p_->runtime) {
-    // MULTI-BLOCK: SUBSTEPS/STRIDE-AWARE CFL step, EXACT mirror of System::step_cfl. A block of
-    // stride cadence advances an effective step stride*dt in substeps sub-steps, so each sub-step
-    // is worth stride*dt/substeps; the per-sub-step stability condition gives the per-block dt
-    // dt_b = cfl*h*substeps_b/(stride_b*w_b), and the GLOBAL dt is the min over the blocks (the most
-    // constraining). AmrRuntime::step_cfl carries the formula (the w_b/substeps/stride live there), then
-    // advances by a step(dt) which re-applies stride and substeps. BACKWARD-COMPAT: with substeps=1 and
-    // stride=1 everywhere, dt = cfl*h*min_b(1/w_b) = cfl*h/w_max, identical to the old formula
-    // (max_speed = max_b w_b) -> multi-block facade substeps=1/stride=1 bit-identical.
-    const double dt = static_cast<double>(p_->runtime->step_cfl(
-        static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
-    p_->t += dt;
-    ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
-    return dt;
-  }
-  // SINGLE-BLOCK (AmrCouplerMP): historical TRANSPORT bound dt = cfl*h/w_max (UNCHANGED formula,
-  // bit-identical without optional bounds), then StabilityPolicy aggregation (audit 2026-06):
-  //  - BLOCK bounds (source_frequency / stability_dt hooks, EMPTY without model trait) applied
-  //    to the effective SUB-STEP dt/substeps (step_fn splits dt into substeps pieces; no stride
-  //    in single-block): dt <= cfl*substeps/mu and dt <= dt_adm*substeps;
-  //  - GLOBAL bounds (add_dt_bound), all_reduce_min like System (identical dt on all ranks).
-  // ADC-645: the single-block coupler CFL divides by the RAW max speed (no historical floor
-  // site); a non-default speed_floor here would be silently ignored -> refuse loud instead.
-  if (speed_floor != static_cast<double>(kCflSpeedFloor))
-    throw std::runtime_error(
-        "AmrSystem::step_cfl : speed_floor is wired on the multi-block runtime engine only (the "
-        "single-block AmrCouplerMP CFL divides by the raw max speed) ; leave it default, or use "
-        "the multi-block runtime path");
-  double h = cfl * hx / p_->max_speed_fn();
-  p_->last_dt_reason = "transport:" + p_->blocks[0].name;
-  const double sub = static_cast<double>(p_->blocks[0].substeps);
-  if (p_->source_frequency_fn) {
-    const double mu = p_->source_frequency_fn();
-    if (mu > 0.0) {
-      const double dt_src = cfl * sub / mu;
-      if (dt_src < h) {
-        h = dt_src;
-        p_->last_dt_reason = "source_frequency:" + p_->blocks[0].name;
+  return p_->execute_step_transaction([&]() -> double {
+    if (p_->clock_restore_pending_) {  // pending phase restoration (cf. step)
+      p_->push_macro_step_to_engine();
+      p_->clock_restore_pending_ = false;
+    }
+    const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
+    // A Program is always on the runtime engine: compute its CFL bound there, then run the Program.
+    if (p_->program_.step_) {
+      const double dt = static_cast<double>(p_->runtime->cfl_dt(
+          static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+      p_->run_program_cadence_(dt);
+      p_->t += dt;
+      ++p_->macro_step_;
+      return dt;
+    }
+    if (p_->runtime) {
+      const double dt = static_cast<double>(p_->runtime->step_cfl(
+          static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+      p_->t += dt;
+      ++p_->macro_step_;
+      return dt;
+    }
+
+    // Legacy single-block coupler: facade publications are transactional; native state snapshotting
+    // remains a separate seam because this path does not own an AmrRuntime.
+    if (speed_floor != static_cast<double>(kCflSpeedFloor))
+      throw std::runtime_error(
+          "AmrSystem::step_cfl : speed_floor is wired on the multi-block runtime engine only (the "
+          "single-block AmrCouplerMP CFL divides by the raw max speed) ; leave it default, or use "
+          "the multi-block runtime path");
+    double h = cfl * hx / p_->max_speed_fn();
+    p_->last_dt_reason = "transport:" + p_->blocks[0].name;
+    const double sub = static_cast<double>(p_->blocks[0].substeps);
+    if (p_->source_frequency_fn) {
+      const double mu = p_->source_frequency_fn();
+      if (mu > 0.0) {
+        const double dt_src = cfl * sub / mu;
+        if (dt_src < h) {
+          h = dt_src;
+          p_->last_dt_reason = "source_frequency:" + p_->blocks[0].name;
+        }
       }
     }
-  }
-  if (p_->stability_dt_fn) {
-    const double db = p_->stability_dt_fn();
-    if (db > 0.0) {
-      const double dt_adm = db * sub;
-      if (dt_adm < h) {
-        h = dt_adm;
-        p_->last_dt_reason = "stability_dt:" + p_->blocks[0].name;
+    if (p_->stability_dt_fn) {
+      const double db = p_->stability_dt_fn();
+      if (db > 0.0) {
+        const double dt_adm = db * sub;
+        if (dt_adm < h) {
+          h = dt_adm;
+          p_->last_dt_reason = "stability_dt:" + p_->blocks[0].name;
+        }
       }
     }
-  }
-  for (const auto& g : p_->dt_bounds) {
-    if (!g.fn)
-      continue;
-    double v = g.fn();
-    if (!(v > 0.0) || !std::isfinite(v))
-      v = std::numeric_limits<double>::infinity();
-    v = all_reduce_min(v);
-    if (v < h) {
-      h = v;
-      p_->last_dt_reason = "global:" + g.label;
+    for (const auto& g : p_->dt_bounds) {
+      if (!g.fn)
+        continue;
+      double v = g.fn();
+      if (!(v > 0.0) || !std::isfinite(v))
+        v = std::numeric_limits<double>::infinity();
+      v = all_reduce_min(v);
+      if (v < h) {
+        h = v;
+        p_->last_dt_reason = "global:" + g.label;
+      }
     }
-  }
-  p_->step_fn(h);
-  p_->t += h;
-  ++p_->macro_step_;  // authoritative counter (parity System: one macro-step = one increment)
-  return h;
+    p_->step_fn(h);
+    p_->t += h;
+    ++p_->macro_step_;
+    return h;
+  });
 }
 
 // GLOBAL step bound (AMR counterpart of System::add_dt_bound): registered BEFORE or AFTER the build
