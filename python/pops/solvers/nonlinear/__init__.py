@@ -8,8 +8,7 @@ from typing import Any
 
 from pops.descriptors import Availability, Descriptor, _planned
 from pops.descriptors_report import CapabilitySet
-from pops.identity import Identity
-from pops.fields._identity import field_identity
+from pops.identity import Identity, make_identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +40,7 @@ class PreparedFieldNonlinear:
             raise ValueError("PreparedFieldNonlinear omits required solve capabilities")
         object.__setattr__(self, "options", options)
         object.__setattr__(self, "capabilities", capabilities)
-        expected = field_identity("prepared-field-nonlinear", self._payload())
+        expected = make_identity("prepared-field-nonlinear", self._payload())
         if self.identity != expected:
             raise ValueError("PreparedFieldNonlinear identity is not canonical")
 
@@ -164,7 +163,7 @@ class Newton(Descriptor):
         }
         return PreparedFieldNonlinear(
             target, options, capabilities,
-            field_identity("prepared-field-nonlinear", payload))
+            make_identity("prepared-field-nonlinear", payload))
 
 
 def FixedPoint(**options: Any) -> Any:
