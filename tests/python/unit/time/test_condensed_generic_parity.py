@@ -156,7 +156,7 @@ def _compile_generic(env, theta, tag, n):
     linear = OperatorHandle(
         operator.name, kind=operator.kind, owner=registry.owner_path,
         signature=operator.signature)
-    P = adctime.Program("cs_%s" % tag).bind_operators(model)
+    P = adctime.Program("cs_%s" % tag)._bind_operators(model)
     lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
         tol=_TOL, max_iter=400,

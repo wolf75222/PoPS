@@ -1,7 +1,7 @@
 """Pure resolve-time requirement/capability evidence for ADC-660.
 
 This module does not compile, emit, cache, or install anything.  It consumes an already-frozen
-``Problem`` plus resolved layout/library values and returns one strict JSON-ready proof document.
+``Case`` plus resolved layout/library values and returns one strict JSON-ready proof document.
 Unknown evidence is a refusal: compile may consume this result, but may not repair or recompute it.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ def resolve_capability_evidence(
     """
     if not bool(getattr(problem, "frozen", False)):
         raise TypeError(
-            "resolve capabilities requires a frozen pops.Problem; validate/freeze it before resolve")
+            "resolve capabilities requires a frozen pops.Case; validate/freeze it before resolve")
     layout_name = _layout_name(layout)
     provider_sources: dict[str, set[str]] = {}
     required: set[str] = set()
@@ -101,7 +101,7 @@ def _collect_problem_evidence(
     required.update(_tokens(_projection(getattr(problem, "requirements", None))))
     blocks = getattr(problem, "_blocks", None)
     if blocks is None or not callable(getattr(blocks, "items", None)):
-        raise TypeError("frozen Problem has no typed block registry")
+        raise TypeError("frozen Case has no typed block registry")
     for name, spec in blocks.items():
         if not isinstance(spec, Mapping) or spec.get("model") is None:
             raise CapabilityResolutionError("block %r has no resolved model evidence" % name)
@@ -259,13 +259,10 @@ def _layout_name(layout: Any) -> str:
     else:
         caps = _projection(getattr(layout, "capabilities", None))
     token = caps.get("layout") if isinstance(caps, Mapping) else None
-    if token is None:
-        name = type(layout).__name__.lower()
-        token = "amr" if name == "amr" else "uniform" if name == "uniform" else None
-    token = str(token).lower() if token is not None else None
-    if token not in ("uniform", "amr"):
-        raise CapabilityResolutionError("resolved layout has unknown capability identity")
-    return token
+    if not isinstance(token, str) or not token or token.strip() != token:
+        raise CapabilityResolutionError(
+            "resolved layout must declare a canonical capabilities()['layout'] token")
+    return token.lower()
 
 
 def _layout_plan_evidence(layout: Any) -> Any:

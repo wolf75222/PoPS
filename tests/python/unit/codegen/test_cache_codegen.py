@@ -39,7 +39,7 @@ def _module():
 
 def _held_program(schedule):
     mod, u = _module()
-    P = adctime.Program("held").bind_operators(mod)
+    P = adctime.Program("held")._bind_operators(mod)
     schedule = schedule(P.clock) if callable(schedule) else schedule
     U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U, schedule=schedule)
@@ -61,7 +61,7 @@ def test_held_solve_fields_lowers_and_emits_cache_branch():
 
 def test_unscheduled_solve_fields_has_no_cache_branch():
     mod, u = _module()
-    P = adctime.Program("plain").bind_operators(mod)
+    P = adctime.Program("plain")._bind_operators(mod)
     U = typed_state(P, "plasma", space=u)
     P._call("fields_from_state", U)               # no schedule
     endpoint = typed_state(P, "plasma", state_name="U", space=u).next

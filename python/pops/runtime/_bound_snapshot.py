@@ -75,31 +75,10 @@ def _data(value: Any, *, where: str) -> Any:
         return {key: _data(item, where=where) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_data(item, where=where) for item in value]
-    if type(value).__module__ == "pops.runtime._bricks_scheme" \
-            and type(value).__name__ == "Spatial":
-        return {
-            "type": "pops.runtime.Spatial",
-            "selection": _data(value.to_data(), where=where),
-        }
-    if type(value).__module__ == "pops.time.schedule" \
-            and type(value).__name__ == "Schedule":
-        return {
-            "type": "pops.time.Schedule", "kind": value.kind, "policy": value.policy,
-            "params": _data(dict(value.params), where=where),
-        }
-    if type(value).__module__ == "pops.diagnostics.measures":
-        fields = {
-            "type": "%s.%s" % (type(value).__module__, type(value).__qualname__),
-            "scheme": value.scheme,
-        }
-        for name in ("block", "role", "cadence", "norm", "quantity", "tolerance"):
-            if hasattr(value, name):
-                fields[name] = _data(getattr(value, name), where=where)
-        return fields
     canonical_identity = getattr(value, "canonical_identity", None)
     if callable(canonical_identity):
         return _data(canonical_identity(), where=where)
-    for hook_name in ("to_data", "to_manifest"):
+    for hook_name in ("to_data", "to_manifest", "consumer_data"):
         hook = getattr(value, hook_name, None)
         if callable(hook):
             return _data(hook(), where=where)
@@ -112,7 +91,7 @@ def _data(value: Any, *, where: str) -> Any:
             "options": _data(options, where=where),
         }
     raise TypeError(
-        "%s cannot enter bind identity: %s has no canonical to_data()/to_manifest()/options()"
+        "%s cannot enter bind identity: %s has no canonical data protocol"
         % (where, type(value).__name__))
 
 

@@ -102,7 +102,7 @@ def test_dsl_model_is_a_module_facade():
 
 def _build_predictor(P, mdl):
     """A GENERIC predictor step: no physics names, only typed operator calls."""
-    P.bind_operators(mdl)
+    P._bind_operators(mdl)
     u = typed_state(P, "plasma")
     fields = P._call("fields_from_state", u)
     rate = P._call("explicit_rhs", u, fields)

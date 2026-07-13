@@ -65,7 +65,7 @@ def test_source_location_capture_is_opt_in_and_out_of_hash():
     case = Case(name="forward_euler_case")
     block, state = add_typed_block(case, module, "plasma", space)
     on = adctime.Program("forward_euler").capture_source_locations(True)
-    on.bind_operators(module)
+    on._bind_operators(module)
     temporal = on.state(block, state)
     U = temporal.n
     R = on._rhs_legacy(state=U, fields=on.solve_fields(U), flux=True, sources=["default"])

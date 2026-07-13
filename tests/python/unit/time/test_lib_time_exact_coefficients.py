@@ -15,7 +15,7 @@ def _bound_program(name):
     u, v = model.conservative_vars("u", "v")
     model.flux(x=[u, v], y=[u, v])
     linear = model.local_linear_map("L", [[-1, 0], [0, -1]])
-    return adctime.Program(name).bind_operators(model), linear
+    return adctime.Program(name)._bind_operators(model), linear
 
 
 def _node(program, op):

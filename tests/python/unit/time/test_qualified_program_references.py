@@ -180,7 +180,7 @@ def test_history_tables_and_serialization_retain_the_qualified_state():
 
 def test_public_call_keeps_the_operator_handle_separate_from_its_lowering_name():
     model, block = _declarations(with_rate=True)
-    program = Program("operator").bind_operators(model)
+    program = Program("operator")._bind_operators(model)
     state = program.state(block, model.u)
 
     rate = program.call(model.rate, state.n)
@@ -198,7 +198,7 @@ def test_public_call_keeps_the_operator_handle_separate_from_its_lowering_name()
 
 def test_board_operator_and_field_routes_refuse_free_names():
     model, block = _declarations(with_rate=True)
-    program = Program("board").bind_operators(model)
+    program = Program("board")._bind_operators(model)
     state = program.state(block, model.u)
 
     board_rate = program.op(model.rate)
@@ -243,7 +243,7 @@ def test_board_field_operator_retains_its_exact_typed_selector():
         signature=Signature((state_space,), field_space), expr="field-solve")
     case = Case(name="case")
     block = case.block("fluid", module)
-    program = Program("field-operator").bind_operators(module)
+    program = Program("field-operator")._bind_operators(module)
     state = program.state(block, module.state_handle(state_space))
 
     solved = program.fields("psi_solve", from_state=state.n, operator=operator)
@@ -254,7 +254,7 @@ def test_board_field_operator_retains_its_exact_typed_selector():
 
 def test_rhs_wrappers_and_ready_presets_keep_typed_source_ownership():
     model, block = _declarations(with_rate=True)
-    program = Program("typed-rhs").bind_operators(model)
+    program = Program("typed-rhs")._bind_operators(model)
     state = program.state(block, model.u)
 
     wrapped = program.rhs(state=state.n, terms=[SourceTerm(model.rate)])
@@ -266,13 +266,13 @@ def test_rhs_wrappers_and_ready_presets_keep_typed_source_ownership():
     with pytest.raises(TypeError, match="typed OperatorHandle"):
         SourceTerm(model.rate.name)
 
-    preset = Program("typed-preset").bind_operators(model)
+    preset = Program("typed-preset")._bind_operators(model)
     forward_euler(preset, block, model.u, sources=(model.rate,), flux=False)
     rhs = next(value for value in preset._values if value.op == "rhs")
     assert rhs.attrs["source_handles"] == (model.rate,)
     with pytest.raises(TypeError, match="source names are not accepted"):
         forward_euler(
-            Program("string-preset").bind_operators(model), block, model.u,
+            Program("string-preset")._bind_operators(model), block, model.u,
             sources=("default",), flux=False)
 
 
@@ -282,7 +282,7 @@ def test_homonymous_operators_from_two_models_resolve_by_owner_and_block_provena
     case = Case(name="coupled")
     first_block = case.block("first_block", first)
     second_block = case.block("second_block", second)
-    program = Program("multi-owner").bind_operators(first).bind_operators(second)
+    program = Program("multi-owner")._bind_operators(first)._bind_operators(second)
     first_state = program.state(first_block, first.u)
     second_state = program.state(second_block, second.u)
     assert len(first_state.space.components) == 1

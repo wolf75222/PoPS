@@ -56,7 +56,7 @@ def _typed(P, block, space, physical=None):
 def test_well_typed_program_passes():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("ok").bind_operators(m)
+    P = adctime.Program("ok")._bind_operators(m)
     u_n = _typed(P, "plasma", u, m)
     fields = P._call("fields_from_state", u_n)
     rate = P._call("explicit_rhs", u_n, fields)
@@ -72,7 +72,7 @@ def test_well_typed_program_passes():
 def test_call_input_space_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
     wrong = _typed(P, "other", _OTHER, m)
     try:
@@ -107,7 +107,7 @@ def test_space_structure_participates_in_program_ir_identity():
 def test_combine_space_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     u_n = _typed(P, "plasma", u, m)
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
@@ -125,7 +125,7 @@ def test_combine_space_mismatch():
 def test_solve_local_linear_domain_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
     rhs_v = _typed(P, "other", _OTHER, m)
@@ -140,7 +140,7 @@ def test_solve_local_linear_domain_mismatch():
 
 def test_declared_state_builds_with_typed_handles():
     m = _model()
-    P = adctime.Program("typed").bind_operators(m)
+    P = adctime.Program("typed")._bind_operators(m)
     u = _typed(P, "plasma", m.state_space("U"), m)
     module = m.module
     declared = module.state_spaces()["U"]

@@ -1,4 +1,4 @@
-"""ADC-652 follow-up: physics models deep-freeze with their Problem."""
+"""ADC-652 follow-up: physics models deep-freeze with their Case."""
 from __future__ import annotations
 
 from types import MappingProxyType
@@ -22,11 +22,18 @@ def _dsl_advection(name="advection"):
 
 
 def _board_advection(name="board_advection"):
-    model = BoardModel(name)
+    from pops.frames import Cartesian2D
+
+    frame = Cartesian2D()
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
     state = model.state("U", components=["u"])
-    flux = model.flux("F", on=state, x=[state[0]], y=[state[0]],
-                      waves={"x": [1], "y": [1]})
-    model.rate("A", ddt(state) == -div(flux))
+    flux = model.flux(
+        "F", frame=frame, state=state,
+        components={x_axis: (state[0],), y_axis: (state[0],)},
+        waves={x_axis: (1,), y_axis: (1,)},
+    )
+    model.rate("A", equation=ddt(state) == -div(flux))
     return model, state
 
 
@@ -65,12 +72,13 @@ def test_dsl_freeze_is_idempotent_deep_and_codegen_readable():
     assert model.list_operators()
 
 
-def test_problem_freezes_external_board_reference_and_keeps_snapshot_stable():
+def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
     model, _state = _board_advection()
-    problem = pops.Problem(name="frozen-physics").block("transport", physics=model)
+    case = pops.Case(name="frozen-physics")
+    case.block("transport", model)
     module_hash = model.module.module_hash()
 
-    snapshot = problem.freeze()
+    snapshot = case.freeze()
 
     assert model.frozen and model.dsl.frozen and model.dsl._m.frozen
     with pytest.raises(RuntimeError, match="frozen"):
@@ -87,7 +95,7 @@ def test_problem_freezes_external_board_reference_and_keeps_snapshot_stable():
         del model.name
 
     assert model.module.module_hash() == module_hash
-    assert build_problem_snapshot(problem).hash == snapshot.hash
+    assert build_problem_snapshot(case).hash == snapshot.hash
     assert "U" in model.inspect()["states"]
     assert "A" in model.module.list_operators()
     assert "void" in model.dsl._m.emit_cpp()
@@ -104,7 +112,9 @@ def test_multispecies_owned_module_and_registry_are_sealed():
     operator = module.operator_registry().get("collision")
     hash_before = module.module_hash()
 
-    pops.Problem(name="multi-freeze").block("plasma", physics=model).freeze()
+    case = pops.Case(name="multi-freeze")
+    case.block("plasma", model)
+    case.freeze()
 
     assert module.frozen and module.operator_registry().frozen
     with pytest.raises((TypeError, RuntimeError)):
@@ -139,15 +149,15 @@ def test_failed_standalone_freeze_rolls_back_the_whole_cascade():
 
     model, _state = _board_advection("freeze_rollback")
     failing = FailingDescriptor()
-    model._field_solvers["bad"] = failing
+    model._test_descriptors = {"bad": failing}
 
     with pytest.raises(RuntimeError, match="injected"):
         model.freeze()
 
     assert not model.frozen and not model.dsl.frozen and not model.dsl._m.frozen
     assert not failing.frozen
-    assert isinstance(model._field_solvers, dict)
-    model._field_solvers.pop("bad")
+    assert isinstance(model._test_descriptors, dict)
+    model._test_descriptors.pop("bad")
     assert model.freeze() is model and model.frozen
 
 
@@ -177,7 +187,7 @@ def test_failed_descriptor_freeze_restores_nested_mutables_in_place():
     metadata = box.metadata
     nested = metadata["nested"]
     failing = FailingNestedDescriptor(box)
-    model._field_solvers["bad"] = failing
+    model._test_descriptors = {"bad": failing}
 
     with pytest.raises(RuntimeError, match="injected nested"):
         model.freeze()
@@ -191,5 +201,5 @@ def test_failed_descriptor_freeze_restores_nested_mutables_in_place():
     assert metadata["shared"] is items
     assert metadata["nested"] is nested
 
-    model._field_solvers.pop("bad")
+    model._test_descriptors.pop("bad")
     assert model.freeze() is model and model.frozen

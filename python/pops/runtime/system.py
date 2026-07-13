@@ -75,7 +75,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
              _SystemDiagnostics, _SystemIO, _LifecycleMixin):
     """The system/coupler: composes blocks, shares a Poisson, advances the whole.
 
-    Low-level runtime. The documented PUBLIC path is the typed ``pops.Problem`` assembly lowered by
+    Low-level runtime. The documented PUBLIC path is the typed ``pops.Case`` assembly lowered by
     ``pops.compile`` and wired by ``pops.bind`` -> ``sim.run(...)``; the per-step ``step_cfl`` /
     ``step`` / ``step_adaptive`` methods (and ``add_block`` / ``add_equation`` / ``set_poisson``)
     are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
@@ -216,7 +216,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
         ``System`` is single-level: it carries no AMR hierarchy, so ``sim.amr`` (the live
         patch / regrid / ghost / reflux / checkpoint reports of Spec 5 sec.8.12) applies only to a
-        refined runtime. Declare ``layout=AMR(...)`` on the ``pops.Problem`` for a refined run, or use
+        refined runtime. Declare ``layout=AMR(...)`` on the ``pops.Case`` for a refined run, or use
         the STATIC authoring report ``pops.inspect_amr(layout)`` for a layout descriptor. Accessing
         it raises a clear ``AttributeError`` (sourced in ``__getattr__`` so the message is single).
         """
@@ -238,7 +238,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         if attr == "amr":
             raise AttributeError(
                 "System has no 'amr' inspection handle: System is a uniform single-level runtime "
-                "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Problem for a refined run "
+                "with no AMR hierarchy. Declare layout=AMR(...) on the pops.Case for a refined run "
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect_amr(layout) for the "
                 "static authoring report.")
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the

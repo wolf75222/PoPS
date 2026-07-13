@@ -1,4 +1,4 @@
-"""Shared, inert helpers for the typed Problem registries."""
+"""Shared, inert helpers for the typed Case registries."""
 from __future__ import annotations
 
 from typing import Any

@@ -58,7 +58,7 @@ def test_call_matches_shortcut_predictor():
         P.commit(endpoint, P.value("u1", U + P.dt * R, at=endpoint.point))
 
     def opfirst(P, _m):
-        P.bind_operators(_m)
+        P._bind_operators(_m)
         U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         R = P._call("explicit_rhs", U, f)
@@ -88,7 +88,7 @@ def test_call_matches_source_and_flux():
             "u1", U + P.dt * s + P.dt * flux, at=endpoint.point))
 
     def opfirst(P, _m):
-        P.bind_operators(_m)
+        P._bind_operators(_m)
         U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         s = P._call("electric", U, f)
@@ -121,7 +121,7 @@ def test_call_default_source():
         P.commit(endpoint, P.value("u1", U + P.dt * s, at=endpoint.point))
 
     def opfirst(P, _m):
-        P.bind_operators(_m)
+        P._bind_operators(_m)
         U = typed_state(P, "plasma", model=_m)
         f = P._call("fields_from_state", U)
         s = P._call("source_default", U, f)
@@ -145,7 +145,7 @@ def test_call_linear_operator_matches_solve_local_linear():
         P.commit(endpoint, U1)
 
     def opfirst(P, _m):
-        P.bind_operators(_m)
+        P._bind_operators(_m)
         U = typed_state(P, "plasma", model=_m)
         endpoint = typed_state(P, "plasma", state_name="U", model=_m).next
         rhs = P.value("rhs", U, at=endpoint.point)
@@ -160,7 +160,7 @@ def test_call_linear_operator_matches_solve_local_linear():
 
 def test_call_typing_errors():
     m = build_model()
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     U = typed_state(P, "plasma", model=m)
     f = P._call("fields_from_state", U)
 

@@ -245,7 +245,7 @@ class ParamRegistry(_CanonicalParamRegistry, _FreezableRegistry):
     """Canonical case-owned parameter authority.
 
     This is the same owner-qualified registry used by ``pops.model.Module``.
-    The Problem wrapper adds only the freeze/report protocol; it does not keep a
+    The Case wrapper adds only the freeze/report protocol; it does not keep a
     second flat ``{name: value}`` store.
     """
 

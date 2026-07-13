@@ -60,7 +60,7 @@ def _bound_local_program(t, name):
     (u,) = model.conservative_vars("u")
     model.flux(x=[u], y=[u])
     linear = model.local_linear_map("lorentz", [[-1]])
-    return t.Program(name).bind_operators(model), linear
+    return t.Program(name)._bind_operators(model), linear
 
 
 # ---- (A) codegen + IR validation: pure Python, always runs ----

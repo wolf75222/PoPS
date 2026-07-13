@@ -150,7 +150,7 @@ class _SystemUnifiedInstall(_System):
             if model is None:
                 raise ValueError(
                     "install: instance %r has no CompiledModel from InstallPlan; rebuild the "
-                    "Problem with pops.compile(...) before binding" % name)
+                    "Case with pops.compile(...) before binding" % name)
             model = self._resolve_instance_model(model)
             resolved_models[name] = model
             spatial = self._lower_spatial(spec.get("spatial"))
@@ -307,7 +307,7 @@ class _SystemUnifiedInstall(_System):
             return model
         raise TypeError(
             "install: instance model must be a detached CompiledModel from InstallPlan, got %s; "
-            "compile the Problem before binding"
+            "compile the Case before binding"
             % type(model).__name__
         )
 

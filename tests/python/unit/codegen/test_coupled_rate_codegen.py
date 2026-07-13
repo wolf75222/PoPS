@@ -48,7 +48,7 @@ def _two_fluid_module(electron_expr=None):
 def _two_fluid_program():
     """A two-block program: solve the collision rate, then forward-Euler each species by its rate."""
     mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("two_fluid_collision").bind_operators(mod)
+    P = adctime.Program("two_fluid_collision")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
@@ -143,7 +143,7 @@ def test_coupled_rate_with_prim_var_is_deferred():
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
     ue = Var("ue", "prim")  # a PRIM reference -> deferred
     mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
-    P = adctime.Program("two_fluid_collision_prim").bind_operators(mod)
+    P = adctime.Program("two_fluid_collision_prim")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
@@ -192,7 +192,7 @@ def test_read_only_catalyst_input_is_bound():
     ne, ni, nn = Var("ne", "cons"), Var("ni", "cons"), Var("nn", "cons")
     mod.operator(name="ioniz", signature=model.Signature((e, i, n), bundle), kind="coupled_rate",
                  expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
-    P = adctime.Program("ioniz_step").bind_operators(mod)
+    P = adctime.Program("ioniz_step")._bind_operators(mod)
     e_state, i_state, n_state = mod.state_handle(e), mod.state_handle(i), mod.state_handle(n)
     e_n = typed_state(P, "e", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "i", space=i, model=mod, state=i_state)
@@ -221,7 +221,7 @@ def test_undefined_cons_var_is_rejected():
     # undefined C++ identifier that only fails at the AOT compile, far from the authoring site.
     ne, ni, zzz = Var("ne", "cons"), Var("ni", "cons"), Var("ZZZ", "cons")
     mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
-    P = adctime.Program("two_fluid_typo").bind_operators(mod)
+    P = adctime.Program("two_fluid_typo")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)

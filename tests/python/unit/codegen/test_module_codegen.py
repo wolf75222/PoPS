@@ -44,7 +44,7 @@ def _model():
 
 def test_metadata_block_emitted():
     m = _model()
-    P = adctime.Program("pc").bind_operators(m)
+    P = adctime.Program("pc")._bind_operators(m)
     block, state = state_refs(P, "plasma")
     libtime.predictor_corrector_local_linear(
         P, block, state, fields_operator=_op(m, "fields_from_state"),
@@ -73,7 +73,7 @@ def test_metadata_block_emitted():
 
 def test_metadata_not_in_step_body():
     m = _model()
-    P = adctime.Program("pc").bind_operators(m)
+    P = adctime.Program("pc")._bind_operators(m)
     block, state = state_refs(P, "plasma")
     libtime.predictor_corrector_local_linear(
         P, block, state, fields_operator=_op(m, "fields_from_state"),

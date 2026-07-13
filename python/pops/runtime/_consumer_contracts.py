@@ -296,7 +296,7 @@ class ConsumerManifest:
 class ConsumerGraph:
     """Immutable authoring or resolved DAG with an explicit phase boundary.
 
-    ``from_policies`` captures callback-free authoring nodes. ``resolve`` is the only route that
+    ``from_consumers`` captures callback-free authoring nodes. ``resolve`` is the only route that
     combines them with Case ownership and a LayoutPlan. The ordinary constructor remains the
     low-level resolved form used by runtime planning.
     """
@@ -340,32 +340,32 @@ class ConsumerGraph:
         object.__setattr__(self, "_sealed", True)
 
     @classmethod
-    def from_policies(cls, policies: Iterable[Any]) -> ConsumerGraph:
-        """Capture typed policies through their universal ``consumer_authoring()`` protocol."""
+    def from_consumers(cls, consumers: Iterable[Any]) -> ConsumerGraph:
+        """Capture typed consumers through their universal ``consumer_authoring()`` protocol."""
         try:
-            supplied = tuple(policies)
+            supplied = tuple(consumers)
         except TypeError as exc:
-            raise TypeError("ConsumerGraph.from_policies requires an iterable of policies") from exc
+            raise TypeError("ConsumerGraph.from_consumers requires an iterable of consumers") from exc
         if not supplied:
-            raise ValueError("ConsumerGraph.from_policies requires at least one policy")
+            raise ValueError("ConsumerGraph.from_consumers requires at least one consumer")
         from ._consumer_authoring import ConsumerAuthoringNode
 
         nodes = []
-        for index, policy in enumerate(supplied):
-            protocol = getattr(policy, "consumer_authoring", None)
+        for index, consumer in enumerate(supplied):
+            protocol = getattr(consumer, "consumer_authoring", None)
             if not callable(protocol):
                 raise TypeError(
-                    "consumer policy %d (%s) must implement consumer_authoring()"
-                    % (index, type(policy).__name__))
+                    "consumer %d (%s) must implement consumer_authoring()"
+                    % (index, type(consumer).__name__))
             authored = protocol()
             if not isinstance(authored, tuple) or any(
                     type(value) is not ConsumerAuthoringNode for value in authored):
                 raise TypeError(
                     "%s.consumer_authoring() must return a tuple of exact "
-                    "ConsumerAuthoringNode values" % type(policy).__name__)
+                    "ConsumerAuthoringNode values" % type(consumer).__name__)
             nodes.extend(authored)
         if not nodes:
-            raise ValueError("consumer policies produced no ConsumerGraph nodes")
+            raise ValueError("consumers produced no ConsumerGraph nodes")
         result = object.__new__(cls)
         object.__setattr__(result, "nodes", ())
         object.__setattr__(result, "topology", ())
@@ -402,7 +402,7 @@ class ConsumerGraph:
         rows.sort(key=lambda row: make_identity("consumer-authoring-node", row).token)
         identities = [make_identity("consumer-authoring-node", row).token for row in rows]
         if len(identities) != len(set(identities)):
-            raise ValueError("ConsumerGraph.from_policies contains a duplicate policy declaration")
+            raise ValueError("ConsumerGraph.from_consumers contains a duplicate consumer declaration")
         return {"schema_version": 1, "phase": "authoring", "nodes": rows}
 
     def resolve(self, resolver: Any, layout_plan: Any, *, owner: Any) -> ConsumerGraph:

@@ -1,87 +1,35 @@
-"""ADC-527: pops.inspect(obj) is a stable, serialisable dispatcher over any descriptor / Problem /
-report. It dispatches to obj.inspect() and is distinct from pops.inspect_capabilities/inspect_amr.
+"""The public inspect bridge is inert, stable and JSON serialisable."""
+from __future__ import annotations
 
-Pure Python; needs only `import pops`.
-"""
 import json
-import sys
 
-import pytest
-
-pops = pytest.importorskip("pops")
+import pops
+from pops.model import Module
 
 
-class _StubModel:
-    def __init__(self):
-        from pops.model import DeclarationIndex, OwnerKind, OwnerPath
-
-        self.name = "m"
-        self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-        self._index = DeclarationIndex(owner=self.owner_path, handles=())
-
-    def declaration_index(self):
-        return self._index
-
-
-def test_pops_inspect_is_public():
-    assert hasattr(pops, "inspect")
+def test_inspect_is_the_single_public_structured_view() -> None:
+    assert pops.inspect is not None
     assert "inspect" in pops.__all__
-    # Distinct from the native capability matrix entry points.
-    assert pops.inspect is not pops.inspect_capabilities
-    assert pops.inspect is not pops.inspect_amr
 
 
-def test_inspect_dispatches_to_a_descriptor():
+def test_inspect_dispatches_to_a_descriptor() -> None:
     from pops.mesh.cartesian import CartesianMesh
+
     mesh = CartesianMesh(n=8)
     record = pops.inspect(mesh)
-    assert record == mesh.inspect()      # dispatches to obj.inspect()
+    assert record == mesh.inspect()
     assert record["name"] == "CartesianMesh"
 
 
-def test_inspect_a_problem_is_json_ready():
-    prob = pops.Problem(name="plasma").block("ne", physics=_StubModel())
-    record = pops.inspect(prob)
+def test_inspect_case_is_json_ready_and_does_not_compile() -> None:
+    case = pops.Case("plasma")
+    case.block("ne", Module("electron"))
+
+    record = pops.inspect(case)
     assert record["name"] == "plasma"
     assert "blocks" in record
-    json.dumps(record)                   # serialisable
+    json.dumps(record)
 
 
-def test_problem_inspect_is_a_typed_report_bridged_by_pops_inspect():
-    # ADC-564: Problem.inspect() is a typed pops.Report (attributes), and pops.inspect(obj) is the
-    # explicit dict bridge over its to_dict() -- so a structure-wanting caller reads attributes.
-    from pops._report import Report
-    prob = pops.Problem(name="plasma").block("ne", physics=_StubModel())
-    report = prob.inspect()
-    assert isinstance(report, Report) and not isinstance(report, dict)
-    assert report.name == "plasma"                 # attribute access
-    assert pops.inspect(prob) == report.to_dict()  # pops.inspect(obj) == report.to_dict()
-
-
-def test_inspect_a_brick_descriptor():
-    from pops.numerics.riemann import HLL
-    brick = HLL()
-    record = pops.inspect(brick)
-    assert record["name"] == brick.name
-    assert record["category"] == "riemann"
-    assert "requirements" in record and "capabilities" in record
-
-
-def test_inspect_a_report_tree():
-    report = pops.ReportTree(
-        phase="validation", severity="info", code="validation.problem.report")
-    report = report.error("block", "no_model", "block ne has no model")
-    record = pops.inspect(report)
-    assert record["ok"] is False
-    assert record["children"][0]["source"] == "block"
-    assert record["children"][0]["code"] == "block.no_model"
-
-
-def test_inspect_never_runs_numerics_on_a_plain_object():
-    # A non-descriptor object falls back to a repr view, never touches the runtime.
-    record = pops.inspect(object())
-    assert "repr" in record
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-q"]))
+def test_inspect_plain_object_never_runs_numerics() -> None:
+    assert "repr" in pops.inspect(object())

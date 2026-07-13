@@ -18,7 +18,7 @@ from typing import Any
 # in one of these sets is refused, so the bound simulation exposes exactly the run / data /
 # diagnostic / io surface and nothing structural.
 
-# Advance the clock (the whole point of binding a compiled Problem).
+# Advance the clock (the whole point of binding a compiled Case).
 _STEPPING = frozenset({
     "run", "step", "step_cfl", "step_adaptive", "solve_fields",
 })
@@ -50,7 +50,7 @@ _IO = frozenset({"checkpoint", "record_program_diagnostic", "composite_reduce"})
 _ALLOWED = _STEPPING | _MUTATIONS | _DIAGNOSTICS | _IO
 
 # Structural / assembly vocabulary that a bound simulation must NOT expose: the composition is
-# declared on the pops.Problem and lowered by pops.compile(...) + pops.bind(...). Accessing one of
+# declared on the pops.Case and lowered by pops.compile(...) + pops.bind(...). Accessing one of
 # these raises a precise AttributeError (never recommends the legacy engine setters).
 _BLOCKED = frozenset({
     "add_block", "add_equation", "add_background", "add_coupling", "add_elliptic_model",
@@ -68,7 +68,7 @@ class BoundSimulation:
     """A strict delegating view over one internal ``RuntimeInstance``.
 
     RuntimeInstance coordinates the C++ executor and accepted-side-effect transactions. Assembly
-    vocabulary is declared on ``pops.Problem`` and lowered before this view exists.
+    vocabulary is declared on ``pops.Case`` and lowered before this view exists.
 
     ``self._engine`` is the documented INTERNAL escape hatch for low-level tests; it is not part of
     the public surface.
@@ -99,7 +99,7 @@ class BoundSimulation:
         if attr in _BLOCKED:
             raise AttributeError(
                 "pops.bind: %r is assembly vocabulary and is not part of a bound simulation; the "
-                "composition is declared on the pops.Problem (blocks / fields / layout / couplings) "
+                "composition is declared on the pops.Case (blocks / fields / layout / couplings) "
                 "and lowered by pops.compile(...) + pops.bind(...)." % attr)
         # Any other name: strict refusal. The bound simulation does NOT silently pass unknown
         # attributes through to the engine -- the run / data / diagnostic / io allowlist is the
@@ -107,7 +107,7 @@ class BoundSimulation:
         raise AttributeError(
             "pops.bind: a bound simulation has no %r; its surface is the run / data / diagnostic / "
             "io methods (run / step / step_cfl / set_state / density / mass / inspect / checkpoint / "
-            "...). Author the composition on the pops.Problem and lower it with pops.compile(...) + "
+            "...). Author the composition on the pops.Case and lower it with pops.compile(...) + "
             "pops.bind(...)." % attr)
 
     def __repr__(self) -> Any:

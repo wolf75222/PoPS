@@ -1,4 +1,4 @@
-"""Typed Problem registries, split by declaration family.
+"""Typed Case registries, split by declaration family.
 
 This module is the stable import surface.  Implementation modules separate model-instance
 qualification and case declarations so no registry family can grow back into a monolith.

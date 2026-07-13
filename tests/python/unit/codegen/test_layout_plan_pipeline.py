@@ -7,6 +7,7 @@ import pytest
 
 import pops
 from pops.codegen._layout_resolution import LayoutCapabilityError
+from pops.codegen._resolution import CapabilityResolutionError, _layout_name
 from pops.mesh import CartesianMesh, LayoutPlanBuilder
 from pops.mesh.layout_plan import LayoutMappingRequirement
 from pops.mesh.layouts import Uniform
@@ -26,24 +27,37 @@ class _MappingProvider:
                 requirement.target.qualified_id) in self.routes
 
 
-def _problem(name="layout-pipeline"):
+def test_layout_capability_identity_is_open_and_never_guessed_from_class_name():
+    class ExternalLayout:
+        def capabilities(self):
+            return {"layout": "external-grid"}
+
+    class AMR:
+        pass
+
+    assert _layout_name(ExternalLayout()) == "external-grid"
+    with pytest.raises(CapabilityResolutionError, match="capabilities"):
+        _layout_name(AMR())
+
+
+def _case(name="layout-pipeline"):
     first = Module("layout-first")
     first_space = first.state_space("U", ("u",))
     second = Module("layout-second")
     second_space = second.state_space("V", ("v",))
-    problem = pops.Problem(name=name)
-    problem.block("first", first)
-    problem.block("second", second)
-    problem.program(pops.Program("layout-time"))
-    pops.validate(problem)
-    return problem, first.state_handle(first_space), second.state_handle(second_space)
+    case = pops.Case(name=name)
+    case.block("first", first)
+    case.block("second", second)
+    case.program(pops.Program("layout-time"))
+    pops.validate(case)
+    return case, first.state_handle(first_space), second.state_handle(second_space)
 
 
-def _heterogeneous_plan(problem):
-    subjects = problem._materialized_layout_subjects()
+def _heterogeneous_plan(case):
+    subjects = case._materialized_layout_subjects()
     by_block = {value.local_id: value for value in subjects["blocks"]}
     by_state = {value.block_ref.local_id: value for value in subjects["states"]}
-    builder = LayoutPlanBuilder(problem.owner_path.canonical())
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
     coarse = builder.layout("coarse", Uniform(CartesianMesh(n=8)))
     fine = builder.layout("fine", Uniform(CartesianMesh(n=16)))
     builder.assign_block(by_block["first"], coarse)
@@ -62,22 +76,22 @@ def _heterogeneous_plan(problem):
 
 
 def test_single_descriptor_is_normalized_through_the_layout_plan_pipeline():
-    problem, _, _ = _problem("single-normalization")
-    resolved = pops.resolve(problem, layout=Uniform(CartesianMesh(n=8)))
+    case, _, _ = _case("single-normalization")
+    resolved = pops.resolve(case, layout=Uniform(CartesianMesh(n=8)))
 
     assert len(resolved.layout_plan.layouts) == 1
     assert len(resolved.layout_plan.assignments) == 4
-    resolved.layout_plan.validate_subjects(**problem._materialized_layout_subjects())
+    resolved.layout_plan.validate_subjects(**case._materialized_layout_subjects())
     assert resolved.capabilities["layout_plan"]["layouts"][0]["capabilities"]["layout"] \
         == "uniform"
     assert resolved.lowering_coverage.to_data()["rows"]
 
 
 def test_explicit_single_plan_uses_the_same_path_with_a_separate_authenticated_provider():
-    problem, _, _ = _problem("single-plan-provider")
-    subjects = problem._materialized_layout_subjects()
+    case, _, _ = _case("single-plan-provider")
+    subjects = case._materialized_layout_subjects()
     descriptor = Uniform(CartesianMesh(n=8))
-    builder = LayoutPlanBuilder(problem.owner_path.canonical())
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("only", descriptor)
     for block in subjects["blocks"]:
         builder.assign_block(block, layout)
@@ -86,7 +100,7 @@ def test_explicit_single_plan_uses_the_same_path_with_a_separate_authenticated_p
     plan = builder.resolve(**subjects)
 
     resolved = pops.resolve(
-        problem, layout=plan, layout_providers={layout: Uniform(CartesianMesh(n=8))})
+        case, layout=plan, layout_providers={layout: Uniform(CartesianMesh(n=8))})
 
     assert resolved.layout_plan == plan
     assert resolved.layout is not descriptor
@@ -94,9 +108,9 @@ def test_explicit_single_plan_uses_the_same_path_with_a_separate_authenticated_p
 
 
 def test_pipeline_rejects_an_unassigned_materialized_state_before_artifact_creation():
-    problem, _, _ = _problem("unassigned-pipeline")
-    subjects = problem._materialized_layout_subjects()
-    builder = LayoutPlanBuilder(problem.owner_path.canonical())
+    case, _, _ = _case("unassigned-pipeline")
+    subjects = case._materialized_layout_subjects()
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("only", Uniform(CartesianMesh(n=8)))
     for block in subjects["blocks"]:
         builder.assign_block(block, layout)
@@ -105,15 +119,15 @@ def test_pipeline_rejects_an_unassigned_materialized_state_before_artifact_creat
         blocks=subjects["blocks"], states=subjects["states"][:1])
 
     with pytest.raises(ValueError, match="unassigned layout subjects"):
-        pops.resolve(problem, layout=incomplete)
+        pops.resolve(case, layout=incomplete)
 
 
 def test_heterogeneous_plan_is_proved_then_refused_with_capability_and_coverage_evidence():
-    problem, _, _ = _problem("multi-runtime-gate")
-    plan = _heterogeneous_plan(problem)
+    case, _, _ = _case("multi-runtime-gate")
+    plan = _heterogeneous_plan(case)
 
     with pytest.raises(LayoutCapabilityError) as caught:
-        pops.resolve(problem, layout=plan)
+        pops.resolve(case, layout=plan)
 
     error = caught.value
     assert error.evidence["gate"] == "multi_layout_runtime_unavailable"
@@ -125,13 +139,13 @@ def test_heterogeneous_plan_is_proved_then_refused_with_capability_and_coverage_
 
 
 def test_adding_an_independent_layout_does_not_change_existing_assignment_capabilities():
-    problem, _, _ = _problem("independent-capabilities")
-    multi = _heterogeneous_plan(problem)
-    subjects = problem._materialized_layout_subjects()
+    case, _, _ = _case("independent-capabilities")
+    multi = _heterogeneous_plan(case)
+    subjects = case._materialized_layout_subjects()
     first_block = next(value for value in subjects["blocks"] if value.local_id == "first")
     first_state = next(value for value in subjects["states"]
                        if value.block_ref.local_id == "first")
-    builder = LayoutPlanBuilder(problem.owner_path.canonical())
+    builder = LayoutPlanBuilder(case.owner_path.canonical())
     layout = builder.layout("coarse", Uniform(CartesianMesh(n=8)))
     builder.assign_block(first_block, layout)
     builder.assign_state(first_state, layout)

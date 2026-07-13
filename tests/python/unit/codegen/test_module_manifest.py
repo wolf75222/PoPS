@@ -1,9 +1,9 @@
-"""ADC-585: the Module / Operator manifests that replace ModelSpec as the central representation.
+"""ADC-585: Module / Operator manifests are the central representation.
 
 ``Module.manifest()`` builds a self-describing, JSON-ready :class:`ModuleManifest`: the spaces,
 params, aux, eigenvalue presence, the typed operator registry (each operator by its stable id, in
-registration order) and the native route-registry components.  It supersedes the legacy flat
-ModelSpec POD, which is now quarantined off the ``pops`` root (``pops.runtime.ModelSpec``).
+registration order) and the native route-registry components. No parallel native model POD
+participates in public authoring.
 
 Pure Python (the model layer is import-free); skips if ``pops`` is not importable.
 """
@@ -277,14 +277,6 @@ def test_describe_errors_cite_operator_and_registry_contents():
     print("OK  describe() on an unknown operator cites operator + registry contents")
 
 
-def test_modelspec_is_quarantined_off_the_pops_root():
-    assert not hasattr(pops, "ModelSpec")
-    from pops.runtime import ModelSpec  # the legacy native-bridge POD's quarantined home
-
-    assert ModelSpec is not None
-    print("OK  pops.ModelSpec removed; pops.runtime.ModelSpec available")
-
-
 def main():
     test_manifest_schema_and_spaces()
     test_manifest_does_not_mutate_module()
@@ -296,7 +288,6 @@ def main():
     test_native_routes_and_abi_slot_present()
     test_coupled_rate_multi_output_names_bundle_without_new_flat_field()
     test_describe_errors_cite_operator_and_registry_contents()
-    test_modelspec_is_quarantined_off_the_pops_root()
     print("OK  test_module_manifest")
 
 

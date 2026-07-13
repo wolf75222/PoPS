@@ -1,4 +1,4 @@
-"""Detached inspection payloads for Problem."""
+"""Detached inspection payloads for Case."""
 from __future__ import annotations
 
 from typing import Any

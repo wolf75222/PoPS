@@ -1,4 +1,4 @@
-"""Owner-qualified declaration handles for a Problem assembly."""
+"""Owner-qualified declaration handles for a Case assembly."""
 from __future__ import annotations
 
 from typing import Any
@@ -115,7 +115,7 @@ class FieldHandle(Handle):
 
 
 class OperatorHandle(Handle):
-    """Reference to a Problem-scoped coupling/local operator declaration."""
+    """Reference to a Case-scoped coupling/local operator declaration."""
 
     __slots__ = ()
 

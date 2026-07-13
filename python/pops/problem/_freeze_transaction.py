@@ -1,4 +1,4 @@
-"""All-or-nothing freeze transactions for a :class:`pops.Problem` object graph.
+"""All-or-nothing freeze transactions for a :class:`pops.Case` object graph.
 
 Every participant is snapshotted before the first ``freeze()`` call.  PoPS Python objects are
 restored by identity (attribute bindings and built-in mutable containers); native or third-party
@@ -119,7 +119,7 @@ def freeze_atomically(participants: Iterable[Any], commit: Callable[[], Any]) ->
                 rollback_errors.append(error)
         if rollback_errors:
             raise RuntimeError(
-                "Problem freeze failed and rollback could not restore every participant: %s"
+                "Case freeze failed and rollback could not restore every participant: %s"
                 % "; ".join(str(error) for error in rollback_errors)) from failure
         raise
 

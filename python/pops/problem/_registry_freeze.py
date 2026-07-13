@@ -1,4 +1,4 @@
-"""Shared deep-freeze mechanics for Problem registries."""
+"""Shared deep-freeze mechanics for Case registries."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -37,12 +37,12 @@ class FreezableRegistry:
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "_frozen", False):
             if name != "_frozen" or value is not True:
-                raise RuntimeError("pops.Problem registry is frozen: cannot change %s" % name)
+                raise RuntimeError("pops.Case registry is frozen: cannot change %s" % name)
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if getattr(self, "_frozen", False):
-            raise RuntimeError("pops.Problem registry is frozen: cannot delete %s" % name)
+            raise RuntimeError("pops.Case registry is frozen: cannot delete %s" % name)
         object.__delattr__(self, name)
 
     def freeze(self) -> Any:
@@ -80,8 +80,8 @@ class FreezableRegistry:
     def _guard_frozen(self, what: Any) -> None:
         if self._frozen:
             raise RuntimeError(
-                "pops.Problem registry is frozen (ADC-563): cannot %s after pops.compile froze the "
-                "Problem; author a fresh Problem and recompile." % what)
+                "pops.Case registry is frozen (ADC-563): cannot %s after pops.compile froze the "
+                "Case; author a fresh Case and recompile." % what)
 
 
 def _immutable_copy(value: Any) -> Any:
@@ -102,7 +102,7 @@ def inspection_copy(value: Any) -> Any:
 
     Registry storage deliberately uses mapping proxies, tuples and frozensets after freeze.  Those
     containers must never leak into the public inspection bridge: callers expect a mutable copy and
-    ``Problem.to_dict()`` promises JSON-compatible container types.
+    ``Case.to_dict()`` promises JSON-compatible container types.
     """
     if isinstance(value, Mapping):
         return {key: inspection_copy(item) for key, item in value.items()}

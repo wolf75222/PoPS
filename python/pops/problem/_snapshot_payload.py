@@ -1,6 +1,6 @@
-"""Raw structural Problem payload used exclusively by :mod:`pops.problem._snapshot`.
+"""Raw structural Case payload used exclusively by :mod:`pops.problem._snapshot`.
 
-The public ``Problem.to_dict()`` is an inspection view and intentionally shortens several objects
+The public ``Case.to_dict()`` is an inspection view and intentionally shortens several objects
 to display names.  A compile-cache identity cannot use that lossy view: two models may share a name
 while carrying different coefficients.  This module reads the typed registries and returns detached
 container shells whose leaves remain the real descriptors; ``AuthoringSnapshot`` then applies its
@@ -13,12 +13,12 @@ from typing import Any
 
 
 def problem_snapshot_payload(problem: Any) -> dict[str, Any]:
-    """Return all cache-relevant Problem declarations without display-name reduction."""
+    """Return all cache-relevant Case declarations without display-name reduction."""
     return _problem_snapshot_payload(problem, artifact=False)
 
 
 def problem_snapshot_artifact_payload(problem: Any) -> dict[str, Any]:
-    """Return the compile-relevant projection of one Problem.
+    """Return the compile-relevant projection of one Case.
 
     Parameter declarations are projected through their authoritative ``artifact_data()`` methods.
     This is intentionally a second construction from typed registries, not a recursive deletion of
@@ -77,7 +77,7 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
         "layout": _layout_semantic_data(layout),
         "time": None if effective_time is None else program_semantic_data(effective_time),
     }
-    return semantic_value(payload, where="Problem semantic payload")
+    return semantic_value(payload, where="Case semantic payload")
 
 
 def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]:
@@ -132,14 +132,14 @@ def _problem_param_rows(problem: Any, *, artifact: bool) -> dict[str, Any]:
         handle = registry.canonicalize(registry.handle(declaration))
         declaration_data = (
             _validated_parameter_artifact_data(
-                declaration, where="Problem parameter %r" % name)
+                declaration, where="Case parameter %r" % name)
             if artifact else declaration.bind_data()
         )
         if not isinstance(declaration_data, Mapping):
-            raise TypeError("Problem parameter %r projection must be a mapping" % name)
+            raise TypeError("Case parameter %r projection must be a mapping" % name)
         row = dict(declaration_data)
         if row.get("name") != name:
-            raise ValueError("Problem parameter %r projection changed its registry name" % name)
+            raise ValueError("Case parameter %r projection changed its registry name" % name)
         row["qid"] = handle.qualified_id
         row["handle"] = handle.canonical_identity()
         rows[name] = row
@@ -173,8 +173,8 @@ def _validated_parameter_artifact_data(declaration: Any, *, where: str) -> dict[
 def _time_snapshot_value(program: Any, *, artifact: bool = False) -> Any:
     """Project a Program from its IR, excluding lifecycle-only inspection state.
 
-    ``Problem.freeze`` first captures the snapshot and then seals the Program.  Inspection reports
-    include that lifecycle state, so using ``inspect()`` made the same Problem hash differently
+    ``Case.freeze`` first captures the snapshot and then seals the Program.  Inspection reports
+    include that lifecycle state, so using ``inspect()`` made the same Case hash differently
     immediately after a successful freeze.  The serialized IR and its hash are the complete compile
     input and remain identical across the mutable-to-frozen transition.
     """
@@ -299,10 +299,10 @@ def _semantic_parameter_rows(problem: Any) -> dict[str, Any]:
     for name, declaration in sorted(problem._param_registry.items()):
         data = declaration.bind_data()
         if not isinstance(data, Mapping):
-            raise TypeError("Problem parameter %r bind_data() must return a mapping" % name)
+            raise TypeError("Case parameter %r bind_data() must return a mapping" % name)
         required = {"kind", "domain", "unit", "storage"}
         if not required.issubset(data):
-            raise TypeError("Problem parameter %r lacks semantic declaration metadata" % name)
+            raise TypeError("Case parameter %r lacks semantic declaration metadata" % name)
         rows[name] = {key: data[key] for key in sorted(required)}
     return rows
 

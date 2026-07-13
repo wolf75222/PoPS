@@ -11,9 +11,6 @@ from typing import Any
 
 
 _EXPORTS = {
-    "ModelSpec": ("pops._bootstrap", "ModelSpec"),
-    "System": ("pops.runtime.system", "System"),
-    "AmrSystem": ("pops.runtime.system", "AmrSystem"),
     "Profile": ("pops.runtime.profile", "Profile"),
     "PerformanceSummary": ("pops.runtime.profile", "PerformanceSummary"),
     "RuntimeInspectionReport": ("pops.runtime.inspection", "RuntimeInspectionReport"),

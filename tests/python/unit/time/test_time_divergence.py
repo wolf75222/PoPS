@@ -190,7 +190,7 @@ def test_condensed_schur_macro_lowers(t):
     # adds the n+1 momentum extrapolation by factor 1/theta on top. theta out of (0, 1] raises ValueError.
     # The end-to-end parity lives in test_time_condensed_schur.py.
     model1 = _lorentz_model("div_m1")
-    P = t.Program("p").bind_operators(model1)
+    P = t.Program("p")._bind_operators(model1)
     lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=1.0, theta=1.0,
         linear_operator=_linear_handle(model1))
@@ -202,7 +202,7 @@ def test_condensed_schur_macro_lowers(t):
     assert "coupling/schur" not in src and "coupling::schur" not in src, src
     # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
     model2 = _lorentz_model("div_m2")
-    P2 = t.Program("p2").bind_operators(model2)
+    P2 = t.Program("p2")._bind_operators(model2)
     lt.CondensedSchur(
         P2, *state_refs(P2, "blk"), alpha=1.0, theta=0.5,
         linear_operator=_linear_handle(model2))
@@ -211,7 +211,7 @@ def test_condensed_schur_macro_lowers(t):
         "theta=0.5 must lower the reconstruct chain (inline block_apply_inverse)")
     # theta out of (0, 1] is still rejected (loud).
     invalid_model = _lorentz_model("div_invalid")
-    invalid = t.Program("p3").bind_operators(invalid_model)
+    invalid = t.Program("p3")._bind_operators(invalid_model)
     try:
         lt.CondensedSchur(
             invalid, *state_refs(invalid, "blk"), alpha=1.0, theta=1.5,

@@ -93,7 +93,7 @@ def _apply_refine_criterion(
         )
     if not getattr(criterion, "references_authenticated", False):
         raise ValueError(
-            "pops.bind: Refine criterion references were not authenticated by Problem.resolve; "
+            "pops.bind: Refine criterion references were not authenticated by Case.resolve; "
             "run it through pops.compile(problem, layout=...) instead of attaching a raw or "
             "canonical-looking Handle directly to a compiled/runtime layout"
         )
@@ -165,7 +165,7 @@ def _refine_subject_name(subject: Any) -> Any:
     if not subject.is_resolved:
         raise ValueError(
             "pops.bind: Refine subject %s is still authoring-owned; compile must resolve every "
-            "reference through Problem.resolve before runtime lowering" % subject.qualified_id
+            "reference through Case.resolve before runtime lowering" % subject.qualified_id
         )
     return subject.local_id
 

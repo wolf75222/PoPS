@@ -14,7 +14,6 @@ import numpy as np
 
 import pops
 import pops.experimental  # noqa: F401  (ADC-600: no longer eagerly bound on the pops root)
-from pops.runtime import ModelSpec  # ADC-585: ModelSpec is the legacy native-bridge POD, off pops root
 from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -387,27 +386,6 @@ def err(fn):
     except Exception as e:
         return str(e)
 
-
-# --- ADC-290 : un ModelSpec INCOMPLET echoue clairement, jamais de retombee physique silencieuse. ---
-# Avant, transport defaut="compressible" / elliptic="charge" -> un ModelSpec nu valait Euler +
-# Poisson-charge par accident. ModelSpec() est desormais NON POSE (transport="" et elliptic="").
-# ADC-585 : ModelSpec est le POD herite du pont natif, hors racine pops (pops.runtime.ModelSpec).
-chk(not hasattr(pops, "ModelSpec"),
-    "ModelSpec est hors racine pops (ADC-585) : pops.ModelSpec n'existe plus")
-chk(raises(lambda: System(n=16).block("m", ModelSpec())),
-    "ModelSpec incomplet (transport non pose) refuse : pas de 'compressible' silencieux")
-chk("transport" in err(lambda: System(n=16).block("m", ModelSpec())).lower(),
-    "message ModelSpec incomplet nomme 'transport' (erreur lisible)")
-_only_transport = ModelSpec()
-_only_transport.transport = "exb"  # elliptic encore non pose
-chk(raises(lambda: System(n=16).block("m", _only_transport)),
-    "ModelSpec sans elliptic refuse : pas de 'charge' silencieux")
-# Parite AmrSystem : meme contrat a l'entree de add_block.
-chk(raises(lambda: AmrSystem(n=16).block("m", ModelSpec())),
-    "AmrSystem.block(ModelSpec incomplet) refuse")
-# Un modele COMPLET (via pops.Model) reste accepte : le garde-fou ne sur-rejette pas.
-chk(not raises(lambda: System(n=16).block("ok", diocotron())),
-    "modele complet (pops.Model) accepte par add_block")
 
 # --- ADC-299 : une config invalide est REJETEE avant toute construction interne (System / AmrSystem). ---
 chk(raises(lambda: System(n=0)), "System(n=0) refuse (n >= 1)")

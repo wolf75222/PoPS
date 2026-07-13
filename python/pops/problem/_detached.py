@@ -159,7 +159,7 @@ def _intrinsically_immutable(value: Any) -> bool:
         if not value.is_resolved:
             raise ValueError(
                 "unresolved authoring Handle %s cannot cross the compiled boundary; resolve it "
-                "through Problem.resolve first" % value.qualified_id
+                "through Case.resolve first" % value.qualified_id
             )
         return True
     if isinstance(value, OwnerPath):

@@ -65,7 +65,7 @@ def _field_program(schedule):
     rho = Var("rho", "cons")
     mod.operator(name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho)
     mod.operator_capabilities("fields_from_state", cacheable=True)
-    P = adctime.Program("sched").bind_operators(mod)
+    P = adctime.Program("sched")._bind_operators(mod)
     schedule = schedule(P.clock) if callable(schedule) else schedule
     U = typed_state(P, "plasma", space=u)
     if schedule is None:

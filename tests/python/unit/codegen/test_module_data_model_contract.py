@@ -345,7 +345,7 @@ def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
     from pops.problem import Case
 
     block = Case(name="shape-case").block("fluid", module)
-    program = Program("rate_shape").bind_operators(module)
+    program = Program("rate_shape")._bind_operators(module)
     value = program.state(block, module.state_handle(state)).n
     rate_value = program._rhs_legacy(state=value, sources=[])
     assert rate_value.logical_shape == {

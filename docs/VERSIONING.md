@@ -22,7 +22,7 @@ What a version bump is allowed to break is exactly this surface:
 - The concepts a model composes against: `PhysicalModel`, `PhysicalFlux`, `NumericalFlux`,
   `SpatialOperator`, `EllipticSolver`,
   and the named generic bricks in `include/pops/physics/`.
-- Python bindings: the documented `pops.*` surface (`pops.Model`, `pops.Problem`, `pops.compile`,
+- Python bindings: the documented `pops.*` surface (`pops.Model`, `pops.Case`, `pops.compile`,
   `pops.bind`, `pops.physics.facade.Model`, the brick classes, `pops.doctor`, `pops.set_threads`,
   `pops.parallel_info`, `pops.has_kokkos`, `pops.__version__`). The runtime engines `System` /
   `AmrSystem` are internal seams behind `pops.compile` / `pops.bind` (reachable as

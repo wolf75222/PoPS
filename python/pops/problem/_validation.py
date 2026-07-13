@@ -1,4 +1,4 @@
-"""Strict validation helpers for behavior-bearing Problem fields."""
+"""Strict validation helpers for behavior-bearing Case fields."""
 from __future__ import annotations
 
 from typing import Any

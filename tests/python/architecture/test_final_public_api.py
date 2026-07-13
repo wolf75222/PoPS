@@ -73,6 +73,14 @@ def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
         assert not hasattr(output, removed)
 
 
+def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
+    from pops import runtime
+
+    for removed in ("ModelSpec", "System", "AmrSystem"):
+        assert removed not in runtime.__all__
+        assert not hasattr(runtime, removed)
+
+
 def test_physics_has_no_competing_model_facade() -> None:
     from pops import physics
 

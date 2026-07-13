@@ -63,7 +63,7 @@ def materialized_layout_subjects(problem: Any) -> dict[str, tuple[Any, ...]]:
     """Enumerate exact canonical blocks, state instances, and case fields without representatives."""
     protocol = getattr(problem, "_materialized_layout_subjects", None)
     if not callable(protocol):
-        raise TypeError("layout planning requires the Problem materialized-subject protocol")
+        raise TypeError("layout planning requires the Case materialized-subject protocol")
     return protocol()
 
 
@@ -152,7 +152,7 @@ def resolve_layout(problem: Any, layout: Any, *, providers: Any = None) \
     subjects = materialized_layout_subjects(problem)
     if isinstance(selected, LayoutPlan):
         if selected.owner != problem.owner_path.canonical():
-            raise ValueError("LayoutPlan owner does not match the frozen Problem authority")
+            raise ValueError("LayoutPlan owner does not match the frozen Case authority")
         selected.validate_subjects(**subjects)
         runtime_descriptor = _select_runtime_provider(selected, providers)
         return ResolvedLayoutAuthority(selected, runtime_descriptor)

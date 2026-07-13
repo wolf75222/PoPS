@@ -225,7 +225,7 @@ def test_condensed_buffer_writers_never_removed():
     RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
     for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
         model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
-        P = adctime.Program("cs").bind_operators(model)
+        P = adctime.Program("cs")._bind_operators(model)
         block, state = state_refs(P, "blk")
         libtime.CondensedSchur(
             P, block, state, alpha=_ALPHA, theta=theta, c_E=c_E,

@@ -7,8 +7,7 @@ would silently drop a test's coverage fails the gate here.
 
 Ground-truth edges asserted below were verified by reading the source:
 
-* ``python/pops/runtime/_bound_sim.py`` is imported (function scope) by
-  ``test_bind_adapters.py`` and ``test_freeze_lifecycle.py``;
+* ``python/pops/runtime/_bind_adapters.py`` is imported directly by the final typed bind gate;
 * ``python/pops/numerics/riemann/waves.py`` is imported by
   ``test_wave_speed_providers.py``;
 * the DSL cross-test helpers: ``test_dsl_block.py`` imports ``test_dsl_brick.py``
@@ -73,10 +72,10 @@ def test_lazy_function_scope_edge_is_captured():
 # --------------------------------------------------------------------------- #
 # Impact query -- ground-truth module -> tests                                 #
 # --------------------------------------------------------------------------- #
-def test_bound_sim_change_selects_bind_and_freeze_tests():
-    sel = cic.impacted_tests(["python/pops/runtime/_bound_sim.py"], repo_root=REPO_ROOT)
-    assert "tests/python/integration/bindings/test_bind_adapters.py" in sel
-    assert "tests/python/integration/runtime/test_freeze_lifecycle.py" in sel
+def test_runtime_instance_change_selects_final_runtime_gate():
+    sel = cic.impacted_tests(
+        ["python/pops/runtime/runtime_instance.py"], repo_root=REPO_ROOT)
+    assert "tests/python/unit/runtime/test_runtime_instance_gate.py" in sel
 
 
 def test_waves_change_selects_wave_speed_providers_test():
@@ -91,7 +90,7 @@ def test_bind_adapters_change_selects_bind_adapters_test():
     sel = cic.impacted_tests(
         ["python/pops/runtime/_bind_adapters.py"], repo_root=REPO_ROOT
     )
-    assert "tests/python/integration/bindings/test_bind_adapters.py" in sel
+    assert "tests/python/unit/runtime/test_typed_bind_phase.py" in sel
 
 
 # --------------------------------------------------------------------------- #

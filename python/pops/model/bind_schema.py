@@ -55,7 +55,7 @@ def _resolved_bind_data(declaration: Any, resolver: Any) -> dict[str, Any]:
 
 
 class BindSchema:
-    """Canonical immutable table of every qualified parameter slot in a Problem."""
+    """Canonical immutable table of every qualified parameter slot in a Case."""
 
     __slots__ = ("schema_version", "_slots", "_by_handle", "_aliases")
 
@@ -221,7 +221,7 @@ class BindSchema:
         """Collect Module parameters per block and CASE-owned control parameters once."""
         block_registry = getattr(problem, "_blocks", None)
         if block_registry is None or not hasattr(block_registry, "items"):
-            raise TypeError("BindSchema.from_problem requires a pops.Problem")
+            raise TypeError("BindSchema.from_problem requires a pops.Case")
         slots: list[BindSlot] = []
         aliases: dict[ParamHandle, ParamHandle] = {}
         for block_name, spec in block_registry.items():
@@ -246,7 +246,7 @@ class BindSchema:
                 live_instance = problem.qualify(declaration_handle, block=block)
                 canonical = problem.resolve(declaration_handle, block=block)
                 if not isinstance(canonical, ParamHandle):
-                    raise TypeError("Problem resolved a Module parameter to a non-ParamHandle")
+                    raise TypeError("Case resolved a Module parameter to a non-ParamHandle")
                 row = _resolved_bind_data(
                     declaration,
                     lambda handle, selected=block: problem.resolve(handle, block=selected),
@@ -260,11 +260,11 @@ class BindSchema:
         if callable(handles) and callable(declaration_for):
             for live_handle in handles():
                 if not isinstance(live_handle, ParamHandle):
-                    raise TypeError("Problem ParamRegistry handles() must return ParamHandle values")
+                    raise TypeError("Case ParamRegistry handles() must return ParamHandle values")
                 declaration = declaration_for(live_handle)
                 canonical = problem.resolve(live_handle)
                 if not isinstance(canonical, ParamHandle):
-                    raise TypeError("Problem resolved a Case parameter to a non-ParamHandle")
+                    raise TypeError("Case resolved a Case parameter to a non-ParamHandle")
                 slots.append(
                     BindSlot(
                         len(slots), canonical,
@@ -274,7 +274,7 @@ class BindSchema:
                 aliases[live_handle] = canonical
         elif case_registry is not None and len(case_registry):
             raise ValueError(
-                "BindSchema cannot consume the transitional ownerless Problem parameter registry; "
+                "BindSchema cannot consume the transitional ownerless Case parameter registry; "
                 "migrate it to the canonical CASE-owned ParamRegistry"
             )
         return cls(slots, aliases=aliases)

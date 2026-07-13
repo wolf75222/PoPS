@@ -483,7 +483,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
     ignored on a single-level mesh is a correctness trap, not a convenience). Passing
     ``Uniform(mesh, refine=..., ignore_amr=IgnoreAMRCriteria())`` is the one explicit,
     self-documenting way to opt out: it is a marker descriptor (it carries no behaviour of its
-    own) that :meth:`pops.Problem.validate` looks for before it raises.
+    own) that :meth:`pops.Case.validate` looks for before it raises.
     """
 
     category = "amr_override"

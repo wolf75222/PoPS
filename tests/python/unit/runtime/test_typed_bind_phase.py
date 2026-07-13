@@ -8,12 +8,30 @@ import pytest
 from pops.runtime import _bind_validation as validation
 from pops.runtime import _bind_adapters
 from pops.runtime._bind_adapters import install_plan
+from pops.runtime._bound_snapshot import _data
 
 
 def test_historical_target_adapters_are_not_an_install_authority():
     assert not hasattr(_bind_adapters, "adapter_for")
     assert not hasattr(_bind_adapters, "_UniformRuntimeAdapter")
     assert not hasattr(_bind_adapters, "_AmrRuntimeAdapter")
+
+
+def test_bind_identity_uses_open_data_protocols_not_descriptor_class_names():
+    class ExternalDescriptor:
+        def to_data(self):
+            return {"provider": "external", "order": 3}
+
+    class ExternalConsumerDescriptor:
+        def consumer_data(self):
+            return {"provider": "external-consumer", "collective": False}
+
+    assert _data(ExternalDescriptor(), where="external") == {
+        "provider": "external", "order": 3}
+    assert _data(ExternalConsumerDescriptor(), where="consumer") == {
+        "provider": "external-consumer", "collective": False}
+    with pytest.raises(TypeError, match="canonical data protocol"):
+        _data(object(), where="opaque")
 
 
 def test_typed_install_rejects_every_wrong_phase_value():

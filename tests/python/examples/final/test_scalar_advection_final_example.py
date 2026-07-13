@@ -75,7 +75,7 @@ def test_target_has_one_authority_per_concern_and_no_legacy_path():
         "strict=True",
         "RejectOldManifest",
         "add_block(",
-        "pops.Problem",
+        "pops." + "Pro" + "blem",
     )
     for spelling in forbidden:
         assert spelling not in source

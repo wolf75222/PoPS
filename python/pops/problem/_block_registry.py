@@ -1,4 +1,4 @@
-"""Block declarations and model-to-instance qualification for a Problem."""
+"""Block declarations and model-to-instance qualification for a Case."""
 from __future__ import annotations
 
 from typing import Any
@@ -59,7 +59,7 @@ class BlockRegistry(_FreezableRegistry):
 
         Qualification is deterministic derived state, but caching it after freeze would mutate a
         mapping proxy.  Eagerly issuing the complete finite set here keeps ``qualify`` and schema
-        extraction read-only on a frozen Problem.  The enclosing freeze transaction rolls this
+        extraction read-only on a frozen Case.  The enclosing freeze transaction rolls this
         cache back if a later member fails to freeze.
         """
         for block in self._handles.values():

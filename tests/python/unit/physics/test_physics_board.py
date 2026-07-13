@@ -161,7 +161,7 @@ def test_rate_and_operator_return_callables_usable_in_a_program():
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
     assert callable(explicit_rate) and callable(implicit_operator)
 
-    P = Program("board_calls").bind_operators(m.module)
+    P = Program("board_calls")._bind_operators(m.module)
     plasma = Case(name="board_calls").block("plasma", m)
     U_n = P.state(plasma, U).n
     f_n = P.solve_fields("f_n", U_n)
@@ -182,7 +182,7 @@ def test_board_module_is_consumable_by_operator_first_program():
     from pops.time import Program
     m = _euler_poisson_lorentz()
     P = Program("operator_first")
-    P.bind_operators(m.module)
+    P._bind_operators(m.module)
     plasma = Case(name="operator_first").block("plasma", m)
     state = m.module.state_handle(m.module.state_spaces()["U"])
     U = P.state(plasma, state).n

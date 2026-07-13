@@ -75,7 +75,7 @@ def test_condensed_program_includes_block_inverse_and_no_schur():
     coeff-free apply, and carries NO coupling/schur token -- neither the include path NOR the C++
     namespace (ADC-637: the brick is retired, the generic route is the sole route)."""
     model = _lorentz_model("cs_model")
-    P = pops_time.Program("cs").bind_operators(model)
+    P = pops_time.Program("cs")._bind_operators(model)
     block, state = state_refs(P, "blk", model=model)
     pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,

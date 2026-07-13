@@ -33,7 +33,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     clock = Clock("macro", owner=case.owner_path)
     output_schedule = every(10, clock=clock)
     diagnostic = Integral(block=block, cadence=output_schedule)
-    graph = ConsumerGraph.from_policies((
+    graph = ConsumerGraph.from_consumers((
         ScientificOutput(
             format=HDF5(parallel=True),
             schedule=output_schedule,
@@ -80,11 +80,11 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 
 
-def test_consumer_policy_protocol_is_required_and_schedule_authority_is_unique():
+def test_consumer_protocol_is_required_and_schedule_authority_is_unique():
     case, block, state = _case()
     clock = Clock("macro", owner=case.owner_path)
     with pytest.raises(TypeError, match="consumer_authoring"):
-        ConsumerGraph.from_policies((object(),))
+        ConsumerGraph.from_consumers((object(),))
     with pytest.raises(ValueError, match="same schedule"):
         ScientificOutput(
             format=HDF5(),

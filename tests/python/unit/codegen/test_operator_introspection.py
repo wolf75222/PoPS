@@ -78,7 +78,7 @@ def test_dsl_model_introspection():
 def test_compiled_problem_introspection():
     m = _model()
     block, state = _time_refs(m)
-    P = adctime.Program("pc").bind_operators(m)
+    P = adctime.Program("pc")._bind_operators(m)
     libtime.predictor_corrector_local_linear(
         P, block, state, fields_operator=_op(m, "fields_from_state"),
         explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
@@ -108,7 +108,7 @@ def test_compiled_introspection_view_does_not_retain_model_registry():
     def build():
         m = _model()
         block, state = _time_refs(m)
-        P = adctime.Program("detached-introspection").bind_operators(m)
+        P = adctime.Program("detached-introspection")._bind_operators(m)
         libtime.predictor_corrector_local_linear(
             P, block, state, fields_operator=_op(m, "fields_from_state"),
             explicit_rate_operator=_op(m, "explicit_rhs"),

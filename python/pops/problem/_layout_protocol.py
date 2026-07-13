@@ -1,4 +1,4 @@
-"""Small protocol adapters between Problem assembly and descriptor/LayoutPlan authorities."""
+"""Small protocol adapters between Case assembly and descriptor/LayoutPlan authorities."""
 from __future__ import annotations
 
 from typing import Any

@@ -112,7 +112,7 @@ def _lorentz_model(name):
 # ============================ (A) IR + codegen: pure Python =============================
 def test_imex_local_builds_and_lowers(t):
     model = _lorentz_model("imex_m")
-    P = t.Program("imex").bind_operators(model)
+    P = t.Program("imex")._bind_operators(model)
     out = lt.imex_local(
         P, *state_refs(P, "plasma"), linear_source=_linear_handle(model))
     assert P.validate() is True and commits_by_block(P)["plasma"] is out
@@ -129,7 +129,7 @@ def test_imex_local_builds_and_lowers(t):
 def test_imex_local_theta_guard(t):
     for bad in (0.0, -0.5, 1.5):
         model = _lorentz_model("theta_%s" % str(bad).replace(".", "_"))
-        program = t.Program("x").bind_operators(model)
+        program = t.Program("x")._bind_operators(model)
         try:
             lt.imex_local(
                 program, *state_refs(program, "plasma"),
@@ -298,7 +298,7 @@ def _run_imex(t):
         print("-- (B imex) skipped: _pops lacks install_program (rebuild _pops) --")
         return
     model = _lorentz_model("imex_prog")
-    P = t.Program("imex_step").bind_operators(model)
+    P = t.Program("imex_step")._bind_operators(model)
     lt.imex_local(
         P, *state_refs(P, "plasma"), linear_source=_linear_handle(model),
         flux=True, sources=(DefaultSource(),), theta=1.0)

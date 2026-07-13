@@ -333,7 +333,7 @@ def build_consumer_graph(core: ScalarAdvectionAuthoring) -> Any:
             target="checkpoints/restart",
         ),
     )
-    return ConsumerGraph.from_policies(consumers)
+    return ConsumerGraph.from_consumers(consumers)
 
 
 def build_final_case() -> FinalScalarAdvectionCase:

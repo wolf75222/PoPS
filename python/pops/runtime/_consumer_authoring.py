@@ -1,4 +1,4 @@
-"""Callback-free policy-to-ConsumerGraph authoring contracts."""
+"""Callback-free consumer-to-ConsumerGraph authoring contracts."""
 from __future__ import annotations
 
 import re

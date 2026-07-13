@@ -195,7 +195,7 @@ def test_cse_condensed_buffer_writers_untouched():
     here -- the op is not pure -- so the emitted C++ is byte-identical (still has the fused RHS write)."""
     RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
     model = _lorentz_model("cs_opt")
-    P = adctime.Program("cs").bind_operators(model)
+    P = adctime.Program("cs")._bind_operators(model)
     block, state = state_refs(P, "blk")
     libtime.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,

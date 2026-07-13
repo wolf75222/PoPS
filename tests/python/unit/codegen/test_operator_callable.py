@@ -52,7 +52,7 @@ def _program_state(model, name):
     case = Case(name="%s-case" % name)
     block = case.block("plasma", model)
     state = module.state_handle(module.state_spaces()["U"])
-    program = adctime.Program(name).bind_operators(module)
+    program = adctime.Program(name)._bind_operators(module)
     return program, program.state(block, state)
 
 

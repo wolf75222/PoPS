@@ -23,7 +23,7 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     first_block = problem.block("first", first)
     second_block = problem.block("second", second)
 
-    program = Program("two-model").bind_operators(first.module).bind_operators(second.module)
+    program = Program("two-model")._bind_operators(first.module)._bind_operators(second.module)
     first_state = program.state(
         first_block, first.module.state_handle(first.module.state_spaces()["U"]))
     second_state = program.state(

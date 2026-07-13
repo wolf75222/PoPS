@@ -29,7 +29,7 @@ These are requirements of the final public protocols, not invitations to use pri
    order and halo depth come from `pops.lib.amr.StateTransfer`; users do not repeat them.
 3. `InitialCondition` and its projection enter the Case through `case.initials.add`, which accepts the
    qualified state once and lowers analytic data without a Python callback at runtime.
-4. `ConsumerGraph.from_policies` lowers direct `ScientificOutput`, `Checkpoint`, and diagnostic
+4. `ConsumerGraph.from_consumers` lowers direct `ScientificOutput`, `Checkpoint`, and diagnostic
    descriptors to the exact layout-qualified runtime graph. Parallel I/O is derived from the format
    (`HDF5(parallel=True)`), so no second switch can disagree with it. `case.consumers(graph)` is the
    only Case attachment.

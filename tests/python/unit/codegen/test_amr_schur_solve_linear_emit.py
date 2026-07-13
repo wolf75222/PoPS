@@ -49,7 +49,7 @@ def _linear_handle(model):
 
 def _emit(target, *, theta=1.0):
     model = _lorentz_model("adc633_emit_model")
-    P = pops_time.Program("adc633_schur_emit").bind_operators(model)
+    P = pops_time.Program("adc633_schur_emit")._bind_operators(model)
     block, state = state_refs(P, "blk", model=model)
     pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=theta,
@@ -85,7 +85,7 @@ def test_refined_driver_orders_gather_solve_publish():
 def test_condensed_preset_declares_hierarchy_scope_on_the_operator():
     """The preset authors generic operator metadata; no condensed op or emitter infers the scope."""
     model = _lorentz_model("adc648_scope_model")
-    P = pops_time.Program("adc648_scope").bind_operators(model)
+    P = pops_time.Program("adc648_scope")._bind_operators(model)
     block, state = state_refs(P, "gas", model=model)
     pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,
@@ -165,7 +165,7 @@ def test_ir_hash_is_target_independent():
     """The IR identity is the same for both targets (the hash is of the IR, not the emitted C++): the
     AMR seam is an emission-time branch, not an IR change, so the uniform IR-hash is untouched."""
     model = _lorentz_model("adc633_hash_model")
-    P = pops_time.Program("adc633_schur_hash").bind_operators(model)
+    P = pops_time.Program("adc633_schur_hash")._bind_operators(model)
     block, state = state_refs(P, "gas", model=model)
     pops_lib_time.CondensedSchur(
         P, block, state, alpha=1.0, theta=1.0,

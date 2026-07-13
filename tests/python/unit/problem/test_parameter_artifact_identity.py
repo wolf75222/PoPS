@@ -1,4 +1,4 @@
-"""ADC-654: full Problem identity is distinct from compile-artifact identity."""
+"""ADC-654: full Case identity is distinct from compile-artifact identity."""
 from __future__ import annotations
 
 import pytest
@@ -16,16 +16,18 @@ from pops.params import (  # noqa: E402
 
 
 def _case_snapshot(declaration):
-    problem = pops.Problem(name="artifact-parameter-case")
-    authored_handle = problem.param(declaration)
-    return problem.freeze(), authored_handle
+    case = pops.Case(name="artifact-parameter-case")
+    case.block("fluid", Module("artifact-parameter-block"))
+    authored_handle = case.param(declaration)
+    return case.freeze(), authored_handle
 
 
 def _model_snapshot(declaration):
     model = Module("artifact-parameter-model")
     model.param(declaration)
-    problem = pops.Problem(name="artifact-model-case").block("fluid", physics=model)
-    return problem.freeze()
+    case = pops.Case(name="artifact-model-case")
+    case.block("fluid", model)
+    return case.freeze()
 
 
 def test_runtime_default_value_or_absence_changes_full_hash_not_artifact_hash():

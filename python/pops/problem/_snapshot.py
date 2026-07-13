@@ -1,9 +1,9 @@
 """Frozen authoring snapshots and their reproducibility/compile identities.
 
-``Problem.freeze()`` returns an :class:`AuthoringSnapshot`: an inert, JSON-ready, array-free capture
+``Case.freeze()`` returns an :class:`AuthoringSnapshot`: an inert, JSON-ready, array-free capture
 of the assembly.  ``pops.compile`` widens that capture with the *effective* layout, time program and
 external libraries.  This distinction matters because those values may be supplied directly to
-``pops.compile`` and therefore do not necessarily live on ``Problem``.  The compiler snapshot is the
+``pops.compile`` and therefore do not necessarily live on ``Case``.  The compiler snapshot is the
 one authority used for cache identity and retained provenance; no effective compile input may live
 only in a side attribute on the compiled handle.
 
@@ -33,7 +33,7 @@ class AuthoringSnapshot:
 
     A plain inert value: :attr:`to_dict` is the canonical dict (deep, array-free, no runtime object)
     and :attr:`hash` is its stable sha256. Two snapshots of the same assembly have the same hash; a
-    mutation before freeze changes it, a mutation after freeze is impossible (the Problem raises).
+    mutation before freeze changes it, a mutation after freeze is impossible (the Case raises).
     ``pops.compile`` attaches it to the compiled handle (``compiled._problem_snapshot``) after the
     compile driver has included :attr:`artifact_hash` in the artifact hash, cache key, path and
     sidecar. :attr:`hash` remains the exact authored/reproducibility identity.
@@ -69,7 +69,7 @@ class AuthoringSnapshot:
         object.__setattr__(self, "_canonical_json", canonical_json)
         object.__setattr__(self, "_hash", canonical_sha256(out))
 
-        # Problem builders always supply their closed scientific projection. Direct construction is
+        # Case builders always supply their closed scientific projection. Direct construction is
         # a low-level provenance seam: there the caller's explicit payload is also the semantic
         # declaration, after the strict snapshot projector has made it an inert value.
         semantic_source = canonical_payload if semantic_payload is None else semantic_payload
@@ -80,7 +80,7 @@ class AuthoringSnapshot:
         object.__setattr__(self, "_semantic_identity", semantic_identity(semantic_data))
 
         # This is a separately versioned preimage, not a scrub of the full canonical dict. The
-        # Problem builder supplies an explicit parameter/model projection; standalone snapshots use
+        # Case builder supplies an explicit parameter/model projection; standalone snapshots use
         # the same raw payload and let objects opt in through artifact_data().
         artifact_source = payload if artifact_payload is None else artifact_payload
         canonical_artifact_payload = _canonical(
@@ -154,7 +154,7 @@ class AuthoringSnapshot:
 def build_problem_snapshot(problem: Any) -> Any:
     """Build the :class:`AuthoringSnapshot` of @p problem (the frozen input to the compile cache key).
 
-    Reads the Problem's raw typed registries (not its intentionally concise inspection view) and
+    Reads the Case's raw typed registries (not its intentionally concise inspection view) and
     canonicalises them into a JSON-ready, deep, inert payload. It computes nothing on a grid and
     imports no ``_pops``. ``.hash`` preserves the exact authored capture and ``.artifact_hash`` is
     the driver-owned compile identity, so a runtime default can change without recompiling while a
@@ -162,12 +162,12 @@ def build_problem_snapshot(problem: Any) -> Any:
     # A successful freeze is a two-phase commit: the snapshot is captured before descriptors are
     # sealed, then containers may be replaced by immutable equivalents (list -> tuple,
     # dict -> mappingproxy).  Re-canonicalising those lifecycle representations would manufacture a
-    # different authoring identity for the same frozen Problem.  The committed snapshot is therefore
+    # different authoring identity for the same frozen Case.  The committed snapshot is therefore
     # the sole authority once frozen.
     if getattr(problem, "frozen", False):
         snapshot = getattr(problem, "snapshot", None)
         if type(snapshot) is not AuthoringSnapshot:
-            raise RuntimeError("frozen Problem has no committed AuthoringSnapshot")
+            raise RuntimeError("frozen Case has no committed AuthoringSnapshot")
         return snapshot
 
     from pops.problem._snapshot_payload import (
@@ -311,7 +311,7 @@ def prepare_compile_snapshot(
     """Freeze authoring, then capture the complete effective compile transaction."""
     freeze = getattr(problem, "freeze", None)
     if not callable(freeze):
-        raise TypeError("pops.compile requires a Problem exposing freeze()")
+        raise TypeError("pops.compile requires a Case exposing freeze()")
     freeze()
     time_freeze = getattr(time, "freeze", None) if time is not None else None
     if callable(time_freeze):

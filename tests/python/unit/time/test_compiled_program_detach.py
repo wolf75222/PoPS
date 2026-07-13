@@ -57,7 +57,7 @@ def _authored_program():
     problem = Case(name="case")
     block = problem.block("fluid", model)
     field = problem.field(FieldProblem(name="psi"))
-    program = Program("compiled-step").bind_operators(model)
+    program = Program("compiled-step")._bind_operators(model)
     state = program.state(block, model.state)
     program.keep_history(state, depth=1)
     previous = state.prev.value

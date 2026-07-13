@@ -103,7 +103,7 @@ def test_explicit_program_binding_rejects_out_of_order_registry_replacement():
                                   matrix=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     implicit_operator = m.operator("implicit_operator", returns=c_b, inputs=["fields"])
     with pytest.raises(ValueError, match="already bound to a different registry"):
-        P.bind_operators(m.module)
+        P._bind_operators(m.module)
 
     fresh, _, _, _, _, fresh_temporal = typed_program_state(
         "late-fresh", block_name="plasma", model=m, state="U")

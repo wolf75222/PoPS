@@ -4,7 +4,7 @@
 assembly's name / blocks / fields / params / consumers / requirements /
 capabilities as ATTRIBUTES, with :meth:`to_dict` the JSON bridge. It is inert -- built from the
 registries' metadata, it triggers no validation and no compilation. This is distinct from the
-per-registry ``inspect()`` dicts it composes and from ``Problem.to_dict()`` (the array-free
+per-registry ``inspect()`` dicts it composes and from ``Case.to_dict()`` (the array-free
 serialisation the snapshot / codegen consume, a superset that adds the stable handle ids).
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ class CaseReport(Report):
             setattr(self, key, value)
 
     def to_dict(self) -> Any:
-        # Byte-identical to the historical Problem.inspect() dict, stamped with the report identity.
+        # Byte-identical to the historical Case.inspect() dict, stamped with the report identity.
         return self._stamp(dict(self._payload))
 
     def __str__(self) -> str:

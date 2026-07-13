@@ -145,7 +145,7 @@ def _linear_handle(model):
 def _bound_program(t, name, *, energy=False):
     model = (_lorentz_energy_model(name + "_model") if energy
              else _lorentz_model(name + "_model"))
-    return t.Program(name).bind_operators(model), model, _linear_handle(model)
+    return t.Program(name)._bind_operators(model), model, _linear_handle(model)
 
 
 # ---- (A) builder ops + macro lowering: pure Python, always runs ----
@@ -266,7 +266,7 @@ def test_condensed_schur_theta_one_ir_byte_identical_with_carry_present(t):
             P, *state_refs(P, "blk"), alpha=_ALPHA,
             linear_operator=linear, **kwargs)
         h1 = P._ir_hash()
-        Q = t.Program("cs").bind_operators(model)
+        Q = t.Program("cs")._bind_operators(model)
         lt.CondensedSchur(
             Q, *state_refs(Q, "blk"), alpha=_ALPHA,
             linear_operator=linear, **kwargs)
@@ -580,7 +580,7 @@ def _run_energy_check(t, pops, np, sqrt, Model, h):
     U0 = np.stack([rho0, mx0, my0, E0])
     sim.set_state("blk", U0)
     model = _energy_model("cs_energy_prog", sqrt, Model)
-    P = t.Program("cs_energy_step").bind_operators(model)
+    P = t.Program("cs_energy_step")._bind_operators(model)
     lt.CondensedSchur(
         P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
         c_E=3, tol=_TOL, max_iter=400,
@@ -678,7 +678,7 @@ def _run_section_b(t):
     def _compile_macro(theta, tag):
         """Compile std.condensed_schur(theta) into a problem.so; None if the toolchain is unavailable."""
         model = schur_model("cs_prog_%s" % tag)
-        P = t.Program("cs_step_%s" % tag).bind_operators(model)
+        P = t.Program("cs_step_%s" % tag)._bind_operators(model)
         lt.CondensedSchur(
             P, *state_refs(P, "blk"), alpha=_ALPHA, theta=theta,
             tol=_TOL, max_iter=400,

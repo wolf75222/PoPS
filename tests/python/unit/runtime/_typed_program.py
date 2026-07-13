@@ -3,7 +3,7 @@
 The final Program API accepts only a case-owned ``BlockHandle`` plus the
 model-owned state ``Handle``.  Tests which exercise Program IR in isolation
 still need those real identities; these helpers build the smallest genuine
-Module/Problem graph without reviving free-name compatibility.
+Module/Case graph without reviving free-name compatibility.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def state_handle(module: Module, state: Any = None) -> Any:
     return module.state_handle(next(iter(spaces.values())))
 
 
-def add_typed_block(case: Problem, model: Any, block_name: str, state: Any = None):
+def add_typed_block(case: Case, model: Any, block_name: str, state: Any = None):
     """Add one real block and return ``(block_handle, state_handle)``."""
     module = module_of(model)
     block = case.block(block_name, module)
@@ -50,7 +50,6 @@ def typed_program_state(
     model: Any = None,
     state: Any = None,
     components: tuple[str, ...] = ("u",),
-    bind_operators: bool = True,
 ):
     """Build a minimal real Program and return ``(P, module, case, block, state, temporal)``."""
     if model is None:
@@ -61,9 +60,7 @@ def typed_program_state(
     case = Case(name="%s_case" % name)
     block, declaration = add_typed_block(case, module, block_name, state)
     program = Program(name)
-    if bind_operators:
-        program.bind_operators(module)
-    temporal = program.state(block, declaration)
+    temporal = program.state(block[declaration])
     return program, module, case, block, declaration, temporal
 
 
@@ -80,11 +77,11 @@ def typed_program_states(
     """
     module = module_of(model)
     case = Case(name="%s_case" % name)
-    program = Program(name).bind_operators(module)
+    program = Program(name)
     endpoints = {}
     for block_name, state in declarations:
         block, declaration = add_typed_block(case, module, block_name, state)
-        endpoints[block_name] = program.state(block, declaration)
+        endpoints[block_name] = program.state(block[declaration])
     return program, module, case, endpoints
 
 

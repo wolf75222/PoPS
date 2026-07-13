@@ -60,7 +60,7 @@ def test_macros_are_model_free():
 
 def test_predictor_corrector_macro():
     m = _model("ep")
-    P = adctime.Program("pc").bind_operators(m)
+    P = adctime.Program("pc")._bind_operators(m)
     block, state = state_refs(P, "plasma", model=m)
     libtime.predictor_corrector_local_linear(
         P, block, state, fields_operator=_handle(m, "fields_from_state"),
@@ -74,7 +74,7 @@ def test_predictor_corrector_macro():
 
 def test_explicit_rk_macro():
     m = _model("rk")
-    P = adctime.Program("rk").bind_operators(m)
+    P = adctime.Program("rk")._bind_operators(m)
     block, state = state_refs(P, "plasma", model=m)
     libtime.explicit_rk(P, block, state, rhs_operator=_handle(m, "explicit_rhs"),
                             fields_operator=_handle(m, "fields_from_state"),
@@ -86,7 +86,7 @@ def test_explicit_rk_macro():
 
 def test_imex_local_linear_macro():
     m = _model("imex")
-    P = adctime.Program("imex").bind_operators(m)
+    P = adctime.Program("imex")._bind_operators(m)
     block, state = state_refs(P, "plasma", model=m)
     libtime.imex_local_linear(P, block, state,
                              explicit_operator=_handle(m, "explicit_rhs"),
@@ -100,7 +100,7 @@ def test_imex_local_linear_macro():
 def test_macro_rejects_string_operator():
     # ADC-532: a stale string operator selector is refused with a clear TypeError, not silently taken.
     m = _model("reject")
-    P = adctime.Program("rej").bind_operators(m)
+    P = adctime.Program("rej")._bind_operators(m)
     block, state = state_refs(P, "plasma", model=m)
     try:
         libtime.imex_local_linear(P, block, state, explicit_operator="explicit_rhs",
@@ -117,14 +117,14 @@ def test_handle_macro_ir_parity_with_name_call():
     # primitive _call selectors (the allowed internal seam). Authoring IR deliberately
     # authenticates block handles, so independently-authored Programs have distinct artifact hashes.
     m = _model("parity")
-    P_handles = adctime.Program("imex").bind_operators(m)
+    P_handles = adctime.Program("imex")._bind_operators(m)
     block, state = state_refs(P_handles, "plasma", model=m)
     libtime.imex_local_linear(P_handles, block, state,
                               explicit_operator=_handle(m, "explicit_rhs"),
                               implicit_operator=_handle(m, "lorentz"),
                               fields_operator=_handle(m, "fields_from_state"), theta=1.0)
     # Manual equivalent using the internal name selectors (the pre-ADC-532 lowering).
-    P_manual = adctime.Program("imex").bind_operators(m)
+    P_manual = adctime.Program("imex")._bind_operators(m)
     u = typed_state(P_manual, "plasma", model=m)
     fields = P_manual._call("fields_from_state", u, name="fields")
     r = P_manual._call("explicit_rhs", u, fields, name="R")
@@ -149,7 +149,7 @@ def test_handle_macro_ir_parity_with_name_call():
 
 def test_macro_reused_across_modules():
     def build(m):
-        P = adctime.Program("pc").bind_operators(m)
+        P = adctime.Program("pc")._bind_operators(m)
         block, state = state_refs(P, "plasma", model=m)
         libtime.predictor_corrector_local_linear(
             P, block, state, fields_operator=_handle(m, "fields_from_state"),

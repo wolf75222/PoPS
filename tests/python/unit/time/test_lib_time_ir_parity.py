@@ -209,11 +209,11 @@ def test_split_callbacks_must_materialize_the_declared_exact_endpoint():
 def test_explicit_rk_parity():
     m = _model("rk")
     block, state_handle = _refs(m)
-    macro = adctime.Program("rk").bind_operators(m)
+    macro = adctime.Program("rk")._bind_operators(m)
     libtime.explicit_rk(macro, block, state_handle, rhs_operator=_op(m, "explicit_rhs"),
                         fields_operator=_op(m, "fields_from_state"), tableau=libtime.SSPRK2_TABLEAU)
     # Manual SSPRK2 over the typed rate via the internal _call seam.
-    manual = adctime.Program("rk").bind_operators(m)
+    manual = adctime.Program("rk")._bind_operators(m)
     dt = manual.dt
     state = manual.state(block, state_handle)
     u0 = state.n
@@ -236,12 +236,12 @@ def test_explicit_rk_parity():
 def test_imex_local_linear_parity():
     m = _model("imex")
     block, state_handle = _refs(m)
-    macro = adctime.Program("imex").bind_operators(m)
+    macro = adctime.Program("imex")._bind_operators(m)
     libtime.imex_local_linear(
         macro, block, state_handle, explicit_operator=_op(m, "explicit_rhs"),
                               implicit_operator=_op(m, "lorentz"),
                               fields_operator=_op(m, "fields_from_state"), theta=1.0)
-    manual = adctime.Program("imex").bind_operators(m)
+    manual = adctime.Program("imex")._bind_operators(m)
     state = manual.state(block, state_handle)
     u = state.n
     point = _point(
@@ -260,7 +260,7 @@ def test_imex_local_linear_parity():
 def test_imex_keeps_distinct_explicit_and_implicit_abscissae():
     m = _model("imex-points")
     block, state_handle = _refs(m)
-    program = adctime.Program("imex-points").bind_operators(m)
+    program = adctime.Program("imex-points")._bind_operators(m)
     theta = Fraction(2, 3)
     libtime.imex_local_linear(
         program,
@@ -286,9 +286,9 @@ def test_imex_local_parity():
     m = _model("imexl")
     block, state_handle = _refs(m)
     lorentz = _op(m, "lorentz")
-    macro = adctime.Program("imex_local").bind_operators(m)
+    macro = adctime.Program("imex_local")._bind_operators(m)
     libtime.imex_local(macro, block, state_handle, linear_source=lorentz)
-    manual = adctime.Program("imex_local").bind_operators(m)
+    manual = adctime.Program("imex_local")._bind_operators(m)
     state = manual.state(block, state_handle)
     U = state.n
     point = _point(
@@ -313,11 +313,11 @@ def test_predictor_corrector_parity():
     m = _model("pc")
     block, state_handle = _refs(m)
     fo, ro, lo = _op(m, "fields_from_state"), _op(m, "explicit_rhs"), _op(m, "lorentz")
-    macro = adctime.Program("pc").bind_operators(m)
+    macro = adctime.Program("pc")._bind_operators(m)
     libtime.predictor_corrector_local_linear(
         macro, block, state_handle, fields_operator=fo,
                                              explicit_rate_operator=ro, implicit_operator=lo)
-    manual = adctime.Program("pc").bind_operators(m)
+    manual = adctime.Program("pc")._bind_operators(m)
     dt = manual.dt
     state = manual.state(block, state_handle)
     u_n = state.n
@@ -352,7 +352,7 @@ def test_predictor_corrector_preserves_partition_abscissae_per_stage():
     m = _model("pc-points")
     block, state_handle = _refs(m)
     fo, ro, lo = _op(m, "fields_from_state"), _op(m, "explicit_rhs"), _op(m, "lorentz")
-    program = adctime.Program("pc-points").bind_operators(m)
+    program = adctime.Program("pc-points")._bind_operators(m)
     libtime.predictor_corrector_local_linear(
         program,
         block,
@@ -394,9 +394,9 @@ def test_bdf1_linear_source_parity():
     m = _model("bdf")
     block, state_handle = _refs(m)
     lorentz = _op(m, "lorentz")
-    macro = adctime.Program("bdf").bind_operators(m)
+    macro = adctime.Program("bdf")._bind_operators(m)
     libtime.bdf(macro, block, state_handle, order=1, linear_source=lorentz)
-    manual = adctime.Program("bdf").bind_operators(m)
+    manual = adctime.Program("bdf")._bind_operators(m)
     state = manual.state(block, state_handle)
     U = state.n
     fields = manual.solve_fields(U)

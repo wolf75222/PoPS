@@ -67,7 +67,7 @@ def test_fields_handle_call_lowers_to_solve_fields():
     m, rho, phi, laplacian, grad = _board_with_field()
     h = m.solve_field("phi_solve", equation=(-laplacian(phi) == rho),
                       outputs={"E": grad(phi).x}, solver=None)
-    P = Program("p").bind_operators(m.module)
+    P = Program("p")._bind_operators(m.module)
     plasma = Case(name="field_solve").block("plasma", m)
     state = m.module.state_handle(m.module.state_spaces()["U"])
     U = P.state(plasma, state).n
@@ -89,7 +89,7 @@ def test_fields_handle_alias_keeps_exact_declaring_owner():
     foreign_handle = second.solve_field(
         "phi_solve", equation=(-laplacian2(phi2) == rho2),
         outputs={"E": grad2(phi2).x}, solver=None)
-    program = Program("p").bind_operators(first.module)
+    program = Program("p")._bind_operators(first.module)
     plasma = Case(name="field_alias").block("plasma", first)
     declaration = first.module.state_handle(first.module.state_spaces()["U"])
     state = program.state(plasma, declaration).n

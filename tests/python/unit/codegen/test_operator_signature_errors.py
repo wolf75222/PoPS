@@ -60,7 +60,7 @@ def _model():
 def test_state_space_mismatch_message():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
     wrong = _typed(P, "other", _OTHER, m)
     try:
@@ -75,7 +75,7 @@ def test_state_space_mismatch_message():
 def test_rate_combined_with_wrong_state_message():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     u_n = _typed(P, "plasma", u, m)
     rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
@@ -94,7 +94,7 @@ def test_field_input_wrong_value_flavour_message():
     # explicit_rhs's second input is a FieldSpace: passing a 'state' value there is a clear error.
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     u_n = _typed(P, "plasma", u, m)
     try:
         P._call("explicit_rhs", u_n, u_n)  # second arg should be a fields value, not a state
@@ -108,7 +108,7 @@ def test_field_input_wrong_value_flavour_message():
 def test_field_wrong_arity_message():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     u_n = _typed(P, "plasma", u, m)
     try:
         P._call("explicit_rhs", u_n)  # explicit_rhs expects (state, fields); only state given
@@ -138,7 +138,7 @@ def test_rate_bundle_block_space_mismatch_message():
 def test_local_linear_operator_domain_mismatch_message():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
+    P = adctime.Program("p")._bind_operators(m)
     fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
     lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
     rhs_v = _typed(P, "other", _OTHER, m)

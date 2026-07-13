@@ -69,7 +69,7 @@ def test_predictor_corrector_returns_program():
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
 
     def build(P):
-        P.bind_operators(m)
+        P._bind_operators(m)
         block, state = state_refs(P, "plasma")
         libtime.predictor_corrector_local_linear(
             P, block, state, fields_operator=_op(m, "fields_from_state"),

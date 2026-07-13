@@ -141,28 +141,6 @@ def test_qualification_rejects_ghost_foreign_double_and_ambiguous_references():
     assert str(block_b.instance_owner_path) in str(error.value)
 
 
-def test_consumer_validation_reports_ambiguous_unqualified_reference_candidates():
-    from pops.output import OutputPolicy
-
-    model = _DeclaredModel()
-    problem = Case(name="transport")
-    block_a = problem.block("a", model)
-    block_b = problem.block("b", model)
-    problem.output(OutputPolicy(fields=[model.u]))
-
-    report = problem.validate_report()
-    issue = next(
-        item for item in report.issues
-        if item.code == "runtime.ambiguous_declaration_reference")
-    assert str(block_a.instance_owner_path) in issue.message
-    assert str(block_b.instance_owner_path) in issue.message
-
-    resolved_problem = Case(name="transport-resolved")
-    resolved_block = resolved_problem.block("a", model)
-    resolved_problem.output(OutputPolicy(fields=[resolved_block[model.u]]))
-    assert resolved_problem.validate_report().ok
-
-
 def test_same_named_model_authorities_collide_before_lowering():
     first = _DeclaredModel("transport")
     second = _DeclaredModel("transport")
@@ -206,7 +184,22 @@ def test_resolved_instance_identity_round_trips_without_losing_origin():
 
 
 def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data():
-    from pops.fields import FieldProblem
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "identity-test-method"}
+
+    class _Solver(Descriptor):
+        category = "field_solver"
+
+        def to_data(self):
+            return {"type": "identity-test-solver"}
 
     model = _DeclaredModel("transport")
     problem = Case(name="case")
@@ -220,7 +213,16 @@ def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data()
     assert decoded_block._instance_registry is None
     assert problem.resolve(decoded_block).canonical_identity() == canonical_block.canonical_identity()
 
-    case_field = problem.field(FieldProblem(name="phi"))
+    field_operator = FieldOperator(
+        "phi",
+        unknown=model.u,
+        equation=-laplacian(ValueExpr(model.u)) == ValueExpr(model.u),
+        providers=Handle("phi_provider", kind="field_operator", owner=model.owner_path),
+    )
+    case_field = problem.field(
+        field_operator,
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
     canonical_field = problem.resolve(case_field)
     decoded_field = Handle.from_canonical_identity(canonical_field.canonical_identity())
     assert problem.resolve(decoded_field).canonical_identity() == canonical_field.canonical_identity()

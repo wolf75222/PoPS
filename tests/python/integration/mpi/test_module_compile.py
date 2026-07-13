@@ -74,7 +74,7 @@ def test_module_lowers_to_dsl():
 
 def test_pure_module_program_emits():
     mod = pure_module()
-    P = adctime.Program("pc").bind_operators(mod)
+    P = adctime.Program("pc")._bind_operators(mod)
     from pops.problem import Case
     problem = Case(name="module-compile")
     block = problem.block("plasma", mod)

@@ -30,7 +30,7 @@ def _program(*, with_operator=False):
         )
     problem = Case(name="case")
     block = problem.block("fluid", model)
-    program = Program("step").bind_operators(model)
+    program = Program("step")._bind_operators(model)
     state = program.state(block, state_declaration)
     if rate is None:
         result = program.value("u_next", state.n, at=state.next.point)

@@ -67,7 +67,7 @@ class _AmrSystemEquation(_AmrSystem):
                      substeps: Any = None) -> Any:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
-        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Problem`` assembly
+        Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Case`` assembly
         lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind``;
         ``add_equation`` stays for that seam and the tests.
 
@@ -249,7 +249,7 @@ class _AmrSystemEquation(_AmrSystem):
         if table is None:
             raise ValueError(
                 "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Problem." % (block, name))
+                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
         if name not in table:
             raise ValueError(
                 "set_aux_field: aux field '%s' not declared by block '%s'; known named fields: %s"

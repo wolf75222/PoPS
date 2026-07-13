@@ -40,7 +40,7 @@ def _references(model: Model | Module, *, case_name: str | None = None):
 
 def _program(model: Model):
     module, block, state = _references(model)
-    program = adctime.Program("handles").bind_operators(module)
+    program = adctime.Program("handles")._bind_operators(module)
     return program, program.state(block, state).n
 
 
@@ -131,7 +131,7 @@ def test_forged_alias_target_cannot_route_to_another_compatible_operator():
     assert legitimate.qualified_id != forged.qualified_id
 
     _, block, state_declaration = _references(module)
-    program = adctime.Program("alias-forgery").bind_operators(module)
+    program = adctime.Program("alias-forgery")._bind_operators(module)
     state = program.state(block, state_declaration).n
     assert program.call(legitimate, state).attrs["source"] == "first"
     with pytest.raises(ValueError, match="authenticates target.*first"):
@@ -189,7 +189,7 @@ def test_readable_default_source_alias_has_an_explicit_registered_target():
     model.flux(x=[u], y=[u])
     source = model.source_term("default", [-u])
     module, block, state_declaration = _references(model)
-    program = adctime.Program("default-source").bind_operators(module)
+    program = adctime.Program("default-source")._bind_operators(module)
     state = program.state(block, state_declaration).n
 
     assert source.name == "default"
@@ -223,13 +223,13 @@ def test_lib_time_helpers_preserve_handle_identity_until_resolution():
     first, first_rate = _rate_model("macro-first")
     _, foreign_rate = _rate_model("macro-second")
     module, block, state_declaration = _references(first)
-    program = adctime.Program("macro").bind_operators(module)
+    program = adctime.Program("macro")._bind_operators(module)
     with pytest.raises(ValueError, match="no operator registry is bound for owner"):
         libtime.explicit_rk(
             program, block, state_declaration, rhs_operator=foreign_rate,
             tableau=libtime.SSPRK2_TABLEAU)
 
-    valid = adctime.Program("macro").bind_operators(module)
+    valid = adctime.Program("macro")._bind_operators(module)
     libtime.explicit_rk(
         valid, block, state_declaration, rhs_operator=first_rate,
         tableau=libtime.SSPRK2_TABLEAU)
@@ -268,7 +268,7 @@ def test_state_space_is_derived_from_the_model_declaration_not_the_call_site():
         operator.name, kind=operator.kind, owner=module.owner_path,
         signature=operator.signature)
     _, block, state_declaration = _references(module)
-    program = adctime.Program("spaces").bind_operators(module)
+    program = adctime.Program("spaces")._bind_operators(module)
     temporal = program.state(block, state_declaration)
     state = temporal.n
     linear = program.call(handle)

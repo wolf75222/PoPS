@@ -31,7 +31,7 @@ def _two_fluid_module():
 def _program_states(mod, name, declarations):
     """Build real case-qualified temporal states for a coupled Program."""
     case = Case(name="%s_case" % name)
-    program = adctime.Program(name).bind_operators(mod)
+    program = adctime.Program(name)._bind_operators(mod)
     result = {}
     for block_name, space in declarations:
         block, state = add_typed_block(case, mod, block_name, space)
