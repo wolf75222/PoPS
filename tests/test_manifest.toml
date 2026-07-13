@@ -947,6 +947,11 @@ sources = ["tests/cpp/unit/physics/test_user_time_integrator.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
+name = "test_amr_tensor_fac_provider"
+sources = ["tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_assembler_driver"
 sources = ["tests/cpp/unit/runtime/test_assembler_driver.cpp"]
 labels = ["unit", "runtime", "fast"]

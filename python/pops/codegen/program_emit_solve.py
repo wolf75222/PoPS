@@ -8,6 +8,7 @@ dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pops.ir.literals import scalar_cpp
@@ -322,6 +323,51 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         "geometric_mg)" % scheme)
 
 
+def _composite_tensor_fac_options(
+        v: Any) -> tuple[int | None, Any, int | None, bool | None]:
+    """Authenticate the complete provider identity carried by a hierarchy solve node."""
+    identity = v.attrs.get("hierarchy_provider_identity")
+    expected_identity = {"schema_version", "provider_id", "capabilities", "options"}
+    if not isinstance(identity, Mapping) or set(identity) != expected_identity:
+        raise TypeError(
+            "CompositeTensorFAC hierarchy solve requires an exact canonical provider identity")
+    if identity["schema_version"] != 1:
+        raise ValueError("CompositeTensorFAC hierarchy solve uses an unsupported identity schema")
+    if identity["provider_id"] != "composite_tensor_fac" \
+            or v.attrs.get("hierarchy_provider") != identity["provider_id"]:
+        raise ValueError("CompositeTensorFAC hierarchy solve provider identity is unauthenticated")
+    capabilities = identity["capabilities"]
+    if (not isinstance(capabilities, (list, tuple))
+            or tuple(capabilities) != ("amr_hierarchy", "tensor_elliptic")):
+        raise ValueError("CompositeTensorFAC hierarchy solve capabilities are unauthenticated")
+    options = identity["options"]
+    expected_options = {"fine_sweeps", "coarse_rel_tol", "coarse_cycles", "verbose"}
+    if not isinstance(options, Mapping) or set(options) != expected_options:
+        raise TypeError(
+            "CompositeTensorFAC options must contain exactly fine_sweeps, coarse_rel_tol, "
+            "coarse_cycles and verbose")
+    fine_sweeps, coarse_cycles, verbose = (
+        options["fine_sweeps"], options["coarse_cycles"], options["verbose"])
+    if fine_sweeps is not None and (
+            isinstance(fine_sweeps, bool) or not isinstance(fine_sweeps, int)
+            or fine_sweeps < 1):
+        raise ValueError("CompositeTensorFAC fine_sweeps must be a positive int or None")
+    if coarse_cycles is not None and (
+            isinstance(coarse_cycles, bool) or not isinstance(coarse_cycles, int)
+            or coarse_cycles < 1):
+        raise ValueError("CompositeTensorFAC coarse_cycles must be a positive int or None")
+    if verbose is not None and type(verbose) is not bool:
+        raise TypeError("CompositeTensorFAC verbose must be a Python bool or None")
+    from pops.model._bind_schema_data import literal_value
+    coarse_rel_tol = options["coarse_rel_tol"]
+    if coarse_rel_tol is not None:
+        coarse_rel_tol = literal_value(
+            coarse_rel_tol, where="CompositeTensorFAC coarse_rel_tol")
+        if isinstance(coarse_rel_tol, bool) or not 0 < coarse_rel_tol < 1:
+            raise ValueError("CompositeTensorFAC coarse_rel_tol must be in (0, 1) or None")
+    return fine_sweeps, coarse_rel_tol, coarse_cycles, verbose
+
+
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                        lines: Any, target: Any = "system") -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
@@ -392,6 +438,16 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     omega = v.attrs.get("omega")
     omega_tok = ("static_cast<pops::Real>(1)" if omega is None
                  else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
+    if (target == "amr_system" and v.attrs.get("scope") == "hierarchy"
+            and v.attrs.get("hierarchy_provider") == "composite_tensor_fac"):
+        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose = (
+            _composite_tensor_fac_options(v))
+        lines.append(
+            "ctx.configure_composite_tensor_fac(%d, static_cast<pops::Real>(%s), %d, %s);"
+            % (0 if fine_sweeps is None else fine_sweeps,
+               scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
+               0 if coarse_cycles is None else coarse_cycles,
+               -1 if verbose is None else int(verbose)))
     lines.append("pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
                  "%d, %d, %s);"
                  % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,

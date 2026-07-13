@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -59,6 +60,67 @@ namespace detail {
 inline Real tensor_fac_relative_scale(Real rhs_norm) {
   return rhs_norm > Real(0) ? rhs_norm : Real(1);
 }
+
+/// Provider-owned FAC controls. The Program Krylov descriptor deliberately owns the outer tolerance
+/// and iteration budget, so they are absent here and are joined only at the native solve boundary.
+struct TensorFacProviderOptions {
+  std::optional<int> fine_sweeps;
+  std::optional<Real> coarse_rel_tol;
+  std::optional<int> coarse_cycles;
+  std::optional<bool> verbose;
+};
+
+inline void validate_tensor_fac_provider_options(const TensorFacProviderOptions& options) {
+  if (options.fine_sweeps && *options.fine_sweeps <= 0)
+    throw std::invalid_argument("CompositeTensorFAC fine_sweeps must be positive");
+  if (options.coarse_rel_tol &&
+      (!std::isfinite(static_cast<double>(*options.coarse_rel_tol)) ||
+       *options.coarse_rel_tol <= Real(0) || *options.coarse_rel_tol >= Real(1)))
+    throw std::invalid_argument("CompositeTensorFAC coarse_rel_tol must be finite and in (0, 1)");
+  if (options.coarse_cycles && *options.coarse_cycles <= 0)
+    throw std::invalid_argument("CompositeTensorFAC coarse_cycles must be positive");
+}
+
+inline TensorFacProviderOptions tensor_fac_provider_options(int fine_sweeps, Real coarse_rel_tol,
+                                                            int coarse_cycles, int verbose) {
+  if (fine_sweeps < 0 || coarse_rel_tol < Real(0) || coarse_cycles < 0)
+    throw std::invalid_argument(
+        "CompositeTensorFAC wire options use zero for native default or a positive override");
+  if (verbose < -1 || verbose > 1)
+    throw std::invalid_argument(
+        "CompositeTensorFAC verbose wire option must be -1 (native default), 0, or 1");
+  TensorFacProviderOptions options{
+      fine_sweeps == 0 ? std::nullopt : std::optional<int>(fine_sweeps),
+      coarse_rel_tol == Real(0) ? std::nullopt : std::optional<Real>(coarse_rel_tol),
+      coarse_cycles == 0 ? std::nullopt : std::optional<int>(coarse_cycles),
+      verbose == -1 ? std::nullopt : std::optional<bool>(verbose == 1)};
+  validate_tensor_fac_provider_options(options);
+  return options;
+}
+
+inline CompositeFacOptions tensor_fac_options(const TensorFacProviderOptions& provider, Real tol,
+                                              int max_iter) {
+  validate_tensor_fac_provider_options(provider);
+  if (!std::isfinite(static_cast<double>(tol)) || tol <= Real(0))
+    throw std::invalid_argument("CompositeTensorFAC Program solver tolerance must be finite and positive");
+  if (max_iter <= 0)
+    throw std::invalid_argument("CompositeTensorFAC Program solver max_iter must be positive");
+  // CompositeFacOptions is the single native source of truth for omitted provider knobs. The
+  // Program-owned controls are always overwritten, and only explicitly present provider controls
+  // override the canonical native defaults.
+  CompositeFacOptions options;
+  options.max_iters = max_iter;
+  options.tol = tol;
+  if (provider.fine_sweeps)
+    options.fine_sweeps = *provider.fine_sweeps;
+  if (provider.coarse_rel_tol)
+    options.coarse_rel_tol = *provider.coarse_rel_tol;
+  if (provider.coarse_cycles)
+    options.coarse_cycles = *provider.coarse_cycles;
+  if (provider.verbose)
+    options.verbose = *provider.verbose;
+  return options;
+}
 }  // namespace detail
 
 /// Per-level tensor-coefficient buffers + a cached composite FAC solve, for one AMR block's condensed
@@ -70,6 +132,23 @@ class AmrTensorElliptic {
   /// the caller). Buffers are allocated lazily on ensure_level_buffers() so a flat hierarchy (never
   /// refined) allocates nothing.
   AmrTensorElliptic(AmrRuntime* eng, int block) : eng_(eng), block_(block) {}
+
+  /// Install the hierarchy-provider controls. Zero marks omitted numeric knobs and -1 marks omitted
+  /// verbosity; those values resolve from CompositeFacOptions, the sole native defaults authority.
+  void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, int coarse_cycles,
+                                      int verbose) {
+    fac_provider_options_ = detail::tensor_fac_provider_options(
+        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose);
+  }
+
+  /// Join provider-owned controls with Program-solver tolerance / iteration budget. Public on this
+  /// internal driver so the bridge is inspectable and unit-testable without constructing AMR storage.
+  CompositeFacOptions composite_fac_options(Real tol, int max_iter) const {
+    if (!fac_provider_options_)
+      throw std::logic_error(
+          "AmrTensorElliptic requires configure_composite_tensor_fac before a composite solve");
+    return detail::tensor_fac_options(*fac_provider_options_, tol, max_iter);
+  }
 
   /// True iff there is >= one populated fine level (level 1 carries >= one patch for this block). The
   /// AmrProgramContext gates the flat (matrix-free BiCGStab) vs composite (FAC) branch on this.
@@ -135,8 +214,8 @@ class AmrTensorElliptic {
     for (int k = 0; k < L; ++k)
       ensure_level_buffers(k);
 
-    // CompositeFacPoisson exposes one diagonal coefficient. The currently shipped condensed preset
-    // authors equal diagonal entries, but the generic Program protocol can author a full tensor.
+    // CompositeFacPoisson exposes one diagonal coefficient. The built-in tensor operator route
+    // requires equal diagonal entries, but the generic Program protocol can author a full tensor.
     // Reject that unsupported provider/operator pair explicitly instead of solving a different
     // operator by ignoring eps_y.
     for (int k = 0; k < L; ++k) {
@@ -183,8 +262,9 @@ class AmrTensorElliptic {
     const Real scale = detail::tensor_fac_relative_scale(rhs_norm);
     const Real absolute_tol = tol * scale;
 
-    const CompositeFacOptions options = fac_->options();
-    const Real residual = fac_->solve(max_iter, options.fine_sweeps, absolute_tol);
+    const CompositeFacOptions options = composite_fac_options(absolute_tol, max_iter);
+    fac_->set_options(options);
+    const Real residual = fac_->solve(options.max_iters, options.fine_sweeps, options.tol);
 
     SolveReport report;
     report.rel_residual = residual / scale;
@@ -285,6 +365,7 @@ class AmrTensorElliptic {
   std::vector<LevelBuffers> levels_;
   std::unique_ptr<CompositeFacPoisson> fac_;
   std::vector<std::vector<Box2D>> fac_level_boxes_;
+  std::optional<detail::TensorFacProviderOptions> fac_provider_options_;
 };
 
 }  // namespace program

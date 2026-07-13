@@ -311,6 +311,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_refinement
   test_ref_ratio
   test_amr_hierarchy
+  test_amr_tensor_fac_provider
   test_cluster
   test_regrid
   test_flux_register

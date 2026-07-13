@@ -685,6 +685,14 @@ class AmrProgramContext {
   void stage_linear_initial_guess(const MultiFab& guess) const {
     tensor_elliptic().stage_initial_guess(level_, &guess);
   }
+  /// Install the explicit hierarchy-provider controls emitted from CompositeTensorFAC. The generic
+  /// Program solver continues to pass its own tolerance / iteration budget to solve_linear_matfree;
+  /// this seam carries only provider-native FAC controls and no physical field vocabulary.
+  void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, int coarse_cycles,
+                                      int verbose) const {
+    tensor_elliptic().configure_composite_tensor_fac(
+        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose);
+  }
   /// Solve the matrix-free condensed-implicit linear system A(phi) = rhs on the hierarchy (ADC-633).
   /// FLAT (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics,
   /// the flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive

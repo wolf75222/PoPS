@@ -1,6 +1,7 @@
 """Program solve, history, value, commit, and record operations."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pops.time.handles import (
@@ -236,6 +237,17 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 raise ValueError("solve_linear: Hierarchy() requires an operator with an explicit "
                                  "hierarchy provider")
             attrs["hierarchy_provider"] = provider
+            provider_identity = operator.attrs.get("hierarchy_provider_identity")
+            if (not isinstance(provider_identity, Mapping)
+                    or provider_identity.get("provider_id") != provider):
+                raise ValueError(
+                    "solve_linear: hierarchy provider identity is missing or unauthenticated")
+            attrs["hierarchy_provider_identity"] = {
+                "schema_version": provider_identity["schema_version"],
+                "provider_id": provider_identity["provider_id"],
+                "capabilities": list(provider_identity["capabilities"]),
+                "options": dict(provider_identity["options"]),
+            }
         # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
         # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
         # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).

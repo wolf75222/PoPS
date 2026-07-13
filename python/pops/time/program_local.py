@@ -405,10 +405,11 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         """Declare a matrix-free operator ``A : domain -> range_``. @p domain / @p range_ are the field
         kind on each side and MUST match (a square operator: the Krylov iterate, residual and solution
         share one layout): ``"scalar"`` (a 1-component scalar field, the default), or ``"vector"`` /
-        ``"state"`` (a multi-component field, e.g. the condensed-Schur block unknown). For a
+        ``"state"`` (a multi-component field, e.g. a coupled block unknown). For a
         ``vector`` / ``state`` operator @p ncomp (an int >= 1) is REQUIRED -- the component count of the
         apply's in/out buffers and of the solution; for a ``scalar`` operator @p ncomp must be omitted
-        (or 1). Supply the apply via ``P.set_apply(A, body_fn)`` before using it in ``P.solve_linear``."""
+        (or 1). Supply the apply via ``P.set_apply(A, body_fn)`` before using it in
+        ``P.solve(LinearProblem(A, rhs), solver=...)``."""
         if domain not in self._OPERATOR_KINDS or range_ not in self._OPERATOR_KINDS:
             raise ValueError(
                 "matrix_free_operator: domain / range_ must be one of %s; got domain=%r range_=%r"
@@ -429,9 +430,11 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                     "matrix_free_operator: a %r operator requires ncomp (an int >= 1); got ncomp=%r"
                     % (domain, ncomp))
         from pops.solvers.scopes import solve_scope_id
-        from pops.solvers.providers import hierarchy_provider_id
+        from pops.solvers.providers import hierarchy_provider_data
         scope_id = solve_scope_id(scope)
-        provider_id = hierarchy_provider_id(provider)
+        provider_identity = hierarchy_provider_data(provider)
+        provider_id = (None if provider_identity is None
+                       else provider_identity["provider_id"])
         if scope_id == "hierarchy" and provider_id is None:
             raise ValueError(
                 "matrix_free_operator: Hierarchy() requires an explicit native provider; "
@@ -443,6 +446,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         if scope_id != "level":
             attrs["scope"] = scope_id
             attrs["hierarchy_provider"] = provider_id
+            attrs["hierarchy_provider_identity"] = provider_identity
         return self._new("matrix_free_op", "matrix_free_operator", (), attrs, name, None)
 
     @atomic_authoring
@@ -490,16 +494,33 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         }
         if "hierarchy" in captured_scopes:
             attrs["scope"] = "hierarchy"
-        providers = {
+        providers = {attrs.get("hierarchy_provider")}
+        providers.update(
             item.attrs.get("hierarchy_provider")
             for node in block for item in node.inputs
             if isinstance(item, ProgramValue) and item.attrs.get("hierarchy_provider") is not None
-        }
+        )
+        providers.discard(None)
         if len(providers) > 1:
             raise ValueError("set_apply: one operator cannot capture competing hierarchy providers %r"
                              % sorted(providers))
+        provider_identities = []
+        if attrs.get("hierarchy_provider_identity") is not None:
+            provider_identities.append(attrs["hierarchy_provider_identity"])
+        provider_identities.extend(
+            item.attrs.get("hierarchy_provider_identity")
+            for node in block for item in node.inputs
+            if isinstance(item, ProgramValue)
+            and item.attrs.get("hierarchy_provider") is not None)
+        if any(identity is None for identity in provider_identities):
+            raise ValueError("set_apply: hierarchy providers require canonical identity data")
+        if provider_identities and any(
+                identity != provider_identities[0] for identity in provider_identities[1:]):
+            raise ValueError(
+                "set_apply: one operator cannot capture competing hierarchy provider identities")
         if providers:
             attrs["hierarchy_provider"] = next(iter(providers))
+            attrs["hierarchy_provider_identity"] = provider_identities[0]
         attrs.update({
             "apply_block": block,
             "apply_region": apply_region,
