@@ -43,6 +43,10 @@ def problem_semantic_payload(problem: Any, *, layout: Any, time: Any) -> dict[st
             "handle": block.canonical_identity(),
             "model": model_semantic_data(spec["model"]),
             "spatial": _spatial_semantic_data(spec["spatial"]),
+            "numerics": (
+                None if name not in problem._numerics_assignments
+                else problem._resolved_numerics_for(name).to_data()
+            ),
         }
         if spec["time"] is not None:
             row["time"] = program_semantic_data(spec["time"])
@@ -107,6 +111,10 @@ def _problem_snapshot_payload(problem: Any, *, artifact: bool) -> dict[str, Any]
         "diagnostics": runtime.diagnostics,
         "schedules": runtime.schedules,
         "constraints": problem._constraint_registry.refinement,
+        "numerics": {
+            name: problem._resolved_numerics_for(name).to_data()
+            for name in sorted(problem._numerics_assignments)
+        },
         "time": _time_snapshot_value(problem._time_registry.program, artifact=artifact),
         "handles": {
             "blocks": [problem._block_registry.canonical_block(handle)

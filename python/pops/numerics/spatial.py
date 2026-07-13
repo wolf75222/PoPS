@@ -6,6 +6,7 @@ created only by :meth:`FiniteVolume.runtime_spatial` after the compile/bind boun
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import copy
 from types import SimpleNamespace
 from typing import Any
@@ -37,7 +38,7 @@ def _resolved_value(value: Any, resolver: Any) -> Any:
 
     if isinstance(value, Handle):
         return resolver(value)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _resolved_value(item, resolver) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return type(value)(_resolved_value(item, resolver) for item in value)
@@ -46,13 +47,42 @@ def _resolved_value(value: Any, resolver: Any) -> Any:
 
 def _resolved_brick(value: Any, resolver: Any) -> Any:
     options = getattr(value, "options", None)
-    if not isinstance(options, dict) or not options:
+    if not isinstance(options, Mapping) or not options:
         return value
     result = copy(value)
     if hasattr(result, "_frozen"):
         object.__setattr__(result, "_frozen", False)
-    object.__setattr__(result, "options", _resolved_value(options, resolver))
+    object.__setattr__(result, "options", _resolved_value(dict(options), resolver))
     return result
+
+
+def _data_value(value: Any) -> Any:
+    from pops.descriptors import BrickDescriptor
+    from pops.model import Handle
+
+    if isinstance(value, BrickDescriptor):
+        return _brick_data(value)
+    if isinstance(value, Handle):
+        if not value.is_resolved:
+            raise ValueError("finite-volume data projection requires resolved handles")
+        return value.canonical_identity()
+    if isinstance(value, Mapping):
+        return {key: _data_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_data_value(item) for item in value]
+    return value
+
+
+def _brick_data(value: Any) -> dict[str, Any]:
+    return {
+        "name": value.name,
+        "category": value.category,
+        "native_id": value.native_id,
+        "scheme": value.scheme,
+        "options": _data_value(dict(value.options)),
+        "requirements": _data_value(dict(value.requirements)),
+        "capabilities": _data_value(dict(value.capabilities)),
+    }
 
 
 class FiniteVolume(Descriptor):
@@ -167,9 +197,9 @@ class FiniteVolume(Descriptor):
             "schema_version": 1,
             "method": "finite_volume",
             "flux": self.flux.canonical_identity(),
-            "variables": self.variables.inspect(),
-            "reconstruction": self.reconstruction.inspect(),
-            "riemann": self.riemann.inspect(),
+            "variables": _brick_data(self.variables),
+            "reconstruction": _brick_data(self.reconstruction),
+            "riemann": _brick_data(self.riemann),
             "formal_order": self.formal_order,
             "ghost_depth": self.ghost_depth,
             "positivity_floor": self.positivity_floor,

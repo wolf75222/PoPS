@@ -76,6 +76,7 @@ class Case:
         self._param_registry = ParamRegistry(self.owner_path)
         self._runtime_registry = RuntimePolicyRegistry()
         self._constraint_registry = ConstraintRegistry()
+        self._numerics_assignments = {}
 
     @property
     def name(self) -> Any:
@@ -175,6 +176,42 @@ class Case:
         self._guard_mutable("add a field")
         return self._field_registry.add(operator, discretization)
 
+    def numerics(self, plan: Any, *, block: Any = None) -> Any:
+        """Assign one :class:`DiscretizationPlan` authority to a block.
+
+        Omitting ``block`` is unambiguous only for a single-block Case. A multi-block Case must name
+        the returned BlockHandle explicitly; model names and strings never select an instance.
+        """
+        from pops.numerics import DiscretizationPlan
+
+        self._guard_mutable("assign a numerical plan")
+        if type(plan) is not DiscretizationPlan:
+            raise TypeError("Case.numerics requires an exact DiscretizationPlan")
+        handles = self._block_registry.handles()
+        if block is None:
+            if len(handles) != 1:
+                raise ValueError(
+                    "Case.numerics without block= requires exactly one block; got %d" % len(handles))
+            live = next(iter(handles.values()))
+        else:
+            canonical = self._block_registry.canonical_block(block)
+            live = self._block_registry.handle(canonical.local_id)
+        if live.local_id in self._numerics_assignments:
+            raise ValueError("block %r already has a DiscretizationPlan" % live.local_id)
+        if self._block_registry.spec(live.local_id)["spatial"] is not None:
+            raise ValueError(
+                "block %r already carries a spatial method; select numerics only through "
+                "DiscretizationPlan" % live.local_id)
+        plan.validate_for(self._block_registry.spec(live.local_id)["model"])
+        self._numerics_assignments[live.local_id] = plan
+        return self
+
+    def _resolved_numerics_for(self, block_name: str) -> Any:
+        plan = self._numerics_assignments.get(block_name)
+        if plan is None:
+            return None
+        return plan.resolve_for(self, self._block_registry.handle(block_name))
+
     def param(self, declaration: Any) -> Any:
         """Register a case-owned typed parameter and return its ParamHandle.
 
@@ -250,6 +287,10 @@ class Case:
     @property
     def _diagnostics(self):
         return self._runtime_registry.diagnostics
+
+    @property
+    def _numerics(self) -> Any:
+        return dict(self._numerics_assignments)
 
     # --- layout / amr access -------------------------------------------------
     @property
@@ -337,6 +378,7 @@ class Case:
                 "n_blocks": len(self._block_registry), "n_fields": len(self._field_registry),
                 "n_params": len(self._param_registry), "n_aux": len(self._runtime_registry.aux),
                 "n_outputs": len(self._runtime_registry.outputs),
+                "n_numerical_plans": len(self._numerics_assignments),
                 "has_time": self._time_registry.program is not None}
 
     def requirements(self) -> Any:
@@ -416,6 +458,14 @@ class Case:
         runtime_context["declaration_resolver"] = self.resolve
         report = report.extend(self._runtime_registry.validate(runtime_context))
         report = report.extend(self._constraint_registry.validate(context))
+        for block_name, plan in sorted(self._numerics_assignments.items()):
+            try:
+                plan.validate_for(self._block_registry.spec(block_name)["model"])
+                self._resolved_numerics_for(block_name)
+            except Exception as exc:  # noqa: BLE001 -- aggregate exact numerical refusal
+                report = report.error(
+                    "numerics", "invalid_discretization_plan", str(exc),
+                    context={"block": block_name})
         return report
 
     def _field_validation_context(self, context: Any) -> Any:

@@ -273,6 +273,9 @@ class _SystemUnifiedInstall(_System):
             return Spatial()
         if isinstance(spatial, Spatial):
             return spatial
+        runtime_spatial = getattr(spatial, "runtime_spatial", None)
+        if callable(runtime_spatial):
+            return runtime_spatial()
         # A lib BrickDescriptor carries the scheme options as STRING tokens in .options. Lower them
         # to the canonical Spatial tokens directly (Spatial._from_tokens bypasses the public typed-
         # descriptor guard, which the runtime FiniteVolume now enforces -- Spec 5 sec.7).

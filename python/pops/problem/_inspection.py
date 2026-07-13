@@ -25,6 +25,9 @@ def inspect_payload(problem: Any) -> dict[str, Any]:
     info["diagnostics"] = runtime["diagnostics"]
     info["schedules"] = runtime["schedules"]
     info["constraints"] = problem._constraint_registry.inspect()
+    info["numerics"] = {
+        block: plan.inspect() for block, plan in sorted(problem._numerics_assignments.items())
+    }
     info["time"] = problem._time_registry.inspect()["program"]
     return inspection_copy(info)
 

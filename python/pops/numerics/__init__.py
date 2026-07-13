@@ -22,6 +22,8 @@ from .reconstruction import limiters
 # SimpleNamespace as ``pops.numerics.spatial`` (shadowing the submodule) so ``spatial.FiniteVolume()``
 # resolves, mirroring the former ``pops.lib.spatial.FiniteVolume()``.
 from .spatial import FiniteVolume, spatial
+from .plan import DiscretizationPlan, ResolvedDiscretizationPlan, ResolvedRateMethod
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume"]
+           "spatial", "FiniteVolume", "DiscretizationPlan", "ResolvedDiscretizationPlan",
+           "ResolvedRateMethod"]

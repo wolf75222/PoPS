@@ -136,6 +136,8 @@ def freeze_problem_graph(problem: Any) -> None:
         participants.append(registry)
     if problem._layout is not None:
         participants.append(problem._layout)
+    numerical_plans = tuple(dict.fromkeys(problem._numerics_assignments.values()))
+    participants.extend(numerical_plans)
 
     def commit() -> None:
         for registry in registries:
@@ -143,6 +145,8 @@ def freeze_problem_graph(problem: Any) -> None:
         layout_freeze = getattr(problem._layout, "freeze", None)
         if callable(layout_freeze):
             layout_freeze()
+        for plan in numerical_plans:
+            plan.freeze()
 
     freeze_atomically(participants, commit)
 

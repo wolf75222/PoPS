@@ -166,6 +166,7 @@ class ResolvedBlock:
     model: Any
     spatial: Any
     backend: str
+    numerics: Any = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
@@ -175,6 +176,8 @@ class ResolvedBlock:
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")
+        object.__setattr__(self, "numerics", _deep_freeze(self.numerics))
+        _evidence(self.numerics, where="ResolvedBlock.numerics")
 
 
 @dataclass(frozen=True, slots=True)

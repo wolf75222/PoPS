@@ -107,15 +107,22 @@ def resolve(
                 dynamic.append(slot)
         return "aot" if target == "system" and dynamic else backend_token
 
-    blocks = tuple(
-        ResolvedBlock(
+    resolved_blocks = []
+    for name, spec in problem._blocks.items():
+        numerics = problem._resolved_numerics_for(name)
+        spatial = spec["spatial"]
+        if numerics is not None:
+            if spatial is not None:
+                raise ValueError("block %r has competing spatial and DiscretizationPlan authorities" % name)
+            spatial = numerics.primary_spatial()
+        resolved_blocks.append(ResolvedBlock(
             name=name,
             model=_resolve_problem_model(spec["model"]),
-            spatial=detached_frozen(spec["spatial"]),
+            spatial=detached_frozen(spatial),
             backend=block_backend(name),
-        )
-        for name, spec in problem._blocks.items()
-    )
+            numerics=numerics,
+        ))
+    blocks = tuple(resolved_blocks)
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
     outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)

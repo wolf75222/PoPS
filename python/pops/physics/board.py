@@ -59,6 +59,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._fluxes = {}
         self._sources = {}
         self._operators = {}
+        # OperatorHandle -> exact physical dependencies retained for numerical-plan validation.
+        # DiscretizationPlan can therefore prove that a FiniteVolume(flux=F) discretizes the F
+        # referenced by the rate equation, instead of trusting matching display names.
+        self._rate_contracts = {}
         self._operator_inputs = {}  # registered op name -> declared field-input names
         self._aliases = {}          # board operator name -> registered op name
         self._invariants = {}

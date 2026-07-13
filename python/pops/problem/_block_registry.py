@@ -79,9 +79,9 @@ class BlockRegistry(_FreezableRegistry):
         self._guard_frozen("add a block")
         key = strict_name(name, "block name")
         if model is None:
-            raise ValueError("add_block(%r): a physics model is required" % key)
+            raise ValueError("block(%r): a physics model is required" % key)
         if key in self._blocks:
-            raise ValueError("add_block(%r): a block of that name already exists" % key)
+            raise ValueError("block(%r): a block of that name already exists" % key)
         model_owner = getattr(model, "owner_path", None)
         if model_owner is None:
             raise MissingOwnershipError(
@@ -370,8 +370,8 @@ class BlockRegistry(_FreezableRegistry):
             report = report.error(
                 self.family,
                 "no_block",
-                "no block declared; add one with add_block(name, model, spatial)",
-                alternatives=["add_block(name, model, spatial)"],
+                "no block declared; add one with block(name, model)",
+                alternatives=["block(name, model)"],
             )
             return report
         for name, spec in self._blocks.items():
