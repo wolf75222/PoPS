@@ -31,7 +31,7 @@ def account_block_plan_fields(report: Any, block_registry: Any) -> Any:
                 "block %r declares a per-block time Program, but the resolved/install plans do "
                 "not carry it; refusing the historical runtime-default substitution" % block_name,
                 context={"block": block_name},
-                alternatives=("declare the whole-system Program with problem.time(...)",))
+                alternatives=("declare the whole-system Program with case.program(...)",))
         if spec.get("diagnostics"):
             report = report.error(
                 "block", "unlowered_block_diagnostics",

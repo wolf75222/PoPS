@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 
-class ProblemAmrHandle:
+class CaseAmrHandle:
     """The ``problem.amr`` handle: record refinement criteria, chain back to the Problem."""
 
     def __init__(self, problem: Any) -> None:
@@ -47,4 +47,4 @@ class ProblemAmrHandle:
         return self._problem
 
 
-__all__ = ["ProblemAmrHandle"]
+__all__ = ["CaseAmrHandle"]

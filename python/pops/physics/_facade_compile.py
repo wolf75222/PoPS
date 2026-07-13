@@ -38,7 +38,7 @@ class _FacadeCompileMixin(_FacadeModel):
 
         INTERNAL codegen engine (Spec 5 sec.11). The documented PUBLIC compile front door is
         ``pops.compile(problem, backend=pops.codegen.Production())``; the authoring facade
-        ``pops.physics.Model`` is added directly (``problem.add_block(model=m)``) and ``pops.compile``
+        ``pops.physics.Model`` is added directly (``case.block(model=m)``) and ``pops.compile``
         captures its operator-first Module internally (ADC-557: no manual ``.lower()`` in the standard
         flow). ``pops.compile`` and ``pops.compile_library`` take a TYPED backend descriptor. This engine ``backend`` argument
         is the internal lowering vocabulary: it accepts a typed descriptor (lowered via lower_backend)

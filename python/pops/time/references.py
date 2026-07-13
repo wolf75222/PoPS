@@ -94,7 +94,7 @@ def bind_field_reference(program: Any, block: Any, field: Any) -> Any:
     if not isinstance(field, FieldHandle):
         raise TypeError(
             "Program.solve_fields: field must be a case-owned FieldHandle returned by "
-            "Problem.add_field(...), not %s" % type(field).__name__)
+            "Case.field(...), not %s" % type(field).__name__)
     if field.owner_path != block.owner_path:
         raise ValueError(
             "Program.solve_fields: field %r and state block %r belong to different Cases"

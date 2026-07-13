@@ -6,14 +6,14 @@ from typing import Any
 
 
 def validate(problem: Any) -> Any:
-    """Validate and freeze one exact Problem without compiling or loading native code."""
-    from pops.problem import Problem
+    """Validate and freeze one exact Case without compiling or loading native code."""
+    from pops.problem import Case
 
-    if type(problem) is not Problem:
-        raise TypeError("pops.validate requires an exact pops.Problem authoring value")
+    if type(problem) is not Case:
+        raise TypeError("pops.validate requires an exact pops.Case authoring value")
     problem.validate()
     if not problem.frozen:
-        raise RuntimeError("pops.validate completed without freezing the Problem")
+        raise RuntimeError("pops.validate completed without freezing the Case")
     return problem
 
 
@@ -23,6 +23,7 @@ def resolve(
     layout: Any,
     layout_providers: Mapping[Any, Any] | None = None,
     backend: Any = None,
+    platform: Any = None,
     time: Any = None,
     libraries: Any = (),
     compile_options: Mapping[str, Any] | None = None,
@@ -31,11 +32,11 @@ def resolve(
     initial_condition_plan: Any = None,
     bootstrap_plan: Any = None,
 ) -> Any:
-    """Resolve a frozen Problem into the only value accepted by :func:`compile`."""
-    from pops.problem import Problem
+    """Resolve a frozen Case into the only value accepted by :func:`compile`."""
+    from pops.problem import Case
 
-    if type(problem) is not Problem or not problem.frozen:
-        raise TypeError("pops.resolve requires the frozen Problem returned by pops.validate")
+    if type(problem) is not Case or not problem.frozen:
+        raise TypeError("pops.resolve requires the frozen Case returned by pops.validate")
     from pops.codegen.backends import Production, _Backend, lower_backend
 
     selected_backend = Production() if backend is None else backend
@@ -121,12 +122,21 @@ def resolve(
     resolved_libraries, snapshot_libraries = resolve_compile_libraries(tuple(libraries or ()))
     snapshot = prepare_problem_snapshot(
         problem, resolved_time, layout=layout_plan, libraries=snapshot_libraries)
-    from pops._bootstrap import abi_key
     from pops.codegen._resolution import resolve_capability_evidence
+
+    module_abi_key = None
+    platform_evidence = None
+    if platform is not None:
+        from pops._platform_contracts import PlatformManifest
+
+        if type(platform) is not PlatformManifest:
+            raise TypeError("pops.resolve platform must be an exact PlatformManifest")
+        module_abi_key = platform.abi.require("resolve.platform.abi")
+        platform_evidence = platform.to_data()
 
     evidence = resolve_capability_evidence(
         problem, layout=layout_plan, libraries=resolved_libraries, time=resolved_time,
-        module_abi_key=abi_key())
+        module_abi_key=module_abi_key)
     amr_requirements = None
     amr_capabilities = None
     if bootstrap_plan is not None:
@@ -148,7 +158,8 @@ def resolve(
                       "amr_resources": amr_requirements},
         capabilities={"resolution": evidence,
                       "layout_plan": layout_plan.capability_evidence(),
-                      "amr_bootstrap": amr_capabilities},
+                      "amr_bootstrap": amr_capabilities,
+                      "requested_platform": platform_evidence},
         lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan)
@@ -270,7 +281,7 @@ def _resolve_problem_model(model: Any) -> Any:
     if isinstance(model, (Module, PhysicsModel)):
         return model
     raise TypeError(
-        "Problem block physics must be a pops.physics.Model or pops.model.Module, got %s"
+        "Case block physics must be a pops.physics.Model or pops.model.Module, got %s"
         % type(model).__name__)
 
 

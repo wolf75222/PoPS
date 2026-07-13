@@ -1,7 +1,7 @@
 """pops.lib.presets -- ready-to-run compose-and-go bundles (ADC-524, criterion 7).
 
 A PRESET pairs a provided model (:mod:`pops.lib.models`) with a provided time scheme
-(:mod:`pops.lib.time`) so a user drops both into a :class:`pops.Problem` in one step instead of
+(:mod:`pops.lib.time`) so a user drops both into a :class:`pops.Case` in one step instead of
 re-deriving the pairing every time. This is the ONE namespace for such bundles: ``pops.lib`` keeps
 only things that are ready to use (``lib.time`` schemes, ``lib.models`` models, ``lib.presets``
 bundles); the generic building blocks live in the top-level central packages (``pops.numerics`` /
@@ -22,13 +22,13 @@ Usage::
 
     preset = vlasov_poisson_magnetic_euler()
     model = preset.model()
-    problem = pops.Problem(name="plasma")
-    block = problem.add_block("f", model)
+    problem = pops.Case(name="plasma")
+    block = problem.block("f", model)
     state = next(
         handle for handle in model.module.declaration_index().records()
         if handle.kind == "state"
     )
-    problem.time(preset.time_scheme(block, state))
+    problem.program(preset.time_scheme(block, state))
     compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96)))
 """
 from __future__ import annotations
@@ -40,9 +40,9 @@ class Preset:
     """A ready-to-run pairing of a provided model factory and a provided time-scheme macro.
 
     ``model()`` builds the provided physics model (a ``pops.physics`` / ``pops.lib.models``
-    composition ready for a Problem block); ``time_scheme(block, state)`` builds the matching
+    composition ready for a Case block); ``time_scheme(block, state)`` builds the matching
     ``pops.time.Program`` from the authoritative ``BlockHandle`` and model state ``Handle``. Both
-    are DESCRIPTOR-level authoring objects the user hands to a :class:`pops.Problem`; the preset
+    are DESCRIPTOR-level authoring objects the user hands to a :class:`pops.Case`; the preset
     carries no mesh, no runtime, and no compiled ``.so``.
 
     Args:

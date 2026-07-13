@@ -319,7 +319,7 @@ def build_solver_ir(solver_brick: Any) -> SolverIR:
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
     from pops.model import DeclarationIndex, Handle, OwnerKind, OwnerPath
-    from pops.problem import Problem
+    from pops.problem import Case
 
     class _SolverStateModel:
         def __init__(self) -> None:
@@ -332,7 +332,7 @@ def build_solver_ir(solver_brick: Any) -> SolverIR:
             return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
 
     state_model = _SolverStateModel()
-    block = Problem(name="solver_case:" + desc.name).add_block("solve", state_model)
+    block = Case(name="solver_case:" + desc.name).block("solve", state_model)
     temporal = program.state(block, state_model.state)
     ctx = SolverContext(program, temporal)
     a_op = program._linear_source("A")   # the matrix-free operator A, an IR operator value

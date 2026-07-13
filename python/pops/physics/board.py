@@ -429,7 +429,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         The STANDARD flow needs NO manual lower (ADC-557) -- add the model and compile::
 
             physics_model = pops.physics.Model(...)
-            problem.add_block("blk", model=physics_model)
+            problem.block("blk", model=physics_model)
             validated = pops.validate(problem)
             resolved = pops.resolve(validated, layout=..., backend=pops.codegen.Production())
             compiled = pops.compile(resolved)
@@ -439,7 +439,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return self.module
 
     # Spec 5 sec.11 alias: physics.Model.to_module() == physics.Model.lower(). ADVANCED / inspection only
-    # (ADC-557): the standard problem.add_block(model=m) -> pops.compile flow captures the Module itself;
+    # (ADC-557): the standard case.block(model=m) -> pops.compile flow captures the Module itself;
     # neither is REQUIRED (pops.compile does the lowering once, internally).
     to_module = lower
 

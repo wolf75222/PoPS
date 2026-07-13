@@ -299,6 +299,11 @@ class CompiledSimulationArtifact:
         from pops._platform_contracts import artifact_platform_manifest
         platform = artifact_platform_manifest(
             backend=self.plan.backend, target=self.plan.target, component=blocks[0].model)
+        requested_platform = self.plan.capabilities.get("requested_platform")
+        if requested_platform is not None and platform.to_data() != requested_platform:
+            raise ValueError(
+                "compiled platform does not exactly match the PlatformManifest resolved by the Case"
+            )
         object.__setattr__(self, "platform_manifest", platform)
         evidence = self._current_component_evidence()
         object.__setattr__(self, "_component_evidence", _deep_freeze(evidence))

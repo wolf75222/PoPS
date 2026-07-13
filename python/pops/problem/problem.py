@@ -1,7 +1,7 @@
-"""The inert, typed, top-level Problem assembly.
+"""The inert, typed, top-level Case assembly.
 
-Problem owns one registry per declaration family and aggregates their validation reports. It is
-inert; ``pops.resolve(pops.validate(problem), layout=...)`` is the semantic lowering boundary.
+Case owns one registry per declaration family and aggregates their validation reports. It is
+inert; ``pops.resolve(pops.validate(case), layout=...)`` is the semantic lowering boundary.
 """
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 from pops.descriptors import Availability
 from pops.mesh.layouts import AMR
-from pops.problem.amr_handle import ProblemAmrHandle
+from pops.problem.amr_handle import CaseAmrHandle
 from pops.problem.registries import (
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
@@ -19,51 +19,50 @@ from pops._report import ReportTree
 from pops.model import OwnerKind, OwnerPath
 
 
-class Problem:
+class Case:
     """A typed, inert top-level assembly: blocks + fields + params + aux + outputs + time.
 
-    ``Problem(name="plasma")`` then chained::
+    ``Case("plasma")`` then assembled explicitly::
 
-        problem = (pops.Problem(name="plasma")
-                   .block("ne", physics=model, spatial=pops.FiniteVolume())
-                   .field(pops.fields.PoissonProblem(unknown="phi", equation=eq, solver=mg))
-                   .time(pops.time.Program(...)))
-        validated = pops.validate(problem)
+        case = pops.Case("plasma")
+        electron = case.block("ne", model=model, spatial=finite_volume)
+        potential = case.field(field_operator, field_discretization)
+        case.program(time_program)
+        validated = pops.validate(case)
         resolved = pops.resolve(validated, layout=Uniform(CartesianMesh()))
         compiled = pops.compile(resolved)
 
-    Each assembly setter RETURNS the Problem so calls chain. A Problem CONTAINS descriptors (the
-    blocks' physics, the field problems) but is NOT itself a :class:`pops.descriptors.Descriptor`
+    Declaration methods return stable owner-qualified handles; singleton assembly authorities such
+    as :meth:`program` return the Case for optional chaining. A Case CONTAINS descriptors (the
+    blocks' physics and field bindings) but is NOT itself a :class:`pops.descriptors.Descriptor`
     (Spec 5 sec.6 / sec.15). It exposes the same inspectable surface --
     ``requirements`` / ``capabilities`` / ``options`` / ``available`` / ``validate`` / ``inspect`` /
     ``lower`` -- implemented DIRECTLY here (by delegating to the registries), so it duck-types as a
     route-describing object without inheriting a descriptor identity.
     """
 
-    category = "problem"
-    #: A Problem names a pure-Python assembly, not a single native C++ symbol.
+    category = "case"
+    #: A Case names a pure-Python assembly, not a single native C++ symbol.
     native_id = None
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in ("_name", "_owner_path") and hasattr(self, name):
-            raise AttributeError("pops.Problem identity is immutable; construct a new Problem")
+            raise AttributeError("pops.Case identity is immutable; construct a new Case")
         if getattr(self, "_frozen", False):
             if name != "_frozen" or value is not True:
-                raise RuntimeError("pops.Problem is frozen: cannot change %s" % name)
+                raise RuntimeError("pops.Case is frozen: cannot change %s" % name)
         object.__setattr__(self, name, value)
 
     def __delattr__(self, name: str) -> None:
         if name in ("_name", "_owner_path"):
-            raise AttributeError("pops.Problem identity is immutable; construct a new Problem")
+            raise AttributeError("pops.Case identity is immutable; construct a new Case")
         if getattr(self, "_frozen", False):
-            raise RuntimeError("pops.Problem is frozen: cannot delete %s" % name)
+            raise RuntimeError("pops.Case is frozen: cannot delete %s" % name)
         object.__delattr__(self, name)
 
-    def __init__(self, layout: Any = None, name: Any = None) -> None:
-        if name is None:
-            name = "Problem"
+    def __init__(self, name: Any = "Case", *, layout: Any = None) -> None:
         if not isinstance(name, str) or not name:
-            raise TypeError("Problem: name must be a non-empty string")
+            raise TypeError("Case: name must be a non-empty string")
         self._name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.CASE, self._name)
         # Validation freezes the assembly and commits the snapshot used by compile identity.
@@ -84,17 +83,17 @@ class Problem:
 
     @property
     def owner_path(self) -> OwnerPath:
-        """Immutable qualified identity anchor for every handle owned by this Problem."""
+        """Immutable qualified identity anchor for every handle owned by this Case."""
         return self._owner_path
 
     # --- freeze lifecycle (ADC-563) -----------------------------------------------------
     def _guard_mutable(self, what: Any) -> None:
-        """Raise when a mutating setter runs after :meth:`freeze` (ADC-563), naming the Problem."""
+        """Raise when a mutating setter runs after :meth:`freeze` (ADC-563), naming the Case."""
         if self._frozen:
             raise RuntimeError(
-                "pops.Problem %r is frozen (ADC-563): cannot %s after pops.compile froze it. A "
+                "pops.Case %r is frozen (ADC-563): cannot %s after pops.compile froze it. A "
                 "compiled artifact is frozen to exactly the assembly it was compiled from; author a "
-                "fresh Problem (or edit BEFORE compile) and recompile -- a post-compile mutation "
+                "fresh Case (or edit BEFORE compile) and recompile -- a post-compile mutation "
                 "cannot change a bound artifact." % (self._name, what))
 
     def freeze(self) -> Any:
@@ -115,7 +114,7 @@ class Problem:
         # Two-phase commit: canonicalisation can call descriptor projections and therefore fail.
         # Build and validate the complete inert snapshot while every authoring object is still
         # mutable; only a successful candidate is followed by the irreversible registry/descriptor
-        # seal.  A serialization error leaves the Problem exactly as editable as it was before the
+        # seal.  A serialization error leaves the Case exactly as editable as it was before the
         # call, so the user can repair the declaration and retry freeze().
         candidate = build_problem_snapshot(self)
         self._freeze_registries()
@@ -150,37 +149,29 @@ class Problem:
     def _constraints(self) -> Any:
         return self._constraint_registry
 
-    # --- assembly (chaining setters delegate to the registries) -------------------------
-    def block(self, name: Any, physics: Any, spatial: Any = None) -> Any:
-        """Declare a physics block ``name`` (its ``physics`` model is REQUIRED). Chains."""
-        self._guard_mutable("add a block")
-        self._block_registry.add(name, physics, spatial=spatial)
-        return self
+    # --- assembly -----------------------------------------------------------------------
+    def block(
+        self,
+        name: Any,
+        model: Any,
+        *,
+        spatial: Any = None,
+        time: Any = None,
+        diagnostics: Any = None,
+    ) -> Any:
+        """Declare one model instance and return its stable owner-qualified block handle.
 
-    def add_block(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
-                  diagnostics: Any = None) -> Any:
-        """Declare a physics block and return its stable :class:`~pops.problem.handles.BlockHandle`.
-
-        The ADC-526 declarative form (a superset of :meth:`block`): a block carries its ``model``
-        (required), its ``spatial`` discretisation, and the optional per-block ``time`` scheme and
-        ``diagnostics``. Unlike the chaining :meth:`block`, this returns a stable HANDLE the user can
-        hold to reference the block later. A duplicate name / missing model is refused loudly here.
+        ``block`` is the sole block-registration path. A model-local state or operator becomes
+        unambiguous for consumers only after qualification through this returned handle. Per-block
+        ``time`` and ``diagnostics`` remain fail-closed inputs until their resolved-plan consumers
+        exist; validation never drops them.
         """
         self._guard_mutable("add a block")
         return self._block_registry.add(name, model, spatial=spatial, time=time,
                                         diagnostics=diagnostics)
 
     def field(self, operator: Any, discretization: Any) -> Any:
-        """Register a physical field operator with its numerical plan. Chains."""
-        self._guard_mutable("add a field")
-        self._field_registry.add(operator, discretization)
-        return self
-
-    def add_field(self, operator: Any, discretization: Any) -> Any:
-        """Register a field operator/plan and return its stable case-owned handle.
-
-        The handle-returning counterpart of the chaining :meth:`field` (ADC-526 stable handles).
-        """
+        """Register one field operator/discretization pair and return its case-owned handle."""
         self._guard_mutable("add a field")
         return self._field_registry.add(operator, discretization)
 
@@ -228,14 +219,8 @@ class Problem:
         self._runtime_registry.set_policies(policies)
         return self
 
-    def time(self, program: Any) -> Any:
-        """Attach the time scheme (a ``pops.time.Program``) used at compile. Chains."""
-        self._guard_mutable("set the time scheme")
-        self._time_registry.set(program)
-        return self
-
     def program(self, program: Any) -> Any:
-        """Attach the whole-system time ``Program`` (the ADC-526 spelling of :meth:`time`). Chains."""
+        """Attach the sole whole-system :class:`pops.Program` authority."""
         self._guard_mutable("set the time program")
         self._time_registry.set(program)
         return self
@@ -275,10 +260,10 @@ class Problem:
     def amr(self) -> Any:
         """The AMR refinement-policy handle (records criteria on the constraint registry; ADC-526).
 
-        A layout-free Problem always exposes ``.amr`` -- the criteria are applied to the layout at
+        A layout-free Case always exposes ``.amr`` -- the criteria are applied to the layout at
         ``pops.compile(problem, layout=AMR(...))``. When a layout WAS given to the constructor it
         must be AMR (a Uniform layout has no level to refine onto), so a back-compat
-        ``Problem(layout=Uniform(...)).amr`` is still refused loudly.
+        ``Case(layout=Uniform(...)).amr`` is still refused loudly.
         """
         if self._layout is not None and callable(
                 getattr(self._layout, "validate_subjects", None)):
@@ -290,7 +275,7 @@ class Problem:
                 "problem.amr: only available with no constructor layout (supply layout=AMR(...) at "
                 "compile) or layout=AMR(...); this problem has layout %r"
                 % type(self._layout).__name__)
-        return ProblemAmrHandle(self)
+        return CaseAmrHandle(self)
 
     def blocks(self) -> Any:
         """The declared blocks as ``{name: BlockHandle}`` (ADC-526 stable-handle accessor)."""
@@ -397,9 +382,9 @@ class Problem:
 
         Runs the layout check plus each registry's own ``validate``, folds them into ONE
         :class:`~pops.ReportTree`, and raises (via ``raise_if_error``)
-        when any error accumulated.  Success seals the Problem before returning, making this the
+        when any error accumulated.  Success seals the Case before returning, making this the
         sole transition from mutable authoring into the validated phase; resolution refuses an
-        unfrozen Problem and never repairs or mutates it.
+        unfrozen Case and never repairs or mutates it.
         """
         report = self.validate_report(context)
         report.raise_if_error()
@@ -410,7 +395,7 @@ class Problem:
     def validate_report(self, context: Any = None) -> Any:
         """Aggregate the per-family validation reports into ONE report (no raise; ADC-553).
 
-        When the Problem carries NO layout (the ADC-526 default), the layout-specific checks
+        When the Case carries NO layout (the ADC-526 default), the layout-specific checks
         (the layout's own ``validate`` and the Uniform-with-AMR-criteria refusal) DEFER to
         ``pops.compile(problem, layout=...)``, where the layout is finally known; the structural
         registry checks always run.
@@ -459,18 +444,18 @@ class Problem:
                                  native_id=self.native_id, options=self.options())
 
     def inspect(self) -> Any:
-        """A typed :class:`~pops.problem.report_view.ProblemReport` of the assembly (ADC-564).
+        """A typed :class:`~pops.problem.report_view.CaseReport` of the assembly (ADC-564).
 
         Attributes + ``to_dict()`` (never a dict subclass), carrying the name / blocks / fields /
         params / aux / outputs / constraints / requirements / capabilities. Inert: no build, no
         compile, no validation. ``pops.inspect(problem)`` is the explicit dict bridge over its
         ``to_dict()``.
         """
-        from pops.problem.report_view import ProblemReport
-        return ProblemReport(self._inspect_payload())
+        from pops.problem.report_view import CaseReport
+        return CaseReport(self._inspect_payload())
 
     def _inspect_payload(self) -> Any:
-        """The ordered inspection dict (the historical inspect() shape) the ProblemReport wraps."""
+        """The ordered inspection dict (the historical inspect() shape) the CaseReport wraps."""
         return inspect_payload(self)
 
     def to_dict(self) -> Any:
@@ -492,9 +477,9 @@ class Problem:
                    "set" if self._time_registry.program is not None else "none"))
 
     def __repr__(self) -> str:
-        return ("Problem(name=%r, layout=%s, blocks=%s, fields=%s)"
+        return ("Case(name=%r, layout=%s, blocks=%s, fields=%s)"
                 % (self._name, self._layout_name() or "none",
                    sorted(self._block_registry.names()), sorted(self._field_registry.names())))
 
 
-__all__ = ["Problem"]
+__all__ = ["Case"]

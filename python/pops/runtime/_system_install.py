@@ -51,7 +51,7 @@ class _SystemInstall(_System):
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Problem(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
         the native/AMR runtime, and the tests.
 
@@ -98,7 +98,7 @@ class _SystemInstall(_System):
         """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Problem(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
+        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
 
         Dispatch:

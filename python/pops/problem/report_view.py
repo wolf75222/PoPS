@@ -1,6 +1,6 @@
-"""pops.problem.report_view -- the typed inspection report of a Problem (ADC-564).
+"""Typed, inert inspection report for a :class:`pops.Case`.
 
-``Problem.inspect()`` returns a :class:`ProblemReport`: a typed :class:`pops.Report` carrying the
+``Case.inspect()`` returns a :class:`CaseReport`: a typed :class:`pops.Report` carrying the
 assembly's name / blocks / fields / params / aux / outputs / constraints / requirements /
 capabilities as ATTRIBUTES, with :meth:`to_dict` the JSON bridge. It is inert -- built from the
 registries' metadata, it triggers no validation and no compilation. This is distinct from the
@@ -14,8 +14,8 @@ from typing import Any
 from pops._report import Report
 
 
-class ProblemReport(Report):
-    """The typed inspection report of a :class:`~pops.problem.problem.Problem` (ADC-564).
+class CaseReport(Report):
+    """The typed inspection report of a :class:`~pops.problem.problem.Case`.
 
     Attributes (all read directly): ``name`` / ``category`` / ``native_id`` / ``options`` /
     ``requirements`` / ``capabilities`` / ``layout`` / ``blocks`` / ``fields`` / ``params`` /
@@ -23,7 +23,7 @@ class ProblemReport(Report):
     match the historical ``inspect()`` dict byte-for-byte so a ``to_dict()`` consumer is unchanged).
     """
 
-    report_type = "problem"
+    report_type = "case"
     schema_version = 1
 
     def __init__(self, payload: Any) -> None:
@@ -38,11 +38,11 @@ class ProblemReport(Report):
         return self._stamp(dict(self._payload))
 
     def __str__(self) -> str:
-        return ("problem %r [%s]: blocks=%s fields=%s params=%s aux=%s outputs=%s time=%s"
+        return ("case %r [%s]: blocks=%s fields=%s params=%s aux=%s outputs=%s time=%s"
                 % (self._payload.get("name"), self._payload.get("category"),
                    list(self._payload.get("blocks", {})), list(self._payload.get("fields", {})),
                    list(self._payload.get("params", {})), self._payload.get("aux"),
                    self._payload.get("outputs"), self._payload.get("time")))
 
 
-__all__ = ["ProblemReport"]
+__all__ = ["CaseReport"]
