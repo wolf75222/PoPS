@@ -152,6 +152,32 @@ class Neumann(FieldBoundaryCondition):
         return Neumann(resolve_value(self.flux, resolver, where="Neumann flux"))
 
 
+class Mixed(FieldBoundaryCondition):
+    """Explicit Robin/mixed law ``alpha*u + beta*du/dn = value``."""
+
+    def __init__(self, alpha: Any, beta: Any, value: Any = 0) -> None:
+        self.alpha = _boundary_value(alpha)
+        self.beta = _boundary_value(beta)
+        self.value = _boundary_value(value)
+        if isinstance(alpha, (bool, int, float)) and isinstance(beta, (bool, int, float)) \
+                and not alpha and not beta:
+            raise ValueError("Mixed boundary requires a non-zero alpha or beta")
+
+    def options(self) -> dict[str, Any]:
+        return {"bc": "mixed", "alpha": strict_field_data(self.alpha),
+                "beta": strict_field_data(self.beta), "value": strict_field_data(self.value)}
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return collect_references((self.alpha, self.beta, self.value))
+
+    def resolve_references(self, resolver: Any) -> Mixed:
+        return Mixed(
+            resolve_value(self.alpha, resolver, where="Mixed alpha"),
+            resolve_value(self.beta, resolver, where="Mixed beta"),
+            resolve_value(self.value, resolver, where="Mixed value"),
+        )
+
+
 class FirstOrderExtrapolation(FieldBoundaryCondition):
     def options(self) -> dict[str, Any]:
         return {"bc": "first_order_extrapolation"}
@@ -201,6 +227,7 @@ __all__ = [
     "Dirichlet",
     "FieldBoundaryCondition",
     "FirstOrderExtrapolation",
+    "Mixed",
     "NamedBoundary",
     "Neumann",
     "Periodic",

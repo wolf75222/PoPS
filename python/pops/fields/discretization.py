@@ -28,6 +28,12 @@ class FieldHierarchyPolicy(Descriptor):
     def to_data(self) -> dict[str, Any]:
         return {"type": type(self).__name__, "options": self.options()}
 
+    def resolve(self, capabilities: Any) -> Any:
+        resolver = getattr(capabilities, "resolve_hierarchy", None)
+        if not callable(resolver):
+            raise TypeError("field hierarchy policy requires typed solve capabilities")
+        return resolver(self.options()["policy"])
+
 
 class InferHierarchyFromLayout(FieldHierarchyPolicy):
     """Resolve uniform/level-local/composite behavior from method and layout capabilities."""

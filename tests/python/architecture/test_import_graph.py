@@ -56,10 +56,10 @@ ALLOWED = {
     # imports nothing else in pops, so it is a SINK: the custom-solver registry hooks are attached
     # onto its namespace by pops.codegen.solvers (a downward codegen -> solvers edge, acyclic).
     "solvers": set(),
-    # Spec 5 Phase E: pops.fields authoring imports only pops.descriptors + pops.math at
-    # module scope. fields.aux re-exports pops.mesh.aux.AuxHalo via a LAZY module __getattr__
-    # (in-function import), so it adds no module-scope mesh edge -> ALLOWED stays empty.
-    "fields": set(),
+    # Resolved field contracts share the canonical symbolic/model/time values they authenticate.
+    # BoundaryTopology remains a lazy, in-function dependency so fields does not create a
+    # module-scope mesh edge and mesh stays independent of fields.
+    "fields": {"ir", "model", "time"},
     "moments": {"ir"},
     # Spec 5 sec.5.13: pops.diagnostics.measures.Norm takes a typed pops.linalg.norms kind
     # (L1 / L2 / LInf), so diagnostics imports linalg (acyclic: linalg imports nothing).

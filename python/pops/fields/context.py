@@ -184,6 +184,9 @@ class FieldContext:
             raise TypeError("FieldContext operator Handle kind must be 'field_operator'")
         if any(not isinstance(item, FieldInput) for item in self.inputs):
             raise TypeError("FieldContext inputs must contain FieldInput values")
+        references = [item.reference for item in self.inputs]
+        if len(references) != len(set(references)):
+            raise ValueError("FieldContext inputs must contain each dependency exactly once")
         if type(self.clock) is not Clock or self.clock.owner is None:
             raise TypeError("FieldContext clock must be an owner-qualified exact Clock")
         if type(self.point) is not TimePoint or self.point.clock != self.clock:
