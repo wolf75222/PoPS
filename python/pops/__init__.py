@@ -58,7 +58,7 @@ __all__ = [
     "Ionization", "Collision", "ThermalExchange",
     "Profile", "PerformanceSummary", "RuntimeInspectionReport", "numerical_defaults_report",
     "fallback_diagnostics_report", "reset_fallback_diagnostics",
-    "time", "model", "math", "physics", "lib", "mesh", "params", "output", "external", "fields",
+    "time", "model", "math", "physics", "lib", "mesh", "params", "output", "external", "interfaces", "fields",
     "linalg", "solvers", "experimental", "abi_key", "capabilities", "inspect", "explain",
     "ReportTree", "ReportPhase", "ReportSeverity", "DiagnosticError", "SourceSpan", "ProvenanceRecord",
     "inspect_amr", "native_capability_report", "runtime_environment_report",
@@ -72,7 +72,7 @@ __all__ = [
 # Lower / authoring layers + the moved integrate (re-exported, surface unchanged; numpy-free).
 from pops.runtime import integrate  # noqa: E402,F401  (pops.integrate name preserved; without numpy)
 from . import time, model, math, lib, physics, mesh  # noqa: E402  (Spec 2/3 operator-first + board authoring + IR)
-from . import params, output, external, fields, linalg, solvers  # noqa: E402  (Spec 5 typed params/output/fields/algebra/solvers)
+from . import params, output, external, interfaces, fields, linalg, solvers  # noqa: E402  (typed component interfaces)
 from .problem import AuthoringSnapshot, Problem  # noqa: E402,F401
 from .time import Program  # noqa: E402,F401
 from pops.physics import PhysicsModel  # noqa: E402,F401  (Spec 5 sec.11: alias of pops.physics.Model)

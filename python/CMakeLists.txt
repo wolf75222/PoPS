@@ -143,6 +143,9 @@ set_target_properties(_pops PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${POPS_PY_PKG})
 # pyAMReX/WarpX). Le flux dev presets+PYTHONPATH reste inchange (SKBUILD absent).
 if(SKBUILD)
   install(TARGETS _pops LIBRARY DESTINATION pops)
+  # External AOT packages compile against the exact headers whose signature is baked into _pops.
+  # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
+  install(DIRECTORY "${_pops_include}/pops" DESTINATION pops/include)
 endif()
 # Copy the pure-Python package (pops/ and every sub-package) into the build tree next to _pops.
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat

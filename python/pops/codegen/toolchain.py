@@ -76,6 +76,7 @@ def pops_include() -> str:
     try:
         import pops as _pops_pkg
         pkg = os.path.dirname(os.path.abspath(_pops_pkg.__file__))   # .../pops
+        candidates.append(os.path.join(pkg, "include"))  # wheel-owned, exact signed header tree
         candidates.append(os.path.normpath(os.path.join(pkg, "..", "..", "..", "include")))
     except Exception:
         pass

@@ -66,7 +66,9 @@ ALLOWED = {
     "diagnostics": {"linalg"},
     "params": set(),
     "output": set(),
-    "external": set(),
+    # External package manifests are semantic authoring inputs and consume the canonical
+    # ComponentManifest value; platform/runtime imports remain lazy phase-boundary operations.
+    "external": {"model"},
     # lib.models wraps pops.moments. Criterion 7: lib is presets-only -- the solver catalog lives in
     # pops.solvers (the lib.solvers shim was removed, so lib no longer imports solvers) and the
     # solver-gen DSL is in codegen, not here. lib.presets (ADC-524) composes a lib.models model with
@@ -77,7 +79,7 @@ ALLOWED = {
     "lib": {"ir", "model", "time", "physics", "moments", "numerics"},
     # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
     # attach the custom-solver registry hooks -> codegen -> solvers (solvers is a sink: acyclic).
-    "codegen": {"ir", "model", "physics", "time", "lib", "solvers", "params"},
+    "codegen": {"ir", "model", "physics", "time", "lib", "solvers", "params", "external"},
     "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen", "params"},
 }
 LAYERS = set(ALLOWED)

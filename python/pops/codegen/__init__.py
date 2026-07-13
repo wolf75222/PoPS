@@ -45,6 +45,7 @@ from .lowering_coverage import (  # noqa: F401
     LoweringCoverageRow,
     LoweringRejection,
 )
+from .component_packages import compile_component  # noqa: F401
 
 __all__ = [
     "pops_header_signature",
@@ -68,4 +69,5 @@ __all__ = [
     "CodegenEnv", "jit_backdoor_enabled",
     "LOWERING_DISPOSITIONS", "LoweringCoverageReport", "LoweringCoverageRow",
     "LoweringRejection",
+    "compile_component",
 ]
