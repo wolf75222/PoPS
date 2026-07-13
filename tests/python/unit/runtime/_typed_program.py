@@ -13,6 +13,7 @@ from typing import Any
 from pops.model import Module
 from pops.problem import Problem
 from pops.time import Program
+from tests.python.support.layout_plan import resolved_layout_contract
 
 
 def module_of(model: Any) -> Module:
@@ -152,11 +153,14 @@ def typed_compiled_artifact(
     })
     backend = next(iter(by_name.values())).backend
     layout_value = layout if layout is not None else {"kind": target}
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout_value, target=target, block_names=names)
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target=target,
         backend=backend,
         layout=layout_value,
+        layout_plan=layout_plan,
         time=program if has_program else None,
         blocks=tuple(
             ResolvedBlock(name, schema_modules[name], None, backend)
@@ -170,6 +174,7 @@ def typed_compiled_artifact(
         libraries=(),
         requirements={},
         capabilities={"cpu": True, "amr": target == "amr_system"},
+        lowering_coverage=layout_coverage,
     )
     compiled.bind_schema = schema
     for name, model in by_name.items():

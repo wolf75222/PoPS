@@ -20,6 +20,7 @@ import sys
 
 
 from tests.python.support.assertions import _check
+from tests.python.support.layout_plan import resolved_layout_contract
 from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -123,11 +124,14 @@ def _install_instances(**models):
     snapshot = AuthoringSnapshot({"kind": "named-field-amr", "blocks": tuple(models)})
     schema = BindSchema()
     source = {"kind": "named-field-amr", "blocks": tuple(models)}
+    layout_plan, layout_coverage = resolved_layout_contract(
+        None, target="amr_system", block_names=models)
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
         backend="production",
         layout=None,
+        layout_plan=layout_plan,
         time=None,
         blocks=tuple(ResolvedBlock(name, source, None, "production") for name in models),
         bind_schema=schema,
@@ -138,6 +142,7 @@ def _install_instances(**models):
         libraries=(),
         requirements={},
         capabilities={"amr": True},
+        lowering_coverage=layout_coverage,
     )
     artifact = CompiledSimulationArtifact(
         plan=resolved,

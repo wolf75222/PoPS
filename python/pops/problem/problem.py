@@ -1,9 +1,7 @@
 """The inert, typed, top-level Problem assembly.
 
-Problem owns exactly one registry per declaration family and aggregates their inspectable
-validation reports.  It computes nothing and imports neither the native extension nor runtime or
-codegen. ``pops.resolve(pops.validate(problem), layout=...)`` is the semantic lowering boundary;
-one assembly can therefore be resolved against different compatible layout descriptors.
+Problem owns one registry per declaration family and aggregates their validation reports. It is
+inert; ``pops.resolve(pops.validate(problem), layout=...)`` is the semantic lowering boundary.
 """
 from __future__ import annotations
 
@@ -16,7 +14,7 @@ from pops.problem.registries import (
     BlockRegistry, ConstraintRegistry, FieldRegistry, ParamRegistry,
     RuntimePolicyRegistry, TimeRegistry)
 from pops.problem._inspection import inspect_payload, serialization_payload
-from pops.problem._validation import account_block_plan_fields, refuse_uniform_with_amr_criteria
+from pops.problem._validation import account_block_plan_fields
 from pops._report import ReportTree
 from pops.model import OwnerKind, OwnerPath
 
@@ -68,15 +66,10 @@ class Problem:
             raise TypeError("Problem: name must be a non-empty string")
         self._name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.CASE, self._name)
-        # ADC-563 freeze: a Problem is MUTABLE during assembly and FROZEN by pops.compile. After
-        # freeze every mutating setter RAISES (naming the Problem) and freeze() returns a stable
-        # AuthoringSnapshot the compile cache keys on.
+        # Validation freezes the assembly and commits the snapshot used by compile identity.
         self._frozen = False
         self._snapshot = None
-        # ADC-526: the Problem does NOT own a layout. Layout is supplied at compile
-        # (pops.compile(problem, layout=Uniform(...)|AMR(...))), so ONE Problem compiles under
-        # either. A constructor layout= is still accepted (back-compat) and, when given, is carried
-        # here so pops.compile can cross-check it against the layout passed at compile.
+        # Layout normally enters at resolve; a constructor authority is cross-checked there.
         self._layout = layout
         self._block_registry = BlockRegistry(self.owner_path)
         self._field_registry = FieldRegistry(self.owner_path)
@@ -287,6 +280,11 @@ class Problem:
         must be AMR (a Uniform layout has no level to refine onto), so a back-compat
         ``Problem(layout=Uniform(...)).amr`` is still refused loudly.
         """
+        if self._layout is not None and callable(
+                getattr(self._layout, "validate_subjects", None)):
+            raise ValueError(
+                "problem.amr cannot mutate policies after a LayoutPlan authority is resolved; "
+                "author refinement policies in its layout descriptors")
         if self._layout is not None and not isinstance(self._layout, AMR):
             raise ValueError(
                 "problem.amr: only available with no constructor layout (supply layout=AMR(...) at "
@@ -345,7 +343,8 @@ class Problem:
 
     # --- DescriptorProtocol surface (pure Python; no runtime, no codegen) ----
     def _layout_name(self) -> Any:
-        return self._layout.name if self._layout is not None else None
+        from pops.problem._layout_protocol import layout_name
+        return layout_name(self._layout)
 
     def options(self) -> Any:
         """The authoring summary: name, layout and the per-registry counts (a plain dict)."""
@@ -358,7 +357,8 @@ class Problem:
     def requirements(self) -> Any:
         """The route's requirements as a typed :class:`~pops.descriptors_report.RequirementSet`."""
         from pops.descriptors_report import RequirementSet
-        base = self._layout.requirements().to_dict() if self._layout is not None else {}
+        from pops.problem._layout_protocol import layout_requirements
+        base = layout_requirements(self._layout)
         req = RequirementSet(base)
         if len(self._field_registry):
             req.add("elliptic_solve")
@@ -368,17 +368,18 @@ class Problem:
     def capabilities(self) -> Any:
         """The route's capabilities as a typed :class:`~pops.descriptors_report.CapabilitySet`."""
         from pops.descriptors_report import CapabilitySet
-        caps = self._layout.capabilities().to_dict() if self._layout is not None else {}
+        from pops.problem._layout_protocol import layout_capabilities
+        caps = layout_capabilities(self._layout)
         caps["blocks"] = sorted(self._block_registry.names())
         caps["fields"] = sorted(self._field_registry.names())
         return CapabilitySet(caps)
 
     def available(self, context: Any = None) -> Any:
         """An EXPLAINABLE availability status, computed from the parts (no runtime)."""
-        if self._layout is not None:
-            layout_status = self._layout.available(context)
-            if not layout_status.ok:
-                return layout_status
+        from pops.problem._layout_protocol import layout_available
+        layout_status = layout_available(self, self._layout, context)
+        if layout_status is not None:
+            return layout_status
         if not len(self._block_registry):
             return Availability.no("problem has no block; add one with .block(name, physics)",
                                    missing=["block"])
@@ -417,12 +418,8 @@ class Problem:
         report = ReportTree(
             phase="validation", severity="info", code="validation.problem.root",
             source="problem", owner=self.owner_path)
-        if self._layout is not None:
-            report = refuse_uniform_with_amr_criteria(report, self._layout)
-            try:
-                self._layout.validate(context)
-            except Exception as exc:  # noqa: BLE001 -- surface the layout's own message as an issue
-                report = report.error("layout", "layout_invalid", str(exc))
+        from pops.problem._layout_protocol import validate_layout_report
+        report = validate_layout_report(self, report, self._layout, context)
         report = report.extend(self._block_registry.validate(context))
         report = account_block_plan_fields(report, self._block_registry)
         # Carry the mesh layout into each field problem's validation so its solver can refuse a
@@ -439,9 +436,15 @@ class Problem:
     def _field_validation_context(self, context: Any) -> Any:
         """The validation context handed to each field problem, carrying the mesh layout."""
         merged: dict[str, Any] = dict(context) if isinstance(context, dict) else {}
-        merged["layout"] = self._layout
+        from pops.problem._layout_protocol import field_validation_layout
+        merged["layout"] = field_validation_layout(self._layout)
         merged["declaration_resolver"] = self.resolve
         return merged
+
+    def _materialized_layout_subjects(self) -> dict[str, tuple[Any, ...]]:
+        """Canonical exact subjects used by the generic LayoutPlan validation protocol."""
+        from pops.problem._layout_protocol import materialized_layout_subjects
+        return materialized_layout_subjects(self)
 
     def explain_routes(self) -> Any:
         """Return a printable route matrix sourced from the C++ authoritative facts (sec.13.12.1)."""

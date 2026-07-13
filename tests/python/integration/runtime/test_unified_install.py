@@ -37,6 +37,8 @@ except Exception as exc:  # noqa: BLE001
     print("skip test_unified_install (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
 
+from tests.python.support.layout_plan import resolved_layout_contract
+
 N = 16
 
 
@@ -72,11 +74,14 @@ def _compiled_artifact(compiled, block_model, *, spatial=None, bind_schema=None)
         "model_hash": block_model.model_hash,
         "has_program": True,
     })
+    layout_plan, layout_coverage = resolved_layout_contract(
+        None, target="system", block_names=("plasma",))
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",
         backend=block_model.backend,
         layout=None,
+        layout_plan=layout_plan,
         time={"kind": "compiled-program"},
         blocks=(ResolvedBlock("plasma", {"model_hash": block_model.model_hash}, spatial,
                               block_model.backend),),
@@ -88,6 +93,7 @@ def _compiled_artifact(compiled, block_model, *, spatial=None, bind_schema=None)
         libraries=(),
         requirements={},
         capabilities={},
+        lowering_coverage=layout_coverage,
     )
     return CompiledSimulationArtifact(
         plan=resolved,

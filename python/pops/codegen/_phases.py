@@ -21,6 +21,7 @@ def resolve(
     problem: Any,
     *,
     layout: Any,
+    layout_providers: Mapping[Any, Any] | None = None,
     backend: Any = None,
     time: Any = None,
     libraries: Any = (),
@@ -37,12 +38,12 @@ def resolve(
     if not isinstance(selected_backend, _Backend):
         raise TypeError("pops.resolve backend must be a typed pops.codegen backend descriptor")
     backend_token = lower_backend(selected_backend)
-    from pops.codegen._layout_resolution import resolve_layout, validate_layout
+    from pops.codegen._layout_resolution import (
+        layout_lowering_coverage, resolve_layout, validate_layout_consumers)
 
-    resolved_layout = resolve_layout(problem, layout)
-    validate_layout(problem, resolved_layout)
-    from pops.mesh.layouts import AMR
-    target = "amr_system" if isinstance(resolved_layout, AMR) else "system"
+    layout_authority = resolve_layout(problem, layout, providers=layout_providers)
+    layout_plan = layout_authority.plan
+    target = "amr_system" if layout_plan.layouts[0].adaptive else "system"
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -53,6 +54,10 @@ def resolve(
         raise ValueError("pops.resolve requires a whole-system Program for Uniform layout")
     if resolved_time is not None and backend_token != "production":
         raise ValueError("a resolved whole-system Program requires backend=Production()")
+    validate_layout_consumers(
+        problem, layout_plan, time=resolved_time,
+        outputs=problem._outputs, diagnostics=problem._diagnostics)
+    resolved_layout = layout_authority.require_runtime()
 
     options = dict(compile_options or {})
     allowed_options = {"so_path", "force", "cxx", "include", "std", "debug"}
@@ -72,7 +77,7 @@ def resolve(
     from pops.model.bind_schema import BindSchema
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
 
-    detached_layout = detached_frozen(resolved_layout)
+    detached_layout = resolved_layout
     bind_schema = BindSchema.from_problem(problem)
     compile_values = bind_schema.resolve_compile()
     def block_backend(name: str) -> str:
@@ -98,20 +103,24 @@ def resolve(
     outputs, diagnostics = capture_runtime_declarations(problem, detached_frozen)
     resolved_libraries, snapshot_libraries = resolve_compile_libraries(tuple(libraries or ()))
     snapshot = prepare_problem_snapshot(
-        problem, resolved_time, layout=detached_layout, libraries=snapshot_libraries)
+        problem, resolved_time, layout=layout_plan, libraries=snapshot_libraries)
     from pops._bootstrap import abi_key
     from pops.codegen._resolution import resolve_capability_evidence
 
     evidence = resolve_capability_evidence(
-        problem, layout=detached_layout, libraries=resolved_libraries, time=resolved_time,
+        problem, layout=layout_plan, libraries=resolved_libraries, time=resolved_time,
         module_abi_key=abi_key())
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
+        layout_plan=layout_plan,
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_solvers=field_solvers, outputs=outputs,
         diagnostics=diagnostics, libraries=resolved_libraries,
-        requirements={"tokens": tuple(evidence["requirements"])},
-        capabilities={"resolution": evidence}, compile_options=options)
+        requirements={"tokens": tuple(evidence["requirements"]),
+                      "layout_resources": layout_plan.resource_requirements()},
+        capabilities={"resolution": evidence,
+                      "layout_plan": layout_plan.capability_evidence()},
+        lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options)
 
 
 def compile(plan: Any) -> Any:

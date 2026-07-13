@@ -38,6 +38,7 @@ class CompiledPlanRecord:
     target: str
     backend: str
     layout: Any
+    layout_plan: Any
     bind_schema: Any
     compile_values: Mapping[Any, Any]
     field_solvers: Mapping[str, Any]
@@ -45,6 +46,7 @@ class CompiledPlanRecord:
     diagnostics: tuple[Any, ...]
     requirements: Mapping[str, Any]
     capabilities: Mapping[str, Any]
+    lowering_coverage: Any
     blocks: tuple[CompiledPlanBlock, ...]
     time_identity: Any
     contract_identity: Identity = field(init=False)
@@ -60,6 +62,7 @@ class CompiledPlanRecord:
             target=plan.target,
             backend=plan.backend,
             layout=plan.layout,
+            layout_plan=plan.layout_plan,
             bind_schema=plan.bind_schema,
             compile_values=plan.compile_values,
             field_solvers=plan.field_solvers,
@@ -67,6 +70,7 @@ class CompiledPlanRecord:
             diagnostics=plan.diagnostics,
             requirements=plan.requirements,
             capabilities=plan.capabilities,
+            lowering_coverage=plan.lowering_coverage,
             blocks=tuple(
                 CompiledPlanBlock(block.name, block.backend, block.spatial)
                 for block in plan.blocks
@@ -84,6 +88,13 @@ class CompiledPlanRecord:
         if self.target not in ("system", "amr_system"):
             raise ValueError("CompiledPlanRecord has an unsupported target")
         object.__setattr__(self, "layout", _deep_freeze(self.layout))
+        from pops.mesh import LayoutPlan
+        from pops.codegen.lowering_coverage import LoweringCoverageReport
+        if type(self.layout_plan) is not LayoutPlan:
+            raise TypeError("CompiledPlanRecord.layout_plan must be an exact LayoutPlan")
+        if type(self.lowering_coverage) is not LoweringCoverageReport:
+            raise TypeError(
+                "CompiledPlanRecord.lowering_coverage must be a LoweringCoverageReport")
         object.__setattr__(self, "compile_values", _deep_freeze(self.compile_values))
         object.__setattr__(self, "field_solvers", _deep_freeze(self.field_solvers))
         object.__setattr__(self, "outputs", tuple(_deep_freeze(v) for v in self.outputs))
@@ -105,6 +116,8 @@ class CompiledPlanRecord:
             "target": self.target,
             "backend": self.backend,
             "layout": _evidence(self.layout, where="compiled plan layout"),
+            "layout_plan": _evidence(
+                self.layout_plan, where="compiled plan layout plan"),
             "bind_schema": _evidence(self.bind_schema, where="compiled plan bind schema"),
             "compile_values": _evidence(
                 self.compile_values, where="compiled plan compile values"),
@@ -117,6 +130,8 @@ class CompiledPlanRecord:
                 self.requirements, where="compiled plan requirements"),
             "capabilities": _evidence(
                 self.capabilities, where="compiled plan capabilities"),
+            "lowering_coverage": _evidence(
+                self.lowering_coverage, where="compiled plan lowering coverage"),
             "blocks": [
                 {
                     "name": block.name,
@@ -260,6 +275,10 @@ class CompiledSimulationArtifact:
         return self.plan.layout
 
     @property
+    def layout_plan(self) -> Any:
+        return self.plan.layout_plan
+
+    @property
     def so_path(self) -> str:
         return str(self._delegate.so_path)
 
@@ -301,7 +320,30 @@ class CompiledSimulationArtifact:
 
     @property
     def lowering_coverage(self) -> Any:
-        return getattr(self._delegate, "lowering_coverage", None)
+        from pops.codegen.lowering_coverage import LoweringCoverageReport, LoweringCoverageRow
+
+        rows = list(self.plan.lowering_coverage.rows)
+
+        def append_component(prefix: str, component: Any) -> None:
+            coverage = getattr(component, "lowering_coverage", None)
+            if coverage is None:
+                coverage = getattr(component, "lowering_coverage_report", None)
+            if type(coverage) is not LoweringCoverageReport:
+                return
+            for row in coverage.rows:
+                rows.append(LoweringCoverageRow(
+                    source="%s/%s" % (prefix, row.source),
+                    disposition=row.disposition,
+                    targets=tuple("%s/%s" % (prefix, target) for target in row.targets),
+                    rule=row.rule,
+                    gate=row.gate,
+                ))
+
+        for block in self.blocks:
+            append_component("block:%s" % block.name, block.model)
+        if self.program is not None:
+            append_component("program", self.program)
+        return LoweringCoverageReport(rows)
 
     @property
     def program_param_routes(self) -> Any:

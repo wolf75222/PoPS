@@ -49,6 +49,7 @@ from pops.problem._snapshot import AuthoringSnapshot
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.krylov import CG
 from pops import model as _model
+from tests.python.support.layout_plan import resolved_layout_contract
 
 
 # --------------------------------------------------------------------------------------------------
@@ -164,11 +165,15 @@ def _compiled_problem(aux_names=(), *, abi_key=None):
     model.abi_key = key
     snapshot = AuthoringSnapshot({"kind": "adc547-bind-fixture"})
     schema = BindSchema()
+    layout_value = {"kind": "uniform"}
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout_value, target="system", block_names=("plasma",))
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="system",
         backend="production",
-        layout={"kind": "uniform"},
+        layout=layout_value,
+        layout_plan=layout_plan,
         time={"program": "adc547_bind"},
         blocks=(ResolvedBlock(
             "plasma", {"model": "adc547-bind-model"}, None, "production"),),
@@ -180,6 +185,7 @@ def _compiled_problem(aux_names=(), *, abi_key=None):
         libraries=(),
         requirements={},
         capabilities={"cpu": True},
+        lowering_coverage=layout_coverage,
     )
 
     class _CompiledProgram:
@@ -329,11 +335,14 @@ def _amr_route_handle():
     layout = AMR(base=CartesianMesh(n=64), max_levels=2, ratio=2, regrid=RegridEvery(4))
     snapshot = AuthoringSnapshot({"kind": "compliance-amr-route-stub"})
     schema = BindSchema()
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout, target="amr_system", block_names=("block",))
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
         backend="production",
         layout=layout,
+        layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock(
             "block", {"model": "compliance-amr-route-model"}, None, "production"),),
@@ -345,6 +354,7 @@ def _amr_route_handle():
         libraries=(),
         requirements={"amr": True},
         capabilities={"cpu": True, "amr": True, "mpi": True},
+        lowering_coverage=layout_coverage,
     )
     return CompiledSimulationArtifact(
         plan=plan,

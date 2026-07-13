@@ -6,6 +6,7 @@ from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimula
 from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from tests.python.support.layout_plan import resolved_layout_contract
 
 
 class CanonicalValue:
@@ -52,11 +53,15 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
     source_models = tuple(CanonicalValue("source-" + name) for name in block_names)
     spatial = tuple({"mesh": {"block": name}} for name in block_names)
     schema = BindSchema() if bind_schema is None else bind_schema
+    layout_value = {"kind": "amr" if target == "amr_system" else "uniform"}
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout_value, target=target, block_names=block_names)
     plan = ResolvedSimulationPlan(
         snapshot=AuthoringSnapshot({"case": "typed-artifact", "target": target}),
         target=target,
         backend="production",
-        layout={"kind": "amr" if target == "amr_system" else "uniform"},
+        layout=layout_value,
+        layout_plan=layout_plan,
         time=None if target == "amr_system" else CanonicalValue("rk2"),
         blocks=tuple(
             ResolvedBlock(name, model, block_spatial, "production")
@@ -71,6 +76,7 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         libraries=(),
         requirements={"amr": target == "amr_system"},
         capabilities={"cpu": True, "amr": target == "amr_system"},
+        lowering_coverage=layout_coverage,
     )
     components = tuple(CompiledComponent(name, target=target) for name in block_names)
     blocks = tuple(

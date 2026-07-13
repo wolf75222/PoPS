@@ -130,7 +130,6 @@ def build_requirements(compiled: Any) -> Any:
                   if type(compiled) is CompiledSimulationArtifact
                   else component_model_metadata(compiled))
     models = [row.model for row in model_rows]
-    model = models[0] if models else None
     args = compiled.arguments()
     layout_runtime = getattr(args, "layout_runtime", {})
 
@@ -180,7 +179,7 @@ def build_requirements(compiled: Any) -> Any:
     # A native composed pops.Model carries its capabilities in its bricks (the C++ requires-gate is
     # the backstop), not in queryable has_* flags -- say so honestly rather than report "none".
     from pops.codegen.loader import CompiledModel  # lazy: codegen <-> loader edge
-    if model is not None and not isinstance(model, CompiledModel):
+    if any(not isinstance(model, CompiledModel) for model in models):
         unknown.append(
             "this artifact carries a composed (non-CompiledModel) model; its flux capabilities live "
             "in its bricks (validated by the C++ requires-gate at first use), not in queryable "

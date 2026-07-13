@@ -43,6 +43,7 @@ from pops.params import RuntimeParam  # noqa: E402
 from pops.problem import Problem  # noqa: E402
 from pops.runtime.system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
+from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
 def _amr_route_handle():
@@ -71,11 +72,14 @@ def _amr_route_handle():
     case = Problem("amr-introspection-case")
     case.add_block("ne", module)
     schema = BindSchema.from_problem(case)
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout, target="amr_system", block_names=("ne",))
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
         backend="production",
         layout=layout,
+        layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock("ne", module, None, "production"),),
         bind_schema=schema,
@@ -86,6 +90,7 @@ def _amr_route_handle():
         libraries=(),
         requirements={"amr": True},
         capabilities={"cpu": True, "amr": True, "mpi": True},
+        lowering_coverage=layout_coverage,
     )
     artifact = CompiledSimulationArtifact(
         plan=resolved,

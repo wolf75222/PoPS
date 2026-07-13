@@ -32,6 +32,7 @@ from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
 from pops.params import ConstParam, RuntimeParam  # noqa: E402
 from pops.problem import Problem  # noqa: E402
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
+from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
 def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
@@ -58,11 +59,14 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
     schema_problem = Problem(name="amr-introspection-case")
     schema_problem.add_block("block", source)
     schema = BindSchema.from_problem(schema_problem)
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout, target="amr_system", block_names=("block",))
     plan = ResolvedSimulationPlan(
         snapshot=AuthoringSnapshot({"kind": "amr-route-introspection-stub"}),
         target="amr_system",
         backend="production",
         layout=layout,
+        layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock("block", source, None, "production"),),
         bind_schema=schema,
@@ -73,6 +77,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         libraries=(),
         requirements={"amr": True},
         capabilities={"cpu": True, "amr": True, "mpi": mpi},
+        lowering_coverage=layout_coverage,
     )
     artifact = CompiledSimulationArtifact(
         plan=plan,
