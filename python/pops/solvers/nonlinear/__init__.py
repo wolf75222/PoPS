@@ -9,7 +9,13 @@ from typing import Any
 from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet
 from pops.identity import Identity, make_identity
-from pops.ir.literals import scalar_data
+
+
+def _scalar_data(value: Any) -> dict[str, Any]:
+    """Serialize an exact scalar without making the solver catalog import the symbolic IR."""
+    from pops.ir.literals import scalar_data
+
+    return scalar_data(value)
 
 
 def _runtime_number(value: Any) -> float:
@@ -85,9 +91,9 @@ class _PreparedLocalNewton:
     def __post_init__(self) -> None:
         payload = {
             "schema_version": 1,
-            "tolerance": scalar_data(self.tolerance),
+            "tolerance": _scalar_data(self.tolerance),
             "max_iterations": self.max_iterations,
-            "finite_difference_step": scalar_data(self.finite_difference_step),
+            "finite_difference_step": _scalar_data(self.finite_difference_step),
         }
         if self.identity != make_identity("prepared-local-newton", payload):
             raise ValueError("prepared LocalNewton identity is not canonical")
@@ -190,7 +196,7 @@ class Newton(Descriptor):
             raise ValueError("Newton field outer solve requires a uniform or AMR system")
         authored = self.options()
         options = {
-            key: value if isinstance(value, int) else scalar_data(value)
+            key: value if isinstance(value, int) else _scalar_data(value)
             for key, value in authored.items()
         }
         capabilities = frozenset({
@@ -237,9 +243,9 @@ class LocalNewton(Descriptor):
         """Prepare the generic Program solve provider."""
         payload = {
             "schema_version": 1,
-            "tolerance": scalar_data(self.tolerance),
+            "tolerance": _scalar_data(self.tolerance),
             "max_iterations": self.max_iterations,
-            "finite_difference_step": scalar_data(self.finite_difference_step),
+            "finite_difference_step": _scalar_data(self.finite_difference_step),
         }
         return _PreparedLocalNewton(
             tolerance=self.tolerance,
