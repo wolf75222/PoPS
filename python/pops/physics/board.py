@@ -22,6 +22,7 @@ The handle classes and the multi-species / inspection half live in
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from .. import math as _bm
@@ -100,6 +101,47 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         boundaries; they never inspect the model's private storage or infer axes from strings.
         """
         return self._frame
+
+    @property
+    def states(self) -> Mapping[str, StateHandle]:
+        """Immutable, live view of the model's declared state handles.
+
+        Library model factories return an ordinary :class:`Model`; callers recover the exact
+        registry-issued handles through these family views instead of a preset-specific result
+        wrapper.  The mapping cannot be mutated and every value retains this model's OwnerPath.
+        """
+        return MappingProxyType(self._states)
+
+    @property
+    def fields(self) -> Mapping[str, Any]:
+        """Immutable, live view of declared scalar/vector field handles."""
+        return MappingProxyType(self._fields)
+
+    @property
+    def fluxes(self) -> Mapping[str, FluxHandle]:
+        """Immutable, live view of declared physical-flux handles."""
+        return MappingProxyType(self._fluxes)
+
+    @property
+    def sources(self) -> Mapping[str, SourceHandle]:
+        """Immutable, live view of declared local-source handles."""
+        return MappingProxyType(self._sources)
+
+    @property
+    def operators(self) -> Mapping[str, Any]:
+        """Immutable snapshot of registry-authenticated callable operator handles.
+
+        Keys include public aliases as well as their canonical registered operators.  Constructing
+        this view never declares an operator and never creates another ownership authority.
+        """
+        from pops.model import OperatorHandle
+
+        handles = {
+            handle.local_id: handle
+            for handle in self.module.declaration_index().records()
+            if isinstance(handle, OperatorHandle)
+        }
+        return MappingProxyType(handles)
 
     # --- escape hatches ---
     @property

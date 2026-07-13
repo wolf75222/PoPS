@@ -36,16 +36,20 @@ def build_case() -> tuple[pops.Case, object]:
         q_over_m=ConstParam("q_over_m", -1.0),
         omega_c=ConstParam("omega_c", 1.0),
     )
+    U = physics.states["U"]
+    F = physics.fluxes["transport"]
+    explicit_rate = physics.operators["transport"]
+    implicit_source = physics.operators["magnetic_rotation"]
     case = pops.Case("hyqmom15-vlasov")
-    plasma = case.block("plasma", physics.model)
-    state = plasma[physics.state]
+    plasma = case.block("plasma", physics)
+    state = plasma[U]
 
     numerics = DiscretizationPlan()
     numerics.rates.add(
-        physics.explicit_rate,
+        explicit_rate,
         FiniteVolume(
-            flux=physics.flux,
-            variables=Conservative(physics.state),
+            flux=F,
+            variables=Conservative(U),
             reconstruction=MUSCL(VanLeer()),
             # The model computes the signed pair from its flux Jacobian; the compiled ABI exports
             # that already-materialized pair to HLL through the ExplicitPair runtime route.
@@ -56,8 +60,8 @@ def build_case() -> tuple[pops.Case, object]:
 
     program = IMEX(
         state,
-        explicit_operator=physics.explicit_rate,
-        implicit_operator=physics.implicit_source,
+        explicit_operator=explicit_rate,
+        implicit_operator=implicit_source,
     )
     program.step_strategy(
         AdaptiveCFL(0.4),
@@ -100,8 +104,9 @@ def main() -> None:
     )
     artifact = pops.compile(resolved)
 
-    initial = np.zeros((len(physics.components), mesh_n, mesh_n), dtype=np.float64)
-    component = {name: index for index, name in enumerate(physics.components)}
+    components = physics.states["U"].components
+    initial = np.zeros((len(components), mesh_n, mesh_n), dtype=np.float64)
+    component = {name: index for index, name in enumerate(components)}
     # Isotropic centred Gaussian moments: a realizable, spatially uniform equilibrium.
     for name, value in {
         "M00": 1.0,
@@ -130,12 +135,11 @@ def main() -> None:
         "artifact": artifact.artifact_identity.token,
         "bound": type(simulation).__name__,
         "checkpoint_restart_bit_identical": restart_equal,
-        "model": physics.model.name,
-        "moments": list(physics.components),
-        "n_moments": len(physics.components),
-        "closure": physics.closure.options(),
+        "model": physics.name,
+        "moments": list(components),
+        "n_moments": len(components),
         "finite": bool(np.isfinite(final_state).all()),
-        "realizability": physics.realizable_set.options(),
+        "realizability": {"order": HyQMOM15.order},
         "program_hash": case._time.to_graph().graph_hash,
         "runtime_steps": steps,
         "runtime_time": simulation.time(),

@@ -12,17 +12,22 @@ from pops.physics import Model
 
 
 def test_hyqmom15_is_a_real_model_with_exact_generic_handles() -> None:
-    definition = HyQMOM15.vlasov_lorentz(exact_speeds=False)
-    assert type(definition.model) is Model
-    assert tuple(definition.state.components) == tuple(moment_names(4))
-    assert len(definition.state.components) == 15
-    assert definition.model.rate_contract(definition.explicit_rate)["flux"] == definition.flux
-    assert definition.implicit_source.kind == "local_linear_operator"
-    assert definition.realizable_set.options() == {"order": 4}
-    assert set(definition.model.module.operator_registry().names()) >= {
-        definition.explicit_rate.registered_operator_name,
-        definition.electric_source.reg_name,
-        definition.implicit_source.registered_operator_name,
+    model = HyQMOM15.vlasov_lorentz(exact_speeds=False)
+    assert type(model) is Model
+    state = model.states["U"]
+    flux = model.fluxes["transport"]
+    explicit_rate = model.operators["transport"]
+    implicit_source = model.operators["magnetic_rotation"]
+    electric_source = model.sources["electric"]
+    assert tuple(state.components) == tuple(moment_names(4))
+    assert len(state.components) == 15
+    assert model.rate_contract(explicit_rate) == {
+        "state": state, "flux": flux, "sources": (electric_source,)}
+    assert implicit_source.kind == "local_linear_operator"
+    assert set(model.module.operator_registry().names()) >= {
+        explicit_rate.registered_operator_name,
+        electric_source.reg_name,
+        implicit_source.registered_operator_name,
     }
 
 
@@ -32,10 +37,10 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
         return {"S%d%d" % (p, 5 - p): 0.0 for p in range(6)}
 
     assert isinstance(zero_fifth_order, LocalClosure)
-    definition = HyQMOM15.vlasov_lorentz(
+    model = HyQMOM15.vlasov_lorentz(
         closure=zero_fifth_order, exact_speeds=False)
-    assert definition.closure.contract_data() == {
-        "kind": "local_moment_closure", "order": 4, "name": "zero_fifth_order"}
+    assert type(model) is Model
+    assert tuple(model.states["U"].components) == tuple(moment_names(4))
 
     @closure(2)
     def wrong_order(_standardized):
@@ -62,12 +67,12 @@ def test_final_example_resolves_and_declares_complete_rollback_surface() -> None
     resolved = pops.resolve(
         pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))
     assert len(resolved.blocks) == 1
-    assert len(physics.components) == 15
+    assert len(physics.states["U"].components) == 15
     transaction = case._time.transaction_plan()
     assert transaction.guards == ("moments.realizable(order=4)",)
     assert set(transaction.staged_effects) == {
         "state", "fields", "flux_ledgers", "histories", "schedules", "consumers"}
     assert len(case._consumers.inspect()["nodes"]) == 2
-    emitted = case._time.emit_cpp_program(model=physics.model.dsl)
+    emitted = case._time.emit_cpp_program(model=physics.dsl)
     assert "pops::detail::mat_inverse<15>(" in emitted
     assert "pops::Real M_[15][15];" in emitted

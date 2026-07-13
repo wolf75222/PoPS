@@ -1,7 +1,6 @@
 """Canonical HyQMOM15 composition over generic Model and closure contracts."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from pops.frames import Cartesian2D
@@ -12,7 +11,7 @@ from pops.moments.model_builder import (
     moment_indices,
     moment_names,
 )
-from pops.moments.projection import RealizabilityProjection, RealizableSet
+from pops.moments.projection import RealizabilityProjection
 from pops.moments.sources import lorentz_sources
 from pops.params import ParameterDeclaration, RuntimeParam
 from pops.physics import Model
@@ -45,31 +44,11 @@ def _magnetic_matrix(indices: tuple[tuple[int, int], ...], omega_c: Any) -> tupl
     return tuple(rows)
 
 
-@dataclass(frozen=True)
-class HyQMOM15Definition:
-    """The authored Model plus the exact handles consumers need to compose a Case."""
-
-    model: Model
-    state: Any
-    flux: Any
-    explicit_rate: Any
-    electric_source: Any
-    implicit_source: Any
-    closure: Any
-    projection: RealizabilityProjection
-    realizable_set: RealizableSet
-
-    @property
-    def order(self) -> int:
-        return _HYQMOM15_ORDER
-
-    @property
-    def components(self) -> tuple[str, ...]:
-        return tuple(moment_names(self.order))
-
-
 class HyQMOM15:
     """Pre-implemented 15-moment physics, assembled from ordinary generic contracts."""
+
+    order = _HYQMOM15_ORDER
+    components = tuple(moment_names(_HYQMOM15_ORDER))
 
     @staticmethod
     def vlasov_lorentz(
@@ -81,12 +60,14 @@ class HyQMOM15:
         omega_c: Any = None,
         exact_speeds: bool = True,
         roe: bool = False,
-    ) -> HyQMOM15Definition:
+    ) -> Model:
         """Author transport, electric forcing and an implicit magnetic local operator.
 
         The closure is evaluated once through ``LocalClosure`` on symbolic values.  The
-        returned object contains a real blackboard :class:`pops.physics.Model`; no HyQMOM
-        token enters the operator registry or native lowering.
+        The return value is the ordinary blackboard :class:`pops.physics.Model`.  Exact handles are
+        available from its immutable family views (``model.states``, ``model.fluxes``,
+        ``model.sources`` and ``model.operators``); no preset-specific result type or HyQMOM token
+        enters the operator registry or native lowering.
         """
         selected_closure = HyQMOM15Closure() if closure is None else closure
         selected_projection = (
@@ -149,24 +130,17 @@ class HyQMOM15:
             "magnetic_rotation", returns=magnetic_math)
         explicit_rate = model.rate(
             "transport",
-            equation=ddt(state) == -div(flux),
+            equation=ddt(state) == -div(flux) + electric,
         )
         # Materialize the final declaration-owned manifest after every operator and
         # parameter exists.  Case registration must observe the settled definition
         # fingerprint, never the intermediate fingerprint issued while the registry was
         # still being assembled.
         model.module.manifest()
-        return HyQMOM15Definition(
-            model=model,
-            state=state,
-            flux=flux,
-            explicit_rate=explicit_rate,
-            electric_source=electric,
-            implicit_source=magnetic,
-            closure=selected_closure,
-            projection=selected_projection,
-            realizable_set=RealizableSet(_HYQMOM15_ORDER),
-        )
+        # Keep local variables explicit while authoring so the registry captures every dependency.
+        # The public return is nevertheless the one canonical Model, not an ad-hoc handle bundle.
+        del flux, electric, magnetic, explicit_rate
+        return model
 
     @staticmethod
     def vlasov_poisson_magnetic(order: Any = _HYQMOM15_ORDER, **options: Any) -> Model:
@@ -174,7 +148,7 @@ class HyQMOM15:
         if order != _HYQMOM15_ORDER:
             raise ValueError(
                 "HyQMOM15 has exactly order 4 (15 moments); use Gaussian for generic orders")
-        return HyQMOM15.vlasov_lorentz(**options).model
+        return HyQMOM15.vlasov_lorentz(**options)
 
 
-__all__ = ["HyQMOM15", "HyQMOM15Definition"]
+__all__ = ["HyQMOM15"]
