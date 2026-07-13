@@ -104,6 +104,12 @@ def _provider_handle(name):
     return Handle(name, kind="boundary_provider", owner=OwnerPath.case("main"))
 
 
+def _case_instance(case_name):
+    return (OwnerPath.case(case_name)
+            .child(OwnerKind.BLOCK, "transport")
+            .instance_of(OwnerPath.model("transport")))
+
+
 def test_boundary_handle_round_trip_and_orientation_are_canonical():
     lower = BoundaryHandle(
         "wall", owner=OwnerPath.case("main"),
@@ -313,6 +319,38 @@ def test_resolution_diagnostics_cover_missing_double_extra_ambiguous_and_periodi
     periodic_need = ExteriorTrace(topology.boundaries[0], state, conservative)
     with pytest.raises(ValueError, match=r"periodic\+physical"):
         BoundaryProviderRegistry().resolve(topology, (periodic_need,))
+
+
+def test_resolution_rejects_foreign_case_subject_before_compile():
+    topology = _topology()
+    _, conservative = _representations()
+    foreign_state = Handle("U", kind="state", owner=_case_instance("foreign"))
+    need = ExteriorTrace(topology.physical[0], foreign_state, conservative)
+    provider = Inflow(
+        handle=_provider_handle("foreign_subject"), outputs=(need,),
+        dependencies=_dependencies())
+
+    with pytest.raises(ValueError, match=r"subject belongs to foreign Case 'foreign'"):
+        BoundaryProviderRegistry(provider).resolve(topology, (need,))
+
+
+def test_resolution_rejects_foreign_case_dependency_before_compile():
+    topology = _topology()
+    state, _, _ = _model_values()
+    _, conservative = _representations()
+    foreign_field = Handle(
+        "velocity", kind="field", owner=_case_instance("foreign"))
+    dependencies = BoundaryDependencies(
+        states=(), fields=(foreign_field,), time=(), runtime_params=(),
+        representation=RepresentationFlow(conservative, conservative, None),
+        characteristic=_none_closure())
+    need = ExteriorTrace(topology.physical[0], state, conservative)
+    provider = Inflow(
+        handle=_provider_handle("foreign_dependency"), outputs=(need,),
+        dependencies=dependencies)
+
+    with pytest.raises(ValueError, match=r"fields\[0\] belongs to foreign Case 'foreign'"):
+        BoundaryProviderRegistry(provider).resolve(topology, (need,))
 
 
 def test_every_semantic_field_is_immutable():

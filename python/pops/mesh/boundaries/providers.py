@@ -30,6 +30,48 @@ def _handle(value: Any, *, where: str, kind: str) -> Handle:
     return value
 
 
+def _require_topology_case(handle: Handle, topology: BoundaryTopology, *, where: str) -> None:
+    """Reject references projected through a Case other than the topology root."""
+    from pops.model import OwnerKind
+
+    case_nodes = tuple(
+        node for node in handle.owner_path.nodes if node.kind is OwnerKind.CASE)
+    if case_nodes and case_nodes[0] != topology.owner.nodes[0]:
+        raise ValueError(
+            "%s belongs to foreign Case %r; BoundaryTopology root is %r"
+            % (where, case_nodes[0].name, topology.owner.nodes[0].name))
+
+
+def _authenticate_port_case(
+        port: BoundaryPort, topology: BoundaryTopology, *, where: str) -> None:
+    _require_topology_case(port.subject, topology, where="%s.subject" % where)
+    _require_topology_case(
+        port.representation, topology, where="%s.representation" % where)
+
+
+def _authenticate_provider_case(
+        provider: BoundaryProvider, topology: BoundaryTopology) -> None:
+    _require_topology_case(provider.handle, topology, where="BoundaryProvider.handle")
+    for index, output in enumerate(provider.outputs):
+        _authenticate_port_case(
+            output, topology, where="BoundaryProvider.outputs[%d]" % index)
+    dependencies = provider.dependencies
+    for name in ("states", "fields", "time", "runtime_params"):
+        for index, handle in enumerate(getattr(dependencies, name)):
+            _require_topology_case(
+                handle, topology, where="BoundaryDependencies.%s[%d]" % (name, index))
+    flow = dependencies.representation
+    _require_topology_case(flow.source, topology, where="RepresentationFlow.source")
+    _require_topology_case(flow.target, topology, where="RepresentationFlow.target")
+    if flow.converter is not None:
+        _require_topology_case(
+            flow.converter, topology, where="RepresentationFlow.converter")
+    for index, handle in enumerate(dependencies.characteristic.characteristics):
+        _require_topology_case(
+            handle, topology,
+            where="CharacteristicClosure.characteristics[%d]" % index)
+
+
 @dataclass(frozen=True, slots=True)
 class BoundaryProvider:
     """Generic provider specification; algorithms live behind its qualified implementation."""
@@ -196,11 +238,15 @@ class BoundaryProviderRegistry:
             raise TypeError("boundary needs must be a tuple of BoundaryPort objects")
         if len(needs) != len(set(needs)):
             raise ValueError("double boundary need")
-        for need in needs:
+        for index, need in enumerate(needs):
+            _authenticate_port_case(
+                need, topology, where="boundary needs[%d]" % index)
             if not topology.contains(need.boundary):
                 raise ValueError("extra boundary need references an undeclared boundary")
             if topology.is_periodic(need.boundary):
                 raise ValueError("periodic+physical boundary need is forbidden")
+        for provider in self.providers:
+            _authenticate_provider_case(provider, topology)
         produced = [output for provider in self.providers for output in provider.outputs]
         for output in produced:
             if not topology.contains(output.boundary):
