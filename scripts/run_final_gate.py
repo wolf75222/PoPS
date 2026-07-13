@@ -71,10 +71,11 @@ def _outside_checkout(path: Path) -> Path:
 
 def _conda_command(arguments: Sequence[str]) -> list[str]:
     quoted = " ".join(shlex.quote(value) for value in arguments)
+    include = shlex.quote(str((ROOT / "include").resolve()))
     command = (
         'source "$(conda info --base)/etc/profile.d/conda.sh"; '
         'conda activate "${POPS_ENV_NAME:-pops}"; '
-        "PYTHONPATH= PYTHONNOUSERSITE=1 " + quoted
+        "PYTHONPATH= PYTHONNOUSERSITE=1 POPS_INCLUDE=" + include + " " + quoted
     )
     return ["bash", "-lc", command]
 

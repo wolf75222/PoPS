@@ -91,3 +91,10 @@ def test_required_python_lane_rejects_script_style_hidden_skips():
     gate._require_no_hidden_skip("42 tests passed")
     with pytest.raises(gate.FinalGateError, match="hidden skip"):
         gate._require_no_hidden_skip("skip (native engine unavailable)\n1 passed")
+
+
+def test_final_gate_pins_native_headers_to_the_validated_checkout():
+    command = gate._conda_command(["python", "-c", "import pops"])
+
+    assert command[:2] == ["bash", "-lc"]
+    assert "POPS_INCLUDE=" + str((ROOT / "include").resolve()) in command[2]
