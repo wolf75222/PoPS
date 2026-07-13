@@ -100,7 +100,7 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
     )
     from pops import codegen, external
 
-    assert codegen.__all__ == ["Production"]
+    assert codegen.__all__ == ["Production", "CompilerLowerable", "CompilerLowering"]
 
     for retired in (
         "BindInputs", "InstallPlan", "ResolvedSimulationPlan", "CompiledSimulationArtifact",
