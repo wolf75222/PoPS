@@ -149,6 +149,32 @@ class AMRTaggingResolutionContext:
         )
         return DiscreteIndicatorContext(layout, discretization, stencil)
 
+    def resolve_value_indicator(
+        self,
+        *,
+        handle: Handle,
+        action: str,
+        comparison: str,
+        threshold: ParamHandle,
+    ) -> Any:
+        """Bind a direct block-state value to strict Above/Below tagging leaves."""
+        from pops.mesh.amr import Above, Below
+
+        if not isinstance(handle, Handle) or handle.kind != "state" or not handle.is_resolved:
+            raise TypeError(
+                "AMR value indicators require an owner-qualified block-state Handle")
+        if handle.owner_path.nodes[0] != self.owner.nodes[0]:
+            raise ValueError(
+                "AMR value indicator %s belongs to a different Case owner"
+                % handle.qualified_id)
+        self.layout_plan.layout_for(handle)
+        if action == "refine" and comparison == "gt":
+            return Above(handle, threshold)
+        if action == "coarsen" and comparison == "lt":
+            return Below(handle, threshold)
+        expected = "strict >" if action == "refine" else "strict <"
+        raise ValueError("AMR %s value rule requires %s threshold" % (action, expected))
+
     def resolve_gradient_magnitude(
         self,
         *,
@@ -196,29 +222,41 @@ def _threshold(value: Any) -> ParamHandle:
     return handle
 
 
+def _threshold_candidate(value: Any) -> ParamHandle | None:
+    references = getattr(value, "declaration_references", None)
+    refs = references() if callable(references) else ()
+    handle = getattr(value, "handle", None)
+    if len(refs) == 1 and handle is refs[0] and isinstance(handle, ParamHandle):
+        return _threshold(value)
+    return None
+
+
 def _resolve_predicate(predicate: Any, *, action: str, context: Any) -> Any:
     comparison = getattr(predicate, "comparison", None)
     left = getattr(predicate, "a", None)
     right = getattr(predicate, "b", None)
     if comparison not in {"lt", "gt"}:
         raise ValueError("AMR tagging supports only strict < or > comparisons")
-    left_protocol = getattr(left, "resolve_for_amr_tagging", None)
-    right_protocol = getattr(right, "resolve_for_amr_tagging", None)
-    if callable(left_protocol) == callable(right_protocol):
+    left_threshold = _threshold_candidate(left)
+    right_threshold = _threshold_candidate(right)
+    if (left_threshold is None) == (right_threshold is None):
         raise TypeError(
-            "AMR comparison must contain exactly one indicator implementing "
-            "resolve_for_amr_tagging(...)"
+            "AMR comparison must contain exactly one runtime parameter threshold"
         )
-    if callable(right_protocol):
+    if left_threshold is not None:
         comparison = {"lt": "gt", "gt": "lt"}[comparison]
-        indicator, threshold_expr = right, left
+        indicator, threshold = right, left_threshold
     else:
-        indicator, threshold_expr = left, right
-    return indicator.resolve_for_amr_tagging(
+        indicator, threshold = left, right_threshold
+    protocol = getattr(indicator, "resolve_for_amr_tagging", None)
+    if not callable(protocol):
+        raise TypeError(
+            "AMR indicator must implement resolve_for_amr_tagging(...)")
+    return protocol(
         context,
         action=action,
         comparison=comparison,
-        threshold=_threshold(threshold_expr),
+        threshold=threshold,
     )
 
 

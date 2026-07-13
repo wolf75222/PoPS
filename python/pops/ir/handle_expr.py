@@ -59,6 +59,25 @@ class ValueExpr(Expr):
             return Const(1 if self.handle.qualified_id == target_handle.qualified_id else 0)
         return Const(0)
 
+    def resolve_for_amr_tagging(
+        self,
+        context: Any,
+        *,
+        action: str,
+        comparison: str,
+        threshold: Any,
+    ) -> Any:
+        """Offer a direct declaration value to an open AMR indicator context."""
+        resolve = getattr(context, "resolve_value_indicator", None)
+        if not callable(resolve):
+            raise TypeError("AMR tagging context must implement resolve_value_indicator(...)")
+        return resolve(
+            handle=self.handle,
+            action=action,
+            comparison=comparison,
+            threshold=threshold,
+        )
+
     def to_cpp(self) -> str:
         raise TypeError(
             "ValueExpr has no context-free C++ spelling; lower it through an owner-aware binding")
