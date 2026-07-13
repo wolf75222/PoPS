@@ -26,10 +26,10 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kNewtonDefaultDamping                 | 1       | public_knob      | IMEX(newton_damping=) |
 | kNewtonDefaultFailPolicy              | none    | public_knob      | IMEX(newton_fail_policy=) |
 | kNewtonFiniteAbsLimit                 | 1e300   | internal_default | fixed overflow guard |
-| kKrylovDefaultRelTol                  | 1e-10   | public_knob      | CondensedSchur(krylov_tol=) |
+| kKrylovDefaultRelTol                  | 1e-10   | public_knob      | GMRES/BiCGStab(rel_tol=) |
 | kTensorKrylovDefaultMaxIters          | 200     | internal_default | fixed |
-| kSchurKrylovCartesianMaxIters         | 400     | public_knob      | CondensedSchur(krylov_max_iters=) |
-| kSchurKrylovPolarMaxIters             | 600     | public_knob      | CondensedSchur(krylov_max_iters=) |
+| kSchurKrylovCartesianMaxIters         | 400     | public_knob      | Program solver max_iter= (Cartesian default report) |
+| kSchurKrylovPolarMaxIters             | 600     | public_knob      | Program solver max_iter= (polar default report) |
 | kKrylovBreakdownTiny                  | 1e-300  | internal_default | fixed breakdown guard |
 | kMGDefaultRelTol                      | 1e-8    | public_knob      | GeometricMG(tolerance=) |
 | kMGDefaultMaxCycles                   | 50      | public_knob      | GeometricMG(max_cycles=) |
@@ -37,11 +37,11 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kMGDefaultMinCoarse                   | 2       | public_knob      | GeometricMG(min_coarse=) |
 | kMGDefaultPreSmooth / PostSmooth      | 2 / 2   | public_knob      | GeometricMG(pre_sweeps=, post_sweeps=) |
 | kMGDefaultBottomSweeps                | 50      | public_knob      | GeometricMG(bottom_sweeps=) |
-| kFACDefaultMaxIters                   | 30      | public_knob      | CondensedSchur(fac_max_iters=) |
-| kFACDefaultFineSweeps                 | 400     | public_knob      | CondensedSchur(fac_fine_sweeps=) |
-| kFACDefaultTol                        | 1e-9    | public_knob      | CondensedSchur(fac_tol=) |
-| kFACInitialCoarseRelTol               | 1e-12   | public_knob      | CondensedSchur(fac_coarse_rel_tol=) |
-| kFACInitialCoarseMaxCycles            | 100     | public_knob      | CondensedSchur(fac_coarse_cycles=) |
+| kFACDefaultMaxIters                   | 30      | public_knob      | Program solver max_iter= on CompositeTensorFAC |
+| kFACDefaultFineSweeps                 | 400     | public_knob      | CompositeTensorFAC(fine_sweeps=) |
+| kFACDefaultTol                        | 1e-9    | public_knob      | Program solver rel_tol= on CompositeTensorFAC |
+| kFACInitialCoarseRelTol               | 1e-12   | public_knob      | CompositeTensorFAC(coarse_rel_tol=) |
+| kFACInitialCoarseMaxCycles            | 100     | public_knob      | CompositeTensorFAC(coarse_cycles=) |
 | kFFTDefaultSpectral                   | false   | public_knob      | FFT(spectral=) |
 | kFFTZeroMeanGauge                     | true    | internal_default | fixed gauge |
 | kFFTDirectDftFallback                 | true    | diagnostic_only  | counter in report |

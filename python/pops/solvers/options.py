@@ -107,9 +107,9 @@ class CompositeFAC(Descriptor):
     into the native composite path (``AmrCouplerMP::set_composite_poisson``) instead of the Option A
     coarse solve + gradient injection. Scope = the coupler's: single block, 2 levels, one mono-box
     fine patch, replicated coarse; an out-of-scope hierarchy refuses at build (never a silent
-    fallback). Every knob left ``None`` keeps the native ``kFAC*`` default (the 0-sentinel wire
-    convention shared with ``CondensedSchur``'s ``fac_*``), so ``CompositeFAC()`` runs the default
-    composite solve. Inert descriptor: the C++ FAC kernel does the work.
+    fallback). Every knob left ``None`` keeps the native ``kFAC*`` default (lowered with the existing
+    0-sentinel wire convention), so ``CompositeFAC()`` runs the default composite solve. Inert
+    descriptor: the C++ FAC kernel does the work.
     """
 
     category = "amr_composite"

@@ -131,9 +131,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                int(point.step), scalar_cpp(point.offset)))
         var[v.id] = var[source.id]
     elif v.op == "solve_fields":
-        # Per-stage field solve (ADC-409): P.solve_fields(state=...) re-solves phi from THIS
+        # Per-stage field solve: the callable Case field operator re-solves phi from THIS
         # stage's explicit state (the shared aux is re-filled before the stage's RHS reads it; the
-        # first stage state == U^n == the old ctx.solve_fields()). Multi-block (ADC-426):
+        # first stage state == U^n == the context's current state). Multi-block:
         # solve_fields_from_state(idx, U_stage) is a genuinely COUPLED solve -- the Poisson RHS is
         # Sum_s elliptic_rhs_s(U_s), block idx at its stage state, every other block contributing
         # its live state into the shared phi/aux.

@@ -217,7 +217,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         State value) from LOCAL per-cell ops only -- ``P.source`` (a named ``m.source_term``),
         ``P.apply`` (a named ``m.linear_source``), the iterate / initial-guess States, and the affine
         algebra over them (e.g. an implicit reaction ``r(U) = U - U0 - dt*S(U)``). A non-local op
-        (``P.rhs`` / ``P.divergence`` / ``P.solve_fields`` / a nested solve) is rejected: the residual
+        (a grid operator / callable field operator / nested solve) is rejected: the residual
         must be re-evaluable at a PERTURBED cell-local stack state, which a halo / global solve cannot.
         The sub-block (like a ``set_apply`` body) lowers to a device-inlinable per-cell residual the
         kernel re-evaluates at ``U`` and at the finite-difference perturbations ``U + eps*e_j``. A
@@ -291,7 +291,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 raise ValueError(
                     "solve_local_nonlinear: residual op '%s' is not LOCAL; a per-cell Newton residual "
                     "may use only %s (the iterate / guess State, P.source, P.apply, affine combines). "
-                    "Use a non-local op (P.rhs / P.divergence / P.solve_fields) outside the residual."
+                    "Use non-local grid and field operators outside the local residual."
                     % (w.op, sorted(self._RESIDUAL_LOCAL_OPS)))
         token = self._new(
             "state", "solve_local_nonlinear", (initial_guess,),

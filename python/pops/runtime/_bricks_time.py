@@ -1,8 +1,8 @@
 """Time-policy bricks and stable physical component roles.
 
 Local IMEX/source-implicit policies remain descriptors because they select a per-block spatial/time
-backend.  Global condensed solves and operator splitting are authored as :class:`pops.Program` graphs;
-the ready-to-use preset is :func:`pops.lib.time.CondensedSchur`.
+backend. Global solves are explicit :class:`pops.Program` graphs; reusable integration programs live
+under :mod:`pops.lib.time` without introducing physics-specific time presets.
 """
 from __future__ import annotations
 

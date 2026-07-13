@@ -137,8 +137,8 @@ class MagneticLorentzForce:
     EXPLICIT regime (moderate omega_c): pointwise algebraic term, no work (F . v = 0, energy
     unchanged). Reads B_z from the aux channel (canonical component 3): call
     ``sim.set_magnetic_field(Bz)`` to populate it. Requires a fluid transport >= 3 variables (momentum
-    on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) goes through the condensed stage
-    pops.lib.time.CondensedSchur, NOT through this explicit brick.
+    on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) is authored as an explicit
+    condensed ``Program.solve`` graph, NOT through this pointwise brick.
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 

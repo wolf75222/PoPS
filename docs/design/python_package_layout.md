@@ -20,21 +20,22 @@ Each top-level package is a single responsibility. Concrete models and ready-mad
 | `pops.mesh` | Mesh, layout (`Uniform` / `AMR`), boundary, geometry and mask descriptors. |
 | `pops.numerics` | Discretization descriptors: Riemann fluxes, reconstruction, terms, variables, projections. |
 | `pops.linalg` | Abstract algebra descriptors (`A x = b`, operators, norms, reductions). |
-| `pops.solvers` | Linear / nonlinear / Schur / elliptic solver and preconditioner descriptors. |
-| `pops.fields` | Elliptic field-problem authoring (`FieldProblem` / `PoissonProblem`) and its catalog. |
+| `pops.solvers` | Executable linear / nonlinear / elliptic solver and preconditioner descriptors, plus hierarchy providers. |
+| `pops.fields` | Physical `FieldOperator` declarations, numerical `FieldDiscretization` plans, outputs and field-read policies. |
 | `pops.diagnostics` | Diagnostic descriptors (norms, reductions). |
 | `pops.params` | Typed runtime-parameter descriptors. |
 | `pops.output` | Direct scientific-output, checkpoint, format and writer descriptors. |
 | `pops.external` | Authenticated source and fixed-binary component package contracts. |
-| `pops.lib` | Ready-to-use presets only: `lib.time` schemes, `lib.models` models, `lib.presets` bundles. |
-| `pops.codegen` | Lowering / build toolchain and the internal `compile_problem` driver + `@solver` DSL. |
+| `pops.lib` | Ready-to-use implementations only: `lib.time`, `lib.models`, `lib.initial`, `lib.amr`. |
+| `pops.codegen` | Internal lowering/build providers consumed by the public `pops.compile` phase. |
 | `pops.runtime` | Unified `RuntimeInstance`, execution, restart, consumers and diagnostics. The ONLY layer that imports `_pops`. |
 | `pops.experimental` | Tests-only, non-stable host backends (`PythonFlux`); never on the public surface. |
 
 Nested sub-packages keep the same rules: `pops.mesh.{layouts,amr,boundaries,geometry,masks}`,
 `pops.numerics.{riemann,reconstruction,terms,variables,projections}`,
-`pops.solvers.{elliptic,krylov,nonlinear,schur}`, `pops.moments.closures`,
-`pops.codegen.solvers`, `pops.runtime.amr`, `pops.lib.{time,models,models.moments,presets}`.
+`pops.solvers.{elliptic,krylov,nonlinear}`, `pops.moments.closures`,
+`pops.codegen.solvers`, `pops.runtime.amr`,
+`pops.lib.{time,models,models.moments,initial,amr}`.
 
 ## Layering DAG
 
@@ -64,8 +65,9 @@ runtime     -> ir, model, physics, time, lib, mesh, codegen   (and _pops)
 
 Only `pops.runtime` imports the compiled `_pops` extension. `codegen` and everything below stay
 `_pops`-free (so the codegen and authoring surface imports without the native build). `pops.lib`
-is a leaf that composes descriptors: a preset in `lib.presets` pairs a `lib.models` model with a
-`lib.time` scheme and never reaches up into `codegen` or `runtime`.
+is a leaf that composes authenticated handles into ordinary Programs: every `lib.time` factory
+returns the same `pops.Program` type as explicit authoring and never reaches into `codegen` or
+`runtime`.
 
 ## Public front door
 

@@ -25,7 +25,7 @@ class PolarMesh(MeshDescriptor):
       transport) AND 'hll' (isothermal fluid only); 'hllc'/'roe' rejected (no polar Euler
       brick);
     - DIRECT polar Poisson (PolarPoissonSolver): single-rank, single-box only;
-    - tensorial polar condensed Program (via pops.lib.time.CondensedSchur): multi-rank/multi-box.
+    - tensorial polar hierarchy-scoped ``Program.solve``: multi-rank/multi-box.
 
     No AMR, no Cartesian<->polar coupling. ``theta_boxes`` splits the transport into
     azimuthal bands (1 = single-box, bit-identical to history; must divide ntheta).

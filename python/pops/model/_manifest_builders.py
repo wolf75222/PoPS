@@ -197,7 +197,7 @@ def condensed_route_manifest(program: Any) -> Any:
         "ops": seen,
         "operator_module": "pops::detail (block_inverse)",
         "operator_header": "pops/numerics/linalg/block_inverse.hpp",
-        "preset": "pops.lib.time.CondensedSchur",
+        "authoring": "pops.Program.solve",
         "limitations": {
             "bit_exact_theta": 1.0,
             "bit_exact_scope": "first_step",

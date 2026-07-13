@@ -104,23 +104,23 @@ def bind_field_reference(program: Any, block: Any, field: Any) -> Any:
     """Authenticate a case-owned field for the exact Case already selected by ``block``."""
     from pops.problem.handles import FieldHandle
 
-    bind_program_block(program, block, where="Program.solve_fields")
+    bind_program_block(program, block, where="field operator")
     if not isinstance(field, FieldHandle):
         raise TypeError(
-            "Program.solve_fields: field must be a case-owned FieldHandle returned by "
+            "field operator: field must be a case-owned FieldHandle returned by "
             "Case.field(...), not %s" % type(field).__name__)
     if field.owner_path != block.owner_path:
         raise ValueError(
-            "Program.solve_fields: field %r and state block %r belong to different Cases"
+            "field operator: field %r and state block %r belong to different Cases"
             % (field.local_id, block.local_id))
     registry = getattr(field, "_field_registry", None)
     if registry is None:
         raise ValueError(
-            "Program.solve_fields: field handle %s is detached from its authoritative Case registry"
+            "field operator: field handle %s is detached from its authoritative Case registry"
             % field.qualified_id)
     if registry.owner_path != block.owner_path:
         raise ValueError(
-            "Program.solve_fields: field registry and state block belong to different Cases")
+            "field operator: field registry and state block belong to different Cases")
     registry.canonicalize(field)
     registry.get(field.local_id)
     return field

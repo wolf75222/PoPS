@@ -4,8 +4,7 @@ Split out of :mod:`pops.runtime._bricks_time` for the 500-line cap (ADC-550): th
 normalization helpers ``_role_to_stable`` / ``_norm_implicit`` and the implicit-source time
 policies ``IMEX`` / ``SourceImplicit`` / ``SourceImplicitBE`` / ``IMEXRK``. ``_bricks_time``
 re-imports every name and ``pops.runtime.bricks`` re-exports them, so no public import path
-changes. The split / Schur policies (``Split`` / ``Strang`` / ``CondensedSchur``) and ``Role``
-stay in their own modules.
+changes. Global solves and operator splitting are explicit ``Program`` graphs.
 """
 from __future__ import annotations
 
@@ -161,16 +160,16 @@ class SourceImplicit:
     future effort. SourceImplicit = source-only IMEX (strictly equivalent to IMEX/pops.Implicit,
     bit-identical numerics).
 
-    WHEN TO USE IT (SourceImplicit LOCAL vs pops.lib.time.CondensedSchur GLOBAL) -- both mechanisms
-    treat a stiff source implicitly, but at different scales:
+    WHEN TO USE IT (local source solve vs global ``Program.solve``) -- both mechanisms can treat a
+    stiff contribution implicitly, but at different scales:
 
     - SourceImplicit is LOCAL: the implicit part couples only the components of A SINGLE CELL
       (backward-Euler solved by per-cell Newton), there is NO spatial coupling between
       cells. Suited to purely local stiff terms (relaxation, reactions, friction).
-    - pops.lib.time.CondensedSchur is GLOBAL: it assembles and solves a tensor
-      elliptic operator by Schur (Krylov BiCGStab) that COUPLES the whole domain. Suited to
-      non-local stiff Lorentz / electrostatic coupling (e.g. magnetized Euler-Poisson from the
-      Hoffart paper, arXiv:2510.11808). A local stiff source does NOT need Schur.
+    - an explicit ``Program.solve(LinearProblem(...), solver=...)`` is GLOBAL: its matrix-free
+      operator may couple the whole domain, and a hierarchy provider can span all AMR levels.
+      This is the appropriate route for non-local stiff Lorentz / electrostatic coupling. A local
+      stiff source does not need that global solve.
 
     - ``substeps=N``: substeps per macro-step (cf. Explicit). Default 1.
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. Explicit). Default 1.

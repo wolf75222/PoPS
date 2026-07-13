@@ -1,8 +1,7 @@
-"""Typed FieldContext for a Program field solve (ADC-588).
+"""Typed FieldContext for a callable Case field operator.
 
-Today ``P.solve_fields(...)`` "returns a FieldContext" only in prose: the IR node is a plain
-``ProgramValue`` and the downstream RHS reads the shared aux by convention. This module makes the
-FieldContext a real, inert descriptor attached to that value so a stage's field solve is
+Calling ``field(state, ...)`` creates an internal field-solve IR value. This module attaches a real,
+inert descriptor to that value so a stage's field solve is
 identifiable and a cross-stage / cross-block read fails loud instead of silently reading a stale
 solve. It mirrors the C++ ``pops::FieldContext`` (include/pops/runtime/context/field_context.hpp):
 a validity token, not a container -- it holds no field data and changes no numerics.
@@ -16,7 +15,7 @@ from typing import Any
 
 @dataclass(frozen=True, slots=True, init=False)
 class FieldContext:
-    """Provenance + validity token for one field solve.
+    """Provenance and validity token for one callable field-operator evaluation.
 
     Attributes:
         field: exact owner-qualified field identity retained by the Program. Strings, ``None`` and

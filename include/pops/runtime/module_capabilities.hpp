@@ -312,9 +312,10 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("krylov:cg_bicgstab_gmres_richardson", "available",
                        "matrix-free Krylov over native MultiFab primitives", kLayoutRouteTokensCsv,
                        "production", "host", mpi, gpu),
-      capability_route("program:condensed_implicit_preset", "partial",
-                       "CondensedSchur is a 2D two-component electrostatic-Lorentz preset; the "
-                       "Program solve/provider protocol itself is physics-independent",
+      capability_route("program:hierarchy_scoped_solve", "partial",
+                       "Program.solve and its provider protocol are physics-independent; AMR "
+                       "hierarchy lowering currently supports one top-level linear solve with "
+                       "CompositeTensorFAC()",
                        "uniform|amr", "production", "host", mpi, gpu),
       capability_route("program_context:system", "available",
                        "compiled ProgramContext install on System", "uniform", "production", "host",

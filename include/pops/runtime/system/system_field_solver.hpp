@@ -877,7 +877,7 @@ class SystemFieldSolver {
           std::to_string(owner_->ba.size()) +
           " boxes); it requires a single-box grid (theta_boxes=1). For a multi-box theta "
           "splitting, "
-          "use pops.lib.time.CondensedSchur in a generated Program, or "
+          "use a hierarchy-scoped Program.solve with a composite tensor provider, or "
           "go back to theta_boxes=1.");
     // Radial BC: Dirichlet/Neumann from poisson_bc() (xlo/xhi). theta always periodic.
     const BCRec pbc = poisson_bc();

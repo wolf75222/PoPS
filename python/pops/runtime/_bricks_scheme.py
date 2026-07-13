@@ -3,9 +3,9 @@
 Inter-species couplings (Ionization / Collision / ThermalExchange), the spatial discretization
 (Spatial / FiniteVolume) and the plain ``Explicit`` time treatment. The implicit time
 policies (IMEX / SourceImplicit / IMEXRK / Implicit / Role)
-live in ``_bricks_time`` (split out for the 500-line cap). Program composition presets such as
-``pops.lib.time.CondensedSchur`` live outside the native brick catalog. ``pops.runtime.bricks`` re-exports
-these together with the model bricks in ``_bricks_model`` and the time policies in ``_bricks_time``.
+live in ``_bricks_time`` (split out for the 500-line cap). Global operator composition is authored
+with ``pops.Program`` and remains outside the native brick catalog. ``pops.runtime.bricks`` re-exports
+the model bricks in ``_bricks_model`` and the time policies in ``_bricks_time``.
 """
 from __future__ import annotations
 

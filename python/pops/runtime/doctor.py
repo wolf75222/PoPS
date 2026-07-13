@@ -305,12 +305,12 @@ def capabilities() -> Any:
             "system": ["explicit (ssprk2|ssprk3)", "imex (= SourceImplicitBE)",
                        "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
                        "fully implicit source)",
-                       "Program macros lie|strang + pops.lib.time.CondensedSchur"],
+                       "Program factories Lie|Strang + explicit Program.solve"],
             "amr": ["explicit (forward Euler per substep)", "ssprk3 (order 3 + reflux per stage)",
                     "imex (= SourceImplicitBE)",
-                    "Program macros lie|strang + pops.lib.time.CondensedSchur (composite hierarchy)"],
+                    "Program factories Lie|Strang + hierarchy-scoped Program.solve"],
             "system_polar": ["explicit (ssprk2|ssprk3)",
-                             "metric-aware pops.lib.time.CondensedSchur Program"],
+                             "metric-aware explicit Program.solve graph"],
             "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
                               "mono-block AND native multi-block (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
@@ -350,12 +350,13 @@ def capabilities() -> Any:
                    "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
-            "system_cartesian": "pops.lib.time.CondensedSchur Program preset ; authored roles/fields ; "
-                                "generic matrix-free solve provider",
-            "system_polar": "same Program preset and IR ; metric-aware divergence/gradient plus "
+            "system_cartesian": "explicit Program.solve(LinearProblem(...), solver=GMRES/BiCGStab) ; "
+                                "authored roles/fields ; generic matrix-free operator",
+            "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
                             "PolarTensorKrylovSolver provider",
-            "amr": "same Program preset and IR ; gather-all-levels, one composite tensor solve, then "
-                   "reconstruct-all-levels ; no native source-stage route",
+            "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
+                   "one composite tensor solve, then reconstruct-all-levels ; no native "
+                   "source-stage route",
         },
         "backends_dsl": {
             "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "

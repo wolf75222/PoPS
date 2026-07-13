@@ -142,9 +142,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
                                     # {"rhs": Expr, "operator": str, "aux": [str]}. The unnamed default
                                     # stays in self._elliptic (m.elliptic_rhs); the named keys enter
                                     # _model_hash ONLY when non-empty (cache key preserved). The runtime
-                                    # (a second elliptic operator / aux channel) is DEFERRED: the IR +
-                                    # validation + hash + codegen-IR land, but ctx.solve_fields(field=)
-                                    # raises NotImplementedError on lowering (cf. time.py).
+                                    # is qualified by Case.field together with its typed numerical
+                                    # discretization and output route.
         self._stab_speed = None  # Expr: STABILITY speed lambda* (None = fallback eigenvalues)
         self._stab_dt = None     # Expr: direct ADMISSIBLE step dt(U, aux) (None = no bound)
         self._src_freq = None    # Expr: frequency mu(U, aux) of the SOURCE (None = no bound)

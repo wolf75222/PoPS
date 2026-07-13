@@ -251,8 +251,9 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """Declare a FIELD-SOLVE operator ``F: U -> Fields`` (ADC-559): the mathematical spelling of
         :meth:`elliptic_field`. Solves ``operator(field) = rhs(U)`` populating the named ``aux`` fields
         (default the electrostatic triple); the returned inspectable handle carries the derived
-        ``Signature`` and ``category == "field_solve"``. The multi-field RUNTIME stays deferred (see
-        :meth:`elliptic_field`); the IR / validation / typed handle land here.
+        ``Signature`` and ``category == "field_solve"``. Case qualification and a
+        ``FieldDiscretization`` supply the runtime route; the model declaration itself chooses no
+        numerical solver.
         """
         self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
         return self._typed_handle(name)
@@ -358,8 +359,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
     def elliptic_field(self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None) -> None:
         """NAMED elliptic field: an elliptic solve operator(field) = rhs(U) populating the named @p aux
         fields (default ['phi', 'grad_x', 'grad_y']); delegates to HyperbolicModel.elliptic_field. The
-        IR + validation + hash land; the multi-field RUNTIME (a second elliptic operator + aux channel)
-        is DEFERRED -- ctx.solve_fields(field=name) raises NotImplementedError on lowering."""
+        IR, validation and hash feed the case-owned callable field route. Solver and boundary choices
+        remain in ``FieldDiscretization`` rather than this physics declaration."""
         self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
 
     def gamma(self, value: Any) -> None:

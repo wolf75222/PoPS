@@ -184,7 +184,7 @@ def emit_cpp_program(
     uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
     the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
     ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
-    shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. A
+    shared phi/aux. A per-block callable field operator therefore sees all blocks' charge. A
     SIMULTANEOUS multi-target override (several blocks at their stage states in ONE solve) lowers to
     ``ctx.solve_fields_from_blocks(<vec>)`` (Spec 3 criterion 24, ADC-457): the RHS is
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once

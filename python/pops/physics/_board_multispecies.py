@@ -184,8 +184,8 @@ class _MultiSpeciesMixin(_BoardModel):
 
         ``inputs`` is the ordered list of contributing species; the field RHS reads every listed
         species' stage state at once. Lowers to a typed ``field_operator`` over the N input
-        :class:`StateSpace` set, the operator-first surface of ``P.solve_fields_from_blocks``
-        (the existing multi-block field solve, Spec 3 criterion 24). ``equation`` /  ``outputs`` /
+        :class:`StateSpace` set, consumed by the callable case-owned field operator over all exact
+        block states. ``equation`` / ``outputs``
         record the physical operator and produced fields. Numerical choices are registered only
         through a case-owned ``FieldDiscretization``.
         """

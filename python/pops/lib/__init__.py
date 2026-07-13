@@ -15,11 +15,11 @@ The relocated central catalogs now live in:
 * moments tools -> :mod:`pops.moments`
 * diagnostics -> :mod:`pops.diagnostics`
 * the brick descriptor -> :mod:`pops.descriptors`
-* linear / nonlinear / Schur / elliptic solvers + preconditioners -> :mod:`pops.solvers`
+* executable linear / nonlinear / elliptic solvers + preconditioners -> :mod:`pops.solvers`
 * the custom-solver generation DSL (internal / experimental) -> :mod:`pops.codegen.solvers`
 
 There is exactly ONE public home for the solver descriptors: :mod:`pops.solvers`
-(``pops.solvers.CG`` / ``GMRES`` / ``GeometricMG`` / ``Newton`` / ``Schur`` ...). ``pops.lib``
+(``pops.solvers.CG`` / ``GMRES`` / ``GeometricMG`` / ``Newton`` ...). ``pops.lib``
 is NOT a second path -- the old ``pops.lib.solvers`` shim was removed (no back-compat alias).
 """
 from . import time
