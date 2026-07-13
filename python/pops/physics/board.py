@@ -176,10 +176,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     # --- state / species ---
     def state(self, name: Any = "U", components: Any = (), roles: Any = None, *,
               representation: Any = None, space: Any = None, units: Any = None) -> Any:
-        """Declare the conservative state. Returns an unpackable :class:`StateHandle`. Board role
-        strings (``density`` / ``momentum_x`` / ``momentum_y`` / ``energy`` / ...) are canonicalized to
-        the dsl roles (``Density`` / ``MomentumX`` / ...) so the native Riemann capabilities (HLLC/Roe
-        role lookup) recognize them.
+        """Declare the conservative state and return an unpackable :class:`StateHandle`.
+
+        The final public surface has no partially implemented unit algebra.  Opaque unit strings or
+        arbitrary metadata are therefore rejected here until a typed unit protocol can participate in
+        validation, semantic identity, lowering and runtime reports end to end.
         """
         name = require_name(name, "state name")
         components = normalize_components(components, "state")
@@ -203,6 +204,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         if placement is not None and self._frame is not None \
                 and placement.frame_id != self._frame.canonical_id:
             raise ValueError("state space frame differs from its Model frame")
+        if units is not None:
+            raise TypeError(
+                "Model.state units are unsupported on the final public route; "
+                "opaque unit metadata cannot be validated or lowered")
         metadata = {
             "representation": selected_representation.name,
             "centering": "cell" if placement is None else placement.centering,

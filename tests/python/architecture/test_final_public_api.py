@@ -77,6 +77,12 @@ def test_case_has_one_registration_spelling_per_family() -> None:
     assert hasattr(case, "program") and not hasattr(case, "time")
 
 
+def test_public_state_rejects_opaque_units_until_a_typed_unit_protocol_exists() -> None:
+    model = pops.Model("dimension_contract")
+    with pytest.raises(TypeError, match="units are unsupported"):
+        model.state("U", components=("rho",), units=("kg/m3",))
+
+
 def test_public_bind_accepts_value_families_without_an_internal_inputs_record() -> None:
     parameters = tuple(signature(pops.bind).parameters)
     assert parameters == (
