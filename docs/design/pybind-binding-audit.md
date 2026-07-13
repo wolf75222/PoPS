@@ -1,76 +1,77 @@
-# Pybind Binding Audit
+# Pybind and native component boundary
 
-ADC-593 stops the `_pops` extension from growing by one hand-written binding file per numeric
-combination (transport x Riemann x AMR mode). This note is the permanent classification of the
-pybind translation units, the block-build dispatch chain, why the per-route seam TUs exist, why the
-native bricks stay pre-instantiated, and the growth rule that replaces the per-combination file.
+This note defines the final binding boundary. Python authoring never selects a native algorithm with
+a string and never calls `System.add_block`. A typed descriptor contributes a versioned
+`ComponentManifest`; resolution authenticates its small interfaces and produces an immutable route
+identity. Pybind materializes the already-resolved plan and does not reinterpret scientific intent.
 
-## Classification of the binding TUs
+## Translation-unit ownership
 
-The bindings live under `python/bindings/`. Each TU falls in one of five categories.
+Bindings live under `python/bindings/` and have only three responsibilities:
 
-| Category | Files | Role |
-| --- | --- | --- |
-| Module entry + init split | `core/bindings.cpp`, `core/init/init_core.cpp`, `core/init/init_system.cpp`, `core/init/init_amr.cpp`, `core/bindings_detail.hpp` | `PYBIND11_MODULE` and the `py::class_` / `.def` registrations. Internal seams of the bind flow, not public vocabulary. |
-| Runtime-core facades | `system/base/system.cpp`, `amr/amr_system.cpp` | The `System` / `AmrSystem` facade + `Impl`. The two heavy TUs; string dispatch to the seam symbols lives here. |
-| Legacy / geometry routes | `system/base/system_polar.cpp` | The verbatim polar (ring) visitor body. Unique shape; kept hand-written. |
-| Riemann dispatchers | `amr/block/compressible/amr_block_compressible.cpp`, `amr/compiled/compressible/amr_compiled_compressible.cpp` | Thin `if (riemann == ...)` routers, one per transport, routing to the per-flux seam leaves. Unique control flow; kept hand-written. |
-| Per-route seam leaves | generated from `bindings/seam_combinations.cmake` (system/isothermal, system/compressible, amr/block, amr/compiled) | One `pops::detail::build_*` function per `(transport, flux)`, each instantiating ONE leaf of the template product. Formerly hand-written; now generated. |
+| Family | Responsibility |
+| --- | --- |
+| module initialization | register value types and the private native execution entry points |
+| plan installation | decode authenticated generated records and construct a `RuntimeInstance` |
+| generated template leaves | instantiate bounded builtin template products without owning route policy |
 
-Counts after ADC-593: 9 hand-written binding TUs remain in git; 19 per-route seam leaves are
-generated at configure time from a single manifest (no longer tracked source files).
+The `System` and `AmrSystem` C++ types are private execution engines. Their pybind classes may expose
+installation seams used by `pops.bind`, but no public Python authoring object delegates to their old
+registration methods.
 
-## The block-build dispatch chain
+## One component path
 
-A Python string selects a route; no algorithm selection lives in pybind lambdas.
+Builtin and external components cross the same contract:
 
-1. `pops.System.add_block(...)` (Python) calls the `System.add_block` binding (`init_system.cpp`).
-2. `System::add_block` (`system/base/system.cpp`) runs the shared `validate_riemann` / `validate_limiter`
-   and does a small `if/else` on the transport / riemann STRING.
-3. Each branch calls a `pops::detail::build_block_<transport>[_<flux>]` SEAM symbol (declared in
-   `include/pops/runtime/builders/block/block_seam.hpp`, defined in a generated seam TU).
-4. The seam calls `build_block_for` / `build_block_for_make` -> `make_block_<flux>` (the typed template
-   route dispatch, phase-2 `route_ids` / `model_factory`). The AMR side mirrors this with
-   `build_amr_block_*` / `build_amr_compiled_*` and `dispatch_amr_*`.
+1. A `ComponentManifest` declares URI/version, exact interfaces, requirements, capabilities,
+   target variants, effects, restart data and entry points.
+2. The registry validates the manifest and produces the same provenance/report shape regardless of
+   origin.
+3. Resolution binds each requirement to a qualified provider and selects a target proven by the
+   platform manifest.
+4. Lowering calls only the component's narrow interfaces. It never switches on a Python class name,
+   performs `isinstance` scientific dispatch, or consults a handwritten allow-list.
+5. Installation authenticates the compiled artifact and binds its declared entry points. Missing
+   interfaces, symbols or target evidence fail before runtime mutation.
 
-The declarative registry is NOT the bindings. Transports come from `brick_catalog.hpp` (Python mirror
-`brick_catalog.py`), fluxes from `route_ids.hpp` (Python mirror `routes.py` `_REGISTRY["riemann"]`).
-`brick_catalog.hpp` static_asserts itself against the registry and route tables. The bindings only
-translate a validated string to the pre-instantiated seam symbol.
+The native interface vocabulary is generated from
+[`schemas/component_catalog.v2.json`](../../schemas/component_catalog.v2.json). Compile-time
+conformers implement only the concepts they need (`Requirement`, `Lowering`, `Stencil`, `Stability`,
+`Provider`, `Effects`, `Restart`, `Report`, `FallibleEvaluation`, `Format`). There is no universal
+component base class and no `provides(any)` escape hatch.
 
-## Why the per-route seam TUs exist (build memory)
+## Generated builtin leaves and build memory
 
-The seam symbols could be ONE template `make_block<TR, Flux, Limiter, Model, ...>` product. Emitting the
-full product (~1700 leaves) in a single TU exceeds 7 GB at `-O3` under Kokkos (`cc1plus` peak). That
-kills CI runners and slows local builds. ADC-335 / ADC-342 / ADC-359 split the product one TU per
-`(transport, flux)`: each TU instantiates only its leaves, TUs compile in parallel, and peak memory is
-bounded by ONE leaf TU. A Ninja `JOB_POOL` (`pops_heavy_module_tu` for the module,
-`pops_heavy_tu` for the tests) serializes the two big facades so two multi-GB compiles never overlap.
+Some builtin C++ policies remain template-instantiated in `_pops` for zero-overhead device kernels.
+That is an implementation strategy, not a second registration path. Their identities and supported
+combinations come from the generated catalog; generated visitors map resolved numeric IDs to typed
+leaves. A handwritten pybind `if/else` on transport, flux, limiter, layout or model is forbidden.
 
-This mitigation is correct and is UNCHANGED by ADC-593. What was wrong was the GROWTH STRATEGY: a new
-Riemann or reconstruction meant a new hand-written pybind file. ADC-593 keeps the one-leaf-per-TU memory
-shape but GENERATES those TUs from one declarative manifest.
+Large template products stay split across generated translation units so one compiler process does
+not instantiate the full product. Ninja job pools bound concurrent heavy compilations. This build
+partitioning must not leak into manifests, route identities or user-visible behavior.
 
-## Why native bricks stay pre-instantiated (not the runtime .so loader)
+## External packages
 
-The seams are pre-instantiated template leaves compiled into `_pops`. They are not moved to the runtime
-`.so` loader (the DSL `production` / `native` path) because that loader honestly CANNOT express the
-routes the pre-instantiated path covers: `stride > 1` sub-cycling, IMEX-RK, partial IMEX masks
-(implicit vars / roles), and MPI / GPU dispatch. The pre-instantiated seam is the right OWNER of the
-builtin numeric routes today; the `.so` loader owns USER-authored models compiled on the fly. This is a
-deliberate boundary, not an omission.
+`pops.external.load(...).require(alias, interface=...)` is the only package entry. Source packages
+are specialized AOT against the resolved target; fixed-binary packages use a distinct exact ABI
+contract and never claim template genericity. Both yield authenticated component artifacts and use
+the same installation registry. Raw `.so` paths, historical brick JSON and `compile_library` are not
+accepted.
 
-## The growth rule (manifest row, never a new file)
+An external conformer can supply a flux, boundary provider, tagger, clustering policy, transfer,
+reflux operation, solver or writer without editing a central dispatcher. Adding a builtin may add a
+catalog row and generated template implementation; adding an external component changes no PoPS
+source file.
 
-Adding a Riemann or reconstruction is:
+## Enforcement
 
-1. one row in `python/bindings/seam_combinations.cmake` (side, transport, flux, symbol, output path);
-2. the `make_block_<flux>` / `dispatch_amr_*_<flux>` template in the headers -- that is NUMERICS, not
-   bindings;
-3. the flux row in `route_ids.hpp` / `routes.py` (the registry) if the flux is new.
+Architecture and conformance tests must prove:
 
-No new hand-written pybind file. `tests/python/architecture/test_pybind_seam_manifest.py` enforces this: the
-former leaf files must be absent from git, every manifest `(transport, flux)` must be a legal catalog /
-registry route, and no new `.cpp` under `python/bindings/` may carry the seam-leaf signature outside the
-generated dir and templates. `python/tests/test_seam_combinations.py` is the runtime sibling: it drives
-a native `add_block` for every manifest combination and asserts a CFL step advances finitely.
+- public imports and normative examples contain no old authoring method or string selector;
+- generated catalog/schema products are current and Python/C++ identities match;
+- component trust boundaries contain no scientific concrete-class branch;
+- malformed manifests and missing interfaces fail before registry mutation;
+- builtin and external provenance/report records have identical structure;
+- at least one external component executes on both Uniform and AMR layouts;
+- generated leaf coverage is complete without a handwritten per-combination binding file.
