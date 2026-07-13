@@ -11,7 +11,7 @@ from .board_handles import FluxHandle, SourceHandle, StateHandle, _safe_name
 class _RateAuthoringMixin:
     """Build and validate explicit finite-volume/rate equations."""
 
-    def rate(self, name: Any, equation: Any) -> Any:
+    def rate(self, name: Any, *, equation: Any) -> Any:
         reg = _safe_name(name)
         if not isinstance(equation, _bm.Equation):
             raise TypeError("rate expects an equation 'ddt(U) == -div(F) + sources'")

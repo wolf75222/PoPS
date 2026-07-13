@@ -37,8 +37,19 @@ class _OperatorViewMixin(_HyperbolicModel):
         components and canonical physical roles. Derived; carries no data."""
         role_list = roles_for(self.cons_names, self.cons_roles)
         roles = dict(zip(self.cons_names, role_list, strict=True))
-        return _model.StateSpace(name=name, components=tuple(self.cons_names),
-                                 roles=roles, layout="cell")
+        metadata = self._state_space_metadata
+        return _model.StateSpace(
+            name=name,
+            components=tuple(self.cons_names),
+            roles=roles,
+            layout=metadata["layout"],
+            storage=metadata["storage"],
+            representation=metadata["representation"],
+            centering=metadata["centering"],
+            units=metadata["units"],
+            frame=metadata["frame"],
+            clock=metadata["clock"],
+        )
 
     def field_space(self, name: str = "fields") -> Any:
         """Typed :class:`pops.model.FieldSpace` view of the auxiliary surface the model

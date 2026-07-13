@@ -21,6 +21,7 @@ The handle classes and the multi-species / inspection half live in
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from .. import math as _bm
@@ -29,7 +30,7 @@ from .board_handles import (FieldHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
                             VectorHandle, _canon_role, _safe_name)
 from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
-                              normalize_sequence, normalize_string_mapping, require_name)
+                              normalize_sequence, require_name)
 from ._board_compile import _BoardCompileMixin
 from ._board_elliptic import _EllipticAuthoringMixin
 from ._board_multispecies import _MultiSpeciesMixin
@@ -44,16 +45,23 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     _physics_mutators = frozenset({
         "state", "species", "primitive", "scalar", "param", "aux", "field",
-        "vector_field", "flux", "source", "local_linear_operator", "field_operator",
+        "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
     })
 
-    def __init__(self, name: Any) -> None:
+    def __init__(self, name: Any, *, frame: Any = None) -> None:
         self._init_physics_freeze()
+        if frame is not None and (
+                not callable(getattr(frame, "to_dict", None))
+                or not isinstance(getattr(frame, "canonical_id", None), str)
+                or not hasattr(frame, "axes")):
+            raise TypeError(
+                "Model frame must expose typed axes, canonical_id and to_dict()")
         from .facade import Model as _PdeModel  # lazy: the facade pulls numpy
         self._dsl = _PdeModel(name)
         self.name = self._dsl.name
+        self._frame = frame
         self._states = {}
         self._fields = {}
         self._fluxes = {}
@@ -109,7 +117,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         return module
 
     # --- state / species ---
-    def state(self, name: Any = "U", components: Any = (), roles: Any = None) -> Any:
+    def state(self, name: Any = "U", components: Any = (), roles: Any = None, *,
+              representation: Any = None, space: Any = None, units: Any = None) -> Any:
         """Declare the conservative state. Returns an unpackable :class:`StateHandle`. Board role
         strings (``density`` / ``momentum_x`` / ``momentum_y`` / ``energy`` / ...) are canonicalized to
         the dsl roles (``Density`` / ``MomentumX`` / ...) so the native Riemann capabilities (HLLC/Roe
@@ -122,6 +131,30 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError(
                 "state %r cannot be declared: this physics model already owns state %r; "
                 "use species(...) for multiple state blocks" % (name, next(iter(self._states))))
+        from pops.representations import Conservative, Representation
+        from pops.spaces import CellState, StatePlacement
+
+        selected_representation = Conservative() if representation is None else representation
+        if not isinstance(selected_representation, Representation):
+            raise TypeError("state representation must be a typed pops.representations value")
+        if space is None:
+            placement = None if self._frame is None else CellState(frame=self._frame)
+        elif isinstance(space, StatePlacement):
+            placement = space
+        else:
+            raise TypeError("state space must be a typed pops.spaces.StatePlacement")
+        if placement is not None and self._frame is not None \
+                and placement.frame_id != self._frame.canonical_id:
+            raise ValueError("state space frame differs from its Model frame")
+        metadata = {
+            "representation": selected_representation.name,
+            "centering": "cell" if placement is None else placement.centering,
+            "layout": "cell" if placement is None else placement.layout,
+            "storage": "multifab" if placement is None else placement.storage,
+            "frame": "model" if placement is None else placement.frame_id,
+            "clock": "simulation" if placement is None else placement.clock,
+            "units": units,
+        }
         role_list = None if roles is None else [_canon_role(role_map.get(c)) for c in components]
         hyp = self._dsl._m
         with atomic_attrs(
@@ -130,14 +163,33 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             (hyp, "prim_state"),
             (hyp, "prim_roles"),
             (hyp, "cons_from"),
+            (hyp, "_state_space_metadata"),
             (self, "_states"),
         ):
+            hyp._state_space_metadata = metadata
             vars_ = self._dsl.conservative_vars(*components, roles=role_list)
             # A blackboard state is a complete coordinate system: use its conservative components
             # as the exact identity primitive layout/inverse, avoiding scalar-law boilerplate.
             self._dsl.primitive_vars(*vars_, roles=role_list)
             self._dsl.conservative_from(list(vars_))
-            handle = StateHandle(name, components, vars_, role_map, owner=self.owner_path)
+            from pops.model import StateSpace
+            from .aux import roles_for
+            typed_roles = dict(zip(
+                components, roles_for(hyp.cons_names, hyp.cons_roles), strict=True))
+            typed_space = StateSpace(
+                name,
+                components,
+                roles=typed_roles,
+                layout=metadata["layout"],
+                storage=metadata["storage"],
+                representation=metadata["representation"],
+                centering=metadata["centering"],
+                units=metadata["units"],
+                frame=metadata["frame"],
+                clock=metadata["clock"],
+            )
+            handle = StateHandle(
+                name, components, vars_, role_map, owner=self.owner_path, space=typed_space)
             self._states[handle.name] = handle
         return handle
 
@@ -202,47 +254,67 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._fields[h.name] = h
         return h
 
-    def vector_field(self, name: Any, x: Any, y: Any) -> Any:
-        """Define a named vector field with ``.x`` / ``.y`` expression components."""
+    def vector(self, name: Any, *, frame: Any, components: Any) -> Any:
+        """Define a physical vector by the typed axes of its frame."""
         name = require_name(name, "vector field name")
         if name in self._fields:
             raise ValueError("field %r is already declared" % name)
+        if self._frame is not None and frame != self._frame:
+            raise ValueError("vector frame differs from its Model frame")
+        if not hasattr(frame, "axes") or not isinstance(components, Mapping):
+            raise TypeError("vector requires a typed frame and an axis-to-expression mapping")
+        if set(components) != set(frame.axes):
+            raise ValueError("vector components must name every typed frame axis exactly once")
         hyp = self._dsl._m
         with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (self, "_fields")):
             h = VectorHandle(
-                name, _wrap(self._to_expr(x)), _wrap(self._to_expr(y)), owner=self.owner_path)
+                name,
+                frame=frame,
+                components={axis: _wrap(self._to_expr(components[axis])) for axis in frame.axes},
+                owner=self.owner_path,
+            )
             self._fields[name] = h
         return h
 
     # --- operators (board equations) ---
-    def flux(self, name: Any, on: Any = None, x: Any = None, y: Any = None, waves: Any = None) -> Any:
+    def flux(self, name: Any, *, frame: Any, state: Any, components: Any,
+             waves: Any = None) -> Any:
         """Declare the physical flux and (optionally) its characteristic speeds.
 
-        ``x`` / ``y`` are the per-component flux expressions; ``waves`` gives the
-        per-direction eigenvalues. Lowers to the model's default flux.
+        ``components`` and ``waves`` are keyed by typed axes, never direction strings.  The current
+        native route supports Cartesian2D; the public mapping contract extends without another
+        method when more dimensions are installed.
         """
         name = require_name(name, "flux name")
-        self._require_state_handle(on, "flux", optional=True)
+        self._require_state_handle(state, "flux", optional=False)
+        if self._frame is not None and frame != self._frame:
+            raise ValueError("flux frame differs from its Model frame")
+        if not hasattr(frame, "axes") or not isinstance(components, Mapping):
+            raise TypeError("flux requires a typed frame and an axis-to-expression mapping")
+        if set(components) != set(frame.axes):
+            raise ValueError("flux components must name every typed frame axis exactly once")
         if self._fluxes:
             raise ValueError("flux %r cannot replace already declared physical flux %r"
                              % (name, next(iter(self._fluxes))))
-        if x is None or y is None:
-            raise ValueError("flux(%r) requires per-component x= and y= expressions" % (name,))
+        axes = {axis.name: axis for axis in frame.axes}
+        if set(axes) != {"x", "y"}:
+            raise ValueError("the installed native flux route requires an exact Cartesian2D frame")
         h = FluxHandle(name, is_default=True, owner=self.owner_path)
-        x_values = normalize_sequence(x, "flux x expressions", nonempty=True)
-        y_values = normalize_sequence(y, "flux y expressions", nonempty=True)
+        x_values = normalize_sequence(
+            components[axes["x"]], "flux x expressions", nonempty=True)
+        y_values = normalize_sequence(
+            components[axes["y"]], "flux y expressions", nonempty=True)
         expected = self._dsl._m.n_vars
         if len(x_values) != expected or len(y_values) != expected:
             raise ValueError("flux(%r) needs %d expression(s) per direction; got %d/%d"
                              % (name, expected, len(x_values), len(y_values)))
         wave_values = None
         if waves is not None:
-            wave_map = normalize_string_mapping(waves, "flux waves")
-            if set(wave_map) != {"x", "y"}:
-                raise ValueError("flux waves must define exactly the 'x' and 'y' directions")
+            if not isinstance(waves, Mapping) or set(waves) != set(frame.axes):
+                raise TypeError("flux waves must map every typed frame axis exactly once")
             wave_values = (
-                normalize_sequence(wave_map["x"], "flux x waves", nonempty=True),
-                normalize_sequence(wave_map["y"], "flux y waves", nonempty=True))
+                normalize_sequence(waves[axes["x"]], "flux x waves", nonempty=True),
+                normalize_sequence(waves[axes["y"]], "flux y waves", nonempty=True))
             if len(wave_values[0]) != expected or len(wave_values[1]) != expected:
                 raise ValueError("flux(%r) needs %d wave(s) per direction; got %d/%d"
                                  % (name, expected, len(wave_values[0]), len(wave_values[1])))

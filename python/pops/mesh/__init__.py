@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from ._descriptor import Availability, MeshDescriptor
 from .cartesian import CartesianMesh
+from .grid import CartesianGrid
 from .polar import PolarMesh
 from .aux import AuxHalo
 from .boxes import PatchBox, BoxLayout
@@ -27,7 +28,7 @@ from .layout_plan import (
 from . import layouts, amr, geometry, masks, boundaries
 
 __all__ = [
-    "CartesianMesh", "PolarMesh", "AuxHalo", "PatchBox", "BoxLayout",
+    "CartesianGrid", "CartesianMesh", "PolarMesh", "AuxHalo", "PatchBox", "BoxLayout",
     "Availability", "MeshDescriptor",
     "LayoutHandle", "LayoutMappingProvider", "LayoutPlan", "LayoutPlanBuilder",
     "normalize_layout_plan",

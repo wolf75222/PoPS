@@ -141,14 +141,33 @@ class FieldHandle(Handle):
 
 
 class VectorHandle(Handle):
-    """A named vector field with ``.x`` / ``.y`` expression components."""
+    """A named vector field indexed by the typed axes of its frame."""
 
-    __slots__ = ("x", "y")
+    __slots__ = ("frame", "components")
 
-    def __init__(self, name: Any, x: Any, y: Any, *, owner: Any) -> None:
+    def __init__(self, name: Any, *, frame: Any, components: Any, owner: Any) -> None:
+        if not callable(getattr(frame, "to_dict", None)) or not hasattr(frame, "axes"):
+            raise TypeError("VectorHandle frame must expose typed axes and to_dict()")
+        values = dict(components)
+        if set(values) != set(frame.axes):
+            raise ValueError("VectorHandle components must name every frame axis exactly once")
         super().__init__(require_name(name, "vector field name"), kind="vector", owner=owner)
-        object.__setattr__(self, "x", x)
-        object.__setattr__(self, "y", y)
+        object.__setattr__(self, "frame", frame)
+        object.__setattr__(self, "components", MappingProxyType(values))
+
+    def __getitem__(self, axis: Any) -> Any:
+        try:
+            return self.components[axis]
+        except KeyError:
+            raise KeyError("axis does not belong to vector frame") from None
+
+    @property
+    def x(self) -> Any:
+        return next(self.components[axis] for axis in self.frame.axes if axis.name == "x")
+
+    @property
+    def y(self) -> Any:
+        return next(self.components[axis] for axis in self.frame.axes if axis.name == "y")
 
     def __repr__(self) -> str:
         return "VectorHandle(%r)" % (self.name,)

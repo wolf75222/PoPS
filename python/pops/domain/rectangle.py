@@ -413,6 +413,14 @@ class RectangleFrame:
         return self.coordinates.axes
 
     @property
+    def x(self) -> CartesianAxis:
+        return self.coordinates.x
+
+    @property
+    def y(self) -> CartesianAxis:
+        return self.coordinates.y
+
+    @property
     def boundaries(self) -> RectangleBoundaries:
         return self.domain.boundaries
 

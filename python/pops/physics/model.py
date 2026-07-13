@@ -82,6 +82,15 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         self.name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
         self._operator_registry_cache = {}
+        self._state_space_metadata = {
+            "representation": "conservative",
+            "centering": "cell",
+            "layout": "cell",
+            "storage": "multifab",
+            "frame": "model",
+            "clock": "simulation",
+            "units": None,
+        }
         self.cons_names = []
         self.prim_defs = {}     # name -> Expr (in terms of the cons / previous prims / aux)
         self.aux_names = []      # CANONICAL aux fields read (phi/grad/B_z/T_e), cf. AUX_CANONICAL
