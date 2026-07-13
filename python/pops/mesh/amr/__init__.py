@@ -10,6 +10,9 @@ from pops.params.use_sites import ParamUse, resolve_param_use
 
 from .._descriptor import Availability, MeshDescriptor
 from ._param_threshold import resolve_refine_threshold
+from . import tagging_graph as _tagging_graph, tagging_resolution as _tagging_resolution
+from .tagging_graph import *  # noqa: F403
+from .tagging_resolution import *  # noqa: F403
 
 # Current native AMR capability envelope (Spec 5 sec.8.7): the production AMR route
 # supports 2 levels at refinement ratio 2. A request beyond this is refused BEFORE the
@@ -486,4 +489,4 @@ __all__ = [
     "ProperNesting", "BufferCells", "AllLevels", "CoarseOnly", "SelectedLevels",
     "CheckpointPolicy", "AMROutput", "IgnoreAMRCriteria", "NATIVE_MAX_LEVELS",
     "NATIVE_RATIOS", "Availability",
-]
+] + _tagging_graph.__all__ + _tagging_resolution.__all__
