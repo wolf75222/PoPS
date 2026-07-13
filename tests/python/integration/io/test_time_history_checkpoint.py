@@ -64,7 +64,7 @@ def _authorize_identity_runtime(sim, compiled):
         artifact_identity=compiled.artifact_identity,
         layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
         step_transaction=sim._step_transaction_plan.to_data(),
-        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
     sim._finalize_bind(snapshot)
@@ -94,7 +94,7 @@ def test_current_checkpoint_envelope_roundtrips(_t):
         artifact_identity=make_identity("artifact", {"binary": "npz-envelope"}),
         layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
         step_transaction={},
-        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
     run = RunManifest(

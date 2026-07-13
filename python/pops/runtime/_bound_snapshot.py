@@ -17,7 +17,7 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes, make_identity
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _identity(value: Any, domain: str, *, where: str) -> Identity:
@@ -139,14 +139,14 @@ class BoundSnapshot:
 
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
-        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence", "outputs",
-        "diagnostics", "bind_schema_identity", "execution_context", "bind_identity",
+        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence",
+        "bind_schema_identity", "execution_context", "bind_identity",
     )
 
     def __init__(self, *, semantic_identity: Any, artifact_identity: Any, layout: Any,
                  blocks: Any, solvers: Any, step_transaction: Any, params: Any, aux_evidence: Any,
-                 initial_evidence: Any, outputs: Any, diagnostics: Any,
-                 bind_schema_identity: Any, execution_context: Any = None) -> None:
+                 initial_evidence: Any, bind_schema_identity: Any,
+                 execution_context: Any = None) -> None:
         semantic = _identity(semantic_identity, "semantic", where="semantic_identity")
         artifact = _identity(artifact_identity, "artifact", where="artifact_identity")
         schema_id = _identity(bind_schema_identity, "bind-schema", where="bind_schema_identity")
@@ -157,8 +157,7 @@ class BoundSnapshot:
             ("layout", layout), ("blocks", list(blocks)), ("solvers", solvers),
             ("step_transaction", step_transaction), ("params", list(params)),
             ("aux_evidence", aux_evidence),
-            ("initial_evidence", initial_evidence), ("outputs", list(outputs)),
-            ("diagnostics", list(diagnostics)),
+            ("initial_evidence", initial_evidence),
             ("execution_context", execution_context),
         ):
             object.__setattr__(self, name, _freeze(_data(value, where=name), where=name))
@@ -178,8 +177,6 @@ class BoundSnapshot:
             "params": _thaw(self.params),
             "aux_evidence": _thaw(self.aux_evidence),
             "initial_evidence": _thaw(self.initial_evidence),
-            "outputs": _thaw(self.outputs),
-            "diagnostics": _thaw(self.diagnostics),
             "bind_schema_identity": self.bind_schema_identity.to_data(),
             "execution_context": _thaw(self.execution_context),
         }
@@ -280,10 +277,6 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
         initial_evidence=_input_evidence(
             {name: spec["initial"] for name, spec in (instances or {}).items()
              if "initial" in spec}, where="initial_state"),
-        # Exact consumers are authenticated by the compiled artifact and owned by RuntimeInstance.
-        # The native BoundSnapshot deliberately carries no second policy registry.
-        outputs=(),
-        diagnostics=(),
         bind_schema_identity=_schema_identity(params),
         execution_context=getattr(engine, "_execution_context", None),
     )

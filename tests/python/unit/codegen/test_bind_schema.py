@@ -393,7 +393,7 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
             layout={"kind": "uniform"}, blocks=[], solvers={},
             step_transaction=None,
             params=resolved.rows(),
-            aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+            aux_evidence={}, initial_evidence={},
             bind_schema_identity=make_identity("bind-schema", schema.to_dict()),
         )
 

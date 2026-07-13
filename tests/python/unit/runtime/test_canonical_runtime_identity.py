@@ -33,7 +33,7 @@ def _bound_snapshot():
                  "spatial": {"flux": "hll"}, "evolve": True}],
         solvers={},
         step_transaction=StepTransactionPlan(FixedDt(0.1)).to_data(),
-        params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
 
@@ -41,8 +41,12 @@ def _bound_snapshot():
 def test_bound_snapshot_has_domain_separated_bind_identity_and_json_view():
     snapshot = _bound_snapshot()
     assert snapshot.bind_identity.domain == "bind"
-    assert snapshot.to_dict()["bind_identity"]["hexdigest"] == snapshot.bind_identity.hexdigest
-    json.dumps(snapshot.to_dict(), allow_nan=False)
+    payload = snapshot.to_dict()
+    assert payload["schema_version"] == 6
+    assert payload["bind_identity"]["hexdigest"] == snapshot.bind_identity.hexdigest
+    assert "outputs" not in payload and "diagnostics" not in payload
+    assert not hasattr(snapshot, "outputs") and not hasattr(snapshot, "diagnostics")
+    json.dumps(payload, allow_nan=False)
 
 
 def test_bound_snapshot_projects_execution_context_identity_digest_without_loss():
@@ -51,7 +55,7 @@ def test_bound_snapshot_projects_execution_context_identity_digest_without_loss(
         semantic_identity=make_identity("semantic", {}),
         artifact_identity=make_identity("artifact", {}),
         layout={"kind": "uniform"}, blocks=[], solvers={}, step_transaction={}, params=[],
-        aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {}),
         execution_context={"backend_identity": identity.to_data()},
     )
@@ -67,7 +71,6 @@ def test_bound_snapshot_refuses_repr_based_extension():
             artifact_identity=make_identity("artifact", {}),
             layout={"kind": "uniform"}, blocks=[], solvers={"phi": object()},
             step_transaction={}, params=[], aux_evidence={}, initial_evidence={},
-            outputs=[], diagnostics=[],
             bind_schema_identity=make_identity("bind-schema", {}),
         )
 
