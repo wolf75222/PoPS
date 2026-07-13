@@ -1,9 +1,9 @@
 """Typed native route API over the generated schema-v2 component catalog.
 
-Every algorithmic choice (Riemann flux, limiter, reconstructed variables, time treatment,
-splitting, field solver, Poisson boundary condition, layout, model bricks) is identified by a
+Every native algorithmic choice (Riemann flux, limiter, reconstructed variables, time treatment,
+field solver, Poisson boundary condition, layout, model bricks) is identified by a
 typed :class:`Route`, not by a free string. The typed descriptors (``pops.numerics`` /
-``pops.solvers`` / the time bricks) lower to these Routes; the ONLY places that emit the legacy
+``pops.solvers`` / the time presets) lower to these Routes; the ONLY places that emit the
 wire token toward the C++ ABI are the bounded adapters (``pops.runtime._system_install`` and
 ``pops.codegen.compile_emit``), and they emit ``str(route)`` -- a :class:`Route` IS its wire
 token (``str`` subclass), so the crossing stays byte-identical while the identity, requirements,
