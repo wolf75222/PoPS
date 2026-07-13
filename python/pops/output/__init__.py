@@ -1,7 +1,7 @@
 """Exact scientific-output and restart consumers plus their data protocols."""
 from .consumers import Checkpoint, ScientificOutput
 from .levels import AllLevels, CoarseOnly, LevelSelection, SelectedLevels
-from .formats import FormatInterface, HDF5, NPZ, ParaView, Plotfile
+from .formats import FormatInterface, HDF5, NPZ, ParaView
 from .data import (
     ArrayPiece, DiagnosticKey, DiagnosticPayload, FieldKey, FieldPayload, LevelGeometry, OutputClock,
     OutputProvenance, OutputRequest, OutputSnapshot,
@@ -17,7 +17,7 @@ __all__ = [
     "Checkpoint", "ScientificOutput",
     "AllLevels", "CoarseOnly", "SelectedLevels",
     "LevelSelection",
-    "FormatInterface", "HDF5", "NPZ", "ParaView", "Plotfile",
+    "FormatInterface", "HDF5", "NPZ", "ParaView",
     "ArrayPiece", "DiagnosticKey", "DiagnosticPayload", "FieldKey", "FieldPayload",
     "LevelGeometry", "OutputClock",
     "OutputProvenance", "OutputRequest", "OutputSnapshot", "BalanceTerms",

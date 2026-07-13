@@ -69,7 +69,7 @@ def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
 
     assert hasattr(output, "ScientificOutput")
     assert hasattr(output, "Checkpoint")
-    for removed in ("RuntimePolicies", "OutputPolicy", "CheckpointPolicy"):
+    for removed in ("RuntimePolicies", "OutputPolicy", "CheckpointPolicy", "Plotfile"):
         assert not hasattr(output, removed)
 
 

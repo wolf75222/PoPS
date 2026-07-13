@@ -1,14 +1,10 @@
-"""pops.output.formats -- typed output-format descriptors (Spec 5 sec.5.14).
-
-A format is a typed object (``HDF5()`` / ``Plotfile()``), not a string ``format="hdf5"``.
-Inert; the runtime writes the actual files.
-"""
+"""Exact output formats backed by independently verifiable writers."""
 from __future__ import annotations
 
 from typing import Any
 
 from pops.descriptors import Descriptor
-from pops.descriptors_report import CapabilitySet, RequirementSet
+from pops.descriptors_report import RequirementSet
 
 
 class FormatInterface(Descriptor):
@@ -77,13 +73,4 @@ class ParaView(FormatInterface):
         return ParaViewWriter()
 
 
-class Plotfile(Descriptor):
-    """AMReX-style plotfile output (per-level directories)."""
-
-    category = "output_format"
-
-    def capabilities(self) -> Any:
-        return CapabilitySet({"per_level": True})
-
-
-__all__ = ["FormatInterface", "HDF5", "NPZ", "ParaView", "Plotfile"]
+__all__ = ["FormatInterface", "HDF5", "NPZ", "ParaView"]
