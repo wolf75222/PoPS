@@ -165,6 +165,118 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system") -> tuple
     body_src = "\n".join("    " + ln for ln in lines)
     return prelude_src, body_src
 
+
+def _emit_amr_hierarchy_bodies(program: Any, model: Any = None) -> tuple | None:
+    """Emit gather / solve-once / publish regions for one hierarchy-scoped linear solve.
+
+    The transform keys only on the generic solve scope.  It does not recognize a physical scheme.
+    Multiple hierarchy barriers are rejected until the region scheduler can represent them explicitly.
+    """
+    from pops.codegen.program_emit_ops import _emit_op
+    solves = [v for v in program._values if v.op == "solve_linear"]
+    scoped = [v for v in solves if v.attrs.get("scope") == "hierarchy"]
+    if not scoped:
+        return None
+    if len(scoped) != 1 or len(solves) != 1:
+        raise NotImplementedError(
+            "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; multiple "
+            "hierarchy barriers require an explicit region schedule")
+    solve = scoped[0]
+    if solve.attrs.get("hierarchy_provider") != "composite_tensor_fac":
+        raise NotImplementedError(
+            "AMR hierarchy-scoped solve provider %r is not lowerable; supported provider: "
+            "CompositeTensorFAC()" % solve.attrs.get("hierarchy_provider"))
+    split = next(index for index, value in enumerate(program._values) if value is solve)
+    control = {"while", "range", "branch"}
+    nested = [v.name for v in program._values if v.op in control]
+    if nested:
+        raise NotImplementedError(
+            "a hierarchy-scoped solve must be a top-level barrier; control-flow regions %r cannot "
+            "cross the gather/solve/publish boundary" % nested)
+
+    # Values crossing from gather into the solve/publish regions must name storage whose lifetime is
+    # wider than one per-level loop iteration.  This is the load-bearing refusal that prevents a local
+    # C++ temporary from being referenced after the loop that declared it.  Alias ops are admitted only
+    # when their storage input is itself portable.
+    portable_ops = {"state", "history", "scalar_field", "matrix_free_operator", "condensed_coeffs"}
+    portable = {v.id for v in program._values[:split] if v.op in portable_ops}
+    changed = True
+    aliases = {"solve_fields": 0, "condensed_rhs": 0, "laplacian": 0,
+               "gradient": 0, "divergence": 0, "fill_boundary": 0}
+    while changed:
+        changed = False
+        for value in program._values[:split]:
+            source_index = aliases.get(value.op)
+            if (source_index is not None and len(value.inputs) > source_index
+                    and value.inputs[source_index].id in portable and value.id not in portable):
+                portable.add(value.id)
+                changed = True
+    solve_inputs = [item.id for item in solve.inputs]
+    missing_solve = [item for item in solve_inputs if item not in portable]
+    if missing_solve:
+        raise NotImplementedError(
+            "hierarchy-scoped solve inputs must use persistent/state/history storage across the "
+            "level barrier; non-portable value ids %r" % missing_solve)
+    available = set(portable)
+    available.add(solve.id)
+    for value in program._values[split + 1:]:
+        missing = [item.id for item in value.inputs if item.id not in available]
+        if missing:
+            raise NotImplementedError(
+                "hierarchy publish node %r depends on gather-local value ids %r; materialize the "
+                "value in persistent storage or move it after the hierarchy solve"
+                % (value.name, missing))
+        available.add(value.id)
+    block_idx = program._block_indices()
+    bases = {}
+    for value in program._values:
+        if value.op == "state" and value.block not in bases:
+            bases[value.block] = value
+    committed_ids = {state.id for state in program._commits.values()}
+    binding_ops = frozenset({"state", "history", "scalar_field", "matrix_free_operator"})
+
+    def registrations() -> list[str]:
+        lines = []
+        ncomps = getattr(program, "_histories_ncomp", {})
+        for name, lag in sorted(program._histories.items()):
+            ncomp = ncomps.get(name)
+            if ncomp is None:
+                lines.append("ctx.register_history(%s, %d);" % (json.dumps(name), int(lag)))
+            else:
+                lines.append("ctx.register_history(%s, %d, %d);"
+                             % (json.dumps(name), int(lag), int(ncomp)))
+        return lines
+
+    def emit_phase(phase: str) -> str:
+        var = {}
+        lines = registrations() if phase == "gather" else []
+        for index, value in enumerate(program._values):
+            emitted = []
+            ignored_prelude = []
+            _emit_op(program, value, bases.get(value.block), committed_ids, var, model, emitted,
+                     ignored_prelude, block_idx, target="amr_system")
+            if phase == "gather":
+                keep = index < split
+            elif phase == "solve":
+                keep = index == split or (index < split and value.op in binding_ops)
+            else:
+                keep = index > split or (index < split and value.op in binding_ops)
+            if keep:
+                lines.extend(emitted)
+        if phase == "publish":
+            for state_ref, committed in program._commits.items():
+                base = bases[state_ref.block_ref]
+                if var[committed.id] != var[base.id]:
+                    lines.append(
+                        "ctx.lincomb(%s, static_cast<pops::Real>(0), %s, "
+                        "static_cast<pops::Real>(1), %s);"
+                        % (var[base.id], var[base.id], var[committed.id]))
+            if program._histories:
+                lines.append("ctx.rotate_histories();")
+        return "\n".join("    " + line for line in lines)
+
+    return emit_phase("gather"), emit_phase("solve"), emit_phase("publish")
+
 def _emit_while(program: Any, v: Any, base: Any, var: Any, model: Any, lines: Any, block_idx: Any = None) -> None:
     """Lower a while op to an infinite C++ loop with a break (the condition re-evaluates each pass).
     The loop variable is a single MultiFab mutated IN PLACE across iterations; the cond / body sub-

@@ -91,7 +91,7 @@ def _spatial():
     return pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
 
 
-def _condensed_program(model, *, block="plasma", theta=1.0):
+def _condensed_program(model, *, block="plasma", theta=1.0, tol=1.0e-10, max_iter=400):
     """Author the condensed preset against the exact bound local-linear declaration."""
     from pops.model import OperatorHandle
     from pops.time import Program
@@ -104,7 +104,8 @@ def _condensed_program(model, *, block="plasma", theta=1.0):
     program = Program("condensed_schur").bind_operators(model)
     _case, states = program_states(program, model, (block,))
     lib_time.condensed_schur(
-        program, states[block], alpha=1.0, theta=theta, linear_operator=handle)
+        program, states[block], alpha=1.0, theta=theta, tol=tol, max_iter=max_iter,
+        linear_operator=handle)
     return program
 
 
@@ -502,6 +503,53 @@ def test_clean_amr_schur_program_compiles_installs_and_runs():
     chk(abs(mass - m0) < 1e-9,
         "the condensed-Schur Program on AMR conserves the coarse mass (|m - m0| = %.2e)"
         % abs(mass - m0))
+
+
+def test_refined_amr_schur_program_solves_hierarchy_once_with_relative_tolerance():
+    """ADC-648: a live two-level hierarchy gathers every level, performs one composite FAC solve,
+    then reconstructs every level.  The public ``solve_linear`` tolerance is relative: ``1e-8`` must
+    not be forwarded to FAC as an arbitrary absolute residual threshold.  A successful step therefore
+    exercises both the relative-to-absolute provider adapter and the report conversion; ``FailRun``
+    would raise if the returned relative residual exceeded the requested tolerance.
+
+    This is the executable counterpart of the source-ordering test: a density bump must create a fine
+    patch before the installed Program steps, and both coarse and fine state remain finite afterwards.
+    """
+    print("== ADC-648: refined condensed Program gathers, solves once, and publishes all levels ==")
+    n = 16
+    x = (np.arange(n) + 0.5) / n
+    xx, yy = np.meshgrid(x, x, indexing="ij")
+    u0 = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
+    bz0 = 4.0 * np.ones((n, n))
+    model = _schur_model("adc648_refined_schur")
+    program = _condensed_program(model, tol=1.0e-8, max_iter=400)
+    try:
+        from pops.codegen.compile_drivers import compile_problem
+        compiled = compile_problem(model=model, time=program, target="amr_system")
+        block_cm = model.compile(backend="production", target="amr_system")
+    except RuntimeError as exc:
+        print("skip (compile refined condensed Program: %s)" % str(exc)[:200])
+        return
+
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim.set_refinement(1.25)
+    sim.set_magnetic_field(bz0)
+    sim.add_equation("plasma", block_cm, spatial=_spatial(),
+                     time=pops.Explicit(method="ssprk2"))
+    sim.set_density("plasma", u0)
+    sim.install_program(compiled.so_path)
+    boxes = sim.patch_boxes()
+    chk(any(int(box[0]) == 1 for box in boxes),
+        "the acceptance run owns a populated fine level (boxes = %r)" % (boxes,))
+    if not boxes:
+        return
+
+    mass0 = float(sim.mass("plasma"))
+    sim.step(1.0e-3)
+    coarse = np.asarray(sim.density("plasma"))
+    chk(np.isfinite(coarse).all(), "the coarse state remains finite after the hierarchy solve")
+    chk(abs(float(sim.mass("plasma")) - mass0) <= 1.0e-9 * max(abs(mass0), 1.0),
+        "the hierarchy-scoped source reconstruction preserves composite mass")
 
 
 def _clean_amr_schur_run(theta, name):

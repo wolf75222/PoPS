@@ -347,7 +347,12 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (sol_sp, op_ncomp))
-    var[v.id] = "(*%s)" % sol_sp  # token: the dereferenced solution MultiFab
+    # On a refined AMR hierarchy the mathematical solution is one field per level.  The persistent
+    # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
+    # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
+    var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
+                 if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
+                 else "(*%s)" % sol_sp)
     # Initial guess: zero (default) or a copy of the guess field.
     if guess_in is None:
         lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)

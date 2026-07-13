@@ -228,6 +228,8 @@ class ProgramContext {
     validate_assembly_read_role(role, "ProgramContext::assembly_source");
     return field;
   }
+  /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
+  MultiFab& linear_solution(MultiFab& field) const { return field; }
 
   /// Solve the matrix-free linear system A(phi) = rhs of a compiled Program (ADC-633). On the uniform
   /// System this dispatches by @p method to the SAME matrix-free Krylov call the codegen used to emit

@@ -68,6 +68,7 @@ class AmrProgramContext {
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   int nlev() const { return eng_->nlev(); }
+  bool has_refined_hierarchy() const { return condensed_elliptic().has_fine_patches(); }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
@@ -455,6 +456,12 @@ class AmrProgramContext {
       return field;
     return s.phi(level_);
   }
+  /// Resolve a hierarchy-scoped solve value for the current publish/reconstruct pass.  Flat AMR is
+  /// the identity; a refined hierarchy returns the level solution published by the one composite solve.
+  MultiFab& linear_solution(MultiFab& field) const {
+    AmrCondensedElliptic& s = condensed_elliptic();
+    return s.has_fine_patches() ? s.phi(level_) : field;
+  }
   /// Solve the matrix-free condensed-implicit linear system A(phi) = rhs on the hierarchy (ADC-633).
   /// FLAT (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics,
   /// the flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
@@ -491,11 +498,9 @@ class AmrProgramContext {
           return report;  // validated above
       }
     }
-    // Refined: the per-level coefficients / RHS are already assembled into AmrCondensedElliptic (through
-    // assembly_target on the prior per-level assembly calls); drive the composite FAC over the whole tower.
-    // The composite FAC currently exposes no per-solve report. Refuse to publish a solved value from
-    // this seam until the composite branch can report its own status.
-    return SolveReport::capability_failure();
+    // Refined: the hierarchy driver calls this seam once, after every level has assembled.  FAC publishes
+    // every level before the reconstruct pass starts, so no level can observe a partial solution.
+    return s.solve_composite(tol, max_iter);
   }
 
   // --- named-flux primitive: DEFERRED on AMR (v1), fail loud -----------------------------------------

@@ -257,7 +257,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
 
     def matrix_free_operator(self, name: Any, domain: Any = "scalar", range_: Any = "scalar",
-                             ncomp: Any = None) -> Any:
+                             ncomp: Any = None, *, scope: Any = None, provider: Any = None) -> Any:
         """Declare a matrix-free operator ``A : domain -> range_``. @p domain / @p range_ are the field
         kind on each side and MUST match (a square operator: the Krylov iterate, residual and solution
         share one layout): ``"scalar"`` (a 1-component scalar field, the default), or ``"vector"`` /
@@ -284,9 +284,22 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 raise ValueError(
                     "matrix_free_operator: a %r operator requires ncomp (an int >= 1); got ncomp=%r"
                     % (domain, ncomp))
-        return self._new("matrix_free_op", "matrix_free_operator", (),
-                         {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
-                          "apply_result": None, "apply_in": None, "apply_out": None}, name, None)
+        from pops.solvers.scopes import solve_scope_id
+        from pops.solvers.providers import hierarchy_provider_id
+        scope_id = solve_scope_id(scope)
+        provider_id = hierarchy_provider_id(provider)
+        if scope_id == "hierarchy" and provider_id is None:
+            raise ValueError(
+                "matrix_free_operator: Hierarchy() requires an explicit native provider; "
+                "use CompositeTensorFAC() for a tensor elliptic hierarchy")
+        if scope_id != "hierarchy" and provider_id is not None:
+            raise ValueError("matrix_free_operator: a hierarchy provider requires scope=Hierarchy()")
+        attrs = {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
+                 "apply_result": None, "apply_in": None, "apply_out": None}
+        if scope_id != "level":
+            attrs["scope"] = scope_id
+            attrs["hierarchy_provider"] = provider_id
+        return self._new("matrix_free_op", "matrix_free_operator", (), attrs, name, None)
 
     @atomic_authoring
     def set_apply(self, operator: Any, body_fn: Any) -> Any:
@@ -326,6 +339,23 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         apply_region = self._region_for_block(sub)
         require_affine_region(self, result, apply_region, "set_apply")
         attrs = dict(operator.attrs)
+        captured_scopes = {
+            item.attrs.get("scope", "level")
+            for node in block for item in node.inputs
+            if isinstance(item, ProgramValue)
+        }
+        if "hierarchy" in captured_scopes:
+            attrs["scope"] = "hierarchy"
+        providers = {
+            item.attrs.get("hierarchy_provider")
+            for node in block for item in node.inputs
+            if isinstance(item, ProgramValue) and item.attrs.get("hierarchy_provider") is not None
+        }
+        if len(providers) > 1:
+            raise ValueError("set_apply: one operator cannot capture competing hierarchy providers %r"
+                             % sorted(providers))
+        if providers:
+            attrs["hierarchy_provider"] = next(iter(providers))
         attrs.update({
             "apply_block": block,
             "apply_region": apply_region,
