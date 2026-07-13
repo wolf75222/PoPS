@@ -32,7 +32,7 @@ class _ProgramDump(_ProgramBase):
             lines.append("  " + self._render_node(value))
         for state_ref, state in self._commits.items():
             lines.append(
-                "  T.commit(T.state(%s, %s).next, %s)"
+                "  T.commit(T.state(%s[%s]).next, %s)"
                 % (
                     block_name(state_ref.block_ref),
                     state_name(state_ref),

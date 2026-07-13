@@ -104,7 +104,7 @@ class _ProgramHistory(_ProgramBase):
         from pops.time.handles import TimeState
         if not isinstance(timestate, TimeState):
             raise ValueError(
-                "keep_history: a TimeState handle is required (T.state(block, U))")
+                "keep_history: a TimeState handle is required (T.state(block[U]))")
         return self._configure_time_history(
             timestate, depth, cold_start, checkpoint_policy)
 

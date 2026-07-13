@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.model.handles import Handle
-from pops.model.ownership import DoubleOwnershipError, OwnerKind, OwnerPath
+from pops.model.ownership import MissingOwnershipError, OwnerKind, OwnerPath
 
 
 def bind_program_block(program: Any, block: Any, *, where: str) -> Any:
@@ -54,19 +54,16 @@ def bind_program_block(program: Any, block: Any, *, where: str) -> Any:
     return block
 
 
-def bind_state_reference(block: Any, declaration: Any) -> tuple[Any, Handle]:
-    """Authenticate ``declaration`` in ``block`` and return its qualified instance.
+def bind_state_reference(program: Any, declaration: Any) -> tuple[Any, Handle]:
+    """Authenticate one already-qualified state and bind its exact model registry.
 
-    ``Program.state(block, U)`` deliberately takes the model-local declaration
-    ``U``: accepting ``block[U]`` as the second argument would make the block
-    argument redundant and would hide accidental double qualification.
+    The sole authoring form is ``Program.state(block[U])``.  The instance handle is the one
+    non-redundant capability that identifies the Case, block, model declaration and state.  Its
+    issuing registry is also the authoritative route to the model's operator registry, so a user
+    never has to repeat ``bind_operators(model.module)`` beside an already-qualified state.
     """
     from pops.problem.handles import BlockHandle
 
-    if not isinstance(block, BlockHandle):
-        raise TypeError(
-            "Program.state: block must be a pops.problem.BlockHandle, not %s"
-            % type(block).__name__)
     if not isinstance(declaration, Handle):
         raise TypeError(
             "Program.state: state must be a declared Handle, not %s"
@@ -75,14 +72,31 @@ def bind_state_reference(block: Any, declaration: Any) -> tuple[Any, Handle]:
         raise TypeError(
             "Program.state: declaration %r has kind %r, expected 'state'"
             % (declaration.local_id, declaration.kind))
-    if declaration.is_instance:
-        raise DoubleOwnershipError(
-            "Program.state: pass the model state declaration as T.state(block, U), "
-            "not the already-qualified block[U]")
-    qualified = block[declaration]
-    if not qualified.is_instance or qualified.block_ref is not block:
+    if not declaration.is_instance:
+        raise MissingOwnershipError(
+            "Program.state: pass the block-qualified state as T.state(block[U]); an unqualified "
+            "model state cannot select one Case instance")
+    block = declaration.block_ref
+    if not isinstance(block, BlockHandle):
+        raise MissingOwnershipError(
+            "Program.state: qualified state is missing its issuing BlockHandle")
+    registry = getattr(block, "_instance_registry", None)
+    if registry is None:
+        raise MissingOwnershipError(
+            "Program.state: state %s is detached from its authoritative Case registry"
+            % declaration.qualified_id)
+    qualified = registry.qualify(declaration, allow_existing=True)
+    if qualified is not declaration:
+        raise MissingOwnershipError(
+            "Program.state: state %s was not issued by this Case registry"
+            % declaration.qualified_id)
+    if qualified.block_ref is not block:
         raise ValueError(
             "Program.state: block qualification did not return this block's state instance")
+    bind_program_block(program, block, where="Program.state")
+    model = registry.spec(block.local_id)["model"]
+    operator_source = getattr(model, "module", model)
+    program._bind_operators(operator_source)
     return block, qualified
 
 

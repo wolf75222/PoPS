@@ -327,8 +327,8 @@ class _ProgramCall(_ProgramBase):
             arg_space = getattr(self._canonical_value(a), "space", None)
             if arg_space is None:
                 raise ValueError(
-                    "operator %r requires a typed %s %r; bind its owner registry before "
-                    "T.state(block, U), or declare typed state metadata"
+                    "operator %r requires a typed %s %r; declare it through the authenticated "
+                    "T.state(block[U]) route"
                     % (op.name, t.kind, t.name))
             if arg_space != t:
                 raise ValueError(

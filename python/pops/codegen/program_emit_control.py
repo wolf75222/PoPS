@@ -54,7 +54,7 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
         if state_in is None or getattr(state_in, "space", None) is None:
             raise NotImplementedError(
                 "the coupled_rate kernel codegen (ADC-457) needs every output block to map to an "
-                "input State declared through T.state(block, U) with typed space metadata; operator %r "
+                "input State declared through T.state(block[U]) with typed space metadata; operator %r "
                 "block %r has none (node %r)" % (op_name, blk, v.name))
         ncons = len(state_in.space.components)
         if len(comps) != ncons:
@@ -84,7 +84,7 @@ def _coupled_rate_components(program: Any, v: Any) -> dict:
     if missing:
         raise NotImplementedError(
             "coupled_rate operator %r references cons var(s) %s that are a component of no input "
-            "state; declare them via T.state(block, U) or fix the formula (ADC-457, node %r)"
+            "state; declare them via T.state(block[U]) or fix the formula (ADC-457, node %r)"
             % (op_name, sorted(missing), v.name))
     return components
 

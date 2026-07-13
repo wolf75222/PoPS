@@ -156,7 +156,7 @@ def resolve_program_spaces(program: Any, model: Any) -> Any:
         return program
     resolved = program._rebuild(lambda _value: True, space_of=inferred)
     if type(model) is not ProgramModelGraph:
-        resolved.bind_operators(model)
+        resolved._bind_operators(model)
     # Per-state clocks/spaces are already carried by typed Programs. The legacy single-model route
     # alone may fill missing table entries from its unique state space.
     _single_registry = _registry(model) if type(model) is not ProgramModelGraph else None

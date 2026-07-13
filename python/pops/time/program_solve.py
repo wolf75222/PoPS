@@ -434,7 +434,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         Two forms (additive; the ``(name, value)`` board form is unchanged):
 
           - ``P.define("U1", U0 + dt * k0)`` (board sugar) names a value: an affine combination of
-            states materializes via ``linear_combine``, a ``rate(U) == <expr>`` equation keeps its
+            states materializes through the canonical affine IR, a ``rate(U) == <expr>`` equation keeps its
             right-hand side, and any other ProgramValue is named in place;
           - ``P.define(U.stage("predictor", point=...), U.n + dt * k0)`` assigns a generated SSA name to the
             stage and enforces single assignment. ``T.define(U.n, ...)`` raises because the
@@ -474,7 +474,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                                  % (name,))
             value = value.rhs
         if isinstance(value, _Affine):
-            return self.linear_combine(name, value, at=at)
+            return self._linear_combine(name, value, at=at)
         if isinstance(value, ProgramValue):
             return self._replace_value(
                 value, name=name, point=value.point if at is None else at)
@@ -486,7 +486,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
     def solve(self, name: Any, equation: Any, *, at: Any = None) -> Any:
         """Board sugar for an implicit local solve ``(I -/+ a*L) @ unknown("x") == rhs``.
 
-        Lowers to ``linear_combine`` (if the rhs is an affine combination) then
+        Lowers to the internal affine IR (if the rhs is an affine combination) then
         ``solve_local_linear``; identical IR to writing those two calls by hand.
         """
         from pops import math as _bm
@@ -496,7 +496,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if not isinstance(lhs, _bm.OpApply):
             raise ValueError("solve(%r): left-hand side must be 'operator @ unknown(name)'" % (name,))
         if isinstance(rhs, _Affine):
-            rhs = self.linear_combine(name + "_rhs", rhs, at=at)
+            rhs = self._linear_combine(name + "_rhs", rhs, at=at)
         elif not (isinstance(rhs, ProgramValue) and rhs.vtype == "state"):
             raise ValueError("solve(%r): right-hand side must be a State or an affine of States"
                              % (name,))

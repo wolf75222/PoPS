@@ -285,7 +285,7 @@ class StateHandle(Handle):
     """Registry-issued state identity carrying its authoritative :class:`StateSpace`.
 
     The space is declaration metadata, not a second identity axis. Carrying it on the handle lets
-    ``Program.state(block, state)`` stay typed without consulting a live Module registry.
+    ``Program.state(block[state])`` stay typed without consulting a live Module registry.
     """
 
     __slots__ = ("space",)

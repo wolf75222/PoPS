@@ -138,7 +138,7 @@ def emit_cpp_program(
     with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
     SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
 
-    Multi-block (ADC-426): N typed ``T.state(block, U)`` declarations + N ``T.commit``
+    Multi-block (ADC-426): N typed ``T.state(block[U])`` declarations + N ``T.commit``
     are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
     the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
     order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
@@ -289,7 +289,7 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
         block = state_ref.block_ref
         if block not in blocks:
             raise ValueError(
-                "commit of unknown block %r: no T.state(block, U) declares it "
+                "commit of unknown block %r: no T.state(block[U]) declares it "
                 "(declared blocks: %s)"
                 % (block_name(block), sorted(block_name(item) for item in blocks)))
     _check_schedules_lowerable(program)

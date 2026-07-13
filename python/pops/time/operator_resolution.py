@@ -22,7 +22,8 @@ def _bound_registry(program: Any, where: str, owner: Any = None) -> tuple[Any, A
     registries = getattr(program, "_operator_registries", None) or {}
     if not registries:
         raise ValueError(
-            "%s: no operators are bound; call P.bind_operators(the_declaring_model) first"
+            "%s: no operators are bound; declare an authenticated state with "
+            "P.state(block[state]) first"
             % where)
     if owner is None:
         if len(registries) != 1:

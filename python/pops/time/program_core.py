@@ -156,17 +156,16 @@ class _ProgramCore(
                     return replacement
         raise ValueError("ProgramValue #%d is not present in its Program" % current.id)
 
-    def state(self, block: Any, state: Any, *, clock: Any = None) -> Any:
+    def state(self, state: Any, *, clock: Any = None) -> Any:
         """Declare one block-qualified temporal state family.
 
-        The sole public form is ``T.state(block_handle, model_state_handle)``. The model-local state
-        is authenticated by the block's authoritative case registry and immediately qualified as
-        ``block[state]``. From this boundary onward the Program stores the qualified handle; neither
-        the block nor the state is ever represented by a free string.
+        The sole public form is ``T.state(block[state])``. The instance handle is authenticated by
+        its Case registry and already carries the exact block plus model declaration. From this
+        boundary onward the Program stores that qualified handle; neither identity is represented
+        by a free string and no redundant ``bind_operators`` call is required.
         """
         self._guard_mutable("declare a state")
-        block, qualified_state = bind_state_reference(block, state)
-        bind_program_block(self, block, where="Program.state")
+        block, qualified_state = bind_state_reference(self, state)
         space = getattr(qualified_state, "space", None)
         if space is None:
             space = self._default_state_spaces.get(block.model_owner_path)
@@ -262,37 +261,34 @@ class _ProgramCore(
             field_context=context, space=field_space)
 
     # --- operator-first calls (Spec 2) -------------------------------------------
-    def bind_operators(self, source: Any) -> Any:
-        """Bind a typed operator registry so ``P.call`` can resolve and type-check operators.
+    def _bind_operators(self, source: Any) -> Any:
+        """Bind a typed operator registry for an authenticated block state.
 
-        ``source`` is an ``pops.model.OperatorRegistry`` or any object exposing
-        ``operator_registry()`` (a ``dsl.Model`` / ``pops.model.Module``). Returns ``self`` for
-        chaining. The bound registry is build-time TYPE information only -- the codegen still reads
-        the model passed to ``compile_problem``; operator-first Programs and the ``pops.lib.time``
-        macros bind the module's operators here.
+        This is private assembly plumbing reached from :meth:`state`; public authoring selects the
+        owner once through ``T.state(block[U])``. The registry is build-time type information only.
         """
         self._guard_mutable("bind operators")
         reg = source.operator_registry() if hasattr(source, "operator_registry") else source
         if not (hasattr(reg, "get") and hasattr(reg, "names")):
-            raise TypeError("bind_operators: expected an OperatorRegistry or an object exposing "
+            raise TypeError("Program operator binding expected an OperatorRegistry or an object exposing "
                             "operator_registry(); got %r" % (source,))
         owner = getattr(reg, "owner_path", None)
         if owner is None:
             raise ValueError(
-                "bind_operators: registry must expose its authoritative OwnerPath owner_path")
+                "Program operator registry must expose its authoritative OwnerPath owner_path")
         existing = self._operator_registries.get(owner)
         if existing is not None:
             if existing is reg:
                 return self
             raise ValueError(
-                "bind_operators: owner %s is already bound to a different registry" % owner)
+                "Program owner %s is already bound to a different registry" % owner)
         canonical_owner = owner.canonical()
         collision = next(
             (bound_owner for bound_owner in self._operator_registries
              if bound_owner.canonical() == canonical_owner), None)
         if collision is not None:
             raise ValueError(
-                "bind_operators: distinct authoring registries claim canonical owner %s"
+                "distinct authoring registries claim canonical Program owner %s"
                 % canonical_owner)
         self._operator_registries[owner] = reg
         inferred = []
@@ -323,11 +319,10 @@ class _ProgramCore(
                     self._replace_value(value, space=field_space)
         return self
 
-    def linear_combine(
+    def _linear_combine(
         self, name: Any = None, expr: Any = None, *, at: Any = None
     ) -> Any:
-        """Materialize an affine combination of State/RHS values into a new State. Accepts
-        ``linear_combine(name, expr)`` or ``linear_combine(expr)``. The per-input coefficient
+        """Materialize an affine combination behind :meth:`Program.value`. The per-input coefficient
         polynomials in ``dt`` are recorded in ``attrs['coeffs']`` (aligned with ``inputs``).
 
         A combination whose terms are ALL ``scalar_field`` values materializes a ``scalar_field``

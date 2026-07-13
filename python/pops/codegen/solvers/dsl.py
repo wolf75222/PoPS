@@ -168,7 +168,7 @@ class SolverContext:
         if self._state is None:
             raise ValueError(
                 "SolverContext.unknown requires a typed TimeState; construct the context from "
-                "Program.state(block_handle, state_handle)")
+                "Program.state(block_handle[state_handle])")
         return self._state.n
 
     def zeros_like(self, value: Any) -> Any:
@@ -208,7 +208,7 @@ class SolverContext:
     def residual(self, operator: Any, x: Any, b: Any) -> Any:
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
         ax = self.apply(operator, x)
-        return self._p.linear_combine(expr=b - ax)
+        return self._p._linear_combine(expr=b - ax)
 
     def combine(self, expr: Any) -> Any:
         """Materialize an affine IR expression (e.g. ``x + omega*r``) into a State IR node.
@@ -216,7 +216,7 @@ class SolverContext:
         The affine ``x + omega*r`` is a deferred IR expression; this records it as one
         ``linear_combine`` node (the next iterate). ``omega`` is an IR literal coefficient,
         never multiplied against data in Python."""
-        return self._p.linear_combine(expr=expr)
+        return self._p._linear_combine(expr=expr)
 
     # --- predicates ---------------------------------------------------------
     def logical_and(self, a: Any, b: Any) -> Any:
