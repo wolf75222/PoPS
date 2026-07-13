@@ -125,6 +125,44 @@ class _BoundaryAuthority:
         return _ReferenceAuthority("boundary", context.resolve(self.reference))
 
 
+@dataclass(frozen=True)
+class _ExternalRateMethod:
+    inner: object
+
+    def validate(self, context=None):
+        return self.inner.validate(context)
+
+    def validate_rate_contract(self, contract):
+        return self.inner.validate_rate_contract(contract)
+
+    def resolve_references(self, resolver):
+        return type(self)(self.inner.resolve_references(resolver))
+
+    def to_data(self):
+        return {"extension": "external-rate-method", "inner": self.inner.to_data()}
+
+    def freeze(self):
+        self.inner.freeze()
+        return self
+
+
+def test_rate_family_accepts_a_small_external_method_protocol() -> None:
+    _, model, state, _, rate, method = _declarations()
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, _ExternalRateMethod(method))
+    case = pops.Case("external-method")
+    block = case.block("tracer", model)
+    case.numerics(plan, block=block)
+    from pops.lib.time import SSPRK2
+
+    case.program(SSPRK2(block[state], rate=rate))
+    resolved = pops.resolve(
+        pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))
+
+    assert resolved.blocks[0].numerics.rates[0].method.to_data()["extension"] \
+        == "external-rate-method"
+
+
 def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None:
     _, model, state, flux, rate, method = _declarations()
     plan = DiscretizationPlan()

@@ -9,7 +9,21 @@ from typing import Any
 from pops.descriptors import Descriptor
 from pops.identity import Identity, semantic_identity
 from pops.model import Handle, OperatorHandle, OwnerKind
-from pops.numerics.spatial import FiniteVolume
+
+
+_RATE_METHOD_PROTOCOL = (
+    "validate", "validate_rate_contract", "resolve_references", "to_data", "freeze",
+)
+
+
+def _require_rate_method(value: Any, where: str) -> Any:
+    missing = [name for name in _RATE_METHOD_PROTOCOL if not callable(getattr(value, name, None))]
+    if missing:
+        raise TypeError(
+            "%s must implement the small rate-method protocol; missing=%s"
+            % (where, missing)
+        )
+    return value
 
 
 def _callable_projection(value: Any, where: str) -> dict[str, Any]:
@@ -79,7 +93,7 @@ class _RateFamily:
     """Unique rate-to-method bindings; expressions can never become mapping keys."""
 
     def __init__(self) -> None:
-        self._rows: list[tuple[OperatorHandle, FiniteVolume]] | tuple[tuple[OperatorHandle, FiniteVolume], ...] = []
+        self._rows: list[tuple[OperatorHandle, Any]] | tuple[tuple[OperatorHandle, Any], ...] = []
         self._frozen = False
 
     def add(self, rate: Any, method: Any) -> None:
@@ -87,13 +101,12 @@ class _RateFamily:
             raise RuntimeError("DiscretizationPlan.rates is frozen")
         if not isinstance(rate, OperatorHandle) or rate.kind not in {"local_rate", "coupled_rate"}:
             raise TypeError("rates.add requires a typed rate OperatorHandle")
-        if type(method) is not FiniteVolume:
-            raise TypeError("rates.add currently requires an exact FiniteVolume descriptor")
+        _require_rate_method(method, "rates.add method")
         if any(existing == rate for existing, _ in self._rows):
             raise ValueError("rate %s already has a numerical method" % rate.qualified_id)
         self._rows.append((rate, method))
 
-    def items(self) -> tuple[tuple[OperatorHandle, FiniteVolume], ...]:
+    def items(self) -> tuple[tuple[OperatorHandle, Any], ...]:
         return tuple(self._rows)
 
     def freeze(self) -> None:
@@ -179,13 +192,15 @@ class _ValueFamily:
 @dataclass(frozen=True, slots=True)
 class ResolvedRateMethod:
     rate: OperatorHandle
-    method: FiniteVolume
+    method: Any
 
     def __post_init__(self) -> None:
         if not isinstance(self.rate, OperatorHandle) or not self.rate.is_resolved:
             raise TypeError("ResolvedRateMethod.rate must be owner-qualified")
-        if type(self.method) is not FiniteVolume or not self.method.flux.is_resolved:
-            raise TypeError("ResolvedRateMethod.method must have resolved physical handles")
+        _require_rate_method(self.method, "ResolvedRateMethod.method")
+        data = self.method.to_data()
+        if not isinstance(data, dict):
+            raise TypeError("ResolvedRateMethod.method.to_data() must return a dict")
         self.method.freeze()
 
     def to_data(self) -> dict[str, Any]:
@@ -283,7 +298,7 @@ class ResolvedDiscretizationPlan:
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.token}
 
-    def primary_spatial(self) -> FiniteVolume:
+    def primary_spatial(self) -> Any:
         """Compatibility projection for the current per-block native spatial ABI.
 
         The resolved plan retains every per-rate binding. The native engine currently accepts one
@@ -345,15 +360,7 @@ class DiscretizationPlan(Descriptor):
             raise ValueError("DiscretizationPlan has no rate binding for Model %r" % model.name)
         for rate, method in selected.items():
             contract = model.rate_contract(rate)
-            if contract["flux"] != method.flux:
-                raise ValueError(
-                    "FiniteVolume flux does not match the physical flux referenced by rate %r"
-                    % rate.local_id)
-            state = method.variables.options.get("state")
-            if state is not None and state != contract["state"]:
-                raise ValueError(
-                    "FiniteVolume variables do not reference the state differentiated by rate %r"
-                    % rate.local_id)
+            method.validate_rate_contract(contract)
             method.validate()
         return True
 

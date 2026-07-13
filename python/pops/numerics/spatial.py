@@ -179,6 +179,19 @@ class FiniteVolume(Descriptor):
         self.ghost_depth
         return True
 
+    def validate_rate_contract(self, contract: Any) -> bool:
+        """Prove this method discretizes the exact physical flux and evolved state."""
+        if not isinstance(contract, Mapping) or "flux" not in contract or "state" not in contract:
+            raise TypeError("FiniteVolume requires a rate contract containing flux and state")
+        if contract["flux"] != self.flux:
+            raise ValueError(
+                "FiniteVolume flux does not match the physical flux referenced by the rate")
+        state = self.variables.options.get("state")
+        if state is not None and state != contract["state"]:
+            raise ValueError(
+                "FiniteVolume variables do not reference the state differentiated by the rate")
+        return True
+
     def resolve_references(self, resolver: Any) -> "FiniteVolume":
         if not callable(resolver):
             raise TypeError("FiniteVolume.resolve_references requires a resolver")
