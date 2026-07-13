@@ -36,7 +36,7 @@ _SUBMODULES = frozenset({
     "amr", "boundary", "codegen", "diagnostics", "domain", "external", "fields", "frames",
     "identity", "initial", "interfaces", "ir", "layouts", "lib", "linalg", "math", "mesh",
     "model", "moments", "numerics", "output", "params", "physics", "projection",
-    "representations", "restart", "runtime", "schedule", "solvers", "spaces", "time",
+    "representations", "runtime", "solvers", "spaces", "time",
 })
 
 def __getattr__(name: str) -> Any:

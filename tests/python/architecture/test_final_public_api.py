@@ -47,6 +47,9 @@ def test_root_contract_is_exact_and_does_not_load_native_code() -> None:
     assert "pops._pops" not in sys.modules
     for removed in _retired_names():
         assert not hasattr(pops, removed)
+    for absent_submodule in ("restart", "schedule"):
+        assert absent_submodule not in dir(pops)
+        assert not hasattr(pops, absent_submodule)
 
 
 def test_case_authoring_validation_and_inspection_are_pure_python() -> None:
