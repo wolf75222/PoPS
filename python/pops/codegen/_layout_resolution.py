@@ -74,7 +74,9 @@ def validate_layout(problem: Any, layout: Any) -> None:
     capabilities = to_dict() if callable(to_dict) else capabilities
     if not isinstance(capabilities, Mapping):
         raise TypeError("layout capabilities() must project to a mapping")
-    supports_amr = bool(capabilities.get("supports_amr", False))
+    supports_amr = capabilities.get("supports_amr", False)
+    if type(supports_amr) is not bool:
+        raise TypeError("layout capability supports_amr must be an exact bool")
     if getattr(layout, "refine", None) is not None and not supports_amr \
             and getattr(layout, "ignore_amr", None) is None:
         raise ValueError(
@@ -168,7 +170,9 @@ def resolve_layout(problem: Any, layout: Any, *, providers: Any = None) \
         states=subjects["states"],
         fields=subjects["fields"],
         blocks=subjects["blocks"],
-        handle_resolver=problem.resolve,
+        handle_resolver=lambda value: (
+            value if getattr(value, "is_resolved", False) else problem.resolve(value)
+        ),
     )
     plan.validate_subjects(**subjects)
     return ResolvedLayoutAuthority(plan, runtime_descriptor)
@@ -205,30 +209,25 @@ def _select_runtime_provider(plan: Any, providers: Any) -> Any:
 
 
 def _resolve_descriptor(problem: Any, selected: Any) -> Any:
-    """Merge Problem policies and authenticate descriptor Handle leaves through protocols."""
-    from pops.mesh.layouts import AMR, Uniform
+    """Authenticate any layout implementation through one fail-closed extension protocol."""
+    protocol = getattr(selected, "resolve_for_case", None)
+    if not callable(protocol):
+        raise TypeError(
+            "pops.resolve layout descriptors must implement resolve_for_case(resolver); "
+            "concrete layout classes and names are never dispatched centrally"
+        )
 
-    def resolved(value: Any) -> Any:
-        if value is None:
-            return None
-        protocol = getattr(value, "resolve_references", None)
-        return protocol(problem.resolve) if callable(protocol) else value
+    def resolver(value: Any) -> Any:
+        return value if getattr(value, "is_resolved", False) else problem.resolve(value)
 
-    if isinstance(selected, Uniform):
-        return Uniform(
-            mesh=selected.mesh, embedded_boundary=selected.embedded_boundary,
-            refine=resolved(selected.refine), ignore_amr=selected.ignore_amr)
-    if not isinstance(selected, AMR):
-        raise TypeError("pops.resolve layout must be a typed descriptor or LayoutPlan")
-
-    refine = resolved(selected.refine)
-    if refine is not None and not getattr(refine, "references_authenticated", False):
-        raise ValueError("pops.resolve: AMR refinement references are not authenticated")
-    return AMR(
-        base=selected.base, max_levels=selected.max_levels, ratio=selected.ratio,
-        regrid=selected.regrid, patches=selected.patches, refine=refine,
-        nesting=selected.nesting, checkpoint=selected.checkpoint,
-        output=resolved(selected.output), clustering=selected.clustering)
+    descriptor = protocol(resolver)
+    if descriptor is None or not all(callable(getattr(descriptor, name, None)) for name in (
+            "validate", "capabilities", "requirements", "options")):
+        raise TypeError(
+            "layout resolve_for_case() must return a typed descriptor implementing the "
+            "layout metadata protocol"
+        )
+    return descriptor
 
 
 def _authenticate_runtime_descriptor(plan: Any, descriptor: Any) -> None:

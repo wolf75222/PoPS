@@ -114,6 +114,33 @@ class Uniform(MeshDescriptor):
     def capabilities(self) -> Any:
         return CapabilitySet({"layout": "uniform", "levels": 1, "supports_amr": False})
 
+    def resolve_for_case(self, resolver: Any) -> Uniform:
+        """Authenticate optional declaration leaves through the common layout protocol."""
+        if not callable(resolver):
+            raise TypeError("Uniform.resolve_for_case requires a callable Handle resolver")
+        refine = self.refine
+        if refine is not None:
+            protocol = getattr(refine, "resolve_references", None)
+            if not callable(protocol):
+                raise TypeError("Uniform.refine must implement resolve_references(resolver)")
+            refine = protocol(resolver)
+        return type(self)(
+            mesh=self.mesh,
+            embedded_boundary=self.embedded_boundary,
+            refine=refine,
+            ignore_amr=self.ignore_amr,
+        )
+
+    def validate(self, context: Any = None) -> bool:
+        if self.refine is not None and self.ignore_amr is None:
+            raise ValueError(
+                "Uniform layout cannot consume AMR refinement criteria; remove the criterion, "
+                "choose AMR, or declare IgnoreAMRCriteria() explicitly"
+            )
+        if self.refine is not None:
+            self.refine.validate(context)
+        return super().validate(context)
+
     def inspect(self) -> dict:
         from pops import inspect_amr
 
@@ -169,6 +196,33 @@ class AMR(MeshDescriptor):
         return RequirementSet({"amr_runtime": True,
                                "reflux": True,
                                "tag_reduction": True})
+
+    def resolve_for_case(self, resolver: Any) -> AMR:
+        """Authenticate every declaration-bearing policy through one descriptor protocol."""
+        if not callable(resolver):
+            raise TypeError("AMR.resolve_for_case requires a callable Handle resolver")
+
+        def resolved(value: Any) -> Any:
+            if value is None:
+                return None
+            protocol = getattr(value, "resolve_references", None)
+            return protocol(resolver) if callable(protocol) else value
+
+        refine = resolved(self.refine)
+        if refine is not None and not getattr(refine, "references_authenticated", False):
+            raise ValueError("AMR refinement references were not authenticated")
+        return type(self)(
+            base=self.base,
+            max_levels=self.max_levels,
+            ratio=self.ratio,
+            regrid=self.regrid,
+            patches=self.patches,
+            refine=refine,
+            nesting=self.nesting,
+            checkpoint=self.checkpoint,
+            output=resolved(self.output),
+            clustering=self.clustering,
+        )
 
     def available(self, context: Any = None) -> Any:
         if self.ratio not in NATIVE_RATIOS:
