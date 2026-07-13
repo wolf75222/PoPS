@@ -1007,6 +1007,11 @@ sources = ["tests/cpp/unit/runtime/test_variable_user_role.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[python.suite]]
+name = "pops_python_examples_final"
+path = "tests/python/examples/final"
+labels = ["integration", "python", "examples", "runtime", "io", "time", "amr", "physics", "medium"]
+
+[[python.suite]]
 name = "pops_python_integration_amr"
 path = "tests/python/integration/amr"
 labels = ["integration", "python", "amr", "medium"]
@@ -1037,9 +1042,24 @@ path = "tests/python/integration/runtime"
 labels = ["integration", "python", "runtime", "medium"]
 
 [[python.suite]]
+name = "pops_python_unit_amr"
+path = "tests/python/unit/amr"
+labels = ["unit", "python", "amr", "mesh", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_boundary"
+path = "tests/python/unit/boundary"
+labels = ["unit", "python", "boundary", "mesh", "numerics", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_codegen"
 path = "tests/python/unit/codegen"
 labels = ["unit", "python", "codegen", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_domain"
+path = "tests/python/unit/domain"
+labels = ["unit", "python", "domain", "mesh", "problem", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_identity"
@@ -1052,6 +1072,21 @@ path = "tests/python/unit/descriptors"
 labels = ["unit", "python", "descriptors", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_fields"
+path = "tests/python/unit/fields"
+labels = ["unit", "python", "fields", "physics", "elliptic", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_initial"
+path = "tests/python/unit/initial"
+labels = ["unit", "python", "initial", "problem", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_lib_time"
+path = "tests/python/unit/lib/time"
+labels = ["unit", "python", "time", "codegen", "solvers", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_reporting"
 path = "tests/python/unit/reporting"
 labels = ["unit", "python", "reporting", "fast"]
@@ -1062,6 +1097,11 @@ path = "tests/python/unit/mesh"
 labels = ["unit", "python", "mesh", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_moments"
+path = "tests/python/unit/moments"
+labels = ["unit", "python", "moments", "physics", "numerics", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_numerics"
 path = "tests/python/unit/numerics"
 labels = ["unit", "python", "numerics", "fast"]
@@ -1070,6 +1110,11 @@ labels = ["unit", "python", "numerics", "fast"]
 name = "pops_python_unit_physics"
 path = "tests/python/unit/physics"
 labels = ["unit", "python", "physics", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_output"
+path = "tests/python/unit/output"
+labels = ["unit", "python", "output", "io", "runtime", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_problem"
