@@ -114,7 +114,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
     def solve_linear(self, name: Any = None, operator: Any = None, rhs: Any = None,
                      initial_guess: Any = None, method: Any = None, preconditioner: Any = None,
                      tol: Any = None, max_iter: Any = None, restart: Any = None, *,
-                     at: Any = None) -> Any:
+                     at: Any = None, scope: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
         return the solution as a field. A state-domain operator with a State rhs returns a State;
         scratch/vector solves return a scalar_field. The iteration is DYNAMIC (C++-side, inside the loop):
@@ -146,6 +146,11 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         # always keyed on, so the IR / emitted C++ stay byte-identical to the historical string path;
         # a bare algorithm-selector string is rejected (the public string form is removed).
         operator = self._canonical_value(operator)
+        from pops.solvers.scopes import solve_scope_id
+        solve_scope = (operator.attrs.get("scope", "level") if scope is None
+                       else solve_scope_id(scope))
+        if operator.attrs.get("scope") == "hierarchy" and solve_scope != "hierarchy":
+            raise ValueError("solve_linear: a hierarchy-scoped operator cannot be downgraded to Level()")
         method, method_options = _lower_krylov_method(method)
         preconditioner, precond_options = _lower_preconditioner(preconditioner)
         # ADC-645: the call-site tol stays the authoritative per-op budget; left default (None) it
@@ -229,6 +234,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         attrs = {"method": method, "preconditioner": preconditioner, "tol": tol_literal,
                  "max_iter": int(max_iter), "has_guess": initial_guess is not None,
                  "ncomp": op_ncomp, "restart": restart_int}
+        if solve_scope != "level":
+            attrs["scope"] = solve_scope
+            provider = operator.attrs.get("hierarchy_provider")
+            if provider is None:
+                raise ValueError("solve_linear: Hierarchy() requires an operator with an explicit "
+                                 "hierarchy provider")
+            attrs["hierarchy_provider"] = provider
         # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
         # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
         # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).

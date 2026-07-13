@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 
-def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str:
+def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
+                      hierarchy_bodies: Any = None) -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
@@ -36,6 +37,25 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str
     coupling is frozen across the RK stages)."""
     if target != "amr_system":
         return ""
+    if hierarchy_bodies is None:
+        level_driver = (
+            '    for (int _k = 0; _k < _nlev; ++_k) {\n'
+            '      ctx.set_level(_k);\n' + body + '\n    }\n')
+    else:
+        gather, solve, publish = hierarchy_bodies
+        level_driver = (
+            '    if (!ctx.has_refined_hierarchy()) {\n'
+            '      for (int _k = 0; _k < _nlev; ++_k) {\n'
+            '        ctx.set_level(_k);\n' + body + '\n      }\n'
+            '    } else {\n'
+            '      // Gather every level before the unique hierarchy-scoped solve.\n'
+            '      for (int _k = 0; _k < _nlev; ++_k) {\n'
+            '        ctx.set_level(_k);\n' + gather + '\n      }\n'
+            '      ctx.set_level(0);\n' + solve + '\n'
+            '      // The composite solution is complete before any level reconstructs or commits.\n'
+            '      for (int _k = 0; _k < _nlev; ++_k) {\n'
+            '        ctx.set_level(_k);\n' + publish + '\n      }\n'
+            '    }\n')
     return (
         '\n#include <pops/runtime/program/amr_program_context.hpp>  // AmrProgramContext (the AMR driver, ADC-508)\n'
         '// AMR install entry (epic ADC-511 / ADC-508, Spec 6): the target=\'amr_system\' counterpart\n'
@@ -52,10 +72,7 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any) -> str
         '    ctx.reset_step();                       // clear the solve_fields guard + the reflux ledger\n'
         '    ctx.regrid_if_due(ctx.macro_step());    // head-of-step union-tags regrid (engine cadence)\n'
         '    const int _nlev = ctx.nlev();\n'
-        '    for (int _k = 0; _k < _nlev; ++_k) {\n'
-        '      ctx.set_level(_k);                     // the body addresses block b at the CURRENT level\n'
-        + body +
-        '\n    }\n'
+        + level_driver +
         '    ctx.couple_levels();                     // (B) average_down + conservative reflux (ADC-639)\n'
         '  });\n'
         '}\n')

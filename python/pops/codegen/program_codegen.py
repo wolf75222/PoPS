@@ -82,6 +82,7 @@ from pops.codegen.program_emit_schedule import (  # noqa: F401
 )
 from pops.codegen.program_emit_control import (  # noqa: F401
     _coupled_rate_components,
+    _emit_amr_hierarchy_bodies,
     _emit_body,
     _emit_branch,
     _emit_range,
@@ -219,7 +220,10 @@ def emit_cpp_program(
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         coeff_elliptic_include=_coeff_elliptic_include(program),
         block_inverse_include=_block_inverse_include(program),
-        amr_install=_emit_amr_install(program, target, prelude, body))
+        amr_install=_emit_amr_install(
+            program, target, prelude, body,
+            _emit_amr_hierarchy_bodies(
+                program, authority, field_plans or {}) if target == "amr_system" else None))
 
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):

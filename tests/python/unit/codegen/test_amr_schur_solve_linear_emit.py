@@ -68,6 +68,77 @@ def test_amr_target_routes_solve_linear_through_ctx():
     )
 
 
+def test_refined_driver_orders_gather_solve_publish():
+    """The refined branch contains a real hierarchy barrier: both level loops surround one solve."""
+    src = _emit("amr_system")
+    gather = src.index("Gather every level before the unique hierarchy-scoped solve")
+    solve = src.index("ctx.solve_linear_matfree(", gather)
+    publish = src.index("The composite solution is complete", solve)
+    assert gather < solve < publish
+    refined = src[gather:src.index("ctx.couple_levels()", gather)]
+    assert refined.count("ctx.solve_linear_matfree(") == 1
+    assert refined[:solve - gather].count("condensed") > 0, "gather region lost assembly kernels"
+    assert "assembly_source(" in refined[publish - gather:], \
+        "publish region lost per-level reconstruction"
+
+
+def test_condensed_operator_derives_hierarchy_scope_without_preset_branching():
+    """Scope is generic operator metadata propagated from captured storage, not a preset dispatch."""
+    model = _lorentz_model("adc648_scope_model")
+    P = pops_time.Program("adc648_scope").bind_operators(model)
+    block, state = state_refs(P, "gas", model=model)
+    pops_lib_time.condensed_schur(
+        P, block, state, alpha=1.0, theta=1.0,
+        linear_operator=_linear_handle(model))
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    operator = solve.inputs[0]
+    assert operator.attrs["scope"] == "hierarchy"
+    assert solve.attrs["scope"] == "hierarchy"
+
+
+def test_hierarchy_scope_rejects_control_flow_crossing_barrier():
+    """A global solve cannot silently inherit the per-level control-flow scheduler."""
+    from pops.solvers import CG, CompositeTensorFAC, Hierarchy
+    P = pops_time.Program("adc648_nested_refusal")
+    block, state = state_refs(P, "gas")
+    temporal = P.state(block, state)
+    U = temporal.n
+    A = P.matrix_free_operator("A", scope=Hierarchy(), provider=CompositeTensorFAC())
+
+    def apply(program, out, x):
+        return program.laplacian(out, x)
+
+    P.set_apply(A, apply)
+    rhs = P.scalar_field("rhs")
+    from pops.time import FailRun
+    phi = P.solve_linear(operator=A, rhs=rhs, method=CG(max_iter=2), max_iter=2).consume(
+        action=FailRun())
+    # Add top-level control flow after the solve: the first driver envelope refuses rather than
+    # claiming a region schedule it cannot preserve.
+    looped = P.range(U, 1, lambda program, value: value)
+    final = P.linear_combine("next", 1 * looped, at=temporal.next.point)
+    P.commit(temporal.next, final)
+    with pytest.raises(NotImplementedError, match="top-level barrier"):
+        P.emit_cpp_program(target="amr_system")
+
+
+def test_hierarchy_scope_without_provider_is_refused_before_codegen():
+    """Scope alone never selects the FAC implementation for an arbitrary matrix-free operator."""
+    from pops.solvers import Hierarchy
+    P = pops_time.Program("adc648_provider_refusal")
+    with pytest.raises(ValueError, match="explicit native provider"):
+        P.matrix_free_operator("A", scope=Hierarchy())
+
+
+def test_provider_extension_uses_interface_not_type_dispatch():
+    """A new provider descriptor travels by canonical id/capability without editing authoring code."""
+    from pops.solvers import Hierarchy, HierarchySolveProvider
+    custom = HierarchySolveProvider("external_composite", frozenset({"amr_hierarchy"}))
+    P = pops_time.Program("adc648_open_provider")
+    operator = P.matrix_free_operator("A", scope=Hierarchy(), provider=custom)
+    assert operator.attrs["hierarchy_provider"] == "external_composite"
+
+
 def test_system_target_keeps_verbatim_bicgstab():
     """The System .so is byte-untouched: it still emits pops::bicgstab_solve, never the AMR seam."""
     src = _emit("system")

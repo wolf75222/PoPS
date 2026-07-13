@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -10,6 +12,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>            // pops::lincomb (device-clean copy / negate)
 #include <pops/mesh/storage/multifab.hpp>            // MultiFab / DistributionMapping
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>  // CompositeFacPoisson (composite FAC elliptic)
+#include <pops/numerics/elliptic/linear/krylov_result.hpp>       // SolveReport
 #include <pops/parallel/comm.hpp>                    // pops::n_ranks (MPI-multilevel refusal)
 #include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine this helper reads)
 
@@ -43,6 +46,15 @@
 namespace pops {
 namespace runtime {
 namespace program {
+
+namespace detail {
+/// FAC reports a composite infinity norm while solve_linear exposes a relative tolerance.  Match the
+/// established Krylov zero-RHS convention exactly: every non-zero RHS, including ||rhs|| < 1, keeps
+/// its own scale; only the homogeneous RHS substitutes one to avoid division by zero.
+inline Real condensed_fac_relative_scale(Real rhs_norm) {
+  return rhs_norm > Real(0) ? rhs_norm : Real(1);
+}
+}  // namespace detail
 
 /// Per-level tensor-coefficient buffers + a cached composite FAC solve, for one AMR block's condensed
 /// tensor elliptic on a refined hierarchy. Owned by AmrProgramContext (one per installed Program on the
@@ -96,10 +108,10 @@ class AmrCondensedElliptic {
   /// drives, ADC-636), so a refined Program matches that route where the coefficient / RHS feed
   /// coincides. The FAC's own operator / iteration decide the solve; the emitted matrix-free apply /
   /// precond are UNUSED on this branch (documented). MPI multilevel is refused precisely (mono-rank).
-  void solve_composite() {
+  SolveReport solve_composite(Real tol, int max_iter) {
     const int L = eng_->nlev();
     if (L < 2)
-      return;  // flat: the caller never reaches this branch (has_fine_patches() is false).
+      return SolveReport::capability_failure();
     if (pops::n_ranks() != 1)
       throw std::runtime_error(
           "AmrCondensedElliptic::solve_composite: the composite condensed-implicit elliptic on a "
@@ -129,10 +141,32 @@ class AmrCondensedElliptic {
       negate_into(fac_->rhs_level(k), lb.rhs);
     }
 
-    fac_->solve();
+    // solve_linear's public tolerance is relative, whereas FAC consumes
+    // an absolute composite infinity-norm tolerance.  Use the same max norm FAC reports, across the
+    // whole tower, so the adapter does not silently reinterpret a relative tolerance as an absolute
+    // one. FAC and the generic Krylov path use different provider-native norms (composite infinity vs
+    // global L2), but share the same relative convention. rhs_norm == 0 is explicit: scale == 1, so a
+    // homogeneous problem receives a finite absolute tolerance and reports its absolute residual.
+    Real rhs_norm = 0;
+    for (int k = 0; k < L; ++k)
+      rhs_norm = std::max(rhs_norm, pops::norm_inf(fac_->rhs_level(k)));
+    const Real scale = detail::condensed_fac_relative_scale(rhs_norm);
+    const Real absolute_tol = tol * scale;
+
+    const CompositeFacOptions options = fac_->options();
+    const Real residual = fac_->solve(max_iter, options.fine_sweeps, absolute_tol);
 
     for (int k = 0; k < L; ++k)
       copy0(levels_[static_cast<std::size_t>(k)].phi, fac_->phi_level(k));
+    SolveReport report;
+    report.rel_residual = residual / scale;
+    if (std::isfinite(static_cast<double>(report.rel_residual)) && report.rel_residual <= tol)
+      report.mark_solved();
+    else
+      report.mark_failed(std::isfinite(static_cast<double>(report.rel_residual))
+                             ? SolveStatus::kIterationLimit
+                             : SolveStatus::kInvalidEvaluation);
+    return report;
   }
 
  private:

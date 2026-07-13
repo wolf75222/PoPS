@@ -36,6 +36,8 @@ from .krylov import CG, BiCGStab, GMRES, Richardson
 from .nonlinear import FixedPoint, Newton
 from .preconditioners import preconditioners
 from .schur import CondensedSchur, Schur
+from .scopes import Hierarchy, Level, SolveScope
+from .providers import CompositeTensorFAC, HierarchySolveProvider
 
 # The flat solver factory surface (``solvers.CG()`` ... ``solvers.Schur()``), the one public
 # factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
@@ -54,5 +56,6 @@ __all__ = [
     "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
     "Newton", "FixedPoint", "Schur", "CondensedSchur",
+    "SolveScope", "Level", "Hierarchy", "HierarchySolveProvider", "CompositeTensorFAC",
     "solvers",
 ]
