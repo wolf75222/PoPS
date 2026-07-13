@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pops.identity import Identity, make_identity
-from pops.interfaces import ComponentInterface, NumericalFlux
+from pops.interfaces import ComponentInterface
 
 from ._package_data import ComponentPackageError
 from .packages import FixedBinaryPackage, _binary_identity
@@ -273,9 +273,7 @@ class InstalledComponent:
         self.verify()
         if interface != self.interface:
             raise TypeError("installed component interface mismatch")
-        if interface == NumericalFlux:
-            return NumericalFluxCpuBinding(self)
-        raise NotImplementedError("no installed binding for interface %s" % interface.uri)
+        return interface.bind_installed(self)
 
 
 class NumericalFluxCpuBinding:
