@@ -2,6 +2,7 @@
 
 #include <pops/core/identity/canonical_value.hpp>
 #include <pops/core/identity/sha256.hpp>
+#include <pops/runtime/config/component_manifest.hpp>
 
 #include <cstdint>
 #include <unordered_set>
@@ -86,6 +87,15 @@ CanonicalValue from_python(const py::handle& value) {
   return from_python(value, active);
 }
 
+[[noreturn]] void raise_component_manifest_error(
+    const pops::component_manifest::Error& error) {
+  const py::object error_type =
+      py::module_::import("pops.model._component_manifest").attr("ComponentManifestError");
+  const py::object instance = error_type(error.code(), error.path(), std::string(error.what()));
+  PyErr_SetObject(error_type.ptr(), instance.ptr());
+  throw py::error_already_set();
+}
+
 }  // namespace
 
 void init_identity(py::module_& m) {
@@ -102,4 +112,27 @@ void init_identity(py::module_& m) {
         return pops::identity::sha256_hex(pops::identity::canonical_bytes(from_python(value)));
       },
       "Private SHA-256 of the deterministic identity encoding.");
+  m.def(
+      "_component_manifest_canonical_bytes",
+      [](const py::handle& value) {
+        try {
+          const auto bytes = pops::component_manifest::canonical_bytes(from_python(value));
+          return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        } catch (const pops::component_manifest::Error& error) {
+          raise_component_manifest_error(error);
+        }
+      },
+      "Validate and serialize the complete schema-v2 ComponentManifest in native code.");
+  m.def(
+      "_component_manifest_semantic_bytes",
+      [](const py::handle& value) {
+        try {
+          const auto normalized = pops::component_manifest::normalize(from_python(value));
+          const auto bytes = pops::identity::canonical_bytes(normalized.semantic_payload);
+          return py::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        } catch (const pops::component_manifest::Error& error) {
+          raise_component_manifest_error(error);
+        }
+      },
+      "Native canonical bytes of the semantic ComponentManifest payload.");
 }

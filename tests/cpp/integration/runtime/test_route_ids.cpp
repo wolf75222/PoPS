@@ -178,11 +178,11 @@ TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
 
 TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
   const std::string signature = route_registry_signature();
-  EXPECT_TRUE(signature.rfind("v1:", 0) == 0) << signature;
-  EXPECT_TRUE(signature.size() == 19) << "v1: plus sixteen lowercase hex digits";
+  EXPECT_TRUE(signature.rfind("v2:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.size() == 67) << "v2: plus complete sha256 catalog digest";
   EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
               std::string::npos);
-  EXPECT_TRUE(throw_message([&] { verify_route_manifest("v1:0000000000000000", "test"); })
+  EXPECT_TRUE(throw_message([&] { verify_route_manifest("v2:0000000000000000000000000000000000000000000000000000000000000000", "test"); })
                   .find("mismatch") != std::string::npos);
   EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
 }

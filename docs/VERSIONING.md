@@ -26,6 +26,9 @@ What a version bump is allowed to break is exactly this surface:
   `pops.runtime.system.*`); they carry no SemVer guarantee and may change.
 - DSL surface: the fixed aux names (`phi`, `grad_x`, `grad_y`, `B_z`, `T_e`) and the
   documented builders.
+- Component interchange: the current `ComponentManifest` schema, canonical identity domains, and
+  generated builtin component catalog. New optional component capabilities are additive; changing
+  the meaning or required shape of an existing semantic field is breaking.
 - Consumable CMake: the `pops::pops` target, `find_package(pops)`, and the documented options
   (`POPS_USE_MPI`, `POPS_USE_HDF5`, `POPS_USE_KOKKOS`, ...) and presets.
 
@@ -39,8 +42,8 @@ is not a SemVer-relevant break.
 ## Bump rules
 
 - PATCH (`x.y.Z`): bug fixes with no change to the public API.
-- MINOR (`x.Y.0`): backward-compatible additions to the public API (new bricks, new options,
-  new Python surface).
+- MINOR (`x.Y.0`): backward-compatible additions to the public API (new bricks/catalog rows, new
+  options, new Python surface, or a new versioned extension schema).
 - MAJOR (`X.0.0`, post-1.0): a break of the public API or of the production DSL ABI.
 
 While in `0.y.z` initial development the public API may still change; a `0.y` bump can carry

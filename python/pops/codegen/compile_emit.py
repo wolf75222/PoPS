@@ -246,11 +246,11 @@ def _emit_route_manifest(symbol_name: Any) -> str:
     """Emit the mandatory native route-registry signature (ADC-599).
 
     Returns the C++ source of ``extern "C" const char* <symbol_name>()`` returning
-    ``route_registry_signature()`` evaluated at EMIT time (the compact "family:count,..." form,
-    MIRROR of pops::route_registry_signature()). The C++ loader requires this symbol and calls
+    ``route_registry_signature()`` evaluated at EMIT time (the versioned semantic-catalog digest,
+    byte-identical to ``pops::route_registry_signature()``). The C++ loader requires this symbol and calls
     pops::verify_route_manifest(value, ctx): a stale .so built against a different route set, or an
     artifact predating this contract, is refused before any run. Imported here (routes.py is
-    import-free) so the signature is baked into the string, exactly like pops_native_abi_key bakes
+    behavior-only) so the signature is baked into the string, exactly like pops_native_abi_key bakes
     POPS_ABI_KEY_LITERAL.
     """
     from pops.runtime.routes import route_registry_signature

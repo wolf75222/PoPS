@@ -21,10 +21,16 @@ class ExternalStencil:
 
 def _manifest(**changes):
     values = {
-        "component_id": "external.test.central-upwind",
-        "version": 1,
+        "uri": "pops://external.test/central-upwind",
+        "component_type": "reconstruction",
+        "version": "1.0.0",
         "facets": ("lowering", "stencil"),
-        "content": {"kind": "reconstruction", "order": 2},
+        "signature": {"kind": "reconstruction", "order": 2},
+        "target": {
+            "variants": [{
+                "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
+            }],
+        },
     }
     values.update(changes)
     return ComponentManifest(**values)
@@ -32,16 +38,16 @@ def _manifest(**changes):
 
 def test_manifest_is_immutable_and_has_canonical_content_digest():
     left = _manifest()
-    right = _manifest(content={"order": 2, "kind": "reconstruction"})
+    right = _manifest(signature={"order": 2, "kind": "reconstruction"})
 
-    assert left.content_bytes == right.content_bytes
-    assert left.content_digest == right.content_digest
-    assert left.digest.startswith("pops.component-manifest.v1:sha256:")
+    assert left.manifest_bytes == right.manifest_bytes
+    assert left.manifest_digest == right.manifest_digest
+    assert left.digest.startswith("pops.component-manifest.v2:sha256:")
     assert ComponentManifest.from_data(left.to_data()) == left
     with pytest.raises((FrozenInstanceError, AttributeError)):
         left.version = 2
     with pytest.raises(TypeError):
-        left.content["order"] = 3
+        left.signature["order"] = 3
 
 
 def test_external_structural_component_registers_and_resolves_without_allowlist():
@@ -55,7 +61,7 @@ def test_external_structural_component_registers_and_resolves_without_allowlist(
     assert registry.revision == 1
 
 
-def test_byte_identical_registration_is_idempotent_but_collision_is_rejected_atomically():
+def test_semantically_identical_registration_is_idempotent_but_collision_is_atomic():
     registry = ComponentRegistry()
     original = ExternalStencil(_manifest())
     registry.register(original)
@@ -65,7 +71,15 @@ def test_byte_identical_registration_is_idempotent_but_collision_is_rejected_ato
     assert registry.revision == 1
     assert len(registry) == 1
 
-    collision = ExternalStencil(_manifest(content={"kind": "reconstruction", "order": 3}))
+    documented = ExternalStencil(_manifest(extensions={
+        "https://example.test/extensions/docs": {
+            "kind": "documentary", "data": {"summary": "same implementation"},
+        },
+    }))
+    assert registry.register(documented) is original
+    assert registry.revision == 1
+
+    collision = ExternalStencil(_manifest(signature={"kind": "reconstruction", "order": 3}))
     with pytest.raises(ValueError, match="identity collision"):
         registry.register(collision)
     assert registry.revision == 1
@@ -107,7 +121,7 @@ def test_snapshot_is_revision_stable_and_freeze_refuses_mutation():
     first = ExternalStencil(_manifest())
     registry.register(first)
     second = ExternalStencil(_manifest(
-        component_id="external.test.second", content={"kind": "reconstruction", "order": 4}
+        uri="pops://external.test/second", signature={"kind": "reconstruction", "order": 4}
     ))
     registry.register(second)
     with pytest.raises(RuntimeError, match="frozen before snapshot"):
@@ -118,5 +132,5 @@ def test_snapshot_is_revision_stable_and_freeze_refuses_mutation():
     assert registry.frozen and frozen.frozen and frozen.revision == 2 and len(frozen) == 2
     assert frozen.resolve(first.component_manifest.component_id) is first
     with pytest.raises(RuntimeError, match="frozen"):
-        registry.register(ExternalStencil(_manifest(component_id="external.test.third")))
+        registry.register(ExternalStencil(_manifest(uri="pops://external.test/third")))
     assert registry.revision == 2

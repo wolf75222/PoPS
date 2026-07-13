@@ -37,17 +37,22 @@ def test_catalog_shape_and_ids():
     assert len(catalog) == 11, "brick catalog is not 11 rows: %d" % len(catalog)
     by_cat = {}
     for row in catalog:
-        for key in ("id", "category", "route_index", "native_entry", "params", "n_vars",
-                    "polar_ok", "requirements", "capabilities", "summary"):
+        for key in ("id", "category", "route_index", "native_entry", "parameters", "n_vars",
+                    "polar_ok", "requirements", "limitations", "summary", "catalog_digest",
+                    "catalog_semantic_digest"):
             assert key in row, "catalog row missing %r key: %r" % (key, row)
         by_cat.setdefault(row["category"], []).append(row["id"])
     assert by_cat["transport"] == ["exb", "compressible", "isothermal"]
     assert by_cat["source"] == ["none", "potential", "gravity", "magnetic", "potential_magnetic"]
     assert by_cat["elliptic"] == ["charge", "background", "gravity"]
-    # The catalog carries the two facts the registry / route tables did not: params + route index.
+    # Every inspection fact is detached from the generated catalog row.
     exb = bc_module.resolve("transport", "exb")
-    assert exb["native_entry"] == "pops::ExBVelocity" and exb["params"] == ["B0"]
-    assert bc_module.resolve("transport", "isothermal")["params"] == ["cs2", "vacuum_floor"]
+    assert exb["native_entry"] == "pops::ExBVelocity" and exb["parameters"] == ["B0"]
+    assert bc_module.resolve("transport", "isothermal")["parameters"] == ["cs2", "vacuum_floor"]
+    info = bc_module.catalog_info()
+    assert info["schema_version"] == 1
+    assert len(info["digest"]) == 64
+    assert len(info["semantic_digest"]) == 64
 
 
 def test_resolve_refusal_lists_catalog_entries():

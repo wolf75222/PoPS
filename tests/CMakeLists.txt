@@ -262,6 +262,13 @@ endforeach()
 # Generated C++ solver kernel used by test_solver_codegen_generated.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME test_component_catalog_generated
+    COMMAND ${CMAKE_COMMAND} -E env "PYTHONDONTWRITEBYTECODE=1"
+            "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/generate_component_catalog.py" --check)
+  set_tests_properties(test_component_catalog_generated PROPERTIES LABELS "architecture;generated")
+
   set(_pops_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
   file(GLOB_RECURSE _pops_gen_solver_pysrc CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/python/pops/*.py")
   add_custom_command(

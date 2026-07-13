@@ -166,6 +166,11 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
   return registry;
 }
 
+std::string amr_time_routes_csv() {
+  return std::string(route_token(TimeRouteId::kExplicitSsprk2)) + "|" +
+         route_token(TimeRouteId::kSsprk3) + "|" + route_token(TimeRouteId::kImex);
+}
+
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
@@ -1227,13 +1232,15 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
     if (time == "imexrk_ars222")
       throw std::runtime_error(
           "AmrSystem : time 'imexrk_ars222' (IMEX-RK family, ARS(2,2,2) scheme) not wired on AMR "
-          "(scope = Cartesian System). Use 'explicit'|'ssprk3'|'imex' on AMR, or a "
+          "(scope = Cartesian System). Use one of [" + amr_time_routes_csv() +
+          "] on AMR, or a "
           "Cartesian System for IMEX-RK.");
     throw std::runtime_error("AmrSystem : time '" + time +
-                             "' unknown on AMR (explicit|ssprk3|imex)");
+                             "' unknown on AMR (valid: " + amr_time_routes_csv() + ")");
   }
   if (recon != "conservative" && recon != "primitive")
-    throw std::runtime_error("AmrSystem : unknown recon '" + recon + "' (conservative|primitive)");
+    throw std::runtime_error("AmrSystem : unknown recon '" + recon + "' (valid: " +
+                             kReconRouteTokensCsv + ")");
   const bool imex = (time == "imex");
   const int time_method = (time == "ssprk3") ? 1 : 0;  // pops::AmrTimeMethod (0 kEuler, 1 kSsprk3)
   // The partial IMEX mask (implicit_vars / implicit_roles) only applies to the IMEX source step:
@@ -1678,7 +1685,8 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
   // bc/wall are actually consumed by poisson_bc()/wall_active(): validated there.
   if (rhs != "charge_density" && rhs != "composite")
     throw std::runtime_error("AmrSystem::set_poisson : unknown rhs '" + rhs +
-                             "' (charge_density|composite ; the right-hand side = sum of the "
+                             "' (valid: " + kPoissonRhsRouteTokensCsv +
+                             "; the right-hand side = sum of the "
                              "block's elliptic bricks)");
   if (solver != "geometric_mg")
     throw std::runtime_error("AmrSystem::set_poisson : solver '" + solver +

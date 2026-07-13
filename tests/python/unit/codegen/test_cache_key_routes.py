@@ -13,14 +13,13 @@ stepped. They pin, at the Python surface:
   1  the artifact-spec identity folds in the registry component: same inputs -> same path; a bumped
      ``ROUTE_REGISTRY_VERSION`` (or a patched component) -> a different path (cache MISS).
   2  the registry cache-key string is the readable ``"routes=vN:<hash16>;capvocab=M"`` form, the
-     registry hash is a 64-hex sha256 digest, and the compact signature lists all 14 route
-     families in registry order with the expected per-family counts.
+     registry hash and versioned signature authenticate the 64-hex semantic-catalog digest, while
+     family counts remain independently pinned.
   3  a ``RuntimeParam`` VALUE never enters ``model_hash`` (seeded at bind, not compile), while a
      ``ConstParam`` value does -- so a runtime ``set_block_params`` is never a recompile.
   4  ``inspect()`` exposes the registry components via ``_route_registry_components()``, consistent
      with :mod:`pops.runtime.routes`.
-  5  ``route_registry_signature()`` is a stable diagnostic equal to the family:count list derived
-     from ``routes_of()``.
+  5  ``route_registry_signature()`` is the stable versioned semantic-catalog diagnostic.
 
 Guarded with ``pytest.importorskip("pops")`` like the sibling ``test_route_ids.py``; the
 ``__main__`` block runs pytest so ``python3 <file>`` works in CI.
@@ -98,11 +97,11 @@ def test_registry_hash_is_a_sha256_digest():
     assert all(c in "0123456789abcdef" for c in digest), digest
 
 
-def test_registry_signature_families_and_counts():
+def test_registry_signature_authenticates_the_full_catalog_and_counts():
     # Content-authenticated signature; family counts remain locked independently below.
     signature = routes.route_registry_signature()
     assert signature.startswith("v%d:" % routes.ROUTE_REGISTRY_VERSION)
-    assert len(signature.rsplit(":", 1)[1]) == 16
+    assert len(signature.rsplit(":", 1)[1]) == 64
     assert tuple((fam, len(routes.routes_of(fam))) for fam, _ in _FAMILY_COUNTS) == _FAMILY_COUNTS
 
 
@@ -146,9 +145,9 @@ def test_route_registry_components_keys_and_consistency():
     assert comp["capability_vocab_version"] == routes.CAPABILITY_VOCAB_VERSION
 
 
-# --- 5: the signature is a stable diagnostic derived from routes_of() --------------------------
+# --- 5: the signature is the stable versioned semantic-catalog diagnostic ---------------------
 
-def test_signature_is_stable_and_derived_from_routes_of():
+def test_signature_is_stable_and_all_family_counts_remain_visible():
     first = routes.route_registry_signature()
     assert first == routes.route_registry_signature(), "the signature is stable across calls"
     assert first.startswith("v%d:" % routes.ROUTE_REGISTRY_VERSION)

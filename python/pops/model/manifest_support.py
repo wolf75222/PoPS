@@ -81,11 +81,11 @@ def native_routes() -> Any:
 
 
 def native_catalog() -> Any:
-    from pops.runtime.brick_catalog import brick_catalog
+    from pops.runtime.brick_catalog import brick_catalog, catalog_info
     from pops.runtime.routes import ROUTE_REGISTRY_VERSION
 
-    return {
-        "version": ROUTE_REGISTRY_VERSION,
+    return catalog_info() | {
+        "route_registry_version": ROUTE_REGISTRY_VERSION,
         "bricks": [entry["id"] for entry in brick_catalog()],
     }
 

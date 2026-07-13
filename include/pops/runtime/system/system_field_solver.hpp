@@ -16,6 +16,7 @@
 #include <pops/parallel/comm.hpp>                           // n_ranks() (FFT MPI guard)
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // derive_aux_polar (polar aux in local basis)
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
+#include <pops/runtime/config/generated_component_catalog.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
 
 #include <algorithm>
@@ -580,7 +581,8 @@ class SystemFieldSolver {
     // stays the historical alias (default, bit-identical) since the usual case is a charge block.
     if (p_rhs != "charge_density" && p_rhs != "composite")
       throw std::runtime_error("System::set_poisson: unknown rhs '" + p_rhs +
-                               "' (charge_density|composite; the right-hand side = sum of the "
+                               "' (valid: " + kPoissonRhsRouteTokensCsv +
+                               "; the right-hand side = sum of the "
                                "per-block elliptic bricks)");
     const BCRec pbc = poisson_bc();
     std::function<bool(Real, Real)> active = wall_active();
@@ -651,7 +653,7 @@ class SystemFieldSolver {
             "unsupported; use eps = 1 or an eps(x) field (set_epsilon_field)");
     } else {
       throw std::runtime_error("System::set_poisson: unknown solver '" + p_solver +
-                               "' (geometric_mg|fft|fft_spectral)");
+                               "' (catalog: " + kFieldSolverRouteTokensCsv + ")");
     }
   }
   /// Installs the eps(x) field (n*n row-major) on the GeometricMG: the operator becomes
@@ -869,7 +871,7 @@ class SystemFieldSolver {
       return;
     if (p_rhs != "charge_density" && p_rhs != "composite")
       throw std::runtime_error("System::set_poisson (polar): unknown rhs '" + p_rhs +
-                               "' (charge_density|composite)");
+                               "' (valid: " + kPoissonRhsRouteTokensCsv + ")");
     if (p_solver != "geometric_mg" && p_solver != "polar")
       throw std::runtime_error(
           "System::set_poisson (polar): solver '" + p_solver +
@@ -1201,7 +1203,7 @@ class SystemFieldSolver {
       std::get<GeometricMG>(*nf.ell).set_abs_tol(mg.abs_tol);
     } else {
       throw std::runtime_error("System: named elliptic field solver '" + solver +
-                               "' unsupported (geometric_mg|fft|fft_spectral)");
+                               "' unsupported (catalog: " + kFieldSolverRouteTokensCsv + ")");
     }
     if (nf.plan.has_boundary_kernel) {
       auto& geometric = std::get<GeometricMG>(*nf.ell);

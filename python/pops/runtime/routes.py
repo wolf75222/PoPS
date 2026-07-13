@@ -1,4 +1,4 @@
-"""Typed native route IDs (ADC-584): the single Python registry of behavior routes.
+"""Typed native route API over the generated schema-v2 component catalog.
 
 Every algorithmic choice (Riemann flux, limiter, reconstructed variables, time treatment,
 splitting, field solver, Poisson boundary condition, layout, model bricks) is identified by a
@@ -9,15 +9,43 @@ wire token toward the C++ ABI are the bounded adapters (``pops.runtime._system_i
 token (``str`` subclass), so the crossing stays byte-identical while the identity, requirements,
 limitations and native entry point become typed and inspectable.
 
-This module is the MIRROR of ``include/pops/runtime/config/route_ids.hpp`` (same families, same
-tokens, same order); ``tests/python/architecture/test_route_registry_parity.py`` locks the two at the
-source level, and the C++ static_asserts lock route_ids.hpp against the historical tag tables
-(kLimiters / kRiemanns / kTransports / kSources / kElliptics). Deliberately IMPORT-FREE (stdlib
-only): the architecture gate loads it standalone, without the compiled ``_pops`` module.
+All route declarations, wire IDs, aliases, capabilities and entry points come from
+``schemas/component_catalog.v2.json``. Checked-in Python and C++ products are generated together;
+this module contains behavior only and cannot drift into a second registry.
 """
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
+
+from ._generated_component_routes import (
+    CAPABILITY_VOCAB_VERSION,
+    COMPONENT_CATALOG_SEMANTIC_SHA256,
+    COMPONENT_CATALOG_SHA256,
+    COMPONENT_MANIFEST_SCHEMA_VERSION,
+    ROUTE_ALIASES as _GENERATED_ROUTE_ALIASES,
+    ROUTE_COMPONENT_DEFAULTS as _GENERATED_COMPONENT_DEFAULTS,
+    ROUTE_METADATA as _GENERATED_ROUTE_METADATA,
+    ROUTE_REGISTRY_SIGNATURE,
+    ROUTE_REGISTRY_VERSION,
+    ROUTE_TABLES as _GENERATED_ROUTE_TABLES,
+)
+
+
+def _freeze_catalog_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze_catalog_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_catalog_value(item) for item in value)
+    return value
+
+
+def _thaw_catalog_value(value: Any) -> Any:
+    if isinstance(value, dict) or hasattr(value, "items"):
+        return {key: _thaw_catalog_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_catalog_value(item) for item in value]
+    return value
 
 
 class Route(str):
@@ -42,16 +70,24 @@ class Route(str):
     native_entry: str
     requirements: tuple
     limitations: tuple
+    metadata: dict
 
     def __new__(cls, family: str, token: str, native_entry: str,
-                requirements: Any = (), limitations: Any = ()) -> Route:
+                requirements: Any = (), limitations: Any = (), metadata: Any = None) -> Route:
         self = super().__new__(cls, token)
         self.family = family
         self.id = "%s.%s" % (family, token)
         self.native_entry = native_entry
         self.requirements = tuple(requirements)
         self.limitations = tuple(limitations)
+        self.metadata = _freeze_catalog_value(dict(metadata or {}))
+        self._frozen = True
         return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_frozen", False):
+            raise AttributeError("Route values are immutable generated catalog handles")
+        object.__setattr__(self, name, value)
 
     @property
     def token(self) -> str:
@@ -67,130 +103,76 @@ class Route(str):
             "native_entry": self.native_entry,
             "requirements": list(self.requirements),
             "limitations": list(self.limitations),
+            "capabilities": _thaw_catalog_value(self.metadata),
+            "catalog_digest": COMPONENT_CATALOG_SHA256,
+            "catalog_semantic_digest": COMPONENT_CATALOG_SEMANTIC_SHA256,
         }
+
+    def component_contract(self) -> dict:
+        """Complete schema-v2 contract input for registration as a component."""
+        defaults = _COMPONENT_DEFAULTS
+        metadata = _thaw_catalog_value(self.metadata)
+        summary = metadata.pop("summary", "")
+        parameters = list(defaults["parameters"])
+        parameters.extend(metadata.pop("parameters", ()))
+        return {
+            "schema_version": COMPONENT_MANIFEST_SCHEMA_VERSION,
+            "uri": "pops://builtin/routes/%s/%s" % (self.family, self.token),
+            "component_type": "route.%s" % self.family,
+            "version": dict(defaults["version"]),
+            "facets": list(defaults["facets"]),
+            "signature": dict(defaults["signature"]),
+            "reads": list(defaults["reads"]),
+            "writes": list(defaults["writes"]),
+            "parameters": parameters,
+            "interfaces": list(defaults["interfaces"]),
+            "requirements": list(self.requirements),
+            "capabilities": [{"name": key, "value": value}
+                             for key, value in sorted(metadata.items())],
+            "effects": list(defaults["effects"]),
+            "layouts": list(defaults["layouts"]),
+            "clocks": list(defaults["clocks"]),
+            "target": _thaw_catalog_value(defaults["target"]),
+            "determinism": dict(defaults["determinism"]),
+            "restart": dict(defaults["restart"]),
+            "precision": {key: list(value) if isinstance(value, list) else value
+                          for key, value in defaults["precision"].items()},
+            "conservation": list(defaults["conservation"]),
+            "entry_points": {"native": self.native_entry},
+            "extensions": {
+                "pops://schemas/extensions/route-inspection": {
+                    "kind": "documentary",
+                    "data": {
+                        "family": self.family,
+                        "id": self.id,
+                        "token": str(self),
+                        "summary": summary,
+                        "limitations": list(self.limitations),
+                        "catalog_digest": COMPONENT_CATALOG_SHA256,
+                        "catalog_semantic_digest": COMPONENT_CATALOG_SEMANTIC_SHA256,
+                    },
+                },
+            },
+        }
+
+    def component_manifest(self):
+        """Materialize the complete canonical ComponentManifest lazily."""
+        from pops.model import ComponentManifest
+
+        return ComponentManifest(**self.component_contract())
 
     def __repr__(self) -> str:
         return "Route(%s)" % self.id
 
 
-def _split(csv: str) -> tuple:
-    return tuple(s for s in csv.split(",") if s) if csv else ()
+_TABLES = _freeze_catalog_value(_GENERATED_ROUTE_TABLES)
+_ALIASES = _freeze_catalog_value(_GENERATED_ROUTE_ALIASES)
+_COMPONENT_DEFAULTS = _freeze_catalog_value(_GENERATED_COMPONENT_DEFAULTS)
 
-
-# --- The route tables: MIRROR of route_ids.hpp, one row per line, same order. ------------------
-# (family, ((token, native_entry, requirements_csv, limitations_csv), ...))
-_TABLES = {
-    "riemann": (
-        ("rusanov", "pops::RusanovFlux", "max_wave_speed", ""),
-        ("hll", "pops::HLLFlux", "physical_flux,wave_speeds", ""),
-        ("hllc", "pops::HLLCFlux",
-         "physical_flux,pressure,wave_speeds,contact_speed,hllc_star_state",
-         "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"),
-        ("roe", "pops::RoeFlux", "physical_flux,roe_average",
-         "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"),
-        ("euler_hllc", "pops::EulerHLLCFlux2D", "physical_flux,pressure,euler_2d_layout",
-         "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; "
-         "polar not wired"),
-        ("euler_roe", "pops::EulerRoeFlux2D", "physical_flux,pressure,euler_2d_layout",
-         "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; "
-         "polar not wired"),
-    ),
-    "limiter": (
-        ("none", "pops::NoSlope", "", ""),
-        ("minmod", "pops::Minmod", "", ""),
-        ("vanleer", "pops::VanLeer", "", ""),
-        ("weno5", "pops::Weno5Z", "3-cell halo",
-         "prototype backend not wired (host order-1 residual)"),
-    ),
-    "recon": (
-        ("conservative", "pops::make_block(recon_prim=false)", "", ""),
-        ("primitive", "pops::make_block(recon_prim=true)", "primitive_vars",
-         "requires a model exposing primitive variables"),
-    ),
-    "time": (
-        ("explicit", "pops::SSPRK2", "", ""),
-        ("ssprk3", "pops::SSPRK3", "",
-         "aot .so ABI not wired (SSPRK2-only extern C entry); native add_block/add_native_block "
-         "only"),
-        ("euler", "pops::ForwardEuler", "",
-         "aot .so ABI not wired; native add_block/add_native_block only; validation use, never "
-         "default"),
-        ("imex", "pops::AdvanceImex", "implicit source term", ""),
-        ("imexrk_ars222", "pops::ImexRkArs222", "implicit source term",
-         "composed native add_block only (.so ABIs do not carry the RK tableau)"),
-    ),
-    "splitting": (
-        ("lie", "pops::SystemStepper(lie)", "", ""),
-        ("strang", "pops::SystemStepper(strang)", "",
-         "H(dt/2) S(dt) H(dt/2); requires a condensed source stage"),
-    ),
-    "field_solver": (
-        ("geometric_mg", "pops::GeometricMG", "", ""),
-        ("fft", "pops::PoissonFFTSolver", "periodic bc,constant coefficient",
-         "walls / variable epsilon not wired; non power-of-two grid falls back to O(n^2) DFT"),
-        ("fft_spectral", "pops::PoissonFFTSolver(spectral)",
-         "periodic bc,constant coefficient",
-         "walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)"),
-        ("polar", "pops::PolarPoissonSolver", "polar geometry",
-         "annular polar only (r_min > 0)"),
-    ),
-    "poisson_bc": (
-        ("auto", "resolved from the wall/periodic system config", "", ""),
-        ("periodic", "pops::fill_boundary(periodic)", "", ""),
-        ("dirichlet", "pops::PhysicalBc(dirichlet)", "", ""),
-        ("neumann", "pops::PhysicalBc(neumann)", "", ""),
-    ),
-    "layout": (
-        ("uniform", "pops::System", "", ""),
-        ("amr", "pops::AmrSystem", "",
-         "refinement ratio 2 (kAmrRefRatio); fft field solver not wired"),
-    ),
-    "transport": (
-        ("exb", "pops::ExBVelocity", "", "scalar (1 var); no fluid source"),
-        ("compressible", "pops::CompressibleFlux", "", "polar geometry not wired"),
-        ("isothermal", "pops::IsothermalFlux", "", ""),
-    ),
-    "source": (
-        ("none", "pops::NoSource", "", ""),
-        ("potential", "pops::PotentialForce", "fluid transport (>= 3 vars)", ""),
-        ("gravity", "pops::GravityForce", "fluid transport (>= 3 vars)", ""),
-        ("magnetic", "pops::MagneticLorentzForce",
-         "fluid transport (>= 3 vars),aux B_z channel",
-         "explicit regime (stiff regime -> condensed Schur stage)"),
-        ("potential_magnetic",
-         "pops::CompositeSource<PotentialForce, MagneticLorentzForce>",
-         "fluid transport (>= 3 vars),aux B_z channel", ""),
-    ),
-    "elliptic": (
-        ("charge", "pops::ChargeDensity", "", ""),
-        ("background", "pops::BackgroundDensity", "", ""),
-        ("gravity", "pops::GravityCoupling", "", ""),
-    ),
-    "source_stage": (
-        ("electrostatic_lorentz", "pops::ElectrostaticLorentzCondensedSchur",
-         "magnetic field B_z,system potential phi", "theta in (0, 1]"),
-    ),
-    "poisson_rhs": (
-        ("charge_density", "per-block ChargeDensity bricks summed", "",
-         "alias of composite when every block carries a charge density (bit-identical)"),
-        ("composite", "per-block elliptic bricks summed", "", ""),
-    ),
-    "wall": (
-        ("none", "no wall (fully periodic/physical domain)", "", ""),
-        ("circle", "pops::make_wall_predicate(circle)", "wall_radius > 0", ""),
-    ),
-}
-
-# Historical alias spellings, resolved by resolve() to their canonical route (parse-only
-# compatibility, mirror of parse_source_route / parse_time_route in route_ids.hpp): the wire
-# token emitted is always the canonical spelling.
-_ALIASES = {
-    "source": {"lorentz": "magnetic", "potential_lorentz": "potential_magnetic"},
-    "time": {"ssprk2": "explicit"},
-}
 
 _REGISTRY = {
-    family: {token: Route(family, token, entry, _split(req), _split(lim))
+    family: {token: Route(family, token, entry, req, lim,
+                          _GENERATED_ROUTE_METADATA[family][token])
              for (token, entry, req, lim) in rows}
     for family, rows in _TABLES.items()
 }
@@ -225,51 +207,26 @@ def route_manifest() -> list:
     return [route.manifest() for family in _TABLES for route in _REGISTRY[family].values()]
 
 
-# Native route catalog version (ADC-599): bumped on any INCOMPATIBLE registry change (a removed
-# or re-tokenized route). Additive rows do not need a bump -- the registry hash below already
-# separates artifacts built against different route sets.
-ROUTE_REGISTRY_VERSION = 1
-
-# Capabilities/reports VOCABULARY version (ADC-599): the shared vocabulary of the capability and
-# inspection reports (status tokens available/partial/unavailable, route row fields, manifest
-# keys). Enters every compiled-artifact cache key so an artifact whose embedded reports speak an
-# older vocabulary is not silently reused after an incompatible vocabulary change.
-CAPABILITY_VOCAB_VERSION = 0
+def component_manifests() -> tuple:
+    """Canonical schema-v2 manifests for all builtin route components."""
+    return tuple(route.component_manifest()
+                 for family in _TABLES for route in _REGISTRY[family].values())
 
 
 def route_registry_signature() -> str:
-    """Content-authenticated FNV-1a signature of every native route row.
-
-    MIRROR of pops::route_registry_signature() (route_ids.hpp); the two strings must stay equal
-    (locked by tests/python/architecture/test_route_registry_parity.py). Embedded verbatim in generated
-    artifacts so a stale .so is refused before any run.  IDs are included explicitly so a removed
-    numeric value cannot be reused without changing artifact identity.
-    """
-    value = 14695981039346656037
-    for family in _TABLES:
-        for route_id, (token, entry, requirements, limitations) in enumerate(_TABLES[family]):
-            row = "\x1f".join((
-                family, str(route_id), token, entry, requirements, limitations,
-            )) + "\n"
-            for byte in row.encode("utf-8"):
-                value ^= byte
-                value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return "v%d:%016x" % (ROUTE_REGISTRY_VERSION, value)
+    """Generated content identity shared verbatim with the C++ catalog."""
+    return ROUTE_REGISTRY_SIGNATURE
 
 
 def route_registry_hash() -> str:
-    """Stable hash of the FULL route registry (tokens, entries, requirements, limitations).
+    """Stable hash of the behavior-bearing route registry.
 
     Enters every compiled-artifact cache key (ADC-599): any registry change -- a new route, a
-    renamed native entry, an added limitation -- invalidates cached .so files instead of silently
-    reusing an artifact built against a different native catalog.
+    renamed native entry, a changed requirement or capability -- invalidates cached .so files
+    instead of silently reusing an artifact built against a different native catalog. Documentary
+    summaries and limitation prose belong only to the full catalog digest and do not recompile.
     """
-    import hashlib
-    parts = ["v%d" % ROUTE_REGISTRY_VERSION]
-    for family in _TABLES:
-        for token, entry, req, lim in _TABLES[family]:
-            parts.append("%s|%s|%s|%s|%s" % (family, token, entry, req, lim))
-    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+    return COMPONENT_CATALOG_SEMANTIC_SHA256
 
 
 # --- Typed route constants (the internal currency of the lowering layer) -----------------------
@@ -418,5 +375,6 @@ def _provider_factory(kind: Any) -> str:
             "davis": "Davis()"}.get(kind, "the matching provider")
 
 
-__all__ = ["Route", "resolve", "routes_of", "route_manifest", "check_riemann_capability",
+__all__ = ["Route", "resolve", "routes_of", "route_manifest", "component_manifests",
+           "check_riemann_capability",
            "check_wave_speed_provider", "euler_layout_ok", "riemann_missing_capabilities"]

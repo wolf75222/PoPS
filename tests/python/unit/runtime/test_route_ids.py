@@ -46,6 +46,24 @@ def test_route_manifest_registry_integrity():
         seen.add(row["id"])
 
 
+def test_route_component_contract_is_immutable_and_classifies_metadata():
+    route = routes.resolve("transport", "exb")
+    with pytest.raises(TypeError):
+        route.metadata["n_vars"] = 99
+    with pytest.raises(AttributeError):
+        route.metadata["parameters"].append("hidden")
+    with pytest.raises(AttributeError):
+        route.family = "elliptic"
+
+    manifest = route.component_manifest()
+    assert manifest.parameters == ("B0",)
+    capability_names = {row["name"] for row in manifest.capabilities}
+    assert capability_names == {"n_vars", "polar_ok"}
+    docs = manifest.extensions["pops://schemas/extensions/route-inspection"]["data"]
+    assert docs["summary"].startswith("scalar ExB drift")
+    assert "summary" not in capability_names and "parameters" not in capability_names
+
+
 def test_spatial_defaults_lower_to_typed_routes():
     # Group 2: the Spatial defaults are typed Routes whose str value stays the historical token.
     spatial = pops.Spatial()

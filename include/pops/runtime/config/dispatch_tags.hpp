@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/runtime/config/generated_component_catalog.hpp>
+
 #include <stdexcept>
 #include <string>
 
@@ -25,51 +27,25 @@
 
 namespace pops {
 
-/// Tag of a reconstruction LIMITER: user-facing name + halo width (n_ghost) required by its
-/// stencil. MIRROR of the::n_ghost constants of the types (NoSlope=1, Minmod=2, VanLeer=2,
-/// Weno5=3, cf. numerics/reconstruction.hpp): a static_assert on the block_builder.hpp side (which
-/// sees both) locks the absence of drift between this table and the real types.
-struct LimiterTag {
-  const char* name;
-  int n_ghost;
-};
+inline std::string riemann_tags_csv(bool polar_only = false) {
+  std::string result;
+  for (const RiemannTag& route : kRiemanns) {
+    if (polar_only && !route.polar_ok)
+      continue;
+    if (!result.empty())
+      result += '|';
+    result += route.name;
+  }
+  return result;
+}
 
-/// SINGLE SOURCE of the wired limiters (order = display priority: none < minmod < vanleer < weno5).
-inline constexpr LimiterTag kLimiters[] = {
-    {"none", 1}, {"minmod", 2}, {"vanleer", 2}, {"weno5", 3}};
-
-/// Tag of a Riemann FLUX: name + model CAPABILITY needs (DOCUMENTARY: the real guard is an
-/// `if constexpr` per model at the call-site -- these flags do NOT drive the dispatch, they
-/// document the contract and serve the tests). polar_ok = wired in polar geometry.
-///   - needs_wave_speeds: hll requires model.wave_speeds (signed waves);
-///   - needs_hllc_struct: hllc requires HasHLLCStructure (or canonical 2D Euler path);
-///   - needs_roe_diss: roe  requires HasRoeDissipation (or canonical 2D Euler path).
-struct RiemannTag {
-  const char* name;
-  bool needs_wave_speeds;
-  bool needs_hllc_struct;
-  bool needs_roe_diss;
-  bool polar_ok;
-};
-
-/// SINGLE SOURCE of the wired Riemann fluxes (order = message
-/// "(rusanov|hll|hllc|roe|euler_hllc|euler_roe)"). euler_hllc / euler_roe are the EXPLICIT canonical
-/// Euler 2D routes (ADC-590): they carry no capability need of their own (the 4-var + pressure layout
-/// is checked at the call-site `if constexpr`), and are not wired in polar geometry.
-inline constexpr RiemannTag kRiemanns[] = {
-    {"rusanov", false, false, false, true},     {"hll", true, false, false, true},
-    {"hllc", false, true, false, false},        {"roe", false, false, true, false},
-    {"euler_hllc", false, false, false, false}, {"euler_roe", false, false, false, false}};
-
-/// Halo width required by the limiter @p lim (source: kLimiters). Default 2 (MUSCL) for an unknown
-/// limiter: this is the HISTORICAL allocation of block_n_ghost -> bit-identical (the make_block
-/// dispatch will throw anyway on an invalid limiter). Used to size the state MultiFab of a block
-/// (wide WENO5 stencil: 5 points, 3 ghosts).
+/// Halo width required by the limiter @p lim (source: generated kLimiters).
+/// Unknown tokens are refused here; allocation can never silently choose a different stencil.
 inline int limiter_n_ghost(const std::string& lim) {
   for (const LimiterTag& t : kLimiters)
     if (lim == t.name)
       return t.n_ghost;
-  return 2;  // MUSCL fallback (historical allocation)
+  throw std::runtime_error("limiter_n_ghost: unknown limiter '" + lim + "'");
 }
 
 namespace detail {
@@ -107,8 +83,8 @@ inline void validate_limiter(const std::string& lim, const char* ctx = "System")
 }
 
 /// Validates a Riemann FLUX tag against kRiemanns. @p polar: annular geometry (rusanov and hll are
-/// wired there). Throws if unknown (cartesian) or not wired in polar, with the HISTORICAL messages
-/// (some tests grep "Riemann flux", "rusanov", "unsupported"). Does NOT validate the model
+/// wired there). Throws if unknown (cartesian) or not wired in polar, naming the generated valid
+/// set. Does NOT validate the model
 /// capabilities (hll/hllc/roe on a transport without signed waves / without pressure): these guards
 /// stay `if constexpr` PER MODEL at the call-site, with their "requires ..." messages unchanged.
 inline void validate_riemann(const std::string& riem, bool polar = false,
@@ -120,17 +96,15 @@ inline void validate_riemann(const std::string& riem, bool polar = false,
     for (const RiemannTag& t : kRiemanns)
       if (riem == t.name && t.polar_ok)
         return;
-    throw std::runtime_error(
-        std::string(ctx) + ": Riemann flux '" + riem +
-        "' unsupported (polar -> 'rusanov' | 'hll' (signed wave speeds); HLLC/Roe "
-        "assume n_vars==4 (Euler with energy), not applicable to scalar ExB or the polar "
-        "isothermal fluid)");
+    throw std::runtime_error(std::string(ctx) + ": Riemann flux '" + riem +
+                             "' unsupported for polar geometry (valid: " +
+                             riemann_tags_csv(true) + "); no fallback");
   }
   for (const RiemannTag& t : kRiemanns)
     if (riem == t.name)
       return;
   throw std::runtime_error(std::string(ctx) + ": unknown Riemann flux '" + riem +
-                           "' (rusanov|hll|hllc|roe|euler_hllc|euler_roe)");
+                           "' (valid: " + riemann_tags_csv() + "); no fallback");
 }
 
 /// DEFENSE-IN-DEPTH guard: reached only if a VALID tag (already accepted by validate_*) is routed

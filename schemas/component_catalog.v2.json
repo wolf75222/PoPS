@@ -1,0 +1,864 @@
+{
+  "catalog_schema_version": 1,
+  "component_manifest_schema_version": 2,
+  "route_registry_version": 2,
+  "capability_vocabulary_version": 1,
+  "manifest_schema": {
+    "semantic_fields": [
+      "schema_version",
+      "uri",
+      "component_type",
+      "version",
+      "facets",
+      "signature",
+      "reads",
+      "writes",
+      "parameters",
+      "interfaces",
+      "requirements",
+      "capabilities",
+      "effects",
+      "layouts",
+      "clocks",
+      "target",
+      "determinism",
+      "restart",
+      "precision",
+      "conservation",
+      "entry_points"
+    ],
+    "top_level_fields": [
+      "schema_version",
+      "uri",
+      "component_type",
+      "version",
+      "facets",
+      "signature",
+      "reads",
+      "writes",
+      "parameters",
+      "interfaces",
+      "requirements",
+      "capabilities",
+      "effects",
+      "layouts",
+      "clocks",
+      "target",
+      "determinism",
+      "restart",
+      "precision",
+      "conservation",
+      "entry_points",
+      "extensions",
+      "digests"
+    ],
+    "target_fields": [
+      "variants"
+    ],
+    "digest_fields": [
+      "semantic",
+      "manifest"
+    ],
+    "extension_kinds": [
+      "documentary",
+      "semantic"
+    ]
+  },
+  "route_component_defaults": {
+    "version": {
+      "major": 1,
+      "minor": 0,
+      "patch": 0
+    },
+    "facets": [],
+    "signature": {},
+    "reads": [],
+    "writes": [],
+    "parameters": [],
+    "interfaces": [],
+    "effects": [],
+    "layouts": [],
+    "clocks": [],
+    "target": {
+      "variants": [
+        {
+          "dimension": 2,
+          "scalar": "float64",
+          "device": "cpu",
+          "features": []
+        }
+      ]
+    },
+    "determinism": {
+      "classification": "unspecified",
+      "scope": []
+    },
+    "restart": {
+      "mode": "stateless",
+      "schema_uri": "",
+      "schema_version": 0
+    },
+    "precision": {
+      "inputs": [
+        "float64"
+      ],
+      "accumulation": "float64",
+      "outputs": [
+        "float64"
+      ]
+    },
+    "conservation": [],
+    "extensions": {}
+  },
+  "route_families": [
+    {
+      "name": "riemann",
+      "cpp_enum": "RiemannRouteId",
+      "cpp_table": "kRiemannRoutes",
+      "routes": [
+        {
+          "token": "rusanov",
+          "wire_id": 0,
+          "cpp_id": "kRusanov",
+          "native_entry": "pops::RusanovFlux",
+          "requirements": [
+            "max_wave_speed"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": false,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": false,
+            "polar_ok": true
+          }
+        },
+        {
+          "token": "hll",
+          "wire_id": 1,
+          "cpp_id": "kHll",
+          "native_entry": "pops::HLLFlux",
+          "requirements": [
+            "physical_flux",
+            "wave_speeds"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": true,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": false,
+            "polar_ok": true
+          }
+        },
+        {
+          "token": "hllc",
+          "wire_id": 2,
+          "cpp_id": "kHllc",
+          "native_entry": "pops::HLLCFlux",
+          "requirements": [
+            "physical_flux",
+            "pressure",
+            "wave_speeds",
+            "contact_speed",
+            "hllc_star_state"
+          ],
+          "limitations": [
+            "polar geometry not wired; generic-only (ADC-590), requires HasHLLCStructure"
+          ],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": false,
+            "needs_hllc_struct": true,
+            "needs_roe_diss": false,
+            "polar_ok": false
+          }
+        },
+        {
+          "token": "roe",
+          "wire_id": 3,
+          "cpp_id": "kRoe",
+          "native_entry": "pops::RoeFlux",
+          "requirements": [
+            "physical_flux",
+            "roe_average"
+          ],
+          "limitations": [
+            "polar geometry not wired; generic-only (ADC-590), requires HasRoeDissipation"
+          ],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": false,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": true,
+            "polar_ok": false
+          }
+        },
+        {
+          "token": "euler_hllc",
+          "wire_id": 4,
+          "cpp_id": "kEulerHllc",
+          "native_entry": "pops::EulerHLLCFlux2D",
+          "requirements": [
+            "physical_flux",
+            "pressure",
+            "euler_2d_layout"
+          ],
+          "limitations": [
+            "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
+          ],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": false,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": false,
+            "polar_ok": false
+          }
+        },
+        {
+          "token": "euler_roe",
+          "wire_id": 5,
+          "cpp_id": "kEulerRoe",
+          "native_entry": "pops::EulerRoeFlux2D",
+          "requirements": [
+            "physical_flux",
+            "pressure",
+            "euler_2d_layout"
+          ],
+          "limitations": [
+            "4-variable canonical Euler (rho,mx,my,E) only; explicit route, never a fallback; polar not wired"
+          ],
+          "aliases": [],
+          "metadata": {
+            "needs_wave_speeds": false,
+            "needs_hllc_struct": false,
+            "needs_roe_diss": false,
+            "polar_ok": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "limiter",
+      "cpp_enum": "LimiterRouteId",
+      "cpp_table": "kLimiterRoutes",
+      "routes": [
+        {
+          "token": "none",
+          "wire_id": 0,
+          "cpp_id": "kNone",
+          "native_entry": "pops::NoSlope",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 1
+          }
+        },
+        {
+          "token": "minmod",
+          "wire_id": 1,
+          "cpp_id": "kMinmod",
+          "native_entry": "pops::Minmod",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 2
+          }
+        },
+        {
+          "token": "vanleer",
+          "wire_id": 2,
+          "cpp_id": "kVanLeer",
+          "native_entry": "pops::VanLeer",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 2
+          }
+        },
+        {
+          "token": "weno5",
+          "wire_id": 3,
+          "cpp_id": "kWeno5",
+          "native_entry": "pops::Weno5Z",
+          "requirements": [
+            "3-cell halo"
+          ],
+          "limitations": [
+            "prototype backend not wired (host order-1 residual)"
+          ],
+          "aliases": [],
+          "metadata": {
+            "n_ghost": 3
+          }
+        }
+      ]
+    },
+    {
+      "name": "recon",
+      "cpp_enum": "ReconRouteId",
+      "cpp_table": "kReconRoutes",
+      "routes": [
+        {
+          "token": "conservative",
+          "wire_id": 0,
+          "cpp_id": "kConservative",
+          "native_entry": "pops::make_block(recon_prim=false)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "primitive",
+          "wire_id": 1,
+          "cpp_id": "kPrimitive",
+          "native_entry": "pops::make_block(recon_prim=true)",
+          "requirements": [
+            "primitive_vars"
+          ],
+          "limitations": [
+            "requires a model exposing primitive variables"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "time",
+      "cpp_enum": "TimeRouteId",
+      "cpp_table": "kTimeRoutes",
+      "routes": [
+        {
+          "token": "explicit",
+          "wire_id": 0,
+          "cpp_id": "kExplicitSsprk2",
+          "native_entry": "pops::SSPRK2",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [
+            "ssprk2"
+          ],
+          "metadata": {}
+        },
+        {
+          "token": "ssprk3",
+          "wire_id": 1,
+          "cpp_id": "kSsprk3",
+          "native_entry": "pops::SSPRK3",
+          "requirements": [],
+          "limitations": [
+            "aot .so ABI not wired (SSPRK2-only extern C entry); native add_block/add_native_block only"
+          ],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "euler",
+          "wire_id": 2,
+          "cpp_id": "kForwardEuler",
+          "native_entry": "pops::ForwardEuler",
+          "requirements": [],
+          "limitations": [
+            "aot .so ABI not wired; native add_block/add_native_block only; validation use, never default"
+          ],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "imex",
+          "wire_id": 3,
+          "cpp_id": "kImex",
+          "native_entry": "pops::AdvanceImex",
+          "requirements": [
+            "implicit source term"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "imexrk_ars222",
+          "wire_id": 4,
+          "cpp_id": "kImexRkArs222",
+          "native_entry": "pops::ImexRkArs222",
+          "requirements": [
+            "implicit source term"
+          ],
+          "limitations": [
+            "composed native add_block only (.so ABIs do not carry the RK tableau)"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "splitting",
+      "cpp_enum": "SplittingRouteId",
+      "cpp_table": "kSplittingRoutes",
+      "routes": [
+        {
+          "token": "lie",
+          "wire_id": 0,
+          "cpp_id": "kLie",
+          "native_entry": "pops::SystemStepper(lie)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "strang",
+          "wire_id": 1,
+          "cpp_id": "kStrang",
+          "native_entry": "pops::SystemStepper(strang)",
+          "requirements": [],
+          "limitations": [
+            "H(dt/2) S(dt) H(dt/2); requires a condensed source stage"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "field_solver",
+      "cpp_enum": "FieldSolverRouteId",
+      "cpp_table": "kFieldSolverRoutes",
+      "routes": [
+        {
+          "token": "geometric_mg",
+          "wire_id": 0,
+          "cpp_id": "kGeometricMg",
+          "native_entry": "pops::GeometricMG",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "fft",
+          "wire_id": 1,
+          "cpp_id": "kFft",
+          "native_entry": "pops::PoissonFFTSolver",
+          "requirements": [
+            "periodic bc",
+            "constant coefficient"
+          ],
+          "limitations": [
+            "walls / variable epsilon not wired; non power-of-two grid falls back to O(n^2) DFT"
+          ],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "fft_spectral",
+          "wire_id": 2,
+          "cpp_id": "kFftSpectral",
+          "native_entry": "pops::PoissonFFTSolver(spectral)",
+          "requirements": [
+            "periodic bc",
+            "constant coefficient"
+          ],
+          "limitations": [
+            "walls / variable epsilon not wired; continuous symbol -(kx^2+ky^2)"
+          ],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "polar",
+          "wire_id": 3,
+          "cpp_id": "kPolar",
+          "native_entry": "pops::PolarPoissonSolver",
+          "requirements": [
+            "polar geometry"
+          ],
+          "limitations": [
+            "annular polar only (r_min > 0)"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "poisson_bc",
+      "cpp_enum": "PoissonBcRouteId",
+      "cpp_table": "kPoissonBcRoutes",
+      "routes": [
+        {
+          "token": "auto",
+          "wire_id": 0,
+          "cpp_id": "kAuto",
+          "native_entry": "resolved from the wall/periodic system config",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "periodic",
+          "wire_id": 1,
+          "cpp_id": "kPeriodic",
+          "native_entry": "pops::fill_boundary(periodic)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "dirichlet",
+          "wire_id": 2,
+          "cpp_id": "kDirichlet",
+          "native_entry": "pops::PhysicalBc(dirichlet)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "neumann",
+          "wire_id": 3,
+          "cpp_id": "kNeumann",
+          "native_entry": "pops::PhysicalBc(neumann)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "layout",
+      "cpp_enum": "LayoutRouteId",
+      "cpp_table": "kLayoutRoutes",
+      "routes": [
+        {
+          "token": "uniform",
+          "wire_id": 0,
+          "cpp_id": "kUniform",
+          "native_entry": "pops::System",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "amr",
+          "wire_id": 1,
+          "cpp_id": "kAmr",
+          "native_entry": "pops::AmrSystem",
+          "requirements": [],
+          "limitations": [
+            "refinement ratio 2 (kAmrRefRatio); fft field solver not wired"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "transport",
+      "cpp_enum": "TransportRouteId",
+      "cpp_table": "kTransportRoutes",
+      "routes": [
+        {
+          "token": "exb",
+          "wire_id": 0,
+          "cpp_id": "kExb",
+          "native_entry": "pops::ExBVelocity",
+          "requirements": [],
+          "limitations": [
+            "scalar (1 var); no fluid source"
+          ],
+          "aliases": [],
+          "metadata": {
+            "n_vars": 1,
+            "polar_ok": true,
+            "parameters": [
+              "B0"
+            ],
+            "summary": "scalar ExB drift advection, v = (-d_y phi, d_x phi) / B0"
+          }
+        },
+        {
+          "token": "compressible",
+          "wire_id": 1,
+          "cpp_id": "kCompressible",
+          "native_entry": "pops::CompressibleFlux",
+          "requirements": [],
+          "limitations": [
+            "polar geometry not wired"
+          ],
+          "aliases": [],
+          "metadata": {
+            "n_vars": 4,
+            "polar_ok": false,
+            "parameters": [
+              "gamma"
+            ],
+            "summary": "compressible Euler, 4 var (rho, rho u, rho v, E)"
+          }
+        },
+        {
+          "token": "isothermal",
+          "wire_id": 2,
+          "cpp_id": "kIsothermal",
+          "native_entry": "pops::IsothermalFlux",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "n_vars": 3,
+            "polar_ok": true,
+            "parameters": [
+              "cs2",
+              "vacuum_floor"
+            ],
+            "summary": "isothermal Euler, 3 var (rho, rho u, rho v)"
+          }
+        }
+      ]
+    },
+    {
+      "name": "source",
+      "cpp_enum": "SourceRouteId",
+      "cpp_table": "kSourceRoutes",
+      "routes": [
+        {
+          "token": "none",
+          "wire_id": 0,
+          "cpp_id": "kNone",
+          "native_entry": "pops::NoSource",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "min_vars": 1,
+            "parameters": [],
+            "summary": "neutral: no source term"
+          }
+        },
+        {
+          "token": "potential",
+          "wire_id": 1,
+          "cpp_id": "kPotential",
+          "native_entry": "pops::PotentialForce",
+          "requirements": [
+            "fluid transport (>= 3 vars)"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "min_vars": 3,
+            "parameters": [
+              "qom"
+            ],
+            "summary": "(q/m) rho E electrostatic force"
+          }
+        },
+        {
+          "token": "gravity",
+          "wire_id": 2,
+          "cpp_id": "kGravity",
+          "native_entry": "pops::GravityForce",
+          "requirements": [
+            "fluid transport (>= 3 vars)"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "min_vars": 3,
+            "parameters": [],
+            "summary": "rho g gravity force"
+          }
+        },
+        {
+          "token": "magnetic",
+          "wire_id": 3,
+          "cpp_id": "kMagneticLorentz",
+          "native_entry": "pops::MagneticLorentzForce",
+          "requirements": [
+            "fluid transport (>= 3 vars)",
+            "aux B_z channel"
+          ],
+          "limitations": [
+            "explicit regime (stiff regime -> condensed Schur stage)"
+          ],
+          "aliases": [
+            "lorentz"
+          ],
+          "metadata": {
+            "min_vars": 3,
+            "parameters": [
+              "qom"
+            ],
+            "summary": "q v x B_z magnetized Lorentz force (explicit regime)"
+          }
+        },
+        {
+          "token": "potential_magnetic",
+          "wire_id": 4,
+          "cpp_id": "kPotentialMagneticLorentz",
+          "native_entry": "pops::CompositeSource<PotentialForce, MagneticLorentzForce>",
+          "requirements": [
+            "fluid transport (>= 3 vars)",
+            "aux B_z channel"
+          ],
+          "limitations": [],
+          "aliases": [
+            "potential_lorentz"
+          ],
+          "metadata": {
+            "min_vars": 3,
+            "parameters": [
+              "qom"
+            ],
+            "summary": "electrostatic + Lorentz, summed"
+          }
+        }
+      ]
+    },
+    {
+      "name": "elliptic",
+      "cpp_enum": "EllipticRouteId",
+      "cpp_table": "kEllipticRoutes",
+      "routes": [
+        {
+          "token": "charge",
+          "wire_id": 0,
+          "cpp_id": "kCharge",
+          "native_entry": "pops::ChargeDensity",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "parameters": [
+              "q"
+            ],
+            "summary": "rho - q : charge density (Poisson source)"
+          }
+        },
+        {
+          "token": "background",
+          "wire_id": 1,
+          "cpp_id": "kBackground",
+          "native_entry": "pops::BackgroundDensity",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "parameters": [
+              "alpha",
+              "n0"
+            ],
+            "summary": "alpha (rho - n0) : neutralizing background"
+          }
+        },
+        {
+          "token": "gravity",
+          "wire_id": 2,
+          "cpp_id": "kGravity",
+          "native_entry": "pops::GravityCoupling",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {
+            "parameters": [
+              "sign",
+              "four_pi_G",
+              "rho0"
+            ],
+            "summary": "sign * 4 pi G (rho - rho0) : gravitational coupling"
+          }
+        }
+      ]
+    },
+    {
+      "name": "source_stage",
+      "cpp_enum": "SourceStageRouteId",
+      "cpp_table": "kSourceStageRoutes",
+      "routes": [
+        {
+          "token": "electrostatic_lorentz",
+          "wire_id": 0,
+          "cpp_id": "kElectrostaticLorentz",
+          "native_entry": "pops::ElectrostaticLorentzCondensedSchur",
+          "requirements": [
+            "magnetic field B_z",
+            "system potential phi"
+          ],
+          "limitations": [
+            "theta in (0, 1]"
+          ],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "poisson_rhs",
+      "cpp_enum": "PoissonRhsRouteId",
+      "cpp_table": "kPoissonRhsRoutes",
+      "routes": [
+        {
+          "token": "charge_density",
+          "wire_id": 0,
+          "cpp_id": "kChargeDensity",
+          "native_entry": "per-block ChargeDensity bricks summed",
+          "requirements": [],
+          "limitations": [
+            "alias of composite when every block carries a charge density (bit-identical)"
+          ],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "composite",
+          "wire_id": 1,
+          "cpp_id": "kComposite",
+          "native_entry": "per-block elliptic bricks summed",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    },
+    {
+      "name": "wall",
+      "cpp_enum": "WallRouteId",
+      "cpp_table": "kWallRoutes",
+      "routes": [
+        {
+          "token": "none",
+          "wire_id": 0,
+          "cpp_id": "kNone",
+          "native_entry": "no wall (fully periodic/physical domain)",
+          "requirements": [],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        },
+        {
+          "token": "circle",
+          "wire_id": 1,
+          "cpp_id": "kCircle",
+          "native_entry": "pops::make_wall_predicate(circle)",
+          "requirements": [
+            "wall_radius > 0"
+          ],
+          "limitations": [],
+          "aliases": [],
+          "metadata": {}
+        }
+      ]
+    }
+  ]
+}

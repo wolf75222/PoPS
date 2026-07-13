@@ -15,6 +15,7 @@ time/coupling) and a high layer never depends on an execution detail.
 
 - [Overview](#overview)
 - [The layers](#the-layers)
+- [Component contracts and generated catalog](#component-contracts-and-generated-catalog)
 - [Grid conventions](#grid-conventions)
 - [AMR coarse-fine stencil (reflux)](#amr-coarse-fine-stencil-reflux)
 - [Pipeline of a time step](#pipeline-of-a-time-step)
@@ -135,6 +136,46 @@ PoPS is organized into five orthogonal layers. A high layer expresses the proble
 
 **Time / coupling.** The layer that composes the operators without knowing their internal implementation: SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)), splitting `lie_step` / `strang_step` ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names, per block, the temporal treatment and the number of substeps; the scheduler reads this policy and calls the adapted operator without knowing the flux formula. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/pops/coupling/base/coupling_policy.hpp`](../include/pops/coupling/base/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/pops/coupling/system/system_coupler.hpp`](../include/pops/coupling/system/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)). Inter-species couplings are TYPED operators: a `CouplingOperator` ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) wraps the flat coupled-source program with a DECLARED conservation contract (which roles it conserves versus creates) and a frequency bound, validated at registration and enumerable read-only via `System::coupled_operators()` (and the AMR mirror). The named couplings (ionization, collision, thermal exchange) are now Python presets that lower to this one representation; there is no named C++ coupling method per coupling.
 
+
+## Component contracts and generated catalog
+
+Every source, native, or externally supplied component crosses composition and loading boundaries
+with a schema-v2 `ComponentManifest`. The manifest is an immutable contract, not a report assembled
+after lowering. Its stable component identifier is the namespaced `uri` plus semantic `version`; its
+semantic payload declares the component type and facets, call signature, reads and writes,
+parameters, provided interfaces, requirements and capabilities, effects, admissible layouts and
+clocks, correlated target variants (dimension/scalar/device/required features), determinism,
+restart schema, precision,
+conservation properties, and named entry points.
+
+Two domain-separated identities are deliberate:
+
+- `semantic_digest` covers every behavior-bearing field and every registered semantic extension;
+- `manifest_digest` additionally covers documentary extensions and is the identity of the complete
+  manifest.
+
+Changing a summary or provenance note therefore does not invalidate scientific semantics. A
+semantic extension must name an absolute schema URI and a positive schema version, and must be
+validated by a registered `ComponentExtensionSchema`; unversioned or unknown semantic extension
+data is refused. Unknown top-level fields are also refused. Values use the closed PoPS canonical
+CBOR vocabulary (no binary floats or opaque Python values), so Python and C++ produce identical
+bytes and SHA-256 identities.
+
+Builtin routes and model bricks have one declaration authority:
+[`schemas/component_catalog.v2.json`](../schemas/component_catalog.v2.json). It owns stable wire IDs,
+aliases, native entry points, requirements, limitations, route metadata, component defaults, and the
+manifest/capability schema versions. [`scripts/generate_component_catalog.py`](../scripts/generate_component_catalog.py)
+generates the Python route/schema products and the C++ catalog header. `routes.py`, `route_ids.hpp`,
+and the Python/C++ brick inspection APIs contain behavior only; they must never declare mirrored
+rows or fallback defaults. The generator's `--check` mode is a CI drift gate. The semantic catalog
+digest enters native route signatures and compiled-artifact cache keys; the full digest additionally
+authenticates documentary summaries and limitations without forcing recompilation.
+
+Adding a builtin component is consequently one catalog change followed by regeneration. Adding an
+external family does not require a base-class branch: it implements the small facet protocols named
+by its manifest, registers that manifest, and lowers through an advertised entry point. Unsupported
+targets and missing capabilities fail with a path, error code, and machine-readable evidence before
+native execution.
 
 ## Grid conventions
 

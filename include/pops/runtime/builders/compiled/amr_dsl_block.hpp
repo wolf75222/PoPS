@@ -21,6 +21,7 @@
 #include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // model_nparams / model_param_defaults (ADC-514)
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE tag registry (validate_limiter/riemann)
+#include <pops/runtime/config/route_ids.hpp>
 
 #include <algorithm>  // std::find, std::sort (resolving the partial IMEX mask of a compiled block)
 #include <functional>
@@ -1294,11 +1295,13 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
         "add_compiled_model(AmrSystem): time='ssprk3' not carried by the "
         "compiled path (.so); use a native block pops.Model(...).");
   if (time != "explicit" && time != "imex")
-    throw std::runtime_error("add_compiled_model(AmrSystem): time '" + time +
-                             "' unknown (explicit|imex)");
+    throw std::runtime_error(
+        "add_compiled_model(AmrSystem): time '" + time + "' unknown (available here: " +
+        std::string(route_token(TimeRouteId::kExplicitSsprk2)) + "|" +
+        route_token(TimeRouteId::kImex) + ")");
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("add_compiled_model(AmrSystem): recon unknown '" + recon +
-                             "' (conservative|primitive)");
+                             "' (valid: " + kReconRouteTokensCsv + ")");
   const bool recon_prim = (recon == "primitive");
   const bool imex = (time == "imex");
   // NATIVE per-block RUNTIME parameters (ADC-514): the model's runtime-param count is known HERE (the

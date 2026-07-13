@@ -66,12 +66,17 @@ from .component_protocols import (
     Stencil,
 )
 from .component_registry import (
-    COMPONENT_MANIFEST_SCHEMA_VERSION,
-    ComponentManifest,
     ComponentRecord,
     ComponentRegistry,
     ComponentRegistrySnapshot,
 )
+from ._component_manifest import (
+    ComponentExtensionSchema,
+    ComponentManifest,
+    ComponentManifestError,
+    ComponentVersion,
+)
+from ._generated_component_schema import COMPONENT_MANIFEST_SCHEMA_VERSION
 from .provider_pack import (
     ComponentContract,
     ComponentKey,
@@ -124,7 +129,8 @@ __all__ = [
     "build_module_manifest",
     "Requirement", "Lowering", "Stencil", "Stability", "Provider", "Effects",
     "Restart", "Report", "FallibleEvaluation",
-    "COMPONENT_MANIFEST_SCHEMA_VERSION", "ComponentManifest", "ComponentRecord",
+    "COMPONENT_MANIFEST_SCHEMA_VERSION", "ComponentExtensionSchema", "ComponentManifest",
+    "ComponentManifestError", "ComponentVersion", "ComponentRecord",
     "ComponentRegistry", "ComponentRegistrySnapshot",
     "ComponentKey", "ComponentContract", "ProviderEntry", "ProviderPack",
     "MissingInputProvider", "build_provider_pack",

@@ -7,147 +7,8 @@ import inspect
 from types import MappingProxyType
 from typing import Any
 
-from pops.identity import Identity, canonical_bytes, make_identity
-
+from ._component_manifest import ComponentManifest
 from .component_protocols import FACET_PROTOCOLS
-
-
-COMPONENT_MANIFEST_SCHEMA_VERSION = 1
-
-
-def _positive_int(value: Any, *, where: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError("%s must be an integer >= 1" % where)
-    return value
-
-
-def _component_id(value: Any) -> str:
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError("component_id must be a non-empty canonical string")
-    return value
-
-
-def _freeze(value: Any, *, where: str = "manifest") -> Any:
-    """Freeze the strict canonical value language without changing its meaning."""
-    if value is None or isinstance(value, (bool, int, str, bytes)):
-        # Ask the canonical encoder to enforce int64 and Unicode constraints now.
-        canonical_bytes(value)
-        return value
-    if isinstance(value, float):
-        raise TypeError("%s cannot contain floats" % where)
-    if isinstance(value, Mapping):
-        frozen = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise TypeError("%s map keys must be strings" % where)
-            frozen[key] = _freeze(item, where="%s.%s" % (where, key))
-        return MappingProxyType(frozen)
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item, where="%s[]" % where) for item in value)
-    if isinstance(value, (set, frozenset)):
-        raise TypeError("%s cannot contain unordered sets" % where)
-    raise TypeError("%s contains opaque %s" % (where, type(value).__name__))
-
-
-def _thaw(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: _thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_thaw(item) for item in value]
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class ComponentManifest:
-    """Strict immutable identity input for one registered component."""
-
-    component_id: str
-    version: int
-    facets: tuple[str, ...] = ()
-    content: Mapping[str, Any] = field(default_factory=dict)
-    schema_version: int = COMPONENT_MANIFEST_SCHEMA_VERSION
-    content_digest: Identity = field(init=False, repr=False)
-    _bytes: bytes = field(init=False, repr=False, compare=False)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "component_id", _component_id(self.component_id))
-        object.__setattr__(self, "version", _positive_int(self.version, where="version"))
-        schema = _positive_int(self.schema_version, where="schema_version")
-        if schema != COMPONENT_MANIFEST_SCHEMA_VERSION:
-            raise ValueError(
-                "unsupported component manifest schema_version %d (expected %d)"
-                % (schema, COMPONENT_MANIFEST_SCHEMA_VERSION)
-            )
-        if not isinstance(self.facets, (list, tuple)):
-            raise TypeError("component manifest facets must be a list or tuple")
-        facets = tuple(self.facets)
-        if any(not isinstance(facet, str) or not facet for facet in facets):
-            raise TypeError("component manifest facets must be non-empty strings")
-        if len(set(facets)) != len(facets):
-            raise ValueError("component manifest facets must be unique")
-        unknown = sorted(set(facets) - set(FACET_PROTOCOLS))
-        if unknown:
-            raise ValueError("unknown component facet(s): %s" % ", ".join(unknown))
-        facets = tuple(sorted(facets))
-        if not isinstance(self.content, Mapping):
-            raise TypeError("component manifest content must be a string-keyed mapping")
-        frozen_content = _freeze(self.content, where="component manifest content")
-        object.__setattr__(self, "facets", facets)
-        object.__setattr__(self, "content", frozen_content)
-        payload = self.to_data(include_digest=False)
-        encoded = canonical_bytes(payload)
-        object.__setattr__(self, "_bytes", encoded)
-        object.__setattr__(
-            self, "content_digest", make_identity("component-manifest", payload,
-                                                   schema_version=schema)
-        )
-
-    @property
-    def digest(self) -> str:
-        """Printable canonical digest token (the typed value is ``content_digest``)."""
-        return self.content_digest.token
-
-    @property
-    def content_bytes(self) -> bytes:
-        return self._bytes
-
-    def to_bytes(self) -> bytes:
-        return self.content_bytes
-
-    def to_data(self, *, include_digest: bool = True) -> dict[str, Any]:
-        data = {
-            "schema_version": self.schema_version,
-            "component_id": self.component_id,
-            "version": self.version,
-            "facets": list(self.facets),
-            "content": _thaw(self.content),
-        }
-        if include_digest:
-            data["digest"] = self.content_digest.token
-        return data
-
-    @classmethod
-    def from_data(cls, data: Any) -> ComponentManifest:
-        required = {
-            "schema_version", "component_id", "version", "facets", "content", "digest",
-        }
-        if not isinstance(data, Mapping) or set(data) != required:
-            raise TypeError(
-                "ComponentManifest data must contain exactly %s" % sorted(required)
-            )
-        result = cls(
-            component_id=data["component_id"],
-            version=data["version"],
-            facets=data["facets"],
-            content=data["content"],
-            schema_version=data["schema_version"],
-        )
-        supplied = Identity.from_token(data["digest"])
-        if supplied != result.content_digest:
-            raise ValueError("ComponentManifest digest does not match its canonical content")
-        if result.to_data() != dict(data):
-            raise ValueError("ComponentManifest data is not in canonical form")
-        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,11 +89,12 @@ class ComponentRegistry:
         self._validate_facets(component, manifest)
         previous = self._by_id.get(manifest.component_id)
         if previous is not None:
-            if previous.manifest.content_bytes == manifest.content_bytes:
+            if previous.manifest.semantic_bytes == manifest.semantic_bytes:
                 return previous.component
             raise ValueError(
-                "component identity collision for %r: existing digest %s, incoming digest %s"
-                % (manifest.component_id, previous.manifest.digest, manifest.digest)
+                "component identity collision for %r: existing semantics %s, incoming semantics %s"
+                % (manifest.component_id, previous.manifest.semantic_digest.token,
+                   manifest.semantic_digest.token)
             )
         record = ComponentRecord(manifest, component)
         self._by_id[manifest.component_id] = record
@@ -242,6 +104,9 @@ class ComponentRegistry:
 
     @staticmethod
     def _validate_facets(component: Any, manifest: ComponentManifest) -> None:
+        unknown = sorted(set(manifest.facets) - set(FACET_PROTOCOLS))
+        if unknown:
+            raise ValueError("unknown component facet(s): %s" % ", ".join(unknown))
         methods = {
             "requirement": ("requirements", ()),
             "lowering": ("lower", (object(),)),
@@ -309,6 +174,5 @@ class ComponentRegistry:
 
 
 __all__ = [
-    "COMPONENT_MANIFEST_SCHEMA_VERSION", "ComponentManifest", "ComponentRecord",
-    "ComponentRegistrySnapshot", "ComponentRegistry",
+    "ComponentRecord", "ComponentRegistrySnapshot", "ComponentRegistry",
 ]

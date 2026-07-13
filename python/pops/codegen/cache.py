@@ -90,7 +90,7 @@ def _registry_cache_key() -> str:
     capabilities/reports vocabulary participate in the artifact identity: an artifact built
     against a different route set (a route added/removed/re-tokenized, a native entry renamed)
     or an older report vocabulary must be a cache MISS, never a silent reuse. The component is
-    readable ("routes=v1:<hash16>;capvocab=0") so the mismatching field is nameable in
+    readable ("routes=v2:<hash16>;capvocab=1") so the mismatching field is nameable in
     diagnostics and in compiled.inspect()."""
     from pops.runtime.routes import (CAPABILITY_VOCAB_VERSION, ROUTE_REGISTRY_VERSION,
                                      route_registry_hash)

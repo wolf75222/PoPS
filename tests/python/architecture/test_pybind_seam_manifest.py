@@ -8,9 +8,8 @@ so the growth strategy is a manifest row, not a hand-written file.
 These gates enforce that invariant WITHOUT a build (source tree only, no _pops import):
 
   1. the hand-written specialization files are GONE from git and the manifest + templates exist;
-  2. every manifest row's (transport, flux) is a legal route -- transport in the brick catalog
-     (brick_catalog.py), flux in the Riemann registry (routes.py) -- so the manifest cannot invent a
-     route and is NOT itself the descriptor registry;
+  2. every manifest row's (transport, flux) is a legal generated component-catalog route, so the
+     manifest cannot invent a route and is NOT itself the descriptor registry;
   3. no NEW hand-written .cpp under python/bindings/ carries the seam-leaf signature (build_*_for_make /
      build_amr_*_for_flux + make_block_ / dispatch_amr_): that pattern belongs in the templates only,
      so a new numeric combination cannot sneak back in as a hand-written file.
@@ -29,8 +28,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 BINDINGS = REPO_ROOT / "python" / "bindings"
 MANIFEST = BINDINGS / "seam_combinations.cmake"
 TEMPLATES = BINDINGS / "templates"
-CATALOG_PY = REPO_ROOT / "python" / "pops" / "runtime" / "brick_catalog.py"
-ROUTES_PY = REPO_ROOT / "python" / "pops" / "runtime" / "routes.py"
+GENERATED_CATALOG = (
+    REPO_ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
+)
 
 # The 19 (transport, flux) leaf TUs that USED to be hand-written and are now generated. They must NOT
 # reappear as tracked source files; regenerating them into the source tree would defeat the manifest.
@@ -77,7 +77,7 @@ def _rel(path):
 
 
 def _load_module(path, name):
-    """Load an import-free mirror module (brick_catalog.py / routes.py) by path, no pops import."""
+    """Load the import-free generated catalog by path, without importing pops or _pops."""
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -127,10 +127,11 @@ def test_manifest_covers_every_former_leaf():
 
 # --- Gate (b): every row is a legal route; the manifest cannot invent one -------------------------
 def test_every_manifest_row_is_a_catalog_and_registry_route():
-    catalog = _load_module(CATALOG_PY, "_seam_brick_catalog")
-    routes = _load_module(ROUTES_PY, "_seam_routes")
-    transports = set(catalog.catalog_ids("transport"))
-    fluxes = {row[0] for row in routes._TABLES["riemann"]}
+    catalog = _load_module(GENERATED_CATALOG, "_seam_generated_component_catalog")
+    transports = {
+        row["id"] for row in catalog.BRICK_CATALOG_ROWS if row["category"] == "transport"
+    }
+    fluxes = {row[0] for row in catalog.ROUTE_TABLES["riemann"]}
 
     violations = []
     for row in _manifest_rows():
@@ -138,11 +139,11 @@ def test_every_manifest_row_is_a_catalog_and_registry_route():
             violations.append("row %s: transport %r is not a brick_catalog transport (%s)"
                               % (row["symbol"], row["transport"], "|".join(sorted(transports))))
         if row["flux"] != "-" and row["flux"] not in fluxes:
-            violations.append("row %s: flux %r is not a routes.py Riemann id (%s)"
+            violations.append("row %s: flux %r is not a generated Riemann id (%s)"
                               % (row["symbol"], row["flux"], "|".join(sorted(fluxes))))
     assert not violations, (
         "the seam manifest is NOT the descriptor registry: every (transport, flux) must already exist "
-        "in brick_catalog.py / routes.py:\n  " + "\n  ".join(violations)
+        "in schemas/component_catalog.v2.json:\n  " + "\n  ".join(violations)
     )
 
 
