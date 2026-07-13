@@ -325,8 +325,8 @@ def test_field_facade_and_direct_lowering_share_one_ir_hash():
 # ---------------------------------------------------------------------------------------------
 # Gate 1c -- AMR: layout=AMR(...) is THE config route; sim.amr is a read-only VIEW.
 # ---------------------------------------------------------------------------------------------
-# The ONLY public AMR *configuration* entry is the AMR(...) mesh descriptor (pops/mesh/layouts and
-# pops/mesh/amr). No target-surface function may take an amr-config STRING kwarg (e.g.
+# The ONLY public AMR *configuration* entry is pops.layouts.AMR plus the authority objects in
+# pops.amr. No target-surface function may take an amr-config STRING kwarg (e.g.
 # amr="amr_system"); that vocabulary is what target=/string selectors reintroduce.
 _AMR_CONFIG_STRING_ARGS = {"amr", "amr_target"}
 
@@ -366,10 +366,9 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
     configuration mutator (no set_/configure_/add_ method that changes levels/ratio).
     """
     from pops.mesh import CartesianMesh
-    from pops.mesh.amr import RegridEvery
-    from pops.mesh.layouts import AMR
+    from tests.python.support.layout_plan import final_amr_layout
 
-    layout = AMR(base=CartesianMesh(n=16, L=1.0), max_levels=2, ratio=2, regrid=RegridEvery(4))
+    layout = final_amr_layout(CartesianMesh(n=16, L=1.0))
     manifest = layout.inspect()
     assert manifest["capabilities"]["layout"] == "amr", (
         "AMR(...) must be the typed AMR configuration surface")

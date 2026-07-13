@@ -359,7 +359,7 @@ def build_final_case(*, cells: int = DEFAULT_CELLS) -> FinalMultiphysicsCase:
     if isinstance(cells, bool) or not isinstance(cells, int) or cells < 4:
         raise ValueError("cells must be an integer >= 4")
     from pops.mesh import CartesianMesh, LayoutPlanBuilder
-    from pops.mesh.layouts import Uniform
+    from pops.layouts import Uniform
 
     authoring = build_authoring()
     pops.validate(authoring.case)

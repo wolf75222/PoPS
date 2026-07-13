@@ -10,7 +10,157 @@ from typing import Any
 
 from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.mesh._descriptor import Availability, MeshDescriptor
-from pops.mesh.layouts import Uniform
+from pops.mesh.amr import IgnoreAMRCriteria
+
+
+_LAYOUT_REPORT_SCHEMA_VERSION = 1
+
+
+def _availability_dict(status: Any) -> dict[str, Any]:
+    return {
+        "status": status.status,
+        "ok": status.ok,
+        "reason": status.reason,
+        "missing": list(status.missing),
+        "alternatives": list(status.alternatives),
+    }
+
+
+def _native_layout_report(features: Any) -> dict[str, Any]:
+    from pops._capabilities import native_capability_report
+
+    report = native_capability_report()
+    wanted = set(features)
+    return {
+        "schema_version": report.schema_version,
+        "abi_version": report.abi_version,
+        "target": report.target,
+        "abi_key": report.abi_key,
+        "platform": report.platform,
+        "routes": [row.to_dict() for row in report.routes if row.feature in wanted],
+    }
+
+
+def _layout_inspect_dict(layout: Any, *, native_features: Any, amr_report: Any = None) -> dict[str, Any]:
+    status = layout.available()
+    info = {
+        "schema_version": _LAYOUT_REPORT_SCHEMA_VERSION,
+        "report_type": "layout_inspection",
+        "name": layout.name,
+        "category": layout.category,
+        "native_id": layout.native_id,
+        "options": layout.options(),
+        "requirements": layout.requirements().to_dict(),
+        "capabilities": layout.capabilities().to_dict(),
+        "available": _availability_dict(status),
+        "native_capabilities": _native_layout_report(native_features),
+    }
+    limitations = [
+        {"feature": row["route_id"], "status": row["status"], "reason": row["reason"]}
+        for row in info["native_capabilities"]["routes"]
+        if row["status"] != "available"
+    ]
+    if not status.ok:
+        limitations.append({
+            "feature": "layout:%s" % info["capabilities"].get("layout", layout.name),
+            "status": status.status,
+            "reason": status.reason,
+        })
+    info["limitations"] = limitations
+    if amr_report is not None:
+        info["amr_report"] = amr_report.to_dict()
+    return info
+
+
+class Uniform(MeshDescriptor):
+    """A single-level layout; AMR criteria need an explicit ignore marker."""
+
+    category = "layout"
+
+    def __init__(self, mesh: Any, embedded_boundary: Any = None, refine: Any = None,
+                 ignore_amr: Any = None) -> None:
+        if ignore_amr is not None and not isinstance(ignore_amr, IgnoreAMRCriteria):
+            raise TypeError(
+                "Uniform(ignore_amr=...) accepts only the typed "
+                "pops.mesh.amr.IgnoreAMRCriteria() marker, got %r; the escape must be "
+                "the explicit descriptor, never a truthy value" % (ignore_amr,))
+        self.mesh = mesh
+        self.embedded_boundary = embedded_boundary
+        self.refine = refine
+        self.ignore_amr = ignore_amr
+
+    def options(self) -> dict[str, Any]:
+        options = {"mesh": self.mesh.name}
+        if self.embedded_boundary is not None:
+            options["embedded_boundary"] = self.embedded_boundary.name
+        if self.refine is not None:
+            options["refine"] = self.refine.name
+            options["ignore_amr"] = self.ignore_amr is not None
+        return options
+
+    def semantic_data(self) -> dict[str, Any]:
+        return {
+            "kind": "uniform",
+            "mesh": self.mesh,
+            "embedded_boundary": self.embedded_boundary,
+            "refinement": self.refine,
+            "ignore_amr": self.ignore_amr is not None,
+        }
+
+    def capabilities(self) -> CapabilitySet:
+        return CapabilitySet({
+            "layout": "uniform",
+            "levels": 1,
+            "supports_amr": False,
+            "transition_ratios": [],
+        })
+
+    def resolve_for_case(self, resolver: Any) -> Uniform:
+        if not callable(resolver):
+            raise TypeError("Uniform.resolve_for_case requires a callable Handle resolver")
+        refine = self.refine
+        if refine is not None:
+            protocol = getattr(refine, "resolve_references", None)
+            if not callable(protocol):
+                raise TypeError("Uniform.refine must implement resolve_references(resolver)")
+            refine = protocol(resolver)
+        return type(self)(
+            mesh=self.mesh,
+            embedded_boundary=self.embedded_boundary,
+            refine=refine,
+            ignore_amr=self.ignore_amr,
+        )
+
+    def validate(self, context: Any = None) -> bool:
+        if self.refine is not None and self.ignore_amr is None:
+            raise ValueError(
+                "Uniform layout cannot consume AMR refinement criteria; remove the criterion, "
+                "choose AMR, or declare IgnoreAMRCriteria() explicitly"
+            )
+        if self.refine is not None:
+            self.refine.validate(context)
+        return super().validate(context)
+
+    def inspect(self) -> dict[str, Any]:
+        from pops._capabilities_inspect import _layout_amr_report
+
+        return _layout_inspect_dict(
+            self,
+            native_features=("layout:Uniform", "layout:AMR", "mesh:2d_storage_arithmetic"),
+            amr_report=_layout_amr_report(self),
+        )
+
+    def _amr_report(self) -> Any:
+        from pops._capabilities_inspect import AmrReport, _native_amr_context
+
+        native_depth, native_ratios, _ = _native_amr_context()
+        return AmrReport(
+            layout="uniform", max_levels=1, ratio=1,
+            native_max_levels=native_depth, native_ratios=native_ratios,
+            available="yes",
+            limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
+            requirements={}, policies=[],
+        )
 
 
 _AMR_AUTHORITY_PROTOCOLS = {
@@ -147,6 +297,18 @@ class AMR(MeshDescriptor):
             "execution": self.execution.to_data(),
         }
 
+    def _summary(self) -> str:
+        """Keep descriptor printing structural; detailed authority data belongs to ``inspect``."""
+        hierarchy = _authority_data(self.hierarchy, "hierarchy")
+        execution = _authority_data(self.execution, "execution")
+        grid_name = getattr(self.grid, "name", type(self.grid).__name__)
+        return "grid=%s, max_levels=%s, transition_ratios=%s, execution=%s" % (
+            grid_name,
+            hierarchy["max_levels"],
+            hierarchy["ratios"],
+            execution["mode"],
+        )
+
     def semantic_data(self) -> dict[str, Any]:
         """Scientific adaptive structure without backend, ABI or runtime availability facts."""
         return {"kind": "amr", **self.options()}
@@ -205,6 +367,38 @@ class AMR(MeshDescriptor):
             "regrid": self.regrid.to_data(),
             "execution": self.execution.to_data(),
         }
+
+    def inspect(self) -> dict[str, Any]:
+        from pops._capabilities_inspect import _layout_amr_report
+
+        return _layout_inspect_dict(
+            self,
+            native_features=("layout:AMR", "amr:refinement_ratio", "mesh:2d_storage_arithmetic"),
+            amr_report=_layout_amr_report(self),
+        )
+
+    def _amr_report(self) -> Any:
+        from pops._capabilities_inspect import AmrReport, _native_amr_context
+
+        native_depth, native_ratios, native_note = _native_amr_context()
+        status = self.available()
+        hierarchy = _authority_data(self.hierarchy, "hierarchy")
+        ratios = tuple(hierarchy["ratios"])
+        ratio = ratios[0] if len(set(ratios)) == 1 else None
+        limitations = [native_note]
+        if not status.ok and status.reason:
+            limitations.append(status.reason)
+        return AmrReport(
+            layout="amr",
+            max_levels=hierarchy["max_levels"],
+            ratio=ratio,
+            native_max_levels=native_depth,
+            native_ratios=native_ratios,
+            available=status.status,
+            limitations=limitations,
+            requirements=self.requirements().to_dict(),
+            policies=[],
+        )
 
 
 __all__ = ["AMR", "Uniform"]

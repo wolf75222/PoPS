@@ -7,7 +7,7 @@ import pops
 from pops.codegen import _phases
 from pops.codegen._plans import BindInputs
 from pops.mesh import CartesianMesh
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 
 
 def test_every_public_phase_rejects_wrong_phase_inputs():

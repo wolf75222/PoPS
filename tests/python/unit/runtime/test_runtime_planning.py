@@ -17,7 +17,7 @@ from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimula
 from pops.codegen.lowering_coverage import LoweringCoverageReport
 from pops.mesh import CartesianMesh, LayoutPlanBuilder
 from pops.mesh.layout_plan import LayoutMappingRequirement
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot

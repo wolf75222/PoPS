@@ -282,9 +282,10 @@ def test_layout_backend_platform_are_distinct_typed_axes():
     # execution DEVICE (KokkosOpenMP / MPI / ...) are three different descriptor categories: none
     # is a substitute for another (a layout is not a target string, a platform is not a backend).
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR, Uniform
+    from pops.layouts import Uniform
+    from tests.python.support.layout_plan import final_amr_layout
     uniform = Uniform(CartesianMesh(n=64))
-    amr = AMR(base=CartesianMesh(n=64))
+    amr = final_amr_layout(CartesianMesh(n=64))
     assert uniform.category == "layout" and amr.category == "layout"
     assert Production().category == "backend"
     assert KokkosOpenMP().category == "platform"
@@ -301,8 +302,10 @@ def test_layout_descriptors_expose_no_target_string():
     # descriptor selects the structure via its capabilities()["layout"] token, NOT a target string
     # on its options -- so no "amr_system" / "system" target string leaks onto the public surface.
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR, Uniform
-    for layout, kind in ((Uniform(CartesianMesh(n=64)), "uniform"), (AMR(base=CartesianMesh(n=64)), "amr")):
+    from pops.layouts import Uniform
+    from tests.python.support.layout_plan import final_amr_layout
+    for layout, kind in ((Uniform(CartesianMesh(n=64)), "uniform"),
+                         (final_amr_layout(CartesianMesh(n=64)), "amr")):
         assert layout.capabilities().to_dict()["layout"] == kind
         opts = layout.options()
         assert "target" not in opts, opts

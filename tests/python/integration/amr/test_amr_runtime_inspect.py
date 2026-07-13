@@ -125,8 +125,8 @@ def test_explain_regrid_dynamic_vs_frozen():
     assert dyn.frozen is False and dyn.regrid_every == 4
     # The union-of-tags criteria are named (config-sourced shape, not a fabricated threshold).
     blob = " ".join(dyn.criteria)
-    # The criteria are described in the Case vocabulary (AMR(refine=Refine.on(...))).
-    assert "AMR(refine=Refine.on" in blob and "grad phi" in blob
+    # The criteria are described by the public AMR tagging authority.
+    assert "AMR tagging predicate" in blob and "grad phi" in blob
 
     frozen = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()
     assert frozen.frozen is True and frozen.regrid_every == 0
@@ -226,9 +226,6 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
     from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.mesh import CartesianMesh
-    from pops.mesh.amr import Refine, RegridEvery
-    from pops.mesh.layouts import AMR
-    from pops.model import Handle, OwnerPath
     from pops.model.bind_schema import BindSchema
     from pops.problem._snapshot import AuthoringSnapshot
 
@@ -238,9 +235,8 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     from pops.codegen._compiled_model_identity import compiled_model_identity
     cm.definition_identity = compiled_model_identity(model_hash="h")
-    rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-runtime-inspect"))
-    carried = AMR(base=CartesianMesh(n=64), regrid=RegridEvery(4),
-                  refine=Refine.on(rho).above(0.1))
+    from tests.python.support.layout_plan import final_amr_layout
+    carried = final_amr_layout(CartesianMesh(n=64))
     snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
     schema = BindSchema()
     layout_plan, layout_coverage = resolved_layout_contract(
@@ -271,11 +267,11 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     assert not hasattr(artifact, "inspect_amr")
     payload = pops.inspect(artifact.layout)["amr_report"]
     assert payload["layout"] == "amr"
-    slots = {row["slot"] for row in payload["policies"]}
-    assert "refine" in slots and "regrid" in slots
+    assert payload["max_levels"] == 2
+    assert payload["transition_ratios"] == [2]
 
     # A separately authored layout is inspected directly, with no artifact-specific override API.
-    override = pops.inspect(AMR(base=CartesianMesh(n=32)))["amr_report"]
+    override = pops.inspect(final_amr_layout(CartesianMesh(n=32)))["amr_report"]
     assert override["max_levels"] == 2 and "policies" in override
     assert {row["slot"] for row in override["policies"]} == set()
 

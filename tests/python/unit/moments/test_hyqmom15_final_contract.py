@@ -62,7 +62,7 @@ def test_final_example_resolves_and_declares_complete_rollback_surface() -> None
 
     import pops
     from pops.mesh import CartesianMesh
-    from pops.mesh.layouts import Uniform
+    from pops.layouts import Uniform
 
     resolved = pops.resolve(
         pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))

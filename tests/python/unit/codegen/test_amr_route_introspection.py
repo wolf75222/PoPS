@@ -25,7 +25,7 @@ from pops.codegen.compiled_artifact import (  # noqa: E402
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
-from pops.mesh.layouts import AMR  # noqa: E402
+from tests.python.support.layout_plan import final_amr_layout  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
@@ -55,7 +55,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
-    layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
+    layout = final_amr_layout(CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
     schema_problem = Case(name="amr-introspection-case")
     schema_problem.block("block", source)
     schema = BindSchema.from_problem(schema_problem)

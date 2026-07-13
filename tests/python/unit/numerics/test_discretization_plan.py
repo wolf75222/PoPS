@@ -11,7 +11,7 @@ from pops.math import ddt, div
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh.cartesian import CartesianMesh
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.numerics import DiscretizationPlan, FiniteVolume
 from pops.numerics.reconstruction import MUSCL
 from pops.numerics.reconstruction.limiters import VanLeer

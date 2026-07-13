@@ -42,7 +42,6 @@ from pops.mesh.amr.transfer import (
     COARSE_FINE_FILL,
     DENSE_STORAGE,
     DERIVED_FIELD,
-    FACE_CENTERED,
     FACE_X_CENTERED,
     FACE_SPACE,
     FIELD_SPACE,
@@ -67,11 +66,11 @@ from pops.lib.amr import (
     PatchTopologyRebuild,
     StateTransfer,
 )
-from pops.mesh.layouts import AMR
 from pops.model import Handle, OwnerPath, ParamHandle
 from pops.time import Clock
 from pops.identity import make_identity
 from pops.runtime._amr_bootstrap_execution import BootstrapReceipt, execute_bootstrap
+from tests.python.support.layout_plan import final_amr_layout
 
 
 OWNER = OwnerPath.case("transfer-bootstrap")
@@ -85,7 +84,7 @@ def _layout():
     state = Handle("U", kind="state", owner=OwnerPath.model("transport"))
     field = Handle("grad_u", kind="field", owner=OWNER)
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("adaptive", AMR(CartesianMesh(n=8), max_levels=2, ratio=2))
+    layout = builder.layout("adaptive", final_amr_layout(CartesianMesh(n=8)))
     builder.assign_state(state, layout)
     builder.assign_field(field, layout)
     plan = builder.resolve(states=(state,), fields=(field,))
@@ -276,7 +275,7 @@ def test_public_provider_identity_is_stable_under_declaration_reordering():
         for name in ("a", "b")
     )
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("stable", AMR(CartesianMesh(n=8), max_levels=2, ratio=2))
+    layout = builder.layout("stable", final_amr_layout(CartesianMesh(n=8)))
     for state in states:
         builder.assign_state(state, layout)
     plan = builder.resolve(states=states)
@@ -308,7 +307,7 @@ def test_field_and_cache_materializer_identities_are_owner_qualified_not_local_n
         Handle("topology", kind="cache", owner=OwnerPath.model("right")),
     )
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("qualified", AMR(CartesianMesh(n=8), max_levels=2, ratio=2))
+    layout = builder.layout("qualified", final_amr_layout(CartesianMesh(n=8)))
     builder.assign_state(state, layout)
     for field in fields:
         builder.assign_field(field, layout)
@@ -342,7 +341,7 @@ def test_cell_face_node_states_use_distinct_providers_and_exact_initial_sources(
     )
     layout_builder = LayoutPlanBuilder(OWNER)
     layout = layout_builder.layout(
-        "multi_space", AMR(CartesianMesh(n=8), max_levels=2, ratio=2)
+        "multi_space", final_amr_layout(CartesianMesh(n=8))
     )
     for state in states:
         layout_builder.assign_state(state, layout)
@@ -532,7 +531,7 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
     state = Handle("U", kind="state", owner=OwnerPath.model("three-level"))
     layout_builder = LayoutPlanBuilder(OWNER)
     layout = layout_builder.layout(
-        "three_levels", AMR(CartesianMesh(n=8), max_levels=3, ratio=2)
+        "three_levels", final_amr_layout(CartesianMesh(n=8), max_levels=3)
     )
     layout_builder.assign_state(state, layout)
     layout_plan = layout_builder.resolve(states=(state,))
@@ -594,11 +593,11 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
     )
     for failure_index in failure_indices:
         class FailingConsumer:
-            bootstrap_consumer_identity = make_identity(
-                "three-level-rollback-consumer", {"failure_index": failure_index}
-            )
-
-            def __init__(self):
+            def __init__(self, *, _failure_index=failure_index):
+                self._failure_index = _failure_index
+                self.bootstrap_consumer_identity = make_identity(
+                    "three-level-rollback-consumer", {"failure_index": _failure_index}
+                )
                 self.state = {"levels": [0], "events": []}
                 self.snapshot = {"levels": [0], "events": []}
 
@@ -606,7 +605,7 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
                 self.state["events"].append(action.identity.token)
                 if action.operation == "create_level":
                     self.state["levels"].append(action.level)
-                if len(self.state["events"]) - 1 == failure_index:
+                if len(self.state["events"]) - 1 == self._failure_index:
                     raise RuntimeError("injected late bootstrap failure")
                 return BootstrapReceipt(
                     action.identity, self.bootstrap_consumer_identity,

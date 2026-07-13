@@ -10,7 +10,7 @@ from pops.codegen._layout_resolution import LayoutCapabilityError
 from pops.codegen._resolution import CapabilityResolutionError, _layout_name
 from pops.mesh import CartesianMesh, LayoutPlanBuilder
 from pops.mesh.layout_plan import LayoutMappingRequirement
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.model import Module
 
 
@@ -32,12 +32,12 @@ def test_layout_capability_identity_is_open_and_never_guessed_from_class_name():
         def capabilities(self):
             return {"layout": "external-grid"}
 
-    class AMR:
+    class MissingCapabilities:
         pass
 
     assert _layout_name(ExternalLayout()) == "external-grid"
     with pytest.raises(CapabilityResolutionError, match="capabilities"):
-        _layout_name(AMR())
+        _layout_name(MissingCapabilities())
 
 
 def _case(name="layout-pipeline"):

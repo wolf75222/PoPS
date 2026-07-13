@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 from pathlib import Path
 
 import pops
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -69,7 +71,7 @@ def test_case_has_one_registration_spelling_per_authority() -> None:
 def test_amr_has_one_checkpoint_output_and_tagging_authority_path() -> None:
     from pops import amr as authoring_amr
     from pops.mesh import amr as mesh_amr
-    from pops.mesh.layouts import AMR as LegacyMeshAMR
+    from pops.layouts import AMR
 
     removed = _removed_amr_authorities()
     for name in removed[:5]:
@@ -78,7 +80,7 @@ def test_amr_has_one_checkpoint_output_and_tagging_authority_path() -> None:
     assert removed[5] not in authoring_amr.__all__
     assert not hasattr(authoring_amr, removed[5])
 
-    layout_parameters = inspect.signature(LegacyMeshAMR).parameters
+    layout_parameters = inspect.signature(AMR).parameters
     assert "checkpoint" not in layout_parameters
     assert "output" not in layout_parameters
 
@@ -94,11 +96,17 @@ def test_amr_has_one_checkpoint_output_and_tagging_authority_path() -> None:
         for path in (
             PACKAGE / "amr" / "authoring.py",
             PACKAGE / "mesh" / "amr" / "__init__.py",
-            PACKAGE / "mesh" / "layouts" / "__init__.py",
+            PACKAGE / "layouts" / "__init__.py",
         )
     )
     for name in removed:
         assert name not in source
+
+
+def test_mesh_layouts_legacy_package_is_absent() -> None:
+    assert not (PACKAGE / "mesh" / "layouts").exists()
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.mesh." + "layouts")
 
 
 def test_program_has_one_runtime_branch_spelling() -> None:

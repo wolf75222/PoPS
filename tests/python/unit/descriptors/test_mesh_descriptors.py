@@ -12,15 +12,16 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.mesh import CartesianMesh, PolarMesh, AuxHalo, PatchBox, BoxLayout  # noqa: E402
-from pops.mesh.layouts import Uniform, AMR  # noqa: E402
+from pops.layouts import Uniform  # noqa: E402
 from pops.mesh.amr import (  # noqa: E402
-    Refine, TagUnion, RegridEvery, FrozenRegrid, PatchLayout, ProperNesting)
+    Refine, TagUnion, RegridEvery, FrozenRegrid)
 from pops.mesh.geometry import Disc, EmbeddedBoundary  # noqa: E402
 from pops.mesh.masks import CutCell, NoMask, Staircase  # noqa: E402
 from pops.mesh.boundaries import Periodic, Physical, FaceBC, XMin  # noqa: E402
 from pops.model import Handle, OwnerPath  # noqa: E402
 from pops.ir.ops import dx, dy, sqrt  # noqa: E402
 from pops.ir import ValueExpr, Var  # noqa: E402
+from tests.python.support.layout_plan import final_amr_layout  # noqa: E402
 
 
 def _handle(name, kind="state"):
@@ -77,16 +78,14 @@ def test_uniform_layout():
 
 def test_amr_route_limits_are_explainable():
     m = CartesianMesh(n=128)
-    ok = AMR(base=m, max_levels=3, ratio=2, regrid=RegridEvery(20),
-             patches=PatchLayout(distribute_coarse=True, coarse_max_grid=32),
-             nesting=ProperNesting(buffer=1))
+    ok = final_amr_layout(m, max_levels=3, ratio=2)
     assert ok.available().ok
     ok.validate()
-    deep = AMR(base=m, max_levels=4)
+    deep = final_amr_layout(m, max_levels=4)
     assert deep.available().ok
     deep.validate()
-    with pytest.raises(ValueError, match="ratio 3"):
-        AMR(base=m, ratio=3).validate()
+    requested = final_amr_layout(m, ratio=3)
+    assert requested.capabilities().get("transition_ratios") == [3]
 
 
 def test_typed_refinement_criteria():
@@ -149,8 +148,8 @@ def test_amr_policies():
 
 
 def test_printable_summaries_are_short_and_stable():
-    s = str(AMR(base=CartesianMesh()))
-    assert s.startswith("AMR") and len(s) < 200
+    s = str(final_amr_layout(CartesianMesh()))
+    assert "AMR" in s and len(s) < 300
     assert "CartesianMesh" in repr(CartesianMesh())
     assert str(Refine.on(_handle("rho")).above(0.05)).startswith("Refine")
     assert str(AuxHalo("foextrap")) == "AuxHalo('foextrap', value=0)"

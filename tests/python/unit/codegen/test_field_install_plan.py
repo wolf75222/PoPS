@@ -23,7 +23,7 @@ from pops.fields.bcs import (
 )
 from pops.math import laplacian
 from pops.mesh import CartesianMesh
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG

@@ -205,7 +205,7 @@ def _descriptor_catalog_report():
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.projections import projections
-    from pops.mesh.layouts import Uniform, AMR
+    from pops.layouts import Uniform, AMR
 
     entries = []
     for namespace in (riemann, reconstruction, limiters, projections):

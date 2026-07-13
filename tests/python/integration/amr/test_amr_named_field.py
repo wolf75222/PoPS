@@ -1,4 +1,4 @@
-"""ADC-428 Named elliptic fields on the AMR layout (codegen + install-seam + optional end-to-end).
+"""ADC-428 Named elliptic fields on the AMR layout (codegen + install seam).
 
 PR #379 lowered named elliptic fields (m.elliptic_field) on the UNIFORM System; ADC-428 wires the AMR
 equivalent: the AMR native loader emits the same register_elliptic_field + set_block_elliptic_field
@@ -11,10 +11,8 @@ Section A (pure Python, always runs): the AMR native loader EMITS the named-fiel
 AmrSystem facade (no longer the ADC-428 NotImplementedError), and the AmrSystem install seam routes a
 declared named field while rejecting an undeclared one.
 
-Section B (gated, self-skip): the typed Case end-to-end -- a default phi + a named field on an AMR
-layout -- compiles (production .so), binds, runs a few steps, and sim.field(name) returns a solved,
-non-trivial second field distinct from the default potential. Skips cleanly (exit 0) without _pops / a
-compiler / a visible Kokkos -- never fakes the engine.
+The typed Case integration matrix owns end-to-end coverage through the public structured descriptor.
+This focused module deliberately does not construct a native runtime from a retired layout API.
 """
 import sys
 
@@ -215,81 +213,12 @@ def test_amr_install_solver_rejects_undeclared_field():
     print("ok test_amr_install_solver_rejects_undeclared_field")
 
 
-# =================== Section B: gated end-to-end on the AMR layout ===================
-def _run_section_b():
-    try:
-        import numpy as np
-
-        import pops
-        from pops.mesh.cartesian import CartesianMesh
-        from pops.mesh.layouts import AMR
-        from pops.numerics.reconstruction import FirstOrder
-        from pops.numerics.riemann import Rusanov
-    except Exception as exc:  # noqa: BLE001
-        print("-- (B) skipped: numpy/_pops/mesh unavailable: %s --" % exc)
-        return True
-
-    # _pops must expose the AMR named-field read-back binding (rebuild _pops if not).
-    if not hasattr(AmrSystem(n=8, L=1.0, periodic=True), "named_field_values"):
-        print("-- (B) skipped: _pops lacks AmrSystem.named_field_values (rebuild _pops) --")
-        return True
-
-    N = 32
-
-    def _ic():
-        x = (np.arange(N) + 0.5) / N
-        X, Y = np.meshgrid(x, x, indexing="ij")
-        rho = 1.0 + 0.3 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.01)
-        rho = rho - (rho.mean() - 1.0)  # zero-mean perturbation -> periodic Poisson solvable
-        mx = 0.1 * rho
-        my = -0.05 * rho
-        return np.stack([rho, mx, my])
-
-    # Build the named model and compile it for the AMR target (production .so). Kokkos-gated.
-    model = _named_model("amr_e2e", scale=2.0)  # rhs = 2 * default -> psi = 2 * default phi
-    try:
-        compiled = model.compile(backend="production", target="amr_system")
-    except (RuntimeError, NotImplementedError) as exc:
-        print("-- (B) skipped: production AMR compile unavailable: %s --" % str(exc)[:160])
-        return True
-
-    # Install the compiled block on a native AmrSystem (the AMR-route runtime). The .so loader runs
-    # register_elliptic_field + set_block_elliptic_field at add time, so the named field "psi" is
-    # registered with its own coarse GeometricMG; sim.run() solves it each step (default Poisson
-    # first, then the named field), and sim.field("psi") reads the solved coarse potential.
-    from pops.runtime._bind_adapters import _amr_config_from_layout  # ADC-583: moved from codegen
-    layout = AMR(CartesianMesh(n=N, L=1.0, periodic=True))
-    sim = AmrSystem(_amr_config_from_layout(layout))
-    sim.set_poisson("charge_density", "geometric_mg")
-    sim.add_equation("plasma", compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit())
-    sim.set_density("plasma", _ic()[0])  # the coarse density (n x n); momentum starts at rest
-    for _ in range(2):
-        sim.step(1e-3)
-
-    phi = np.asarray(sim.potential())
-    psi = np.asarray(sim.field("psi"))
-    _check(psi.shape == phi.shape, "sim.field('psi') returns the coarse (n, n) shape")
-    _check(np.isfinite(psi).all(), "the named field is finite")
-    _check(float(np.abs(psi - psi.mean()).max()) > 1e-6,
-           "the named field is non-trivial (genuinely solved, not a zero no-op)")
-    # psi = 2 * default phi (rhs = 2 * default, Poisson linear) -> psi is DISTINCT from phi.
-    dphi = float(np.abs(phi - phi.mean()).max())
-    dpsi = float(np.abs(psi - psi.mean()).max())
-    _check(dphi > 1e-6 and abs(dpsi - 2.0 * dphi) < 1e-2 * dpsi,
-           "the named field (rhs=2*default) solves to ~2x the default potential (distinct + scaled)")
-    print("ok test_amr_named_field_end_to_end (psi span %.3e == 2 x phi span %.3e)" % (dpsi, dphi))
-    return True
-
-
 def _run_all():
     funcs = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
     for fn in funcs:
         fn()
     print("\nall %d Section-A test(s) passed" % len(funcs))
-    _run_section_b()
 
 
 if __name__ == "__main__":

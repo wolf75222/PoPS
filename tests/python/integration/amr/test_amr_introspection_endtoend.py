@@ -26,7 +26,7 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
-from pops.runtime.bricks import Periodic
+from pops.runtime.bricks import Periodic  # noqa: E402
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._plans import (  # noqa: E402
@@ -38,21 +38,20 @@ from pops.codegen.compiled_artifact import (  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.codegen._compiled_model_identity import compiled_model_identity  # noqa: E402
 from pops.mesh import CartesianMesh  # noqa: E402
-from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
-from pops.mesh.layouts import AMR, Uniform  # noqa: E402
-from pops.model import Handle, Module, OwnerPath  # noqa: E402
+from pops.layouts import Uniform  # noqa: E402
+from pops.model import Module  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
 from pops.problem import Case  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
-from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
+from tests.python.support.layout_plan import final_amr_layout, resolved_layout_contract  # noqa: E402
 
 
 def _amr_route_handle():
     """A stub exact AMR artifact (target='amr_system', no ``.so``) carrying the AMR layout.
 
-    This mirrors ``pops.compile(problem, layout=AMR(...))``: an exact artifact owns the resolved
-    AMR layout and a target-specific compiled block. No ``.so`` is dlopened -- the arguments /
+This mirrors ``pops.compile(problem, layout=<structured AMR descriptor>)``: an exact artifact owns
+the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlopened -- the arguments /
     estimate_memory / generic layout-inspection surface is
     pure metadata + formula, so it is validated here without the Kokkos AOT per-block loader compile.
     """
@@ -65,9 +64,7 @@ def _amr_route_handle():
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
-    rho = Handle("rho", kind="state", owner=OwnerPath.shared("amr-introspection"))
-    layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2,
-                 regrid=RegridEvery(4), refine=Refine.on(rho).above(0.1))
+    layout = final_amr_layout(CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
     snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
     module = Module("amr-introspection-model")
     module.param(alpha)

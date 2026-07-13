@@ -81,7 +81,7 @@ def test_absolute_memory_estimate_refuses_untyped_shape_before_any_formula(monke
 
 def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import Uniform
+    from pops.layouts import Uniform
 
     class Extension:
         @staticmethod
@@ -107,7 +107,7 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
     from pops.mesh import CartesianGrid
-    from pops.mesh.layouts import Uniform
+    from pops.layouts import Uniform
 
     class Extension:
         @staticmethod

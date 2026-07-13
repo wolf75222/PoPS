@@ -244,8 +244,9 @@ def test_fft_rejects_amr_layout_with_precise_message():
     # Spec 6 sec.8: pairing FFT with an AMR layout is a MATHEMATICAL incompatibility -- it must
     # be refused with the PRECISE message (not a vague "AMR unsupported"), naming GeometricMG.
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR, Uniform
-    amr = AMR(base=CartesianMesh(n=64))
+    from pops.layouts import Uniform
+    from tests.python.support.layout_plan import final_amr_layout
+    amr = final_amr_layout(CartesianMesh(n=64))
     status = elliptic.FFT().available({"layout": amr})
     assert status.status == "no"
     assert status.reason == "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG()."
@@ -277,10 +278,10 @@ def test_geometric_mg_accepts_amr_layout():
     # GeometricMG is the AMR-capable elliptic solver: it advertises amr and stays available with
     # an AMR layout context (no rejection), so it is the alternative FFT points at.
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR
+    from tests.python.support.layout_plan import final_amr_layout
     g = elliptic.GeometricMG()
     assert g.capabilities().supports("amr") is True
-    assert g.available(AMR(base=CartesianMesh(n=64))).status == "yes"
+    assert g.available(final_amr_layout(CartesianMesh(n=64))).status == "yes"
 
 
 # --- preconditioners ---------------------------------------------------------------------

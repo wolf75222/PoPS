@@ -1,6 +1,6 @@
 """AMR Program op-support capability query (ADC-634): which ops a Program uses run on AMR.
 
-The clean AMR route (``pops.compile(problem, layout=AMR(...))`` with a whole-system time
+The clean AMR route (``pops.compile(problem, layout=<structured AMR descriptor>)`` with a whole-system time
 ``Program``) compiles + installs + runs for ANY Program: a body using a deferred op still
 COMPILES against ``AmrProgramContext`` (the signatures match ``ProgramContext`` byte-for-byte) and
 throws the honest ``AmrProgramContext`` backstop only when that op is reached at run. ADC-634 adds

@@ -368,7 +368,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
         ``MultiFab``; every assumption is in :attr:`MemoryEstimate.assumptions` and the estimate is
         CONSERVATIVE. @p mesh an ``pops.mesh.CartesianMesh`` (or an int / 2-tuple of extents); @p
         platform an optional hint (``"mpi"`` adds the halo-exchange buffer); @p layout an optional
-        ``pops.mesh.layouts.AMR`` / ``Uniform`` for an AMR hierarchy estimate (conservative;
+        ``pops.layouts.AMR`` / ``Uniform`` for an AMR hierarchy estimate (conservative;
         full-refinement worst case)."""
         from pops.codegen.inspect_compiled import build_memory_estimate
         return build_memory_estimate(

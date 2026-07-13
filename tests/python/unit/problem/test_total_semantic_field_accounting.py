@@ -6,7 +6,7 @@ from pops.diagnostics import Integral
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.mesh import CartesianMesh
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.output import HDF5, ScientificOutput
 from pops.representations import Conservative
 from pops.runtime import ConsumerGraph

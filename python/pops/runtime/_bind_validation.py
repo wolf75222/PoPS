@@ -105,8 +105,9 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
         lines.append("initial state for unknown block %r; the artifact declares block(s) %s"
                      % (name, sorted(declared) or "(none)"))
     mesh = _layout_mesh(layout)
-    # AMR seeds via set_density, Uniform via set_state; like _layout_mesh, AMR layouts carry .base.
-    amr = getattr(layout, "base", None) is not None
+    # AMR seeds via set_density, Uniform via set_state.  The decision is the layout capability,
+    # never a concrete class or a historical ``.base`` attribute.
+    amr = _layout_kind(layout) == "amr"
     ghost = getattr(manifest, "ghost_depth", None)
     if ghost is None and initial_state:
         lines.append("the compiled manifest carries no ghost_depth; it is ABI-incomplete and cannot "
@@ -167,13 +168,34 @@ def _layout_mesh(layout: Any) -> Any:
     """The 2D cell count ``n`` (an n x n grid) of @p layout, or ``None`` when it carries no mesh."""
     if layout is None:
         return None
-    mesh = getattr(layout, "mesh", None) or getattr(layout, "base", None)
+    if _layout_kind(layout) == "amr":
+        runtime_data = getattr(layout, "runtime_layout_data", None)
+        if not callable(runtime_data):
+            return None
+        data = runtime_data()
+        if not isinstance(data, dict):
+            return None
+        cells = data.get("grid", {}).get("cells")
+        if not isinstance(cells, (list, tuple)) or len(cells) != 2 or cells[0] != cells[1]:
+            return None
+        return int(cells[0])
+    mesh = getattr(layout, "mesh", None)
     n = getattr(mesh, "n", None)
     if n is None:
         return None
     if isinstance(n, (tuple, list)):
         return int(n[0]) if n else None
     return int(n)
+
+
+def _layout_kind(layout: Any) -> str | None:
+    """Read the layout kind through the open capabilities protocol."""
+    protocol = getattr(layout, "capabilities", None)
+    if not callable(protocol):
+        return None
+    capabilities = protocol()
+    data = capabilities.to_dict() if callable(getattr(capabilities, "to_dict", None)) else capabilities
+    return data.get("layout") if isinstance(data, dict) else None
 
 
 def validate_runtime_param_domains(declared_params: Any, params: Any) -> Any:

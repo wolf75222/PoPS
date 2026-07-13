@@ -7,7 +7,7 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 
 pops = pytest.importorskip("pops")
 from pops.mesh import CartesianMesh  # noqa: E402
-from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.layouts import Uniform  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():
@@ -69,7 +69,8 @@ def test_layout_inspect_reports_native_routes_and_limitations():
     assert any(row["route_id"] == "mesh:2d_storage_arithmetic" and row["status"] == "partial"
                for row in uniform_info["native_capabilities"]["routes"])
 
-    amr = AMR(CartesianMesh(n=8), max_levels=2, ratio=2)
+    from tests.python.support.layout_plan import final_amr_layout
+    amr = final_amr_layout(CartesianMesh(n=8), max_levels=2, ratio=2)
     amr_info = amr.inspect()
     assert amr_info["capabilities"]["layout"] == "amr"
     routes = {row["route_id"]: row for row in amr_info["native_capabilities"]["routes"]}

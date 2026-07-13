@@ -2165,7 +2165,7 @@ of this page. The goal is not to present a partial capability as complete.
 | periodic Poisson, $n = 2^k$ | `poisson_fft_solver` | direct, $O(N \log N)$ (section 10) |
 | Poisson with wall, Dirichlet, or $\varepsilon(x)$ | `geometric_mg` | multigrid, arbitrary geometry (section 9, 11) |
 | full-tensor operator (anisotropic, polar) | `krylov_solver` (matrix-free BiCGStab) | no matrix assembly (section 12, 16) |
-| localized feature (front, ring) | `layout=AMR(refine=Refine.on(...).above(...))` | adaptive refinement, conservative reflux (section 17 to 19) |
+| localized feature (front, ring) | structured `pops.layouts.AMR` descriptor | adaptive refinement, conservative reflux (section 17 to 19) |
 | inter-species sources | `CoupledSource` bytecode as a typed `CouplingOperator` | declared conservation contract, validated at registration (section 22) |
 | non-rectangular domain | EB cut-cell (disc) or polar ring | curved boundary without staircase (section 14 to 16) |
 

@@ -10,8 +10,9 @@ from pops.codegen.component_packages import compile_component
 from pops.external import build_source_package_manifest, load
 from pops.interfaces import ComponentInterface
 from pops.mesh.cartesian import CartesianMesh
-from pops.mesh.layouts import AMR, Uniform
+from pops.layouts import Uniform
 from pops.model import ComponentManifest
+from tests.python.support.layout_plan import final_amr_layout
 
 
 class ProbeBinding:
@@ -97,7 +98,7 @@ def main():
         binding = installed.bind(Probe)
         mesh = CartesianMesh(n=4, periodic=True)
         assert binding.evaluate(Uniform(mesh), 4.0) == 12.0
-        assert binding.evaluate(AMR(base=mesh), 4.0) == 20.0
+        assert binding.evaluate(final_amr_layout(mesh), 4.0) == 20.0
         assert installed.runtime_contract.layouts == ("amr", "uniform")
 
     print("OK ADC-681/687 external C++ interface executed through Uniform and AMR")

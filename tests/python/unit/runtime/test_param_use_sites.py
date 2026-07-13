@@ -13,7 +13,6 @@ from pops.math import Bool, Integer, Real  # noqa: E402
 from pops.mesh import CartesianMesh, PolarMesh  # noqa: E402
 from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.geometry import Disc, DiscDomain, HalfPlane  # noqa: E402
-from pops.mesh.layouts import AMR  # noqa: E402
 from pops.model import Handle, OwnerPath, ParamHandle  # noqa: E402
 from pops.numerics.reconstruction import (  # noqa: E402
     required_ghost_depth,
@@ -69,8 +68,6 @@ def test_matrix_is_closed_and_runtime_is_rejected_by_every_structural_use():
         (lambda p: CartesianMesh(n=p), ParamUse.SHAPE),
         (lambda p: CartesianMesh(L=p), ParamUse.MESH_EXTENT),
         (lambda p: CartesianMesh(periodic=p), ParamUse.MESH_TOPOLOGY),
-        (lambda p: AMR(base=CartesianMesh(), max_levels=p), ParamUse.AMR_HIERARCHY),
-        (lambda p: AMR(base=CartesianMesh(), ratio=p), ParamUse.AMR_HIERARCHY),
         (lambda p: RegridEvery(p), ParamUse.REGRID_SCHEDULE),
         (lambda p: Every(AcceptedStep(Clock("macro")), p), ParamUse.SCHEDULE),
         (lambda p: validate_ghost_depth("weno5", available=p), ParamUse.GHOST_DEPTH),
@@ -117,13 +114,6 @@ def test_const_params_are_explicitly_unwrapped_at_structural_sites():
     )
     assert (mesh.n, mesh.L, mesh.periodic, mesh.dim) == (32, 2.5, False, 2)
 
-    layout = AMR(
-        base=mesh,
-        max_levels=ConstParam("levels", 2, dtype=Integer),
-        ratio=ConstParam("ratio", 2, dtype=Integer),
-        regrid=RegridEvery(ConstParam("regrid", 5, dtype=Integer)),
-    )
-    assert (layout.max_levels, layout.ratio, layout.regrid.steps) == (2, 2, 5)
     trigger = Every(
         AcceptedStep(Clock("macro")), ConstParam("cadence", 7, dtype=Integer))
     assert trigger.n == 7

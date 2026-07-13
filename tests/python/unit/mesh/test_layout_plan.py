@@ -12,9 +12,9 @@ from pops.mesh.layout_plan import (
     LayoutPlanBuilder,
     normalize_layout_plan,
 )
-from pops.mesh.layouts import AMR, Uniform
-from pops.mesh.amr import PatchClustering
+from pops.layouts import Uniform
 from pops.model import Handle, OwnerKind, OwnerPath
+from tests.python.support.layout_plan import final_amr_layout
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,8 @@ def _complete_builder(reverse: bool = True):
     state, field, block = _refs()
     builder = LayoutPlanBuilder(OwnerPath.case("main"))
     uniform = builder.layout("base", Uniform(CartesianMesh(n=16)))
-    adaptive = builder.layout("adaptive", AMR(CartesianMesh(n=16), max_levels=2, ratio=2))
+    adaptive = builder.layout(
+        "adaptive", final_amr_layout(CartesianMesh(n=16), max_levels=2, ratio=2))
     builder.assign_state(state, adaptive)
     builder.assign_field(field, uniform)
     builder.assign_block(block, adaptive)
@@ -196,12 +197,12 @@ def test_public_single_layout_normalization_returns_a_degenerate_plan():
     assert [level.refinement for level in plan.layouts[0].levels] == [1]
 
 
-def test_descriptor_snapshot_accounts_for_semantics_omitted_from_options():
+def test_descriptor_snapshot_accounts_for_structured_hierarchy_semantics():
     owner = OwnerPath.case("main")
     first = normalize_layout_plan(
-        AMR(CartesianMesh(n=8), clustering=PatchClustering(min_efficiency=0.6)), owner=owner)
+        final_amr_layout(CartesianMesh(n=8), max_levels=2), owner=owner)
     second = normalize_layout_plan(
-        AMR(CartesianMesh(n=8), clustering=PatchClustering(min_efficiency=0.8)), owner=owner)
-    assert first.layouts[0].options == second.layouts[0].options  # proves options() is incomplete
+        final_amr_layout(CartesianMesh(n=8), max_levels=3), owner=owner)
+    assert first.layouts[0].options != second.layouts[0].options
     assert first.layouts[0].descriptor_snapshot != second.layouts[0].descriptor_snapshot
     assert first.canonical_id != second.canonical_id

@@ -4,7 +4,7 @@ from pops.identity import Identity, canonical_sha256
 from pops.identity.semantic import semantic_identity, semantic_identity_of
 from pops.descriptors import Descriptor
 from pops.mesh import CartesianMesh
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.model import Module
 from pops.problem import Case
 from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot

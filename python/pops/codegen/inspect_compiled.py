@@ -571,7 +571,7 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     # On the AMR route ``compiled`` is a CompiledModel carrying the AMR layout in its immutable
     # InstallPlan and no Program, so a bare ``estimate_memory(mesh)`` defaults to that plan. An
     # explicit layout wins.  A low-level handle without a normalized layout cannot be assigned a
-    # made-up single level: callers must pass Uniform(...) or AMR(...).
+    # made-up single level: callers must pass a typed Uniform or structured AMR descriptor.
     if layout is None:
         plan = getattr(compiled, "install_plan", None)
         layout = getattr(plan, "layout", None)
@@ -645,7 +645,8 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     """A CONSERVATIVE AMR patch budget from the public layout-capability protocol (no bind).
 
     Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra
-    patch budget (``amr_patch_bytes`` is ``None``). For an ``AMR(max_levels=L, ratio=r)`` layout the
+    patch budget (``amr_patch_bytes`` is ``None``). For an AMR layout with ``max_levels=L`` and
+    transition ratio ``r`` the
     worst case fully refines every level: a level ``k`` covering the whole domain at refinement
     ``r^k`` has ``r^(2k)`` times the base cells (2D). Summing the geometric series over the refined
     levels (1..L-1) gives the extra fine-grid footprint on top of the base level. This is an UPPER

@@ -116,11 +116,11 @@ class AmrRuntimeView:
         frozen = regrid_every == 0
         # The union-of-tags criteria shape, as the multi-block route documents it (the exact
         # threshold lives on the native model; we name the criteria, not a fabricated number).
-        # Refinement is declared on the AMR layout (AMR(refine=Refine.on(subject).above(value))).
+        # Refinement is declared by the structured AMR layout's tagging authority.
         criteria = [
-            "per-block variable threshold (AMR(refine=Refine.on(variable/role).above(threshold)); "
+            "per-block variable threshold (AMR tagging predicate on variable/role; "
             "default the density, component 0)",
-            "grad phi (AMR(refine=Refine.on(phi).gradient_above(threshold)); multi-block only, "
+            "grad phi (AMR tagging predicate; multi-block only, "
             "disabled when the threshold <= 0)",
         ]
         notes = []

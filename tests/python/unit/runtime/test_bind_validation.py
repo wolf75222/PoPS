@@ -49,10 +49,16 @@ class _Uniform:
 
 
 class _AMR:
-    """An AMR layout stand-in: carries .base (the coarse mesh), like pops.mesh.layouts.AMR."""
+    """An AMR layout stand-in exposing capabilities() and runtime_layout_data()."""
 
     def __init__(self, n):
-        self.base = _Mesh(n)
+        self.n = n
+
+    def capabilities(self):
+        return {"layout": "amr"}
+
+    def runtime_layout_data(self):
+        return {"grid": {"cells": [self.n, self.n]}}
 
 
 class _Array:

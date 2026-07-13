@@ -30,7 +30,7 @@ try:
     from pops.codegen import Arguments, MemoryEstimate
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR, Uniform
+    from pops.layouts import Uniform
     from pops.params import ConstParam, RuntimeParam
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
@@ -233,14 +233,15 @@ def test_estimate_memory_mpi_platform():
 
 
 def test_estimate_memory_amr_layout():
-    """layout=AMR(...) produces a conservative per-level patch budget; Uniform adds none."""
-    print("== estimate_memory(layout=AMR) is a conservative hierarchy estimate ==")
+    """A structured AMR layout produces a conservative per-level patch budget; Uniform adds none."""
+    print("== estimate_memory(structured AMR layout) is a conservative hierarchy estimate ==")
     cp = _compiled()
     base = CartesianMesh(n=64)
     uniform = cp.estimate_memory(mesh=base, layout=Uniform(base))
     chk("amr_patch" not in uniform.categories, "a Uniform layout adds no AMR patch budget")
     chk(uniform.layout == "uniform", "the layout kind is reported as uniform")
-    amr = cp.estimate_memory(mesh=base, layout=AMR(base, max_levels=3, ratio=2))
+    from tests.python.support.layout_plan import final_amr_layout
+    amr = cp.estimate_memory(mesh=base, layout=final_amr_layout(base, max_levels=3, ratio=2))
     chk(amr.categories.get("amr_patch", 0) > 0, "an AMR layout adds a positive patch budget")
     chk(amr.total_bytes > uniform.total_bytes, "the AMR hierarchy estimate is larger")
     chk(any("CONSERVATIVE" in note for note in amr.assumptions),

@@ -11,7 +11,7 @@ from pops.codegen._layout_resolution import layout_lowering_coverage
 from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 from pops.identity import make_identity
 from pops.mesh import CartesianMesh, normalize_layout_plan
-from pops.mesh.layouts import Uniform
+from pops.layouts import Uniform
 from pops.model import OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot

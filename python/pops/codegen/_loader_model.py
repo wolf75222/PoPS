@@ -203,7 +203,7 @@ class CompiledModel:
     def arguments(self) -> Any:
         """The runtime inputs this AMR-route artifact expects at bind (Spec 5 sec.12.2, ADC-515).
 
-        The AMR route of ``pops.compile(problem, layout=AMR(...))`` returns the first block's
+        The AMR route of ``pops.compile(problem, layout=<structured AMR descriptor>)`` returns the first block's
         ``CompiledModel`` (there is no whole-system ``CompiledProblem`` on AMR: each block is a native
         ``add_native_block`` loader). So the ``arguments()`` seam ``CompiledProblem`` exposes on the
         Uniform route lives HERE too, built from the SAME :func:`~pops.codegen.inspect_compiled.
