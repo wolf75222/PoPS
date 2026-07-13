@@ -1,6 +1,7 @@
 """Structured native numerical/solver/physical defaults."""
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 
@@ -74,7 +75,7 @@ _CONSTANT_CLASSIFICATION: dict = {
 def _static_report() -> dict:
     return {
         "schema_version": 1,
-        "source": "pops.runtime.defaults.static_fallback",
+        "source": "source-only",
         "newton": {
             "max_iters": 2,
             "rel_tol": 0.0,
@@ -153,18 +154,41 @@ def _static_report() -> dict:
     }
 
 
-def numerical_defaults_report() -> dict:
-    """Return structured native numerical, solver and physical defaults."""
-    try:
-        from pops import _pops  # noqa: PLC0415
+class NativeDefaultsReportError(RuntimeError):
+    """A loaded native extension cannot provide its numerical-defaults report."""
 
-        fn: Any = getattr(_pops, "numerical_defaults_report", None)
-        if callable(fn):
-            report: Any = fn()
-            return dict(report)
-    except Exception:
-        pass
-    return _static_report()
+
+def _native_extension() -> Any:
+    """Return the extension only when it is genuinely absent; preserve load failures."""
+    for name in ("_pops", "pops._pops"):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise
+    return None
+
+
+def numerical_defaults_report() -> dict:
+    """Return native defaults, or an explicitly labelled source-only report.
+
+    The source-only report is permitted exclusively when no extension can be imported.  Once an
+    extension is loaded, a missing, failing, or malformed native report is actionable and therefore
+    fails closed.
+    """
+    mod = _native_extension()
+    if mod is None:
+        return _static_report()
+    fn: Any = getattr(mod, "numerical_defaults_report", None)
+    if not callable(fn):
+        raise NativeDefaultsReportError(
+            "loaded _pops extension does not expose callable numerical_defaults_report()")
+    try:
+        return dict(fn())
+    except Exception as exc:
+        raise NativeDefaultsReportError(
+            "_pops.numerical_defaults_report() failed or returned a malformed mapping"
+        ) from exc
 
 
 _DEFAULTS: Any = numerical_defaults_report()

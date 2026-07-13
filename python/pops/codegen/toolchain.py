@@ -5,6 +5,7 @@ Public API re-exported from pops.codegen.__init__.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import shutil
 import sys
@@ -13,17 +14,22 @@ from typing import Any
 
 # --- _pops access (mirrors dsl.py: try top-level then relative) ---
 def _pops_module() -> Any:
-    """The _pops extension module if it is loadable, otherwise None (dsl.py stays usable alone)."""
+    """Return ``_pops`` only when it is absent, never when its load failed.
+
+    A binary-loader or dependency error from an installed extension must remain visible: treating it
+    as an unavailable optional module would select a different toolchain and hide the real cause.
+    """
     try:
-        import _pops
-        return _pops
-    except Exception:
-        try:
-            import pops._bootstrap  # noqa: F401, PLC0415 -- establishes RTLD_GLOBAL first
-            from pops import _pops  # noqa: PLC0415
-            return _pops
-        except Exception:
+        return importlib.import_module("_pops")
+    except ModuleNotFoundError as exc:
+        if exc.name != "_pops":
+            raise
+    try:
+        return importlib.import_module("pops._pops")
+    except ModuleNotFoundError as exc:
+        if exc.name == "pops._pops":
             return None
+        raise
 
 
 # --- Signature of the core header tree (ABI key of the "production" path) -------------

@@ -18,6 +18,8 @@ module may not import ``pops.mesh`` at module scope; cf. tests/python/architectu
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import importlib
 from typing import Any
 
 from pops.codegen._artifact_models import (
@@ -26,9 +28,65 @@ from pops.codegen._artifact_models import (
 )
 from pops._report import Report
 
-# Bytes per double-precision cell value. The core is 2D (n x n cells), one field component is a
-# full grid traversal; a "field pass" in Program.estimate is one such state-sized buffer.
-_BYTES_PER_CELL = 8
+
+class MemoryEstimateCapabilityError(ValueError):
+    """The requested absolute estimate lacks a required, authoritative capability fact."""
+
+    def __init__(self, message: str, *, field: str, actual: Any = None) -> None:
+        super().__init__(message)
+        self.field = field
+        self.actual = actual
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryRuntimeContext:
+    """Validated native facts required to turn a structural formula into bytes."""
+
+    dimension: int
+    real_bytes: int
+    amr_refinement_ratio: int
+
+
+def _native_memory_context() -> _MemoryRuntimeContext:
+    """Read the native precision and AMR facts; an absolute estimate has no source-only mode."""
+    mod = None
+    for name in ("_pops", "pops._pops"):
+        try:
+            mod = importlib.import_module(name)
+            break
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise
+    if mod is None:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires _pops.runtime_environment_report(): absolute byte precision is "
+            "unknown in a source-only installation", field="runtime.precision")
+    fn = getattr(mod, "runtime_environment_report", None)
+    if not callable(fn):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires callable _pops.runtime_environment_report()",
+            field="runtime_environment_report")
+    try:
+        report = dict(fn())
+    except Exception as exc:
+        raise MemoryEstimateCapabilityError(
+            "_pops.runtime_environment_report() failed or returned a malformed mapping",
+            field="runtime_environment_report") from exc
+
+    values = {}
+    for key in ("dimension", "real_bytes", "amr_refinement_ratio"):
+        value = report.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory requires native runtime_environment_report[%r] as a positive int "
+                "(got %r)" % (key, value), field="runtime.%s" % key, actual=value)
+        values[key] = value
+    if values["dimension"] != 2:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory currently implements an explicit 2D perimeter/hierarchy formula; native "
+            "dimension=%d requires a dimension-aware estimator" % values["dimension"],
+            field="runtime.dimension", actual=values["dimension"])
+    return _MemoryRuntimeContext(**values)
 
 
 # ---------------------------------------------------------------------------
@@ -344,22 +402,24 @@ class MemoryEstimate(Report):
                 % (self.total_bytes, self.cells, len(self.categories)))
 
 
-def _mesh_shape(mesh: Any) -> tuple:
-    """Return ``(cells, (nx, ny))`` for a mesh argument WITHOUT touching the runtime.
+def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
+    """Read a square shape only from a typed mesh whose dimension matches native evidence."""
+    from pops.mesh.cartesian import CartesianMesh  # lazy: preserve codegen import layering
 
-    Accepts a ``pops.mesh.CartesianMesh`` (or any object exposing ``n``), or a plain int / 2-tuple.
-    The core is 2D (n x n), so a scalar ``n`` means ``n * n`` cells. A richer mesh carrying an
-    explicit ``(nx, ny)`` is honoured if present."""
-    n: Any = getattr(mesh, "n", mesh)
-    if isinstance(n, (tuple, list)):
-        if len(n) != 2:
-            raise ValueError("estimate_memory: mesh shape must be 2D (got %r)" % (n,))
-        nx, ny = int(n[0]), int(n[1])
-    else:
-        nx = ny = int(n)
-    if nx <= 0 or ny <= 0:
-        raise ValueError("estimate_memory: mesh extents must be positive (got %dx%d)" % (nx, ny))
-    return nx * ny, (nx, ny)
+    if not isinstance(mesh, CartesianMesh):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires a typed CartesianMesh; bare integers and tuples do not carry "
+            "a proven dimension", field="mesh", actual=type(mesh).__name__)
+    if mesh.dim != context.dimension:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory mesh dimension=%r disagrees with native dimension=%r"
+            % (mesh.dim, context.dimension), field="mesh.dimension", actual=mesh.dim)
+    n = mesh.n
+    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires CartesianMesh.n as a positive integer (got %r)" % n,
+            field="mesh.n", actual=n)
+    return n * n, (n, n)
 
 
 def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
@@ -367,8 +427,8 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     """Build the :class:`MemoryEstimate` for a compiled artifact on ``mesh`` (sec.12.3).
 
     A pure FORMULA over the Program's static cost (``Program.estimate``) and the carried model's
-    component counts -- it allocates nothing. The byte budget per category, with ``C`` the cell
-    count, ``B`` = 8 bytes/cell, ``n_cons`` / ``n_aux`` the model's component counts:
+    component counts -- it allocates nothing. ``B`` is read from the loaded native runtime report;
+    an absolute estimate is rejected rather than guessing precision in a source-only install.
 
       - ``state``        = n_cons * C * B           (the persistent conservative state)
       - ``field_output`` = (#field solves) * C * B  (one scalar field per elliptic solve)
@@ -387,27 +447,36 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     AMR layout the estimate is CONSERVATIVE (full refinement of every level); a tight figure needs a
     bind (the regrid pattern is data-dependent).
     """
+    context = _native_memory_context()
     program = getattr(compiled, "program", None)
-    cells, shape = _mesh_shape(mesh)
+    cells, shape = _mesh_shape(mesh, context)
     _cons, n_cons, _params, _aux_names, n_aux, _space = _model_metadata(compiled)
-    n_cons = max(n_cons, 1)  # a degenerate empty model still stages 1 component (never 0 bytes)
+    if n_cons < 0 or n_aux < 0:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires non-negative compiled component counts (got n_cons=%r, n_aux=%r)"
+            % (n_cons, n_aux), field="compiled.components", actual=(n_cons, n_aux))
 
     # On the AMR route ``compiled`` is a CompiledModel carrying the AMR layout in its immutable
     # InstallPlan and no Program, so a bare ``estimate_memory(mesh)`` defaults to that plan. An
-    # explicit layout wins; a low-level handle without an InstallPlan retains the uniform default.
+    # explicit layout wins.  A low-level handle without a normalized layout cannot be assigned a
+    # made-up single level: callers must pass Uniform(...) or AMR(...).
     if layout is None:
         plan = getattr(compiled, "install_plan", None)
         layout = getattr(plan, "layout", None)
+    if layout is None:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires an explicit typed Uniform/AMR layout or an artifact InstallPlan",
+            field="layout")
 
-    est = program.estimate() if (program is not None and hasattr(program, "estimate")) \
-        else {"buffer_count": 1, "heavy_kernels": 0}
-    scratch_buffers = int(est.get("buffer_count", 1))
+    est = program.estimate() if (program is not None and hasattr(program, "estimate")) else {
+        "buffer_count": 0, "heavy_kernels": 0}
+    scratch_buffers = int(est.get("buffer_count", 0))
     n_field_solves = int(est.get("heavy_kernels", 0))
     n_linear_solves = sum(1 for v in getattr(program, "_values", [])
                           if v.op == "solve_linear") if program is not None else 0
     n_elliptic = max(n_field_solves - n_linear_solves, 0)
 
-    cell_field = cells * _BYTES_PER_CELL          # one scalar field (n x n doubles)
+    cell_field = cells * context.real_bytes        # one scalar field with native Real precision
     state_field = n_cons * cell_field             # one full conservative-state buffer
 
     categories = {
@@ -424,15 +493,15 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
     ghost = _ghost_depth(compiled)
     nx, ny = shape
     perimeter = 2 * (nx + ny)                      # cells on the domain boundary ring (2D)
-    halo = ghost * perimeter * n_cons * _BYTES_PER_CELL
+    halo = ghost * perimeter * n_cons * context.real_bytes
     categories["halo"] = halo
 
     requires_mpi = bool(platform) and "mpi" in str(platform).lower()
     categories["mpi_buffer"] = halo if requires_mpi else 0
 
     assumptions = [
-        "double precision: %d bytes per cell value" % _BYTES_PER_CELL,
-        "2D core: %d cells = %d x %d" % (cells, nx, ny),
+        "native precision: %d bytes per cell value" % context.real_bytes,
+        "native dimension=%d: %d cells = %d x %d" % (context.dimension, cells, nx, ny),
         "scratch counted AFTER the Program's static buffer-reuse report (%d buffers); the codegen "
         "may keep more, so this is a lower bound on scratch reuse" % scratch_buffers,
         "ghost halo depth assumed %d (conservative MUSCL stencil; not recorded in today's metadata)"
@@ -444,8 +513,8 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
 
     layout_kind = "system"
     if layout is not None:
-        layout_kind, amr_bytes, amr_notes = _amr_patch_budget(layout, state_field, cell_field,
-                                                              n_elliptic)
+        layout_kind, amr_bytes, amr_notes = _amr_patch_budget(
+            layout, state_field, cell_field, n_elliptic, context)
         if amr_bytes is not None:
             categories["amr_patch"] = amr_bytes
             assumptions.extend(amr_notes)
@@ -459,7 +528,8 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
                           conservative=True, layout=layout_kind)
 
 
-def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic: Any) -> tuple:
+def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic: Any,
+                      context: _MemoryRuntimeContext) -> tuple:
     """A CONSERVATIVE AMR patch budget from an ``AMR`` layout descriptor (no bind).
 
     Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra
@@ -475,8 +545,18 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     if not isinstance(layout, AMR):
         raise TypeError("estimate_memory(layout=): expected a pops.mesh.layouts.AMR / Uniform; "
                         "got %r" % type(layout).__name__)
-    max_levels = int(getattr(layout, "max_levels", 1) or 1)
-    ratio = int(getattr(layout, "ratio", 2) or 2)
+    capabilities = layout.capabilities()
+    max_levels = capabilities.get("max_levels")
+    ratio = capabilities.get("ratio")
+    for key, value in (("max_levels", max_levels), ("ratio", ratio)):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory requires AMR normalized capability %s as a positive int (got %r)"
+                % (key, value), field="layout.%s" % key, actual=value)
+    if ratio != context.amr_refinement_ratio:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory AMR ratio=%d disagrees with native ratio=%d" % (
+                ratio, context.amr_refinement_ratio), field="layout.ratio", actual=ratio)
     if max_levels <= 1:
         return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
     # Sum r^(2k) for k = 1 .. max_levels-1 (each refined level fully covering the domain).

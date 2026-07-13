@@ -12,6 +12,7 @@ importable without a compiled extension.
 from __future__ import annotations
 
 import json
+import importlib
 from typing import Any
 
 from pops._capabilities_common import (
@@ -23,47 +24,65 @@ from pops._capabilities_common import (
 )
 
 
+class NativeCapabilityReportError(RuntimeError):
+    """A loaded native extension cannot supply a valid capability report."""
+
+
+def _native_extension() -> Any:
+    """Load the native extension, returning ``None`` only when it is truly absent.
+
+    An import error *inside* an installed extension is evidence of a broken native route, not an
+    optional-source-only installation.  Preserve it so callers never turn a failed native report
+    into an ``unknown`` capability matrix.
+    """
+    for name in ("_pops", "pops._pops"):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise
+    return None
+
+
 def _module_capabilities(target: str = "module") -> Any:
-    """The C++ authoritative capability dict (``_pops.module_capabilities()``) or ``None``.
+    """The C++ authoritative capability dict, or ``None`` for a source-only install.
 
     Lazily imports ``_pops`` (top-level then ``pops._pops``, mirroring the codegen toolchain) so the
     module import graph stays acyclic and the catalog walk works with no compiled module present.
-    Returns ``None`` when ``_pops`` is unavailable or predates ``module_capabilities`` (old build):
-    the descriptor walk then proceeds WITHOUT the cross-check rather than failing -- a missing native
-    source is a graceful degradation, never a fabricated capability.
+    ``None`` means the extension is absent.  A loaded extension must expose and successfully call
+    ``module_capabilities``; an old, broken, or malformed native route is an error, never an
+    indistinguishable ``unknown`` fallback.
     """
-    try:
-        import _pops as mod  # noqa: PLC0415 -- lazy: keeps this module's import graph acyclic
-    except Exception:
-        try:
-            from pops import _pops as mod  # noqa: PLC0415
-        except Exception:
-            return None
-    fn = getattr(mod, "module_capabilities", None)
-    if fn is None:  # an _pops built before this work: no authoritative source to cross-check against.
+    mod = _native_extension()
+    if mod is None:
         return None
+    fn = getattr(mod, "module_capabilities", None)
+    if not callable(fn):
+        raise NativeCapabilityReportError(
+            "loaded _pops extension does not expose callable module_capabilities()")
     try:
         return dict(fn(target))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise NativeCapabilityReportError(
+            "_pops.module_capabilities(%r) failed or returned a malformed mapping" % target
+        ) from exc
 
 
 def _native_capability_report_from_extension(target: str = "module") -> Any:
     """Return ``_pops.capability_report(target)`` as :class:`NativeCapabilityReport`, or ``None``."""
-    try:
-        import _pops as mod  # noqa: PLC0415 -- lazy: keeps this module importable without _pops
-    except Exception:
-        try:
-            from pops import _pops as mod  # noqa: PLC0415
-        except Exception:
-            return None
-    fn = getattr(mod, "capability_report", None)
-    if fn is None:
+    mod = _native_extension()
+    if mod is None:
         return None
+    fn = getattr(mod, "capability_report", None)
+    if not callable(fn):
+        raise NativeCapabilityReportError(
+            "loaded _pops extension does not expose callable capability_report()")
     try:
         return NativeCapabilityReport.from_dict(dict(fn(target)))
-    except Exception:
-        return None
+    except Exception as exc:
+        raise NativeCapabilityReportError(
+            "_pops.capability_report(%r) failed or returned a malformed mapping" % target
+        ) from exc
 
 
 def native_capability_report(target: str = "module", *, flags: Any = None,
@@ -80,7 +99,7 @@ def native_capability_report(target: str = "module", *, flags: Any = None,
         if report is not None:
             return report
         flags = _module_capabilities(target)
-        source = source or ("native" if flags is not None else "unknown")
+        source = source or ("native" if flags is not None else "source-only")
     else:
         source = source or "manifest"
     rows = _support_rows(flags, source) + _inventory_rows(flags, source)
