@@ -74,13 +74,14 @@ def test_magnetic_moment_source_descriptor_contract():
 
 
 def test_hyqmom15_closure_descriptor_contract():
-    closure = moments.HyQMOM15Closure(variant="levermore")
+    closure = moments.HyQMOM15Closure()
     assert isinstance(closure, (Descriptor, DescriptorProtocol))
     assert closure.name == "HyQMOM15Closure"
     assert closure.category == "closure"
     assert closure.order == 4
     opts = closure.options()
-    assert opts["variant"] == "levermore" and opts["order"] == 4
+    assert opts["order"] == 4
+    assert opts["local_operator"]["kind"] == "local_moment_closure"
     assert closure.capabilities().to_dict()["provides"] == "order_4_standardized_moments"
     assert closure.validate() is True
     # The descriptor is still the closure callable (Spec 5 sec.6 does not change its role).
@@ -89,8 +90,8 @@ def test_hyqmom15_closure_descriptor_contract():
                     "S13": 0.0, "S04": 3.0}
     out = closure(standardized)
     assert set(out) == {"S%d%d" % (p, 5 - p) for p in range(6)}
-    # The unvalidated custom variant is gated (ship-authoring / gate-runtime pattern).
-    with pytest.raises(NotImplementedError):
+    # User physics goes through @closure(4), never a reserved string variant.
+    with pytest.raises(TypeError):
         moments.HyQMOM15Closure(variant="custom")
 
 
@@ -204,9 +205,9 @@ def test_hyqmom15_model_is_inspectable_and_runtime_free():
     module = getattr(model, "module", model)
     assert hasattr(module, "operator_registry")
     op_names = module.operator_registry().names()
-    assert "flux_default" in op_names and "source_default" in op_names
+    assert {"flux_default", "electric", "magnetic_rotation", "transport"} <= set(op_names)
     # 15 conservative components (the order-4 hierarchy), canonical names.
-    components = model._m.state_space().components
+    components = model.dsl._m.state_space().components
     assert len(components) == 15 and components[0] == "M00"
     # No compiled / runtime leakage on the authoring object.
     for runtime_attr in ("so_path", "abi_key"):

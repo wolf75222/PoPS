@@ -431,7 +431,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     % (name, obj.name))
             target = obj.registered_operator_name
             try:
-                self.module.operator_registry().get(target)
+                registry = (self._multi_module.operator_registry()
+                            if self._multi_module is not None
+                            else self._dsl._m.operator_registry())
+                registry.get(target)
             except KeyError:
                 raise ValueError(
                     "operator(%r): operator handle %r is not registered by this physics model"
@@ -439,6 +442,10 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             if name in self._aliases:
                 raise ValueError("operator alias %r is already declared" % name)
             self._aliases[name] = target
+            # Aliases are part of the blackboard Module projection even though they do not mutate
+            # the underlying PDE registry. Rebuild that view on its next access so its manifest and
+            # declaration index observe the complete authored surface.
+            self._invalidate_authoring_views()
             return obj
         raise TypeError(
             "operator(%r): returns= must be a local_linear_operator object or a "
@@ -448,8 +455,16 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """Return the one immutable handle for an operator already in this model's registry."""
         from pops.model import OperatorHandle
         name = require_name(name, "registered operator name")
-        module = self._multi_module if self._multi_module is not None else self._dsl.module
-        op = module.operator_registry().get(name)
+        # Facade operators are authored incrementally. Invalidate any previously requested Module
+        # projection, but authenticate directly against the authoritative registry: materializing a
+        # transient Module for every operator would bind several live fingerprint providers to one
+        # model owner and make its identity depend on garbage-collection timing.
+        self._dsl._invalidate_authoring_views()
+        self._invalidate_authoring_views()
+        registry = (self._multi_module.operator_registry()
+                    if self._multi_module is not None
+                    else self._dsl._m.operator_registry())
+        op = registry.get(name)
         return OperatorHandle(
             op.name,
             kind=op.kind,

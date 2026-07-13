@@ -30,8 +30,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                            fields: Any = None) -> Any:
         """Solve a LOCAL linear system ``operator U = rhs`` cell by cell, where
         ``operator = self.I +/- a*L`` for a single model linear source ``L`` (``a`` may depend on dt
-        / constants). Returns the solution State. A non-local or non-linear operator is rejected; the
-        per-cell dense fallback bound (n_cons <= 8) is enforced by the codegen (a later phase)."""
+        / constants). Returns the solution State. A non-local or non-linear operator is rejected;
+        dense storage is specialized to the model manifest's exact component count."""
         if not isinstance(operator, _Operator) or operator.identity.as_dict() != {0: 1}:
             raise ValueError("solve_local_linear currently supports local linear operators only")
         if len(operator.terms) != 1:
@@ -107,8 +107,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         The Jacobian is formed in-kernel by finite differences (``J_ij = (r_i(U+eps e_j) - r_i(U))/eps``)
         and the Newton step ``J dU = -r`` is solved with the SAME stack-only dense inverse
         (``pops::detail::mat_inverse<N>``) `solve_local_linear` uses -- so the kernel is heap-free
-        / allocation-free / dispatch-free (no ``std::function`` / Eigen / ``std::vector``). The dense
-        fallback bound ``n_cons <= 8`` is enforced by the codegen (same as `solve_local_linear`)."""
+        / allocation-free / dispatch-free (no ``std::function`` / Eigen / ``std::vector``). Its dense
+        storage is specialized to the model manifest's exact component count."""
         if not callable(residual):
             raise ValueError(
                 "solve_local_nonlinear: residual must be an IR-building callable "

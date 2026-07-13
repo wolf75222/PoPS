@@ -60,6 +60,11 @@ def _data(value: Any, *, where: str) -> Any:
         return {"decimal": str(value)}
     if isinstance(value, Fraction):
         return {"rational": [value.numerator, value.denominator]}
+    if isinstance(value, bytes):
+        # Identity.to_data() deliberately carries its SHA-256 digest as canonical bytes. Bound
+        # snapshots also expose a JSON view, so retain the exact value through an explicit tagged
+        # lowercase-hex projection instead of rejecting a valid ExecutionContext identity.
+        return {"bytes_hex": value.hex()}
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, Enum):

@@ -39,6 +39,21 @@ def test_bound_snapshot_has_domain_separated_bind_identity_and_json_view():
     json.dumps(snapshot.to_dict(), allow_nan=False)
 
 
+def test_bound_snapshot_projects_execution_context_identity_digest_without_loss():
+    identity = make_identity("runtime-backend-manifest", {"backend": "serial"})
+    snapshot = BoundSnapshot(
+        semantic_identity=make_identity("semantic", {}),
+        artifact_identity=make_identity("artifact", {}),
+        layout={"kind": "uniform"}, blocks=[], solvers={}, cadence=None, params=[],
+        aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
+        bind_schema_identity=make_identity("bind-schema", {}),
+        execution_context={"backend_identity": identity.to_data()},
+    )
+    assert snapshot.to_dict()["execution_context"]["backend_identity"]["digest"] == {
+        "bytes_hex": identity.hexdigest,
+    }
+
+
 def test_bound_snapshot_refuses_repr_based_extension():
     with pytest.raises(TypeError, match="cannot enter bind identity"):
         BoundSnapshot(

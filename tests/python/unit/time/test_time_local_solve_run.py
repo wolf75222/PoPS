@@ -8,7 +8,7 @@ cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_
 
 (A) Codegen (pure Python, always runs): the generated C++ of a Lorentz ``solve_local_linear`` contains
     the per-cell dense-inverse kernel (M = I - dt*L assembled from the aux B_z, mat_inverse, the
-    matvec onto the rhs state); the n_cons > 8 dense-fallback guard fires; the Phase-4b ops are refused
+    matvec onto the rhs state); manifest-sized systems exceed the old eight-component cap; Phase-4b ops are refused
     without a model.
 
 (B) End-to-end Lorentz parity (skips unless the full toolchain is present): a 3-variable model
@@ -116,7 +116,7 @@ chk("a_ * (B_z)" in src and "a_ * ((-B_z))" in src,
 chk(raises(NotImplementedError, lambda: lorentz_program().emit_cpp_program()),
     "solve_local_linear refused without a model")
 
-# n_cons > 8 dense-fallback guard.
+# The dense kernel is specialized from the manifest, with no eight-component dispatch cap.
 big = Model("too_big")
 cons = big.conservative_vars(*["c%d" % i for i in range(9)])
 big.aux("B_z")
@@ -128,8 +128,9 @@ endpoint_big = typed_state(Pbig, "blk", state_name="U", model=big).next
 Qb = Pbig.value("Qb", 1.0 * Ub, at=endpoint_big.point)
 Pbig.commit(endpoint_big, Pbig.solve_local_linear(
     name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"), rhs=Qb))
-chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
-    "n_cons > 8 dense-fallback guard fires")
+big_src = Pbig.emit_cpp_program(model=big)
+chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
+    "n_cons=9 emits exact manifest-sized dense storage")
 
 # ---- (B) end-to-end Lorentz parity: skips unless the full toolchain is present ----
 if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):

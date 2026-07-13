@@ -39,4 +39,6 @@ def gaussian_closure(order: Any) -> Any:
 
         return {"S%d%d" % (p, top - p): m(p, top - p) for p in range(top + 1)}
 
-    return closure
+    from .protocol import LocalClosure
+
+    return LocalClosure(order, "gaussian", closure)

@@ -10,10 +10,9 @@ Public surface:
 """
 from __future__ import annotations
 
-import functools
 from typing import Any
 
-from .protocol import Closure, MomentClosure
+from .protocol import Closure, LocalClosure, MomentClosure, apply_local_closure
 from .gaussian import gaussian_closure
 
 
@@ -31,24 +30,10 @@ def closure(order: Any) -> Any:
     """
     if not isinstance(order, int) or isinstance(order, bool) or order < 2:
         raise ValueError("@closure(order): order must be an int >= 2 (got %r)" % (order,))
-    want = {"S%d%d" % (p, order + 1 - p) for p in range(order + 2)}
-
     def decorate(fn: Any) -> Any:
         if not callable(fn):
             raise TypeError("@closure must decorate a callable closure; got %r" % (fn,))
-
-        @functools.wraps(fn)
-        def wrapped(S: Any) -> Any:  # noqa: N803  (S mirrors the engine variable name)
-            out = fn(S)
-            if not isinstance(out, dict) or set(out) != want:
-                raise TypeError(
-                    "closure %r must return exactly the keys %s (got %s)"
-                    % (getattr(fn, "__name__", fn), sorted(want),
-                       sorted(out) if isinstance(out, dict) else type(out).__name__))
-            return out
-
-        wrapped.order = order  # type: ignore[attr-defined]
-        return wrapped
+        return LocalClosure(order, getattr(fn, "__name__", type(fn).__name__), fn)
 
     return decorate
 
@@ -56,4 +41,7 @@ def closure(order: Any) -> Any:
 # HyQMOM15Closure imports gaussian_closure, so import it after gaussian is bound.
 from .hyqmom15 import HyQMOM15Closure  # noqa: E402
 
-__all__ = ["closure", "Closure", "MomentClosure", "gaussian_closure", "HyQMOM15Closure"]
+__all__ = [
+    "closure", "Closure", "LocalClosure", "MomentClosure", "apply_local_closure",
+    "gaussian_closure", "HyQMOM15Closure",
+]

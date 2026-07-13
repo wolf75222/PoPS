@@ -98,7 +98,6 @@ from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
 from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
 from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
 from pops.codegen.program_lowerability import (
-    all_ops as _all_ops,
     check_model_owner_dispatch as _check_model_owner_dispatch,
     check_schedules_lowerable as _check_schedules_lowerable,
 )
@@ -295,18 +294,9 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
     _check_schedules_lowerable(program)
     for v in program._values:
         _check_op_lowerable(program, v, model)
-    # Per-cell dense fallback bound for the local dense solves (mat_inverse<N> uses fixed stack
-    # buffers): solve_local_linear (M = I - a*L) and solve_local_nonlinear (the Newton FD Jacobian).
-    dense_ops = ("solve_local_linear", "solve_local_nonlinear")
-    for value in (v for v in _all_ops(program) if v.op in dense_ops):
-        if model is None:
-            continue
-        impl = _model_impl(model_for_node(model, value))
-        n_cons = len(getattr(impl, "cons_names", []) or [])
-        if n_cons > 8:
-            raise ValueError(
-                "local dense fallback for %r supports n_cons <= 8 (got %d)"
-                % (value.name, n_cons))
+    # Local dense solves are specialized to the model-manifest component count. The emitted
+    # ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; there is no separate
+    # hard-coded state-size dispatch or truncating fixed-capacity buffer.
 
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work

@@ -5,12 +5,12 @@
 U0, ``emit_cpp_program`` emits a device kernel that re-evaluates an inlined residual ``r(U)`` (built
 from the residual sub-block -- named ``source`` / ``apply`` per-cell Exprs + the iterate / frozen guess
 + affine combines), forms an in-kernel finite-difference Jacobian, and solves the Newton step
-``J dU = -r`` with the SAME stack dense inverse ``pops::detail::mat_inverse<N>`` ``solve_local_linear``
+``J dU = -r`` with the SAME manifest-sized dense inverse ``pops::detail::mat_inverse<N>`` ``solve_local_linear``
 uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::function / Eigen in the kernel
 (only stack scalars + fixed ``[N]`` / ``[N][N]`` arrays).
 
 (A) Validation + codegen (pure Python, always runs): the builder rejects a non-callable residual, a
-    non-State guess, a non-positive max_iter, a non-local residual op, and (with n_cons > 8) the dense
+    non-State guess, a non-positive max_iter, a non-local residual op, and manifest-sized dense
     fallback; a valid implicit reaction lowers to a per-cell Newton kernel whose generated C++ has the
     residual lambda, the FD Jacobian, the mat_inverse step and the convergence break; refused w/o model.
 
@@ -181,7 +181,7 @@ def section_a(t):
     chk(raises(NotImplementedError, lambda: reaction_program(t, "react_nm").emit_cpp_program()),
         "the Newton codegen is refused without a model")
 
-    # --- n_cons > 8 dense-fallback guard fires (the FD Jacobian is a fixed N x N stack inverse) ---
+    # --- n_cons is manifest-sized (the FD Jacobian is an exact N x N stack inverse) ---
     big = Model("too_big_nl")
     cons = big.conservative_vars(*["c%d" % i for i in range(9)])
     big.source_term("react", [-1.0 * c for c in cons])
@@ -196,8 +196,9 @@ def section_a(t):
     Pbig.commit(endpoint,
                 Pbig.solve_local_nonlinear(
                     name="W", residual=big_resid, initial_guess=guess))
-    chk(raises(ValueError, lambda: Pbig.emit_cpp_program(model=big)),
-        "n_cons > 8 dense-fallback guard fires")
+    big_src = Pbig.emit_cpp_program(model=big)
+    chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
+        "n_cons=9 emits exact manifest-sized Newton storage")
 
 
 # ============================ (B) end-to-end implicit-reaction parity ============================

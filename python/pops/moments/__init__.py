@@ -14,8 +14,8 @@ surface (:mod:`pops.moments.closures`).
 from .model_builder import moment_indices, moment_names, build_moment_model
 from .sources import (lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
-from .closures import (gaussian_closure, closure, Closure, MomentClosure,
-                       HyQMOM15Closure)
+from .closures import (gaussian_closure, closure, Closure, LocalClosure, MomentClosure,
+                       apply_local_closure, HyQMOM15Closure)
 
 # --- Spec-4 facade API (thin wrappers over the generator) -------------------
 from .hierarchy import CartesianVelocityMoments, MomentModel, MomentHierarchy
@@ -50,6 +50,8 @@ __all__ = [
     "MagneticMomentSource",
     "closure",
     "Closure",
+    "LocalClosure",
+    "apply_local_closure",
     "HyQMOM15Closure",
     # generic construction vocabulary (ADC-543): inert handles + typed aliases
     "VelocitySpace",
