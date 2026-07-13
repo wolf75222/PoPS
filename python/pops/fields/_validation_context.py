@@ -1,4 +1,5 @@
 """Duck-typed compile-context queries for field validation."""
+
 from __future__ import annotations
 
 from typing import Any

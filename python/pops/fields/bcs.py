@@ -1,124 +1,213 @@
-"""pops.fields.bcs -- field-VALUE boundary conditions (Spec 5 sec.5.5 / sec.8.16.4).
+"""Extensible typed boundary selectors and field-value conditions."""
 
-These describe the boundary condition imposed on a FIELD value: periodic wrap, a
-Dirichlet value, a Neumann flux, or first-order extrapolation. The mesh-side
-:mod:`pops.mesh.boundaries` owns the domain TOPOLOGY (which faces are periodic vs
-physical); this module owns what value/flux a field takes on a face.
-
-:class:`FaceBC` binds one of these conditions to a named domain face. The face selectors
-(:class:`XMin` / :class:`XMax` / :class:`YMin` / :class:`YMax`) live here too so the
-``fields`` package stays self-contained (it imports only :mod:`pops.descriptors`).
-
-Inert descriptors; the runtime materialises the actual ghost fills.
-"""
 from __future__ import annotations
 
 from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
+from pops.ir.expr import Expr
+from pops.model import Handle
+
+from ._identity import strict_field_data
+from ._references import collect_references, reference_label, resolve_handle, resolve_value
 
 
-class _Face(Descriptor):
-    """A named domain face selector (used to attach a per-face field condition)."""
+class BoundarySelector(Descriptor):
+    """Small extension interface selecting a topological boundary region."""
 
-    category = "face"
-    axis = -1
-    side = ""
+    category = "boundary_selector"
 
-    def options(self) -> dict:
-        return {"axis": self.axis, "side": self.side}
+    def to_data(self) -> dict[str, Any]:
+        return {"type": type(self).__name__, "options": self.options()}
 
 
-class XMin(_Face):
-    axis, side = 0, "lo"
+class AllPhysicalBoundaries(BoundarySelector):
+    def options(self) -> dict[str, Any]:
+        return {"selector": "all_physical"}
 
 
-class XMax(_Face):
-    axis, side = 0, "hi"
+class AxisBoundary(BoundarySelector):
+    """Cartesian boundary selector usable in any dimension."""
+
+    def __init__(self, axis: Any, side: Any) -> None:
+        if isinstance(axis, bool) or not isinstance(axis, int) or axis < 0:
+            raise ValueError("AxisBoundary axis must be an integer >= 0")
+        if side not in {"lo", "hi"}:
+            raise ValueError("AxisBoundary side must be exactly 'lo' or 'hi'")
+        self.axis = axis
+        self.side = side
+
+    def options(self) -> dict[str, Any]:
+        return {"selector": "axis", "axis": self.axis, "side": self.side}
 
 
-class YMin(_Face):
-    axis, side = 1, "lo"
+class NamedBoundary(BoundarySelector):
+    """Reference a model/domain-owned boundary for non-Cartesian geometries."""
+
+    def __init__(self, boundary: Any) -> None:
+        if not isinstance(boundary, Handle):
+            raise TypeError("NamedBoundary boundary must be a declaration Handle")
+        self.boundary = boundary
+
+    def options(self) -> dict[str, Any]:
+        return {
+            "selector": "named",
+            "boundary": reference_label(self.boundary, where="NamedBoundary boundary"),
+        }
+
+    def resolve_references(self, resolver: Any) -> NamedBoundary:
+        return NamedBoundary(
+            resolve_handle(self.boundary, resolver, where="NamedBoundary boundary")
+        )
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return (self.boundary,)
 
 
-class YMax(_Face):
-    axis, side = 1, "hi"
+class XMin(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(0, "lo")
 
 
-class Periodic(Descriptor):
-    """A periodic field boundary: the field wraps across the boundary."""
+class XMax(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(0, "hi")
+
+
+class YMin(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(1, "lo")
+
+
+class YMax(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(1, "hi")
+
+
+class ZMin(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(2, "lo")
+
+
+class ZMax(AxisBoundary):
+    def __init__(self) -> None:
+        super().__init__(2, "hi")
+
+
+class FieldBoundaryCondition(Descriptor):
+    """Small extension interface for one field boundary law."""
 
     category = "field_bc"
 
-    def options(self) -> dict:
+    def to_data(self) -> dict[str, Any]:
+        return {"type": type(self).__name__, "options": self.options()}
+
+
+def _boundary_value(value: Any) -> Any:
+    if isinstance(value, (Expr, Handle)):
+        return value
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if callable(getattr(value, "to_data", None)):
+        return value
+    raise TypeError("boundary value must be a scalar, Handle, Expr, or typed value with to_data()")
+
+
+class Periodic(FieldBoundaryCondition):
+    """Require consistency with a periodic mesh-topology pairing."""
+
+    def options(self) -> dict[str, Any]:
         return {"bc": "periodic"}
 
-    def capabilities(self) -> Any:
+    def capabilities(self) -> CapabilitySet:
         return CapabilitySet({"periodic": True})
 
 
-class Dirichlet(Descriptor):
-    """A Dirichlet field boundary: the field value is fixed to :paramref:`value`.
+class Dirichlet(FieldBoundaryCondition):
+    def __init__(self, value: Any = 0) -> None:
+        self.value = _boundary_value(value)
 
-    ``on`` optionally restricts the condition to a face selector (an instance of a
-    :class:`_Face` subclass); ``None`` means all physical faces.
-    """
+    def options(self) -> dict[str, Any]:
+        return {"bc": "dirichlet", "value": strict_field_data(self.value)}
 
-    category = "field_bc"
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return collect_references(self.value)
 
-    def __init__(self, value: Any = 0.0, on: Any = None) -> None:
-        self.value = float(value)
-        self.on = on
-
-    def options(self) -> dict:
-        return {"bc": "dirichlet", "value": self.value,
-                "on": getattr(self.on, "name", self.on)}
+    def resolve_references(self, resolver: Any) -> Dirichlet:
+        return Dirichlet(resolve_value(self.value, resolver, where="Dirichlet value"))
 
 
-class Neumann(Descriptor):
-    """A Neumann field boundary: the normal flux/derivative is fixed to :paramref:`value`.
+class Neumann(FieldBoundaryCondition):
+    def __init__(self, flux: Any = 0) -> None:
+        self.flux = _boundary_value(flux)
 
-    ``on`` optionally restricts the condition to a face selector; ``None`` means all
-    physical faces.
-    """
+    def options(self) -> dict[str, Any]:
+        return {"bc": "neumann", "flux": strict_field_data(self.flux)}
 
-    category = "field_bc"
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return collect_references(self.flux)
 
-    def __init__(self, value: Any = 0.0, on: Any = None) -> None:
-        self.value = float(value)
-        self.on = on
-
-    def options(self) -> dict:
-        return {"bc": "neumann", "value": self.value,
-                "on": getattr(self.on, "name", self.on)}
+    def resolve_references(self, resolver: Any) -> Neumann:
+        return Neumann(resolve_value(self.flux, resolver, where="Neumann flux"))
 
 
-class FirstOrderExtrapolation(Descriptor):
-    """A zero-gradient field boundary (ghost cell mirrors the interior cell)."""
-
-    category = "field_bc"
-
-    def options(self) -> dict:
-        return {"bc": "foextrap"}
+class FirstOrderExtrapolation(FieldBoundaryCondition):
+    def options(self) -> dict[str, Any]:
+        return {"bc": "first_order_extrapolation"}
 
 
-class FaceBC(Descriptor):
-    """Bind a field boundary :paramref:`condition` to a specific :paramref:`face` selector."""
+class BoundaryCondition(Descriptor):
+    """Bind one condition to one selector; this is the sole binding authority."""
 
-    category = "face_bc"
+    category = "boundary_condition"
 
-    def __init__(self, face: Any, condition: Any) -> None:
-        if not isinstance(face, _Face):
-            raise TypeError(
-                "FaceBC: face must be a face selector (XMin/XMax/YMin/YMax), got %r" % (face,))
-        self.face = face
+    def __init__(self, selector: Any, condition: Any) -> None:
+        if not isinstance(selector, BoundarySelector):
+            raise TypeError("BoundaryCondition selector must be a BoundarySelector")
+        if not isinstance(condition, FieldBoundaryCondition):
+            raise TypeError("BoundaryCondition condition must be a FieldBoundaryCondition")
+        self.selector = selector
         self.condition = condition
 
-    def options(self) -> dict:
-        return {"face": self.face.name,
-                "condition": getattr(self.condition, "name", repr(self.condition))}
+    def options(self) -> dict[str, Any]:
+        return {
+            "selector": self.selector.options(),
+            "condition": self.condition.options(),
+        }
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "selector": self.selector.to_data(),
+            "condition": self.condition.to_data(),
+        }
+
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return collect_references((self.selector, self.condition))
+
+    def resolve_references(self, resolver: Any) -> BoundaryCondition:
+        resolve = getattr(self.selector, "resolve_references", None)
+        selector = resolve(resolver) if callable(resolve) else self.selector
+        condition = resolve_value(self.condition, resolver, where="BoundaryCondition condition")
+        return BoundaryCondition(selector, condition)
 
 
-__all__ = ["Periodic", "Dirichlet", "Neumann", "FirstOrderExtrapolation", "FaceBC",
-           "XMin", "XMax", "YMin", "YMax"]
+__all__ = [
+    "AllPhysicalBoundaries",
+    "AxisBoundary",
+    "BoundaryCondition",
+    "BoundarySelector",
+    "Dirichlet",
+    "FieldBoundaryCondition",
+    "FirstOrderExtrapolation",
+    "NamedBoundary",
+    "Neumann",
+    "Periodic",
+    "XMax",
+    "XMin",
+    "YMax",
+    "YMin",
+    "ZMax",
+    "ZMin",
+]

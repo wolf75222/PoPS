@@ -1,45 +1,29 @@
-"""pops.fields.outputs -- typed outputs of an elliptic field solve (Spec 5 sec.5.5 / sec.9).
+"""Typed physical output maps produced by a :class:`FieldOperator`."""
 
-A field solve produces the unknown itself and a set of DERIVED quantities computed from it (the
-electric field ``E = -grad(phi)``, a stress / current, a diagnostic aux). Spec 5 makes each such
-output a TYPED descriptor rather than a free ``{"E": "grad_phi"}`` string map, so a
-:class:`FieldProblem` declares exactly which fields it exposes and how each is derived, before the
-runtime materialises them.
-
-* :class:`FieldOutput` -- the solved field itself surfaced under a name (``phi``);
-* :class:`GradientOutput` -- the (negative) gradient of the solved field (``E = -grad(phi)``);
-* :class:`DerivedField` -- an arbitrary field derived from the solve by a named recipe.
-
-Inert descriptors: they record the name + recipe and answer the protocol; the runtime computes the
-actual arrays. This is the typed counterpart of the flat ``physics.board_handles.FieldOutputs``
-string map (which the facade ``solve_field`` shortcut still accepts).
-"""
 from __future__ import annotations
 
 from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
+from pops.ir.expr import Expr
+from pops.model import Handle
 
+from ._identity import strict_field_data
 from ._references import reference_label, resolve_handle
 
 
 class _Output(Descriptor):
-    """Base of the field-output descriptors: a named quantity with a derivation recipe."""
+    """Base contract for one named physical output of a field operator."""
 
     category = "field_output"
-    #: The lowered recipe token the runtime reads (``"field"`` / ``"grad_phi"`` / ``"derived"``).
     recipe = "field"
 
     def __init__(self, name: Any, source: Any = None) -> None:
         if not isinstance(name, str) or not name:
             raise TypeError("field output name must be a non-empty string")
-        if source is not None:
-            from pops.model import Handle
-            if not isinstance(source, Handle):
-                raise TypeError(
-                    "field output source must be a declaration Handle; names/strings are not "
-                    "references")
+        if source is not None and not isinstance(source, Handle):
+            raise TypeError("field output source must be a declaration Handle")
         self._name = name
         self.source = source
 
@@ -47,63 +31,107 @@ class _Output(Descriptor):
     def name(self) -> str:
         return self._name
 
-    def options(self) -> dict:
-        return {"name": self._name, "recipe": self.recipe,
-                "source": (reference_label(self.source, where="field output source")
-                           if self.source is not None else None)}
+    def options(self) -> dict[str, Any]:
+        return {
+            "name": self._name,
+            "recipe": self.recipe,
+            "source": (
+                reference_label(self.source, where="field output source")
+                if self.source is not None
+                else None
+            ),
+        }
 
-    def requirements(self) -> Any:
-        return RequirementSet({} if self.source is None else {
-            "field": reference_label(self.source, where="field output source")})
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "name": self._name,
+            "recipe": self.recipe,
+            "source": (self.source.canonical_identity() if self.source is not None else None),
+        }
+
+    def requirements(self) -> RequirementSet:
+        return RequirementSet(
+            {}
+            if self.source is None
+            else {"field": reference_label(self.source, where="field output source")}
+        )
 
     def resolve_references(self, resolver: Any) -> _Output:
         from copy import copy
 
         resolved = copy(self)
         if self.source is not None:
-            resolved.source = resolve_handle(
-                self.source, resolver, where="field output source")
+            resolved.source = resolve_handle(self.source, resolver, where="field output source")
         return resolved
 
-    def declaration_references(self) -> tuple[Any, ...]:
+    def declaration_references(self) -> tuple[Handle, ...]:
         return () if self.source is None else (self.source,)
 
 
 class FieldOutput(_Output):
-    """Expose the solved field itself under :paramref:`name` (``FieldOutput("phi")``)."""
-
-    recipe = "field"
+    """Expose the solved unknown itself under ``name``."""
 
 
 class GradientOutput(_Output):
-    """The negative gradient of the solved field: ``E = -grad(phi)`` (``GradientOutput("E", "phi")``).
+    """Expose the physical gradient of ``source`` with an explicit sign."""
 
-    :paramref:`source` names the solved field to differentiate (the unknown of the field problem);
-    :paramref:`name` is the exposed vector field. The runtime computes the centred gradient.
-    """
+    recipe = "gradient"
 
-    recipe = "grad_phi"
-
-    def __init__(self, name: Any, source: Any) -> None:
+    def __init__(self, name: Any, source: Any, *, sign: int = -1) -> None:
+        if sign not in {-1, 1}:
+            raise ValueError("GradientOutput sign must be exactly -1 or 1")
         super().__init__(name, source=source)
+        self.sign = sign
 
-    def capabilities(self) -> Any:
+    def options(self) -> dict[str, Any]:
+        result = super().options()
+        result["sign"] = self.sign
+        return result
+
+    def to_data(self) -> dict[str, Any]:
+        result = super().to_data()
+        result["sign"] = self.sign
+        return result
+
+    def capabilities(self) -> CapabilitySet:
         return CapabilitySet({"vector": True, "derivative_order": 1})
 
 
 class DerivedField(_Output):
-    """A field derived from the solve by a named :paramref:`recipe` (``DerivedField("J", "ohm")``).
+    """Expose a derived field defined by a symbolic expression, never a recipe string."""
 
-    Names an output the runtime computes with the given recipe from the solved field / declared
-    inputs; the recipe token is carried inert (the numeric kernel is selected by the runtime).
-    """
+    recipe = "expression"
 
-    def __init__(self, name: Any, recipe: Any, source: Any = None) -> None:
-        super().__init__(name, source=source)
-        self.recipe = str(recipe)
+    def __init__(self, name: Any, expression: Any) -> None:
+        if not isinstance(expression, Expr):
+            raise TypeError("DerivedField expression must be a pops Expr")
+        super().__init__(name)
+        self.expression = expression
 
-    def capabilities(self) -> Any:
+    def options(self) -> dict[str, Any]:
+        return {
+            "name": self._name,
+            "recipe": self.recipe,
+            "expression": strict_field_data(self.expression),
+        }
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "type": type(self).__name__,
+            "name": self._name,
+            "recipe": self.recipe,
+            "expression": strict_field_data(self.expression),
+        }
+
+    def capabilities(self) -> CapabilitySet:
         return CapabilitySet({"derived": True})
 
+    def declaration_references(self) -> tuple[Handle, ...]:
+        return tuple(self.expression.declaration_references())
 
-__all__ = ["FieldOutput", "GradientOutput", "DerivedField"]
+    def resolve_references(self, resolver: Any) -> DerivedField:
+        return DerivedField(self.name, self.expression.resolve_references(resolver))
+
+
+__all__ = ["DerivedField", "FieldOutput", "GradientOutput"]

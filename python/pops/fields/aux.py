@@ -8,11 +8,15 @@ expression (in C++, not Python). The per-field aux halo / ghost policy
 
 Inert descriptors; they compute nothing.
 """
+
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.descriptors import Descriptor
+
+if TYPE_CHECKING:
+    from pops.mesh.aux import AuxHalo
 
 
 class StaticAux(Descriptor):
@@ -49,9 +53,13 @@ class DerivedAux(Descriptor):
         return self._name
 
     def options(self) -> dict:
-        return {"name": self._name, "kind": "derived",
-                "expression": getattr(self.expression, "name", repr(self.expression))
-                if self.expression is not None else None}
+        return {
+            "name": self._name,
+            "kind": "derived",
+            "expression": getattr(self.expression, "name", repr(self.expression))
+            if self.expression is not None
+            else None,
+        }
 
 
 # Re-export the per-field aux halo descriptor under the Spec 5 sec.14.2.4 name
@@ -62,6 +70,7 @@ class DerivedAux(Descriptor):
 def __getattr__(name: str) -> Any:
     if name == "AuxHalo":
         from pops.mesh.aux import AuxHalo
+
         return AuxHalo
     raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
