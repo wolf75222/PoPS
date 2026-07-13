@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.time.step_strategy import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
+from pops._bootstrap import StepAttemptRejected
 
 
 def _number(value: Any) -> float:
@@ -63,4 +64,4 @@ def run_control_payload(strategy: StepStrategy) -> dict[str, Any]:
     raise TypeError("unknown StepStrategy %r" % (strategy,))
 
 
-__all__ = ["resolve_run_strategy", "run_control_payload", "run_step_attempt"]
+__all__ = ["StepAttemptRejected", "resolve_run_strategy", "run_control_payload", "run_step_attempt"]

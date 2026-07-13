@@ -5,7 +5,8 @@ import inspect
 
 import pytest
 
-from pops.runtime._step_strategy import resolve_run_strategy, run_control_payload, run_step_attempt
+from pops.runtime._step_strategy import (
+    StepAttemptRejected, resolve_run_strategy, run_control_payload, run_step_attempt)
 from pops.runtime.system import System
 from pops.time import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
 
@@ -30,6 +31,11 @@ class _Native:
     def step_cfl(self, cfl):
         self.calls.append(("step_cfl", cfl))
         self.t += 0.25
+
+
+def test_native_rejection_signal_is_distinguishable_from_fatal_runtime_errors():
+    assert issubclass(StepAttemptRejected, RuntimeError)
+    assert StepAttemptRejected is not RuntimeError
 
 
 def test_step_strategy_is_closed_and_validated():
