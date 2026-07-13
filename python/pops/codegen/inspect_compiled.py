@@ -18,6 +18,7 @@ module may not import ``pops.mesh`` at module scope; cf. tests/python/architectu
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import importlib
 from typing import Any
@@ -45,6 +46,16 @@ class _MemoryRuntimeContext:
     dimension: int
     real_bytes: int
     amr_refinement_ratio: int
+
+
+@dataclass(frozen=True, slots=True)
+class _MemoryLayoutContext:
+    """Validated layout facts used by the hierarchy part of an absolute estimate."""
+
+    kind: str
+    dimension: int
+    max_levels: int
+    ratio: int | None
 
 
 def _native_memory_context() -> _MemoryRuntimeContext:
@@ -402,24 +413,121 @@ class MemoryEstimate(Report):
                 % (self.total_bytes, self.cells, len(self.categories)))
 
 
-def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
-    """Read a square shape only from a typed mesh whose dimension matches native evidence."""
-    from pops.mesh.cartesian import CartesianMesh  # lazy: preserve codegen import layering
-
-    if not isinstance(mesh, CartesianMesh):
+def _capability_data(provider: Any, *, where: str) -> dict[str, Any]:
+    """Read the small typed capability protocol without coupling to descriptor classes."""
+    capabilities = getattr(provider, "capabilities", None)
+    if not callable(capabilities):
         raise MemoryEstimateCapabilityError(
-            "estimate_memory requires a typed CartesianMesh; bare integers and tuples do not carry "
-            "a proven dimension", field="mesh", actual=type(mesh).__name__)
-    if mesh.dim != context.dimension:
+            "estimate_memory requires %s.capabilities()" % where,
+            field="%s.capabilities" % where, actual=type(provider).__name__)
+    reported = capabilities()
+    to_dict = getattr(reported, "to_dict", None)
+    if not callable(to_dict):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires %s.capabilities() to return a typed value with to_dict()"
+            % where, field="%s.capabilities" % where, actual=type(reported).__name__)
+    data = to_dict()
+    if not isinstance(data, Mapping):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires %s.capabilities().to_dict() to return a mapping" % where,
+            field="%s.capabilities" % where, actual=type(data).__name__)
+    return dict(data)
+
+
+def _positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires %s as a positive integer (got %r)" % (field, value),
+            field=field, actual=value)
+    return value
+
+
+def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
+    """Read extents from the public CartesianGrid/CartesianMesh capability-and-data protocol."""
+    capabilities = _capability_data(mesh, where="mesh")
+    if capabilities.get("geometry") != "cartesian":
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires a Cartesian mesh/grid capability (got geometry=%r)"
+            % capabilities.get("geometry"), field="mesh.geometry",
+            actual=capabilities.get("geometry"))
+    dimension = _positive_int(capabilities.get("dim"), field="mesh.dimension")
+    if dimension != context.dimension:
         raise MemoryEstimateCapabilityError(
             "estimate_memory mesh dimension=%r disagrees with native dimension=%r"
-            % (mesh.dim, context.dimension), field="mesh.dimension", actual=mesh.dim)
-    n = mesh.n
-    if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            % (dimension, context.dimension), field="mesh.dimension", actual=dimension)
+
+    cells = getattr(mesh, "cells", None)
+    if cells is not None:
+        if not isinstance(cells, (tuple, list)) or len(cells) != dimension:
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory requires mesh.cells with exactly %d extents (got %r)"
+                % (dimension, cells), field="mesh.cells", actual=cells)
+        shape = tuple(_positive_int(value, field="mesh.cells[%d]" % index)
+                      for index, value in enumerate(cells))
+    else:
+        n = _positive_int(getattr(mesh, "n", None), field="mesh.n")
+        shape = (n,) * dimension
+    if dimension != 2:
         raise MemoryEstimateCapabilityError(
-            "estimate_memory requires CartesianMesh.n as a positive integer (got %r)" % n,
-            field="mesh.n", actual=n)
-    return n * n, (n, n)
+            "estimate_memory currently implements a 2D perimeter/hierarchy formula; mesh dimension=%d "
+            "requires a dimension-aware estimator" % dimension,
+            field="mesh.dimension", actual=dimension)
+    return shape[0] * shape[1], shape
+
+
+def _layout_dimension(layout: Any, capabilities: dict[str, Any]) -> int:
+    """Read a layout's explicit dimension, or the capability data of its public grid provider."""
+    dimension = capabilities.get("dim")
+    if dimension is None:
+        for name in ("grid", "mesh", "base"):
+            provider = getattr(layout, name, None)
+            if provider is not None:
+                dimension = _capability_data(provider, where="layout.%s" % name).get("dim")
+                break
+    return _positive_int(dimension, field="layout.dimension")
+
+
+def _layout_context(layout: Any, context: _MemoryRuntimeContext) -> _MemoryLayoutContext:
+    """Validate the class-independent layout capability protocol used by memory estimation."""
+    capabilities = _capability_data(layout, where="layout")
+    kind = capabilities.get("layout")
+    if kind not in ("uniform", "amr"):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory supports only layout='uniform' or layout='amr' (got %r)" % kind,
+            field="layout.kind", actual=kind)
+    dimension = _layout_dimension(layout, capabilities)
+    if dimension != context.dimension:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory layout dimension=%r disagrees with native dimension=%r"
+            % (dimension, context.dimension), field="layout.dimension", actual=dimension)
+
+    max_levels = _positive_int(
+        capabilities.get("max_levels", capabilities.get("levels")), field="layout.max_levels")
+    if kind == "uniform":
+        if max_levels != 1 or capabilities.get("supports_amr") is not False:
+            raise MemoryEstimateCapabilityError(
+                "estimate_memory uniform layout must explicitly report max_levels=1 and supports_amr=False",
+                field="layout.max_levels", actual=max_levels)
+        return _MemoryLayoutContext(kind, dimension, max_levels, None)
+
+    ratio = _positive_int(capabilities.get("ratio"), field="layout.ratio")
+    ratios = capabilities.get("transition_ratios")
+    if not isinstance(ratios, (tuple, list)) or len(ratios) != max_levels - 1:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory AMR layout requires transition_ratios for every level transition",
+            field="layout.transition_ratios", actual=ratios)
+    normalized_ratios = tuple(
+        _positive_int(value, field="layout.transition_ratios[%d]" % index)
+        for index, value in enumerate(ratios))
+    if any(value != ratio for value in normalized_ratios):
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires one normalized AMR ratio; transition_ratios=%r disagree with ratio=%d"
+            % (normalized_ratios, ratio), field="layout.transition_ratios", actual=normalized_ratios)
+    if ratio != context.amr_refinement_ratio:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory AMR ratio=%d disagrees with native ratio=%d" % (
+                ratio, context.amr_refinement_ratio), field="layout.ratio", actual=ratio)
+    return _MemoryLayoutContext(kind, dimension, max_levels, ratio)
 
 
 def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
@@ -443,9 +551,10 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
       - ``amr_patch``    = for an ``AMR`` layout: a CONSERVATIVE per-level patch budget
 
     @p platform optional hint (e.g. ``"mpi"`` / ``"cpu"``) to include the MPI halo exchange buffer;
-    @p layout optional ``pops.mesh.layouts.AMR``/``Uniform`` to estimate an AMR hierarchy. For an
-    AMR layout the estimate is CONSERVATIVE (full refinement of every level); a tight figure needs a
-    bind (the regrid pattern is data-dependent).
+    @p layout a typed provider exposing ``capabilities().to_dict()``.  The estimator accepts the
+    public ``layout='uniform'`` / ``layout='amr'`` protocol, including ``pops.layouts.AMR``; AMR
+    requires explicit dimension, max-level and transition-ratio evidence.  Its figure is
+    CONSERVATIVE (full refinement of every level); a tight figure needs a bind.
     """
     context = _native_memory_context()
     program = getattr(compiled, "program", None)
@@ -530,33 +639,20 @@ def build_memory_estimate(compiled: Any, mesh: Any, *, platform: Any = None,
 
 def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic: Any,
                       context: _MemoryRuntimeContext) -> tuple:
-    """A CONSERVATIVE AMR patch budget from an ``AMR`` layout descriptor (no bind).
+    """A CONSERVATIVE AMR patch budget from the public layout-capability protocol (no bind).
 
     Returns ``(layout_kind, amr_patch_bytes, notes)``. For a ``Uniform`` layout there is no extra
     patch budget (``amr_patch_bytes`` is ``None``). For an ``AMR(max_levels=L, ratio=r)`` layout the
     worst case fully refines every level: a level ``k`` covering the whole domain at refinement
     ``r^k`` has ``r^(2k)`` times the base cells (2D). Summing the geometric series over the refined
     levels (1..L-1) gives the extra fine-grid footprint on top of the base level. This is an UPPER
-    bound (real regrids refine a fraction of the domain); a tight figure needs a bind. The mesh
-    import is lazy to respect the codegen layering."""
-    from pops.mesh.layouts import AMR, Uniform  # lazy: codegen may not import mesh at module scope
-    if isinstance(layout, Uniform):
+    bound (real regrids refine a fraction of the domain); a tight figure needs a bind."""
+    layout_context = _layout_context(layout, context)
+    if layout_context.kind == "uniform":
         return "uniform", None, []
-    if not isinstance(layout, AMR):
-        raise TypeError("estimate_memory(layout=): expected a pops.mesh.layouts.AMR / Uniform; "
-                        "got %r" % type(layout).__name__)
-    capabilities = layout.capabilities()
-    max_levels = capabilities.get("max_levels")
-    ratio = capabilities.get("ratio")
-    for key, value in (("max_levels", max_levels), ("ratio", ratio)):
-        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-            raise MemoryEstimateCapabilityError(
-                "estimate_memory requires AMR normalized capability %s as a positive int (got %r)"
-                % (key, value), field="layout.%s" % key, actual=value)
-    if ratio != context.amr_refinement_ratio:
-        raise MemoryEstimateCapabilityError(
-            "estimate_memory AMR ratio=%d disagrees with native ratio=%d" % (
-                ratio, context.amr_refinement_ratio), field="layout.ratio", actual=ratio)
+    max_levels = layout_context.max_levels
+    ratio = layout_context.ratio
+    assert ratio is not None  # established by _layout_context for kind='amr'
     if max_levels <= 1:
         return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
     # Sum r^(2k) for k = 1 .. max_levels-1 (each refined level fully covering the domain).
