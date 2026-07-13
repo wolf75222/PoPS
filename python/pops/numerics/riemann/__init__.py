@@ -23,6 +23,24 @@ def _riemann(name: Any, native_id: Any, caps: Any) -> Any:
     return _native(name, native_id, name, category="riemann", caps=caps)
 
 
+def _scalar_upwind(*, velocity: Any) -> Any:
+    """Exact scalar upwind route expressed through the native Rusanov flux.
+
+    For a linear scalar flux ``F=aU`` with the declared velocity as exact stability bound, Rusanov
+    and upwind are algebraically identical. The public identity records that stronger contract while
+    the native route remains the generic ``pops::RusanovFlux`` implementation.
+    """
+    from pops.model import Handle
+
+    if not isinstance(velocity, Handle) or velocity.kind != "vector":
+        raise TypeError("ScalarUpwind(velocity=) requires a typed vector Handle")
+    return _native(
+        "scalar_upwind", "pops::RusanovFlux", "rusanov", category="riemann",
+        caps=["physical_flux", "provider_pack", "stability_bound"],
+        velocity=velocity, exact_linear_scalar=True,
+    )
+
+
 def _hll(waves: Any = None) -> Any:
     """The HLL numerical flux descriptor, optionally pinned to a typed wave-speed provider.
 
@@ -63,6 +81,7 @@ def _hll(waves: Any = None) -> Any:
 riemann = SimpleNamespace(
     Rusanov=lambda: _riemann(
         "rusanov", "pops::RusanovFlux", ["physical_flux", "provider_pack", "stability_bound"]),
+    ScalarUpwind=_scalar_upwind,
     HLL=_hll,
     HLLC=lambda: _riemann("hllc", "pops::HLLCFlux",
                           ["physical_flux", "provider_pack", "stability_bound", "pressure", "wave_speeds",
@@ -103,6 +122,7 @@ riemann.validate = validate
 # Spec 5: expose the fluxes at module scope so ``from pops.numerics.riemann import HLL``
 # works (the namespace stays for ``riemann.HLL`` and the attached capability hooks).
 Rusanov = riemann.Rusanov
+ScalarUpwind = riemann.ScalarUpwind
 HLL = riemann.HLL
 HLLC = riemann.HLLC
 Roe = riemann.Roe
@@ -110,6 +130,6 @@ EulerHLLC2D = riemann.EulerHLLC2D
 EulerRoe2D = riemann.EulerRoe2D
 User = riemann.User
 
-__all__ = ["riemann", "waves", "Rusanov", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D",
+__all__ = ["riemann", "waves", "Rusanov", "ScalarUpwind", "HLL", "HLLC", "Roe", "EulerHLLC2D", "EulerRoe2D",
            "User", "WaveSpeedProvider", "ExplicitPair", "FromJacobian", "FromPressure",
            "Einfeldt", "Davis", "MaxWaveSpeed", "provider_of", "available", "validate"]

@@ -21,7 +21,7 @@ from .reconstruction import limiters
 # The finite-volume spatial brick catalog (criterion 7: moved out of pops.lib.spatial). Bind the
 # SimpleNamespace as ``pops.numerics.spatial`` (shadowing the submodule) so ``spatial.FiniteVolume()``
 # resolves, mirroring the former ``pops.lib.spatial.FiniteVolume()``.
-from .spatial import spatial
+from .spatial import FiniteVolume, spatial
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial"]
+           "spatial", "FiniteVolume"]

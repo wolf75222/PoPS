@@ -17,7 +17,7 @@ from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
 from pops.params.use_sites import ParamUse, resolve_param_use
-from .limiters import limiters
+from .limiters import Minmod, limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
 # lowered scheme token. A first-order scheme reads the cell mean (1 ghost); a second-order
@@ -66,12 +66,32 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
                    epsilon=epsilon)
 
 
+def _muscl(limiter: Any = None) -> Any:
+    """Second-order MUSCL reconstruction with one typed limiter authority.
+
+    The limiter determines the native reconstruction token. Formal order and ghost depth are
+    properties of this descriptor; callers never repeat them in an AMR or halo policy.
+    """
+    selected = Minmod() if limiter is None else limiter
+    if isinstance(selected, str) or getattr(selected, "category", None) != "limiter":
+        raise TypeError(
+            "MUSCL(limiter=) requires a typed limiter descriptor such as Minmod() or VanLeer()"
+        )
+    scheme = getattr(selected, "scheme", None)
+    if scheme not in ("minmod", "vanleer"):
+        raise ValueError("MUSCL does not have a native route for limiter %r" % scheme)
+    native_id = "pops::Minmod" if scheme == "minmod" else "pops::VanLeer"
+    return _native(
+        "muscl", native_id, scheme, category="reconstruction", limiter=selected,
+        formal_order=2, ghost_depth=2,
+    )
+
+
 reconstruction = SimpleNamespace(
-    FirstOrder=lambda: _native("firstorder", "pops::NoSlope", "firstorder",
-                               category="reconstruction", ghost_depth=1),
-    MUSCL=lambda limiter="minmod": _native(
-        "muscl", "pops::Minmod", limiter, category="reconstruction", limiter=limiter,
-        ghost_depth=2),
+    FirstOrder=lambda: _native(
+        "firstorder", "pops::NoSlope", "firstorder", category="reconstruction",
+        formal_order=1, ghost_depth=1),
+    MUSCL=_muscl,
     WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
     WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="reconstruction"),

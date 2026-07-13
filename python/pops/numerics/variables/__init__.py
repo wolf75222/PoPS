@@ -18,15 +18,20 @@ from typing import Any
 from pops.descriptors import BrickDescriptor
 
 
-def _variables(scheme: Any) -> Any:
+def _variables(scheme: Any, state: Any = None) -> Any:
     """A reconstructed-variable-set descriptor (no native C++ symbol: a per-block flag)."""
+    if state is not None:
+        from pops.model import Handle
+
+        if not isinstance(state, Handle) or state.kind != "state":
+            raise TypeError("reconstructed variables require a StateHandle or None")
     return BrickDescriptor(scheme, "native", category="variables", native_id="",
-                           scheme=scheme)
+                           scheme=scheme, options=None if state is None else {"state": state})
 
 
 variables = SimpleNamespace(
-    Conservative=lambda: _variables("conservative"),
-    Primitive=lambda: _variables("primitive"),
+    Conservative=lambda state=None: _variables("conservative", state),
+    Primitive=lambda state=None: _variables("primitive", state),
 )
 
 # Spec 5: expose the variable sets at module scope (``from pops.numerics.variables import
