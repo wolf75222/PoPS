@@ -85,15 +85,16 @@ def _manifest_for(
     if action is None:
         action = FailRun()
     return ConsumerManifest(
-        handle,
-        ConsumerKind.SCIENTIFIC_OUTPUT,
-        (quantity,),
-        Schedule(Every(AcceptedStep(clock), n)),
-        "file:///adc-685/%s" % name,
-        HDF5(parallel=True) if parallel_mode is ParallelMode.COLLECTIVE else NPZ(),
-        parallel_mode,
-        dependencies,
-        action,
+        handle=handle,
+        kind=ConsumerKind.SCIENTIFIC_OUTPUT,
+        quantities=(quantity,),
+        schedule=Schedule(Every(AcceptedStep(clock), n)),
+        target_uri="file:///adc-685/%s" % name,
+        output_format=(
+            HDF5(parallel=True) if parallel_mode is ParallelMode.COLLECTIVE else NPZ()),
+        parallel_mode=parallel_mode,
+        dependencies=dependencies,
+        failure_action=action,
     )
 
 

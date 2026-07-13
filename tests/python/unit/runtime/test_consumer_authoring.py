@@ -69,10 +69,14 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
     assert output.parallel_mode is ParallelMode.COLLECTIVE
     assert output.quantities[0].reference == case.resolve(state)
     assert output.quantities[0].levels == (0,)
-    diagnostic_data, = output.operation.to_data()["data"]["diagnostics"]
+    assert output.operation is None
+    assert output.output_format_data["provider_id"] == "pops.output.hdf5.v1"
+    diagnostic_data, = output.to_data()["diagnostics"]
     assert diagnostic_data["references"] == [case.resolve(block).canonical_identity()]
     assert diagnostic_data["descriptor"]["scheme"] == "integral"
-    assert checkpoint.operation.to_data()["data"]["bit_identical"] is True
+    assert checkpoint.output_format is None
+    assert checkpoint.operation_data["provider_id"] == "pops.restart.accepted-state-v3"
+    assert checkpoint.operation_data["bit_identical"] is True
     assert case.snapshot.to_dict()["consumers"]["phase"] == "authoring"
 
 

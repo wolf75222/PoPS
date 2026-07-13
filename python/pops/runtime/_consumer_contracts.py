@@ -238,7 +238,18 @@ class ConsumerManifest:
             first, second = diagnostic.consumer_data(), diagnostic.consumer_data()
             if type(first) is not dict or first != second:
                 raise TypeError("%s consumer_data() must return one deterministic dict" % where)
-            diagnostic_rows.append(freeze_data(first, "%s.consumer_data" % where))
+            references = getattr(diagnostic, "declaration_references", None)
+            if not callable(references):
+                raise TypeError("%s must implement declaration_references()" % where)
+            resolved_references = references()
+            if not isinstance(resolved_references, tuple) or any(
+                    not isinstance(value, Handle) or not value.is_resolved
+                    for value in resolved_references):
+                raise TypeError("%s references must be canonical Handles" % where)
+            diagnostic_rows.append(freeze_data({
+                "descriptor": first,
+                "references": [value.canonical_identity() for value in resolved_references],
+            }, "%s.consumer_data" % where))
         if diagnostic_rows and self.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
             raise ValueError("only ScientificOutput can embed diagnostic providers")
         object.__setattr__(self, "diagnostics_data", tuple(diagnostic_rows))
