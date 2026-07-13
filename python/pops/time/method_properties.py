@@ -209,6 +209,27 @@ def _unknown_graph(graph: Any, reason: str, abscissae: Any = ()) -> ProgramMetho
     return ProgramMethodCertificate(graph.graph_hash, None, properties)
 
 
+def _is_explicit_rate_call(node: Any) -> bool:
+    """Return whether *node* is one authenticated explicit rate evaluation.
+
+    Normalized graphs retain primitive ``rhs`` nodes for the internal lowering route and expose
+    public operator calls as :class:`OperatorCall` nodes.  The latter must be classified from their
+    canonical typed handle and lowering metadata; names and debug labels are deliberately ignored.
+    """
+    if node.kind == "program_value":
+        return node.op == "rhs"
+    if node.kind != "operator_call":
+        return False
+    operator = node.operator.to_data()
+    handle = operator.get("handle", {})
+    lowering = operator.get("lowering", {})
+    return (
+        handle.get("kind") in {"grid_operator", "local_rate"}
+        and lowering.get("op") == "rhs"
+        and lowering.get("value_type") == "rhs"
+    )
+
+
 def certify_program_graph(graph: Any) -> ProgramMethodCertificate:
     """Reconstruct an explicit RK certificate from normalized graph semantics.
 
@@ -221,8 +242,7 @@ def certify_program_graph(graph: Any) -> ProgramMethodCertificate:
         raise TypeError("certify_program_graph requires an exact normalized ProgramGraph")
     nodes = {node.node_id: node for node in graph.nodes}
     states = [node for node in graph.nodes if node.kind == "state_read"]
-    rhs = [node for node in graph.nodes
-           if node.kind == "program_value" and node.op == "rhs"]
+    rhs = [node for node in graph.nodes if _is_explicit_rate_call(node)]
     commits = [node for node in graph.nodes if node.kind == "commit"]
     abscissae = tuple(_point_offset(node.point) for node in rhs)
     if len(states) != 1 or not rhs or len(commits) != 1:
