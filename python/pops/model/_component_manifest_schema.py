@@ -127,11 +127,12 @@ def _semantic_set(value: Any, *, path: str) -> tuple[Any, ...]:
     if not isinstance(value, (list, tuple)):
         _refuse("expected_sequence", path, f"{path} must be a list or tuple", evidence=value)
     rows = [_freeze(item, path=f"{path}[]") for item in value]
-    rows.sort(key=lambda row: (len(canonical_bytes(row)), canonical_bytes(row)))
-    encoded = [canonical_bytes(row) for row in rows]
+    encoded_rows = [(canonical_bytes(_thaw(row)), row) for row in rows]
+    encoded_rows.sort(key=lambda item: (len(item[0]), item[0]))
+    encoded = [item[0] for item in encoded_rows]
     if len(encoded) != len(set(encoded)):
         _refuse("duplicate_value", path, f"{path} contains duplicate semantic rows")
-    return tuple(rows)
+    return tuple(item[1] for item in encoded_rows)
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -347,7 +348,8 @@ def _interfaces(value: Any, facets: tuple[str, ...],
             evidence={"missing": sorted(facet_names - names),
                       "undeclared_facets": sorted(names - facet_names)},
         )
-    normalized.sort(key=lambda row: (len(canonical_bytes(row)), canonical_bytes(row)))
+    normalized.sort(key=lambda row: (
+        len(canonical_bytes(_thaw(row))), canonical_bytes(_thaw(row))))
     return tuple(normalized)
 
 
@@ -423,5 +425,4 @@ def _default_restart() -> dict[str, Any]:
 
 def _default_precision() -> dict[str, Any]:
     return {"inputs": [], "accumulation": "unspecified", "outputs": []}
-
 
