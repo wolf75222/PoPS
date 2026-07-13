@@ -10,6 +10,7 @@ from pops.model import OwnerPath
 from pops.physics import Model
 from pops.physics.board_handles import (FieldHandle, FieldsHandle, FluxHandle, SourceHandle,
                                         StateHandle, _safe_name)
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 
 
 def _expr_lists(mapping):
@@ -57,9 +58,19 @@ def _snapshot(model):
 
 
 def _scalar(name="scalar"):
-    model = Model(name)
+    model = Model(name, frame=FRAME)
     state = model.state("U", components=["u"])
     return model, state, state[0]
+
+
+def _scalar_flux(model, state, value, *, waves=None):
+    return model.flux(
+        "F",
+        frame=FRAME,
+        state=state,
+        components={X_AXIS: [value], Y_AXIS: [value]},
+        waves=(None if waves is None else {X_AXIS: waves["x"], Y_AXIS: waves["y"]}),
+    )
 
 
 def test_handle_constructors_never_coerce_names_or_boolean_flags():
@@ -100,7 +111,7 @@ def test_foreign_flux_state_is_rejected_before_any_flux_mutation():
     before = _snapshot(model)
 
     with pytest.raises(ValueError, match="declared by this physics model"):
-        model.flux("F", on=foreign_state, x=[u], y=[u])
+        _scalar_flux(model, foreign_state, u)
 
     assert _snapshot(model) == before
 
@@ -115,7 +126,7 @@ def test_flux_builder_failure_restores_flux_and_wave_registries(monkeypatch):
 
     monkeypatch.setattr(model._dsl, "eigenvalues", fail_after_mutation)
     with pytest.raises(RuntimeError, match="injected"):
-        model.flux("F", on=state, x=[u], y=[u], waves={"x": [1], "y": [1]})
+        _scalar_flux(model, state, u, waves={"x": [1], "y": [1]})
 
     assert _snapshot(model) == before
 
@@ -178,7 +189,7 @@ def test_invalid_field_operator_output_and_foreign_unknown_are_atomic():
 
 def test_failed_finite_volume_rate_never_publishes_reconstruction(monkeypatch):
     model, state, u = _scalar("rate_builder")
-    flux = model.flux("F", on=state, x=[u], y=[u])
+    flux = _scalar_flux(model, state, u)
     marker = object()
     before = _snapshot(model)
 
@@ -269,7 +280,7 @@ def test_foreign_multispecies_handle_does_not_register_coupled_operator():
 def test_rate_equation_with_foreign_flux_is_atomic():
     model, state, _ = _scalar("rate_local")
     foreign, foreign_state, foreign_u = _scalar("rate_foreign")
-    foreign_flux = foreign.flux("F", on=foreign_state, x=[foreign_u], y=[foreign_u])
+    foreign_flux = _scalar_flux(foreign, foreign_state, foreign_u)
     before = _snapshot(model)
 
     with pytest.raises(ValueError, match="declared by this physics model"):
