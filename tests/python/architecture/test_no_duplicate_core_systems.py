@@ -205,19 +205,16 @@ def test_lib_time_exports_are_macros_not_stepper_classes():
 
 
 def test_lib_time_macro_returns_the_same_program_handle():
-    """Functional (skip-clean): a lib.time macro RETURNS a pops.time.Program, one handle, no stepper.
+    """Installed-package gate: a lib.time macro returns one pops.time.Program handle.
 
     Reuses the ADC-554 program_macro contract with an authoritative BlockHandle and state Handle.
     The macro produces the canonical Program; it never mints a second stepper object or promotes a
     free block/state name into semantic ownership.
     """
-    try:
-        import pops.lib.time as lib_time
-        from pops.model import Module
-        from pops.problem import Case
-        from pops.time import Program
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    import pops.lib.time as lib_time
+    from pops.model import Module
+    from pops.problem import Case
+    from pops.time import Program
 
     module = Module("architecture-time-schemes")
     state_space = module.state_space("U", ("u",))
@@ -280,19 +277,16 @@ def test_bind_path_consumes_a_field_problem_never_constructs_one():
 
 
 def test_field_facade_and_direct_lowering_share_one_ir_hash():
-    """Functional (skip-clean): the facade path and the direct path lower to identical IR.
+    """Installed-package gate: facade and direct paths lower to identical IR.
 
     ADC-565 demands "facade == direct". Two same-named Programs register a field solve two ways -- via
     the ``@P.step`` facade decorator and via a direct inline ``solve_fields`` call -- and must produce
     a byte-identical ``_ir_hash`` (the ADC-529 IR fingerprint; no compile, no _pops), proving there is
     no second field-lowering path.
     """
-    try:
-        from pops.model import Module
-        from pops.problem import Case
-        from pops.time import Program
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.model import Module
+    from pops.problem import Case
+    from pops.time import Program
 
     module = Module("field-parity-model")
     state_space = module.state_space("U", ("u",))
@@ -365,18 +359,15 @@ def test_no_public_function_takes_an_amr_config_string_kwarg():
 
 
 def test_amr_config_lives_in_the_layout_descriptor_only():
-    """Functional (skip-clean): AMR(...) is the config surface; sim.amr is a read-only view.
+    """Installed-package gate: AMR(...) configures; sim.amr is a read-only view.
 
     Reuses the ADC-598 shape: AMR(...).inspect() carries capabilities.layout=="amr" (the config
     manifest), while sim.amr.inspect() is a {hierarchy, patches, regrid, limitations} VIEW with NO
     configuration mutator (no set_/configure_/add_ method that changes levels/ratio).
     """
-    try:
-        from pops.mesh import CartesianMesh
-        from pops.mesh.amr import RegridEvery
-        from pops.mesh.layouts import AMR
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.mesh import CartesianMesh
+    from pops.mesh.amr import RegridEvery
+    from pops.mesh.layouts import AMR
 
     layout = AMR(base=CartesianMesh(n=16, L=1.0), max_levels=2, ratio=2, regrid=RegridEvery(4))
     manifest = layout.inspect()
@@ -385,11 +376,8 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
 
     # sim.amr is a runtime VIEW: no config mutator, and inspect() is the fixed four-key view.
     # ADC-545: the engine left the top-level surface -- reach it via the advanced runtime seam.
-    try:
-        from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
-        sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
-    except Exception as exc:  # pragma: no cover - native extension unavailable in this build.
-        pytest.skip("AmrSystem construction unavailable: %s" % exc)
+    from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
 
     view = sim.amr
     mutators = [name for name in dir(view)

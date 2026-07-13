@@ -23,7 +23,7 @@ Python authors an inert, typed `pops.Case`: physics model, finite-volume descrip
 field problems, time program, outputs, and runtime parameters. The explicit typed pipeline is
 `validate(case) → resolve(validated, layout=...) → compile(resolved) → bind(artifact, ...)`.
 Compilation lowers the resolved assembly to generated or native C++; binding creates the runtime;
-`sim.run(...)` advances with C++/Kokkos/MPI kernels.
+`pops.run(sim, **run_controls)` advances it with C++/Kokkos/MPI kernels.
 Python never runs a per-cell loop.
 
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live in
@@ -38,9 +38,10 @@ dU/dt + div F(U, fields, aux) = S(U, fields, aux)
 D phi                         = f(U)
 ```
 
-Field outputs are exposed through named auxiliary channels. The standard Poisson contract provides
-`phi`, `grad_x`, and `grad_y`; a model may also declare named aux fields such as `B_z` or `T_e`.
-All these names are metadata for the generated C++ path, not Python callbacks.
+Field outputs are exposed through owner-qualified, typed field handles. Each field operator declares
+its own output schema (scalar, vector, tensor, components and frame); consumers bind those handles
+without relying on reserved names such as `phi` or `grad_x`. Names remain optional metadata for the
+generated C++ path, never Python callbacks or runtime lookup authority.
 
 ## Table of contents
 
@@ -56,7 +57,8 @@ All these names are metadata for the generated C++ path, not Python callbacks.
 
 - **C++20** compiler: AppleClang 16+, GCC 13+, Clang 17+ (`nvcc_wrapper` for the CUDA target).
 - **CMake >= 3.21**: the build is driven by presets ([CMakePresets.json](CMakePresets.json)).
-- **[Kokkos](https://kokkos.org) 4.2+**: the only on-node backend, required. No need to
+- **[Kokkos](https://kokkos.org) 4.4.01**: the exact promised release, with Serial and OpenMP
+  execution spaces. It is the only on-node backend and is required. No need to
   pre-install it; if it is not found, CMake fetches and builds it (FetchContent).
 - **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*.
 - **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`: DataWriter)*.
@@ -97,8 +99,9 @@ cmake --preset parallel && cmake --build --preset parallel && ctest --preset par
 cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI
 ```
 
-Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). Runtime thread
-control is exposed through `pops.set_threads()`.
+Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). For an OpenMP build,
+set `OMP_NUM_THREADS` (and, where required by the Kokkos installation, `KOKKOS_NUM_THREADS`) before
+launching Python or use the scheduler's native CPU/thread controls.
 
 ### Uninstall
 
@@ -141,8 +144,9 @@ and let PoPS generate and bind the corresponding C++ artifact.
 ### From Python
 
 The public Python path is typed and compiled. Physics, numerics, boundaries, the explicit time
-`Program`, layout, consumers, and execution controls each have one authority. The complete scalar
-advection reference is executable directly:
+`Program`, layout, consumers, and execution controls each have one authority. Final executable
+references are collected under [`examples/final`](examples/final); the complete scalar-advection
+case runs directly:
 
 ```bash
 python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py
@@ -156,7 +160,7 @@ SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and 
 
 ## Documentation
 
-The documentation corpus is being rebuilt from the retained foundation:
+The documentation corpus describes the final public lifecycle and its current implementation:
 
 - [Architecture](docs/ARCHITECTURE.md): current technical map of the core.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.

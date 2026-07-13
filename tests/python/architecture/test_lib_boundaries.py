@@ -15,8 +15,9 @@ It EXTENDS, and does not re-implement, two existing fences (cited inline so the 
     file asserts CONTENT (no central class defined or re-exported under lib) and the DIRECTORY set,
     which the layering fence does not check.
 
-Source-only AST scans (run without the native extension) plus skip-clean functional proofs that
-import ``pops``. ASCII only.
+Source-only AST scans plus installed-package functional proofs. The latter fail when the promised
+``pops`` installation is unavailable; an acceptance gate must never turn that defect into a skip.
+ASCII only.
 """
 import ast
 import pathlib
@@ -231,12 +232,9 @@ def test_lib_init_stays_thin():
 
 
 def test_lib_models_lower_to_physics_without_runtime():
-    """Functional (skip-clean): a provided model lowers to a pops.model/physics object whose manifest
+    """Installed-package gate: a provided model lowers to a pops.model/physics object whose manifest
     carries NO runtime/compiled fields (no .so path, no abi_key)."""
-    try:
-        from pops.lib.models import Gaussian, HyQMOM15
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.lib.models import Gaussian, HyQMOM15
 
     for factory in (lambda: HyQMOM15.vlasov_poisson_magnetic(order=4),
                     lambda: Gaussian.transport()):

@@ -21,7 +21,7 @@ import sys
 
 import pytest
 
-pops = pytest.importorskip("pops")
+import pops
 
 from pops import moments  # noqa: E402
 from pops.descriptors import Availability, Descriptor, DescriptorProtocol  # noqa: E402
@@ -197,10 +197,7 @@ def test_hyqmom15_model_is_inspectable_and_runtime_free():
     # The provided HyQMOM15 model builds to an authoring physics object whose Module lists the
     # typed transport + source operators and the 15 conservative names, with no runtime leakage
     # (mirrors the ADC-566 lib boundary: models lower runtime-free to pops.model.Module).
-    try:
-        from pops.lib.models.moments import HyQMOM15
-    except Exception as exc:  # pragma: no cover - bare tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.lib.models.moments import HyQMOM15
     model = HyQMOM15.vlasov_poisson_magnetic(order=4)
     module = getattr(model, "module", model)
     assert hasattr(module, "operator_registry")

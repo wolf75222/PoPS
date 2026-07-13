@@ -13,8 +13,8 @@ Two kinds of check:
   (profiler.hpp report()). They do NOT fake the engine: they parse a literal sample of what the C++
   Profiler emits, which is the contract this wrapper is built to read.
 * ENGINE -- a real native System under the context manager: asserts enable/disable, the
-  off-by-default contract, and that a stepped block's report flows into a PerformanceSummary. Skipped
-  (not failed) if _pops / numpy is unavailable; never faked.
+  off-by-default contract, and that a stepped block's report flows into a PerformanceSummary. The
+  promised installed _pops / numpy stack is required; absence fails the gate and is never faked.
 
 The heavy per-brick / scheduler / memory counters are Kokkos-gated (compiled .so step on ROMEO); the
 typed views DECLARE those measures unavailable here rather than fabricating them -- asserted below.
@@ -234,16 +234,14 @@ def _make_stepped_system():
 
 
 def test_engine_exports_typed_surface():
-    pops = pytest.importorskip("pops")
+    import pops
+
     assert hasattr(pops, "Profile") and hasattr(pops, "PerformanceSummary")
     assert pops.Profile.Basic().level == "basic"
 
 
 def test_engine_context_manager_enables_then_disables():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
+    pops, sim, _ = _make_stepped_system()
     # off by default -- a plain System never enabled.
     assert sim.is_profiling() is False
     with sim.profile(pops.Profile.Basic()) as prof:
@@ -262,10 +260,7 @@ def test_engine_context_manager_enables_then_disables():
 
 def test_engine_off_by_default_contract():
     """A plain run (no with sim.profile()) records NOTHING: profiling stays disabled."""
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
+    pops, sim, _ = _make_stepped_system()
     sim.step(1e-3)
     assert sim.is_profiling() is False
     summ = PerformanceSummary(sim.profile_report())
@@ -274,19 +269,13 @@ def test_engine_off_by_default_contract():
 
 
 def test_engine_profile_rejects_non_profile_arg():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
+    pops, sim, _ = _make_stepped_system()
     with pytest.raises(TypeError):
         sim.profile("advanced")
 
 
 def test_engine_profile_no_arg_uses_env_default():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
+    pops, sim, _ = _make_stepped_system()
     saved = os.environ.get("POPS_PROFILE")
     try:
         os.environ["POPS_PROFILE"] = "advanced"

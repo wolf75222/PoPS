@@ -18,12 +18,12 @@ dance. Two pieces:
 
 The off-by-default contract (criterion 44): profiling adds no heavy timers unless explicitly
 enabled. The native ``enable_profiling`` already gates this -- a plain run leaves the profiler
-disabled. :meth:`System.profile` (the context manager in :mod:`pops.runtime.system`) is the typed
-front door: it enables on ``__enter__`` and disables on ``__exit__``, and exposes
+disabled. The bound simulation's ``profile`` context manager is the typed front door: it enables
+on ``__enter__`` and disables on ``__exit__``, and exposes
 ``prof.summary()`` -> :class:`PerformanceSummary`.
 
 This module is a pure typed/parsing wrapper: it imports neither ``_pops`` nor numpy. The native
-extension is reached only through the :class:`System` instance the context manager is bound to.
+extension is reached only through the internal engine owned by the bound simulation.
 """
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ class Profile:
     Use the named constructors rather than a string flag::
 
         with sim.profile(pops.Profile.Basic()) as prof:
-            sim.run(0.1)
+            pops.run(sim, t_end=0.1, max_steps=1000)
         print(prof.summary())
 
     ``Basic`` surfaces the coarse phase timings + the kernel/step counters; ``Advanced`` also asks

@@ -2,10 +2,10 @@
 
 How a depth-d history ring (the buffer behind ``T.prev(lag)``) is PERSISTED inside a
 checkpoint: which of the d slots are STORED verbatim and which are RECOMPUTED at restart by
-deterministic replay of the installed compiled Program. This is a DIFFERENT axis from
-:class:`pops.output.CheckpointPolicy` (which governs WHEN a checkpoint is written); to avoid
-the category collision at :mod:`pops.problem.registries` the descriptors here declare the
-category ``"history_persistence"``.
+deterministic replay of the installed compiled Program. This is a DIFFERENT axis from the
+:class:`pops.output.Checkpoint` consumer schedule (which governs WHEN a checkpoint is written);
+to avoid a category collision at :mod:`pops.problem.registries`, the descriptors here declare
+the category ``"history_persistence"``.
 
 The three policies subclass :class:`pops.descriptors.Descriptor` (they inspect / freeze /
 serialize like every route object) and share ONE generic primitive,
@@ -42,7 +42,7 @@ from pops._manifest_protocol import (
 from pops.params.use_sites import ParamUse, resolve_param_use
 
 #: The category every history-persistence descriptor declares. Distinct from the
-#: ``"checkpoint_policy"`` category of :class:`pops.output.CheckpointPolicy` (a different axis),
+#: ``"checkpoint"`` category of :class:`pops.output.Checkpoint` (a different axis),
 #: so a runtime-policy registry never confuses the two (ADC-626).
 HISTORY_PERSISTENCE_CATEGORY = "history_persistence"
 HISTORY_PERSISTENCE_SCHEMA_VERSION = 1

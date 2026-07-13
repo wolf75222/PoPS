@@ -104,7 +104,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                                 % type(mesh).__name__)
             mesh._apply(config)
         # Mark the Kokkos init as imminent: _System(config) allocates Fabs -> Kokkos initializes
-        # (lazy) here. After this point, pops.set_threads has no further effect (warned by set_threads).
+        # (lazy) here. Runtime thread environment must therefore be fixed before this allocation.
         _threading._first_system_built = True
         self._s = _System(config)  # geometry == 'polar' builds a global ring (Phase 2b, cf. PolarMesh)
         # Table of NAMED aux fields per block (ADC-70 phase 1): block -> {name: canonical component}.
@@ -154,7 +154,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         Usage::
 
             with sim.profile(pops.Profile.Basic()) as prof:
-                sim.run(t_end=0.1)
+                pops.run(sim, t_end=0.1, max_steps=1000)
             print(prof.summary())
 
         @p profile is a :class:`pops.Profile` level (``Profile.Basic()`` / ``Profile.Advanced()``);

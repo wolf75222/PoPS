@@ -21,9 +21,11 @@ import pytest
 
 # Spec 5 (sec.4): the brick-loader + generic external() live in pops.descriptors, and
 # the riemann ``User`` selector in pops.numerics.riemann (formerly all under pops.lib).
-_desc = pytest.importorskip("pops.descriptors")
+import pops.descriptors as _desc
+from pops.numerics import riemann
+
 lib = types.SimpleNamespace(
-    riemann=pytest.importorskip("pops.numerics.riemann").riemann,
+    riemann=riemann,
     external=_desc.external,
     load_cpp_library=_desc.load_cpp_library,
     _register_manifest=_desc._register_manifest,

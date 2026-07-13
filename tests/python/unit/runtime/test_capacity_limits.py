@@ -8,15 +8,15 @@ bounds:
   1. OVERFLOW REJECTED EARLY, at codegen, with a USER-FACING error that NAMES the limit, the count and the
      offending params -- before any .so is emitted or any device array is read out of bounds. Pure Python
      (the guard fires in assign_runtime_indices), so no compiled _pops is required.
-  2. The kMaxRuntimeParams bound is MIRRORED from the single C++ source: when _pops is importable, the
-     Python literal (physics.aux) agrees with _pops.__max_runtime_params__ -- they cannot silently drift.
+  2. The kMaxRuntimeParams bound is MIRRORED from the single C++ source: the installed extension and
+     Python literal (physics.aux) agree on _pops.__max_runtime_params__ -- they cannot silently drift.
   3. The capacity is SURFACED in the reports/manifest: the ModuleManifest params_utilization row and the
      runtime-param report row carry {count, limit}.
   4. The coupled-source kCsMax* overflow still errors with the exact messages, and CompiledCoupledSource
      exposes a utilization() view of the bounds.
 
-pops is never faked: the real Model / manifest / CoupledSource are used; _pops-dependent checks are
-hasattr / import gated so the suite runs on a tree without a freshly built module.
+pops is never faked: the real Model / manifest / CoupledSource and installed _pops module are used.
+Missing native exports fail this release gate instead of being treated as compatibility skips.
 """
 import pytest
 
@@ -88,10 +88,10 @@ def test_exactly_the_limit_is_accepted():
     assert len(nodes) == _limit()
 
 
-def test_python_limit_matches_cpp_constant_when_module_present():
-    _pops = pytest.importorskip("pops._pops")
-    if not hasattr(_pops, "__max_runtime_params__"):
-        pytest.skip("built _pops predates the __max_runtime_params__ export (ADC-610)")
+def test_python_limit_matches_cpp_constant():
+    from pops import _pops
+
+    assert hasattr(_pops, "__max_runtime_params__")
     assert _limit() == int(_pops.__max_runtime_params__)
 
 
@@ -99,8 +99,7 @@ def test_module_manifest_surfaces_runtime_param_utilization():
     from pops.model.manifest import module_manifest_of
     model = _model_with_runtime_params(3)
     manifest = module_manifest_of(model)
-    if manifest is None:
-        pytest.skip("this facade Model exposes no backing Module (manifest honestly absent)")
+    assert manifest is not None
     util = manifest.params_utilization
     assert util["limit"] == _limit()
     # count = the runtime params surfaced (>= 0); the limit and status are always present.
@@ -131,7 +130,7 @@ def test_params_utilization_helper_computes_count_limit_status():
 
 
 def test_coupled_source_overflow_errors_are_exact():
-    ms = pytest.importorskip("pops.physics.multispecies")
+    from pops.physics import multispecies as ms
     # Too many source terms (> kCsMaxTerms): the compile() validation names the count and the bound.
     src = ms.CoupledSource("cs")
     ne = src.block("e").role("density")
@@ -147,7 +146,7 @@ def test_coupled_source_overflow_errors_are_exact():
 
 
 def test_compiled_coupled_source_utilization_surfaces_bounds():
-    ms = pytest.importorskip("pops.physics.multispecies")
+    from pops.physics import multispecies as ms
     src = ms.CoupledSource("cs")
     ne = src.block("e").role("density")
     ni = src.block("i").role("density")

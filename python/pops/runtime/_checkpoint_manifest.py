@@ -82,7 +82,8 @@ def seal_checkpoint_payload(owner: Any, payload: dict[str, Any], *, runtime_kind
     run = getattr(owner, "last_run_identity", None)
     if type(run) is not Identity or run.domain != "run":
         raise RuntimeError(
-            "checkpoint requires a prior sim.run(...) so its execution controls have a run identity")
+            "checkpoint requires a prior pops.run(sim, **controls) so its execution controls "
+            "have a run identity")
     arrays = {name: _array_evidence(value) for name, value in sorted(payload.items())}
     base = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,

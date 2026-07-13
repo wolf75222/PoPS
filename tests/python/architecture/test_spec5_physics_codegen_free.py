@@ -27,15 +27,8 @@ def test_physics_never_imports_codegen_at_module_scope():
     assert not offenders
 
 
-try:
-    import pops._pops  # noqa: F401
-    _HAVE_POPS = True
-except Exception:
-    _HAVE_POPS = False
-
-
-@pytest.mark.skipif(not _HAVE_POPS, reason="compiled _pops extension not importable")
 def test_typed_descriptor_repr_is_short_and_has_no_array_dump():
+    import pops._pops  # noqa: F401
     from pops.diagnostics import Integral, MinMax, Norm
     from pops.linalg import L2
     from pops.numerics.reconstruction import FirstOrder, MUSCL, WENO5
