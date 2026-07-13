@@ -102,7 +102,6 @@ from pops.codegen.program_lowerability import (
     check_model_owner_dispatch as _check_model_owner_dispatch,
     check_schedules_lowerable as _check_schedules_lowerable,
 )
-from pops.time.program_space_resolution import resolve_program_spaces
 from pops.codegen.program_models import ProgramModelGraph, model_for_node
 
 
@@ -195,7 +194,6 @@ def emit_cpp_program(
     if model_graph is not None and type(model_graph) is not ProgramModelGraph:
         raise TypeError("model_graph must be an exact ProgramModelGraph")
     authority = model_graph if model_graph is not None else model
-    program = resolve_program_spaces(program, authority)
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()

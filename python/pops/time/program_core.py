@@ -431,7 +431,7 @@ class _ProgramCore(
             values=tuple(value for value in (state, fields) if value is not None))
         source_name = resolved.lowering.get("source", resolved.name)
         if source_name == "default":
-            result = self._rhs_legacy(
+            result = self._rhs_primitive(
                 name=operator.name, state=state, fields=fields,
                 flux=False, sources=["default"])
             attrs = dict(result.attrs)

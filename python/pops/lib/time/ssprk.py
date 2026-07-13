@@ -6,7 +6,7 @@ from typing import Any
 
 from pops.time.method_tableau import RungeKuttaTableau
 
-from ._factory import program_factory
+from ._factory import program_factory, resolve_solve_action
 from .rk import SSPRK2_TABLEAU, _build_explicit_runge_kutta
 
 
@@ -18,19 +18,21 @@ SSPRK3_TABLEAU = RungeKuttaTableau(
 )
 
 
-def SSPRK2(state: Any, *, rate: Any, fields: Any = None) -> Any:
+def SSPRK2(state: Any, *, rate: Any, fields: Any = None, solve_action: Any = None) -> Any:
     """Return the ordinary two-stage, second-order SSP Program."""
+    action = resolve_solve_action(solve_action, "SSPRK2")
     return program_factory(
         "SSPRK2", _build_explicit_runge_kutta,
-        state, rate, fields, SSPRK2_TABLEAU,
+        state, rate, fields, SSPRK2_TABLEAU, action,
     )
 
 
-def SSPRK3(state: Any, *, rate: Any, fields: Any = None) -> Any:
+def SSPRK3(state: Any, *, rate: Any, fields: Any = None, solve_action: Any = None) -> Any:
     """Return the ordinary three-stage, third-order SSP Program."""
+    action = resolve_solve_action(solve_action, "SSPRK3")
     return program_factory(
         "SSPRK3", _build_explicit_runge_kutta,
-        state, rate, fields, SSPRK3_TABLEAU,
+        state, rate, fields, SSPRK3_TABLEAU, action,
     )
 
 

@@ -16,32 +16,32 @@ class _ProgramRhs(_ProgramBase):
     """Compose a rate from typed terms, then lower it to primitive flux/source selectors."""
 
     def rhs(self, name: Any = None, state: Any = None, fields: Any = None, *,
-            terms: Any = None, **legacy: Any) -> Any:
-        """Build ``R`` from typed RHS terms; free flux/source selectors are refused.
+            terms: Any) -> Any:
+        """Build ``R`` from typed RHS terms.
 
-        ``Flux()`` selects the conservative divergence and ``DefaultSource()`` explicitly selects
-        the block model's default/composite source. Named sources are exact ``OperatorHandle``
-        values returned by ``m.source_term``, directly or wrapped in ``SourceTerm(handle)`` /
-        ``LocalTerm(handle)``. Their owner identity stays in the IR until lowering.
+        ``Flux()`` selects the default conservative divergence, while ``Flux(handle)`` selects an
+        exact named grid operator. ``DefaultSource()`` explicitly selects the block model's
+        default/composite source. Named sources are exact ``OperatorHandle`` values returned by
+        ``m.source_term``, directly or wrapped in ``SourceTerm(handle)`` / ``LocalTerm(handle)``.
+        Every selected operator retains its owner identity in the IR until lowering.
         """
-        if legacy or terms is None:
-            extra = "".join(", %s=" % key for key in sorted(legacy))
-            raise TypeError(
-                "P.rhs requires the typed terms= list, not the legacy flux=/sources=/fluxes= form%s; "
-                "pass P.rhs(state=U, fields=f, terms=[Flux(), source])" % extra)
         state = _resolve_handle(state)
-        from pops.time._rhs_terms import terms_to_flux_sources
-        flux, sources, source_handles = terms_to_flux_sources(self, terms, state=state)
-        result = self._rhs_legacy(
-            name=name, state=state, fields=fields, flux=flux, sources=sources)
-        if not source_handles:
+        from pops.time._rhs_terms import lower_rhs_terms
+        flux, sources, source_handles, fluxes, flux_handles = lower_rhs_terms(
+            self, terms, state=state)
+        result = self._rhs_primitive(
+            name=name, state=state, fields=fields, flux=flux, sources=sources, fluxes=fluxes)
+        if not source_handles and not flux_handles:
             return result
         attrs = dict(result.attrs)
-        attrs["source_handles"] = source_handles
+        if source_handles:
+            attrs["source_handles"] = source_handles
+        if flux_handles:
+            attrs["flux_handles"] = flux_handles
         return self._replace_value(result, attrs=attrs)
 
-    def _rhs_legacy(self, name: Any = None, state: Any = None, fields: Any = None,
-                    flux: Any = True, sources: Any = None, fluxes: Any = None) -> Any:
+    def _rhs_primitive(self, name: Any = None, state: Any = None, fields: Any = None,
+                       flux: Any = True, sources: Any = None, fluxes: Any = None) -> Any:
         """Private projection of typed terms to runtime-local flux/source selector tokens."""
         state, fields = _resolve_handle(state), _resolve_handle(fields)
         if isinstance(name, ProgramValue):

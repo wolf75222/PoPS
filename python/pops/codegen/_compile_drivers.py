@@ -316,8 +316,6 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     model, source_module, lowering_coverage, compile_authority = (
         prepare_program_authority(model, model_graph)
     )
-    from pops.time.program_space_resolution import resolve_program_spaces
-    time = resolve_program_spaces(time, compile_authority)
     from pops.time.program_detach import detach_compiled_program
     time = detach_compiled_program(time)
     program_graph = time.to_graph()

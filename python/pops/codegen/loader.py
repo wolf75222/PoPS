@@ -50,14 +50,13 @@ class CompiledProblem(CompiledProblemDumpMixin):
                  program_param_routes: Any = None, generated_cpp: Any = None,
                  lowering_coverage: Any = None, program_graph: Any = None) -> None:
         self.so_path = so_path
-        from pops.time.program_space_resolution import resolve_program_spaces
-        resolved_program = resolve_program_spaces(program, model)
         # Code emission has completed before the loader is constructed.  Retain a clone-owned,
         # registry-free Program for inspection/runtime metadata, never the authoring Program graph.
         from pops.time.program import Program
-        if isinstance(resolved_program, Program):
+        resolved_program = program
+        if isinstance(program, Program):
             from pops.time.program_detach import detach_compiled_program
-            resolved_program = detach_compiled_program(resolved_program)
+            resolved_program = detach_compiled_program(program)
         self.program = resolved_program
         if program_graph is None and self.program is not None:
             program_graph = self.program.to_graph()

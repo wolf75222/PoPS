@@ -4,6 +4,17 @@ from __future__ import annotations
 from typing import Any
 
 
+def resolve_solve_action(value: Any, where: str) -> Any:
+    """Return a validated explicit failure action, defaulting a preset to fail closed."""
+    from pops.time import FailRun, SolveAction
+
+    action = FailRun() if value is None else value
+    if not isinstance(action, SolveAction):
+        raise TypeError(
+            "%s solve_action must be FailRun(...) or RejectAttempt(...)" % where)
+    return action
+
+
 def program_factory(name: str, build: Any, *args: Any, **kwargs: Any) -> Any:
     """Build one ordinary Program through the same operations as manual authoring."""
     from pops.provenance import callable_span, source_span
@@ -49,17 +60,29 @@ def call_at(
     *candidate_args: Any,
     name: str,
     point: Any,
+    solve_action: Any = None,
 ) -> Any:
-    """Call one typed operator and name its result at the requested stage."""
+    """Call one typed operator, explicitly consume a field solve, and name its result."""
     from ._helpers import _op_space_arity
+    from pops.time import FieldSolveOutcome, SolveAction
 
     arity = _op_space_arity(program, handle)
     # A nullary operator has no ProgramValue from which the callable handle could recover the
     # authoring Program. Presets own that internal lowering boundary explicitly.
     value = program._call(handle) if arity == 0 else handle(*candidate_args[:arity])
+    if isinstance(value, FieldSolveOutcome):
+        if not isinstance(solve_action, SolveAction):
+            raise TypeError(
+                "field operator %r requires solve_action=FailRun(...) or RejectAttempt(...)"
+                % handle.name)
+        value = value.consume(action=solve_action)
+    elif solve_action is not None:
+        raise TypeError(
+            "solve_action applies only to a field-operator outcome; %r returned %s"
+            % (handle.name, type(value).__name__))
     return program.value(name, value, at=point)
 
 
 __all__ = [
-    "call_at", "instance_state", "operator_handle", "program_factory",
+    "call_at", "instance_state", "operator_handle", "program_factory", "resolve_solve_action",
 ]

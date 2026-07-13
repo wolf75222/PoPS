@@ -5,9 +5,11 @@ from fractions import Fraction
 from typing import Any
 
 from pops.solvers import DenseLU
-from pops.time import FailRun, LocalLinear
+from pops.time import LocalLinear
 
-from ._factory import call_at, instance_state, operator_handle, program_factory
+from ._factory import (
+    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+)
 from ._helpers import _block_label, _stage_point
 
 
@@ -34,6 +36,7 @@ def _build_adams_bashforth(
     rate: Any,
     fields: Any,
     order: int,
+    solve_action: Any,
 ) -> None:
     if isinstance(order, bool) or order not in _AB_WEIGHTS:
         raise ValueError("AdamsBashforth order must be 1, 2, or 3")
@@ -45,6 +48,7 @@ def _build_adams_bashforth(
     point = _stage_point(program, "ab%d_current" % order, 0)
     stage_fields = call_at(
         program, fields, initial, name="ab%d_fields" % order, point=point,
+        solve_action=solve_action,
     ) if fields is not None else None
     current = call_at(
         program, rate, initial, stage_fields,
@@ -69,8 +73,10 @@ def AdamsBashforth(
     rate: Any,
     order: int,
     fields: Any = None,
+    solve_action: Any = None,
 ) -> Any:
     """Return an ordinary explicit multistep Program with typed operator dependencies."""
+    action = resolve_solve_action(solve_action, "AdamsBashforth")
     return program_factory(
         "AdamsBashforth%d" % order,
         _build_adams_bashforth,
@@ -78,6 +84,7 @@ def AdamsBashforth(
         rate,
         fields,
         order,
+        action,
     )
 
 
@@ -88,6 +95,7 @@ def _build_bdf(
     explicit: Any,
     fields: Any,
     order: int,
+    solve_action: Any,
 ) -> None:
     if isinstance(order, bool) or order not in (1, 2):
         raise ValueError("BDF order must be 1 or 2")
@@ -105,6 +113,7 @@ def _build_bdf(
     )
     stage_fields = call_at(
         program, fields, initial, name="bdf%d_fields" % order, point=point,
+        solve_action=solve_action,
     ) if fields is not None else None
     linear = call_at(
         program, implicit, stage_fields,
@@ -132,7 +141,7 @@ def _build_bdf(
     solved = program.solve(
         LocalLinear(operator=operator, rhs=rhs, fields=stage_fields),
         solver=DenseLU(), name="bdf%d_solve" % order,
-    ).consume(action=FailRun())
+    ).consume(action=solve_action)
     endpoint = program.value(
         "bdf%d_step" % order, solved, at=temporal.next.point)
     program.commit(temporal.next, endpoint)
@@ -145,15 +154,17 @@ def BDF(
     order: int,
     explicit: Any = None,
     fields: Any = None,
+    solve_action: Any = None,
 ) -> Any:
     """Return BDF1/BDF2 for one typed local-linear implicit operator.
 
     Globally coupled nonlinear problems remain explicit ``Program.solve(problem, solver=...)``
     authoring; this preset does not guess a Jacobian, preconditioner, or field policy.
     """
+    action = resolve_solve_action(solve_action, "BDF")
     return program_factory(
         "BDF%d" % order, _build_bdf,
-        state, implicit, explicit, fields, order,
+        state, implicit, explicit, fields, order, action,
     )
 
 

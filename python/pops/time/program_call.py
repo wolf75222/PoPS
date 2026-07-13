@@ -2,7 +2,7 @@
 
 Split out of :mod:`pops.time.program_core` for the 500-line cap (ADC-550): the private
 ``_call`` lowering used by callable operator handles plus its helpers
-(``_operator_call_name`` / ``_validate_schedule`` / ``_lower_call`` / ``_lower_coupled_rate`` /
+(``_validate_schedule`` / ``_lower_call`` / ``_lower_coupled_rate`` /
 ``_check_call_args``). ``_ProgramCore`` mixes :class:`_ProgramCall` in while the public surface
 stays operator-first (``rate(state)``).
 
@@ -31,20 +31,15 @@ class _ProgramCall(_ProgramBase):
     """Private typed operator-call lowering used by callable operator handles."""
 
     def _call(self, operator: Any, *args: Any, name: Any = None, schedule: Any = None) -> Any:
-        """Internal operator-first call: resolve, type-check and lower an operator (str name OR
-        handle). NOT a public surface: callable operator handles delegate here after locating their
-        Program from typed arguments. A string token survives only for internal lowerers."""
+        """Resolve, type-check and lower one exact operator handle."""
         from pops.model import OperatorHandle
-        operator_handle = None
-        if isinstance(operator, OperatorHandle):
-            op = resolve_operator_handle(self, operator, where="operator call", values=args)
-            operator_name = op.name
-            operator_handle = operator
-        else:
-            operator_name = self._operator_call_name(operator)
-            from pops.time.operator_resolution import resolve_registered_operator
-            op = resolve_registered_operator(
-                self, operator_name, where="P._call", values=args)
+        if not isinstance(operator, OperatorHandle):
+            raise TypeError(
+                "operator call requires the exact OperatorHandle returned by a model declarer; "
+                "got %r" % (operator,))
+        op = resolve_operator_handle(self, operator, where="operator call", values=args)
+        operator_name = op.name
+        operator_handle = operator
         self._check_call_args(op, args)
         self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
@@ -58,8 +53,6 @@ class _ProgramCall(_ProgramBase):
                 raise ValueError(
                     "schedule= is not supported on a coupled_rate operator (%r) yet; schedule its "
                     "per-block consumers instead (ADC-457/458)" % (operator_name,))
-            if operator_handle is None:
-                return result
             tagged = {}
             coupled = None
             for block, value in result.items():
@@ -77,11 +70,9 @@ class _ProgramCall(_ProgramBase):
         # LocalLinearOperator / StateSpace) so downstream ops can type-check the composition
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
         attrs = dict(result.attrs)
-        if operator_handle is not None:
-            attrs["operator_handle"] = operator_handle
+        attrs["operator_handle"] = operator_handle
         field_context = result.field_context
-        if (operator_handle is not None and result.op == "solve_fields"
-                and attrs.get("field") is not None):
+        if result.op == "solve_fields" and attrs.get("field") is not None:
             # _lower_field_operator authenticated a registry-issued field selector. Retain the exact
             # public handle (including an alias identity) in both node attrs and field provenance.
             attrs["field"] = operator_handle
@@ -98,20 +89,8 @@ class _ProgramCall(_ProgramBase):
             return self._field_solve_outcome(result)
         return result
 
-    def _operator_call_name(self, operator: Any) -> Any:
-        """Normalize an internal :meth:`_call` operator selector to its registry name.
-
-        Accepts only a plain ``str`` internal selector token. Handles are resolved by
-        :func:`resolve_operator_handle` before this private seam is reached, so no typed identity can
-        be reduced to a name here."""
-        if isinstance(operator, str) and operator:
-            return operator
-        raise TypeError(
-            "_call: internal operator selector must be a non-empty string, got %r"
-            % (operator,))
-
     def _validate_schedule(self, op: Any, schedule: Any, values: Any = ()) -> Any:
-        """A schedule= on P.call must be a Schedule; a caching policy (hold / accumulate_dt)
+        """A schedule on an operator handle must be a Schedule; a caching policy (hold / accumulate_dt)
         requires the operator to be cacheable (Spec 3 criterion 27)."""
         if not isinstance(schedule, Schedule):
             raise TypeError(
@@ -164,24 +143,23 @@ class _ProgramCall(_ProgramBase):
                     % (consumer, value.name))
 
     def _lower_call(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
-        # A typed call lowers THROUGH the PRIVATE RHS builder (self._rhs_legacy(flux=...) /
+        # A typed call lowers through the private native RHS projection (self._rhs_primitive(...) /
         # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
-        # already used the typed P.call front door), so there is one public path and no re-entrancy
+        # already invoked an exact operator handle), so there is one path and no re-entrancy
         # flag to keep. ADC-642: one decode -- a keyed dispatch over the shared OPERATOR_KINDS
         # vocabulary; each handler holds its arm body verbatim (grid_operator/local_rate share one).
         kind = op.kind
         handler = _LOWER_CALL_HANDLERS.get(kind)
         if handler is None:
             raise NotImplementedError(
-                "P.call: operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
+                "operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
         return handler(self, op, operator_name, args, name)
 
     def _lower_field_operator(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
         # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
         # multi-block field solve: every input species contributes to the one shared elliptic RHS
         # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
-        # species is dropped -- a single-input field operator stays the historical single-block
-        # solve_fields (named-field routing via the operator name as before).
+        # species is dropped -- a single-input field operator uses the single-block field solve.
         state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
         if len(state_args) > 1:
             result = self._solve_fields_from_blocks(
@@ -202,8 +180,8 @@ class _ProgramCall(_ProgramBase):
             # The default source lives in m._source, not as a named source_term; reach it
             # through the source-only RHS path (byte-identical to flux=False,
             # sources=["default"]), since ctx.source(name) only resolves named source_terms.
-            return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=False,
-                                    sources=["default"])
+            return self._rhs_primitive(name=name, state=args[0], fields=fields, flux=False,
+                                       sources=["default"])
         return self._source(source_name, state=args[0], fields=fields)
 
     def _lower_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
@@ -212,12 +190,12 @@ class _ProgramCall(_ProgramBase):
         if op.kind == "grid_operator":
             # Flux divergence only (no source): the default flux or a named flux_term.
             fluxes = None if operator_name == "flux_default" else [operator_name]
-            return self._rhs_legacy(name=name, state=args[0], fields=fields, flux=True,
-                                    sources=[], fluxes=fluxes)
+            return self._rhs_primitive(name=name, state=args[0], fields=fields, flux=True,
+                                       sources=[], fluxes=fluxes)
         low = op.lowering
-        return self._rhs_legacy(name=name, state=args[0], fields=fields,
-                                flux=low.get("flux", True), sources=low.get("sources"),
-                                fluxes=low.get("fluxes"))
+        return self._rhs_primitive(name=name, state=args[0], fields=fields,
+                                   flux=low.get("flux", True), sources=low.get("sources"),
+                                   fluxes=low.get("fluxes"))
 
     def _lower_local_linear_operator(self, op: Any, operator_name: Any, args: Any,
                                      name: Any) -> Any:
@@ -237,7 +215,7 @@ class _ProgramCall(_ProgramBase):
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.
 
         A coupled operator (collisions, ionization, ...) of arbitrary arity returns a typed
-        ``RateBundle``; ``P.call`` returns a :class:`_CoupledResult` whose ``["electrons"]`` is the
+        ``RateBundle``; the callable handle returns a :class:`_CoupledResult` whose ``["electrons"]`` is the
         per-block rate (an RHS ProgramValue over that block) so it composes like any other RHS. The
         coupled-rate KERNEL codegen has landed (ADC-457): ``_emit_coupled_rate_kernel`` lowers the
         ``coupled_rate`` node to one multi-state ``for_each_cell`` and each ``coupled_rate_out``
@@ -274,7 +252,7 @@ class _ProgramCall(_ProgramBase):
         return _CoupledResult(outs)
 
     def _check_call_args(self, op: Any, args: Any) -> Any:
-        """Type-check ``P.call`` arguments against an operator's Signature: arity plus the vtype of
+        """Type-check callable-handle arguments against an operator's Signature: arity plus the vtype of
         each space-typed input (a StateSpace input wants a 'state' value, a FieldSpace input a
         'fields' value). Operator-valued inputs are not passed positionally. Clear error on mismatch.
         """

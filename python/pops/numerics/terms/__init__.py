@@ -21,14 +21,37 @@ from pops.descriptors_report import CapabilitySet
 class Flux(Descriptor):
     """A conservative finite-volume flux-divergence term ``-div F`` of the residual.
 
-    Names the flux contribution to the right-hand side; the numerical flux brick itself
-    (Rusanov/HLL/...) is selected separately under :mod:`pops.numerics.riemann`.
+    ``Flux()`` selects the model's default physical flux. ``Flux(operator)`` selects one exact
+    named grid operator returned by the model declarer; several named flux terms may be summed in
+    one RHS. The numerical interface flux (Rusanov/HLL/...) remains a separate discretization
+    choice under :mod:`pops.numerics.riemann`.
     """
 
     category = "rhs_term"
 
+    def __init__(self, operator: Any = None) -> None:
+        if operator is not None:
+            from pops.model import OperatorHandle
+
+            if not isinstance(operator, OperatorHandle):
+                raise TypeError(
+                    "Flux(operator) requires the exact OperatorHandle returned by a grid/flux "
+                    "declarer; got %r" % (operator,))
+            if operator.kind != "grid_operator":
+                raise TypeError(
+                    "Flux(operator) requires a grid_operator handle, got kind %r"
+                    % operator.kind)
+        self._operator = operator
+
+    @property
+    def operator(self) -> Any:
+        return self._operator
+
     def options(self) -> dict:
-        return {"term": "flux"}
+        return {
+            "term": "flux",
+            "operator": None if self._operator is None else self._operator.inspect(),
+        }
 
     def capabilities(self) -> Any:
         return CapabilitySet({"conservative": True, "divergence": True})

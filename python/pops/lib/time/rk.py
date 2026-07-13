@@ -6,7 +6,9 @@ from typing import Any
 
 from pops.time.method_tableau import RungeKuttaTableau
 
-from ._factory import call_at, instance_state, operator_handle, program_factory
+from ._factory import (
+    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+)
 from ._helpers import _stage_point
 
 
@@ -34,6 +36,7 @@ def _build_explicit_runge_kutta(
     rate: Any,
     fields: Any,
     tableau: Any,
+    solve_action: Any,
 ) -> None:
     if type(tableau) is not RungeKuttaTableau:
         raise TypeError("RungeKutta tableau must be an exact RungeKuttaTableau")
@@ -58,6 +61,7 @@ def _build_explicit_runge_kutta(
         stage_fields = call_at(
             program, fields, stage_state,
             name="%s_fields_%d" % (tag, stage), point=point,
+            solve_action=solve_action,
         ) if fields is not None else None
         rates.append(call_at(
             program, rate, stage_state, stage_fields,
@@ -78,17 +82,20 @@ def RungeKutta(
     rate: Any,
     tableau: RungeKuttaTableau,
     fields: Any = None,
+    solve_action: Any = None,
 ) -> Any:
     """Return an ordinary explicit-RK Program for one exact ``block[state]`` handle."""
     name = tableau.name if type(tableau) is RungeKuttaTableau and tableau.name else "RungeKutta"
+    action = resolve_solve_action(solve_action, "RungeKutta")
     return program_factory(
-        name, _build_explicit_runge_kutta, state, rate, fields, tableau)
+        name, _build_explicit_runge_kutta, state, rate, fields, tableau, action)
 
 
-def RK4(state: Any, *, rate: Any, fields: Any = None) -> Any:
+def RK4(state: Any, *, rate: Any, fields: Any = None, solve_action: Any = None) -> Any:
     """Return the classic fourth-order Runge--Kutta Program."""
+    action = resolve_solve_action(solve_action, "RK4")
     return program_factory(
-        "RK4", _build_explicit_runge_kutta, state, rate, fields, RK4_TABLEAU)
+        "RK4", _build_explicit_runge_kutta, state, rate, fields, RK4_TABLEAU, action)
 
 
 __all__ = [

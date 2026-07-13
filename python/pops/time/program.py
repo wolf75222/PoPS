@@ -74,9 +74,8 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         self._init_time_handle_tables()
         # De-stringing is the ONE public path (Spec 5 sec.15, ADC-479 criteria 23 + 27): the public
         # Callable operator handles and the public P.rhs require typed declarations
-        # (the legacy string operator name / flux=/sources= form is REFUSED). The byte-identical
-        # builders survive ONLY as the internal _call / _rhs_legacy, which the typed front doors and
-        # the pops.lib.time macros lower through -- no opt-in flag, no second public path.
+        # Free operator names and flux/source selector kwargs never enter Program IR. Callable
+        # handles and typed RHS terms lower through one private native projection only.
         self._values = []
         self._issued_values = {}  # id -> strong identity, including stale immutable replacement records
         self._next_id = 0

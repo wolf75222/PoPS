@@ -30,17 +30,12 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
     from pops.ir.expr import Var
     op_name = v.attrs["operator"]
-    from pops.time.operator_resolution import (
-        resolve_operator_handle, resolve_registered_operator,
-    )
+    from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
     if operator_handle is not None and getattr(program, "_operator_registries", None):
         op = resolve_operator_handle(
             program, operator_handle, where="coupled_rate codegen", values=v.inputs)
-    elif operator_handle is None:
-        op = resolve_registered_operator(
-            program, op_name, where="coupled_rate codegen", values=v.inputs)
-    else:
+    elif operator_handle is not None:
         # Compiled Programs deliberately detach mutable authoring registries.  Whole-system
         # compilation retains the immutable source Module in ProgramModelGraph, so resolve the
         # canonical owner-qualified handle against that authority instead of reattaching a registry.
@@ -62,6 +57,9 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
         if op.kind != operator_handle.kind or op.kind != "coupled_rate":
             raise ValueError(
                 "coupled_rate codegen: operator handle kind differs from its source Module")
+    else:
+        raise ValueError(
+            "coupled_rate codegen: node %r lacks its owner-qualified OperatorHandle" % v.name)
     expr = op.body
     if not isinstance(expr, Mapping):
         raise NotImplementedError(

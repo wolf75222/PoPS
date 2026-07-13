@@ -3,13 +3,9 @@
 Public authoring routes accept :class:`pops.model.OperatorHandle` values, never
 free operator-name strings.  A handle is meaningful only relative to the exact
 registry that declared it: a matching local name is not sufficient.  This
-module centralizes that boundary so ``P.call``, ``P.linear_source``, typed RHS
-terms, condensed operators, and ``pops.lib.time`` macros cannot drift into
-slightly different validation rules.
-
-Private ``_...`` lowering seams may still use registry-local string tokens.
-Those strings are resolved by :func:`resolve_registered_operator`; they are not
-accepted by :func:`resolve_operator_handle`.
+module centralizes that boundary so operator calls, ``P.linear_source``, typed
+RHS terms, matrix-free operators, and ``pops.lib.time`` factories cannot drift
+into slightly different validation rules.
 """
 from __future__ import annotations
 
@@ -52,21 +48,6 @@ def _bound_registry(program: Any, where: str, owner: Any = None) -> tuple[Any, A
     return registry, owner
 
 
-def _owner_from_values(values: Any, where: str) -> Any:
-    """Infer exactly one model owner from block-qualified Program arguments."""
-    owners = {
-        value.block.model_owner_path
-        for value in values
-        if getattr(value, "block", None) is not None
-    }
-    if len(owners) > 1:
-        raise ValueError(
-            "%s: arguments span multiple model owners %s; select a typed cross-model operator "
-            "whose protocol explicitly supports that join"
-            % (where, sorted(str(owner) for owner in owners)))
-    return next(iter(owners)) if owners else None
-
-
 def _normalize_kinds(expected_kinds: Any) -> frozenset[str] | None:
     if expected_kinds is None:
         return None
@@ -78,33 +59,6 @@ def _normalize_kinds(expected_kinds: Any) -> frozenset[str] | None:
     if not kinds or any(not isinstance(kind, str) or not kind for kind in kinds):
         raise TypeError("expected_kinds must contain one or more non-empty strings")
     return kinds
-
-
-def resolve_registered_operator(
-    program: Any,
-    name: Any,
-    *,
-    where: str,
-    expected_kinds: Any = None,
-    values: Any = (),
-) -> Any:
-    """Resolve a registry-local name and enforce its expected operator kind.
-
-    This helper is for private lowering tokens and for typed RHS descriptors
-    whose public type carries a declared term category but no owner handle.  It
-    deliberately performs no coercion and never accepts an empty/non-string
-    name.
-    """
-    if not isinstance(name, str) or not name:
-        raise TypeError("%s: operator name must be a non-empty string" % where)
-    registry, _ = _bound_registry(program, where, _owner_from_values(values, where))
-    operator = registry.get(name)
-    kinds = _normalize_kinds(expected_kinds)
-    if kinds is not None and operator.kind not in kinds:
-        raise ValueError(
-            "%s: registered operator %r has kind %r; expected one of %s"
-            % (where, name, operator.kind, sorted(kinds)))
-    return operator
 
 
 def resolve_operator_handle(
@@ -177,4 +131,4 @@ def resolve_operator_handle(
     return operator
 
 
-__all__ = ["resolve_operator_handle", "resolve_registered_operator"]
+__all__ = ["resolve_operator_handle"]
