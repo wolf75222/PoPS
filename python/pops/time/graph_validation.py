@@ -186,6 +186,10 @@ def validate_nodes(nodes: Any, clocks: Any, available: dict[int, Any], *, where:
             solve_source = available[source.inputs[0].node_id]
             if index is None or index < 0 or index >= _solve_arity(solve_source):
                 raise ValueError("solve_outcome_component index is outside solve outcome arity")
+        if type(node) is Synchronize:
+            from pops.time.synchronization import validate_relation_data
+
+            validate_relation_data(node.relation.to_data())
         for index, region in enumerate(_nested_regions(node)):
             _validate_region_boundary(
                 region, available, declared,

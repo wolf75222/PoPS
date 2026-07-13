@@ -141,6 +141,19 @@ class HistoryHandle(_ReadableTemporalHandle, Handle):
     def __call__(self, lag: Any = 1) -> Any:
         return self._program._history_handle_from(self, lag)
 
+    @property
+    def contract(self) -> Any:
+        """Complete typed history contract owned by the issuing Program."""
+        return self._program._history_contract_for_handle(self)
+
+    @property
+    def validity(self) -> Any:
+        return self.contract.validity
+
+    @property
+    def interpolation(self) -> Any:
+        return self.contract.interpolation
+
     def __repr__(self) -> str:
         return "HistoryHandle(block=%r, state=%r, lag=%d)" % (
             block_name(self.block), state_name(self.state), self.lag)

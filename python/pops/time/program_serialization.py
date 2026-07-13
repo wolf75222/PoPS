@@ -181,6 +181,13 @@ class _ProgramSerialization:
                 }
                 for name, (depth, policy) in sorted(persistence.items())
             ]
+        contracts = getattr(self, "_history_contracts", {})
+        if contracts:
+            result["history_contracts"] = [
+                contract.to_data()
+                for _state, contract in sorted(
+                    contracts.items(), key=lambda item: item[0].state.qualified_id)
+            ]
         if self._dt_bound is not None:
             block, value = self._dt_bound
             result["dt_bound"] = {

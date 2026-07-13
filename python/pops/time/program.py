@@ -95,6 +95,9 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # the policy-selected slots; the compile-time pass validates coherence + program-determinism per
         # ring. Empty -> every ring persists Dense (the historical whole ring, no recomputation).
         self._history_persistence = {}
+        # TimeState -> complete owner/state/space/clock/validity/interpolation contract (ADC-667).
+        # This is distinct from persistence: checkpoint placement cannot imply read semantics.
+        self._history_contracts = {}
         # OPTIONAL dt bound (spec s18 / ADC-417): a recorded scalar sub-program (cfl -> Scalar) the
         # generated .so exports as pops_program_dt_bound; None = no bound (the native CFL is used).
         self._dt_bound = None        # (block, scalar_value) once set; the block is the scalar sub-block

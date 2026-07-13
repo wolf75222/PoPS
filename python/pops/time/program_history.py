@@ -16,7 +16,8 @@ class _ProgramHistory(_ProgramBase):
     """Full-state and narrow scalar history rings with explicit provenance."""
 
     def history(self, name: Any, lag: Any = 1, ncomp: Any = None, *,
-                space: Any = None, block: Any = None, state_ref: Any = None) -> Any:
+                space: Any = None, block: Any = None, state_ref: Any = None,
+                contract: Any = None) -> Any:
         self._guard_mutable("declare a history read")
         if not isinstance(name, str) or not name:
             raise ValueError("history: name must be a non-empty string")
@@ -27,6 +28,14 @@ class _ProgramHistory(_ProgramBase):
             if not isinstance(block, BlockHandle):
                 raise TypeError("history: block must be a BlockHandle or None")
         if ncomp is None:
+            if contract is not None:
+                from pops.time.history import HistoryContract
+                if type(contract) is not HistoryContract:
+                    raise TypeError("history: contract must be an exact HistoryContract")
+                if contract.state is not state_ref or contract.space != space:
+                    raise ValueError("history: contract state/space does not match the history ring")
+                if contract.clock != self.clock and contract.clock.owner != self.owner_path:
+                    raise ValueError("history: contract clock belongs to a different Program")
             if space is None and name in self._history_spaces:
                 space = self._history_spaces[name]
             if block is None and name in self._history_blocks:
@@ -35,9 +44,12 @@ class _ProgramHistory(_ProgramBase):
             self._declare_history_block(name, block)
             self._declare_history_state(name, state_ref, block)
             self._histories[name] = max(self._histories.get(name, 0), lag)
+            attrs = {"history": name, "lag": int(lag), "state": state_ref}
+            if contract is not None:
+                attrs["history_contract"] = contract.to_data()
             return self._new(
                 "state", "history", (),
-                {"history": name, "lag": int(lag), "state": state_ref}, name, block,
+                attrs, name, block,
                 space=space, state_ref=state_ref)
         if space is not None or block is not None or state_ref is not None:
             raise ValueError("history: a narrow scalar ring has no StateSpace/block provenance")
@@ -96,14 +108,14 @@ class _ProgramHistory(_ProgramBase):
             space=value.space, state_ref=value.state_ref)
 
     def keep_history(self, timestate: Any, depth: Any, cold_start: Any = None,
-                     checkpoint_policy: Any = None) -> Any:
+                     checkpoint_policy: Any = None, interpolation: Any = None) -> Any:
         self._guard_mutable("configure state history")
         from pops.time.handles import TimeState
         if not isinstance(timestate, TimeState):
             raise ValueError(
                 "keep_history: a TimeState handle is required (T.state(block, U))")
         return self._configure_time_history(
-            timestate, depth, cold_start, checkpoint_policy)
+            timestate, depth, cold_start, checkpoint_policy, interpolation)
 
 
 __all__ = ["_ProgramHistory"]

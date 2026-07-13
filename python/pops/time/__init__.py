@@ -17,7 +17,10 @@ cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 from pops.time.handles import (  # noqa: F401
     HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
 )
-from pops.time.history import CopyCurrent  # noqa: F401
+from pops.time.history import (  # noqa: F401
+    CopyCurrent, DenseOutput, HistoryContract, HistoryValidity,
+    InterpolationCapability, LinearInterpolation, NoInterpolation, PiecewiseConstant,
+)
 from pops.time.history_persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
@@ -67,7 +70,7 @@ from pops.time.schedule import (  # noqa: F401
     always, every, on_end, on_start, when,
 )
 from pops.time.synchronization import (  # noqa: F401
-    SampleAndHold, SynchronizationRelation,
+    InterpolateHistory, SampleAndHold, SynchronizationRelation,
 )
 from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
 
@@ -83,8 +86,10 @@ __all__ = ["Program", "CompiledTime", "ProgramValue", "StageStateSet", "Residual
            "MethodCertificate", "MethodProperties", "AdditiveMethodCertificate",
            "AdditiveMethodProperties", "ProgramMethodCertificate", "SSPCertificate",
            "UnknownOrder", "certify_program_graph",
-           "SampleAndHold", "SynchronizationRelation",
+           "InterpolateHistory", "SampleAndHold", "SynchronizationRelation",
            "TimeState", "StageHandle", "HistoryHandle", "StateEndpointHandle", "CopyCurrent",
+           "HistoryContract", "HistoryValidity", "InterpolationCapability",
+           "NoInterpolation", "PiecewiseConstant", "LinearInterpolation", "DenseOutput",
            "HistoryPersistence", "Dense", "Interval", "Revolve",
            "Domain", "AcceptedStep", "Attempt", "Stage", "ClockTick", "AMRLevel",
            "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every",

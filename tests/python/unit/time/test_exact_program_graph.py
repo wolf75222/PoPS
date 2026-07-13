@@ -111,7 +111,10 @@ def test_cross_clock_reads_require_one_explicit_synchronize_node():
         ProgramGraph("illegal", (source, illegal), clocks=(slow, fast))
 
     sync = Synchronize(
-        1, ValueRef(0), slow, fast, {"kind": "sample_and_hold"}, TimePoint(fast))
+        1, ValueRef(0), slow, fast,
+        {"kind": "sample_and_hold", "schema_version": 1,
+         "provider": {"kind": "latest_accepted_sample", "schema_version": 1}},
+        TimePoint(fast))
     legal = ProgramValue(
         2, "legal", "state", "copy", (ValueRef(1),), fast, TimePoint(fast))
     graph = ProgramGraph("legal", (source, sync, legal), clocks=(slow, fast))
