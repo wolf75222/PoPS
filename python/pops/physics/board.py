@@ -49,6 +49,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
+        "field_provider",
     })
 
     def __init__(self, name: Any, *, frame: Any = None) -> None:
@@ -323,11 +324,24 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             return self._dsl.aux(name)
         return self._dsl.aux_field(name)
 
-    def field(self, name: Any) -> Any:
-        """Declare a solved scalar field (e.g. the potential ``phi``)."""
+    def field(self, name: Any, *, components: Any = None) -> Any:
+        """Declare a solved scalar or a multi-component field space.
+
+        Multi-species models use ``components=`` for the potential and its materialized derivatives;
+        the returned handle is still the one owner-qualified field declaration consumed by Case.
+        """
         name = require_name(name, "field name")
         if name in self._fields:
             raise ValueError("field %r is already declared" % name)
+        if components is not None:
+            if self._multi_module is None:
+                raise ValueError("field components require a multi-species Model")
+            values = normalize_components(components, "field %s" % name)
+            descriptor = self._multi_module.field_space(name, values)
+            h = self._multi_module.field_handle(descriptor)
+            self._fields[h.name] = h
+            self._invalidate_authoring_views()
+            return h
         h = FieldHandle(name, owner=self.owner_path)
         self._fields[h.name] = h
         return h
@@ -365,13 +379,15 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         """
         name = require_name(name, "flux name")
         self._require_state_handle(state, "flux", optional=False)
+        if self._multi_module is not None:
+            state = self._species_handle("flux", name, state)
         if self._frame is not None and frame != self._frame:
             raise ValueError("flux frame differs from its Model frame")
         if not hasattr(frame, "axes") or not isinstance(components, Mapping):
             raise TypeError("flux requires a typed frame and an axis-to-expression mapping")
         if set(components) != set(frame.axes):
             raise ValueError("flux components must name every typed frame axis exactly once")
-        if self._fluxes:
+        if self._multi_module is None and self._fluxes:
             raise ValueError("flux %r cannot replace already declared physical flux %r"
                              % (name, next(iter(self._fluxes))))
         axes = {axis.name: axis for axis in frame.axes}
@@ -382,7 +398,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             components[axes["x"]], "flux x expressions", nonempty=True)
         y_values = normalize_sequence(
             components[axes["y"]], "flux y expressions", nonempty=True)
-        expected = self._dsl._m.n_vars
+        expected = len(state.components) if self._multi_module is not None else self._dsl._m.n_vars
         if len(x_values) != expected or len(y_values) != expected:
             raise ValueError("flux(%r) needs %d expression(s) per direction; got %d/%d"
                              % (name, expected, len(x_values), len(y_values)))
@@ -396,6 +412,35 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             if len(wave_values[0]) != expected or len(wave_values[1]) != expected:
                 raise ValueError("flux(%r) needs %d wave(s) per direction; got %d/%d"
                                  % (name, expected, len(wave_values[0]), len(wave_values[1])))
+        if self._multi_module is not None:
+            from pops.model import Rate, Signature
+
+            if name in self._fluxes:
+                raise ValueError("flux %r is already declared" % name)
+            self._multi_module.operator(
+                name=name,
+                kind="grid_operator",
+                signature=Signature((state.space,), Rate(state.space)),
+                expr={
+                    "x": [self._to_expr(value) for value in x_values],
+                    "y": [self._to_expr(value) for value in y_values],
+                },
+            )
+            if wave_values is not None:
+                proposed = {
+                    "x": tuple(self._to_expr(value) for value in wave_values[0]),
+                    "y": tuple(self._to_expr(value) for value in wave_values[1]),
+                }
+                existing = self._multi_module._eigenvalues
+                if existing is not None and repr(existing) != repr(proposed):
+                    raise ValueError(
+                        "multi-species flux wave declarations must share one exact eigenvalue law"
+                    )
+                self._multi_module.eigenvalues(**proposed)
+            self._fluxes[name] = h
+            self._invalidate_authoring_views()
+            return h
+
         hyp = self._dsl._m
         with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
                           (hyp, "_eig"), (self, "_fluxes")):
@@ -409,10 +454,12 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._fluxes[name] = h
         return h
 
-    def source(self, name: Any, on: Any = None, value: Any = None) -> Any:
+    def source(self, name: Any, on: Any = None, value: Any = None, *, fields: Any = None) -> Any:
         """Declare a named local source term; returns a :class:`SourceHandle`."""
         name = require_name(name, "source name")
         self._require_state_handle(on, "source", optional=True)
+        if self._multi_module is not None:
+            on = self._species_handle("source", name, on)
         if value is None:
             raise ValueError("source(%r) requires value= (one expression per component)" % (name,))
         reg = _safe_name(name)
@@ -420,10 +467,29 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             raise ValueError("source %r collides with already declared source %r"
                              % (name, self._sources[reg].name))
         values = normalize_sequence(value, "source expressions", nonempty=True)
-        if len(values) != self._dsl._m.n_vars:
+        expected = len(on.components) if self._multi_module is not None else self._dsl._m.n_vars
+        if len(values) != expected:
             raise ValueError("source(%r) needs %d expression(s); got %d"
-                             % (name, self._dsl._m.n_vars, len(values)))
+                             % (name, expected, len(values)))
         h = SourceHandle(name, reg, owner=self.owner_path)
+        if self._multi_module is not None:
+            from pops.model import Handle, Rate, Signature
+
+            inputs = [on.space]
+            if fields is not None:
+                if (not isinstance(fields, Handle) or fields.owner_path != self.owner_path
+                        or self._fields.get(fields.local_id) != fields):
+                    raise ValueError("source fields must be declared by this physics model")
+                inputs.append(self._multi_module.field_spaces()[fields.local_id])
+            self._multi_module.operator(
+                name=reg,
+                kind="local_source",
+                signature=Signature(tuple(inputs), Rate(on.space)),
+                expr=[self._to_expr(expression) for expression in values],
+            )
+            self._sources[reg] = h
+            self._invalidate_authoring_views()
+            return h
         hyp = self._dsl._m
         with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"),
                           (hyp, "_source_terms"), (hyp, "_source"), (self, "_sources")):

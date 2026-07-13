@@ -66,7 +66,16 @@ def normalize_roles(roles: Any, components: tuple[str, ...], where: str) -> dict
     for component, role in result.items():
         require_name(component, "%s role component" % where)
         if role is not None:
-            require_name(role, "%s role for %s" % (where, component))
+            from .roles import ComponentRole
+
+            if isinstance(role, str):
+                raise TypeError(
+                    "%s role for %s requires a typed ComponentRole, not a string"
+                    % (where, component))
+            if not isinstance(role, ComponentRole):
+                raise TypeError(
+                    "%s role for %s must implement ComponentRole"
+                    % (where, component))
     return result
 
 

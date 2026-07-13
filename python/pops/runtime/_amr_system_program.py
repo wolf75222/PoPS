@@ -47,6 +47,7 @@ class _AmrSystemProgram(_AmrSystem):
             # program._history_persistence. Attach the name -> policy map so the v3 checkpoint stores
             # only the policy-selected slots and the restart replays the gaps. Absent -> Dense.
             program = getattr(compiled, "program", None)
+            program = getattr(program, "program", program)
             persistence = getattr(program, "_history_persistence", None) if program else None
             set_persistence = getattr(self, "set_history_persistence", None)
             if persistence and set_persistence is not None:

@@ -119,12 +119,21 @@ def resolve_field_install_plan(
     target: str,
     rhs_providers: tuple[Any, ...],
     provider_route: tuple[dict[str, Any], ...],
+    output_components: tuple[str, ...],
     layout: Any,
 ) -> ResolvedFieldInstallPlan:
     operator = getattr(registration, "operator", None)
     plan = getattr(registration, "discretization", None)
     if not isinstance(operator, FieldOperator) or not isinstance(plan, FieldDiscretization):
         raise TypeError("field registration lost FieldOperator + FieldDiscretization")
+    output_components = tuple(output_components)
+    if len(output_components) not in (1, 3) or any(
+            not isinstance(component, str) or not component
+            for component in output_components):
+        raise TypeError(
+            "field output space must resolve to one potential component or "
+            "potential plus two gradient components"
+        )
     rows: list[LoweringCoverageRow] = []
     layout_contract = field_layout_contract(layout)
     source = "field:%s:operator" % name
@@ -347,6 +356,14 @@ def resolve_field_install_plan(
         "field:%s:hierarchy" % name, "derived", rule=(
             "%s + target=%s resolves to %s" % (policy, target, hierarchy))))
 
+    output_owner = operator.unknown.block_ref.local_id
+    rows.append(LoweringCoverageRow(
+        "field:%s:output" % name,
+        "lowered",
+        ("field-install:%s:output:%s:%s" % (
+            name, output_owner, operator.unknown.qualified_id),),
+    ))
+
     options = {
         "rhs": "composite",
         "provider_slot": provider_slot,
@@ -358,6 +375,7 @@ def resolve_field_install_plan(
             "owner_identity": operator.unknown.block_ref.canonical_identity(),
             "owner_block": operator.unknown.block_ref.local_id,
             "key": operator.name,
+            "components": output_components,
         },
         "rhs_identity": field_identity(
             "field-rhs", {

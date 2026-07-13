@@ -6,5 +6,6 @@ operators and small protocols returned by ``Model``.
 """
 
 from .board import Model
+from .roles import ComponentRole, Density, Momentum
 
-__all__ = ["Model"]
+__all__ = ["Model", "ComponentRole", "Density", "Momentum"]

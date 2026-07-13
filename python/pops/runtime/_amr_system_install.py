@@ -140,6 +140,9 @@ class _AmrSystemInstall(_AmrSystem):
             self.add_equation(name, model, spatial=spatial, time=time)
             resolved_models[name] = model
 
+        for field_plan in field_plans.values():
+            self._register_field_plan_output(field_plan, resolved_models)
+
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
         # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
         for field_name, field in aux.items():
@@ -381,6 +384,27 @@ class _AmrSystemInstall(_AmrSystem):
                                handle.qualified_id) for handle in handles]
         self._s.set_field_boundary_parameters(
             field_plan.native_options["provider_slot"], values)
+
+    def _register_field_plan_output(self, field_plan: Any, models: Any) -> None:
+        route = field_plan.native_options["output_route"]
+        block = route["owner_block"]
+        model = models.get(block)
+        if model is None:
+            raise ValueError("AMR field output route names unknown block %r" % block)
+        from pops.physics.aux import AUX_NAMED_BASE
+
+        declared = list(getattr(model, "aux_extra_names", ()) or ())
+        components = tuple(route["components"])
+        missing = [component for component in components if component not in declared]
+        if missing:
+            raise ValueError(
+                "AMR field output route %r is absent from block %r native aux layout: %s"
+                % (field_plan.name, block, ", ".join(missing))
+            )
+        indices = [AUX_NAMED_BASE + declared.index(component) for component in components]
+        indices.extend([-1] * (3 - len(indices)))
+        self._s.register_elliptic_field(
+            block, route["key"], indices[0], indices[1], indices[2])
 
     def _install_solver(self, field: Any, solver_brick: Any,
                         declared_fields: Any = frozenset()) -> Any:

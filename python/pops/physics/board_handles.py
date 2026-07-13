@@ -62,11 +62,16 @@ _BOARD_ROLE = {
 
 
 def _canon_role(role: Any) -> Any:
-    """Canonicalize a board role string; ``None`` remains an unspecified role."""
+    """Translate one typed public role at the private Module boundary."""
     if role is None:
         return None
-    value = require_name(role, "state role")
-    return _BOARD_ROLE.get(value.lower(), value)
+    from .roles import ComponentRole
+
+    if isinstance(role, str):
+        raise TypeError("state roles require typed ComponentRole descriptors, not strings")
+    if not isinstance(role, ComponentRole):
+        raise TypeError("state role must implement ComponentRole")
+    return role.native_name
 
 
 def _roles_for(hyp: Any) -> Any:

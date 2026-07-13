@@ -84,6 +84,37 @@ class _MultiSpeciesMixin(_BoardModel):
 
     # --- quantities ---
 
+    def field_provider(self, name: Any, *, on: Any, into: Any, value: Any) -> Any:
+        """Declare one species-owned contribution to a solved field RHS.
+
+        Providers remain distinct from the Case-owned field solve: they state only which local
+        source density a species contributes to the shared field space.
+        """
+        from .. import model as _model
+
+        if self._multi_module is None:
+            raise ValueError(
+                "field_provider(%r) requires a multi-species Model" % name)
+        species = self._species_handle("field_provider", name, on)
+        if (not isinstance(into, _model.Handle) or into.owner_path != self.owner_path
+                or self._fields.get(into.local_id) != into):
+            raise ValueError(
+                "field_provider(%r) into= must be a field declared by this Model" % name)
+        fields = self._multi_module.field_spaces().get(into.local_id)
+        if fields is None:
+            raise ValueError(
+                "field_provider(%r) output field %r has no typed FieldSpace"
+                % (name, into.local_id))
+        reg = _safe_name(name)
+        self._multi_module.operator(
+            name=reg,
+            kind="field_operator",
+            signature=_model.Signature((species.space,), fields),
+            expr=self._to_expr(value),
+        )
+        self._invalidate_authoring_views()
+        return self._registered_operator_handle(reg)
+
     def coupled_rate(self, name: Any, inputs: Any = (), outputs: Any = None, preserves: Any = None,
                      dissipates: Any = None) -> Any:
         """Declare a coupled rate over several species (collisions, ionization, radiation).
@@ -199,17 +230,18 @@ class _MultiSpeciesMixin(_BoardModel):
         return handles
 
     def _species_handle(self, op: Any, name: Any, sp: Any) -> Any:
-        """Resolve one species (a StateHandle or a species name) to its StateHandle."""
-        if isinstance(sp, StateHandle):
-            if sp.owner_path != self.owner_path:
-                raise ValueError(
-                    "%s(%r): species handle %r belongs to another physics model"
-                    % (op, name, sp.name))
-            handle = self._species.get(sp.name)
-            if handle != sp:
-                handle = None
-        else:
-            handle = self._species.get(require_name(sp, "%s species" % op))
+        """Authenticate one exact species handle; names never select dependencies."""
+        if not isinstance(sp, StateHandle):
+            raise TypeError(
+                "%s(%r): species dependencies require exact StateHandle objects, not names"
+                % (op, name))
+        if sp.owner_path != self.owner_path:
+            raise ValueError(
+                "%s(%r): species handle %r belongs to another physics model"
+                % (op, name, sp.name))
+        handle = self._species.get(sp.name)
+        if handle != sp:
+            handle = None
         if handle is None:
             known = ", ".join(self._species) or "<none>"
             raise KeyError("%s(%r): unknown species %r (declared: %s)"
@@ -221,7 +253,7 @@ class _MultiSpeciesMixin(_BoardModel):
         """A list view of a single item or an iterable (so inputs=e and inputs=[e, i] both work)."""
         if x is None:
             return []
-        if isinstance(x, (StateHandle, str)):
+        if isinstance(x, StateHandle):
             return [x]
         return list(normalize_sequence(x, "species inputs"))
 

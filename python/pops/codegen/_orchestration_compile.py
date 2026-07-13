@@ -99,9 +99,30 @@ def capture_field_plans(
         providers, provider_route = _field_rhs_providers(problem, field)
         prepared.append((name, field, providers, provider_route))
     for name, field, providers, provider_route in prepared:
+        unknown = field.operator.unknown
+        block_ref = unknown.block_ref
+        declaration_ref = unknown.declaration_ref
+        if block_ref is None or declaration_ref is None:
+            raise TypeError(
+                "FieldOperator unknown must be an owner-qualified FieldSpace instance"
+            )
+        block_spec = problem._block_registry.spec(block_ref.local_id)
+        model = None if block_spec is None else block_spec.get("model")
+        field_spaces = getattr(model, "field_spaces", None)
+        if not callable(field_spaces):
+            field_spaces = getattr(getattr(model, "module", None), "field_spaces", None)
+        declared_spaces = field_spaces() if callable(field_spaces) else {}
+        output_space = declared_spaces.get(declaration_ref.local_id)
+        output_components = tuple(getattr(output_space, "components", ()))
+        if not output_components:
+            raise ValueError(
+                "FieldOperator %r output declaration %r is absent from block %r"
+                % (name, declaration_ref.local_id, block_ref.local_id)
+            )
         resolved = resolve_field_install_plan(
             name, detach(field), target=target, rhs_providers=providers,
-            provider_route=provider_route, layout=layout)
+            provider_route=provider_route, output_components=output_components,
+            layout=layout)
         route = resolved.native_options["provider_slot"]
         provider_identity = resolved.native_options["provider_identity"]
         if route in runtime_routes:

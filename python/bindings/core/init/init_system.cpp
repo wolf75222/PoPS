@@ -390,6 +390,9 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("max_cycles"), py::arg("min_coarse"), py::arg("pre_smooth"),
            py::arg("post_smooth"), py::arg("bottom_sweeps"),
            py::arg("coarse_threshold"))
+      .def("register_elliptic_field", &System::register_elliptic_field,
+           py::arg("block"), py::arg("field"), py::arg("phi_comp"),
+           py::arg("gx_comp"), py::arg("gy_comp"))
       .def("set_field_boundary_plan", &System::set_field_boundary_plan,
            py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
            py::arg("value"))

@@ -24,7 +24,28 @@ class _RateAuthoringMixin:
             raise ValueError(
                 "rate left-hand side must reference a StateHandle declared by this physics model; "
                 "got %r" % (state,))
+        if self._multi_module is not None:
+            state = self._species_handle("rate", name, state)
         flux, sources = self._destructure_rate(equation.rhs)
+        if self._multi_module is not None:
+            fluxes = () if flux is None else (
+                self._multi_module.operator_handle(flux.name),)
+            source_refs = tuple(
+                self._multi_module.operator_handle(source.reg_name) for source in sources)
+            result = self._multi_module.rate_operator(
+                reg,
+                state_space=state.space,
+                flux=flux is not None,
+                fluxes=fluxes,
+                sources=source_refs,
+            )
+            self._rate_contracts[result] = {
+                "state": state,
+                "flux": flux,
+                "sources": tuple(sources),
+            }
+            self._invalidate_authoring_views()
+            return result
         hyp = self._dsl._m
         with atomic_attrs((hyp, "_rate_operators"), (self, "_rate_contracts")):
             self._dsl.rate_operator(

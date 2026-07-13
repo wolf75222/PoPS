@@ -41,6 +41,11 @@ _DIAGNOSTICS = frozenset({
     "lifecycle_state", "bound_snapshot", "bind_identity", "last_run_manifest", "last_run_identity",
     "last_restart_identity",
     "program_report", "reduce_component",
+    # Exact, inert restart/transparency reads. These expose the already-installed runtime state and
+    # authenticated consumer graph; they cannot mutate composition or bypass Case authorities.
+    "state_global", "field_provider_slots", "field_potential_global",
+    "history_names", "history_depth", "history_global", "installed_program_hash",
+    "consumer_graph", "consumer_cursors",
 })
 
 # Exact scientific outputs are ConsumerGraph nodes, never an imperative side channel.  Checkpoint
