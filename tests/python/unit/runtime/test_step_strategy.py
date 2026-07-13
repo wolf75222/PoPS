@@ -77,6 +77,8 @@ def test_run_step_attempt_dispatches_only_the_declared_controller():
 
 def test_strategy_payload_is_reportable_and_run_signature_keeps_cfl_default():
     assert run_control_payload(FixedDt(0.1)) == {"strategy": "fixed_dt", "dt": 0.1}
-    assert run_control_payload(AdaptiveCFL(0.4)) == {"strategy": "adaptive_cfl", "cfl": 0.4}
+    assert run_control_payload(AdaptiveCFL(0.4)) == {
+        "strategy": "adaptive_cfl", "cfl": 0.4, "max_dt": None,
+    }
     assert inspect.signature(System.run).parameters["cfl"].default is None
     assert "strategy" in inspect.signature(System.run).parameters

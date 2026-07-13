@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""IO v1 (audit 2026-06) : sim.write (vtk/npz) + sim.checkpoint / sim.restart.
+"""Uniform low-level IO: visualization plus strict checkpoint boundary.
 
-La preuve centrale : un run CHECKPOINTE puis RESTARTE dans une composition rejouee reprend
-BIT-IDENTIQUEMENT -- y compris la cadence STRIDE (hold-then-catch-up), qui depend de macro_step
-% stride et pas seulement de t (c'est exactement ce que set_clock restaure).
+The final checkpoint route requires a compiled/bound Program, a declared run controller and an
+accepted synchronized transaction. This low-level engine intentionally has none of those identities:
+the test therefore proves it cannot manufacture a restart artifact. Exact compiled-Program restart,
+including stride/history state, is covered by ``test_time_history_checkpoint.py``.
 
 Verifie :
-  (1) checkpoint -> restart -> N pas == run continu, BIT-IDENTIQUE (avec un bloc stride=2 pour
-      exercer la dependance a macro_step) ;
-  (2) restart refuse une composition differente / une grille differente (erreur explicite) ;
-  (3) write npz : champs et horloge presents ; write vtk : .vti lisible (en-tete ImageData).
+  (1) un moteur bas niveau ne peut pas contourner la frontiere de checkpoint stricte ;
+  (2) write npz : champs et horloge presents ; write vtk : .vti lisible (en-tete ImageData).
 Invariants par assert ; imprime "OK test_io_checkpoint" en cas de succes.
 """
 from pops.numerics.reconstruction.limiters import Minmod
@@ -60,55 +59,20 @@ def build(n=16):
 tmp = tempfile.mkdtemp()
 dt = 2e-3
 
-# --- (1) checkpoint -> restart bit-identique (stride=2 exerce macro_step) -----------
-print("== (1) reprise bit-identique (3 pas ; checkpoint ; +4 pas vs restart +4 pas) ==")
+# --- (1) strict checkpoint boundary -------------------------------------------------
+print("== (1) checkpoint strict : moteur bas niveau refuse ==")
 sim = build()
 for _ in range(3):  # 3 pas (IMPAIR) : le bloc stride=2 est au MILIEU de sa fenetre au checkpoint
     sim.step(dt)
-ck = sim.checkpoint(os.path.join(tmp, "chk"))
-chk(os.path.exists(ck), f"checkpoint ecrit ({os.path.basename(ck)})")
-chk(sim.macro_step() == 3, f"macro_step = 3 ({sim.macro_step()})")
-for _ in range(4):
-    sim.step(dt)
-ref_ions = np.asarray(sim.get_state("ions"))
-ref_slow = np.asarray(sim.get_state("slow"))
-ref_t = sim.time()
-
-sim2 = build()  # composition REJOUEE (contrat v1)
-sim2.restart(os.path.join(tmp, "chk"))
-chk(sim2.macro_step() == 3 and abs(sim2.time() - 3 * dt) < 1e-15,
-    "horloge restauree (t, macro_step)")
-for _ in range(4):
-    sim2.step(dt)
-chk(np.array_equal(np.asarray(sim2.get_state("ions")), ref_ions),
-    "bloc rapide : reprise BIT-IDENTIQUE")
-chk(np.array_equal(np.asarray(sim2.get_state("slow")), ref_slow),
-    "bloc stride=2 : reprise BIT-IDENTIQUE (fenetre stride reprise via macro_step)")
-chk(abs(sim2.time() - ref_t) < 1e-15, "temps final identique")
-
-# --- (2) rejets explicites -----------------------------------------------------------
-print("== (2) rejets explicites ==")
-bad = System(n=16, L=1.0, periodic=True)
-bad.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-bad.add_block("autre",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                        transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                        elliptic=pops.ChargeDensity(charge=0.0)),
-              spatial=pops.FiniteVolume(limiter=Minmod()))
 try:
-    bad.restart(os.path.join(tmp, "chk"))
-    chk(False, "composition differente aurait du lever")
-except ValueError as e:
-    chk("composition" in str(e), f"composition differente : {str(e)[:70]}")
-small = build(n=8)
-try:
-    small.restart(os.path.join(tmp, "chk"))
-    chk(False, "grille differente aurait du lever")
-except ValueError as e:
-    chk("checkpoint grid" in str(e), f"grille differente : {str(e)[:70]}")
+    sim.checkpoint(os.path.join(tmp, "chk"))
+    chk(False, "checkpoint bas niveau aurait du etre refuse")
+except RuntimeError as e:
+    chk("desynchronized" in str(e), f"frontiere stricte : {str(e)[:80]}")
+chk(not os.path.exists(os.path.join(tmp, "chk.npz")), "aucun fichier partiel publie")
 
-# --- (3) write npz / vtk ---------------------------------------------------------------
-print("== (3) write npz / vtk ==")
+# --- (2) write npz / vtk ---------------------------------------------------------------
+print("== (2) write npz / vtk ==")
 p_npz = sim.write(os.path.join(tmp, "out"), format="npz", step=7)
 d = np.load(p_npz)
 chk(p_npz.endswith("_000007.npz") and "state_ions" in d and "phi" in d and "macro_step" in d,

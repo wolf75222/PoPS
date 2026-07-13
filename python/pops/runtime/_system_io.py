@@ -288,11 +288,17 @@ class _SystemIO(_System):
                 "write(format='hdf5', parallel=True) (visualization output). A restartable parallel "
                 "HDF5 checkpoint remains to be done (PR-IO-3, docs/IO_CHECKPOINT_PLAN.md) ; for "
                 "now : checkpoint(parallel=False).")
+        temporal = getattr(self, "_temporal_restart_state", None)
+        if temporal is None:
+            raise RuntimeError("checkpoint requires the Uniform temporal restart state")
+        temporal_json = temporal.checkpoint_json(
+            time=self._s.time(), macro_step=self._s.macro_step())
         blocks = list(self._s.block_names())
-        out = {"pops_checkpoint_version": 2,
+        out = {"pops_checkpoint_version": 3,
                "t": self._s.time(), "macro_step": self._s.macro_step(),
                "nx": self._s.nx(), "ny": self._s.ny(),
-               "abi_key": abi_key(), "blocks": np.array(blocks)}
+               "abi_key": abi_key(), "blocks": np.array(blocks),
+               "temporal_restart_state": np.array(temporal_json)}
         # COLLECTIVE gather (all ranks) BEFORE the rank-0 guard.
         for b in blocks:
             nv = self._s.n_vars(b)
@@ -371,9 +377,17 @@ class _SystemIO(_System):
         self._last_restart_identity = authenticate_checkpoint_payload(
             self, d, runtime_kind="uniform")
         ckpt_version = int(d["pops_checkpoint_version"])
-        if ckpt_version != 2:
-            raise ValueError("restart : checkpoint version %r not supported (expected exactly 2)"
+        if ckpt_version != 3:
+            raise ValueError("restart : checkpoint version %r not supported (expected exactly 3; "
+                             "historical checkpoints require offline migration)"
                              % (d["pops_checkpoint_version"],))
+        from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
+        preflight_uniform_restart(d)
+        if "temporal_restart_state" not in d:
+            raise ValueError("restart : checkpoint lacks its strict Uniform temporal state")
+        from pops.runtime._temporal_restart import TemporalRestartState
+        restored_temporal = TemporalRestartState.from_json(
+            d["temporal_restart_state"], time=d["t"], macro_step=d["macro_step"])
         if int(d["nx"]) != self._s.nx() or int(d["ny"]) != self._s.ny():
             raise ValueError("restart : checkpoint grid (%d x %d) != system (%d x %d)"
                              % (int(d["nx"]), int(d["ny"]), self._s.nx(), self._s.ny()))
@@ -451,3 +465,4 @@ class _SystemIO(_System):
                     float(d["cache_accum_dt_%d" % nid]), name,
                     np.asarray(d[value_key], dtype=np.float64))
         self._s.set_clock(float(d["t"]), int(d["macro_step"]))
+        self._temporal_restart_state = restored_temporal

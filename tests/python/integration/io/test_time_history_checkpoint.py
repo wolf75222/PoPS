@@ -27,6 +27,7 @@ a visible Kokkos, exactly like test_time_history.py.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+import json
 import os
 import sys
 import tempfile
@@ -49,11 +50,10 @@ _DT = 0.01
 _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
 
 
-def _authorize_identity_runtime(sim, compiled, *, executed=False):
+def _authorize_identity_runtime(sim, compiled):
     """Attach the exact identity boundary to this deliberately low-level integration engine."""
     from pops.identity import make_identity
     from pops.runtime._bound_snapshot import BoundSnapshot
-    from pops.runtime._run_manifest import RunManifest
 
     snapshot = BoundSnapshot(
         semantic_identity=compiled.semantic_identity,
@@ -63,17 +63,7 @@ def _authorize_identity_runtime(sim, compiled, *, executed=False):
         params=[], aux_evidence={}, initial_evidence={}, outputs=[], diagnostics=[],
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
     )
-    if executed:
-        from pops.time.history_persistence import Dense
-        sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
     sim._finalize_bind(snapshot)
-    if executed:
-        run = RunManifest(
-            bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
-            controls={"t_end": sim.time(), "cfl": 0.4,
-                      "max_steps": sim.macro_step(), "output_mode": "current-directory"})
-        sim._last_run_manifest = run
-        sim._last_run_identity = run.run_identity
     return snapshot
 
 
@@ -105,9 +95,20 @@ def test_current_checkpoint_envelope_roundtrips(_t):
         controls={"t_end": 0.1, "cfl": 0.4, "max_steps": 10,
                   "output_mode": "current-directory"})
     owner = SimpleNamespace(bound_snapshot=snapshot, last_run_identity=run.run_identity)
+    temporal = {
+        "schema_version": 1,
+        "strategy": {"strategy": "fixed_dt", "dt": 0.05},
+        "clock": {"time": (0.1).hex(), "macro_step": 2},
+        "schedule_cursors": {"macro_step": 2},
+        "controller_state": {"last_accepted_dt": (0.05).hex()},
+        "event_queue": [],
+        "transaction_stats": {"accepted": 2, "rejected": 0, "failed": 0},
+        "status": "accepted", "synchronized": True,
+    }
     out = {
-        "pops_checkpoint_version": 2, "t": 0.1, "macro_step": 2,
+        "pops_checkpoint_version": 3, "t": 0.1, "macro_step": 2,
         "abi_key": abi_key(), "program_hash": "deadbeef" * 8,
+        "temporal_restart_state": np.array(json.dumps(temporal, sort_keys=True)),
         "history_names": np.array([], dtype="U1"),
         "cache_nodes": np.array([], dtype=np.int64),
         "cache_names": np.array([], dtype="U1"),
@@ -320,7 +321,8 @@ def _compile_program(pops, t, builder, prog_name, model_name):
     _case, states = program_states(P, module, ("blk",))
     builder(P, states["blk"])
     try:
-        return pops.codegen.compile_problem(model=_passive_source_model(model_name), time=P)
+        from pops.codegen.compile_drivers import compile_problem
+        return compile_problem(model=_passive_source_model(model_name), time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
         return None
@@ -360,9 +362,10 @@ def _run_section_b(t):
     sim1, _ = _build_system(pops, np, n)
     sim1.set_state("blk", np.stack([rho0]))
     sim1.install_program(compiled.so_path)
-    for _ in range(half):
-        sim1.step(_DT)
-    _authorize_identity_runtime(sim1, compiled, executed=True)
+    _authorize_identity_runtime(sim1, compiled)
+    sim1.run(t_end=half * _DT, strategy=t.FixedDt(_DT), max_steps=half)
+    from pops.time.history_persistence import Dense
+    sim1.set_history_persistence({name: Dense() for name in sim1._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
@@ -373,8 +376,7 @@ def _run_section_b(t):
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
-        for _ in range(_NSTEPS - half):
-            sim2.step(_DT)
+        sim2.run(t_end=_NSTEPS * _DT, strategy=t.FixedDt(_DT), max_steps=_NSTEPS - half)
     state_b = np.array(sim2.get_state("blk"))[0]
 
     err = float(np.abs(state_a - state_b).max())
@@ -439,9 +441,10 @@ def _run_section_c(t):
 
     sim.set_state("blk", np.stack([np.ones((n, n))]))
     sim.install_program(ab2.so_path)
-    sim.step(_DT)
-    sim.step(_DT)
-    _authorize_identity_runtime(sim, ab2, executed=True)
+    _authorize_identity_runtime(sim, ab2)
+    sim.run(t_end=2 * _DT, strategy=t.FixedDt(_DT), max_steps=2)
+    from pops.time.history_persistence import Dense
+    sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
