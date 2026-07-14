@@ -39,21 +39,24 @@ def _two_fluid_module(electron_expr=None):
     bundle = model.RateBundle({"electrons": model.Rate(e), "ions": model.Rate(i)})
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
     e_comps = electron_expr if electron_expr is not None else [ni - ne, ne, ne]
-    mod.operator(name="collision", signature=model.Signature((e, i), bundle),
-                 kind="coupled_rate",
-                 expr={"electrons": e_comps, "ions": [ne - ni, ni, ni]})
-    return mod, e, i, bundle
+    collision = mod.operator(
+        name="collision",
+        signature=model.Signature((e, i), bundle),
+        kind="coupled_rate",
+        expr={"electrons": e_comps, "ions": [ne - ni, ni, ni]},
+    )
+    return mod, e, i, bundle, collision
 
 
 def _two_fluid_program():
     """A two-block program: solve the collision rate, then forward-Euler each species by its rate."""
-    mod, e, i, _ = _two_fluid_module()
+    mod, e, i, _, collision = _two_fluid_module()
     P = adctime.Program("two_fluid_collision")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
-    C = P._call("collision", e_n, i_n)
+    C = collision(e_n, i_n)
     e_next = typed_state(P, "electrons", state_name=e.name, space=e,
                          model=mod, state=e_state).next
     i_next = typed_state(P, "ions", state_name=i.name, space=i,
@@ -142,13 +145,13 @@ def test_coupled_rate_with_prim_var_is_deferred():
     # (never silently emits an undefined `ue` local), naming the deferral precisely.
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
     ue = Var("ue", "prim")  # a PRIM reference -> deferred
-    mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
+    mod, e, i, _, collision = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
     P = adctime.Program("two_fluid_collision_prim")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
-    C = P._call("collision", e_n, i_n)
+    C = collision(e_n, i_n)
     e_next = typed_state(P, "electrons", state_name=e.name, space=e,
                          model=mod, state=e_state).next
     i_next = typed_state(P, "ions", state_name=i.name, space=i,
@@ -190,14 +193,18 @@ def test_read_only_catalyst_input_is_bound():
     n = mod.state_space("n_st", ("nn",))  # the catalyst: an input, NOT an output block
     bundle = model.RateBundle({"e": model.Rate(e), "i": model.Rate(i)})
     ne, ni, nn = Var("ne", "cons"), Var("ni", "cons"), Var("nn", "cons")
-    mod.operator(name="ioniz", signature=model.Signature((e, i, n), bundle), kind="coupled_rate",
-                 expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
+    ioniz = mod.operator(
+        name="ioniz",
+        signature=model.Signature((e, i, n), bundle),
+        kind="coupled_rate",
+        expr={"e": [ni + nn], "i": [ne + nn]},
+    )  # both rates read the catalyst nn
     P = adctime.Program("ioniz_step")._bind_operators(mod)
     e_state, i_state, n_state = mod.state_handle(e), mod.state_handle(i), mod.state_handle(n)
     e_n = typed_state(P, "e", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "i", space=i, model=mod, state=i_state)
     n_n = typed_state(P, "n", space=n, model=mod, state=n_state)
-    C = P._call("ioniz", e_n, i_n, n_n)
+    C = ioniz(e_n, i_n, n_n)
     e_next = typed_state(P, "e", state_name=e.name, space=e,
                          model=mod, state=e_state).next
     i_next = typed_state(P, "i", state_name=i.name, space=i,
@@ -220,13 +227,15 @@ def test_undefined_cons_var_is_rejected():
     # author forgot to add to a P.state space) must raise the ADC-457 deferral at emit -- never emit an
     # undefined C++ identifier that only fails at the AOT compile, far from the authoring site.
     ne, ni, zzz = Var("ne", "cons"), Var("ni", "cons"), Var("ZZZ", "cons")
-    mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
+    mod, e, i, _, collision = _two_fluid_module(
+        electron_expr=[ni - ne + zzz, ne, ne]
+    )  # ZZZ is in no state
     P = adctime.Program("two_fluid_typo")._bind_operators(mod)
     e_state = mod.state_handle(e)
     i_state = mod.state_handle(i)
     e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
     i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
-    C = P._call("collision", e_n, i_n)
+    C = collision(e_n, i_n)
     e_next = typed_state(P, "electrons", state_name=e.name, space=e,
                          model=mod, state=e_state).next
     i_next = typed_state(P, "ions", state_name=i.name, space=i,

@@ -6,9 +6,12 @@ A `solve_fields` node carrying `Schedule(Every(...), off=Hold())` must codegen t
 check (the cache RUNTIME cadence runs in a compiled .so -- ROMEO; the CacheManager is unit-tested by
 tests/cpp/integration/runtime/test_cache_manager.cpp). Other ops/policies still refuse to lower (not yet supported).
 """
+from types import SimpleNamespace
+
 import pytest
 
 from pops import model
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.ir.expr import Var
 from typed_program_support import typed_state
 
@@ -32,26 +35,46 @@ def _module():
     u = mod.state_space("U", ("rho", "mx", "my"))
     fields = mod.field_space("fields", ("phi",))
     rho = Var("rho", "cons")
-    mod.operator(name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho)
+    fields_from_state = mod.operator(
+        name="fields_from_state", signature=(u,) >> fields, kind="field_operator", expr=rho
+    )
     mod.operator_capabilities("fields_from_state", cacheable=True)
-    return mod, u
+    return mod, u, fields_from_state
 
 
 def _held_program(schedule):
-    mod, u = _module()
+    mod, u, fields_from_state = _module()
     P = adctime.Program("held")._bind_operators(mod)
     schedule = schedule(P.clock) if callable(schedule) else schedule
-    U = typed_state(P, "plasma", space=u)
-    P._call("fields_from_state", U, schedule=schedule)
-    endpoint = typed_state(P, "plasma", state_name="U", space=u).next
+    state = mod.state_handle(u)
+    U = typed_state(P, "plasma", space=u, model=mod, state=state)
+    fields_from_state(U, schedule=schedule).consume(action=adctime.FailRun())
+    endpoint = typed_state(
+        P, "plasma", state_name="U", space=u, model=mod, state=state
+    ).next
     P.commit(endpoint, P.value("U1", U, at=endpoint.point))
-    return P
+    return P, mod
+
+
+def _emit(P, mod):
+    """Supply the exact field-provider route that final operator-handle lowering requires."""
+    fields_from_state = mod.operator_handle("fields_from_state")
+    field_plans = {
+        "fields": SimpleNamespace(
+            rhs_providers=(fields_from_state,),
+            native_options={
+                "provider_slot": "fields",
+                "boundary_kernel_required": False,
+            },
+        )
+    }
+    return emit_cpp_program(P, model=mod.to_dsl(), field_plans=field_plans)
 
 
 def test_held_solve_fields_lowers_and_emits_cache_branch():
-    P = _held_program(lambda clock: _every(clock, 3, adctime.Hold()))
+    P, mod = _held_program(lambda clock: _every(clock, 3, adctime.Hold()))
     P._check_schedules_lowerable()                # must NOT raise: solve_fields + hold is lowerable
-    cpp = P.emit_cpp_program()
+    cpp = _emit(P, mod)
     assert "cache_should_update" in cpp, "due check emitted"
     assert "cache_store_aux" in cpp, "recompute branch stores the aux"
     assert "cache_restore_aux" in cpp, "held branch restores the cached aux"
@@ -60,21 +83,24 @@ def test_held_solve_fields_lowers_and_emits_cache_branch():
 
 
 def test_unscheduled_solve_fields_has_no_cache_branch():
-    mod, u = _module()
+    mod, u, fields_from_state = _module()
     P = adctime.Program("plain")._bind_operators(mod)
-    U = typed_state(P, "plasma", space=u)
-    P._call("fields_from_state", U)               # no schedule
-    endpoint = typed_state(P, "plasma", state_name="U", space=u).next
+    state = mod.state_handle(u)
+    U = typed_state(P, "plasma", space=u, model=mod, state=state)
+    fields_from_state(U).consume(action=adctime.FailRun())  # no schedule
+    endpoint = typed_state(
+        P, "plasma", state_name="U", space=u, model=mod, state=state
+    ).next
     P.commit(endpoint, P.value("U1", U, at=endpoint.point))
-    cpp = P.emit_cpp_program()
+    cpp = _emit(P, mod)
     assert "cache_should_update" not in cpp       # plain unconditional solve, no cache
     assert "ctx.solve_fields_from_state(" in cpp
 
 
 def test_always_solve_fields_has_no_cache_branch():
-    P = _held_program(lambda clock: adctime.Schedule(
+    P, mod = _held_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AcceptedStep(clock))))
-    cpp = P.emit_cpp_program()
+    cpp = _emit(P, mod)
     assert "cache_should_update" not in cpp       # always() == default cadence, no caching
 
 
@@ -82,9 +108,9 @@ def test_skip_policy_on_solve_fields_now_lowers():
     # ADC-458 scheduler codegen: skip on a field solve lowers (the op runs only when due; the aux keeps
     # its stale content off-cadence) -- it no longer refuses. See test_scheduler_codegen for the full
     # policy/kind matrix.
-    P = _held_program(lambda clock: _every(clock, 5, adctime.Skip()))
+    P, mod = _held_program(lambda clock: _every(clock, 5, adctime.Skip()))
     P._check_schedules_lowerable()                 # no raise
-    cpp = P.emit_cpp_program()
+    cpp = _emit(P, mod)
     assert "skip: stale aux off-cadence" in cpp
     assert "cache_should_update" in cpp
 
@@ -92,13 +118,14 @@ def test_skip_policy_on_solve_fields_now_lowers():
 def test_hold_on_non_every_kind_now_lowers():
     # ADC-458: a hold on on_start lowers to the macro_step()==0 due test; subcycle lowers to a sub-loop.
     # Only on_end still refuses (a compiled step loop has no end-of-run signal).
-    cpp = _held_program(
-        lambda clock: _at_start(clock, adctime.Hold())).emit_cpp_program()
+    P, mod = _held_program(lambda clock: _at_start(clock, adctime.Hold()))
+    cpp = _emit(P, mod)
     assert "(ctx.macro_step() == 0)" in cpp
     assert "cache_store_aux" in cpp
     with pytest.raises(NotImplementedError, match="ClockTick"):
-        _held_program(lambda clock: adctime.Schedule(
-            adctime.Always(adctime.ClockTick(clock))))._check_schedules_lowerable()
+        P, _ = _held_program(lambda clock: adctime.Schedule(
+            adctime.Always(adctime.ClockTick(clock))))
+        P._check_schedules_lowerable()
     with pytest.raises(NotImplementedError, match="AtEnd"):
-        _held_program(
-            lambda clock: _at_end(clock, adctime.Hold()))._check_schedules_lowerable()
+        P, _ = _held_program(lambda clock: _at_end(clock, adctime.Hold()))
+        P._check_schedules_lowerable()

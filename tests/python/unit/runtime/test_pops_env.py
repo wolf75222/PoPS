@@ -35,6 +35,7 @@ try:
         CodegenEnv, resolve_log_level, resolve_autotune, jit_backdoor_enabled)
     from pops.codegen.loader import CompiledProblem
     from pops.codegen.inspect_report import CompiledReport
+    from pops.numerics.terms import DefaultSource, Flux
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_pops_env (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -50,8 +51,8 @@ def _program(name="env_demo"):
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
     U = temporal.n
-    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + dt * R))
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 
 

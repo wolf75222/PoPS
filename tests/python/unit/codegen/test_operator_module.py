@@ -2,18 +2,21 @@
 
 A Module is the model-free view: typed spaces + a registry of typed operators. Model
 encapsulates a Module (its source_term / linear_source / elliptic_field / flux register
-typed operators). A generic Program -- written only with operator names and signatures --
+typed operators). A generic Program -- written only with exact operator handles and signatures --
 runs against any Module that provides the expected signatures. Pure Python; skips if pops
 is not importable.
 """
 import sys
+from types import SimpleNamespace
 
 try:
     from pops import model
+    from pops.codegen.program_codegen import emit_cpp_program
     from pops.ir.expr import Const
     from pops.physics._facade import Model
     from pops import time as adctime
     from pops.params import RuntimeParam
+    from pops.solvers import DenseLU
     from typed_program_support import typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_module (pops unavailable: %s)" % exc)
@@ -84,6 +87,17 @@ def test_module_builder_and_decorator():
     print("OK  Module builder + decorator operators, parameters, aux fields")
 
 
+def test_program_refuses_string_operator_selection():
+    selector = "fields_from_state"
+    try:
+        adctime.Program("string_operator_refusal")._call(selector)
+        raise AssertionError("expected string operator selection to be refused")
+    except TypeError as exc:
+        msg = str(exc)
+        assert "exact OperatorHandle" in msg and repr(selector) in msg, msg
+    print("OK  Program operator calls reject strings and require exact handles")
+
+
 def test_dsl_model_is_a_module_facade():
     m = Model("ep")
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
@@ -100,16 +114,26 @@ def test_dsl_model_is_a_module_facade():
     print("OK  Model.module exposes the derived registry + spaces")
 
 
-def _build_predictor(P, mdl):
-    """A GENERIC predictor step: no physics names, only typed operator calls."""
+def _build_predictor(P, mdl, operators):
+    """A GENERIC predictor step: no physics names, only exact typed operator handles."""
+    field_solve, rate_operator, linear_operator = operators
     P._bind_operators(mdl)
-    u = typed_state(P, "plasma")
-    fields = P._call("fields_from_state", u)
-    rate = P._call("explicit_rhs", u, fields)
-    lin = P._call("lorentz", fields)
-    endpoint = typed_state(P, "plasma", state_name="U").next
+    module = mdl.module
+    state_space = module.state_spaces()["U"]
+    state = module.state_handle(state_space)
+    u = typed_state(P, "plasma", space=state_space, model=module, state=state)
+    fields = field_solve(u).consume(action=adctime.FailRun())
+    rate = rate_operator(u, fields)
+    lin = linear_operator(fields)
+    endpoint = typed_state(
+        P, "plasma", state_name="U", space=state_space, model=module, state=state
+    ).next
     rhs = P.value("rhs", u + P.dt * rate, at=endpoint.point)
-    ustar = P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
+    ustar = P.solve(
+        adctime.LocalLinear(operator=P.I - P.dt * lin, rhs=rhs, fields=fields),
+        solver=DenseLU(),
+        name="ustar",
+    ).consume(action=adctime.FailRun())
     P.commit(endpoint, ustar)
 
 
@@ -123,23 +147,39 @@ def _physics_model(name, gain):
     m.flux(x=[mx, mx * mx / rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho])
     m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
-    return m
+    linear_operator = m.linear_source("lorentz", [[0.0, 0.0, 0.0],
+                                                   [0.0, 0.0, bz],
+                                                   [0.0, -bz, 0.0]])
+    m.elliptic_field(
+        "fields", rho - 1.0, aux=["grad_x", "grad_y", "B_z"]
+    )
+    rate_operator = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    field_solve = m.module.operator_handle("fields")
+    return m, (field_solve, rate_operator, linear_operator)
+
+
+def _emit_predictor(program, mdl, field_solve):
+    field_plans = {
+        "fields": SimpleNamespace(
+            rhs_providers=(field_solve,),
+            native_options={
+                "provider_slot": "fields",
+                "boundary_kernel_required": False,
+            },
+        )
+    }
+    return emit_cpp_program(program, model=mdl, field_plans=field_plans)
 
 
 def test_same_program_two_modules():
-    ma = _physics_model("A", 1.0)
-    mb = _physics_model("B", 2.0)  # same signatures, different physics
+    ma, operators_a = _physics_model("A", 1.0)
+    mb, operators_b = _physics_model("B", 2.0)  # same signatures, different physics
     pa = adctime.Program("pc")
-    _build_predictor(pa, ma)
-    src_a = pa.emit_cpp_program(model=ma)
+    _build_predictor(pa, ma, operators_a)
+    src_a = _emit_predictor(pa, ma, operators_a[0])
     pb = adctime.Program("pc")
-    _build_predictor(pb, mb)
-    src_b = pb.emit_cpp_program(model=mb)
+    _build_predictor(pb, mb, operators_b)
+    src_b = _emit_predictor(pb, mb, operators_b[0])
     assert "pops_install_program" in src_a and "pops_install_program" in src_b
     # The SAME generic function produced a valid, distinct program for each module
     # (the electric gain differs), proving reuse without mentioning any physics.
@@ -150,6 +190,7 @@ def test_same_program_two_modules():
 def main():
     test_signature_sugar()
     test_module_builder_and_decorator()
+    test_program_refuses_string_operator_selection()
     test_dsl_model_is_a_module_facade()
     test_same_program_two_modules()
     print("OK  test_operator_module")

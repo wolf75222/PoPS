@@ -16,6 +16,7 @@ def _skip(message):
 try:
     from pops import time as adctime
     from pops.codegen.program_emit_schedule import _lower_schedule_ir
+    from pops.numerics.terms import DefaultSource, Flux
     from pops.runtime._consumer_contracts import ConsumerMoment
     from pops.runtime._consumer_planning import _is_due, _schedule_coordinate
     from pops.time.points import TimePoint
@@ -147,7 +148,7 @@ def _scratch_program(schedule):
     program = adctime.Program("schedule_extension")
     schedule = schedule(program.clock) if callable(schedule) else schedule
     state = typed_state(program, "ions")
-    rate = program._rhs_legacy(state=state, flux=True, sources=["default"])
+    rate = program.rhs(state=state, terms=[Flux(), DefaultSource()])
     rate = program._replace_value(rate, attrs={**rate.attrs, "schedule": schedule})
     endpoint = typed_state(program, "ions", state_name="U").next
     program.commit(endpoint, program.value("U1", state + program.dt * rate, at=endpoint.point))
@@ -231,7 +232,7 @@ def test_third_party_predicate_survives_call_validation_and_rebuild():
     )
     operator = SimpleNamespace(name="external_rate", capabilities={"cacheable": True})
     program._validate_schedule(operator, schedule, (state,))
-    rate = program._rhs_legacy(state=state, flux=True, sources=["default"])
+    rate = program.rhs(state=state, terms=[Flux(), DefaultSource()])
     rate = program._replace_value(rate, attrs={**rate.attrs, "schedule": schedule})
     endpoint = typed_state(program, "plasma", state_name="U").next
     program.commit(

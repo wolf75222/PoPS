@@ -8,8 +8,8 @@ existing operator-first multi-block IR (PR #287/#299/#300) rather than a paralle
 * ``m.coupled_rate(...)`` -> the existing ``coupled_rate`` operator kind: a ``RateBundle``
   signature over the input species, the SAME operator the hand-written operator-first model
   registers;
-* ``m.solve_fields_from_species(...)`` -> a multi-input ``field_operator`` (the operator-first
-  surface of ``P.solve_fields_from_blocks``).
+* ``m.solve_fields_from_species(...)`` -> a multi-input ``field_operator`` consumed through a
+  callable multi-state ``FieldHandle`` whose solve outcome is handled explicitly.
 
 The equivalence pinned here is structural AND at emit: a 3-fluid board model lowers to 3
 StateSpaces + a coupled_rate + a multi-block field operator, and a two-fluid board model emits the
@@ -30,8 +30,20 @@ adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
 from pops.ir.expr import Var  # noqa: E402
-from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
+from pops.problem import Case  # noqa: E402
 from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
+
+
+def _typed_program_states(name, module, declarations):
+    """Build exact per-species Case blocks for a multi-state Module."""
+    case = Case(name="%s_case" % name)
+    program = adctime.Program(name)
+    states = {}
+    for block_name, state_space in declarations:
+        state = module.state_handle(state_space)
+        block = case.block(block_name, module, states=(state,))
+        states[block_name] = program.state(block[state])
+    return program, module, case, states
 
 
 def _three_fluid_board():
@@ -49,8 +61,9 @@ def _three_fluid_board():
             i: [e["ne"] - i["ni"], i["ni"], i["ni"]],
             n: [n["nn"], n["nn"], n["nn"]],
         })
-    m.solve_fields_from_species("fields", inputs=[e, i, n],
-                                outputs={"phi": None}, solver="geometric_mg")
+    m.solve_fields_from_species(
+        "fields", inputs=[e, i, n], outputs={"phi": None}
+    )
     return m, e, i, n
 
 
@@ -81,13 +94,14 @@ def _two_fluid_handwritten():
 
 def _two_fluid_program(mod, e_space, i_space):
     """A forward-Euler collision step over the two-fluid module (board or hand-written)."""
-    P, _, _, states = typed_program_states(
+    collision = mod.operator_handle("collision")
+    P, _, _, states = _typed_program_states(
         "two_fluid_collision", mod,
         (("electron_state", e_space), ("ion_state", i_space)),
     )
     e_state, i_state = states["electron_state"], states["ion_state"]
     e_n, i_n = e_state.n, i_state.n
-    C = P._call("collision", e_n, i_n)
+    C = collision(e_n, i_n)
     P.commit_many({
         e_state.next:
             P.value("e1", e_n + P.dt * C[e_n.block], at=e_state.next.point),
@@ -223,15 +237,20 @@ def test_wrong_species_rate_in_affine_combine_errors():
     m = physics.Model("tf")
     e = m.species("electrons", state=["ne"])
     i = m.species("ions", state=["ni"])
-    m.coupled_rate("collision", inputs=[e, i],
-                   outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
+    collision = m.coupled_rate(
+        "collision", inputs=[e, i],
+        outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
     spaces = m.module.state_spaces()
-    P, _, _, states = typed_program_states(
-        "s", m, (("electrons", spaces[e.name]), ("ions", spaces[i.name])))
+    P, _, _, states = _typed_program_states(
+        "s", m.module, (("electrons", spaces[e.name]), ("ions", spaces[i.name])))
     e_n, i_n = states["electrons"].n, states["ions"].n
-    C = P._call("collision", e_n, i_n)
+    C = collision(e_n, i_n)
     with pytest.raises(ValueError, match="incompatible state spaces"):
-        P.value("bad", e_n + P.dt * C[i_n.block])  # electron state + ion rate
+        P.value(
+            "bad",
+            e_n + P.dt * C[i_n.block],  # electron state + ion rate
+            at=states["electrons"].next.point,
+        )
 
 
 def test_coupled_rate_output_component_count_must_match_state():
@@ -287,7 +306,7 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     m, _e, _i, _n = _three_fluid_board()
     mod = m.module
     sp = mod.state_spaces()
-    P, _, _, states = typed_program_states(
+    P, _, _, states = _typed_program_states(
         "ms_fields", mod,
         (("electrons", sp["electrons"]),
          ("ions", sp["ions"]),
@@ -295,7 +314,8 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     )
     e_n, i_n, n_n = (
         states["electrons"].n, states["ions"].n, states["neutrals"].n)
-    f = P._call("fields", e_n, i_n, n_n)
+    field_solve = mod.operator_handle("fields")
+    f = field_solve(e_n, i_n, n_n)
     assert f.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
     assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
 
