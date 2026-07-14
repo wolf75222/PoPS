@@ -107,7 +107,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
 
 def program_semantic_data(program: Any) -> dict[str, Any]:
     """Normalize Program IR while dropping presentation-only program and node names."""
-    from pops.time.program import Program
+    from pops.time._program.api import Program
 
     if not isinstance(program, Program):
         raise TypeError("semantic program identity requires a pops.time.Program")

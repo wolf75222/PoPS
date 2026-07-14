@@ -21,7 +21,7 @@ PopsComponentStatusV1 ok() {
   return {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
 }
 
-TEST(test_amr_compiled_model, ExactTransferAndRefluxTablesPreserveConservativeDataflow) {
+TEST(test_amr_compiled_model, ExactTransferTablePreservesConservativeDataflow) {
   const std::array<double, 8> fine{1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 8.0, 8.0};
   std::array<double, 4> coarse{};
   const std::array<std::int32_t, 2> ratio{1, 2};
@@ -45,29 +45,6 @@ TEST(test_amr_compiled_model, ExactTransferAndRefluxTablesPreserveConservativeDa
   ASSERT_EQ(pops::component::apply_transfer(transfer, nullptr, transfer_request, status), 0);
   EXPECT_EQ(coarse, (std::array<double, 4>{1.0, 2.0, 4.0, 8.0}));
 
-  const std::array<double, 4> fine_integrated{1.25, 1.75, 4.5, 7.5};
-  std::array<double, 4> flux_register{};
-  const PopsRefluxApiV1 reflux{
-      header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
-      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result_status) {
-        auto* output = static_cast<double*>(request->flux_register.data);
-        const auto* fine_values = static_cast<const double*>(request->fine_integrated.data);
-        const auto* coarse_values = static_cast<const double*>(request->coarse_integrated.data);
-        for (std::size_t point = 0; point < 4; ++point)
-          output[point] += fine_values[point] - coarse_values[point];
-        *result_status = ok();
-        return 0;
-      }};
-  const PopsRefluxRequestV1 reflux_request{
-      sizeof(PopsRefluxRequestV1),
-      abi::const_field_view(coarse.data(), 1, 4),
-      abi::const_field_view(fine_integrated.data(), 1, 4),
-      abi::field_view(flux_register.data(), 1, 4), abi::host_execution_context()};
-  ASSERT_EQ(pops::component::deposit_reflux(reflux, nullptr, reflux_request, status), 0);
-  EXPECT_EQ(flux_register, (std::array<double, 4>{0.25, -0.25, 0.5, -0.5}));
-  EXPECT_DOUBLE_EQ(flux_register[0] + flux_register[1] + flux_register[2] +
-                       flux_register[3],
-                   0.0);
 }
 
 TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
@@ -76,17 +53,31 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
   const PopsTaggerApiV1 tagger{
       header(sizeof(PopsTaggerApiV1), POPS_NATIVE_INTERFACE_TAGGER_V1),
       +[](void*, const PopsTaggerRequestV1* request, PopsComponentStatusV1* status) {
-        const auto* state = static_cast<const double*>(request->state.data);
-        for (std::size_t point = 0; point < request->tags.size; ++point)
-          request->tags.data[point] = state[point] > 1.0 ? 1 : 0;
+        const auto* state = static_cast<const double*>(request->states[0].values.data);
+        for (std::size_t point = 0; point < request->refine_candidates.size; ++point)
+          request->refine_candidates.data[point] =
+              state[point] > request->program.leaves[0].threshold;
         *status = ok();
         return 0;
       }};
+  const PopsQualifiedConstFieldV1 tag_states{
+      sizeof(PopsQualifiedConstFieldV1), 1, "case::indicator",
+      abi::const_field_view(indicator.data(), 2, 3)};
+  const PopsTaggingLeafV1 tag_leaf{
+      sizeof(PopsTaggingLeafV1), 0, 0, 1, 1.0, POPS_TAGGING_NO_STENCIL_V1};
+  const std::int32_t tag_op = 1, tag_arg = 0;
+  std::array<std::uint8_t, 6> coarsen{}, refine_equalities{}, coarsen_equalities{};
   const PopsTaggerRequestV1 tag_request{
-      sizeof(PopsTaggerRequestV1),
-      abi::const_field_view(indicator.data(), 2, 3),
-      {sizeof(PopsByteViewV1), tags.data(), tags.size()}, abi::logical_time(),
-      abi::host_execution_context()};
+      sizeof(PopsTaggerRequestV1), 1, &tag_states,
+      {sizeof(PopsTaggingProgramV1), "case::tag-program", 0, nullptr, 1, &tag_leaf,
+       1, &tag_op, &tag_arg, 0, nullptr, nullptr, 0, 0, 0,
+       POPS_TAGGING_NON_FINITE_REJECT_V1},
+      {0, 0, 0}, {0, 0, 0}, {1, 2, 0}, {1.0, 1.0, 0.0}, 0,
+      {sizeof(PopsByteViewV1), tags.data(), tags.size()},
+      {sizeof(PopsByteViewV1), coarsen.data(), coarsen.size()},
+      {sizeof(PopsByteViewV1), refine_equalities.data(), refine_equalities.size()},
+      {sizeof(PopsByteViewV1), coarsen_equalities.data(), coarsen_equalities.size()},
+      abi::logical_time(), abi::host_execution_context()};
   PopsComponentStatusV1 status{};
   ASSERT_EQ(pops::component::tag_batch(tagger, nullptr, tag_request, status), 0);
   EXPECT_EQ(tags, (std::array<std::uint8_t, 6>{0, 1, 1, 0, 1, 0}));
@@ -102,7 +93,7 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
         for (std::size_t point = 0; point < request->tags.size; ++point) {
           if (request->tags.data[point] == 0) continue;
           if (first == request->tags.size) first = point;
-          last = point + 1;
+          last = point;
         }
         *request->box_count = first == request->tags.size ? 0 : 1;
         if (*request->box_count != 0) {
@@ -120,7 +111,7 @@ TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
                 clustering, nullptr, cluster_request, status), 0);
   ASSERT_EQ(box_count, 1u);
   EXPECT_EQ(boxes[0], 1);
-  EXPECT_EQ(boxes[1], 5);
+  EXPECT_EQ(boxes[1], 4);
 }
 
 }  // namespace

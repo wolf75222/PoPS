@@ -326,7 +326,7 @@ def test_solve_outcome_never_publishes_failed_or_incompatible_accepted_context()
         plan, SolveStatus.CONVERGED, 6, witness, "tolerance reached", accepted)
     assert converged.publish() is accepted
 
-    for status in (SolveStatus.NON_CONVERGED, SolveStatus.INCOMPATIBLE):
+    for status in (SolveStatus.NON_CONVERGED, SolveStatus.INCOMPATIBLE_RHS):
         with pytest.raises(ValueError, match="cannot publish Accepted"):
             SolveOutcome(plan, status, 6, witness, "failed", accepted)
     failed = SolveOutcome(
@@ -334,6 +334,12 @@ def test_solve_outcome_never_publishes_failed_or_incompatible_accepted_context()
             plan, accepted=False))
     with pytest.raises(RuntimeError, match="only a converged solve"):
         failed.publish()
+    incompatible = SolveOutcome(
+        plan, SolveStatus.INCOMPATIBLE_RHS, 0, witness,
+        "RHS violates the authenticated nullspace compatibility condition",
+        _context(plan, accepted=False))
+    assert incompatible.to_data()["status"] == "incompatible_rhs"
+    assert incompatible.to_data()["reason"].startswith("RHS violates")
 
 
 def test_resolved_contracts_and_outcomes_are_immutable():

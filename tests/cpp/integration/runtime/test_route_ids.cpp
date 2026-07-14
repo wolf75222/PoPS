@@ -4,8 +4,7 @@
 //   (1) parse/token round-trip over EVERY row of EVERY k*Routes table (iterate by index) ;
 //   (2) an unknown token is REFUSED with a message naming the family, the requested token, the valid
 //       token set AND the phrase "never fall back to a default" (never a silent default) ;
-//   (3) the historical alias spellings resolve to the canonical route while route_token emits the
-//       canonical spelling ;
+//   (3) historical alias spellings are refused while route_token emits the one canonical spelling ;
 //   (4) route_info carries the native entry point / requirements / limitations columns ;
 //   (5) the route tables MIRROR the historical registries (dispatch_tags / model_registry) row for
 //       row ; the header static_asserts this too -- we assert it dynamically so the test documents
@@ -145,13 +144,17 @@ TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
   }
 }
 
-TEST(RouteIds, HistoricalAliasesResolveToCanonicalRoute) {
-  EXPECT_TRUE(parse_source_route("lorentz") == SourceRouteId::kMagneticLorentz)
-      << "alias 'lorentz' -> kMagneticLorentz";
-  EXPECT_TRUE(parse_source_route("potential_lorentz") == SourceRouteId::kPotentialMagneticLorentz)
-      << "alias 'potential_lorentz' -> kPotentialMagneticLorentz";
-  EXPECT_TRUE(parse_time_route("ssprk2") == TimeRouteId::kExplicitSsprk2)
-      << "alias 'ssprk2' -> kExplicitSsprk2";
+TEST(RouteIds, HistoricalAliasesAreRefusedAndCanonicalTokensRemainStable) {
+  const std::string lorentz = throw_message([] { (void)parse_source_route("lorentz"); });
+  EXPECT_TRUE(contains(lorentz, "source") && contains(lorentz, "lorentz") &&
+              contains(lorentz, "never fall back to a default"));
+  const std::string potential =
+      throw_message([] { (void)parse_source_route("potential_lorentz"); });
+  EXPECT_TRUE(contains(potential, "source") && contains(potential, "potential_lorentz") &&
+              contains(potential, "never fall back to a default"));
+  const std::string ssprk2 = throw_message([] { (void)parse_time_route("ssprk2"); });
+  EXPECT_TRUE(contains(ssprk2, "time") && contains(ssprk2, "ssprk2") &&
+              contains(ssprk2, "never fall back to a default"));
   EXPECT_TRUE(std::string(route_token(SourceRouteId::kMagneticLorentz)) == "magnetic")
       << "route_token(kMagneticLorentz) == 'magnetic' (canonique)";
   EXPECT_TRUE(std::string(route_token(SourceRouteId::kPotentialMagneticLorentz)) ==

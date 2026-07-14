@@ -25,6 +25,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -144,8 +145,8 @@ def test_scalar_field_ncomp_validates(t):
 
 
 def test_divgrad_codegen(t):
-    src = _divgrad_program(
-        t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)).emit_cpp_program()
+    src = emit_cpp_program(_divgrad_program(
+        t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)))
     for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_linear_matfree",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)

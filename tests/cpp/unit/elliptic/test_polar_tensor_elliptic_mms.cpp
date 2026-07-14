@@ -183,6 +183,73 @@ static DistributionMapping solver_dm(const BoxArray& ba) {
   return DistributionMapping(ba.size(), n_ranks());
 }
 
+// Materialise c_bc = L_int(0) independently of PolarTensorKrylovSolver. The regression then builds
+// rhs = c_bc + b_eff so the stored rhs is dominated by the affine boundary term while R(0) = b_eff
+// remains small and known exactly.
+static void fill_affine_operator_offset(const PolarGeometry& geom, const BoxArray& ba,
+                                        const BCRec& bc, MultiFab& offset) {
+  const DistributionMapping dm = solver_dm(ba);
+  MultiFab zero(ba, dm, 1, 1);
+  MultiFab one_rr(ba, dm, 1, 1);
+  MultiFab one_tt(ba, dm, 1, 1);
+  zero.set_val(Real(0));
+  one_rr.set_val(Real(1));
+  one_tt.set_val(Real(1));
+  device_fence();
+  fill_ghosts(zero, geom.domain, bc);
+  apply_polar_tensor(zero, geom, offset, &one_rr, &one_tt, nullptr, nullptr);
+}
+
+struct PolarAffineForcingReport {
+  SolveReport probe;
+  SolveReport converged;
+  SolveReport warm;
+  double true_relative_residual;
+};
+
+static PolarAffineForcingReport affine_forcing_case(BCType type) {
+  constexpr int n = 12;
+  constexpr Real boundary_value = Real(1e3);
+  constexpr Real tight_tol = Real(1e-8);
+  const Box2D dom = Box2D::from_extents(n, n);
+  const PolarGeometry geom{dom, kRmin, kRmax};
+  const BoxArray ba(std::vector<Box2D>{dom});
+  const DistributionMapping dm = solver_dm(ba);
+  BCRec bc;
+  bc.xlo = bc.xhi = type;
+  bc.ylo = bc.yhi = BCType::Periodic;
+  bc.xlo_val = bc.xhi_val = boundary_value;
+  bc.dx = geom.dr();
+  bc.dy = geom.dtheta();
+  if (type == BCType::Robin) {
+    bc.xlo_alpha = bc.xhi_alpha = Real(1);
+    bc.xlo_beta = bc.xhi_beta = Real(0.25);
+  }
+
+  PolarTensorKrylovSolver solver(geom, ba, bc, PolarPrecond::Jacobi);
+  MultiFab offset(ba, dm, 1, 0);
+  MultiFab effective(ba, dm, 1, 0);
+  fill_affine_operator_offset(geom, ba, bc, offset);
+  Array4 forcing = effective.fab(0).array();
+  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
+    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
+      forcing(i, j, 0) =
+          Real(1) + Real(0.1) * std::cos(geom.theta_cell(j)) + Real(0.05) * (i - dom.lo[0]);
+  lincomb(solver.rhs(), Real(1), offset, Real(1), effective);
+
+  solver.phi().set_val(Real(0));
+  // Correct normalization gives ||r0|| / ||R(0)|| = 1, so rel_tol=0.5 cannot publish a
+  // zero-iteration solve. Normalizing by the boundary-dominated stored rhs would do exactly that.
+  const SolveReport probe = solver.solve(Real(0.5), 1);
+
+  solver.phi().set_val(Real(0));
+  const SolveReport converged = solver.solve(tight_tol, 1000);
+  const double effective_norm = std::sqrt(static_cast<double>(dot(effective, effective)));
+  const double true_relative_residual = static_cast<double>(solver.residual()) / effective_norm;
+  const SolveReport warm = solver.solve(tight_tol, 1000);
+  return {probe, converged, warm, true_relative_residual};
+}
+
 // Resout le cas tenseur (arr, art, atr, att) sur (nr x nth), mode m, BC Dirichlet, et rend (erreur,
 // resultat BiCGStab). Le RHS est rempli cote HOTE (f_tensor = fonction hote ; un pointeur de fonction
 // hote n'est pas appelable depuis un kernel device, cf. test_polar_poisson_mms).
@@ -270,6 +337,15 @@ TEST(test_polar_tensor_elliptic_mms, reports_explicit_status_and_action) {
   EXPECT_EQ(nonfinite.status, SolveStatus::kInvalidEvaluation);
   EXPECT_EQ(nonfinite.action, SolveAction::kFailRun);
 
+  BCRec nonfinite_bc = bc;
+  nonfinite_bc.xlo_val = std::numeric_limits<Real>::quiet_NaN();
+  PolarTensorKrylovSolver invalid_offset(g, ba, nonfinite_bc, PolarPrecond::Jacobi);
+  invalid_offset.phi().set_val(Real(0));
+  invalid_offset.rhs().set_val(Real(0));
+  const SolveReport nonfinite_offset = invalid_offset.solve(Real(1e-8), 4);
+  EXPECT_EQ(nonfinite_offset.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(nonfinite_offset.action, SolveAction::kFailRun);
+
   PolarTensorKrylovSolver limited(g, ba, bc, PolarPrecond::Jacobi);
   limited.set_coefficients(nullptr, nullptr);
   limited.phi().set_val(Real(0));
@@ -295,6 +371,51 @@ TEST(test_polar_tensor_elliptic_mms, reports_explicit_status_and_action) {
   const SolveReport breakdown = singular.solve(Real(1e-8), 4);
   EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
   EXPECT_EQ(breakdown.action, SolveAction::kFailRun);
+}
+
+TEST(test_polar_tensor_elliptic_mms, affine_boundary_forcing_uses_effective_rhs_scale) {
+  for (const BCType type : {BCType::Dirichlet, BCType::Robin}) {
+    SCOPED_TRACE(type == BCType::Dirichlet ? "Dirichlet" : "Robin");
+    const PolarAffineForcingReport report = affine_forcing_case(type);
+    EXPECT_EQ(report.probe.iters, 1);
+    EXPECT_TRUE(report.converged.solved());
+    EXPECT_LT(report.converged.rel_residual, Real(1e-8));
+    EXPECT_LT(report.true_relative_residual, 1e-8);
+    EXPECT_TRUE(report.warm.solved());
+    EXPECT_EQ(report.warm.iters, 0);
+    EXPECT_LT(report.warm.rel_residual, Real(1e-8));
+  }
+}
+
+TEST(test_polar_tensor_elliptic_mms,
+     zero_forcing_requires_exact_zero_without_absolute_tolerance) {
+  constexpr int n = 8;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const PolarGeometry geometry{domain, kRmin, kRmax};
+  const BoxArray boxes(std::vector<Box2D>{domain});
+  BCRec bc;
+  bc.xlo = bc.xhi = BCType::Dirichlet;
+  bc.ylo = bc.yhi = BCType::Periodic;
+
+  PolarTensorKrylovSolver solver(geometry, boxes, bc, PolarPrecond::Jacobi);
+  solver.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
+  solver.phi().set_val(Real(1e-6));
+  const Real initial_residual = solver.residual();
+  ASSERT_GT(initial_residual, Real(0));
+  ASSERT_LT(initial_residual, Real(1));
+
+  // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
+  const SolveReport exact_only =
+      solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
+  EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
+
+  solver.phi().set_val(Real(1e-6));
+  const Real reset_residual = solver.residual();
+  const SolveReport absolute = solver.solve(
+      Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
+  EXPECT_TRUE(absolute.solved());
+  EXPECT_EQ(absolute.iters, 0);
+  EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));
 }
 
 // (A) CONVERGENCE O(2) ISOTROPE (A = I). nr = nth raffines ensemble (erreur radiale ET azimutale O(2)).

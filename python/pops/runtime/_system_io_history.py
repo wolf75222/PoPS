@@ -10,7 +10,7 @@ import json
 
 def resolve_ring_policy(policy, depth):
     """Validate the explicitly installed history-persistence policy for one ring."""
-    from pops.time.history_persistence import HistoryPersistence
+    from pops.time._history.persistence import HistoryPersistence
     if not isinstance(policy, HistoryPersistence):
         raise RuntimeError(
             "checkpoint history ring has no explicit compiled persistence policy")
@@ -83,10 +83,10 @@ def restore_histories(system, d, fired_out=None):
     replay. A stored-slots / policy mismatch is refused verbatim. When @p fired_out is a dict it is
     populated ``name -> the in-window regrid steps the replay fired`` (ADC-635; the AMR reader asserts it
     against the checkpoint fingerprint). Returns the typed
-    :class:`~pops.time.history_persistence_report.HistoryReplayReport`."""
+    :class:`~pops.time._history.report.HistoryReplayReport`."""
     import numpy as np
-    from pops.time.history_persistence import HistoryPersistence
-    from pops.time.history_persistence_report import HistoryReplayReport
+    from pops.time._history.persistence import HistoryPersistence
+    from pops.time._history.report import HistoryReplayReport
     report = HistoryReplayReport()
     for hname in (str(h) for h in d["history_names"]):
         depth = int(d["history_depth_" + hname])

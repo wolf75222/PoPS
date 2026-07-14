@@ -16,6 +16,7 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import solve_field, typed_state
 
@@ -69,7 +70,7 @@ def _fe(name="fe_dtbound"):
 # (A1) a Program WITHOUT a dt bound emits has_dt_bound() -> false; the dt_bound function returns +inf.
 P_no = _fe("fe_no_bound")
 chk(not P_no.has_dt_bound(), "a fresh Program has no dt bound")
-src_no = P_no.emit_cpp_program()
+src_no = emit_cpp_program(P_no)
 chk("bool pops_program_has_dt_bound()" in src_no, "has_dt_bound ABI function emitted")
 chk("pops::Real pops_program_dt_bound(" in src_no, "dt_bound ABI function emitted")
 chk("return false;" in src_no, "no-bound Program: has_dt_bound() returns false")
@@ -88,7 +89,7 @@ def _dt_bound(P, cfl):
 
 
 chk(P_dec.has_dt_bound(), "@P.dt_bound records the bound")
-src_dec = P_dec.emit_cpp_program()
+src_dec = emit_cpp_program(P_dec)
 chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns true")
 chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")

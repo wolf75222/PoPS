@@ -1,6 +1,7 @@
 """Exact lowering of an adaptive layout through its open runtime-data protocol."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -35,16 +36,46 @@ def _regrid_every(data: dict[str, Any]) -> int:
     raise ValueError("native AMR supports Always/Every regrid triggers")
 
 
+def _native_amr_grid_values(
+    data: Any,
+) -> tuple[tuple[int, int], tuple[float, float], tuple[float, float], bool]:
+    """Authenticate one Cartesian grid and project only native-representable topology.
+
+    The native AMR config has one global periodic flag. A partial axis partition is therefore an
+    unavailable backend route, never a reason to erase the authored topology.
+    """
+    from pops.mesh.grid import CartesianGrid
+
+    grid = CartesianGrid.from_dict(data)
+    periodic_axes = grid.topology.periodic_axes
+    if periodic_axes and len(periodic_axes) != len(grid.axes):
+        raise NotImplementedError(
+            "native AmrSystemConfig has one global periodic flag and cannot represent a partially "
+            "periodic CartesianGrid topology"
+        )
+    return grid.cells, grid.frame.lower, grid.frame.upper, bool(periodic_axes)
+
+
+def _native_binary64(value: Any, *, where: str) -> float:
+    if isinstance(value, Mapping) and set(value) == {"binary64"} \
+            and isinstance(value["binary64"], str):
+        result = float.fromhex(value["binary64"])
+    elif isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("%s must be one canonical binary64 value" % where)
+    else:
+        result = float(value)
+    if not 0.0 < result <= 1.0:
+        raise ValueError("%s must be in (0, 1]" % where)
+    return result
+
+
 def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
     from pops.mesh._amr import ResolvedHierarchy
 
     data = _runtime_data(layout)
-    grid = data["grid"]
-    cells = tuple(grid["cells"])
-    lower = tuple(grid["extent"]["lower"])
-    upper = tuple(grid["extent"]["upper"])
+    cells, lower, upper, periodic = _native_amr_grid_values(data["grid"])
     lengths = (upper[0] - lower[0], upper[1] - lower[1])
     if cells[0] != cells[1] or lower != (0.0, 0.0) or lengths[0] != lengths[1]:
         raise NotImplementedError(
@@ -69,7 +100,7 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     cfg = AmrSystemConfig()
     cfg.n = cells[0]
     cfg.L = lengths[0]
-    cfg.periodic = False
+    cfg.periodic = periodic
     cfg.level_count = hierarchy.plan.level_count
     cfg.regrid_margin = buffer[0]
     cfg.regrid_grow = next(iter(lookaheads))
@@ -77,15 +108,21 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     cfg.explicit_bootstrap = True
 
     cluster = hierarchy.plan.clustering.options.to_data()
+    clustering_provider = cluster.get("provider")
     patches = hierarchy.plan.patch_generation.options.to_data()
     balance = hierarchy.plan.load_balance.options.to_data()
-    if cluster.get("native_route") != "berger_rigoutsos" \
+    if not isinstance(clustering_provider, dict) \
+            or clustering_provider.get("provider_type") not in {
+                "builtin_amr_clustering", "external_amr_clustering"} \
             or patches.get("native_route") != "box_array" \
             or balance != {"native_route": "round_robin"}:
         raise NotImplementedError("resolved hierarchy selected an unavailable native provider")
-    cfg.cluster_min_efficiency = float(cluster.get("minimum_efficiency", 0.0))
-    cfg.cluster_min_box_size = int(cluster.get("minimum_box_size", 0))
-    cfg.cluster_max_box_size = int(cluster.get("maximum_box_size", 0))
+    if clustering_provider["provider_type"] == "builtin_amr_clustering":
+        cfg.cluster_min_efficiency = _native_binary64(
+            clustering_provider["minimum_efficiency"],
+            where="AMR clustering minimum_efficiency")
+        cfg.cluster_min_box_size = int(clustering_provider["minimum_box_size"])
+        cfg.cluster_max_box_size = int(clustering_provider["maximum_box_size"])
     cfg.distribute_coarse = bool(patches.get("distribute_coarse", False))
     cfg.coarse_max_grid = int(patches.get("coarse_max_grid", 0))
     return cfg

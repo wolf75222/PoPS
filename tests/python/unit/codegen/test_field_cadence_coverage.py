@@ -19,7 +19,7 @@ from pops.fields.policies import FieldReadError
 from pops.identity import make_identity
 from pops.model import Handle, OwnerPath
 from pops.time import Clock, TimePoint, always, every
-from pops.time.schedule_lowering import ScheduleDueKind
+from pops.time._schedule.ir import ScheduleDueKind
 
 
 def _scheduled_field(step: int = 4):

@@ -460,6 +460,57 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("max_cycles"), py::arg("min_coarse"), py::arg("pre_smooth"),
            py::arg("post_smooth"), py::arg("bottom_sweeps"),
            py::arg("coarse_threshold"))
+      .def(
+          "_install_field_solver_components",
+          [](System& system, const std::string& provider_slot,
+             std::shared_ptr<pops::component::LoadedComponent> topology,
+             std::shared_ptr<pops::component::LoadedComponent> solver,
+             const py::dict& topology_binding, const py::dict& solver_binding,
+             const std::string& topology_parameters_json,
+             const std::string& solver_parameters_json,
+             const std::string& source_layout_identity,
+             const std::string& topology_recipe_identity,
+             const std::string& boundary_contract_json, double relative_tolerance,
+             double absolute_tolerance, std::int32_t max_iterations,
+             const py::dict& execution) {
+            auto spec = pops::python::detail::field_solver_spec_from_python(
+                provider_slot, topology_binding, solver_binding,
+                topology_parameters_json, solver_parameters_json,
+                source_layout_identity, topology_recipe_identity,
+                boundary_contract_json, relative_tolerance,
+                absolute_tolerance, max_iterations, execution);
+            system.install_field_solver_components(
+                provider_slot, std::move(spec), std::move(topology), std::move(solver));
+          },
+          py::arg("provider_slot"), py::arg("topology_component"),
+          py::arg("solver_component"), py::arg("topology_binding"),
+          py::arg("solver_binding"), py::arg("topology_parameters_json"),
+          py::arg("solver_parameters_json"), py::arg("source_layout_identity"),
+          py::arg("topology_recipe_identity"),
+          py::arg("boundary_contract_json"), py::arg("relative_tolerance"),
+          py::arg("absolute_tolerance"), py::arg("max_iterations"),
+          py::arg("execution_context"))
+      .def("_set_field_topology_authority", &System::set_field_topology_authority,
+           py::arg("provider_slot"), py::arg("provider_kind"),
+           py::arg("provenance"), py::arg("topology_digest"))
+      .def(
+          "_field_topology_report",
+          [](const System& system, const std::string& provider_slot) {
+            py::list report;
+            for (const auto& row : system.field_topology_report(provider_slot)) {
+              py::dict item;
+              item["patch_identity"] = row.patch_identity;
+              item["topology_digest"] = row.topology_digest;
+              item["provenance"] = row.provenance;
+              item["material_points"] = row.material_points;
+              item["connected_components"] = row.connected_components;
+              item["source_layout_identity"] = row.source_layout_identity;
+              item["materialized_layout_identity"] = row.materialized_layout_identity;
+              report.append(std::move(item));
+            }
+            return report;
+          },
+          py::arg("provider_slot"))
       .def("register_elliptic_field", &System::register_elliptic_field,
            py::arg("block"), py::arg("field"), py::arg("phi_comp"),
            py::arg("gx_comp"), py::arg("gy_comp"))

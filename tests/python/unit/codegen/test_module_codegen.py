@@ -6,6 +6,7 @@ by integer OperatorId. The descriptor is read once at install (introspection + r
 validation, module_metadata.hpp); it must NOT appear in the step body, so operators stay inlined and
 there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 from types import SimpleNamespace
 
@@ -50,8 +51,6 @@ def _program_inputs(model):
 
 
 def _emit(program, model):
-    from pops.codegen.program_codegen import emit_cpp_program
-
     solve = next(value for value in program._values if value.op == "solve_fields")
     field = solve.attrs["field"]
     plan = SimpleNamespace(
@@ -119,7 +118,7 @@ def test_no_model_empty_module():
             at=target.next.point,
         ),
     )
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     assert "pops_module_operator_count() { return 0; }" in src
     print("OK  model=None emits an empty GeneratedModule (count 0)")
 

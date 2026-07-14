@@ -17,8 +17,6 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-#include <pops/runtime/amr/amr_tensor_elliptic.hpp>
-
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -30,15 +28,10 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace pops;
 
-TEST(test_composite_fac_poisson, relative_tolerance_scale_preserves_small_nonzero_rhs) {
-  using pops::runtime::program::detail::tensor_fac_relative_scale;
-  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(0)), Real(1));
-  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(0.25)), Real(0.25));
-  EXPECT_DOUBLE_EQ(tensor_fac_relative_scale(Real(4)), Real(4));
-}
 static constexpr double kPi = 3.14159265358979323846;
 
 static double u_exact(double x, double y) {
@@ -109,7 +102,8 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
         a(i, j, 0) = f_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
   }
-  const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
+  const Real rfac =
+      fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
   device_fence();
 
   EXPECT_TRUE(std::isfinite(rfac)) << "FAC residu fini: rfac=" << rfac;
@@ -186,8 +180,9 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
   comm_finalize();
 }
 
-// ADC-614: set_options(CompositeFacOptions{}) + no-argument solve() is BIT-IDENTICAL to the explicit
-// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol) -- the installed-options path
+// set_options(CompositeFacOptions{}) + no-argument solve() matches the explicit default contract.
+// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultRelTol, kFACDefaultAbsTol) -- the
+// installed-options path
 // defaults to the kFAC* constants. An override changes the composite residual (the knobs are read).
 TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) {
   comm_init();
@@ -220,7 +215,8 @@ TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) 
   CompositeFacPoisson explicit_fac(geom_c, ba_c, bc, fine_box, r);
   fill(explicit_fac);
   const Real r_explicit =
-      explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol);
+      explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultRelTol,
+                         kFACDefaultAbsTol);
 
   CompositeFacPoisson installed_fac(geom_c, ba_c, bc, fine_box, r);
   fill(installed_fac);
@@ -234,11 +230,34 @@ TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) 
   fill(tuned_fac);
   CompositeFacOptions tuned;
   tuned.max_iters = 60;
-  tuned.tol = Real(1e-12);
+  tuned.rel_tol = Real(1e-12);
   tuned_fac.set_options(tuned);
   const Real r_tuned = tuned_fac.solve();
   EXPECT_TRUE(std::isfinite(r_tuned));
   EXPECT_LE(r_tuned, r_explicit) << "a tighter tol / more iters cannot worsen the residual";
+
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba_c = BoxArray::from_domain(dom, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+  CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+
+  fac.rhs_coarse().fab(0).array()(1, 1, 0) = std::numeric_limits<Real>::quiet_NaN();
+  const Real residual = fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
+  const SolveReport& report = fac.last_solve_report();
+  EXPECT_TRUE(std::isinf(residual));
+  EXPECT_EQ(report.iters, 0);
+  EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
 
   comm_finalize();
 }

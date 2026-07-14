@@ -1,5 +1,6 @@
 """ADC-663 typed schedule algebra and honest native lowering boundary."""
 from __future__ import annotations
+from pops.codegen.program_codegen import _check_schedules_lowerable
 
 import json
 
@@ -10,7 +11,7 @@ from typed_program_support import typed_state
 from pops.time import Program
 from pops.numerics.terms import Flux
 from pops.time.points import Clock, StagePoint, TimePoint
-from pops.time.schedule import (
+from pops.time import (
     AMRLevel, AcceptedStep, AccumulateDt, Always, Attempt, AtEnd, AtStart,
     ClockTick, Error, Event, EventHandle, Every, Hold, Schedule, Skip, Stage, WallOutput,
     When, Zero,
@@ -72,18 +73,24 @@ def _scheduled_rate(*, off=None, domain_factory=AcceptedStep):
 def test_scheduled_read_without_off_policy_fails_before_native_lowering():
     program, _ = _scheduled_rate()
     with pytest.raises(ValueError, match="no explicit OffPolicy"):
-        program._check_schedules_lowerable()
+        _check_schedules_lowerable(program)
 
 
 def test_typed_schedule_serialization_and_rebuild_are_exact():
     program, rate = _scheduled_rate(off=Zero())
     encoded = program._serialize()["nodes"][rate.id]["attrs"]["schedule"]
 
-    assert encoded["schema_version"] == 2
-    assert encoded["domain"]["type"]["qualname"] == "AcceptedStep"
-    assert encoded["trigger"]["type"]["qualname"] == "Every"
+    assert encoded["schema_version"] == 3
+    assert encoded["domain"]["type"] == {
+        "uri": "pops://time/schedule/domains/accepted-step", "version": 1,
+    }
+    assert encoded["trigger"]["type"] == {
+        "uri": "pops://time/schedule/triggers/every", "version": 1,
+    }
     assert encoded["trigger"]["payload"] == {"n": 2}
-    assert encoded["off"]["type"]["qualname"] == "Zero"
+    assert encoded["off"]["type"] == {
+        "uri": "pops://time/schedule/off-policies/zero", "version": 1,
+    }
     assert encoded["off"]["payload"] == {}
     rebuilt = program._rebuild(lambda value: True)
     assert rebuilt._serialize(include_provenance=False) == \
@@ -119,4 +126,4 @@ def test_future_runtime_domains_are_preserved_but_refused_honestly(
         domain_factory, domain_name):
     program, _ = _scheduled_rate(off=Zero(), domain_factory=domain_factory)
     with pytest.raises(NotImplementedError, match=domain_name):
-        program._check_schedules_lowerable()
+        _check_schedules_lowerable(program)

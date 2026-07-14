@@ -136,7 +136,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg", *,
                     bc: Any = None, wall: Any = None, composite: bool = False,
                     fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
-                    fac_tol: float = 0.0, fac_coarse_rel_tol: float = 0.0,
+                    fac_rel_tol: float = 0.0, fac_abs_tol: float = 0.0,
+                    fac_coarse_rel_tol: float = 0.0,
+                    fac_coarse_abs_tol: float = 0.0,
                     fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
         """Configure AMR Poisson with typed boundary and wall selectors.
 
@@ -152,13 +154,17 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             rhs=rhs, solver=solver, bc=bc_token, wall=wall_token,
             wall_radius=wall_radius, composite=composite,
             fac_max_iters=fac_max_iters, fac_fine_sweeps=fac_fine_sweeps,
-            fac_tol=fac_tol, fac_coarse_rel_tol=fac_coarse_rel_tol,
+            fac_rel_tol=fac_rel_tol, fac_abs_tol=fac_abs_tol,
+            fac_coarse_rel_tol=fac_coarse_rel_tol,
+            fac_coarse_abs_tol=fac_coarse_abs_tol,
             fac_coarse_cycles=fac_coarse_cycles, fac_verbose=fac_verbose)
 
     def _set_poisson_native(self, *, rhs: Any, solver: Any, bc: Any, wall: Any,
                             wall_radius: Any = 0.0, composite: bool = False,
                             fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
-                            fac_tol: float = 0.0, fac_coarse_rel_tol: float = 0.0,
+                            fac_rel_tol: float = 0.0, fac_abs_tol: float = 0.0,
+                            fac_coarse_rel_tol: float = 0.0,
+                            fac_coarse_abs_tol: float = 0.0,
                             fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
         """Private token-level seam used by resolved AMR installation."""
         _guard_assembling(self, "set_poisson")
@@ -169,9 +175,14 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
             wall_radius=native_real(wall_radius, where="AmrSystem.set_poisson.wall_radius"),
             composite=bool(composite), fac_max_iters=int(fac_max_iters),
             fac_fine_sweeps=int(fac_fine_sweeps),
-            fac_tol=native_real(fac_tol, where="AmrSystem.set_poisson.fac_tol"),
+            fac_rel_tol=native_real(
+                fac_rel_tol, where="AmrSystem.set_poisson.fac_rel_tol"),
+            fac_abs_tol=native_real(
+                fac_abs_tol, where="AmrSystem.set_poisson.fac_abs_tol"),
             fac_coarse_rel_tol=native_real(
                 fac_coarse_rel_tol, where="AmrSystem.set_poisson.fac_coarse_rel_tol"),
+            fac_coarse_abs_tol=native_real(
+                fac_coarse_abs_tol, where="AmrSystem.set_poisson.fac_coarse_abs_tol"),
             fac_coarse_cycles=int(fac_coarse_cycles), fac_verbose=bool(fac_verbose))
 
     def run(self, t_end, *, max_steps, output_dir=None, controls=None):

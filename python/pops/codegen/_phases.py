@@ -157,6 +157,7 @@ def resolve(
     initial_condition_plan = None
     bootstrap_plan = None
     amr_execution = None
+    amr_providers = {}
     if target == "amr_system":
         from pops.amr._resolution import (
             AMRLayoutResolver,
@@ -186,6 +187,7 @@ def resolve(
             initials=problem.initials,
             program=resolved_time,
             resolve=resolve_amr_handle,
+            components=tuple(components),
         )
         resolved_amr = adaptive_layout.resolve_amr_authorities(context)
         if type(resolved_amr) is not ResolvedAMRAuthorities:
@@ -197,6 +199,7 @@ def resolve(
         initial_condition_plan = resolved_amr.initial_conditions
         bootstrap_plan = resolved_amr.bootstrap
         amr_execution = resolved_amr.execution
+        amr_providers = resolved_amr.providers
     # Boundary producers depend on the resolved layout and, for adaptive states, on the exact AMR
     # transfer authority.  Compose them only after both authorities exist, then carry the single
     # executable GhostProducerPlan through compile/install.
@@ -272,7 +275,7 @@ def resolve(
         component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
-        amr_execution=amr_execution)
+        amr_execution=amr_execution, amr_providers=amr_providers)
 
 
 def compile(plan: Any) -> Any:

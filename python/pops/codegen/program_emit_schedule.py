@@ -13,7 +13,7 @@ import json
 from typing import Any
 
 from pops.codegen.program_emit_kernels import _AUX_OUTPUT_OPS, ProgramValue
-from pops.time.schedule import (
+from pops.time._schedule.api import (
     Schedule,
     ScheduleAction,
     ScheduleComment,

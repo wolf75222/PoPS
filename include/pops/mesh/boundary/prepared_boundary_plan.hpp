@@ -55,6 +55,9 @@ class PreparedBoundaryPlan {
   const std::string& state_identity() const { return state_identity_; }
   int required_depth() const { return required_depth_; }
   int ncomp() const { return static_cast<int>(component_bc_.size()); }
+  /// Validate that an already allocated state can execute this prepared plan.  Installation-time
+  /// consumers use the same invariant as the fill path, without performing or probing a fill.
+  void validate_state_layout(const MultiFab& state) const { validate_for(state); }
   bool has_omitted_faces() const {
     return std::any_of(omitted_faces_.begin(), omitted_faces_.end(), [](bool value) {
       return value;

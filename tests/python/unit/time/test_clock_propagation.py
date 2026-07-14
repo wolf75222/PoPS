@@ -1,4 +1,5 @@
 """ADC-662: exact clock and evaluation-point ownership in the Program graph."""
+from pops.codegen.program_codegen import emit_cpp_program
 import json
 from fractions import Fraction
 
@@ -9,8 +10,8 @@ from typed_program_support import typed_state
 from pops.time import Program, SampleAndHold
 from pops.numerics.terms import Flux
 from pops.time.points import Clock, StagePoint, TimePoint
-from pops.time.schedule import AcceptedStep, Every, Hold, Schedule
-from pops.time.program_value_validation import validate_input_clocks
+from pops.time import AcceptedStep, Every, Hold, Schedule
+from pops.time._program.value_validation import validate_input_clocks
 
 
 def _stage(state, name="predictor", offset=Fraction(1, 2)):
@@ -122,7 +123,7 @@ def test_fixed_ratio_subcycle_has_an_explicit_schedule_and_native_sync_lowering(
         if getattr(node, "loop_kind", None) == "subcycle")
     assert graph_loop.parent_clock == program.clock
     assert graph_loop.clock == fast and graph_loop.count == 3
-    source = program.emit_cpp_program()
+    source = emit_cpp_program(program)
     assert json.loads(json.dumps(program.temporal_manifest())) == temporal
     from pops.runtime._temporal_restart import TemporalRestartState
 

@@ -5,7 +5,7 @@ INERT inspection (acceptance criterion #38, epic ADC-479): build a REAL ``pops.t
 SSPRK3-style multi-stage step with field solves + a Krylov solve) lowered in memory -- NO Kokkos
 compile, NO .so on disk -- and assert that
 
-  - ``program.scratch_plan()`` / ``compiled.scratch_plan()`` return a ``ScratchPlan`` listing the
+  - ``build_scratch_plan(program)`` / ``compiled.scratch_plan()`` return a ``ScratchPlan`` listing the
     per-category scratch counts (state / rhs / scalar-field), inspectable BEFORE any bind / run;
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
@@ -129,7 +129,7 @@ def test_scratch_plan_categories():
     """scratch_plan() lists the state / rhs / scalar-field scratch counts of the IR."""
     print("== scratch_plan() lists the scratch categories ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     chk(isinstance(plan, ScratchPlan), "scratch_plan() returns a ScratchPlan")
     # SSPRK3: 3 linear_combine states (U1/U2/Un) + 3 rhs rates, no scalar field.
     chk(plan.categories["state"] == 3, "3 state scratches (U1/U2/Un linear_combine)")
@@ -150,8 +150,8 @@ def test_scratch_plan_available_before_run():
     # The free builder and both delegators agree (same IR -> same plan).
     chk(build_scratch_plan(cp.program).to_dict() == cp.scratch_plan().to_dict(),
         "build_scratch_plan and compiled.scratch_plan() agree")
-    chk(cp.program.scratch_plan().to_dict() == cp.scratch_plan().to_dict(),
-        "Program.scratch_plan() and compiled.scratch_plan() agree")
+    chk(build_scratch_plan(cp.program).to_dict() == cp.scratch_plan().to_dict(),
+        "build_scratch_plan(program) and compiled.scratch_plan() agree")
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +163,7 @@ def test_reuse_is_sound():
     earlier occupant -- verified directly against the liveness ranges."""
     print("== reused buffers have provably-disjoint live ranges ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     chk(plan.buffers_saved > 0, "SSPRK3 reuses at least one buffer")
     chk(plan.buffer_count < plan.scratch_count, "buffer_count < scratch_count (reuse happened)")
     # The 3 per-stage rates are each consumed by the next combine -> disjoint -> one buffer. Node
@@ -188,7 +188,7 @@ def test_rejected_reuse_has_reason():
     """A scratch that could NOT reuse a buffer is listed with an inspectable reason (overlap)."""
     print("== rejected reuse carries an inspectable reason ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     # U1 / U2 are still live when the next stages' states are defined (a later combine reads them), so
     # they cannot share a buffer with the still-live earlier states -> rejected.
     rejected_names = {r["scratch"] for r in plan.rejected}
@@ -209,7 +209,7 @@ def test_no_fabricated_reuse():
     """No scratch is BOTH reused and rejected; reuse never claims a still-live buffer."""
     print("== reuse / rejected are consistent (no fabricated reuse) ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     reused = {r["scratch"] for r in plan.reused}
     rejected = {r["scratch"] for r in plan.rejected}
     chk(not (reused & rejected), "a scratch is never both reused and rejected")
@@ -229,7 +229,7 @@ def test_persistent_multigrid_buffers():
     """An elliptic solve_fields contributes a persistent multigrid buffer (whole-solve)."""
     print("== persistent multigrid buffers for field solves ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     mg = [p for p in plan.persistent if p["kind"] == "multigrid"]
     chk(len(mg) == 3, "3 field solves -> 3 multigrid persistent buffers")
     chk(plan.conservative is True, "the plan declares itself conservative (persistent buffers)")
@@ -241,7 +241,7 @@ def test_persistent_krylov_buffers():
     """A solve_linear (Krylov) node contributes persistent Krylov work vectors."""
     print("== persistent Krylov work vectors for a solve_linear ==")
     P = _krylov()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
     chk(krylov[0]["buffers"] >= 1, "the Krylov entry reports >= 1 work vector")
@@ -258,7 +258,7 @@ def test_no_persistent_without_solve():
         temporal.next,
         P.value("U1", U + P.dt * r, at=temporal.next.point),
     )
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")
 
@@ -271,7 +271,7 @@ def test_to_dict_and_json_roundtrip():
     """to_dict round-trips through JSON; to_json writes a valid file and returns the string."""
     print("== scratch_plan() serialisation (to_dict / to_json) ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     d = plan.to_dict()
     chk(set(d) >= {"categories", "scratch_count", "buffer_count", "reused", "rejected",
                    "persistent", "conservative", "notes"}, "to_dict carries every field")
@@ -290,7 +290,7 @@ def test_str_and_repr():
     """str(plan) is a readable report; repr is a short summary."""
     print("== scratch_plan() str / repr ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     text = str(plan)
     chk("scratch plan for Program 'ssprk3'" in text, "str() names the program")
     chk("scratch categories" in text and "reused buffers" in text, "str() shows categories + reuse")

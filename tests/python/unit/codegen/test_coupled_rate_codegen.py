@@ -17,6 +17,8 @@ here. Real engine only; skips if pops.time is unavailable, never faking.
 Runs BOTH as a script (``python3 test_coupled_rate_codegen.py``, the CI-style invocation) and under
 pytest (the test_* functions take no args and importorskip pops.time).
 """
+from pops.codegen.program_codegen import _check_lowerable
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 import pytest
@@ -73,12 +75,12 @@ def _two_fluid_program():
 def test_check_lowerable_no_longer_raises_for_coupled_rate():
     # un-gate: a cons-only coupled_rate lowers (was a hard NotImplementedError before ADC-457 part B).
     _mod, P = _two_fluid_program()
-    P._check_lowerable(None)  # must not raise
+    _check_lowerable(P, None)  # must not raise
 
 
 def test_emit_one_multi_state_for_each_cell():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # ONE shared kernel fills both blocks' rate scratches (not two independent single-block rates).
     assert src.count("pops::for_each_cell") == 1
 
@@ -88,8 +90,8 @@ def test_frozen_coupled_rate_codegen_is_a_repeatable_pure_read():
     P.freeze()
     before = P._ir_hash()
 
-    first = P.emit_cpp_program(model=None)
-    second = P.emit_cpp_program(model=None)
+    first = emit_cpp_program(P, model=None)
+    second = emit_cpp_program(P, model=None)
 
     assert first == second
     assert P._ir_hash() == before
@@ -98,7 +100,7 @@ def test_frozen_coupled_rate_codegen_is_a_repeatable_pure_read():
 
 def test_emit_binds_both_input_state_array4s():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # The two species states are ctx.state(0) / ctx.state(1) -> u0 / u1; each binds its OWN read handle.
     assert "const pops::ConstArray4 u0A = u0.fab(li).const_array();" in src
     assert "const pops::ConstArray4 u1A = u1.fab(li).const_array();" in src
@@ -106,7 +108,7 @@ def test_emit_binds_both_input_state_array4s():
 
 def test_emit_binds_cons_vars_from_respective_states():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # ne is component 0 of the electron state (u0), ni component 0 of the ion state (u1): each cons
     # local reads from ITS OWN state's Array4, so the coupled formulas reference the right cells.
     assert "const pops::Real ne = u0A(i, j, 0);" in src
@@ -115,7 +117,7 @@ def test_emit_binds_cons_vars_from_respective_states():
 
 def test_emit_writes_both_block_rate_scratches():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # Both blocks' rate scratches are allocated (shaped like their own state) and WRITTEN in the kernel.
     assert "= ctx.rhs_scratch_like(u0);" in src and "= ctx.rhs_scratch_like(u1);" in src
     # electron rate = [ni - ne, ne, ne]; ion rate = [ne - ni, ni, ni], each into its block's scratch.
@@ -127,7 +129,7 @@ def test_emit_writes_both_block_rate_scratches():
 
 def test_per_block_out_composes_in_a_forward_step():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # e1 = e_n + dt * re : the electron rate scratch is axpy'd onto the electron state with dt; same
     # for the ion block. Each coupled_rate_out aliases its block's scratch (no separate compute).
     electron_scratch = next(ln.split("=")[0].strip().split()[-1]
@@ -163,7 +165,7 @@ def test_coupled_rate_with_prim_var_is_deferred():
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):
-        P._check_lowerable(None)
+        _check_lowerable(P, None)
 
 
 def test_authored_coupled_rate_node_is_self_contained_after_binding():
@@ -171,14 +173,14 @@ def test_authored_coupled_rate_node_is_self_contained_after_binding():
     # authenticated operator payload, so later validation does not depend on a mutable registry.
     _mod, P = _two_fluid_program()
     P._registry = None
-    P._check_lowerable(None)
+    _check_lowerable(P, None)
 
 
 def test_coupled_rate_codegen_emits_no_forbidden_cpp_tokens():
     # Guard (mirrors test_time_local_newton): the emitted .cpp must use ProgramContext primitives only,
     # never raw std::vector / std::function / Eigen:: / new / malloc -- in code OR comments.
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     for tok in ("std::vector", "std::function", "Eigen::", "new ", "malloc"):
         assert tok not in src, "emitted coupled-rate .cpp must not contain %r" % tok
 
@@ -215,7 +217,7 @@ def test_read_only_catalyst_input_is_bound():
         i_next: P.value(
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
     assert "u2.fab(li).const_array()" in src, "the catalyst input state's read handle is bound"
     assert "const pops::Real nn = u2A(i, j, 0);" in src, "the catalyst cons var nn binds from u2"
@@ -247,7 +249,7 @@ def test_undefined_cons_var_is_rejected():
             "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
     })
     with pytest.raises(NotImplementedError, match="ADC-457"):
-        P._check_lowerable(None)
+        _check_lowerable(P, None)
 
 
 def _run():

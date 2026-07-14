@@ -10,6 +10,7 @@
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
 #include <pops/mesh/layout/refinement.hpp>                    // average_down, coarsen_index
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // coarse solver (geometric multigrid)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (residual, reads the already-filled ghosts)
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>  // PatchRange, CoverageMask (coarse footprint of a patch)
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -64,6 +66,20 @@
 namespace pops {
 
 namespace detail {
+
+struct FacCopyAllKernel {
+  Array4 dst;
+  ConstArray4 src;
+  int comp;
+  POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = src(i, j, comp); }
+};
+
+struct FacSetAllKernel {
+  Array4 dst;
+  Real value;
+  int comp;
+  POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = value; }
+};
 
 /// BILINEAR interpolation of the coarse potential (cell-centered, @p C with ghosts) at the CENTER of the
 /// fine cell (i, j). Ratio @p r. The fine center has abscissa (i+0.5)/r in coarse-step units, i.e.
@@ -121,6 +137,8 @@ class CompositeFacPoisson {
         f_c_(ba_c, dm_c_, 1, 0),
         f_f_(ba_f_, dm_f_, 1, 0),
         res_c_(ba_c, dm_c_, 1, 0),
+        lap_c_(ba_c, dm_c_, 1, 0),
+        lap_f_(ba_f_, dm_f_, 1, 0),
         boundary_view_c_(ba_c, dm_c_, 1, 1),
         eps_c_(ba_c, dm_c_, 1, 1),
         eps_f_(ba_f_, dm_f_, 1, 1),
@@ -150,10 +168,15 @@ class CompositeFacPoisson {
     ayx_c_.set_val(Real(0));
     axy_f_.set_val(Real(0));
     ayx_f_.set_val(Real(0));
+    // The finest level participates in the scientific composite residual even for a two-level
+    // hierarchy. Deeper constructors reuse this buffer as level 1's residual storage.
+    res_f_ = MultiFab(ba_f_, dm_f_, 1, 0);
+    res_f_.set_val(Real(0));
     // ADC-636: build the uniform per-level metadata (coverage / footprints / intermediate mg) so the
     // general path is reachable for a 2-level input too (the cross-check hook and the MPI path). The
     // legacy 2-level dispatch does not use it -- it keeps cov_/patch_coarse_ as before, untouched.
     finalize_hierarchy_metadata_();
+    initialize_probe_storage_();
   }
 
   /// N-LEVEL CTOR (ADC-636). @p level_boxes[k] = the fine BoxArray of level k+1 (in that level's index
@@ -174,6 +197,7 @@ class CompositeFacPoisson {
     n_levels_ = 1 + static_cast<int>(level_boxes.size());
     build_extra_levels_(level_boxes);
     validate_nesting_(level_boxes);  // refuse non-nested patches (C/F bilerp source undefined)
+    initialize_probe_storage_();
   }
 
   MultiFab& rhs_coarse() {
@@ -228,9 +252,8 @@ class CompositeFacPoisson {
   /// ONE-WAY path (coarse solve + fine solve with bilinear C-F ghosts) -- the patch refines locally.
   void set_two_way(bool v) { two_way_ = v; }
 
-  /// ADC-614: install the composite-FAC knobs (outer iterations / fine sweeps / composite tol /
-  /// internal coarse GeometricMG rel_tol+cycles / verbose). Defaults are the kFAC* constants so the
-  /// no-argument solve() below is bit-identical to today. verbose maps onto the diagnostics flag.
+  /// Install the composite-FAC knobs (outer iterations / fine sweeps / mixed relative+absolute
+  /// composite stop / internal coarse GeometricMG rel_tol+cycles / verbose).
   void set_options(const CompositeFacOptions& o) {
     options_ = o;
     verbose_ = o.verbose;
@@ -265,8 +288,9 @@ class CompositeFacPoisson {
 
   const SolveReport& last_solve_report() const { return last_solve_report_; }
 
-  /// Solves the composite system with the INSTALLED options (ADC-614). The couplers call this
-  /// no-argument form; with default-constructed options it is bit-identical to the historical solve.
+  /// Solves the composite system with the installed mixed-tolerance options. Failed linear solves do
+  /// not publish a value through this throwing convenience overload; callers that consume a
+  /// SolveReport directly use the explicit overload below.
   Real solve() {
     if (has_boundary_kernel_ && boundary_kernel_.observes_iteration) {
       if (!has_field_nonlinear_options_)
@@ -278,44 +302,110 @@ class CompositeFacPoisson {
                                  last_solve_report_.status_name());
       return last_residual_;
     }
-    const Real result = solve(options_.max_iters, options_.fine_sweeps, options_.tol);
-    last_solve_report_.iters = options_.max_iters;
-    last_solve_report_.rel_residual = result;
-    if (result <= options_.tol) {
-      last_solve_report_.mark_solved();
-    } else {
-      last_solve_report_.mark_failed(SolveStatus::kIterationLimit,
-                                     SolveAction::kRejectAttempt);
+    const Real result = solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol,
+                              options_.abs_tol);
+    if (!last_solve_report_.solved()) {
       throw std::runtime_error(std::string("field composite solve failed: ") +
                                last_solve_report_.status_name());
     }
     return result;
   }
 
-  /// Solves the composite system. @return the final max composite residual.
-  /// @p max_iters FAC iterations (two-way); @p fine_sweeps SOR sweeps per fine solve; @p tol tolerance.
+  /// Solves the composite system. @return the final composite infinity-norm residual.
+  /// Stops at max(@p rel_tol * ||R(0)||inf, @p abs_tol), where R(0) is evaluated through the exact
+  /// composite operator on every active level with the installed BCs, masks and coefficients. The
+  /// report denominator is ||R(0)||inf for every nonzero forcing, however small, and one only when it
+  /// is exactly zero. @p max_iters counts FAC two-way iterations; @p fine_sweeps is per fine solve.
   ///
   /// DISPATCH (ADC-636). The 2-level, NON adjacent, MONO-RANK envelope routes to the VERBATIM legacy
   /// body (solve_two_level_legacy_ below) -- same bytes, hence same bits, gated by the golden. Every
   /// genuinely new shape (N > 2 levels, adjacent fine patches, or n_ranks() > 1) routes to the general
   /// FAC (solve_composite_nlevel_, composite_fac_nlevel.hpp). At L == 2 / non-adjacent / mono-rank the
   /// general path reduces algebraically to the legacy loop (cross-checked, not gated on).
-  Real solve(int max_iters, int fine_sweeps, Real tol) {
+  Real solve(int max_iters, int fine_sweeps, Real rel_tol, Real abs_tol) {
+    if (max_iters < 0 || fine_sweeps < 0)
+      throw std::invalid_argument("CompositeFacPoisson iteration budgets must be nonnegative");
+    if (rel_tol < Real(0) || !std::isfinite(static_cast<double>(rel_tol)))
+      throw std::invalid_argument("CompositeFacPoisson rel_tol must be finite and nonnegative");
+    if (abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
+      throw std::invalid_argument("CompositeFacPoisson abs_tol must be finite and nonnegative");
+
+    last_solve_report_ = {};
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
     if (fallible_linear_boundary)
       boundary_failure_.reset();
-    const Real result =
-        (!force_general_ && n_levels_ == 2 && !adjacent_ && n_ranks() == 1)
-            ? solve_two_level_legacy_(max_iters, fine_sweeps, tol)
-            : solve_composite_nlevel_(max_iters, fine_sweeps, tol);
+    const bool general = force_general_ || n_levels_ != 2 || adjacent_ || n_ranks() != 1;
+    if (general)
+      setup_level_coeffs_();
+    else
+      setup_two_level_coeffs_();
+
+    const Real forcing_norm = exact_zero_composite_residual_(general);
     if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
       throw std::runtime_error(
           "composite field boundary evaluation failed at face " +
           std::to_string(boundary_failure_.face) + " cell (" +
           std::to_string(boundary_failure_.i) + "," +
           std::to_string(boundary_failure_.j) + ")");
-    return result;
+    if (!std::isfinite(static_cast<double>(forcing_norm)))
+      return mark_invalid_linear_solve_(0);
+
+    const Real report_denominator = forcing_norm == Real(0) ? Real(1) : forcing_norm;
+    const Real relative_stop = rel_tol * forcing_norm;
+    if (!std::isfinite(static_cast<double>(relative_stop)))
+      return mark_invalid_linear_solve_(0);
+    const Real stop = relative_stop > abs_tol ? relative_stop : abs_tol;
+
+    // Respect a converged incoming composite iterate without mutating its valid cells. This matters
+    // for repeated solves and for caller-provided level guesses; the denominator remains R(0), not the
+    // warm-start defect.
+    if (fallible_linear_boundary)
+      boundary_failure_.reset();
+    const Real incoming_residual = composite_residual_norm_(general, /*prepare_cf=*/true);
+    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
+      throw std::runtime_error(
+          "composite field boundary evaluation failed at face " +
+          std::to_string(boundary_failure_.face) + " cell (" +
+          std::to_string(boundary_failure_.i) + "," +
+          std::to_string(boundary_failure_.j) + ")");
+    if (!std::isfinite(static_cast<double>(incoming_residual)))
+      return mark_invalid_linear_solve_(0);
+    if (incoming_residual <= stop) {
+      last_residual_ = incoming_residual;
+      last_solve_report_.iters = 0;
+      last_solve_report_.rel_residual = incoming_residual / report_denominator;
+      if (!std::isfinite(static_cast<double>(last_solve_report_.rel_residual)))
+        return mark_invalid_linear_solve_(0);
+      last_solve_report_.mark_solved();
+      return incoming_residual;
+    }
+
+    if (fallible_linear_boundary)
+      boundary_failure_.reset();
+    const LinearSolveResult outcome = general
+                                          ? solve_composite_nlevel_(max_iters, fine_sweeps, stop)
+                                          : solve_two_level_legacy_(max_iters, fine_sweeps, stop);
+    if (fallible_linear_boundary && boundary_failure_.synchronize_across_ranks())
+      throw std::runtime_error(
+          "composite field boundary evaluation failed at face " +
+          std::to_string(boundary_failure_.face) + " cell (" +
+          std::to_string(boundary_failure_.i) + "," +
+          std::to_string(boundary_failure_.j) + ")");
+    if (!std::isfinite(static_cast<double>(outcome.residual)))
+      return mark_invalid_linear_solve_(outcome.iterations);
+
+    last_residual_ = outcome.residual;
+    last_solve_report_.iters = outcome.iterations;
+    last_solve_report_.rel_residual = outcome.residual / report_denominator;
+    if (!std::isfinite(static_cast<double>(last_solve_report_.rel_residual)))
+      return mark_invalid_linear_solve_(outcome.iterations);
+    if (outcome.residual <= stop)
+      last_solve_report_.mark_solved();
+    else
+      last_solve_report_.mark_failed(SolveStatus::kIterationLimit,
+                                     SolveAction::kRejectAttempt);
+    return outcome.residual;
   }
 
   /// TEST HOOK (ADC-636): route a 2-level non-adjacent mono-rank input through the GENERAL path so the
@@ -324,20 +414,19 @@ class CompositeFacPoisson {
   void force_general_path_for_test(bool v) { force_general_ = v; }
 
  private:
-  /// VERBATIM historical 2-level FAC driver (moved unchanged from solve(); ADC-636 dispatch). This is
-  /// the non-regression anchor: the 2-level non-adjacent mono-rank path executes exactly these bytes.
-  Real solve_two_level_legacy_(int max_iters, int fine_sweeps, Real tol) {
-    // VARIABLE COEFFICIENT (condensed Schur operator B_z=0): sets eps on the coarse solver and
-    // fills the eps ghosts PER LEVEL. eps_c ghosts = zero-gradient (coeff_bc Foextrap, like the
-    // Schur builder); eps_f C-F ghosts = bilerp of eps_c (consistency of the coefficient flux across
-    // the interface). Without variable coefficient -> scalar Laplacian operator (Phase 1, bit-identical).
+  struct LinearSolveResult {
+    Real residual;
+    int iterations;
+  };
+
+  void setup_two_level_coeffs_() {
     if (has_eps_) {
       device_fence();
       fill_ghosts(eps_c_, geom_c_.domain, coeff_bc(bc_));
       fill_cf_coarse_to_fine(eps_c_, eps_f_);
       mg_.set_epsilon(eps_c_);
     }
-    if (has_cross_) {  // FULL tensor (Schur B_z != 0): cross terms on both solvers + ghosts.
+    if (has_cross_) {
       device_fence();
       fill_ghosts(axy_c_, geom_c_.domain, coeff_bc(bc_));
       fill_ghosts(ayx_c_, geom_c_.domain, coeff_bc(bc_));
@@ -345,41 +434,143 @@ class CompositeFacPoisson {
       fill_cf_coarse_to_fine(ayx_c_, ayx_f_);
       mg_.set_cross_terms(axy_c_, ayx_c_);
     }
+  }
+
+  Real composite_residual_norm_(bool general, bool prepare_cf) {
+    // FAC's scientific residual is the level-0 composite defect: the uncovered coarse residual plus
+    // the conservative flux replacement from every child interface.  This is the defect the FAC
+    // correction actually solves.  Fine-level equations are relaxation subproblems; folding their
+    // transient post-smoothing defects into the outer stop would change the algorithm into a
+    // different (and non-contractive) iteration after the composite defect has converged.
+    // A zero-probe or an arbitrary incoming iterate needs its derived C/F ghosts prepared. During
+    // FAC itself, refresh_fine()/relax_level_() have already frozen those ghosts before smoothing;
+    // rebuilding them after average-down would change the interface flux seen by the correction and
+    // turns the historical contractive iteration into a divergent one.
+    if (prepare_cf) {
+      fill_ghosts(phi_c_, geom_c_.domain, bc_);
+      if (general) {
+        for (int level = 1; level < n_levels_; ++level)
+          fill_cf_phi_(level);
+      } else {
+        fill_cf_ghosts();
+      }
+    }
+    const Real norm = general ? composite_residual_(0) : composite_coarse_residual();
+    return std::isfinite(static_cast<double>(norm)) ? norm
+                                                    : std::numeric_limits<Real>::infinity();
+  }
+
+  static void copy_all_cells_(MultiFab& dst, const MultiFab& src) {
+    for (int li = 0; li < dst.local_size(); ++li) {
+      Array4 d = dst.fab(li).array();
+      const ConstArray4 s = src.fab(li).const_array();
+      const Box2D grown = dst.fab(li).grown_box();
+      for (int comp = 0; comp < dst.ncomp(); ++comp)
+        for_each_cell(grown, detail::FacCopyAllKernel{d, s, comp});
+    }
+  }
+
+  static void set_all_cells_(MultiFab& dst, Real value) {
+    for (int li = 0; li < dst.local_size(); ++li) {
+      Array4 d = dst.fab(li).array();
+      const Box2D grown = dst.fab(li).grown_box();
+      for (int comp = 0; comp < dst.ncomp(); ++comp)
+        for_each_cell(grown, detail::FacSetAllKernel{d, value, comp});
+    }
+  }
+
+  void initialize_probe_storage_() {
+    phi_probe_snapshot_.clear();
+    phi_probe_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
+    for (int level = 0; level < n_levels_; ++level) {
+      MultiFab& phi = phi_level(level);
+      phi_probe_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+    }
+    boundary_probe_snapshot_ = MultiFab(ba_c_, dm_c_, 1, boundary_view_c_.n_grow());
+    phi_published_snapshot_.clear();
+    phi_published_snapshot_.reserve(static_cast<std::size_t>(n_levels_));
+    for (int level = 0; level < n_levels_; ++level) {
+      MultiFab& phi = phi_level(level);
+      phi_published_snapshot_.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
+    }
+  }
+
+  Real exact_zero_composite_residual_(bool general) {
+    for (int level = 0; level < n_levels_; ++level) {
+      MultiFab& phi = phi_level(level);
+      copy_all_cells_(phi_probe_snapshot_[static_cast<std::size_t>(level)], phi);
+      set_all_cells_(phi, Real(0));
+    }
+    if (has_boundary_kernel_)
+      copy_all_cells_(boundary_probe_snapshot_, boundary_view_c_);
+    auto restore = [&]() {
+      for (int level = 0; level < n_levels_; ++level)
+        copy_all_cells_(phi_level(level),
+                        phi_probe_snapshot_[static_cast<std::size_t>(level)]);
+      if (has_boundary_kernel_)
+        copy_all_cells_(boundary_view_c_, boundary_probe_snapshot_);
+    };
+    try {
+      const Real norm = composite_residual_norm_(general, /*prepare_cf=*/true);
+      restore();
+      device_fence();
+      return norm;
+    } catch (...) {
+      restore();
+      device_fence();
+      throw;
+    }
+  }
+
+  Real mark_invalid_linear_solve_(int iterations) {
+    last_residual_ = std::numeric_limits<Real>::infinity();
+    last_solve_report_.iters = iterations;
+    last_solve_report_.rel_residual = std::numeric_limits<Real>::infinity();
+    last_solve_report_.mark_failed(SolveStatus::kInvalidEvaluation,
+                                   SolveAction::kRejectAttempt);
+    return last_residual_;
+  }
+
+  /// VERBATIM historical 2-level FAC driver (moved unchanged from solve(); ADC-636 dispatch). This is
+  /// the non-regression anchor: the 2-level non-adjacent mono-rank path executes exactly these bytes.
+  LinearSolveResult solve_two_level_legacy_(int max_iters, int fine_sweeps, Real stop) {
     // 0) initial coarse solve (gives a phi_c for the 1st C-F ghost). ADC-614: the internal coarse
     // GeometricMG rel_tol / max_cycles come from the installed options (default = kFAC* constants).
     copy0(mg_.rhs(), f_c_);
     mg_.phi().set_val(Real(0));
-    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
     copy0(phi_c_, mg_.phi());
 
     // 1) bilinear C-F ghosts + fine solve (base ONE-WAY).
     refresh_fine(fine_sweeps);
 
     diagnostics_.clear();
-    Real rnorm = composite_coarse_residual();
+    Real rnorm = composite_residual_norm_(/*general=*/false, /*prepare_cf=*/false);
     record_residual(-1, rnorm);
     if (!two_way_) {
       last_residual_ = rnorm;
-      return rnorm;
+      return {rnorm, 0};
     }
 
     // 2) FAC two-way iterations: coarse correction (C-F flux) then re-solve fine.
+    int iterations = 0;
     for (int it = 0; it < max_iters; ++it) {
-      if (rnorm < tol)
+      if (!std::isfinite(static_cast<double>(rnorm)) || rnorm <= stop)
         break;
       // coarse correction: Lap e_c = r_c (homogeneous Dirichlet), phi_c += e_c (non covered). The
       // correction solve uses the SAME internal coarse tolerance/cycles as the initial solve (ADC-614).
       copy0(mg_.rhs(), res_c_);
       mg_.phi().set_val(Real(0));
-      mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+      mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
       add_uncovered(phi_c_, mg_.phi());
       // re-ghost + re-solve fine on the corrected phi_c.
       refresh_fine(fine_sweeps);
-      rnorm = composite_coarse_residual();
+      rnorm = composite_residual_norm_(/*general=*/false, /*prepare_cf=*/false);
+      ++iterations;
       record_residual(it, rnorm);
     }
     last_residual_ = rnorm;
-    return rnorm;
+    return {rnorm, iterations};
   }
 
  public:
@@ -393,17 +584,14 @@ class CompositeFacPoisson {
     if (!has_boundary_kernel_ || !boundary_kernel_.observes_iteration)
       return SolveReport::capability_failure();
     validate_field_newton_options(nonlinear);
-    std::vector<MultiFab> published;
-    published.reserve(static_cast<std::size_t>(n_levels_));
     for (int level = 0; level < n_levels_; ++level) {
       MultiFab& phi = phi_level(level);
-      published.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-      lincomb(published.back(), Real(1), phi, Real(0), phi);
+      copy_all_cells_(phi_published_snapshot_[static_cast<std::size_t>(level)], phi);
     }
     auto restore = [&]() {
       for (int level = 0; level < n_levels_; ++level)
-        lincomb(phi_level(level), Real(1), published[static_cast<std::size_t>(level)], Real(0),
-                published[static_cast<std::size_t>(level)]);
+        copy_all_cells_(phi_level(level),
+                        phi_published_snapshot_[static_cast<std::size_t>(level)]);
     };
 
     SolveReport report;
@@ -413,7 +601,8 @@ class CompositeFacPoisson {
         boundary_context_.point.iteration = iteration;
         mg_.set_boundary_context(boundary_context_);
         boundary_failure_.reset();
-        const Real residual = solve(options_.max_iters, options_.fine_sweeps, options_.tol);
+        const Real residual = solve(options_.max_iters, options_.fine_sweeps, options_.rel_tol,
+                                    options_.abs_tol);
         const bool failed = boundary_failure_.synchronize_across_ranks();
         if (failed || !std::isfinite(static_cast<double>(residual))) {
           report.iters = iteration + 1;
@@ -448,9 +637,7 @@ class CompositeFacPoisson {
       Array4 d = dst.fab(li).array();
       const ConstArray4 s = src.fab(li).const_array();
       const Box2D b = dst.box(li);
-      for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-        for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-          d(i, j, 0) = s(i, j, 0);
+      for_each_cell(b, detail::FacCopyAllKernel{d, s, 0});
     }
   }
 
@@ -645,13 +832,12 @@ class CompositeFacPoisson {
     // The cross terms are read also on the COVERED cells (= fine average after average_down) -> the
     // 9-point stencil stays consistent at the interface; only the NORMAL flux is explicitly joined C-F
     // (the cross flux, tangential and small for the Schur step, is carried by the volume stencil).
-    MultiFab lap(ba_c_, dm_c_, 1, 0);
-    apply_laplacian(operator_view, geom_c_, lap, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
+    apply_laplacian(operator_view, geom_c_, lap_c_, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
                     /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &axy_c_ : nullptr,
                     has_cross_ ? &ayx_c_ : nullptr);
     device_fence();
     Array4 R = res_c_.fab(0).array();
-    const ConstArray4 LAP = lap.fab(0).const_array();
+    const ConstArray4 LAP = lap_c_.fab(0).const_array();
     const ConstArray4 FC = f_c_.fab(0).const_array();
     const Box2D b = res_c_.box(0);
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
@@ -741,8 +927,12 @@ class CompositeFacPoisson {
     Real nrm = Real(0);
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        if (!cov_.covered(i, j))
-          nrm = std::fmax(nrm, std::fabs(R(i, j, 0)));
+        if (!cov_.covered(i, j)) {
+          if (!std::isfinite(static_cast<double>(R(i, j, 0))))
+            return std::numeric_limits<Real>::infinity();
+          else
+            nrm = std::max(nrm, std::fabs(R(i, j, 0)));
+        }
     return nrm;
   }
 
@@ -750,8 +940,8 @@ class CompositeFacPoisson {
     if (!verbose_)
       return;
     diagnostics_.record("elliptic.fac.residual", "CompositeFacPoisson", "info",
-                        iteration < 0 ? "initial composite coarse residual"
-                                      : "FAC iteration composite coarse residual",
+                        iteration < 0 ? "initial composite hierarchy residual"
+                                      : "FAC iteration composite hierarchy residual",
                         iteration, static_cast<double>(residual));
   }
 
@@ -763,7 +953,7 @@ class CompositeFacPoisson {
   BoxArray ba_f_;
   DistributionMapping dm_f_;
   GeometricMG mg_;  ///< coarse solver (initial + corrections), homogeneous Dirichlet
-  MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, boundary_view_c_;
+  MultiFab phi_c_, phi_f_, f_c_, f_f_, res_c_, lap_c_, lap_f_, boundary_view_c_;
   MultiFab eps_c_, eps_f_;  ///< variable permittivity per level (condensed Schur operator B_z=0)
   MultiFab axy_c_, ayx_c_, axy_f_, ayx_f_;  ///< cross terms per level (full tensor, Schur B_z!=0)
   std::vector<Box2D> patch_coarse_;  ///< covered coarse footprint PER fine patch (multi-patch)
@@ -777,12 +967,15 @@ class CompositeFacPoisson {
   CompiledFieldBoundaryKernel boundary_kernel_{};
   FieldBoundaryExecutionContext boundary_context_{};
   FieldBoundaryFailure boundary_failure_{};
+  std::vector<MultiFab> phi_probe_snapshot_;  ///< persistent full-state snapshots for exact R(0)
+  MultiFab boundary_probe_snapshot_;          ///< persistent generated-boundary view snapshot
+  std::vector<MultiFab> phi_published_snapshot_;  ///< persistent rollback state for boundary FAS
   bool has_field_nonlinear_options_ = false;
   FieldNewtonOptions field_nonlinear_options_{};
   SolveReport last_solve_report_{};
   bool verbose_ = false;
   bool two_way_ = true;
-  CompositeFacOptions options_;  ///< ADC-614: installed FAC knobs; defaults = kFAC* (bit-identical).
+  CompositeFacOptions options_;  ///< Installed FAC budgets, mixed tolerances and diagnostics knobs.
   int n_levels_ = 2;      ///< ADC-636: hierarchy depth; 2 for the historical ctors, 1+patch-levels for N-level.
   bool adjacent_ = false;  ///< ADC-636: true when the hierarchy has edge/corner-touching fine patches (general path).
   bool force_general_ = false;  ///< ADC-636 test hook: route the 2-level input through the general path.
@@ -793,11 +986,11 @@ class CompositeFacPoisson {
   // so the historical allocation is untouched. geom_lv_[k-2] = geom_c_.refine(2^k); cov_lv_[k-2] is
   // the coverage of level k by level k+1 (empty for the finest); foot_lv_[k-2][g] is the coarse
   // (level k-1) footprint of patch g. mg_lv_[k-2] serves the intermediate-level correction solve.
-  MultiFab res_f_;  ///< ADC-636: level-1 composite residual buffer (the N-level driver needs a res per level)
+  MultiFab res_f_;  ///< level-1 composite residual buffer (report/stop norm and N-level correction).
   std::vector<Geometry> geom_lv_;   ///< geom_lv_[k-2] = geom_c_.refine(2^k) for level k >= 2
   std::vector<BoxArray> ba_lv_;     ///< ba_lv_[k-2] = the level-k patch tiling
   std::vector<DistributionMapping> dm_lv_;
-  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, eps_lv_, axy_lv_, ayx_lv_;
+  std::vector<MultiFab> phi_lv_, f_lv_, res_lv_, lap_lv_, eps_lv_, axy_lv_, ayx_lv_;
   // Uniform per-level metadata, index m in [0, L-1] (covers level 0/1 as well as k >= 2 so the driver
   // loops without special-casing). cov_of_[m] = coverage of level m by level m+1 (finest: none).
   // foot_of_[m][g] = PatchRange of patch g of level m on level m-1 (empty at m == 0).
@@ -806,11 +999,17 @@ class CompositeFacPoisson {
   // Intermediate-level correction multigrid: level_mg_[m] serves level m for 1 <= m <= L-2 (the
   // finest patch level is relaxed by SOR only). [0] (base mg_) and [L-1] stay null.
   std::vector<std::unique_ptr<GeometricMG>> level_mg_;
+  // Hot-path MPI communication scratch.  Built with the hierarchy, then reset/reused by every
+  // residual/correction: no FluxRegister or MultiFab allocation is allowed inside solve().
+  std::vector<std::unique_ptr<FluxRegister>> flux_registers_;
+  std::unique_ptr<FluxRegister> coarse_average_register_;
+  std::vector<MultiFab> correction_residual_replicated_, correction_eps_replicated_,
+      correction_axy_replicated_, correction_ayx_replicated_;
 
   // ADC-636: the general FAC (N levels / adjacent patches / MPI). Declared here; DEFINED out-of-line
   // in composite_fac_nlevel.hpp (tail-included below) so composite_fac_poisson.hpp keeps the legacy
   // body + dispatch and the general machinery lives in the mg/ layer per ADC-334.
-  Real solve_composite_nlevel_(int max_iters, int fine_sweeps, Real tol);
+  LinearSolveResult solve_composite_nlevel_(int max_iters, int fine_sweeps, Real stop);
   void build_extra_levels_(const std::vector<BoxArray>& level_boxes);
   // Build the uniform per-level metadata (cov_of_[m] = level m covered by level m+1, foot_of_[m][g] =
   // level-(m-1) footprint of patch g, level_mg_[m] = intermediate correction multigrid) from the
@@ -830,6 +1029,7 @@ class CompositeFacPoisson {
   // routes remote fine fluxes through a per-face FluxRegister (ADC-636 commit 4) for MPI bit-identity.
   void add_flux_correction_(int m, MultiFab& dst);
   MultiFab& res_level_(int m) { return m == 0 ? res_c_ : (m == 1 ? res_f_ : res_lv_[m - 2]); }
+  MultiFab& lap_level_(int m) { return m == 0 ? lap_c_ : (m == 1 ? lap_f_ : lap_lv_[m - 2]); }
   void add_uncovered_level_(int m, MultiFab& phi, const MultiFab& e);  // phi += e on uncovered cells
   void copy0_(MultiFab& dst, const MultiFab& src);                     // dst <- src (comp 0, valid)
   // Average-down phi_level(m) -> phi_level(m-1). When the parent (m-1) is the REPLICATED coarse under

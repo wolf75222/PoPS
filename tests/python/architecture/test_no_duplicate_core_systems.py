@@ -51,10 +51,10 @@ TARGET_SURFACE_ROOTS = (
 _STEPPER_METHODS = {"step", "advance", "integrate"}
 
 # The ONE canonical public stepper. Program.step is a BUILD-TIME authoring decorator
-# (program_authoring.py) that records the IR body once; it is never executed numerically. It is the
+# (_program/authoring.py) that records the IR body once; it is never executed numerically. It is the
 # single allowed stepper class, named explicitly (no broad allowlist).
 _ALLOWED_STEPPER_CLASSES = {
-    "Program": "python/pops/time/program.py: the ONE canonical compiled-time stepper; step() is a "
+    "Program": "python/pops/time/_program/api.py: the ONE canonical compiled-time stepper; step() is a "
                "build-time IR authoring decorator, not a numerical advance loop",
 }
 

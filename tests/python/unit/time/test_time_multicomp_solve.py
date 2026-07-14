@@ -24,6 +24,7 @@ component 0 alone and leave the rest unsolved.
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
     / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -191,12 +192,12 @@ def test_typed_state_component_count_is_checked_at_author_time(t):
 
 
 def test_multicomp_codegen(t):
-    src = _mc_program(t, 2).emit_cpp_program()
+    src = emit_cpp_program(_mc_program(t, 2))
     n = src.count("ctx.alloc_scalar_field(2, 1)")  # lap scratch + accumulator + solution
     assert n >= 3, "the 2-component solve allocates 2-component scratch/acc/solution\n%s" % src
     assert "ctx.solve_linear_matfree" in src and "ctx.laplacian" in src, src
     # the scalar path still allocates 1-component fields only
-    src1 = _mc_program(t, 1).emit_cpp_program()
+    src1 = emit_cpp_program(_mc_program(t, 1))
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1
 
 

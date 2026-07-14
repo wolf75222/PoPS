@@ -20,8 +20,8 @@ import sys
 import pytest
 
 from pops import time as adctime
-from pops.time.history import CopyCurrent
-from pops.time.history_persistence import Dense, Interval
+from pops.time._history.policy import CopyCurrent
+from pops.time._history.persistence import Dense, Interval
 
 
 def _expect(exc_type, fn, needle):

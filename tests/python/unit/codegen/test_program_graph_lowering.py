@@ -5,7 +5,7 @@ import pytest
 
 from pops.codegen.program_graph_lowering import emit_program_graph
 from pops.time import Program
-from pops.time.program_detach import detach_compiled_program
+from pops.time._program.detach import detach_compiled_program
 
 
 def test_lowering_accepts_only_the_graph_equivalent_detached_adapter(monkeypatch):

@@ -1,5 +1,6 @@
 """ADC-666: typed, lowered and identity-bearing macro-step transactions."""
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 import pytest
 
@@ -66,7 +67,7 @@ def test_project_and_recheck_is_lazy_lowered_and_visible_in_transaction_identity
     plan = program.transaction_plan()
     assert plan.guards[0].role is GuardRole.ERROR_ESTIMATE
     assert plan.projections == (BlockProjection(),)
-    source = program.emit_cpp_program()
+    source = emit_cpp_program(program)
     assert "ctx.apply_projection(0," in source
     assert '"guard"' in source
     assert "StepAttemptRejected" in source
@@ -129,4 +130,4 @@ def test_fail_run_guard_is_typed_and_lowered_as_fatal():
         "finite_state", state, program.norm_inf(state) >= 0.0, action=FailRun())
     program.commit(temporal.next, guarded)
     program.step_strategy(FixedDt(0.1))
-    assert "throw std::runtime_error" in program.emit_cpp_program()
+    assert "throw std::runtime_error" in emit_cpp_program(program)

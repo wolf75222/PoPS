@@ -1197,7 +1197,7 @@ phi_theta = T.solve(
         initial_guess=phi_n,
         scope=scope,
     ),
-    solver=CompositeTensorFAC(max_iter=400, rel_tol=1e-10),
+    solver=CompositeTensorFAC(max_iter=400, rel_tol=1e-10, abs_tol=0.0),
     name="condensed_stage",
 ).consume(action=FailRun())
 # Reconstruction, theta extrapolation, energy update and commit remain explicit Program IR.

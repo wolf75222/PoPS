@@ -311,6 +311,9 @@ inline void AmrRuntime::set_clustering(double min_efficiency, int min_box_size, 
   cluster_.min_efficiency = min_efficiency;
   cluster_.min_box_size = min_box_size;
   cluster_.max_box_size = max_box_size;
+  if (!external_clustering_)
+    clustering_provider_ =
+        std::make_shared<const amr::BergerRigoutsosProvider>(cluster_);
 }
 
 }  // namespace pops

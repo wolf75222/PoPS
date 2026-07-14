@@ -28,6 +28,7 @@ per-stage FieldContext buffer is needed.
 Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
 never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import solve_field, typed_state
 
@@ -125,7 +126,7 @@ def heun_program(name="sffs_heun", model=None):
 # ============================ (A) codegen: pure Python, always runs ============================
 print("== (A) solve_fields(state) lowers to solve_fields_from_state ==")
 codegen_model = named_source_model()
-src = heun_program(model=codegen_model).emit_cpp_program(model=codegen_model)
+src = emit_cpp_program(heun_program(model=codegen_model), model=codegen_model)
 
 # Both stages lower to the per-stage solve; the bare current-state form is gone.
 chk(src.count("ctx.solve_fields_from_state(0, ") == 2,
@@ -159,7 +160,7 @@ R = P_fe.rhs(
 endpoint_fe = typed_state(P_fe, "plasma", state_name="U", model=fe_model).next
 P_fe.commit(endpoint_fe, P_fe.value(
     "U1", U + P_fe.dt * R, at=endpoint_fe.point))
-src_fe = P_fe.emit_cpp_program(model=fe_model)
+src_fe = emit_cpp_program(P_fe, model=fe_model)
 chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
     "the single-stage solve_fields(U) on the current state still lowers (per-stage form)")
 

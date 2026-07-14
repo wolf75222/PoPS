@@ -17,6 +17,7 @@ scalar runtime branch ``P.branch``. The 0/1 mask is built per cell with ``P.cell
     SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
     (never faking the engine).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -85,7 +86,7 @@ def test_where_result_type(t):
 
 def test_where_codegen(t):
     P = _clamp_program(t)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ("ctx.alloc_scalar_field(1, 1)",          # the mask field
                  "pops::for_each_cell",                      # the per-cell select kernel
                  "fieldA(i, j, 0) >= 0.5",                   # exact threshold lowering

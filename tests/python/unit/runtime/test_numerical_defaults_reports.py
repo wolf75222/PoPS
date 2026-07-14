@@ -28,8 +28,11 @@ def test_numerical_defaults_report_is_structured():
     assert d["krylov"]["schur_polar_max_iters"] == 600
     assert d["mg"]["rel_tol"] == pytest.approx(1e-8)
     assert d["mg"]["max_cycles"] == 50
-    assert d["fac"]["initial_coarse_rel_tol"] == pytest.approx(1e-12)
-    assert d["fac"]["initial_coarse_max_cycles"] == 100
+    assert d["fac"]["rel_tol"] == pytest.approx(1e-9)
+    assert d["fac"]["abs_tol"] == pytest.approx(0.0)
+    assert d["fac"]["coarse_rel_tol"] == pytest.approx(1e-12)
+    assert d["fac"]["coarse_abs_tol"] == pytest.approx(0.0)
+    assert d["fac"]["coarse_cycles"] == 100
     assert d["fft"]["zero_mean_gauge"] is True
     assert d["eb"]["cut_fraction_floor"] == pytest.approx(1e-3)
     assert d["eb"]["face_open_eps"] == pytest.approx(1e-6)  # ADC-615

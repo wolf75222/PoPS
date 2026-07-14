@@ -1,5 +1,6 @@
 """ADC-652: authoring literals stay exact until an explicit target lowering."""
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 from decimal import Decimal
 from fractions import Fraction
@@ -99,7 +100,7 @@ def test_exact_affine_coefficient_has_one_typed_codec_for_hash_and_cpp():
     coeff = program._serialize()["nodes"][-1]["attrs"]["coeffs"][0]
     assert coeff == [[0, {
         "kind": "rational", "numerator": "1", "denominator": "3"}]]
-    assert "(pops::Real(1) / pops::Real(3))" in program.emit_cpp_program()
+    assert "(pops::Real(1) / pops::Real(3))" in emit_cpp_program(program)
 
 
 def test_unit_target_and_algebraic_program_constants_reach_target_lowering_losslessly():
@@ -123,7 +124,7 @@ def test_unit_target_and_algebraic_program_constants_reach_target_lowering_lossl
     assert literals[0]["unit"] == "m/s" and literals[0]["target"] == "pops::Real"
     assert literals[1]["kind"] == "algebraic" and literals[1]["value"] == "sqrt(2)"
     with pytest.raises(TypeError, match="explicit unit-system conversion"):
-        program.emit_cpp_program()
+        emit_cpp_program(program)
 
 
 def test_affine_coefficients_refuse_to_drop_annotations_or_evaluate_algebraic_literals():
@@ -235,7 +236,7 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     assert solve.attrs["tol"].to_data() == {"kind": "decimal", "value": "1E-12"}
     assert solve.attrs["omega"].to_data() == {
         "kind": "rational", "numerator": "2", "denominator": "3"}
-    source = program.emit_cpp_program()
+    source = emit_cpp_program(program)
     assert "pops::Real(1E-12)" in source
     assert "(pops::Real(2) / pops::Real(3))" in source
 

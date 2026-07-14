@@ -89,6 +89,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         "catalog_schema_version", "component_manifest_schema_version",
         "route_registry_version", "capability_vocabulary_version", "manifest_schema",
         "interface_vocabulary", "native_interface_abi_version", "native_common_abi_version",
+        "tagging_program_abi",
         "native_interface_abis", "boundary_handle_native_routes",
         "route_family_native_interfaces", "route_family_interfaces",
         "route_component_defaults", "route_families",
@@ -147,16 +148,64 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         if isinstance(data[name], bool) or not isinstance(data[name], int) or data[name] != 1:
             raise CatalogError(
                 f"unsupported native component {label} ABI version")
+    tagging = _exact(data["tagging_program_abi"], {
+        "version", "leaf_opcodes", "logical_opcodes", "candidate_outputs",
+        "indicator_stencil_routes", "maximum_stencil_terms",
+        "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
+    }, "tagging_program_abi")
+    if tagging["version"] != 1 or tagging["persistent_hysteresis"] is not False:
+        raise CatalogError(
+            "tagging_program_abi v1 requires explicit non-persistent hysteresis")
+    if tagging["non_finite_policy"] != "reject":
+        raise CatalogError(
+            "tagging_program_abi v1 requires fail-closed non-finite rejection")
+    opcode_ids: set[int] = set()
+    for family in ("leaf_opcodes", "logical_opcodes"):
+        values = tagging[family]
+        if not isinstance(values, dict) or not values:
+            raise CatalogError(f"tagging_program_abi.{family} must be a non-empty mapping")
+        for name, opcode in values.items():
+            _identifier(name, f"tagging_program_abi.{family} opcode")
+            if isinstance(opcode, bool) or not isinstance(opcode, int) \
+                    or opcode < 1 or opcode > 127 or opcode in opcode_ids:
+                raise CatalogError(f"tagging_program_abi.{family}.{name} has an invalid id")
+            opcode_ids.add(opcode)
+    if tagging["candidate_outputs"] != [
+        "refine_candidates", "coarsen_candidates",
+        "refine_equalities", "coarsen_equalities",
+    ]:
+        raise CatalogError("tagging_program_abi candidate outputs are not canonical")
+    routes = tagging["indicator_stencil_routes"]
+    if not isinstance(routes, list) or not routes \
+            or len(routes) != len(set(routes)) \
+            or any(not isinstance(route, str) or not route for route in routes):
+        raise CatalogError(
+            "tagging_program_abi indicator_stencil_routes must be unique strings")
+    maximum_terms = tagging["maximum_stencil_terms"]
+    if isinstance(maximum_terms, bool) or not isinstance(maximum_terms, int) \
+            or maximum_terms < 1:
+        raise CatalogError("tagging_program_abi maximum_stencil_terms must be >= 1")
+    maximum = tagging["maximum_instruction_count"]
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
+        raise CatalogError("tagging_program_abi maximum_instruction_count must be >= 1")
     native_abis = data["native_interface_abis"]
     if not isinstance(native_abis, list) or not native_abis:
         raise CatalogError("native_interface_abis must be a non-empty list")
     native_names: set[str] = set()
+    native_ids: set[int] = set()
     native_uris: set[str] = set()
     native_tables: set[str] = set()
     for index, native in enumerate(native_abis):
         native = _exact(native, {
-            "name", "uri", "version", "cpp_table", "hot_path", "facets", "operations",
+            "id", "name", "uri", "version", "cpp_table", "hot_path", "facets", "operations",
         }, f"native_interface_abis[{index}]")
+        abi_id = native["id"]
+        if isinstance(abi_id, bool) or not isinstance(abi_id, int) or abi_id < 0:
+            raise CatalogError(
+                f"native_interface_abis[{index}].id must be an integer >= 0")
+        if abi_id in native_ids:
+            raise CatalogError(f"duplicate native component interface id {abi_id}")
+        native_ids.add(abi_id)
         name = native["name"]
         if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
             raise CatalogError(f"native_interface_abis[{index}].name is not canonical")
@@ -173,6 +222,14 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                 or native["version"] < 1:
             raise CatalogError(f"native_interface_abis[{index}].version must be >= 1")
         table = _identifier(native["cpp_table"], f"native_interface_abis[{index}].cpp_table")
+        if name == "field_solver" and (native["version"] != 2 or
+                                        table != "PopsFieldSolverApiV2"):
+            raise CatalogError(
+                "field_solver must declare the indivisible PopsFieldSolverApiV2 interface")
+        if name == "field_topology" and (native["version"] != 2 or
+                                          table != "PopsFieldTopologyApiV2"):
+            raise CatalogError(
+                "field_topology must declare the indivisible PopsFieldTopologyApiV2 interface")
         if table in native_tables:
             raise CatalogError(f"duplicate native component interface table {table!r}")
         native_tables.add(table)
@@ -502,7 +559,7 @@ def _render_routes(catalog: dict[str, Any], digest: str,
 def _render_native_interfaces(catalog: dict[str, Any], digest: str,
                               semantic_digest: str) -> str:
     rows = tuple({
-        "id": index,
+        "id": row["id"],
         "name": row["name"],
         "uri": row["uri"],
         "version": row["version"],
@@ -510,7 +567,7 @@ def _render_native_interfaces(catalog: dict[str, Any], digest: str,
         "hot_path": row["hot_path"],
         "facets": tuple(row["facets"]),
         "operations": tuple(row["operations"]),
-    } for index, row in enumerate(catalog["native_interface_abis"]))
+    } for row in catalog["native_interface_abis"])
     boundary_routes = {
         kind: (row["interface"], row["operation"])
         for kind, row in catalog["boundary_handle_native_routes"].items()
@@ -523,6 +580,7 @@ def _render_native_interfaces(catalog: dict[str, Any], digest: str,
         f"NATIVE_COMPONENT_COMMON_ABI_VERSION = {catalog['native_common_abi_version']}",
         f"NATIVE_COMPONENT_CATALOG_SHA256 = {digest!r}",
         f"NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = {semantic_digest!r}",
+        f"NATIVE_TAGGING_PROGRAM_ABI = {_py_literal(catalog['tagging_program_abi'])}",
         f"NATIVE_COMPONENT_INTERFACES = {_py_literal(rows)}",
         "NATIVE_COMPONENT_INTERFACE_BY_NAME = {row['name']: row for row in NATIVE_COMPONENT_INTERFACES}",
         "NATIVE_COMPONENT_INTERFACE_BY_URI = {row['uri']: row for row in NATIVE_COMPONENT_INTERFACES}",
@@ -536,17 +594,37 @@ def _render_native_interfaces(catalog: dict[str, Any], digest: str,
 def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
     """Render the closed C/POD execution ABI shared by builtin and package conformers."""
     enum_rows = "\n".join(
-        "  POPS_NATIVE_INTERFACE_%s_V1 = %d," % (row["name"].upper(), index)
-        for index, row in enumerate(catalog["native_interface_abis"])
+        "  POPS_NATIVE_INTERFACE_%s_V%d = %d," % (
+            row["name"].upper(), row["version"], row["id"])
+        for row in catalog["native_interface_abis"]
+    )
+    tagging = catalog["tagging_program_abi"]
+    tagging_opcode_rows = "\n".join(
+        "  POPS_TAGGING_%s_V1 = %d," % (name.upper(), opcode)
+        for family in ("leaf_opcodes", "logical_opcodes")
+        for name, opcode in tagging[family].items()
+    )
+    tagging_leaf_cases = " ".join(
+        "case POPS_TAGGING_%s_V1:" % name.upper()
+        for name in tagging["leaf_opcodes"]
+    )
+    tagging_logical_cases = " ".join(
+        "case POPS_TAGGING_%s_V1:" % name.upper()
+        for name in tagging["logical_opcodes"]
+    )
+    tagging_stencil_route_rows = "\n".join(
+        '#define POPS_TAGGING_STENCIL_ROUTE_%s "%s"'
+        % (route.upper(), route)
+        for route in tagging["indicator_stencil_routes"]
     )
     table_size_rows = "\n".join(
-        "    case POPS_NATIVE_INTERFACE_%s_V1: return sizeof(%s);"
-        % (row["name"].upper(), row["cpp_table"])
+        "    case POPS_NATIVE_INTERFACE_%s_V%d: return sizeof(%s);"
+        % (row["name"].upper(), row["version"], row["cpp_table"])
         for row in catalog["native_interface_abis"]
     )
     table_name_rows = "\n".join(
-        "    case POPS_NATIVE_INTERFACE_%s_V1: return \"%s\";"
-        % (row["name"].upper(), row["cpp_table"])
+        "    case POPS_NATIVE_INTERFACE_%s_V%d: return \"%s\";"
+        % (row["name"].upper(), row["version"], row["cpp_table"])
         for row in catalog["native_interface_abis"]
     )
     return f'''#pragma once
@@ -570,6 +648,22 @@ extern "C" {{
 typedef enum PopsNativeInterfaceIdV1 {{
 {enum_rows}
 }} PopsNativeInterfaceIdV1;
+
+typedef enum PopsTaggingOpcodeV1 {{
+{tagging_opcode_rows}
+}} PopsTaggingOpcodeV1;
+#define POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 {tagging['maximum_instruction_count']}u
+#define POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1 {tagging['maximum_stencil_terms']}u
+#define POPS_TAGGING_NO_STENCIL_V1 ((size_t)-1)
+#define POPS_TAGGING_NON_FINITE_REJECT_V1 1
+{tagging_stencil_route_rows}
+
+static inline int pops_tagging_opcode_is_leaf_v1(int32_t opcode) {{
+  switch (opcode) {{ {tagging_leaf_cases} return 1; default: return 0; }}
+}}
+static inline int pops_tagging_opcode_is_logical_v1(int32_t opcode) {{
+  switch (opcode) {{ {tagging_logical_cases} return 1; default: return 0; }}
+}}
 
 typedef enum PopsComponentActionV1 {{
   POPS_COMPONENT_CONTINUE_V1 = 0,
@@ -833,10 +927,68 @@ typedef struct PopsFieldBoundaryClosureApiV1 {{
   PopsFieldBoundaryEvalFnV1 jvp;
 }} PopsFieldBoundaryClosureApiV1;
 
+typedef struct PopsTaggingAxisStencilV1 {{
+  uint32_t struct_size;
+  int32_t axis;
+  int32_t derivative_order;
+  int32_t formal_order;
+  size_t ghost_lower;
+  size_t ghost_upper;
+  size_t term_count;
+  const int32_t* offsets;
+  const double* coefficients;
+}} PopsTaggingAxisStencilV1;
+typedef struct PopsTaggingStencilV1 {{
+  uint32_t struct_size;
+  const char* stencil_identity;
+  const char* route;
+  const char* norm;
+  const char* scale;
+  const char* boundary_mode;
+  int32_t dimension;
+  size_t axis_count;
+  const PopsTaggingAxisStencilV1* axes;
+}} PopsTaggingStencilV1;
+typedef struct PopsTaggingLeafV1 {{
+  uint32_t struct_size;
+  size_t state_index;
+  size_t component;
+  int32_t opcode;
+  double threshold;
+  size_t stencil_index;
+}} PopsTaggingLeafV1;
+typedef struct PopsTaggingProgramV1 {{
+  uint32_t struct_size;
+  const char* program_identity;
+  size_t stencil_count;
+  const PopsTaggingStencilV1* stencils;
+  size_t leaf_count;
+  const PopsTaggingLeafV1* leaves;
+  size_t refine_instruction_count;
+  const int32_t* refine_opcodes;
+  const int32_t* refine_arguments;
+  size_t coarsen_instruction_count;
+  const int32_t* coarsen_opcodes;
+  const int32_t* coarsen_arguments;
+  int32_t minimum_cycles;
+  int32_t equality_policy;
+  int32_t conflict_policy;
+  int32_t non_finite_policy;
+}} PopsTaggingProgramV1;
 typedef struct PopsTaggerRequestV1 {{
   uint32_t struct_size;
-  PopsConstFieldViewV1 state;
-  PopsByteViewV1 tags;
+  size_t state_count;
+  const PopsQualifiedConstFieldV1* states;
+  PopsTaggingProgramV1 program;
+  int64_t patch_lower[3];
+  int64_t domain_lower[3];
+  int64_t domain_upper[3];
+  double cell_size[3];
+  uint32_t periodic_axes;
+  PopsByteViewV1 refine_candidates;
+  PopsByteViewV1 coarsen_candidates;
+  PopsByteViewV1 refine_equalities;
+  PopsByteViewV1 coarsen_equalities;
   PopsLogicalTimeV1 logical_time;
   PopsExecutionContextV1 execution;
 }} PopsTaggerRequestV1;
@@ -851,6 +1003,8 @@ typedef struct PopsClusteringRequestV1 {{
   PopsConstByteViewV1 tags;
   const int64_t* extents;
   int32_t dimension;
+  // `boxes` is box-major [lo_0..lo_(d-1), hi_0..hi_(d-1)]. Bounds are
+  // inclusive and relative to the supplied tag region.
   int64_t* boxes;
   size_t box_capacity;
   size_t* box_count;
@@ -880,48 +1034,116 @@ typedef struct PopsTransferApiV1 {{
   PopsTransferApplyFnV1 apply;
 }} PopsTransferApiV1;
 
-typedef struct PopsRefluxRequestV1 {{
+typedef struct PopsFieldPatchMetadataV1 {{
   uint32_t struct_size;
-  PopsConstFieldViewV1 coarse_integrated;
-  PopsConstFieldViewV1 fine_integrated;
-  PopsFieldViewV1 flux_register;
-  PopsExecutionContextV1 execution;
-}} PopsRefluxRequestV1;
-typedef int32_t (*PopsDepositIntegratedFnV1)(
-    void*, const PopsRefluxRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsRefluxApiV1 {{
-  PopsComponentTableHeaderV1 header;
-  PopsDepositIntegratedFnV1 deposit_integrated;
-}} PopsRefluxApiV1;
+  size_t global_patch_index;
+  int32_t owner_rank;
+  int32_t level;
+  int32_t dimension;
+  int64_t lower[3];
+  int64_t upper[3];
+  // Physical coordinate of the lower face at `lower`, not the global-domain origin.
+  double physical_lower[3];
+  double cell_spacing[3];
+  PopsFieldCenteringV1 centering;
+  uint32_t centering_axes;
+  // Qualified source LayoutPlan identity; materialization is carried by global topology.
+  const char* layout_identity;
+  const char* patch_identity;
+}} PopsFieldPatchMetadataV1;
 
-typedef struct PopsFieldSolverRequestV1 {{
+typedef enum PopsFieldMaterialRepresentationV1 {{
+  POPS_FIELD_MATERIAL_FULL_V1 = 1,
+  POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1 = 2,
+  POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1 = 3,
+  POPS_FIELD_MATERIAL_IDS_V1 = 4,
+  POPS_FIELD_MATERIAL_IDS_WITH_CUT_CELL_FRACTION_V1 = 5
+}} PopsFieldMaterialRepresentationV1;
+
+typedef struct PopsFieldGlobalTopologyV1 {{
   uint32_t struct_size;
+  const char* topology_recipe_identity;
+  // Qualified authoring LayoutPlan identity, preserved on every FieldView.
+  const char* source_layout_identity;
+  // Exact runtime materialization identity: source layout + geometry + boxes + owners + topology.
+  const char* materialized_layout_identity;
+  int32_t dimension;
+  int64_t domain_lower[3];
+  int64_t domain_upper[3];
+  uint32_t periodic_axes;
+  size_t patch_count;
+  const PopsFieldPatchMetadataV1* patches;
+}} PopsFieldGlobalTopologyV1;
+
+typedef struct PopsFieldSolverTopologyLabelV2 {{
+  uint32_t struct_size;
+  int32_t id;
+  const char* label;
+  const char* provenance;
+}} PopsFieldSolverTopologyLabelV2;
+
+typedef struct PopsFieldSolverPatchV2 {{
+  uint32_t struct_size;
+  size_t metadata_index;
   PopsConstFieldViewV1 rhs;
   PopsFieldViewV1 solution;
   PopsConstFieldViewV1 coefficients;
   PopsConstByteViewV1 material_mask;
   PopsConstInt32ViewV1 component_labels;
+}} PopsFieldSolverPatchV2;
+
+typedef struct PopsFieldSolverRequestV2 {{
+  uint32_t struct_size;
+  PopsFieldGlobalTopologyV1 topology;
+  size_t local_patch_count;
+  const PopsFieldSolverPatchV2* local_patches;
+  size_t topology_label_count;
+  const PopsFieldSolverTopologyLabelV2* topology_labels;
+  const char* topology_provenance;
   const char* topology_digest;
   const char* boundary_contract_json;
   double relative_tolerance;
   double absolute_tolerance;
   int32_t max_iterations;
   PopsExecutionContextV1 execution;
-}} PopsFieldSolverRequestV1;
-typedef struct PopsSolveReportV1 {{
+}} PopsFieldSolverRequestV2;
+
+typedef enum PopsSolveStatusV2 {{
+  POPS_SOLVE_SOLVED_V2 = 0,
+  POPS_SOLVE_SINGULAR_V2 = 1,
+  POPS_SOLVE_BREAKDOWN_V2 = 2,
+  POPS_SOLVE_ITERATION_LIMIT_V2 = 3,
+  POPS_SOLVE_INVALID_EVALUATION_V2 = 4,
+  POPS_SOLVE_CAPABILITY_FAILURE_V2 = 5,
+  POPS_SOLVE_INVALID_INPUT_V2 = 6,
+  POPS_SOLVE_INCOMPATIBLE_RHS_V2 = 7
+}} PopsSolveStatusV2;
+
+typedef enum PopsSolveActionV2 {{
+  POPS_SOLVE_ACTION_NONE_V2 = 0,
+  POPS_SOLVE_ACTION_FAIL_RUN_V2 = 1,
+  POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2 = 2
+}} PopsSolveActionV2;
+
+typedef struct PopsSolveReportV2 {{
   uint32_t struct_size;
-  int32_t converged;
+  PopsSolveStatusV2 status;
+  PopsSolveActionV2 action;
   int32_t iterations;
-  double initial_residual;
-  double final_residual;
-  PopsComponentStatusV1 status;
-}} PopsSolveReportV1;
-typedef int32_t (*PopsFieldSolveFnV1)(
-    void*, const PopsFieldSolverRequestV1*, PopsSolveReportV1*);
-typedef struct PopsFieldSolverApiV1 {{
+  // residual_norm / reference_residual_norm, using denominator 1 only when the reference is zero.
+  double relative_residual;
+  // Exact ||R(x0)|| used by max(relative_tolerance * ||R(x0)||, absolute_tolerance).
+  double reference_residual_norm;
+  // Exact ||R(x_final)|| tested against the mixed convergence threshold.
+  double residual_norm;
+  const char* reason;
+}} PopsSolveReportV2;
+typedef int32_t (*PopsFieldSolveFnV2)(
+    void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2*);
+typedef struct PopsFieldSolverApiV2 {{
   PopsComponentTableHeaderV1 header;
-  PopsFieldSolveFnV1 solve;
-}} PopsFieldSolverApiV1;
+  PopsFieldSolveFnV2 solve;
+}} PopsFieldSolverApiV2;
 
 typedef struct PopsWriterBoxV1 {{
   uint32_t struct_size;
@@ -1014,32 +1236,43 @@ typedef struct PopsWriterApiV1 {{
   PopsWriterCleanupFnV1 rollback;
 }} PopsWriterApiV1;
 
-typedef struct PopsFieldTopologyRequestV1 {{
+typedef struct PopsFieldTopologyPatchV2 {{
   uint32_t struct_size;
-  PopsConstFieldViewV1 geometry;
+  size_t metadata_index;
+  PopsFieldMaterialRepresentationV1 material_representation;
+  PopsConstByteViewV1 material_coverage;
+  PopsConstFieldViewV1 cut_cell_volume_fraction;
+  PopsConstInt32ViewV1 material_ids;
   PopsByteViewV1 material_mask;
   PopsInt32ViewV1 component_labels;
+}} PopsFieldTopologyPatchV2;
+typedef struct PopsFieldTopologyRequestV2 {{
+  uint32_t struct_size;
+  PopsFieldGlobalTopologyV1 topology;
+  size_t local_patch_count;
+  const PopsFieldTopologyPatchV2* local_patches;
   PopsExecutionContextV1 execution;
-}} PopsFieldTopologyRequestV1;
-typedef struct PopsTopologyLabelV1 {{
+}} PopsFieldTopologyRequestV2;
+typedef struct PopsTopologyLabelV2 {{
+  uint32_t struct_size;
   int32_t id;
   const char* label;
   const char* provenance;
-}} PopsTopologyLabelV1;
-typedef struct PopsFieldTopologyResultV1 {{
+}} PopsTopologyLabelV2;
+typedef struct PopsFieldTopologyResultV2 {{
   uint32_t struct_size;
   size_t label_count;
-  const PopsTopologyLabelV1* labels;
+  const PopsTopologyLabelV2* labels;
   const char* provenance;
   const char* topology_digest;
   PopsComponentStatusV1 status;
-}} PopsFieldTopologyResultV1;
-typedef int32_t (*PopsPrepareTopologyFnV1)(
-    void*, const PopsFieldTopologyRequestV1*, PopsFieldTopologyResultV1*);
-typedef struct PopsFieldTopologyApiV1 {{
+}} PopsFieldTopologyResultV2;
+typedef int32_t (*PopsPrepareTopologyFnV2)(
+    void*, const PopsFieldTopologyRequestV2*, PopsFieldTopologyResultV2*);
+typedef struct PopsFieldTopologyApiV2 {{
   PopsComponentTableHeaderV1 header;
-  PopsPrepareTopologyFnV1 prepare_topology;
-}} PopsFieldTopologyApiV1;
+  PopsPrepareTopologyFnV2 prepare_topology;
+}} PopsFieldTopologyApiV2;
 
 typedef struct PopsComponentInterfaceEntryV1 {{
   PopsNativeInterfaceIdV1 interface_id;

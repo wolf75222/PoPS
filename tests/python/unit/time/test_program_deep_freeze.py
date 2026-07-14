@@ -1,4 +1,5 @@
 """Program.freeze deeply detaches authoring tables and preserves pure reads."""
+from pops.codegen.program_codegen import emit_cpp_program
 from typed_program_support import typed_state
 
 from types import MappingProxyType
@@ -60,8 +61,8 @@ def test_frozen_program_codegen_is_repeatable_and_does_not_install_caches():
     program.freeze()
     before = program._ir_hash()
 
-    first = program.emit_cpp_program()
-    second = program.emit_cpp_program()
+    first = emit_cpp_program(program)
+    second = emit_cpp_program(program)
 
     assert first == second
     assert program._ir_hash() == before

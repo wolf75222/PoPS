@@ -11,14 +11,15 @@ from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
     prepare_step_controller,
+    register_step_controller_factory,
     resolve_run_strategy,
     run_control_payload,
     run_step_attempt,
 )
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
-from pops.time.step_strategy import register_step_strategy_type
-from pops.time.step_strategy import validate_step_strategy_manifest
+from pops.time._step.strategy import register_step_strategy_type
+from pops.time._step.strategy import validate_step_strategy_manifest
 
 
 class _Engine:
@@ -205,9 +206,10 @@ def test_registered_strategy_and_controller_own_extension_and_restart_protocols(
         def to_data(self):
             return {"kind": self.kind, "dt": self.dt}
 
-        def runtime_controller(self, controls=None):
-            self.validate_runtime_controls(controls)
-            return Controller(self)
+    @register_step_controller_factory(Registered)
+    def registered_controller(strategy, controls=None):
+        strategy.validate_runtime_controls(controls)
+        return Controller(strategy)
 
     strategy = Registered(0.25)
     engine = _Engine(strategy)
@@ -238,10 +240,6 @@ def test_registered_strategy_provider_owns_strict_restart_reconstruction():
             if set(value) != {"kind", "value"} or value["kind"] != "binary64":
                 raise ValueError("invalid Restartable dt")
             return cls(float.fromhex(value["value"]))
-
-        def runtime_controller(self, controls=None):
-            self.validate_runtime_controls(controls)
-            raise NotImplementedError
 
     payload = run_control_payload(Restartable(0.25))
     assert validate_step_strategy_manifest(payload) == payload

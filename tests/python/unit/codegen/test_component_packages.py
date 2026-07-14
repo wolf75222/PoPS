@@ -19,7 +19,8 @@ from pops.model import ComponentManifest
 from pops.runtime._platform_manifest import proven_serial_manifest
 
 
-def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_points=None):
+def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_points=None,
+              parameters=()):
     interface = interfaces.NumericalFlux
     return ComponentManifest(
         uri=uri, component_type="numerical_flux", version="1.0.0",
@@ -28,6 +29,7 @@ def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_
                    "inputs": ["left", "right", "face", "providers"],
                    "native_interface": interface.signature_declaration()},
         interfaces=interface.manifest_declarations(),
+        parameters=parameters,
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
         }]},
@@ -59,6 +61,24 @@ def test_source_package_verifies_content_before_authoring_registry(tmp_path):
     with pytest.raises(ComponentPackageError) as error:
         load(path)
     assert error.value.code == "source_digest"
+
+
+def test_external_component_parameters_are_deeply_frozen_authorities(tmp_path):
+    manifest = _manifest(parameters=({"name": "options", "kind": "runtime"},))
+    path, _ = _write_source(tmp_path, manifest=manifest)
+    authored = {"levels": [1, 2], "policy": {"strict": True}}
+    component = load(path).require(
+        "average", interface=interfaces.NumericalFlux)(options=authored)
+
+    authored["levels"].append(3)
+    authored["policy"]["strict"] = False
+    assert component.to_data()["parameters"] == {
+        "options": {"levels": [1, 2], "policy": {"strict": True}}
+    }
+    from pops.problem._detached import detached_frozen
+    assert detached_frozen(component) is component
+    with pytest.raises(TypeError):
+        component.parameters["options"]["policy"]["strict"] = False
 
 
 def test_tampered_manifest_digest_is_rejected(tmp_path):

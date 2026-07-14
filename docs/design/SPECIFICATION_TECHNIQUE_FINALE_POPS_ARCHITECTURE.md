@@ -312,6 +312,58 @@ consomment exactement ce même quintuplet ; une permutation de labels, un masque
 étranger est refusé avant le kernel. Il existe donc une base et une contrainte de gauge par composante
 connexe, sans branche Poisson ni hypothèse d'un domaine globalement connexe.
 
+`ExternalFieldSolver(topology=..., solver=...)` est une autorité indivisible : les deux composants,
+leurs manifests, leurs interfaces et leurs paramètres sont appariés à `resolve`, préparés une seule
+fois à `bind`, puis possédés jusqu'à la destruction du runtime. Les interfaces `FieldTopology` ABI v2
+et `FieldSolver` ABI v2 forment cette paire sans alias ni table v1. `FieldSolver`
+transporte une topologie globale répliquée (bornes du domaine, axes périodiques, métadonnées de tous
+les patches et owners) et un tableau de vues locales. Sa requête transporte aussi sans substitution
+le quintuplet préparé : masque, labels, vocabulaire de labels dont chaque ligne porte son
+`struct_size`, provenance et digest. Ces données sont des copies runtime persistantes adossées à
+l'autorité topologique immuable ; omission, remplacement ou mutation par le composant est refusé. La requête et
+ses buffers d'autorité sont construits une seule fois après la matérialisation topologique, puis
+réutilisés sans reconstruire le JSON ni allouer un tableau de patches à chaque solve.
+`FieldTopology.prepare_topology` et `FieldSolver.solve` sont appelés
+exactement une fois par matérialisation/solve, y compris sur un rang sans patch local ; il n'existe
+pas de boucle de solve indépendante par patch. Chaque métadonnée porte les bornes d'indices, la
+coordonnée physique de sa face basse, l'espacement, le centrage, l'identité qualifiée du `LayoutPlan`
+source et l'identité du patch. L'identité dérivée de la matérialisation (géométrie, boxes, owners,
+périodicité et recette topologique) reste distincte de l'identité source.
+
+`PopsSolveReportV2` contient un unique statut scientifique typé, une action, `iterations`,
+`reference_residual_norm`, `residual_norm`, `relative_residual` et une `reason` obligatoire. Il ne
+contient ni booléen `converged`, ni résidus ambigus `initial`/`final`. Le ratio doit être cohérent avec
+les deux normes (dénominateur `1` seulement lorsque la norme de référence est nulle) et un succès doit
+vérifier `residual_norm <= max(relative_tolerance * reference_residual_norm, absolute_tolerance)`.
+`IncompatibleRhs` est un échec scientifique explicite. L'entier retourné par le callback signale
+uniquement un échec de transport ABI et ne fabrique jamais de statut scientifique.
+
+La représentation matière est typée (`full`, couverture binaire, fraction cut-cell, ids matériau ou
+leur combinaison), jamais simulée par un tableau de `1`. La route actuellement prouvée de bout en bout
+est plus étroite que cette ABI : `Uniform(CartesianGrid)`, cell-centered, plein matériau, float64,
+host et communicateur série. AMR, embedded boundary, multimatériau, GPU, MPI sans consensus global,
+conditions de bord dépendantes d'un état/champ/temps et outer solve non linéaire sont refusés à
+`resolve`; les accepter dans un manifest ne suffit pas à rendre l'adapter capable.
+
+Cette route sélectionne, pour chacun des deux composants, exactement un variant cible
+`{dimension: 2, scalar: "float64", device: "cpu"}`. Un variant uniquement 3D, ou plusieurs variants
+2D CPU ambigus, est refusé avant compilation ; une vue 2D ne peut jamais être passée à un binaire
+authentifié pour une autre dimension.
+
+Le runtime possède un unique protocole de backend de champ pour les implémentations builtin et
+externes : `rhs`, `phi`, configuration de frontière, préparation du second membre, `solve`,
+finalisation, snapshot/restore et rapport topologique. Le chemin scientifique ne branche pas sur
+« externe » après matérialisation. La provenance n'est pas exposée par un getter parallèle :
+`RuntimeInstance.inspect()` et le `RunReport` publient le même schéma `field_providers`, avec
+l'autorité déclarée, l'identité du layout source, l'état matérialisé, le digest/provenance observés et
+les métriques exactes des patches. Avant matérialisation, les faits runtime sont `None` et la liste de
+patches est vide ; aucune valeur sentinelle n'est inventée.
+La préparation applique le même contrat de compatibilité du nullspace et la même mise à l'échelle
+physique aux deux backends ; la finalisation applique la gauge déclarée avant les ghosts. Une réussite
+externe n'est synchronisée ni publiée qu'après vérification de la finitude de chaque degré de liberté
+matériel actif. Un échec conserve le snapshot publié et ne copie jamais une sortie fournisseur
+partielle ou non finie vers le device.
+
 ## 6. Domaine, maillage et layouts
 
 Les layouts publics vivent uniquement dans `pops.layouts` :
@@ -414,19 +466,23 @@ exactes, pas une normalisation vers un layout représentatif.
 
 ### 6.2 Autorité AMR
 
-Un layout AMR agrège cinq facettes :
+Un layout AMR agrège cinq facettes scientifiques et deux providers d'exécution :
 
 - `AMRHierarchy` : niveaux et ratios par transition ;
 - `AMRTagging` : graphe de prédicats, décisions, hystérésis et conflits ;
 - `AMRRegrid` : cadence et règle de reconstruction ;
 - `AMRTransfer` : politique par espace/état ;
-- `AMRExecution` : relation temporelle entre niveaux.
+- `AMRExecution` : relation temporelle entre niveaux ;
+- un provider `Tagger` qui matérialise le graphe de tagging ;
+- un provider `Clustering` qui transforme les tags en boîtes parentes.
 
 ```python
 layout = AMR(
     grid=grid,
     hierarchy=AMRHierarchy(max_levels=..., ratios=(...)),
     tagging=tagging,
+    tagger=pops.lib.amr.SymbolicTagger(),
+    clustering=pops.lib.amr.BergerRigoutsos(),
     regrid=AMRRegrid(schedule=every(5, clock=T.clock)),
     transfer=transfer,
     execution=AMRExecution.subcycled((
@@ -436,10 +492,95 @@ layout = AMR(
 )
 ```
 
+Les builtins de `pops.lib.amr` et les composants externes implémentent le même petit protocole de
+provider. Un composant externe est sélectionné sans callback Python :
+
+```python
+from pops.amr import ClusteringProvider, TaggerProvider
+
+layout = AMR(
+    ...,
+    tagger=TaggerProvider(component=my_tagger),
+    clustering=ClusteringProvider(component=my_clustering),
+)
+resolved = pops.resolve(
+    pops.validate(case),
+    layout=layout,
+    components=(my_tagger, my_clustering),
+)
+```
+
+Les deux valeurs doivent référencer un exact `pops.external.ExternalComponent` portant
+respectivement l'interface générée `Tagger` ou `Clustering`. Le même objet exact doit être fourni à
+`resolve(components=...)`; son identité de manifest, son interface et sa version traversent
+`resolve -> compile -> bind`. Le manifest doit déclarer une classification déterministe `bitwise` ou
+`reproducible`, car chaque rang doit produire la même hiérarchie. Un `Tagger` déclare en plus une
+capacité `amr_tagging_program` exacte : opcodes feuilles/logiques supportés, nombre maximal
+d'instructions, routes de stencil d'indicateur, nombre maximal de termes par axe et les quatre
+sorties `refine_candidates`, `coarsen_candidates`,
+`refine_equalities`, `coarsen_equalities`. La résolution refuse un opcode ou une capacité absente ;
+elle ne réduit jamais le graphe à un prédicat privé du composant.
+Chaque provider v1 sélectionne exactement un variant
+`{dimension: 2, scalar: "float64", device: "cpu"}` ; une déclaration 3D ne rend pas l'adapter 2D
+compatible.
+
+Le contrat `Tagger` v1 reçoit, pour chaque patch local, toutes les vues d'états qualifiées utilisées
+par le graphe ainsi que son programme lié canonique : feuilles, composantes, seuils, programmes
+refine/coarsen, stencils discrets, hystérésis, égalité, conflits et identité. Un stencil discret
+transporte sa route versionnée, sa dimension, sa norme, son échelle, son mode de frontière et, pour
+chaque axe, offsets, coefficients, ordre de dérivée, ordre formel et halos inférieur/supérieur. Le
+spatial method le fournit sous forme typée et sérialisable ; `resolve` refuse une méthode absente ou
+ambiguë. Il n'existe aucun choix runtime par nom de reconstruction et aucun fallback vers une
+différence centrée. Les moments des coefficients jusqu'à l'ordre formel déclaré sont vérifiés, puis
+les halos requis sont comparés aux halos réellement alloués avant le premier appel du provider.
+Avec `boundary_mode="ghost_extension"`, les halos same-level, coarse/fine et physiques sont produits
+par les autorités `AMRTransfer`/`PreparedBoundaryPlan` exactes au clock et au temps logique du
+tagging. Une frontière physique non périodique sans producteur complet, ou une face d'interface
+omise sans transfert de ghost correspondant, fait échouer le bind ; un stencil ne lit jamais une
+valeur de halo résiduelle.
+
+Le composant évalue ce même programme exact et rend
+les quatre masques candidats. PoPS reste l'unique autorité qui applique la couverture fine courante,
+la politique d'égalité et les conflits refine/coarsen. Les états ne sont ni packés ni réduits
+globalement. Pour un parent distribué, seule une OR collective groupée des quatre bitmaps est
+autorisée ; pour un parent répliqué, les bitmaps doivent être identiques rang par rang et toute
+divergence est refusée au lieu d'être masquée par une union. `min_cycles > 0` est refusé
+à la résolution tant que le runtime ne possède pas le stockage persistant de décision requis : une
+hystérésis ne peut jamais être acceptée puis ignorée. Changer un seuil, le graphe, coarsen, l'égalité
+ou les conflits change l'identité et le contenu du programme lié.
+
+L'évaluation logique est trivaluée. Une égalité de feuille produit `Unknown`; `not Unknown` reste
+`Unknown`; `Any` vaut `True` dès qu'un enfant vaut `True`, sinon `Unknown` s'il en existe un, sinon
+`False`; `All` vaut `False` dès qu'un enfant vaut `False`, sinon `Unknown` s'il en existe un, sinon
+`True`. Les quatre masques représentent le résultat des racines, pas l'union des égalités internes.
+`EqualityPolicy` transforme ensuite tout `Unknown` de racine en aucune action, candidat refine ou
+candidat coarsen, avant `ConflictPolicy`, y compris si l'autre racine vaut déjà `True`.
+`non_finite_policy="reject"` est fixe dans la capability et l'ABI v1 : une valeur scalaire, un terme
+de stencil ou un gradient dérivé `NaN`/infini interrompt le tagging avant toute logique booléenne.
+En particulier `Not(NaN)` ne peut pas devenir `True`. Un composant externe signale ce rejet par son
+`PopsComponentStatusV1`; PoPS refuse aussi les entrées non finies avant l'appel et ne convertit jamais
+une erreur numérique en masque `False`.
+
+L'installation prépare chaque table une fois avant la création du runtime. Une table absente, une
+capacité de sortie insuffisante ou une identité divergente échoue
+avant publication de la hiérarchie ; il n'existe ni callback Python par cellule, ni switch sur
+`component_id`, ni fallback vers le builtin après une erreur externe.
+
+Le contrat `Clustering` v1 reçoit un masque dense et retourne des lignes
+`[lo_0, ..., lo_(d-1), hi_0, ..., hi_(d-1)]`, bornes inclusives relatives à la région de tags. PoPS
+valide capacité, bornes, non-recouvrement et couverture de tous les tags avant de convertir ces
+boîtes parentes en layout fin. Les boîtes sont triées lexicographiquement avant validation ; PoPS
+vérifie ensuite que cette séquence canonique est identique sur tous les rangs avant publication. La
+preuve overlap/couverture est linéaire dans le domaine dense et l'aire couverte ; le consensus MPI
+batché utilise un nombre constant de collectives, jamais une collective par boîte. Le
+provider ne contrôle ni nesting, ni distribution, ni publication.
+
 Le transfert appartient au layout et n'est pas ajouté une seconde fois au `DiscretizationPlan`.
 Les seuils de tagging sont des paramètres du `Case` et sont donc résolus/bindés comme toute autre
 valeur. Une expression telle que `norm(grad(ValueExpr(block[U]))) > case.value(threshold)` est
-résolue dans un contexte discret explicite ; elle n'invente pas un gradient continu exécutable.
+résolue dans un `DiscreteIndicatorContext` explicite. Sa discrétisation spatiale y authentifie le
+stencil exact décrit ci-dessus ; AMR ne répète ni `order=`, ni profondeur de halo, et n'invente pas
+un gradient continu exécutable.
 
 Le plan normalisé conserve chaque ratio de transition et le raffinement cumulé de chaque niveau.
 La relation temporelle de chaque paire parent/enfant est une autorité distincte du ratio spatial.
@@ -449,7 +590,9 @@ n'invente jamais `time_ratio = space_ratio`; une relation non intégrale exige e
 doivent couvrir exactement la hiérarchie.
 
 Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
-reflux et sous-cyclage AMR exigent un ratio de transition égal à 2. Une autre dimension ou un autre
+correction conservative et sous-cyclage AMR exigent un ratio de transition égal à 2. La correction
+coarse/fine reste l'unique ledger de flux détenu par PoPS : aucune interface externe `Reflux`
+n'existe, car déléguer ce dépôt créerait une seconde autorité conservative. Une autre dimension ou un autre
 ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
 planification ne normalise jamais la demande vers ce sous-ensemble.
 
@@ -611,6 +754,24 @@ restaure l'ensemble des valeurs acceptées précédentes. Un solveur généré d
 convergence scientifique explicite, distinct de son budget ; atteindre seulement la limite
 d'itérations produit `kIterationLimit`, jamais un succès fabriqué.
 
+Pour tout solveur linéaire affine et son résidu discret `R(u) = b - A(u)`, le résidu relatif est
+`||R(u)|| / ||R(0)||` dans la norme globale définie par le contrat du solveur, avec une base égale à
+`1` lorsque `||R(0)|| == 0`. `R(0)` est évalué par l'opérateur préparé exact : mêmes coefficients,
+masques, frontières physiques ou générées et topologie que `R(u)`. Il inclut donc le lifting des
+frontières inhomogènes ; pour un opérateur linéaire homogène, il se réduit à `b`. Cette norme (`L2`,
+`Linf`, pondérée, composite, etc.) ne dépend jamais du warm start. Le critère mixte est
+`||R(u)|| <= max(rel_tol * ||R(0)||, abs_tol)`. Le zero-probe et ses buffers sont persistants, et les
+normes initiales peuvent être agrégées dans une même collective. Relancer un système inchangé déjà
+sous ce seuil retourne donc un succès à zéro itération, au lieu de demander implicitement une
+réduction supplémentaire par `rel_tol`.
+
+Un outer solve non linéaire ne réutilise pas implicitement cette définition linéaire. Sa politique de
+normalisation est un élément explicite du solveur ; la politique livrée prend le résidu du snapshot
+accepté au début de la tentative comme référence et une base égale à `1` si ce résidu est nul. Le
+report et le critère utilisent cette même référence pendant toute la tentative. Une norme de résidu
+préconditionnée peut guider une itération interne, mais elle ne peut jamais remplacer la norme
+scientifique déclarée dans le `SolveReport` publié.
+
 Un schéma IMEX/ARK porte les abscisses exactes de chaque partition dans ses `StagePoint`. Les
 coefficients sont rationnels/exacts lorsqu'ils le sont mathématiquement. Un certificat d'ordre ou SSP
 est dérivé du tableau/graphe ; l'utilisateur ne répète pas `order=2` si le tableau l'établit.
@@ -658,10 +819,15 @@ Un schedule est le produit typé `Schedule(trigger, off=...)` de quatre petites 
 - `OffPolicy.native_schedule_off()` retourne un exact `ScheduleOffIR` ;
 - `Schedule.native_schedule_ir()` compose les trois en un exact `ScheduleLoweringIR`.
 
-Une extension est un dataclass immuable et slotté, déclare un `manifest_tag`, projette toutes ses
-données comportementales, conserve son type exact pendant le rebuild et participe à l'identité du
-graphe. Un dictionnaire ressemblant à l'IR, un retour partiel ou un type transformé pendant le mapping
-sont refusés ; aucune classe d'extension n'est enregistrée dans une liste centrale.
+Une extension est un dataclass immuable et slotté, déclare un `manifest_tag`, ainsi qu'une identité
+sémantique possédée par sa classe (`component_uri` absolue et namespacée,
+`component_version >= 1`), projette toutes ses données comportementales, conserve son type exact
+pendant le rebuild et participe à l'identité du graphe. Le chemin de module Python et le `qualname`
+ne sont jamais utilisés comme identité persistante. Un dictionnaire ressemblant à l'IR, un retour
+partiel, une identité héritée ou un type transformé pendant le mapping sont refusés ; aucune classe
+d'extension n'est enregistrée dans une liste centrale. Tous les types du protocole, y compris
+`UnresolvedScheduleCondition`, sont importables depuis `pops.time` : une extension n'importe aucun
+module `_schedule` privé.
 
 Le vocabulaire livré comprend les domaines `AcceptedStep`, `Attempt`, `Stage`, `ClockTick`,
 `AMRLevel`, `Event` et `WallOutput`, les triggers `Always`, `Every`, `AtStart`, `AtEnd` et `When`, et les
@@ -758,7 +924,10 @@ rapportent l'horloge cumulative réellement publiée. `stop_reason` est un `pops
 seul arrêt réussi actuellement implémenté est `TARGET_TIME_REACHED`. Un épuisement de `max_steps`,
 une garde terminale ou un effet non publiable lève une exception et ne fabrique pas de rapport de
 succès. Le rapport transporte les identités authentifiées `run_identity`, `bind_identity`,
-`execution_identity` et `artifact_identity`, sans recalcul ni valeur par défaut.
+`execution_identity` et `artifact_identity`, sans recalcul ni valeur par défaut. Sa section
+`field_providers` est la projection immuable du même rapport de provenance que
+`RuntimeInstance.inspect()` après l'appel : builtin et externe utilisent le même schéma et seuls les
+faits réellement matérialisés y apparaissent.
 Le rapport n'a pas de vérité booléenne implicite : le code utilisateur choisit explicitement le
 champ observé (`accepted_steps`, `stop_reason`, etc.).
 
@@ -868,8 +1037,9 @@ paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, d�
 restart et points d'entrée.
 
 Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
-ghost boundary, closure de champ, tagging, clustering, transfert, reflux, solveur de champ, writer et
-topologie de champ). Chaque famille possède sa propre version d'interface, indépendante de la version
+ghost boundary, closure de champ, tagging, clustering, transfert, solveur de champ, writer et
+topologie de champ). Le reflux conservatif reste une autorité interne pilotée par le flux ledger ;
+aucune table externe `Reflux` n'est annoncée. Chaque famille possède sa propre version d'interface, indépendante de la version
 du protocole enveloppe. Le loader authentifie identité sémantique, manifest, digest du catalogue,
 taille/header de table et opérations requises avant de conserver le handle de bibliothèque. Les tables
 sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans

@@ -2,6 +2,7 @@
 
 #include <pops/amr/regridding/regrid.hpp>   // tag_cells, grow_tags (per-block tags + phi for the union regrid)
 #include <pops/amr/tagging/tag_box.hpp>  // TagBox, tag_union (cell-by-cell OR of the tags of all blocks)
+#include <pops/amr/tagging/tagging_truth.hpp>
 #include <pops/core/state/state.hpp>   // kAuxBaseComps
 #include <pops/core/state/variables.hpp>  // VariableSet, VariableRole, role_from_name (role -> component of coupled sources)
 #include <pops/coupling/amr/amr_coupler_mp.hpp>  // detail::coupler_inject_aux_mb (aux injection coarse->fine)
@@ -32,6 +33,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
+#include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
 #include <pops/runtime/context/grid_context.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
@@ -98,6 +100,9 @@ namespace pops {
 /// authoring object or Python callback.
 struct AmrFieldSolveConfig {
   std::string provider_identity;
+  std::string topology_provider_kind;
+  std::string topology_provenance;
+  std::string topology_digest;
   std::string output_owner_identity;
   std::string output_block;
   std::string output_key;
@@ -488,26 +493,10 @@ class AmrRuntime {
     bool prepared = false;
   };
 
-  /// Data-only AMR tagging program installed from the resolved Python provider graph.  The VM is a
-  /// compact post-order boolean stack: leaf instructions read one owner-qualified block component;
-  /// logical instructions combine already-produced values.  No Python callback or class-name switch
-  /// survives into the runtime loop.
-  struct TaggingProgram {
-    struct Leaf {
-      std::size_t block = 0;
-      int component = 0;
-      int opcode = 0;
-      Real threshold = Real(0);
-    };
-    std::vector<Leaf> leaves;
-    std::vector<int> refine_ops, refine_args;
-    std::vector<int> coarsen_ops, coarsen_args;
-    int equality_policy = 0;  ///< 0 hold, 1 refine, 2 coarsen
-    int conflict_policy = 0;  ///< 0 error, 1 hold, 2 refine wins, 3 coarsen wins
-    int min_cycles = 0;
-    std::string provider_identity;
-    bool prepared = false;
-  };
+  /// One exact graph representation is shared by the builtin VM and an external Tagger evaluator.
+  /// External implementations receive this program verbatim and return candidates; they never
+  /// replace AMRTagging's refine/coarsen/equality/conflict authority.
+  using TaggingProgram = runtime::amr::PreparedTaggingProgram;
 
   /// Deep, move-independent image of every runtime-owned value a macro-step may mutate.  MultiFab
   /// copies retain their BoxArray/DistributionMapping, so the snapshot carries the hierarchy itself,
@@ -585,6 +574,13 @@ class AmrRuntime {
           hierarchy_.dy[level] != hierarchy_.dy[level + 1] * Real(ratio))
         throw std::runtime_error("AmrRuntime : inconsistent hierarchy refinement metric");
     }
+    const bool fully_periodic =
+        bcPhi_.xlo == BCType::Periodic && bcPhi_.xhi == BCType::Periodic &&
+        bcPhi_.ylo == BCType::Periodic && bcPhi_.yhi == BCType::Periodic;
+    if (fully_periodic && !wall_active_)
+      default_field_nullspace_ = constant_mean_zero_nullspace(
+          "pops://amr/default-field/nullspace/constant@1",
+          "fully periodic AMR default field", geom_.dx() * geom_.dy());
 
     // EXACT layout consistency between blocks (the aux is shared per level): same number of levels,
     // and per level same BoxArray (boxes AND order), same DistributionMapping, same dx/dy. SAME guard
@@ -706,48 +702,61 @@ class AmrRuntime {
         std::move(provider_identity), component, threshold, true};
   }
 
-  void set_tagging_program(std::vector<TaggingProgram::Leaf> leaves,
-                           std::vector<int> refine_ops, std::vector<int> refine_args,
-                           std::vector<int> coarsen_ops, std::vector<int> coarsen_args,
+  void set_tagging_program(std::vector<TaggingProgram::Stencil> stencils,
+                           std::vector<TaggingProgram::Leaf> leaves,
+                           std::vector<std::int32_t> refine_ops,
+                           std::vector<std::int32_t> refine_args,
+                           std::vector<std::int32_t> coarsen_ops,
+                           std::vector<std::int32_t> coarsen_args,
                            int min_cycles, int equality_policy, int conflict_policy,
+                           std::string clock_identity,
                            std::string provider_identity) {
-    if (bootstrap_pending_ || provider_identity.empty() || leaves.empty() ||
+    if (bootstrap_pending_ || clock_identity.empty() || provider_identity.empty() ||
+        leaves.empty() ||
         refine_ops.empty() || refine_ops.size() != refine_args.size() ||
         coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 ||
+        refine_ops.size() + coarsen_ops.size() >
+            POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 ||
         equality_policy < 0 || equality_policy > 2 || conflict_policy < 0 ||
         conflict_policy > 3)
       throw std::runtime_error("AmrRuntime::set_tagging_program invalid manifest");
     if (min_cycles != 0)
       throw std::runtime_error(
           "AmrRuntime::set_tagging_program min_cycles requires a persistent tagging-state provider");
-    for (const auto& leaf : leaves)
-      if (leaf.block >= blocks_.size() || leaf.component < 0 ||
-          leaf.component >= blocks_[leaf.block].ncomp || leaf.opcode < 1 || leaf.opcode > 5 ||
-          !std::isfinite(static_cast<double>(leaf.threshold)))
+    for (const auto& leaf : leaves) {
+      const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
+                            leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
+      if (leaf.state_index >= blocks_.size() ||
+          leaf.component >= static_cast<std::size_t>(blocks_[leaf.state_index].ncomp) ||
+          !pops_tagging_opcode_is_leaf_v1(leaf.opcode) ||
+          !std::isfinite(static_cast<double>(leaf.threshold)) ||
+          gradient != (leaf.stencil_index != POPS_TAGGING_NO_STENCIL_V1) ||
+          (gradient && leaf.stencil_index >= stencils.size()))
         throw std::runtime_error("AmrRuntime::set_tagging_program invalid leaf");
-    const auto validate_program = [&leaves](const std::vector<int>& ops,
-                                            const std::vector<int>& args,
+    }
+    const auto validate_program = [&leaves](const std::vector<std::int32_t>& ops,
+                                            const std::vector<std::int32_t>& args,
                                             bool required) {
       if (ops.empty()) {
         if (required)
           throw std::runtime_error("AMR tagging program has no refine root");
         return;
       }
-      if (ops.size() > 128)
-        throw std::runtime_error("AMR tagging program exceeds the native 128-node bound");
+      if (ops.size() > POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1)
+        throw std::runtime_error("AMR tagging program exceeds the native instruction bound");
       int depth = 0;
       for (std::size_t index = 0; index < ops.size(); ++index) {
         const int op = ops[index], arg = args[index];
-        if (op >= 1 && op <= 5) {
+        if (pops_tagging_opcode_is_leaf_v1(op)) {
           if (arg < 0 || static_cast<std::size_t>(arg) >= leaves.size() ||
               leaves[static_cast<std::size_t>(arg)].opcode != op)
             throw std::runtime_error("AMR tagging leaf opcode/index mismatch");
           ++depth;
-        } else if (op == 16 || op == 17) {
+        } else if (op == POPS_TAGGING_ANY_OF_V1 || op == POPS_TAGGING_ALL_OF_V1) {
           if (arg < 2 || depth < arg)
             throw std::runtime_error("AMR tagging n-ary stack underflow");
           depth -= arg - 1;
-        } else if (op == 18) {
+        } else if (op == POPS_TAGGING_NOT_V1) {
           if (arg != 1 || depth < 1)
             throw std::runtime_error("AMR tagging not stack underflow");
         } else {
@@ -759,11 +768,58 @@ class AmrRuntime {
     };
     validate_program(refine_ops, refine_args, true);
     validate_program(coarsen_ops, coarsen_args, false);
-    tagging_program_ = TaggingProgram{std::move(leaves), std::move(refine_ops),
-                                     std::move(refine_args), std::move(coarsen_ops),
-                                     std::move(coarsen_args), equality_policy,
-                                     conflict_policy, min_cycles,
-                                     std::move(provider_identity), true};
+    for (const auto& leaf : leaves) {
+      const bool gradient = leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
+                            leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1;
+      if (!gradient || (base_per_.x && base_per_.y))
+        continue;
+      const auto& block = blocks_[leaf.state_index];
+      if (!block.boundary_plan || block.boundary_plan->has_omitted_faces())
+        throw std::runtime_error(
+            "non-periodic AMR gradient tagging requires a complete prepared ghost-production "
+            "authority on every sampled physical face");
+      block.boundary_plan->validate_state_layout(block.levels->front().U);
+    }
+    TaggingProgram candidate{
+        std::move(stencils), std::move(leaves), std::move(refine_ops),
+        std::move(refine_args), std::move(coarsen_ops), std::move(coarsen_args),
+        equality_policy, conflict_policy, min_cycles,
+        POPS_TAGGING_NON_FINITE_REJECT_V1, std::move(clock_identity),
+        std::move(provider_identity), true};
+    runtime::amr::validate_tagging_stencil_program(
+        candidate,
+        std::vector<std::string>{POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1},
+        POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1, 2,
+        [this](std::size_t state_index) {
+          const auto& levels = *blocks_[state_index].levels;
+          if (levels.empty())
+            throw std::invalid_argument("AMR Tagger state has no materialized level");
+          return static_cast<std::size_t>(levels.front().U.n_grow());
+        });
+    tagging_program_ = std::move(candidate);
+  }
+
+  void install_external_tagger(
+      std::shared_ptr<runtime::amr::PreparedTaggerComponent> provider) {
+    if (!provider || external_tagger_ || bootstrap_pending_)
+      throw std::runtime_error("AmrRuntime external Tagger requires one pre-bootstrap provider");
+    external_tagger_ = std::move(provider);
+  }
+
+  void install_external_clustering(
+      std::shared_ptr<runtime::amr::PreparedClusteringComponent> provider) {
+    if (!provider || external_clustering_ || bootstrap_pending_)
+      throw std::runtime_error(
+          "AmrRuntime external Clustering requires one pre-bootstrap provider");
+    clustering_provider_ = provider;
+    external_clustering_ = std::move(provider);
+  }
+
+  void set_component_logical_time(std::int64_t tick, double physical_time) {
+    if (tick < 0 || !std::isfinite(physical_time))
+      throw std::runtime_error("AmrRuntime component logical time is invalid");
+    component_tick_ = tick;
+    component_physical_time_ = physical_time;
   }
 
   void register_bootstrap_staggered_field(
@@ -1820,7 +1876,9 @@ class AmrRuntime {
   /// is built on the first solve, never here.
   void install_field_plan(const std::string& provider_slot, const AmrFieldSolveConfig& plan) {
     if (provider_slot.empty() || plan.provider_identity.empty() || plan.output_block.empty() ||
-        plan.output_key.empty() || plan.providers.empty())
+        plan.output_key.empty() || plan.providers.empty() ||
+        plan.topology_provider_kind.empty() || plan.topology_provenance.empty() ||
+        plan.topology_digest.empty())
       throw std::runtime_error("AmrRuntime: incomplete qualified field provider plan");
     auto existing = named_fields_.find(provider_slot);
     if (existing != named_fields_.end() && existing->second.plan.provider_identity !=
@@ -1958,6 +2016,27 @@ class AmrRuntime {
     result.reserve(named_fields_.size());
     for (const auto& item : named_fields_)
       result.push_back(item.first);
+    return result;
+  }
+
+  /// Report only a topology that a named field solver has actually materialized.  Every supported
+  /// AMR field route is full-material on the exact shared hierarchy, exposed patch by patch over all
+  /// levels.  Regrid invalidates the solver and therefore makes this report absent again until the
+  /// new topology is materialized.
+  std::optional<std::vector<PatchBox>> field_topology_patches(
+      const std::string& provider_slot) const {
+    const auto found = named_fields_.find(provider_slot);
+    if (found == named_fields_.end())
+      throw std::runtime_error("AmrRuntime: unknown qualified field provider slot '" +
+                               provider_slot + "'");
+    const NamedField& field = found->second;
+    if (!field.mg && field.level_mg.empty() && !field.fac)
+      return std::nullopt;
+    std::vector<PatchBox> result;
+    for (int level = 0; level < hierarchy_.nlev(); ++level)
+      for (const Box2D& box : hierarchy_.ba[static_cast<std::size_t>(level)].boxes())
+        result.push_back(
+            PatchBox{level, box.lo[0], box.lo[1], box.hi[0], box.hi[1]});
     return result;
   }
 
@@ -2276,10 +2355,12 @@ class AmrRuntime {
     mg_.rhs().set_val(Real(0));
     for (auto& b : blocks_)
       b.add_elliptic_rhs((*b.levels)[0].U, mg_.rhs());
+    require_field_nullspace_compatible(mg_.rhs(), default_field_nullspace_);
     mg_.solve();
     const SolveReport report = mg_.last_solve_report();
     if (!report.solved())
       return report;
+    apply_field_gauge(mg_.phi(), default_field_nullspace_);
 
     // 3. coarse aux = (phi, grad phi) via the SAME clean path as AmrSystemCoupler: fill the ghosts of
     // phi according to bcPhi_, field_postprocess (phi + grad), fill the ghosts of aux according to
@@ -2481,65 +2562,75 @@ class AmrRuntime {
  public:
 
   struct TagVmValue {
-    bool matches = false;
-    bool equality = false;
+    amr::TagTruth truth = amr::TagTruth::False;
+
+    [[nodiscard]] bool matches() const noexcept {
+      return truth == amr::TagTruth::True;
+    }
+    [[nodiscard]] bool equality() const noexcept {
+      return truth == amr::TagTruth::Unknown;
+    }
   };
 
   TagVmValue evaluate_tagging_program(const TaggingProgram& program,
                                       const std::vector<ConstArray4>& values,
-                                      const std::vector<int>& ops,
-                                      const std::vector<int>& args,
+                                      const std::vector<std::int32_t>& ops,
+                                      const std::vector<std::int32_t>& args,
                                       const Box2D& domain, Real dx, Real dy,
                                       int i, int j) const {
-    std::array<TagVmValue, 128> stack{};
+    (void)domain;
+    if (program.non_finite_policy != POPS_TAGGING_NON_FINITE_REJECT_V1)
+      throw std::runtime_error(
+          "AMR Tagger program lost its fail-closed non-finite policy");
+    std::array<TagVmValue, POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1> stack{};
     std::size_t depth = 0;
     for (std::size_t index = 0; index < ops.size(); ++index) {
       const int op = ops[index], arg = args[index];
-      if (op >= 1 && op <= 5) {
+      if (pops_tagging_opcode_is_leaf_v1(op)) {
         const auto& leaf = program.leaves[static_cast<std::size_t>(arg)];
-        const ConstArray4& a = values[leaf.block];
-        Real sample = a(i, j, leaf.component);
-        if (op == 3) {
+        const ConstArray4& a = values[leaf.state_index];
+        Real sample = a(i, j, static_cast<int>(leaf.component));
+        if (op == POPS_TAGGING_MAGNITUDE_ABOVE_V1) {
           sample = std::abs(sample);
-        } else if (op == 4 || op == 5) {
-          const Real gx = (!base_per_.x && i == domain.lo[0])
-                              ? (a(i + 1, j, leaf.component) - sample) / dx
-                              : (!base_per_.x && i == domain.hi[0])
-                                    ? (sample - a(i - 1, j, leaf.component)) / dx
-                                    : (a(i + 1, j, leaf.component) -
-                                       a(i - 1, j, leaf.component)) /
-                                          (Real(2) * dx);
-          const Real gy = (!base_per_.y && j == domain.lo[1])
-                              ? (a(i, j + 1, leaf.component) - sample) / dy
-                              : (!base_per_.y && j == domain.hi[1])
-                                    ? (sample - a(i, j - 1, leaf.component)) / dy
-                                    : (a(i, j + 1, leaf.component) -
-                                       a(i, j - 1, leaf.component)) /
-                                          (Real(2) * dy);
-          sample = std::sqrt(gx * gx + gy * gy);
+        } else if (op == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
+                   op == POPS_TAGGING_GRADIENT_BELOW_V1) {
+          const auto& stencil = program.stencils[leaf.stencil_index];
+          Real squared_norm = Real(0);
+          for (const auto& axis : stencil.axes) {
+            Real derivative = Real(0);
+            for (std::size_t term = 0; term < axis.offsets.size(); ++term) {
+              const int x = axis.axis == 0 ? i + axis.offsets[term] : i;
+              const int y = axis.axis == 1 ? j + axis.offsets[term] : j;
+              derivative += static_cast<Real>(axis.coefficients[term]) *
+                            a(x, y, static_cast<int>(leaf.component));
+            }
+            derivative /= axis.axis == 0 ? dx : dy;
+            squared_norm += derivative * derivative;
+          }
+          sample = std::sqrt(squared_norm);
         }
-        const bool greater = op == 1 || op == 3 || op == 4;
-        stack[depth++] = TagVmValue{
-            greater ? sample > leaf.threshold : sample < leaf.threshold,
-            sample == leaf.threshold};
+        const bool greater = op == POPS_TAGGING_ABOVE_V1 ||
+                             op == POPS_TAGGING_MAGNITUDE_ABOVE_V1 ||
+                             op == POPS_TAGGING_GRADIENT_ABOVE_V1;
+        stack[depth++] = TagVmValue{amr::tag_comparison(
+            static_cast<double>(sample), static_cast<double>(leaf.threshold), greater)};
         continue;
       }
-      if (op == 18) {
-        TagVmValue value = stack[depth - 1];
-        stack[depth - 1] = TagVmValue{!value.matches, value.equality};
+      if (op == POPS_TAGGING_NOT_V1) {
+        stack[depth - 1].truth = amr::tag_not(stack[depth - 1].truth);
         continue;
       }
       const std::size_t begin = depth - static_cast<std::size_t>(arg);
-      TagVmValue combined{op == 17, false};
-      for (std::size_t child = begin; child < depth; ++child) {
-        combined.equality = combined.equality || stack[child].equality;
-        if (op == 16)
-          combined.matches = combined.matches || stack[child].matches;
-        else
-          combined.matches = combined.matches && stack[child].matches;
-      }
+      std::array<amr::TagTruth, POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1> children{};
+      for (std::size_t child = begin; child < depth; ++child)
+        children[child - begin] = stack[child].truth;
       depth = begin;
-      stack[depth++] = combined;
+      if (op == POPS_TAGGING_ANY_OF_V1)
+        stack[depth++] = TagVmValue{
+            amr::tag_any(children.begin(), children.begin() + arg)};
+      else
+        stack[depth++] = TagVmValue{
+            amr::tag_all(children.begin(), children.begin() + arg)};
     }
     return stack[0];
   }
@@ -2549,17 +2640,70 @@ class AmrRuntime {
     TagBox equalities;
   };
 
+  void prepare_tagging_states(int level, const Box2D& domain) {
+    if (level < 0 || level >= nlev_ || tagging_program_.clock_identity.empty())
+      throw std::runtime_error(
+          "AMR Tagger cannot qualify its ghost-production evaluation point");
+    std::vector<bool> gradient_state(blocks_.size(), false);
+    for (const auto& leaf : tagging_program_.leaves)
+      if (leaf.opcode == POPS_TAGGING_GRADIENT_ABOVE_V1 ||
+          leaf.opcode == POPS_TAGGING_GRADIENT_BELOW_V1)
+        gradient_state[leaf.state_index] = true;
+    if (std::none_of(gradient_state.begin(), gradient_state.end(),
+                     [](bool value) { return value; }))
+      return;
+
+    runtime::multiblock::BoundaryEvaluationPoint point{
+        tagging_program_.clock_identity, component_tick_, level, 0, 0,
+        ::pops::amr::Rational(0, 1), 0.0, component_physical_time_};
+    if (boundary_stage_states_)
+      throw std::runtime_error(
+          "AMR Tagger ghost production overlaps another boundary evaluation");
+    std::map<std::string, MultiFab*> staged;
+    for (std::size_t block = 0; block < blocks_.size(); ++block) {
+      if (blocks_[block].state_identity.empty() ||
+          !staged.emplace(
+              blocks_[block].state_identity,
+              &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U).second)
+        throw std::runtime_error(
+            "AMR Tagger requires unique qualified state storage routes");
+    }
+    boundary_stage_states_.emplace(BoundaryStageStateView{point, std::move(staged)});
+    struct StageStateReset {
+      std::optional<BoundaryStageStateView>* slot;
+      ~StageStateReset() { slot->reset(); }
+    } reset{&boundary_stage_states_};
+
+    const Geometry geometry = geom_.refine(level_refinement(level));
+    for (std::size_t block_index = 0; block_index < blocks_.size(); ++block_index) {
+      if (!gradient_state[block_index])
+        continue;
+      auto& block = blocks_[block_index];
+      MultiFab& state = (*block.levels)[static_cast<std::size_t>(level)].U;
+      fill_level_state_cf_ghosts(block_index, level, state);
+      if (!block.boundary_plan) {
+        fill_ghosts(state, domain, transport_bc());
+        continue;
+      }
+      if (block.boundary_field_registry && *block.boundary_field_registry) {
+        auto fields = (*block.boundary_field_registry)(point, state, nullptr, nullptr);
+        block.boundary_plan->fill_same_level_and_physical(
+            state, fields, geometry, point);
+      } else {
+        block.boundary_plan->fill_same_level_and_physical(
+            state, &aux_[static_cast<std::size_t>(level)], geometry, point);
+      }
+    }
+  }
+
   TagVmGrid execute_tagging_root(int level, const Box2D& domain,
-                                 const std::vector<int>& ops,
-                                 const std::vector<int>& args) {
+                                 const std::vector<std::int32_t>& ops,
+                                 const std::vector<std::int32_t>& args) {
     TagVmGrid out{TagBox(domain), TagBox(domain)};
     if (ops.empty())
       return out;
-    for (auto& block : blocks_) {
-      MultiFab& state = (*block.levels)[level].U;
-      fill_boundary(state, domain, base_per_);
-      state.sync_host();
-    }
+    for (auto& block : blocks_)
+      (*block.levels)[level].U.sync_host();
     MultiFab& reference = (*blocks_[0].levels)[level].U;
     const Geometry geometry = geom_.refine(level_refinement(level));
     for (int li = 0; li < reference.local_size(); ++li) {
@@ -2573,13 +2717,13 @@ class AmrRuntime {
           const TagVmValue value = evaluate_tagging_program(
               tagging_program_, arrays, ops, args, domain,
               geometry.dx(), geometry.dy(), i, j);
-          out.matches(i, j) = value.matches ? 1 : 0;
-          out.equalities(i, j) = value.equality ? 1 : 0;
+          out.matches(i, j) = value.matches() ? 1 : 0;
+          out.equalities(i, j) = value.equality() ? 1 : 0;
         }
     }
     if (n_ranks() > 1) {
-      all_reduce_or_inplace(out.matches.t.data(), static_cast<int>(out.matches.t.size()));
-      all_reduce_or_inplace(out.equalities.t.data(), static_cast<int>(out.equalities.t.size()));
+      all_reduce_or_inplace(out.matches.t.data(), out.matches.t.size());
+      all_reduce_or_inplace(out.equalities.t.data(), out.equalities.t.size());
     }
     return out;
   }
@@ -2596,45 +2740,52 @@ class AmrRuntime {
     return current;
   }
 
+  TagBox apply_tagging_decisions(const TagBox& refine, const TagBox& coarsen,
+                                 const TagBox& refine_equalities,
+                                 const TagBox& coarsen_equalities,
+                                 TagBox result) const {
+    if (refine.box != result.box || coarsen.box != result.box ||
+        refine_equalities.box != result.box || coarsen_equalities.box != result.box)
+      throw std::runtime_error("AMR Tagger candidate grids disagree on their parent domain");
+    for (int j = result.box.lo[1]; j <= result.box.hi[1]; ++j)
+      for (int i = result.box.lo[0]; i <= result.box.hi[0]; ++i) {
+        const auto root = [](bool matches, bool equality) {
+          return equality ? amr::TagTruth::Unknown
+                          : (matches ? amr::TagTruth::True : amr::TagTruth::False);
+        };
+        const auto decision = amr::resolve_tag_decision(
+            root(refine(i, j) != 0, refine_equalities(i, j) != 0),
+            root(coarsen(i, j) != 0, coarsen_equalities(i, j) != 0),
+            static_cast<amr::TagEqualityPolicy>(tagging_program_.equality_policy),
+            static_cast<amr::TagConflictPolicy>(tagging_program_.conflict_policy));
+        if (decision.conflict_error)
+          throw std::runtime_error(
+              "AMR tagging refine/coarsen conflict under ConflictPolicy.ERROR");
+        if (decision.refine)
+          result(i, j) = 1;
+        else if (decision.coarsen)
+          result(i, j) = 0;
+      }
+    return result;
+  }
+
   TagBox execute_runtime_tagging_program(int parent_level, int fine_level,
                                         const Box2D& parent_domain,
                                         int refinement_ratio) {
+    prepare_tagging_states(parent_level, parent_domain);
     TagVmGrid refine = execute_tagging_root(
         parent_level, parent_domain, tagging_program_.refine_ops,
         tagging_program_.refine_args);
     TagVmGrid coarsen = execute_tagging_root(
         parent_level, parent_domain, tagging_program_.coarsen_ops,
         tagging_program_.coarsen_args);
-    TagBox result = current_fine_coverage(parent_domain, fine_level, refinement_ratio);
-    for (int j = parent_domain.lo[1]; j <= parent_domain.hi[1]; ++j)
-      for (int i = parent_domain.lo[0]; i <= parent_domain.hi[0]; ++i) {
-        bool refine_cell = refine.matches(i, j) != 0;
-        bool coarsen_cell = coarsen.matches(i, j) != 0;
-        if (refine_cell && coarsen_cell) {
-          if (tagging_program_.conflict_policy == 0)
-            throw std::runtime_error(
-                "AMR tagging refine/coarsen conflict under ConflictPolicy.ERROR");
-          if (tagging_program_.conflict_policy == 1)
-            refine_cell = coarsen_cell = false;
-          else if (tagging_program_.conflict_policy == 2)
-            coarsen_cell = false;
-          else
-            refine_cell = false;
-        }
-        if (!refine_cell && !coarsen_cell &&
-            (refine.equalities(i, j) != 0 || coarsen.equalities(i, j) != 0)) {
-          refine_cell = tagging_program_.equality_policy == 1;
-          coarsen_cell = tagging_program_.equality_policy == 2;
-        }
-        if (refine_cell)
-          result(i, j) = 1;
-        else if (coarsen_cell)
-          result(i, j) = 0;
-      }
-    return result;
+    return apply_tagging_decisions(
+        refine.matches, coarsen.matches, refine.equalities, coarsen.equalities,
+        current_fine_coverage(parent_domain, fine_level, refinement_ratio));
   }
 
   TagBox execute_bootstrap_tagging_program(int level, const Box2D& domain) {
+    prepare_tagging_states(level, domain);
     TagVmGrid refine = execute_tagging_root(
         level, domain, tagging_program_.refine_ops, tagging_program_.refine_args);
     if (tagging_program_.equality_policy == 1)
@@ -2670,8 +2821,46 @@ class AmrRuntime {
             tags(i, j) = 1;
     }
     if (n_ranks() > 1)
-      all_reduce_or_inplace(tags.t.data(), static_cast<int>(tags.t.size()));
+      all_reduce_or_inplace(tags.t.data(), tags.t.size());
     return tags;
+  }
+
+  runtime::amr::PreparedTaggerCandidates execute_external_tagger(
+      int parent_level, const Box2D& domain) {
+    if (!external_tagger_ || !tagging_program_.prepared || blocks_.empty())
+      throw std::runtime_error("AmrRuntime external Tagger provider is not installed");
+    prepare_tagging_states(parent_level, domain);
+    std::vector<runtime::amr::PreparedTaggingField> fields;
+    fields.reserve(blocks_.size());
+    for (auto& block : blocks_) {
+      MultiFab& state = (*block.levels)[parent_level].U;
+      fields.push_back(runtime::amr::PreparedTaggingField{block.state_identity, &state});
+    }
+    const Geometry geometry = geom_.refine(level_refinement(parent_level));
+    return external_tagger_->tag(
+        fields, tagging_program_, domain, parent_level, component_tick_,
+        component_physical_time_, static_cast<double>(geometry.dx()),
+        static_cast<double>(geometry.dy()), base_per_.x, base_per_.y,
+        parent_level == 0 && replicated_coarse_);
+  }
+
+  TagBox execute_external_bootstrap_tagging(int level, const Box2D& domain) {
+    auto candidates = execute_external_tagger(level, domain);
+    if (tagging_program_.equality_policy == 1)
+      for (std::size_t index = 0; index < candidates.refine.t.size(); ++index)
+        candidates.refine.t[index] =
+            candidates.refine.t[index] || candidates.refine_equalities.t[index];
+    return std::move(candidates.refine);
+  }
+
+  TagBox execute_external_regrid_tagging(int parent_level, int fine_level,
+                                         const Box2D& domain,
+                                         int refinement_ratio) {
+    auto candidates = execute_external_tagger(parent_level, domain);
+    return apply_tagging_decisions(
+        candidates.refine, candidates.coarsen,
+        candidates.refine_equalities, candidates.coarsen_equalities,
+        current_fine_coverage(domain, fine_level, refinement_ratio));
   }
 
   /// Append one fine level from tags on the current finest parent. Unlike regrid(), this grows the
@@ -2693,7 +2882,9 @@ class AmrRuntime {
     const Box2D pdom = dom_.refine(level_refinement(pk));
     std::vector<TagBox> parts;
     parts.reserve(blocks_.size() + 1);
-    if (tagging_program_.prepared) {
+    if (external_tagger_) {
+      parts.push_back(execute_external_bootstrap_tagging(pk, pdom));
+    } else if (tagging_program_.prepared) {
       parts.push_back(execute_bootstrap_tagging_program(pk, pdom));
     } else {
       for (std::size_t b = 0; b < blocks_.size(); ++b)
@@ -2706,9 +2897,9 @@ class AmrRuntime {
           "AmrRuntime::bootstrap_next_level : no resolved tagging predicate");
     TagBox grown = grow_tags(tag_union(parts), regrid_grow_, pdom);
     const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
-    auto [fb, dmap] = regrid_compute_fine_layout(
-        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
-        refinement_ratio, parents);
+    auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
+        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_,
+        *clustering_provider_, refinement_ratio, parents);
     if (fb.size() == 0)
       throw std::runtime_error(
           "AmrRuntime::bootstrap_next_level : resolved tagging produced no fine cells");
@@ -2831,7 +3022,9 @@ class AmrRuntime {
     parts.reserve(blocks_.size() + 1);
     const int refinement_ratio =
         hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
-    if (tagging_program_.prepared) {
+    if (external_tagger_) {
+      parts.push_back(execute_external_regrid_tagging(pk, fk, pdom, refinement_ratio));
+    } else if (tagging_program_.prepared) {
       parts.push_back(execute_runtime_tagging_program(pk, fk, pdom, refinement_ratio));
     } else {
       for (std::size_t b = 0; b < blocks_.size(); ++b) {
@@ -2863,9 +3056,9 @@ class AmrRuntime {
     // fine layout. all_reduce_or_inplace is called INSIDE regrid_compute_fine_layout for every
     // distributed parent: all ranks start from the SAME tag grid -> IDENTICAL fb/dmap per rank.
     const BoxArray* parents = pk > 0 ? &hierarchy_.ba[pk] : nullptr;
-    auto [fb, dmap] = regrid_compute_fine_layout(
-        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_, cluster_,
-        refinement_ratio, parents);  // ADC-616 params + resolved proper nesting
+    auto [fb, dmap] = regrid_compute_fine_layout_with_provider(
+        std::move(grown), pdom, pk, regrid_margin_, replicated_coarse_,
+        *clustering_provider_, refinement_ratio, parents);
 #ifdef POPS_HAS_MPI
     // MPI COLLECTIVE COUNT (Spec 5 criterion 43): regrid_compute_fine_layout issues ONE
     // all_reduce_or_inplace over the tag grid when the coarse is distributed (multi-rank) -- every rank
@@ -3044,15 +3237,11 @@ class AmrRuntime {
   /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
-    // NOTE (ADC-318): this pre-solve plus step(dt)'s own head solve below is a DOUBLE Poisson solve on
-    // the SAME unchanged state (regrid_every=0 freezes the grid in between). It looks redundant but is
-    // NOT, and is INTENTIONALLY kept. GeometricMG::solve() is warm-started and iterates to a RELATIVE
-    // tolerance (rel_tol 1e-8; abs_tol 0 by default, so its off-step early-exit never fires here), so the
-    // second solve does not recompute identical phi: starting from the first solve's iterate it
-    // over-converges it by ~rel_tol. Skipping the second solve would therefore NOT be bit-identical; it
-    // drifts the trajectory by ~3e-10 over 20 steps (below the solver tolerance and far below the O(dt^2)
-    // scheme error, but nonzero). The de-dup was declined to preserve the exact historical bit-stream
-    // (SystemStepper::step_cfl avoids the double solve by INLINING its advance, not by skipping a solve).
+    // This pre-solve provides the field required by max_speed. step(dt) keeps its own transaction-level
+    // field solve, but the unchanged warm start now exits at zero V-cycles because GeometricMG measures
+    // convergence against ||rhs|| rather than demanding another rel_tol factor from its incoming
+    // residual. The two public operations therefore retain independent failure/reporting boundaries
+    // without numerical over-solving.
     require_solved_field_report(solve_fields(), "AmrRuntime::cfl_dt");
     Real dt = std::numeric_limits<Real>::infinity();
     last_dt_reason_ = "degenerate";
@@ -3657,8 +3846,10 @@ class AmrRuntime {
       nf.fac = std::make_shared<CompositeFacPoisson>(geom_, hierarchy_.ba[0], boundary, fine_boxes);
       CompositeFacOptions fac_options;
       fac_options.max_iters = nf.plan.mg_opts.max_cycles;
-      fac_options.tol = std::max(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.abs_tol);
+      fac_options.rel_tol = nf.plan.mg_opts.rel_tol;
+      fac_options.abs_tol = nf.plan.mg_opts.abs_tol;
       fac_options.coarse_rel_tol = nf.plan.mg_opts.rel_tol;
+      fac_options.coarse_abs_tol = nf.plan.mg_opts.abs_tol;
       fac_options.coarse_cycles = nf.plan.mg_opts.max_cycles;
       nf.fac->set_options(fac_options);
       if (nf.plan.has_boundary_kernel)
@@ -3859,6 +4050,7 @@ class AmrRuntime {
   std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
   GeometricMG mg_;
   std::function<bool(Real, Real)> wall_active_;
+  FieldNullspacePlan default_field_nullspace_;
   std::vector<AmrRuntimeBlock> blocks_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
@@ -3934,6 +4126,12 @@ class AmrRuntime {
   int regrid_grow_ = 2;
   int regrid_margin_ = 2;
   ClusterParams cluster_{};  ///< ADC-616: Berger-Rigoutsos params; default {0.7,1,32} (bit-identical).
+  std::shared_ptr<runtime::amr::PreparedTaggerComponent> external_tagger_;
+  std::shared_ptr<runtime::amr::PreparedClusteringComponent> external_clustering_;
+  std::shared_ptr<const amr::ClusteringProvider> clustering_provider_ =
+      std::make_shared<const amr::BergerRigoutsosProvider>(ClusterParams{});
+  std::int64_t component_tick_ = 0;
+  double component_physical_time_ = 0.0;
   int aux_ncomp_ = kAuxBaseComps;
   int nlev_ = 0;
   int macro_step_ = 0;

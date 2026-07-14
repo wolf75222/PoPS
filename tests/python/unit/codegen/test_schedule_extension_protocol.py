@@ -2,6 +2,8 @@
 """Strict native schedule extension protocol and built-in parity."""
 
 from __future__ import annotations
+from pops.codegen.program_codegen import _check_schedules_lowerable
+from pops.codegen.program_codegen import emit_cpp_program
 
 import sys
 from dataclasses import dataclass
@@ -20,7 +22,7 @@ try:
     from pops.output._consumer_contracts import ConsumerMoment
     from pops.runtime._consumer_planning import _is_due, _schedule_coordinate
     from pops.time.points import TimePoint
-    from pops.time.schedule import (
+    from pops.time import (
         ScheduleAction,
         ScheduleDueIR,
         ScheduleDueKind,
@@ -38,6 +40,8 @@ class AcceptedChannel(adctime.AcceptedStep):
 
     channel: str = "primary"
     manifest_tag = "test.accepted_channel"
+    component_uri = "test://pops/time/schedule/domains/accepted-channel"
+    component_version = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +51,8 @@ class ConfigurableEvery(adctime.Trigger):
     period: int
     label: str = "external"
     manifest_tag = "test.configurable_every"
+    component_uri = "test://pops/time/schedule/triggers/configurable-every"
+    component_version = 1
 
     def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
         del where
@@ -68,11 +74,15 @@ class ThirdPartyHold(adctime.OffPolicy):
         )
 
     manifest_tag = "test.third_party_hold"
+    component_uri = "test://pops/time/schedule/off-policies/hold"
+    component_version = 1
 
 
 @dataclass(frozen=True, slots=True)
 class ThirdPartySchedule(adctime.Schedule):
     audit_label: str = "external-schedule"
+    component_uri = "test://pops/time/schedule"
+    component_version = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +90,8 @@ class ThirdPartyPredicate(adctime.Trigger):
     condition: object
     predicate_name: str = "external-predicate"
     manifest_tag = "test.third_party_predicate"
+    component_uri = "test://pops/time/schedule/triggers/predicate"
+    component_version = 1
 
     def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
         del where
@@ -90,7 +102,7 @@ class ThirdPartyPredicate(adctime.Trigger):
         if moment.at_start:
             return False
         if type(self.condition) is not bool:
-            from pops.time.schedule_protocol import UnresolvedScheduleCondition
+            from pops.time import UnresolvedScheduleCondition
 
             raise UnresolvedScheduleCondition(self.condition)
         return self.condition
@@ -99,6 +111,19 @@ class ThirdPartyPredicate(adctime.Trigger):
 @dataclass(frozen=True, slots=True)
 class MissingNativeProtocol(adctime.Trigger):
     manifest_tag = "test.missing_native_protocol"
+
+
+@dataclass(frozen=True, slots=True)
+class MissingSemanticIdentity(adctime.Trigger):
+    period: int = 2
+    manifest_tag = "test.missing_semantic_identity"
+
+    def native_schedule_due(self, *, where: str) -> ScheduleDueIR:
+        del where
+        return ScheduleDueIR(ScheduleDueKind.CACHE_PERIOD, period=self.period)
+
+    def consumer_due(self, coordinate, moment):
+        return not moment.at_start and coordinate % self.period == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,8 +201,8 @@ def test_third_party_schedule_lowers_without_codegen_registration():
     assert schedule.needs_cache()
 
     compiled = _scratch_program(make_schedule)
-    compiled._check_schedules_lowerable()
-    cpp = compiled.emit_cpp_program(model=None)
+    _check_schedules_lowerable(compiled)
+    cpp = emit_cpp_program(compiled, model=None)
     assert "ctx.schedule_is_due(" in cpp and ", 3," in cpp
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
@@ -219,9 +244,24 @@ def test_configurable_schedule_round_trip_preserves_exact_extension_identity():
     encoded = next(
         node["attrs"]["schedule"] for node in after["nodes"] if "schedule" in node["attrs"]
     )
-    assert encoded["type"]["qualname"] == "ThirdPartySchedule"
+    assert encoded["type"] == {
+        "uri": "test://pops/time/schedule", "version": 1,
+    }
     assert encoded["domain"]["payload"] == {"channel": "checkpoint"}
     assert encoded["trigger"]["payload"] == {"period": 5, "label": "configured"}
+
+
+def test_extension_must_own_a_versioned_semantic_identity():
+    def make_schedule(clock):
+        return adctime.Schedule(
+            MissingSemanticIdentity(adctime.AcceptedStep(clock)), off=adctime.Skip())
+
+    authored = _scratch_program(make_schedule)
+    _expect_error(
+        TypeError,
+        "component_uri and component_version",
+        lambda: authored._serialize(include_provenance=False),
+    )
 
 
 def test_third_party_predicate_survives_call_validation_and_rebuild():
@@ -241,7 +281,7 @@ def test_third_party_predicate_survives_call_validation_and_rebuild():
         endpoint,
         program.value("U1", state + program.dt * rate, at=endpoint.point),
     )
-    program._check_schedules_lowerable()
+    _check_schedules_lowerable(program)
     before = program._serialize(include_provenance=False)
     rebuilt = program._rebuild(lambda value: True)
     after = rebuilt._serialize(include_provenance=False)

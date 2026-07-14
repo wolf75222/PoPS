@@ -136,9 +136,11 @@ inline py::dict numerical_defaults_report_to_dict() {
   py::dict fac;
   fac["max_iters"] = kFACDefaultMaxIters;
   fac["fine_sweeps"] = kFACDefaultFineSweeps;
-  fac["tol"] = static_cast<double>(kFACDefaultTol);
-  fac["initial_coarse_rel_tol"] = static_cast<double>(kFACInitialCoarseRelTol);
-  fac["initial_coarse_max_cycles"] = kFACInitialCoarseMaxCycles;
+  fac["rel_tol"] = static_cast<double>(kFACDefaultRelTol);
+  fac["abs_tol"] = static_cast<double>(kFACDefaultAbsTol);
+  fac["coarse_rel_tol"] = static_cast<double>(kFACInitialCoarseRelTol);
+  fac["coarse_abs_tol"] = static_cast<double>(kFACInitialCoarseAbsTol);
+  fac["coarse_cycles"] = kFACInitialCoarseMaxCycles;
 
   py::dict fft;
   fft["spectral_default"] = kFFTDefaultSpectral;
@@ -229,8 +231,10 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kMGDefaultCoarseThreshold", "public_knob");
   klass("kFACDefaultMaxIters", "public_knob");
   klass("kFACDefaultFineSweeps", "public_knob");
-  klass("kFACDefaultTol", "public_knob");
+  klass("kFACDefaultRelTol", "public_knob");
+  klass("kFACDefaultAbsTol", "public_knob");
   klass("kFACInitialCoarseRelTol", "public_knob");
+  klass("kFACInitialCoarseAbsTol", "public_knob");
   klass("kFACInitialCoarseMaxCycles", "public_knob");
   klass("kFFTDefaultSpectral", "public_knob");
   klass("kFFTZeroMeanGauge", "internal_default");

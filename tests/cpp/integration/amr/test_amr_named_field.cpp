@@ -199,6 +199,9 @@ TEST(test_amr_named_field, Runs) {
   // declared. The closure mirrors make_poisson_rhs of a charge brick: rhs += q * U[0].
   AmrFieldSolveConfig psi_plan;
   psi_plan.provider_identity = "test:plasma/psi";
+  psi_plan.topology_provider_kind = "structured";
+  psi_plan.topology_provenance = "test:periodic-cartesian";
+  psi_plan.topology_digest = "test:periodic-cartesian:v1";
   psi_plan.output_owner_identity = "test:plasma";
   psi_plan.output_block = "plasma";
   psi_plan.output_key = "psi";
@@ -239,6 +242,9 @@ TEST(test_amr_named_field, Runs) {
   // A genuinely different, correctly scaled second field (not an alias of the default phi).
   AmrFieldSolveConfig chi_plan;
   chi_plan.provider_identity = "test:plasma/chi";
+  chi_plan.topology_provider_kind = "structured";
+  chi_plan.topology_provenance = "test:periodic-cartesian";
+  chi_plan.topology_digest = "test:periodic-cartesian:v1";
   chi_plan.output_owner_identity = "test:plasma";
   chi_plan.output_block = "plasma";
   chi_plan.output_key = "chi";
@@ -297,9 +303,17 @@ TEST(test_amr_named_field, Runs) {
   runtime::program::AmrProgramContext context(&rt, nullptr);
   context.reset_step();
   context.set_level(0);
-  const SolveReport context_failed = context.solve_fields();
-  EXPECT_EQ(context_failed.status, SolveStatus::kIterationLimit);
-  EXPECT_EQ(context_failed.action, SolveAction::kRejectAttempt);
+  std::string context_diagnostic;
+  try {
+    (void)context.solve_fields();
+    FAIL() << "periodic default RHS with non-zero mean was accepted or silently projected";
+  } catch (const std::runtime_error& error) {
+    context_diagnostic = error.what();
+  }
+  EXPECT_NE(context_diagnostic.find("incompatible with nullspace"), std::string::npos)
+      << context_diagnostic;
+  EXPECT_NE(context_diagnostic.find("silent projection is forbidden"), std::string::npos)
+      << context_diagnostic;
   EXPECT_EQ(max_abs_diff(rt.phi(), context_phi_before), Real(0));
   for (int level = 0; level < rt.nlev(); ++level)
     EXPECT_EQ(max_abs_diff(rt.aux(level),
@@ -326,6 +340,9 @@ TEST(test_amr_named_field, Runs) {
 
   AmrFieldSolveConfig fail_plan;
   fail_plan.provider_identity = "test:plasma/zeta";
+  fail_plan.topology_provider_kind = "structured";
+  fail_plan.topology_provenance = "test:periodic-cartesian";
+  fail_plan.topology_digest = "test:periodic-cartesian:v1";
   fail_plan.output_owner_identity = "test:plasma";
   fail_plan.output_block = "plasma";
   fail_plan.output_key = "zeta";

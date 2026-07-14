@@ -19,6 +19,7 @@ kernel reads the CURRENT value via ``ctx.program_params(block).get(index)``.
     predicted (the source contribution scales LINEARLY in k). Runs in CI (gate-python rebuilds _pops);
     skips if numpy/_pops/compiler/Kokkos is absent or the .so compile fails -- never faking the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -118,7 +119,7 @@ def _decay_program(model, name="decay_runtime"):
 print("== (A) compiled-Program runtime-param codegen + routing (pure Python) ==")
 runtime_model = _runtime_decay_model(2.0)
 P = _decay_program(runtime_model)
-src_rt = P.emit_cpp_program(model=compiler_model(runtime_model))
+src_rt = emit_cpp_program(P, model=compiler_model(runtime_model))
 chk("ctx.program_params(0)" in src_rt, "runtime source binds ctx.program_params(0)")
 chk("params.get(0)" in src_rt, "runtime source reads params.get(0) (not inlined)")
 chk("pops_program_param_count() { return 1; }" in src_rt, "metadata exports 1 runtime param")
@@ -126,7 +127,7 @@ chk('"k"' in src_rt and "pops_program_param_name" in src_rt, "metadata exports t
 chk("a later phase" not in src_rt, "the old 'a later phase' reject text is gone")
 
 const_model = _const_decay_model(2.0)
-src_const = _decay_program(const_model).emit_cpp_program(
+src_const = emit_cpp_program(_decay_program(const_model),
     model=compiler_model(const_model))
 chk("params.get(" not in src_const, "const param stays INLINE (no params.get read)")
 chk("ctx.program_params(" not in src_const, "const param -> no per-block RuntimeParams binding")

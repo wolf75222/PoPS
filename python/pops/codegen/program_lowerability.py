@@ -177,7 +177,7 @@ def _check_amr_flux_weights(program: Any) -> None:
 def check_schedules_lowerable(program: Any, *, target: str | None = None) -> None:
     """Reject schedule policies without a semantically valid native lowering."""
     from pops.codegen.program_emit_schedule import _lower_schedule_ir
-    from pops.time.schedule import Schedule
+    from pops.time._schedule.api import Schedule
     scheduled = {
         value.id: value for value in all_ops(program)
         if value.attrs.get("schedule") is not None
@@ -231,7 +231,7 @@ def check_schedules_lowerable(program: Any, *, target: str | None = None) -> Non
         schedule.validate_site(clock=value.clock, point=value.point,
                                where="schedule on node %r" % value.name)
         lowering = _lower_schedule_ir(value, schedule)
-        from pops.time.schedule import ScheduleTimeline
+        from pops.time._schedule.api import ScheduleTimeline
         if target == "system" and lowering.domain.timeline is ScheduleTimeline.AMR_LEVEL:
             raise NotImplementedError(
                 "AMRLevel schedule on node %r requires target='amr_system'" % value.name)

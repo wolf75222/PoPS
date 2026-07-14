@@ -194,13 +194,18 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     library_manifests = []
     external_brick_records = []
 
-    if time is None or not hasattr(time, "emit_cpp_program"):
-        raise ValueError("compile_problem: time must be an pops.time.Program (got %r)" % (time,))
+    from pops.time._program.contract import require_program
+    try:
+        require_program(time, exact=True, where="compile_problem: time")
+    except (TypeError, RuntimeError):
+        raise ValueError(
+            "compile_problem: time must be an pops.time.Program (got %r)" % (time,)
+        ) from None
     from pops.codegen.program_models import prepare_program_authority
     model, source_module, lowering_coverage, compile_authority = (
         prepare_program_authority(model, model_graph)
     )
-    from pops.time.program_detach import detach_compiled_program
+    from pops.time._program.detach import detach_compiled_program
     time = detach_compiled_program(time)
     program_graph = time.to_graph()
     from pops.codegen.program_graph_lowering import emit_program_graph

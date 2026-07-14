@@ -11,7 +11,7 @@ import numpy as np
 import pops
 from pops.codegen import Production
 from pops.identity.semantic import program_semantic_data, semantic_identity_of
-from pops.time.graph import ValueRef
+from pops.time import ValueRef
 
 
 ROOT = Path(__file__).resolve().parents[5]

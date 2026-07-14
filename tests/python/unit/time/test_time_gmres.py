@@ -26,6 +26,7 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -131,20 +132,20 @@ def _helmholtz(P, x):
 
 # ---- (A) codegen + validation: pure Python, always runs ----
 def test_gmres_codegen(t):
-    src = _spd_program(t, method="gmres").emit_cpp_program()
+    src = emit_cpp_program(_spd_program(t, method="gmres"))
     for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
                  "pops::ApplyFn{}"):  # identity (empty) preconditioner
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
 def test_gmres_restart_default_in_codegen(t):
-    src = _spd_program(t, restart=30).emit_cpp_program()
+    src = emit_cpp_program(_spd_program(t, restart=30))
     assert ", 30," in src and "ctx.solve_linear_matfree" in src, \
         "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
-    src = _spd_program(t, restart=12).emit_cpp_program()
+    src = emit_cpp_program(_spd_program(t, restart=12))
     assert ", 12," in src and "ctx.solve_linear_matfree" in src, \
         "an overridden restart must lower\n%s" % src
 

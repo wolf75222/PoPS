@@ -17,6 +17,7 @@ from pops._ir.literals import (
     scalar_data,
     scalar_literal,
 )
+from pops.time.value_support import _ProgramValueBase
 
 
 class CoefficientLiteralError(TypeError):
@@ -66,8 +67,7 @@ def validate_program_value_identity(
     if isinstance(region, bool) or not isinstance(region, int) or region < 0:
         raise ValueError("ProgramValue region must be a non-negative integer")
     frozen_inputs = tuple(inputs)
-    from pops.time.values import ProgramValue
-    if any(not isinstance(value, ProgramValue) for value in frozen_inputs):
+    if any(not isinstance(value, _ProgramValueBase) for value in frozen_inputs):
         raise TypeError("ProgramValue inputs must contain only ProgramValue nodes")
     return frozen_inputs
 

@@ -13,8 +13,8 @@ import sys
 import pytest
 
 from pops import time as adctime
-from pops.time.history_persistence import Dense, Interval, Revolve
-from pops.time.history_persistence_validate import check_program
+from pops.time._history.persistence import Dense, Interval, Revolve
+from pops.time._history.validation import check_program
 
 
 def _expect(exc_type, fn, needle):
@@ -85,7 +85,7 @@ def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
 def test_dense_policy_never_refused_even_with_unknown_op():
     """Dense needs no replay, so the determinism scan never refuses it."""
     from pops._report import ReportTree
-    from pops.time.history_persistence_validate import validate_history_persistence
+    from pops.time._history.validation import validate_history_persistence
 
     class FakeOp:
         op = "some_future_stochastic_op"
@@ -104,7 +104,7 @@ def test_dense_policy_never_refused_even_with_unknown_op():
 def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
     """A non-Dense policy whose replay reaches an op OUTSIDE the vetted allow-list is refused loud."""
     from pops._report import ReportTree
-    from pops.time.history_persistence_validate import validate_history_persistence
+    from pops.time._history.validation import validate_history_persistence
 
     class FakeOp:
         op = "rng_source"

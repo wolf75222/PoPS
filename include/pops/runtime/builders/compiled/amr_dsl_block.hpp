@@ -180,10 +180,14 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       fo.max_iters = bp.poisson.fac_max_iters;
     if (bp.poisson.fac_fine_sweeps > 0)
       fo.fine_sweeps = bp.poisson.fac_fine_sweeps;
-    if (bp.poisson.fac_tol > 0.0)
-      fo.tol = static_cast<Real>(bp.poisson.fac_tol);
+    if (bp.poisson.fac_rel_tol > 0.0)
+      fo.rel_tol = static_cast<Real>(bp.poisson.fac_rel_tol);
+    if (bp.poisson.fac_abs_tol > 0.0)
+      fo.abs_tol = static_cast<Real>(bp.poisson.fac_abs_tol);
     if (bp.poisson.fac_coarse_rel_tol > 0.0)
       fo.coarse_rel_tol = static_cast<Real>(bp.poisson.fac_coarse_rel_tol);
+    if (bp.poisson.fac_coarse_abs_tol > 0.0)
+      fo.coarse_abs_tol = static_cast<Real>(bp.poisson.fac_coarse_abs_tol);
     if (bp.poisson.fac_coarse_cycles > 0)
       fo.coarse_cycles = bp.poisson.fac_coarse_cycles;
     fo.verbose = bp.poisson.fac_verbose;

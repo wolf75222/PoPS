@@ -1,6 +1,6 @@
 """Lower typed ``Program.rhs(terms=[...])`` entries to native RHS route data.
 
-Factored out of :mod:`pops.time.program_core` (file-size budget): the transformation is pure
+Factored out of :mod:`pops.time._program.operations` (file-size budget): the transformation is pure
 (no Program state), so it lives as a module function. The ``pops.numerics`` / ``pops.model``
 imports stay function-local so this module adds no module-scope edge to the time package.
 """

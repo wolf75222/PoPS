@@ -32,6 +32,7 @@ class ResolvedAMRAuthorities:
     initial_conditions: Any
     bootstrap: Any
     execution: Any
+    providers: Any
 
     def canonical_identity(self) -> dict[str, Any]:
         return {
@@ -43,6 +44,7 @@ class ResolvedAMRAuthorities:
             "initial_conditions": self.initial_conditions.canonical_identity(),
             "bootstrap": self.bootstrap.canonical_identity(),
             "execution": self.execution.to_data(),
+            "providers": dict(self.providers),
         }
 
 
@@ -164,6 +166,17 @@ class AMRTaggingResolutionContext:
             )
         plan, method = matches[0]
         layout = self.layout_plan.layout_for(state)
+        lower_stencil = getattr(method, "amr_indicator_stencil", None)
+        if not callable(lower_stencil):
+            raise NotImplementedError(
+                "AMR indicator discretization does not provide amr_indicator_stencil(...)"
+            )
+        lowering = lower_stencil(dimension=_dimension(self.layout_plan))
+        from pops.numerics.indicator_stencils import DiscreteGradientStencil
+
+        if type(lowering) is not DiscreteGradientStencil:
+            raise TypeError(
+                "amr_indicator_stencil(...) must return a DiscreteGradientStencil")
         discretization = Handle(
             "discretization_%s" % plan.identity.token,
             kind="discretization",
@@ -173,13 +186,14 @@ class AMRTaggingResolutionContext:
             "method": method.to_data(),
             "state": state.canonical_identity(),
             "layout": layout.canonical_identity(),
+            "lowering": lowering.to_data(),
         }
         stencil = Handle(
             "stencil_%s" % _handle_token("amr-indicator-stencil", stencil_payload),
             kind="stencil",
             owner=self.owner,
         )
-        return DiscreteIndicatorContext(layout, discretization, stencil)
+        return DiscreteIndicatorContext(layout, discretization, stencil, lowering)
 
     def resolve_value_indicator(
         self,
@@ -362,6 +376,7 @@ class AMRResolutionContext:
     initials: Any
     program: Any
     resolve: Callable[[Handle], Handle]
+    components: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         from pops.mesh import LayoutPlan
@@ -380,6 +395,7 @@ class AMRResolutionContext:
             raise TypeError("adaptive regridding requires one explicit Program")
         if not callable(self.resolve):
             raise TypeError("AMR resolution resolver must be callable")
+        object.__setattr__(self, "components", tuple(self.components))
 
 
 def _combined_requirement(
@@ -426,6 +442,7 @@ def _hierarchy(
     transfer: Any,
     tagging: ResolvedTaggingAuthority,
     context: AMRResolutionContext,
+    clustering: Any,
 ) -> Any:
     from pops.mesh._amr import (
         CanonicalOptions,
@@ -523,8 +540,16 @@ def _hierarchy(
         transitions=transitions,
         nesting=nesting,
         clustering=ClusteringPolicy(
-            provider("berger_rigoutsos", "amr_clustering_provider"),
-            CanonicalOptions({"native_route": "berger_rigoutsos"}),
+            provider(
+                "clustering_%s" % clustering.runtime_binding_data()["provider_identity"],
+                "amr_clustering_provider",
+            ),
+            CanonicalOptions({
+                "provider": {
+                    **clustering.runtime_binding_data(),
+                    "layout_identity": context.layout_plan.qualified_id,
+                }
+            }),
         ),
         patch_generation=PatchGenerationPolicy(
             provider("box_array", "amr_patch_generation_provider"),
@@ -562,6 +587,8 @@ def resolve_amr_authorities(
     regrid: Any,
     transfer: Any,
     execution: Any,
+    tagger: Any,
+    clustering: Any,
     context: AMRResolutionContext,
 ) -> ResolvedAMRAuthorities:
     """Resolve every adaptive-layout concern exactly once from its owning declaration."""
@@ -578,6 +605,20 @@ def resolve_amr_authorities(
                 raise TypeError("AMR %s authority must implement %s()" % (slot, method))
     if type(context) is not AMRResolutionContext:
         raise TypeError("AMR resolution requires an AMRResolutionContext")
+    providers = {"tagger": tagger, "clustering": clustering}
+    for slot, value in providers.items():
+        for method in (
+                "inspect", "resolve_references", "require_component_inputs",
+                "require_tagging_graph", "runtime_binding_data"):
+            if slot == "clustering" and method == "require_tagging_graph":
+                continue
+            if not callable(getattr(value, method, None)):
+                raise TypeError("AMR %s provider must implement %s()" % (slot, method))
+    resolved_providers = {
+        slot: value.resolve_references(context.resolve) for slot, value in providers.items()
+    }
+    for slot, value in resolved_providers.items():
+        value.require_component_inputs(context.components)
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(context.layout_plan)
     tagging_context = AMRTaggingResolutionContext(
         context.owner,
@@ -586,12 +627,14 @@ def resolve_amr_authorities(
         context.resolve,
     )
     resolved_tagging = resolve_tagging(tagging, tagging_context)
+    resolved_providers["tagger"].require_tagging_graph(resolved_tagging.graph)
     resolved_hierarchy = _hierarchy(
         hierarchy,
         regrid,
         resolved_transfer,
         resolved_tagging,
         context,
+        resolved_providers["clustering"],
     )
     initial = context.initials.resolve_amr(
         layout_plan=context.layout_plan,
@@ -600,6 +643,27 @@ def resolve_amr_authorities(
         tagging=resolved_tagging.graph,
         constraints=(),
     )
+    provider_bindings = {
+        slot: {
+            **value.runtime_binding_data(),
+            "layout_identity": context.layout_plan.qualified_id,
+        }
+        for slot in ("clustering", "tagger")
+        for value in (resolved_providers[slot],)
+    }
+    provider_bindings["tagger"] = {
+        **provider_bindings["tagger"],
+        "clock_identity": context.program.clock.qualified_id,
+        "tagging_graph_identity": resolved_tagging.graph.qualified_id,
+    }
+    identity_payload = {
+        key: value for key, value in provider_bindings["tagger"].items()
+        if key != "provider_identity"
+    }
+    provider_bindings["tagger"]["provider_identity"] = make_identity(
+        "resolved-amr-tagger-provider",
+        semantic_value(identity_payload, where="resolved AMR Tagger provider"),
+    ).token
     return ResolvedAMRAuthorities(
         hierarchy=resolved_hierarchy,
         transfer=resolved_transfer,
@@ -607,6 +671,7 @@ def resolve_amr_authorities(
         initial_conditions=initial.initial_condition_plan,
         bootstrap=initial.bootstrap_plan,
         execution=execution,
+        providers=provider_bindings,
     )
 
 

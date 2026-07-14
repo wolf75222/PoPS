@@ -154,13 +154,13 @@ class LoadedComponent final {
     }
     void* state = nullptr;
     if (header->prepare != nullptr) {
-      PopsComponentStatusV1 status{
-          sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+      PopsComponentStatusV1 status = unwritten_component_status();
       const PopsComponentPrepareRequestV1 request{
           sizeof(PopsComponentPrepareRequestV1), parameters_json.c_str(),
           target_json.c_str(), execution};
       const int code = header->prepare(&request, &state, &status);
-      if (code != 0 || status.code != 0 || status.action != POPS_COMPONENT_CONTINUE_V1) {
+      if (!component_status_is_well_formed(status) || code != 0 || status.code != 0 ||
+          status.action != POPS_COMPONENT_CONTINUE_V1) {
         if (state != nullptr && header->destroy != nullptr) header->destroy(state);
         throw std::runtime_error(
             status.reason == nullptr ? "native component preparation failed" : status.reason);

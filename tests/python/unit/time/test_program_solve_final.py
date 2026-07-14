@@ -1,5 +1,6 @@
 """Final typed Program.solve contract: one verb, typed problems, executable solvers."""
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 import inspect
 
@@ -62,7 +63,7 @@ def test_typed_linear_problem_lowers_to_the_real_native_krylov_route():
     ).consume(action=FailRun())
     program.commit(temporal.next, solved)
 
-    source = program.emit_cpp_program()
+    source = emit_cpp_program(program)
     assert "ctx.solve_linear_matfree" in source
 
 

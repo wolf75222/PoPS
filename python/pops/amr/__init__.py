@@ -26,6 +26,7 @@ from .materialization import (
     NativeAMRMaterializationKind,
     TransferCapabilities,
 )
+from .providers import ClusteringProvider, TaggerProvider
 
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "Buffer",
     "CanonicalOptions",
     "Coarsen",
+    "ClusteringProvider",
     "ConflictPolicy",
     "EqualityPolicy",
     "Hysteresis",
@@ -48,5 +50,6 @@ __all__ = [
     "NativeAMRMaterializationDescriptor",
     "NativeAMRMaterializationKind",
     "Tag",
+    "TaggerProvider",
     "TransferCapabilities",
 ]

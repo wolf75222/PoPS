@@ -79,6 +79,7 @@ class DiscreteIndicatorContext:
     layout: Handle
     discretization: Handle
     stencil: Handle
+    lowering: Any
 
     def __post_init__(self) -> None:
         _canonical_handle(self.layout, where="DiscreteIndicatorContext.layout",
@@ -87,12 +88,18 @@ class DiscreteIndicatorContext:
                           kinds=frozenset(("discretization",)))
         _canonical_handle(self.stencil, where="DiscreteIndicatorContext.stencil",
                           kinds=frozenset(("stencil",)))
+        from pops.numerics.indicator_stencils import DiscreteGradientStencil
+
+        if type(self.lowering) is not DiscreteGradientStencil:
+            raise TypeError(
+                "DiscreteIndicatorContext.lowering must be a DiscreteGradientStencil")
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"schema_version": _SCHEMA_VERSION, "context_type": "discrete_indicator",
                 "layout": self.layout.canonical_identity(),
                 "discretization": self.discretization.canonical_identity(),
-                "stencil": self.stencil.canonical_identity()}
+                "stencil": self.stencil.canonical_identity(),
+                "stencil_lowering": self.lowering.to_data()}
 
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "discrete_indicator_context", **self.canonical_identity()}

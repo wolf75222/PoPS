@@ -1,5 +1,6 @@
 """Whole-Program lowering dispatches every node through its own model owner."""
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 from pops.codegen._plans import ResolvedBlock
 from pops.codegen.program_models import ProgramModelGraph
@@ -49,7 +50,7 @@ def test_two_model_program_emits_each_models_own_source_kernel():
         ResolvedBlock(
             "second", second, None, "production", ("U",), ("test::second::state::U",)),
     ))
-    source = program.emit_cpp_program(model_graph=graph)
+    source = emit_cpp_program(program, model_graph=graph)
 
     assert "first_physics" in source and "second_physics" in source
     assert "pops::Real(-2) * u" in source

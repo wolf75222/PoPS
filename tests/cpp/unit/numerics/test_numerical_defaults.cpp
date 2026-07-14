@@ -38,6 +38,9 @@ TEST(test_numerical_defaults, mg_krylov_fac_amr_named_constants) {
   EXPECT_EQ(kSchurKrylovCartesianMaxIters, 400) << "Cartesian Schur Krylov budget is reported";
   EXPECT_EQ(kSchurKrylovPolarMaxIters, 600) << "Polar Schur Krylov budget is reported";
   EXPECT_EQ(kFACDefaultMaxIters, 30) << "FAC max_iters default is reported";
+  EXPECT_EQ(kFACDefaultRelTol, Real(1e-9)) << "FAC relative tolerance default is reported";
+  EXPECT_EQ(kFACDefaultAbsTol, Real(0)) << "FAC absolute floor default is reported";
+  EXPECT_EQ(kFACInitialCoarseAbsTol, Real(0)) << "FAC coarse absolute floor is reported";
   EXPECT_EQ(kFACInitialCoarseRelTol, Real(1e-12)) << "FAC initial coarse tolerance is reported";
   EXPECT_EQ(kFACInitialCoarseMaxCycles, 100) << "FAC initial coarse cycle budget is reported";
   EXPECT_EQ(kAmrRefinementDisabledThreshold, Real(1e30))

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from pops.time.method_tableau import RungeKuttaTableau
+from pops.time._methods.tableau import RungeKuttaTableau
 
 from ._factory import (
     call_at, call_field_at, field_handle, instance_state, operator_handle,

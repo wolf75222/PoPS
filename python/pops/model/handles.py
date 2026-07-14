@@ -480,7 +480,7 @@ class OperatorHandle(Handle):
                 raise TypeError(
                     "operator %r accepts program= only for a nullary call; ProgramValue "
                     "arguments already select their Program" % self.name)
-            from pops.time.program import Program
+            from pops.time._program.api import Program
 
             if not isinstance(program, Program):
                 raise TypeError(

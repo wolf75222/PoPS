@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iomanip>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -300,12 +302,23 @@ inline std::vector<double> require_field_nullspace_compatible(
   }
   all_reduce_sum_inplace(moments.data(), static_cast<int>(moments.size()));
   for (std::size_t b = 0; b < plan.bases.size(); ++b) {
+    if (!std::isfinite(moments[2 * b]) || !std::isfinite(moments[2 * b + 1]))
+      throw std::runtime_error(
+          "field RHS has a non-finite compatibility moment for nullspace basis '" +
+          plan.bases[b].identity + "' (" + plan.bases[b].provenance +
+          "); silent projection is forbidden");
     const double scale = moments[2 * b + 1] > 1.0 ? moments[2 * b + 1] : 1.0;
     const double tolerance = 128.0 * std::numeric_limits<Real>::epsilon() * scale;
-    if (std::abs(moments[2 * b]) > tolerance)
+    if (std::abs(moments[2 * b]) > tolerance) {
+      std::ostringstream witness;
+      witness << std::setprecision(17) << moments[2 * b];
+      std::ostringstream allowed;
+      allowed << std::setprecision(17) << tolerance;
       throw std::runtime_error(
           "field RHS is incompatible with nullspace basis '" + plan.bases[b].identity +
-          "' (" + plan.bases[b].provenance + "); silent projection is forbidden");
+          "' (" + plan.bases[b].provenance + "): moment=" + witness.str() +
+          " tolerance=" + allowed.str() + "; silent projection is forbidden");
+    }
   }
   return moments;
 }

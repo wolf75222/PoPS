@@ -57,8 +57,37 @@
   ],
   "native_interface_abi_version": 1,
   "native_common_abi_version": 1,
+  "tagging_program_abi": {
+    "version": 1,
+    "leaf_opcodes": {
+      "above": 1,
+      "below": 2,
+      "magnitude_above": 3,
+      "gradient_above": 4,
+      "gradient_below": 5
+    },
+    "logical_opcodes": {
+      "any_of": 16,
+      "all_of": 17,
+      "not": 18
+    },
+    "candidate_outputs": [
+      "refine_candidates",
+      "coarsen_candidates",
+      "refine_equalities",
+      "coarsen_equalities"
+    ],
+    "indicator_stencil_routes": [
+      "linear_axis_stencil_l2_v1"
+    ],
+    "maximum_stencil_terms": 16,
+    "maximum_instruction_count": 128,
+    "non_finite_policy": "reject",
+    "persistent_hysteresis": false
+  },
   "native_interface_abis": [
     {
+      "id": 0,
       "name": "numerical_flux",
       "uri": "pops://interfaces/numerical-flux",
       "version": 1,
@@ -68,6 +97,7 @@
       "operations": ["evaluate_faces"]
     },
     {
+      "id": 1,
       "name": "ghost_boundary",
       "uri": "pops://interfaces/ghost-boundary",
       "version": 1,
@@ -77,6 +107,7 @@
       "operations": ["apply_region_batch"]
     },
     {
+      "id": 2,
       "name": "field_boundary_closure",
       "uri": "pops://interfaces/field-boundary-closure",
       "version": 1,
@@ -86,6 +117,7 @@
       "operations": ["residual", "jvp"]
     },
     {
+      "id": 3,
       "name": "tagger",
       "uri": "pops://interfaces/tagger",
       "version": 1,
@@ -95,6 +127,7 @@
       "operations": ["tag_batch"]
     },
     {
+      "id": 4,
       "name": "clustering",
       "uri": "pops://interfaces/clustering",
       "version": 1,
@@ -104,6 +137,7 @@
       "operations": ["cluster"]
     },
     {
+      "id": 5,
       "name": "transfer",
       "uri": "pops://interfaces/transfer",
       "version": 1,
@@ -113,24 +147,17 @@
       "operations": ["apply"]
     },
     {
-      "name": "reflux",
-      "uri": "pops://interfaces/reflux",
-      "version": 1,
-      "cpp_table": "PopsRefluxApiV1",
-      "hot_path": true,
-      "facets": ["effects", "fallible_evaluation"],
-      "operations": ["deposit_integrated"]
-    },
-    {
+      "id": 7,
       "name": "field_solver",
       "uri": "pops://interfaces/field-solver",
-      "version": 1,
-      "cpp_table": "PopsFieldSolverApiV1",
+      "version": 2,
+      "cpp_table": "PopsFieldSolverApiV2",
       "hot_path": false,
       "facets": ["lowering", "fallible_evaluation", "report"],
       "operations": ["solve"]
     },
     {
+      "id": 8,
       "name": "writer",
       "uri": "pops://interfaces/writer",
       "version": 1,
@@ -140,10 +167,11 @@
       "operations": ["verify", "publish", "discard", "rollback"]
     },
     {
+      "id": 9,
       "name": "field_topology",
       "uri": "pops://interfaces/field-topology",
-      "version": 1,
-      "cpp_table": "PopsFieldTopologyApiV1",
+      "version": 2,
+      "cpp_table": "PopsFieldTopologyApiV2",
       "hot_path": false,
       "facets": ["provider", "report"],
       "operations": ["prepare_topology"]

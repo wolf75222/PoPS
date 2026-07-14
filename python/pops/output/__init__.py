@@ -9,10 +9,12 @@ from .data import (
     OutputProvenance, OutputRequest, OutputSnapshot,
 )
 from .diagnostics import BalanceTerms, composite_integrals
-from .writers import (
-    HDF5Writer, NPZWriter, OutputPublicationReceipt, ParaViewWriter,
-    PreparedOutputFile, deterministic_target, read_hdf5, read_npz, read_paraview,
+from ._writers.common import (
+    OutputPublicationReceipt, PreparedOutputFile, deterministic_target,
 )
+from ._writers.hdf5 import HDF5Writer, read_hdf5
+from ._writers.npz import NPZWriter, read_npz
+from ._writers.paraview import ParaViewWriter, read_paraview
 from . import formats
 
 __all__ = [

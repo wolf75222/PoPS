@@ -22,6 +22,7 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import solve_field, typed_field, typed_state
 
@@ -227,16 +228,16 @@ def _norm_ids(src):
 
 
 mdl = whole_flux_model("nf_codegen")
-src_none = _norm_ids(_fe_program("nf_codegen", None, model=mdl).emit_cpp_program(model=mdl))
-src_default = _norm_ids(_fe_program(
-    "nf_codegen", ["default"], model=mdl).emit_cpp_program(model=mdl))
+src_none = _norm_ids(emit_cpp_program(_fe_program("nf_codegen", None, model=mdl), model=mdl))
+src_default = _norm_ids(emit_cpp_program(_fe_program(
+    "nf_codegen", ["default"], model=mdl), model=mdl))
 chk("ctx.rhs_into(0, " in src_none, "default rhs lowers via ctx.rhs_into")
 chk("ctx.neg_div_flux_into(" not in src_none, "default rhs does NOT use the named-flux divergence path")
 chk(src_none == src_default,
     "rhs(fluxes=['default']) lowers byte-identically to rhs(fluxes=None) (the historical default)")
 
 # A NAMED flux lowers the new path (per-cell flux kernel + neg_div_flux_into), NOT rhs_into.
-src_named = _fe_program("nf_named", ["whole"], model=mdl).emit_cpp_program(model=mdl)
+src_named = emit_cpp_program(_fe_program("nf_named", ["whole"], model=mdl), model=mdl)
 chk("ctx.neg_div_flux_into(" in src_named, "a named-flux rhs lowers via ctx.neg_div_flux_into")
 chk("pops::for_each_cell(" in src_named, "the named flux is evaluated by a per-cell kernel")
 chk("ctx.rhs_into(0, " not in src_named, "a named-flux rhs does NOT call rhs_into (distinct stencil)")
@@ -246,17 +247,17 @@ chk("ctx.rhs_into(0, " not in src_named, "a named-flux rhs does NOT call rhs_int
 chk(raises(KeyError, lambda: _fe_program(
     "nf_unknown", ["does_not_exist"], model=mdl)),
     "an unknown flux_term name cannot mint an OperatorHandle")
-chk(raises(ValueError, lambda: _fe_program(
-    "nf_mix", ["default", "whole"], model=mdl).emit_cpp_program(model=mdl)),
+chk(raises(ValueError, lambda: emit_cpp_program(_fe_program(
+    "nf_mix", ["default", "whole"], model=mdl), model=mdl)),
     "mixing 'default' with a named flux raises ValueError")
-chk(raises(NotImplementedError, lambda: _fe_program(
-    "nf_nomodel", ["whole"], model=mdl).emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: emit_cpp_program(_fe_program(
+    "nf_nomodel", ["whole"], model=mdl))),
     "a named-flux rhs without a model raises NotImplementedError")
 
 # Two named fluxes summing to the whole flux lower to ONE kernel + one neg_div_flux_into (the SUM).
 split_codegen_model = split_flux_model()
-src_split = _fe_program(
-    "nf_split_prog", ["conv", "press"], model=split_codegen_model).emit_cpp_program(
+src_split = emit_cpp_program(_fe_program(
+    "nf_split_prog", ["conv", "press"], model=split_codegen_model),
         model=split_codegen_model)
 chk(src_split.count("ctx.neg_div_flux_into(") == 1,
     "a multi-named-flux rhs assembles a single -div of the summed fluxes")
@@ -278,17 +279,17 @@ ell_model, Vell = _carrier()
 ell_model.elliptic_field("phi2", rhs=Vell["rho"], aux=["phi2", "g2x", "g2y"])
 for a in ("phi2", "g2x", "g2y"):
     ell_model._m.aux_field(a)  # the named field's aux outputs need channel slots (ADC-428)
-src_named_ell = _named_field_program(model=ell_model).emit_cpp_program(model=ell_model)
+src_named_ell = emit_cpp_program(_named_field_program(model=ell_model), model=ell_model)
 chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named_ell,
     "solve_fields(field=) lowers to the named ctx call (ADC-428 multi-elliptic runtime)")
 # Unknown field name -> clear ValueError; missing model -> NotImplementedError (cannot validate).
 unknown_ell_model = _carrier()[0]
 chk(raises(ValueError,
-           lambda: _named_field_program(
-               "nf_unknown_ell", model=unknown_ell_model).emit_cpp_program(
+           lambda: emit_cpp_program(_named_field_program(
+               "nf_unknown_ell", model=unknown_ell_model),
                    model=unknown_ell_model)),
     "an unknown elliptic_field name in solve_fields raises ValueError")
-chk(raises(NotImplementedError, lambda: _named_field_program("nf_nomodel_ell").emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: emit_cpp_program(_named_field_program("nf_nomodel_ell"))),
     "a named-elliptic solve_fields without a model raises NotImplementedError")
 # An empty field name is rejected at construction (clear error).
 bad_field_program = adctime.Program("x")

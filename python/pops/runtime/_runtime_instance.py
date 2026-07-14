@@ -44,6 +44,130 @@ def _identity_data(value: Any) -> Any:
     raise TypeError("runtime identity evidence must implement to_data() or be canonical scalar data")
 
 
+_FIELD_TOPOLOGY_ROW_KEYS = frozenset({
+    "patch_identity",
+    "topology_digest",
+    "provenance",
+    "material_points",
+    "connected_components",
+})
+_FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS = frozenset({
+    "source_layout_identity",
+    "materialized_layout_identity",
+})
+
+
+def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]:
+    """Read one native topology report through its private inspection seam.
+
+    Multi-layout executors retain one native engine per layout.  Slot ownership is discovered from
+    the already-installed native registries; no backend is built and no field array is touched.
+    """
+    engines = getattr(executor, "_engines", None)
+    candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
+    reports = []
+    for candidate in candidates:
+        slots = getattr(candidate, "field_provider_slots", None)
+        if callable(slots) and slot not in tuple(slots()):
+            continue
+        native = getattr(candidate, "_s", candidate)
+        inspect_topology = getattr(native, "_field_topology_report", None)
+        if not callable(inspect_topology):
+            continue
+        reports.append(inspect_topology(slot))
+    if len(reports) > 1:
+        raise RuntimeError(
+            "one qualified field-provider slot is materialized by multiple native executors")
+    if not reports:
+        return ()
+    normalized = []
+    for index, raw in enumerate(reports[0]):
+        if not isinstance(raw, Mapping):
+            raise TypeError("native field topology report rows must be mappings")
+        row = dict(raw)
+        keys = frozenset(row)
+        if not _FIELD_TOPOLOGY_ROW_KEYS <= keys or keys - (
+                _FIELD_TOPOLOGY_ROW_KEYS | _FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS):
+            raise TypeError("native field topology report row has an invalid schema")
+        for name in ("patch_identity", "topology_digest", "provenance"):
+            if not isinstance(row[name], str) or not row[name]:
+                raise TypeError("native field topology report %s must be non-empty" % name)
+        for name in ("material_points", "connected_components"):
+            value = row[name]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise TypeError("native field topology report %s must be non-negative" % name)
+        for name in _FIELD_TOPOLOGY_OPTIONAL_ROW_KEYS:
+            value = row.get(name)
+            if value == "":
+                value = None
+            if value is not None and (not isinstance(value, str) or not value):
+                raise TypeError("native field topology report %s must be qualified" % name)
+            row[name] = value
+        normalized.append(row)
+    normalized.sort(key=lambda row: row["patch_identity"])
+    if len({row["patch_identity"] for row in normalized}) != len(normalized):
+        raise RuntimeError("native field topology report contains duplicate patch identities")
+    return tuple(normalized)
+
+
+def _field_provider_evidence(
+    install_plan: Any, layout_plan: Any, executor: Any,
+) -> tuple[dict[str, Any], ...]:
+    """Return one common, honest report schema for builtin and external field providers."""
+    result = []
+    for name, field_plan in sorted(install_plan.artifact.plan.field_plans.items()):
+        options = field_plan.native_options
+        provider = options["solver_provider"]
+        provider_kind = provider["provider_kind"]
+        if provider_kind not in {"builtin_v1", "external_component_v1"}:
+            raise RuntimeError("resolved field plan carries an unknown provider kind")
+        slot = options["provider_slot"]
+        patches = _field_topology_rows(executor, slot)
+        digests = {row["topology_digest"] for row in patches}
+        provenances = {row["provenance"] for row in patches}
+        materialized_layouts = {
+            row["materialized_layout_identity"] for row in patches
+            if row["materialized_layout_identity"] is not None
+        }
+        if len(digests) > 1 or len(provenances) > 1 or len(materialized_layouts) > 1:
+            raise RuntimeError(
+                "one field-provider materialization returned inconsistent global topology facts")
+        topology = provider["topology"]
+        if provider_kind == "builtin_v1":
+            authority = {
+                "kind": "builtin",
+                "provider_kind": topology["provider_kind"],
+                "declared_provenance": topology["provenance"],
+                "declared_topology_digest": topology["topology_digest"],
+            }
+        else:
+            interface = topology["native_interface"]
+            authority = {
+                "kind": "component",
+                "component_id": topology["component_id"],
+                "component_manifest_identity": topology["component_manifest_identity"],
+                "source_package_identity": topology["source_package_identity"],
+                "interface_uri": interface["uri"],
+                "interface_version": topology["interface_version"],
+            }
+        result.append({
+            "field": name,
+            "provider_slot": slot,
+            "provider_kind": provider_kind,
+            "source_layout_identity": layout_plan.qualified_id,
+            "topology_recipe_identity": provider["topology_recipe_identity"],
+            "authority": authority,
+            "materialized": bool(patches),
+            "materialized_layout_identity": (
+                next(iter(materialized_layouts)) if materialized_layouts else None
+            ),
+            "topology_digest": next(iter(digests)) if digests else None,
+            "provenance": next(iter(provenances)) if provenances else None,
+            "patches": list(patches),
+        })
+    return tuple(result)
+
+
 class RuntimeInstance:
     """Authenticated InstallPlan plus its sole native executor and transactional consumers."""
 
@@ -262,6 +386,8 @@ class RuntimeInstance:
                 "output_root": None if self._output_root is None else str(self._output_root),
                 "last_run_identity": _identity_data(self.last_run_identity),
                 "last_restart_identity": _identity_data(self.last_restart_identity),
+                "field_providers": list(_field_provider_evidence(
+                    self._install_plan, self._layout_plan, self._executor)),
             },
         )
 
@@ -565,6 +691,8 @@ class RuntimeInstance:
             bind_identity=self.bind_identity,
             execution_identity=self._execution_context.identity,
             artifact_identity=self._install_plan.artifact.artifact_identity,
+            field_providers=_field_provider_evidence(
+                self._install_plan, self._layout_plan, self._executor),
         )
 
     def _checkpoint_payload(self, path: Any) -> str:

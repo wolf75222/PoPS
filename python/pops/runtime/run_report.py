@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from pops._frozen_data import freeze_data, thaw_data
 from pops.identity import Identity
 
 
@@ -47,6 +48,7 @@ class RunReport:
     bind_identity: Identity
     execution_identity: Identity
     artifact_identity: Identity
+    field_providers: tuple[Any, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -77,6 +79,13 @@ class RunReport:
                 name,
                 _identity(getattr(self, name), domain=domain, where=name),
             )
+        if not isinstance(self.field_providers, (list, tuple)):
+            raise TypeError("field_providers must be an ordered report sequence")
+        object.__setattr__(
+            self,
+            "field_providers",
+            freeze_data(self.field_providers, "field_providers"),
+        )
 
     def to_data(self) -> dict[str, Any]:
         """Return detached, canonical report data suitable for inspection or serialization."""
@@ -90,6 +99,7 @@ class RunReport:
             "bind_identity": self.bind_identity.to_data(),
             "execution_identity": self.execution_identity.to_data(),
             "artifact_identity": self.artifact_identity.to_data(),
+            "field_providers": thaw_data(self.field_providers),
         }
 
     def __bool__(self) -> bool:

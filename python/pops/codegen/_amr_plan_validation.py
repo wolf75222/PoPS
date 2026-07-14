@@ -1,6 +1,7 @@
 """Exact AMR authority cross-checks and current native lowering boundary."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -35,6 +36,8 @@ def validate_amr_authorities(plan: Any) -> None:
         plan.amr_execution,
     )
     if not any(value is not None for value in authorities):
+        if plan.amr_providers:
+            raise ValueError("non-AMR plan cannot carry AMR provider bindings")
         return
     if plan.target != "amr_system" or any(value is None for value in authorities):
         raise ValueError(
@@ -69,6 +72,75 @@ def validate_amr_authorities(plan: Any) -> None:
         raise ValueError("ResolvedSimulationPlan bootstrap does not authenticate AMR authorities")
     if plan.initial_condition_plan.transfer_identity != plan.amr_transfer.identity:
         raise ValueError("ResolvedSimulationPlan initial conditions authenticate another transfer")
+    providers = plan.amr_providers
+    if tuple(providers) != ("clustering", "tagger"):
+        raise ValueError("AMR plan requires exact clustering and tagger provider bindings")
+    from pops import interfaces
+
+    expected_interfaces = {
+        "clustering": interfaces.Clustering.to_data(),
+        "tagger": interfaces.Tagger.to_data(),
+    }
+    component_inputs = {
+        component.component_manifest.component_id: component.to_data()
+        for component in plan.component_inputs
+    }
+    for slot, binding in providers.items():
+        if not isinstance(binding, Mapping) or binding.get("schema_version") != 1 \
+                or not isinstance(binding.get("provider_identity"), str) \
+                or binding.get("layout_identity") != plan.layout_plan.qualified_id \
+                or binding.get("native_interface") != expected_interfaces[slot]:
+            raise TypeError("AMR %s provider binding is incomplete or unauthenticated" % slot)
+        external = binding.get("component_id") is not None
+        expected_type = "external_amr_%s" % slot if external else "builtin_amr_%s" % slot
+        if binding.get("provider_type") != expected_type:
+            raise ValueError("AMR %s provider kind disagrees with its component authority" % slot)
+        if external and (
+                not isinstance(binding.get("component_manifest_identity"), str)
+                or binding.get("interface_version") != 1
+                or not isinstance(binding.get("component"), Mapping)
+                or component_inputs.get(binding.get("component_id"))
+                != dict(binding["component"])):
+            raise TypeError("external AMR %s provider lost exact component identity" % slot)
+        if not external:
+            expected_id = {
+                "clustering": "pops.lib.amr::berger_rigoutsos",
+                "tagger": "pops.lib.amr::symbolic_tagger",
+            }[slot]
+            if binding.get("provider_id") != expected_id:
+                raise ValueError("builtin AMR %s provider is not canonical" % slot)
+    tagger = providers["tagger"]
+    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
+
+    capability = tagger.get("tagging_capability")
+    expected_capability_keys = {
+        "schema_version", "capability_type", "leaf_opcodes", "leaf_opcode_ids",
+        "logical_opcodes", "logical_opcode_ids", "candidate_outputs",
+        "indicator_stencil_routes", "maximum_stencil_terms",
+        "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
+    }
+    if not isinstance(capability, Mapping) or set(capability) != expected_capability_keys \
+            or capability.get("schema_version") != 1 \
+            or capability.get("capability_type") != "amr_tagging_program" \
+            or tuple(capability.get("candidate_outputs", ())) != tuple(
+                NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]) \
+            or not set(capability.get("indicator_stencil_routes", ())) <= set(
+                NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
+            or not capability.get("indicator_stencil_routes") \
+            or isinstance(capability.get("maximum_stencil_terms"), bool) \
+            or not isinstance(capability.get("maximum_stencil_terms"), int) \
+            or capability.get("maximum_stencil_terms") < 1 \
+            or capability.get("maximum_stencil_terms") \
+            > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"] \
+            or capability.get("non_finite_policy") \
+            != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] \
+            or capability.get("persistent_hysteresis") is not \
+            NATIVE_TAGGING_PROGRAM_ABI["persistent_hysteresis"]:
+        raise ValueError("AMR tagger lacks the exact candidate-program protocol")
+    if tagger.get("tagging_graph_identity") != plan.bootstrap_plan.tagging.qualified_id:
+        raise ValueError("AMR tagger authenticates another resolved tagging graph")
+    if not isinstance(tagger.get("clock_identity"), str):
+        raise ValueError("AMR tagger lost its exact logical clock identity")
     hierarchy = plan.resolved_hierarchy
     transitions = hierarchy.plan.transitions
     execution = plan.amr_execution
@@ -96,8 +168,14 @@ def validate_amr_authorities(plan: Any) -> None:
         raise NotImplementedError(
             "native AMR requires one isotropic buffer and one lookahead across transitions"
         )
+    cluster_options = hierarchy.plan.clustering.options.to_data()
+    from pops.identity.semantic import semantic_value
+
+    expected_clustering = semantic_value(
+        dict(providers["clustering"]), where="AMR clustering provider")
+    if cluster_options != {"provider": expected_clustering}:
+        raise ValueError("resolved hierarchy clustering differs from the AMR provider authority")
     policy_routes = (
-        (hierarchy.plan.clustering.options, "berger_rigoutsos", "clustering"),
         (hierarchy.plan.patch_generation.options, "box_array", "patch generation"),
         (hierarchy.plan.load_balance.options, "round_robin", "load balance"),
     )

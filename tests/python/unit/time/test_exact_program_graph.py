@@ -7,17 +7,20 @@ from types import MappingProxyType
 
 import pytest
 
-from pops.time import Clock, FailRun, StagePoint, TimePoint
-from pops.time.graph import (
+from pops.time import (
     Branch,
+    Clock,
     Commit,
+    FailRun,
+    GraphProgramValue as ProgramValue,
     OperatorCall,
     ProgramGraph,
-    ProgramValue,
     Region,
     Solve,
+    StagePoint,
     StateRead,
     Synchronize,
+    TimePoint,
     Unknown,
     ValueRef,
 )

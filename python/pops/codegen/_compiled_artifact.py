@@ -85,6 +85,7 @@ class CompiledPlanRecord:
     initial_condition_plan: Any = None
     bootstrap_plan: Any = None
     amr_execution: Any = None
+    amr_providers: Mapping[str, Any] = field(default_factory=dict)
     contract_identity: Identity = field(init=False)
 
     @classmethod
@@ -128,6 +129,7 @@ class CompiledPlanRecord:
             initial_condition_plan=plan.initial_condition_plan,
             bootstrap_plan=plan.bootstrap_plan,
             amr_execution=plan.amr_execution,
+            amr_providers=plan.amr_providers,
         )
 
     def __post_init__(self) -> None:
@@ -160,6 +162,7 @@ class CompiledPlanRecord:
                     "CompiledPlanRecord.consumer_graph must be an exact ConsumerGraph or None")
         object.__setattr__(self, "requirements", _deep_freeze(self.requirements))
         object.__setattr__(self, "capabilities", _deep_freeze(self.capabilities))
+        object.__setattr__(self, "amr_providers", _deep_freeze(self.amr_providers))
         contracts = tuple(_deep_freeze(item) for item in self.component_contracts)
         component_ids = [item.get("component_id") for item in contracts]
         if any(not isinstance(component_id, str) or not component_id
@@ -260,6 +263,8 @@ class CompiledPlanRecord:
             "amr_execution": _evidence(
                 self.amr_execution, where="compiled plan AMR execution"
             ) if self.amr_execution is not None else None,
+            "amr_providers": _evidence(
+                self.amr_providers, where="compiled plan AMR providers"),
         }
 
     def verify(self) -> None:

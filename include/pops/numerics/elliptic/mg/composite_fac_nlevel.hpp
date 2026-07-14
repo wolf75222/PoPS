@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 /// @file
@@ -29,6 +30,90 @@
 /// composite_coarse_residual), the cross-check documented in test_composite_fac_nlevel.
 
 namespace pops {
+
+namespace detail {
+
+/// Fill only the coarse/fine ghost ring of one patch.  Every field captured here is a POD device
+/// handle or a scalar; the host MultiFab and its ownership metadata never cross the kernel seam.
+struct FacFillCoarseFineGhostKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  int ratio;
+
+  POPS_HD void operator()(int i, int j) const {
+    const bool inside = i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] &&
+                        j <= valid.hi[1];
+    if (!inside)
+      fine(i, j, 0) = fac_bilerp_coarse(coarse, i, j, ratio);
+  }
+};
+
+/// One red or black five-point SOR color.  A five-point stencil has no dependency between cells of
+/// the same color, hence this parallel kernel preserves the sequential red/black arithmetic.  The
+/// nine-point cross-term path deliberately remains host-ordered below because its diagonal stencil
+/// couples cells of the same color.
+struct FacRedBlackFivePointSorKernel {
+  Array4 phi;
+  ConstArray4 rhs;
+  ConstArray4 eps;
+  Real idx2;
+  Real idy2;
+  Real omega;
+  int color;
+  bool has_eps;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (((i + j) & 1) != color)
+      return;
+    const Real exm = has_eps ? eps_harmonic(eps(i, j, 0), eps(i - 1, j, 0)) : Real(1);
+    const Real exp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i + 1, j, 0)) : Real(1);
+    const Real eym = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j - 1, 0)) : Real(1);
+    const Real eyp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j + 1, 0)) : Real(1);
+    const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
+    const Real nb =
+        (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
+        (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
+    const Real cross = Real(0);
+    const Real pgs = (nb + cross - rhs(i, j, 0)) / diag;
+    phi(i, j, 0) = (Real(1) - omega) * phi(i, j, 0) + omega * pgs;
+  }
+};
+
+/// Unmasked residual on the finest active level (which, by definition, has no covered cells).
+struct FacFinestResidualKernel {
+  Array4 residual;
+  ConstArray4 rhs;
+  ConstArray4 laplacian;
+
+  POPS_HD void operator()(int i, int j) const {
+    residual(i, j, 0) = rhs(i, j, 0) - laplacian(i, j, 0);
+  }
+};
+
+/// Exact infinity-norm reducer for a finest-level residual.  Every non-finite sample maps to +inf
+/// before Kokkos::Max, so neither NaN operand order nor the backend reduction tree can hide it.
+struct FacFinestNormInfKernel {
+  ConstArray4 residual;
+
+  POPS_HD void operator()(int i, int j, Real& acc) const {
+    const Real v = residual(i, j, 0);
+    const Real av = v < Real(0) ? -v : v;
+    if (!(av <= std::numeric_limits<Real>::max())) {
+      acc = std::numeric_limits<Real>::infinity();
+      return;
+    }
+    if (av > acc)
+      acc = av;
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<FacFillCoarseFineGhostKernel>);
+static_assert(std::is_trivially_copyable_v<FacRedBlackFivePointSorKernel>);
+static_assert(std::is_trivially_copyable_v<FacFinestResidualKernel>);
+static_assert(std::is_trivially_copyable_v<FacFinestNormInfKernel>);
+
+}  // namespace detail
 
 // ------------------------------------------------------------------------------------------------
 // build_extra_levels_ : allocate levels k >= 2 + the uniform per-level coverage/footprint metadata
@@ -61,17 +146,20 @@ inline void CompositeFacPoisson::build_extra_levels_(const std::vector<BoxArray>
     geom_lv_.push_back(gk);
     ba_lv_.push_back(bak);
     dm_lv_.push_back(dmk);
-    MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0);
+    MultiFab phik(bak, dmk, 1, 1), fk(bak, dmk, 1, 0), rk(bak, dmk, 1, 0),
+        lapk(bak, dmk, 1, 0);
     MultiFab epk(bak, dmk, 1, 1), axk(bak, dmk, 1, 1), ayk(bak, dmk, 1, 1);
     phik.set_val(Real(0));
     fk.set_val(Real(0));
     rk.set_val(Real(0));
+    lapk.set_val(Real(0));
     epk.set_val(Real(1));
     axk.set_val(Real(0));
     ayk.set_val(Real(0));
     phi_lv_.push_back(std::move(phik));
     f_lv_.push_back(std::move(fk));
     res_lv_.push_back(std::move(rk));
+    lap_lv_.push_back(std::move(lapk));
     eps_lv_.push_back(std::move(epk));
     axy_lv_.push_back(std::move(axk));
     ayx_lv_.push_back(std::move(ayk));
@@ -129,18 +217,47 @@ inline void CompositeFacPoisson::finalize_hierarchy_metadata_() {
                                                    /*replicated=*/false);
     }
   }
+
+  // FAC residual / correction scratch is part of the hierarchy allocation, not the iteration.  A
+  // FluxRegister owns host storage, therefore constructing one in composite_residual_ would allocate
+  // on every residual evaluation (and becomes especially visible for FAS).  One register per
+  // coarse/fine interface is sufficient because residual evaluation is sequential by level.
+  flux_registers_.clear();
+  flux_registers_.resize(static_cast<std::size_t>(L));
+  for (int m = 0; m + 1 < L; ++m) {
+    const Geometry& gm = geom_level(m);
+    const Box2D region = Box2D::from_extents(gm.domain.nx(), gm.domain.ny());
+    flux_registers_[static_cast<std::size_t>(m)] = std::make_unique<FluxRegister>(region, 4);
+  }
+  const Box2D coarse_region = Box2D::from_extents(geom_c_.domain.nx(), geom_c_.domain.ny());
+  coarse_average_register_ = std::make_unique<FluxRegister>(coarse_region, 1);
+
+  correction_residual_replicated_.clear();
+  correction_eps_replicated_.clear();
+  correction_axy_replicated_.clear();
+  correction_ayx_replicated_.clear();
+  correction_residual_replicated_.resize(static_cast<std::size_t>(L));
+  correction_eps_replicated_.resize(static_cast<std::size_t>(L));
+  correction_axy_replicated_.resize(static_cast<std::size_t>(L));
+  correction_ayx_replicated_.resize(static_cast<std::size_t>(L));
+  for (int m = 1; m + 1 < L; ++m) {
+    GeometricMG& mgk = *level_mg_[static_cast<std::size_t>(m)];
+    const BoxArray& rba = mgk.rhs().box_array();
+    const DistributionMapping& rdm = mgk.rhs().dmap();
+    correction_residual_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 0);
+    correction_eps_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
+    correction_axy_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
+    correction_ayx_replicated_[static_cast<std::size_t>(m)] = MultiFab(rba, rdm, 1, 1);
+  }
 }
 
 // dst <- src, component 0, valid cells (== the legacy copy0).
 inline void CompositeFacPoisson::copy0_(MultiFab& dst, const MultiFab& src) {
-  device_fence();
   for (int li = 0; li < dst.local_size(); ++li) {
     Array4 d = dst.fab(li).array();
     const ConstArray4 s = src.fab(li).const_array();
     const Box2D b = dst.box(li);
-    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        d(i, j, 0) = s(i, j, 0);
+    for_each_cell(b, detail::FacCopyAllKernel{d, s, 0});
   }
 }
 
@@ -200,26 +317,26 @@ inline ConstArray4 parent_array_for_(const MultiFab& parent, const Box2D& child_
       return parent.fab(li).const_array();
   return ConstArray4{};
 }
+
+inline Array4 writable_array_covering_(MultiFab& parent, const Box2D& footprint) {
+  for (int li = 0; li < parent.local_size(); ++li)
+    if (parent.box(li).contains(footprint))
+      return parent.fab(li).array();
+  return Array4{};
+}
 }  // namespace detail
 
 // fill_cf_field_ : ghosts of a level-k COEFFICIENT field by bilerp of the parent (level k-1). Generic
 // (eps, a_xy, a_yx); reads the CO-LOCATED local parent fab (mono-box replicated at level 0).
 inline void CompositeFacPoisson::fill_cf_field_(int /*k*/, MultiFab& fine, const MultiFab& parent) {
-  device_fence();
-  const int ng = fine.n_grow();
   for (int li = 0; li < fine.local_size(); ++li) {
     Array4 F = fine.fab(li).array();
     const Box2D vb = fine.box(li);
-    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, ng);
+    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, fine.n_grow());
     if (C.p == nullptr)
       continue;  // no local parent (should not happen under co-location); skip
-    for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-      for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-        const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-        if (inside)
-          continue;
-        F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-      }
+    for_each_cell(fine.fab(li).grown_box(),
+                  detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
   }
 }
 
@@ -229,25 +346,17 @@ inline void CompositeFacPoisson::fill_cf_field_(int /*k*/, MultiFab& fine, const
 //   3. fill_boundary(phi_k) : overwrite the ghosts overlapping a sibling patch's valid cells.
 // For non-adjacent patches step 3 is a no-op -> identical to the legacy fill_cf_ghosts alone.
 inline void CompositeFacPoisson::fill_cf_phi_(int k) {
-  device_fence();
   MultiFab& phik = phi_level(k);
   const MultiFab& parent = phi_level(k - 1);
-  const int ng = phik.n_grow();
   for (int li = 0; li < phik.local_size(); ++li) {
     Array4 F = phik.fab(li).array();
     const Box2D vb = phik.box(li);
-    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, ng);  // co-located parent fab
+    const ConstArray4 C = detail::parent_array_for_(parent, vb, ratio_, phik.n_grow());
     if (C.p == nullptr)
       continue;
-    for (int j = vb.lo[1] - ng; j <= vb.hi[1] + ng; ++j)
-      for (int i = vb.lo[0] - ng; i <= vb.hi[0] + ng; ++i) {
-        const bool inside = (i >= vb.lo[0] && i <= vb.hi[0] && j >= vb.lo[1] && j <= vb.hi[1]);
-        if (inside)
-          continue;
-        F(i, j, 0) = detail::fac_bilerp_coarse(C, i, j, ratio_);
-      }
+    for_each_cell(phik.fab(li).grown_box(),
+                  detail::FacFillCoarseFineGhostKernel{F, C, vb, ratio_});
   }
-  device_fence();
   fill_boundary(phik, geom_level(k).domain);  // step 3: fine-fine sibling exchange (adjacency + MPI)
 }
 
@@ -262,6 +371,7 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
   const Real idx = Real(1) / gm.dx(), idy = Real(1) / gm.dy();
   const bool he = has_eps_, hc = has_cross_;
   const CoverageMask& cov = cov_of_[m];
+  const bool finest_unmasked = m + 1 == n_levels_;
   for (int li = 0; li < phim.local_size(); ++li) {
     const Box2D vb = phim.box(li);
     const Real omega = sor_omega_(vb);
@@ -271,6 +381,16 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
     const ConstArray4 E = eps_level(m).fab(li).const_array();
     const ConstArray4 AXY = a_xy_level(m).fab(li).const_array();
     const ConstArray4 AYX = a_yx_level(m).fab(li).const_array();
+    if (finest_unmasked && !hc) {
+      for (int s = 0; s < sweeps; ++s)
+        for (int color = 0; color < 2; ++color)
+          for_each_cell(vb, detail::FacRedBlackFivePointSorKernel{P, F, E, idx2, idy2,
+                                                                  omega, color, he});
+      continue;
+    }
+    // CoverageMask is host storage. The intermediate-level mask and the nine-point same-color
+    // dependency therefore retain their deterministic lexicographic host order.
+    device_fence();
     for (int s = 0; s < sweeps; ++s)
       for (int color = 0; color < 2; ++color)
         for (int j = vb.lo[1]; j <= vb.hi[1]; ++j)
@@ -306,6 +426,9 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
   const int L = n_levels_;
   if (m + 1 >= L)
     return;
+  // FluxRegister and CoverageMask are host storage. Complete the preceding operator/ghost kernels
+  // before this deterministic host/MPI fold reads their MultiFab inputs.
+  device_fence();
   const Geometry& gm = geom_level(m);
   const CoverageMask& cov = cov_of_[m];
   const bool he = has_eps_;
@@ -329,8 +452,8 @@ inline void CompositeFacPoisson::add_flux_correction_(int m, MultiFab& dst) {
   MultiFab& eps_child = eps_level(m + 1);
   // FluxRegister over the level-m grid: single-writer per (cell,direction) slot (4/cell), gather()
   // sums (x,0,0,..) exactly, then a fixed-order fold. Serial: gather() is the identity -> bit-identical.
-  const Box2D region = Box2D::from_extents(gm.domain.nx(), gm.domain.ny());
-  FluxRegister reg(region, 4);  // slot k in {0:xm, 1:xp, 2:ym, 3:yp}
+  FluxRegister& reg = *flux_registers_[static_cast<std::size_t>(m)];
+  std::fill(reg.buf.begin(), reg.buf.end(), Real(0));  // persistent host register, reset in place
   for (int g = 0; g < child.size(); ++g) {
     // level-m footprint of child patch g.
     const Box2D pc = foot_of_[m + 1][g].empty() ? PatchRange(child[g]).box() : foot_of_[m + 1][g];
@@ -434,12 +557,28 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
       fill_ghosts(phi_c_, geom_c_.domain, bc_);
     fill_cf_phi_(m);
   }
-  MultiFab lap(phim.box_array(), phim.dmap(), 1, 0);
+  MultiFab& lap = lap_level_(m);
   MultiFab& operator_view = (m == 0 && has_boundary_kernel_) ? boundary_view_c_ : phim;
   apply_laplacian(operator_view, gm, lap, /*coef=*/nullptr,
                   has_eps_ ? &eps_level(m) : nullptr,
                   /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &a_xy_level(m) : nullptr,
                   has_cross_ ? &a_yx_level(m) : nullptr);
+  if (m + 1 == n_levels_) {
+    Real nrm = Real(0);
+    for (int li = 0; li < resm.local_size(); ++li) {
+      Array4 R = resm.fab(li).array();
+      const ConstArray4 LAP = lap.fab(li).const_array();
+      const ConstArray4 FM = rhs_level(m).fab(li).const_array();
+      const Box2D b = resm.box(li);
+      for_each_cell(b, detail::FacFinestResidualKernel{R, FM, LAP});
+      nrm = std::max(nrm,
+                     reduce_max_cell(b, detail::FacFinestNormInfKernel{resm.fab(li).const_array()}));
+    }
+    return Real(all_reduce_max(static_cast<double>(nrm)));
+  }
+
+  // The remaining levels carry a host-only CoverageMask. Finish the operator before the ordered
+  // masked host fold; the finest unmasked path above stays entirely on the execution space.
   device_fence();
   const CoverageMask& cov = cov_of_[m];
   for (int li = 0; li < resm.local_size(); ++li) {
@@ -459,8 +598,12 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
     const Box2D b = resm.box(li);
     for (int j = b.lo[1]; j <= b.hi[1]; ++j)
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-        if (!cov.covered(i, j))
-          nrm = std::fmax(nrm, std::fabs(R(i, j, 0)));
+        if (!cov.covered(i, j)) {
+          if (!std::isfinite(static_cast<double>(R(i, j, 0))))
+            nrm = std::numeric_limits<Real>::infinity();
+          else
+            nrm = std::max(nrm, std::fabs(R(i, j, 0)));
+        }
   }
   return Real(all_reduce_max(static_cast<double>(nrm)));
 }
@@ -528,13 +671,26 @@ inline void CompositeFacPoisson::average_down_level_(int m) {
   MultiFab& parent = phi_level(m - 1);
   MultiFab& child = phi_level(m);
   if (m - 1 != 0 || n_ranks() == 1) {
-    average_down(child, parent, ratio_);  // distributed parent, or serial -> legacy path (bit-identical)
+    // Every child is co-located with its unique parent (build_extra_levels_), and same-level
+    // footprints never overlap. Write the conservative average directly into that parent: this is
+    // the same AverageDownKernel arithmetic as average_down(), without its per-call scratch MultiFab.
+    const Real inv = Real(1) / Real(ratio_ * ratio_);
+    for (int li = 0; li < child.local_size(); ++li) {
+      const ConstArray4 F = child.fab(li).const_array();
+      const Box2D footprint = PatchRange(child.box(li)).box();
+      const Array4 P = detail::writable_array_covering_(parent, footprint);
+      if (P.p == nullptr)
+        throw std::runtime_error(
+            "CompositeFacPoisson: co-located parent missing during average-down");
+      for_each_cell(footprint,
+                    detail::AverageDownKernel{F, P, inv, ratio_, /*component=*/0});
+    }
     return;
   }
   // replicated coarse under MPI: single-writer FluxRegister over the coarse grid.
-  const Geometry& gc = geom_level(0);
-  const Box2D region = Box2D::from_extents(gc.domain.nx(), gc.domain.ny());
-  FluxRegister reg(region, 1);
+  device_fence();  // FluxRegister is host storage; finish child kernels before host reads.
+  FluxRegister& reg = *coarse_average_register_;
+  std::fill(reg.buf.begin(), reg.buf.end(), Real(0));  // persistent host register, reset in place
   const int r = ratio_;
   for (int li = 0; li < child.local_size(); ++li) {
     const ConstArray4 F = child.fab(li).const_array();
@@ -571,7 +727,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
   if (m == 0) {
     copy0_(mg_.rhs(), res_c_);
     mg_.phi().set_val(Real(0));
-    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+    mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
     add_uncovered_level_(0, phi_c_, mg_.phi());
     return;
   }
@@ -584,35 +740,40 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     // every rank (single owner -> all_reduce_sum of the owner's data + 0 elsewhere = an exact
     // broadcast), solve the replicated mg identically on all ranks, then write the correction back to
     // the distributed patch on the owning rank. Deterministic + bit-identical across np.
-    const BoxArray& rba = mgk.rhs().box_array();
-    const DistributionMapping& rdm = mgk.rhs().dmap();  // replicated (every rank owns the box)
-    auto broadcast = [&](const MultiFab& dist) {
-      MultiFab rep(rba, rdm, 1, dist.n_grow());
+    auto broadcast = [&](MultiFab& rep, const MultiFab& dist) {
       rep.set_val(Real(0));
       // the owner writes its patch cells; others contribute 0.
       for (int li = 0; li < dist.local_size(); ++li) {
         Array4 R = rep.fab(0).array();
         const ConstArray4 S = dist.fab(li).const_array();
         const Box2D b = dist.box(li);
-        for (int j = b.lo[1]; j <= b.hi[1]; ++j)
-          for (int i = b.lo[0]; i <= b.hi[0]; ++i)
-            R(i, j, 0) = S(i, j, 0);
+        for_each_cell(b, detail::FacCopyAllKernel{R, S, 0});
       }
+      device_fence();  // MPI consumes the managed allocation from the host.
       all_reduce_sum_inplace(rep.fab(0).array().p, static_cast<int>(rep.fab(0).size()));
-      return rep;
     };
-    MultiFab res_rep = broadcast(res_level_(m));
-    if (has_eps_)
-      mgk.set_epsilon(broadcast(eps_level(m)));
-    if (has_cross_)
-      mgk.set_cross_terms(broadcast(a_xy_level(m)), broadcast(a_yx_level(m)));
+    MultiFab& res_rep = correction_residual_replicated_[static_cast<std::size_t>(m)];
+    broadcast(res_rep, res_level_(m));
+    if (has_eps_) {
+      MultiFab& eps_rep = correction_eps_replicated_[static_cast<std::size_t>(m)];
+      broadcast(eps_rep, eps_level(m));
+      mgk.set_epsilon(eps_rep);
+    }
+    if (has_cross_) {
+      MultiFab& axy_rep = correction_axy_replicated_[static_cast<std::size_t>(m)];
+      MultiFab& ayx_rep = correction_ayx_replicated_[static_cast<std::size_t>(m)];
+      broadcast(axy_rep, a_xy_level(m));
+      broadcast(ayx_rep, a_yx_level(m));
+      mgk.set_cross_terms(axy_rep, ayx_rep);
+    }
     copy0_(mgk.rhs(), res_rep);
     mgk.phi().set_val(Real(0));
-    mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+    mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
     // write the correction back to the distributed patch on its owner (add_uncovered on the local fab).
     const CoverageMask& cov = cov_of_[m];
     MultiFab& phim = phi_level(m);
     const ConstArray4 E = mgk.phi().fab(0).const_array();
+    device_fence();  // CoverageMask is host-only; preserve the ordered masked correction.
     for (int li = 0; li < phim.local_size(); ++li) {
       Array4 P = phim.fab(li).array();
       const Box2D b = phim.box(li);
@@ -630,7 +791,7 @@ inline void CompositeFacPoisson::correct_level_(int m) {
     mgk.set_cross_terms(a_xy_level(m), a_yx_level(m));
   copy0_(mgk.rhs(), res_level_(m));
   mgk.phi().set_val(Real(0));
-  mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+  mgk.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
   add_uncovered_level_(m, phi_level(m), mgk.phi());
 }
 
@@ -638,14 +799,14 @@ inline void CompositeFacPoisson::correct_level_(int m) {
 // solve_composite_nlevel_ : the general FAC driver (design 3f). At L == 2 it is a single-iteration
 // loop that reduces algebraically to the legacy 2-level loop.
 // ------------------------------------------------------------------------------------------------
-inline Real CompositeFacPoisson::solve_composite_nlevel_(int max_iters, int fine_sweeps, Real tol) {
+inline CompositeFacPoisson::LinearSolveResult CompositeFacPoisson::solve_composite_nlevel_(
+    int max_iters, int fine_sweeps, Real stop) {
   const int L = n_levels_;
-  setup_level_coeffs_();  // == the legacy :189-215 coefficient setup, per level
 
   // 0) initial coarse solve (base level).
   copy0_(mg_.rhs(), f_c_);
   mg_.phi().set_val(Real(0));
-  mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles);
+  mg_.solve(options_.coarse_rel_tol, options_.coarse_cycles, options_.coarse_abs_tol);
   copy0_(phi_c_, mg_.phi());
 
   // 1) relax every patch level coarse-to-fine, then a fine-to-coarse average-down cascade (==
@@ -655,11 +816,11 @@ inline Real CompositeFacPoisson::solve_composite_nlevel_(int max_iters, int fine
   cascade_avgdown_();
 
   diagnostics_.clear();
-  Real rnorm = composite_residual_(0);
+  Real rnorm = composite_residual_norm_(/*general=*/true, /*prepare_cf=*/false);
   record_residual(-1, rnorm);
   if (!two_way_) {
     last_residual_ = rnorm;
-    return rnorm;
+    return {rnorm, 0};
   }
 
   // 2) FAC two-way iterations -- a MULTIPLICATIVE (Gauss-Seidel over the level chain) coarse-to-fine
@@ -671,8 +832,9 @@ inline Real CompositeFacPoisson::solve_composite_nlevel_(int max_iters, int fine
   // an additive Jacobi batch) is what drives ||res_0|| below tol. A fine-to-coarse average-down
   // cascade closes the sweep (conservation to ulp). At L == 2 this is exactly correct(0) +
   // relax(1) + average_down + residual, bit-identical to the legacy loop.
+  int iterations = 0;
   for (int it = 0; it < max_iters; ++it) {
-    if (rnorm < tol)
+    if (!std::isfinite(static_cast<double>(rnorm)) || rnorm <= stop)
       break;
     for (int m = 0; m + 1 < L; ++m) {
       if (m > 0)
@@ -681,11 +843,12 @@ inline Real CompositeFacPoisson::solve_composite_nlevel_(int max_iters, int fine
       relax_level_(m + 1, fine_sweeps);  // re-establish the finer level on the corrected parent
     }
     cascade_avgdown_();
-    rnorm = composite_residual_(0);
+    rnorm = composite_residual_norm_(/*general=*/true, /*prepare_cf=*/false);
+    ++iterations;
     record_residual(it, rnorm);
   }
   last_residual_ = rnorm;
-  return rnorm;
+  return {rnorm, iterations};
 }
 
 }  // namespace pops

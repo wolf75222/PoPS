@@ -48,6 +48,7 @@ def _resolved_brick(value: Any, resolver: Any) -> Any:
 def _data_value(value: Any) -> Any:
     from pops.descriptors import BrickDescriptor
     from pops.model import Handle
+    from pops.numerics.indicator_stencils import LinearAxisStencil
 
     if isinstance(value, BrickDescriptor):
         return _brick_data(value)
@@ -55,6 +56,8 @@ def _data_value(value: Any) -> Any:
         if not value.is_resolved:
             raise ValueError("finite-volume data projection requires resolved handles")
         return value.canonical_identity()
+    if type(value) is LinearAxisStencil:
+        return value.to_data()
     if isinstance(value, Mapping):
         return {key: _data_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -167,6 +170,31 @@ class FiniteVolume(Descriptor):
         self.formal_order
         self.ghost_depth
         return True
+
+    def amr_indicator_stencil(self, *, dimension: int) -> Any:
+        """Return the reconstruction-owned, typed discrete gradient lowering.
+
+        There is deliberately no scheme-name switch here.  A native or external reconstruction
+        must carry its exact axis coefficients; missing metadata is refused during AMR resolution.
+        """
+        from pops.numerics.indicator_stencils import (
+            LinearAxisStencil,
+            gradient_stencil,
+        )
+
+        authored = self.reconstruction.options.get("amr_gradient_stencil")
+        if type(authored) is LinearAxisStencil:
+            axis = authored
+        elif isinstance(authored, Mapping):
+            axis = LinearAxisStencil.from_data(dict(authored))
+        else:
+            raise NotImplementedError(
+                "reconstruction %r does not provide a typed AMR gradient stencil"
+                % self.reconstruction.name)
+        if max(axis.ghost_lower, axis.ghost_upper) > self.ghost_depth:
+            raise ValueError(
+                "reconstruction AMR gradient stencil exceeds its declared ghost_depth")
+        return gradient_stencil(axis, dimension=dimension)
 
     def validate_rate_contract(self, contract: Any) -> bool:
         """Prove this method discretizes the exact physical flux and evolved state."""

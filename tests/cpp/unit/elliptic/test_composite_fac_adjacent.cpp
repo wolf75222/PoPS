@@ -103,7 +103,8 @@ TEST(CompositeFacAdjacentTest, adjacent_patch_continuity_and_mms) {
   mg0.solve(1e-12, 100);
   device_fence();
 
-  const Real rfac = fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*tol=*/1e-9);
+  const Real rfac =
+      fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*rel_tol=*/1e-9, /*abs_tol=*/0.0);
   device_fence();
 
   EXPECT_TRUE(std::isfinite(rfac));

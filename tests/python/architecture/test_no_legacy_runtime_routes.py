@@ -204,7 +204,7 @@ def test_mesh_layouts_legacy_package_is_absent() -> None:
 
 
 def test_program_has_one_runtime_branch_spelling() -> None:
-    source = (PACKAGE / "time" / "program_authoring.py").read_text(encoding="utf-8")
+    source = (PACKAGE / "time" / "_program" / "authoring.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     authoring = next(
         node for node in tree.body

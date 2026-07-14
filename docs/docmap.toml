@@ -82,7 +82,7 @@ depends_on = [
   "python/pops/_api.py",
   "python/pops/physics/board.py",
   "python/pops/problem/problem.py",
-  "python/pops/time/program.py",
+  "python/pops/time/_program/api.py",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
   "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
   "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py",

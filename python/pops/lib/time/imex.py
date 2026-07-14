@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.time.method_tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 from pops.time import LocalLinear
 from pops.solvers import DenseLU
 

@@ -22,6 +22,9 @@ from pops.time import Program
         {"rel_tol": 0},
         {"rel_tol": 1},
         {"rel_tol": float("nan")},
+        {"abs_tol": True},
+        {"abs_tol": -1},
+        {"abs_tol": float("nan")},
         {"fine_sweeps": True},
         {"fine_sweeps": 1.5},
         {"fine_sweeps": 0},
@@ -33,6 +36,8 @@ from pops.time import Program
         {"coarse_rel_tol": 1},
         {"coarse_rel_tol": float("nan")},
         {"coarse_rel_tol": float("inf")},
+        {"coarse_abs_tol": True},
+        {"coarse_abs_tol": -1},
         {"verbose": 0},
         {"verbose": "true"},
     ],
@@ -47,16 +52,20 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
     assert solvers.CompositeTensorFAC is CompositeTensorFAC
     assert default.max_iter == 30
     assert default.rel_tol == 1.0e-9
+    assert default.abs_tol == 0.0
     assert default.fine_sweeps is None
     assert default.coarse_rel_tol is None
+    assert default.coarse_abs_tol is None
     assert default.coarse_cycles is None
     assert default.verbose is None
 
     configured = CompositeTensorFAC(
         max_iter=23,
         rel_tol=Fraction(3, 100_000_000),
+        abs_tol=Fraction(1, 1_000_000_000_000),
         fine_sweeps=7,
         coarse_rel_tol=Fraction(1, 8),
+        coarse_abs_tol=Fraction(1, 10_000_000_000_000),
         coarse_cycles=9,
         verbose=False,
     )
@@ -73,8 +82,10 @@ def test_identity_owns_complete_flat_and_refined_solve_contract():
         "options": {
             "max_iter": 23,
             "rel_tol": scalar_data(Fraction(3, 100_000_000)),
+            "abs_tol": scalar_data(Fraction(1, 1_000_000_000_000)),
             "fine_sweeps": 7,
             "coarse_rel_tol": scalar_data(Fraction(1, 8)),
+            "coarse_abs_tol": scalar_data(Fraction(1, 10_000_000_000_000)),
             "coarse_cycles": 9,
             "verbose": False,
         },

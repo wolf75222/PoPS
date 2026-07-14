@@ -12,7 +12,7 @@ from ._version import __version__
 from .physics.board import Model
 from .problem import Case
 from .runtime.run_report import RunReport, RunStopReason
-from .time.program import Program
+from .time._program.api import Program
 
 
 __all__ = [

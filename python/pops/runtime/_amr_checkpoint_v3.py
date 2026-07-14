@@ -367,7 +367,7 @@ def _preflight_histories_v3(sim, d):
     """Validate the entire ring registry and persisted buffers without mutating native state."""
     import numpy as np
     from pops import _pops
-    from pops.time.history_persistence import HistoryPersistence
+    from pops.time._history.persistence import HistoryPersistence
 
     checkpoint_names = ([str(name) for name in d["history_names"]]
                         if "history_names" in d else [])

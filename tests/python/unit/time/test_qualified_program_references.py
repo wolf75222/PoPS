@@ -156,7 +156,7 @@ def test_two_instances_of_one_model_remain_distinct_in_time_ir():
     assert right_state.n.block is right
     assert left_state.n.state_ref != right_state.n.state_ref
 
-    from pops.time.program_serialization import _json_ready
+    from pops.time._program.serialization import _json_ready
     encoded = _json_ready({right_state.state: "right", left_state.state: "left"})
     entries = encoded["mapping_entries"]
     assert [entry[0]["handle"]["block_ref"]["local_id"] for entry in entries] == [

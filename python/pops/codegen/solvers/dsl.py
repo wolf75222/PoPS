@@ -291,7 +291,7 @@ class _SolverWhile:
         if not (hasattr(cond, "vtype") and cond.vtype == "bool"):
             raise TypeError("while_: the condition builder must return a Bool IR value "
                             "(e.g. ctx.norm2(r) > tol); got %r" % (cond,))
-        from pops.time.program_value_validation import require_region
+        from pops.time._program.value_validation import require_region
         require_region(
             self._p, cond, self._p._region_for_block(cond_block), "solver while condition",
             vtype="bool")

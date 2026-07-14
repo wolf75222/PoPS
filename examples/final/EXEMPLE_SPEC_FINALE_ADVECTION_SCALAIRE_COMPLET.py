@@ -317,12 +317,14 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         Tag,
     )
     from pops.layouts import AMR
-    from pops.lib.amr import StateTransfer
+    from pops.lib.amr import BergerRigoutsos, StateTransfer, SymbolicTagger
     from pops.math import grad, norm
     from pops.time import every
 
     # The explicit Handle -> Expr conversion preserves Python identity semantics.  AMRTagging binds
-    # this continuous-looking predicate to the resolved discrete gradient/stencil context of U.
+    # this continuous-looking predicate to U's resolved spatial method.  That method owns the exact
+    # typed, serializable gradient coefficients/offsets/order/halos transported to both builtin and
+    # external Taggers; there is no runtime reconstruction-name switch or centered fallback.
     tracer_value = ValueExpr(core.tracer_state)
     gradient_magnitude = norm(grad(tracer_value))
     tagging = AMRTagging(
@@ -343,6 +345,11 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         grid=core.grid,
         hierarchy=AMRHierarchy(max_levels=3, ratios=(2, 2)),
         tagging=tagging,
+        # Providers are explicit typed objects. A Tagger evaluates this exact resolved graph (all
+        # state inputs come from its leaves); it is never a second, independent tagging policy.
+        # pops.lib contains builtins; pops.amr exposes exact external native provider bindings.
+        tagger=SymbolicTagger(),
+        clustering=BergerRigoutsos(),
         regrid=AMRRegrid(schedule=every(5, clock=core.program.clock)),
         transfer=transfer,
         # Temporal subcycling is an independent authority; it is never inferred from spatial ratios.
@@ -514,7 +521,7 @@ def _require_refined_hierarchy(snapshot: ScalarRuntimeSnapshot, *, where: str) -
 def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
     """Reopen one independently persisted HDF5 and ParaView artifact."""
 
-    from pops.output.writers import read_hdf5, read_paraview
+    from pops.output import read_hdf5, read_paraview
 
     hdf5_paths = tuple(sorted(root.rglob("*.h5")))
     paraview_paths = tuple(sorted(root.rglob("*.vtu")))

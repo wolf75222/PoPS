@@ -17,6 +17,7 @@ These checks stay pure Python (no compiler / no ``.so``); they pin:
 
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 import pytest
@@ -120,11 +121,11 @@ def test_remap_without_facade_reraises_unchanged():
 
 def test_emit_is_byte_identical_through_lower_and_validate():
     direct_model = _facade_model()
-    direct = _fe_program(direct_model, "cmp").emit_cpp_program(
+    direct = emit_cpp_program(_fe_program(direct_model, "cmp"),
         model=direct_model, target="system")
     candidate = _facade_model()
     emit_model, _ = lower_and_validate(candidate, facade=None)
-    via = _fe_program(emit_model, "cmp").emit_cpp_program(model=emit_model, target="system")
+    via = emit_cpp_program(_fe_program(emit_model, "cmp"), model=emit_model, target="system")
     assert direct == via, "routing a facade Model through lower_and_validate is byte-identical"
 
 

@@ -722,8 +722,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     def check(self) -> Any:
         """Validate that every referenced quantity is declared (single-species path).
 
-        Multi-species models compose their blocks in a time Program and validate at emit
-        (``P.emit_cpp_program`` / ``P._check_lowerable``), so a model-level ``check`` is a
+        Multi-species models compose their blocks in a time Program and validate in the compiler
+        (``pops.codegen.program_codegen.emit_cpp_program`` / ``_check_lowerable``), so ``check`` is a
         single-species notion; it is a no-op for a multi-species model."""
         if self._multi_module is not None:
             return None

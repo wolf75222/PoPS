@@ -111,11 +111,38 @@ def test_required_python_lane_rejects_script_style_hidden_skips():
         gate._require_no_hidden_skip("skip (native engine unavailable)\n1 passed")
 
 
-def test_final_gate_pins_native_headers_to_the_validated_checkout():
+def test_final_gate_pins_one_conda_environment_and_native_headers(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.delenv("POPS_CONDA_EXE", raising=False)
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    executable = tmp_path / "conda"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setattr(gate.shutil, "which", lambda name: str(executable))
+    monkeypatch.setenv("POPS_ENV_NAME", "pops-proof")
     command = gate._conda_command(["python", "-c", "import pops"])
 
-    assert command[:2] == ["bash", "-lc"]
-    assert "POPS_INCLUDE=" + str((ROOT / "include").resolve()) in command[2]
+    assert command[:6] == [
+        str(executable.resolve()), "run", "--no-capture-output", "-n", "pops-proof",
+        "/usr/bin/env",
+    ]
+    assert "POPS_INCLUDE=" + str((ROOT / "include").resolve()) in command
+    assert command[-3:] == ["python", "-c", "import pops"]
+    assert "bash" not in command
+
+
+def test_final_gate_honours_explicit_conda_executable(monkeypatch, tmp_path):
+    executable = tmp_path / "conda"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    monkeypatch.setenv("POPS_CONDA_EXE", str(executable))
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+
+    command = gate._conda_command(["python", "-V"])
+
+    assert command[0] == str(executable.resolve())
+    assert command[-2:] == ["python", "-V"]
 
 
 def test_artifact_reopen_requires_and_records_npz(tmp_path):

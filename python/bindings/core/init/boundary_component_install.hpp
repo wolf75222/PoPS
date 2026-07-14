@@ -3,6 +3,7 @@
 #include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/runtime/dynamic/prepared_execution_context.hpp>
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
+#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <pybind11/pybind11.h>
 
@@ -35,6 +36,38 @@ make_component_execution_context(const py::dict& row) {
       py::cast<std::int64_t>(row["communicator_datatype_f_handle"]),
       py::cast<std::string>(row["communicator_identity"]),
       py::cast<std::string>(row["communicator_datatype_identity"]));
+}
+
+inline runtime::field::PreparedFieldSolverSpec field_solver_spec_from_python(
+    std::string provider_slot, const py::dict& topology, const py::dict& solver,
+    std::string topology_parameters_json, std::string solver_parameters_json,
+    std::string source_layout_identity, std::string topology_recipe_identity,
+    std::string boundary_contract_json,
+    double relative_tolerance, double absolute_tolerance, std::int32_t max_iterations,
+    const py::dict& execution_data) {
+  runtime::field::PreparedFieldSolverSpec spec;
+  spec.provider_slot = std::move(provider_slot);
+  spec.topology_component_id =
+      py::cast<std::string>(topology["component_id"]);
+  spec.topology_manifest_identity =
+      py::cast<std::string>(topology["component_manifest_identity"]);
+  spec.topology_interface_version =
+      py::cast<std::uint32_t>(topology["interface_version"]);
+  spec.topology_parameters_json = std::move(topology_parameters_json);
+  spec.solver_component_id = py::cast<std::string>(solver["component_id"]);
+  spec.solver_manifest_identity =
+      py::cast<std::string>(solver["component_manifest_identity"]);
+  spec.solver_interface_version =
+      py::cast<std::uint32_t>(solver["interface_version"]);
+  spec.solver_parameters_json = std::move(solver_parameters_json);
+  spec.source_layout_identity = std::move(source_layout_identity);
+  spec.topology_recipe_identity = std::move(topology_recipe_identity);
+  spec.boundary_contract_json = std::move(boundary_contract_json);
+  spec.relative_tolerance = relative_tolerance;
+  spec.absolute_tolerance = absolute_tolerance;
+  spec.max_iterations = max_iterations;
+  spec.execution = make_component_execution_context(execution_data);
+  return spec;
 }
 
 inline PopsBoundaryRegionKindV1 boundary_region_kind(const std::string& kind) {

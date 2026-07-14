@@ -4,8 +4,8 @@ FREE FUNCTIONS taking the ``program`` (and an optional physical ``model``), mirr
 ``pops.codegen.module_codegen`` for models. ``emit_cpp_program(program, model=None)`` lowers
 the Program SSA IR to the C++ source of a ``problem.so`` (the stable .so ABI installed by
 ``System::install_program``); the ``_emit_*`` / ``_check_*`` helpers and the per-cell kernel
-emitters are the lowering machinery. ``pops.time.Program.emit_cpp_program`` is a thin
-delegator into this module (lazy import), keeping ``pops.time`` free of any codegen edge.
+emitters are the lowering machinery. This module exclusively owns compiler materialization;
+``pops.time.Program`` remains an inert authoring and IR object.
 
 This is the THIN public module of the program emitter.  The lowering machinery is split
 across sibling modules so each file fits the Spec-4 size budget, and every name re-imported

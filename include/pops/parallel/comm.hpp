@@ -5,7 +5,7 @@
 ///
 /// Layer: `include/pops/parallel`.
 /// Role: expose my_rank()/n_ranks() and a fixed set of global reductions (sum/min/max on
-/// double and long, in-place sum on a double array, in-place OR on a marker array)
+/// double and long, in-place sum/max on a double array, in-place OR on a marker array)
 /// behind a single facade. Without POPS_HAS_MPI everything compiles to a serial identity; the rest
 /// of the code never sees MPI_COMM_WORLD nor mpi.h directly.
 /// Contract: every collective operates on MPI_COMM_WORLD; each rank must call them
@@ -22,6 +22,10 @@
 #ifdef POPS_HAS_MPI
 #include <mpi.h>
 #endif
+
+#include <algorithm>
+#include <cstddef>
+#include <limits>
 
 namespace pops {
 
@@ -106,11 +110,35 @@ inline void all_reduce_sum_inplace(double* buf, int n) {
   MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 }
 
+/// Element-by-element maximum of an array, in place, on all ranks.  This batches related scalar
+/// convergence witnesses into one collective without changing their individual MPI_MAX semantics.
+inline void all_reduce_max_inplace(double* buf, int n) {
+  if (!comm_active() || n <= 0)
+    return;
+  MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+}
+
 inline long all_reduce_sum(long x) {
   if (!comm_active())
     return x;
   long r = x;
   MPI_Allreduce(&x, &r, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+  return r;
+}
+
+inline long all_reduce_max(long x) {
+  if (!comm_active())
+    return x;
+  long r = x;
+  MPI_Allreduce(&x, &r, 1, MPI_LONG, MPI_MAX, MPI_COMM_WORLD);
+  return r;
+}
+
+inline long all_reduce_min(long x) {
+  if (!comm_active())
+    return x;
+  long r = x;
+  MPI_Allreduce(&x, &r, 1, MPI_LONG, MPI_MIN, MPI_COMM_WORLD);
   return r;
 }
 
@@ -120,10 +148,61 @@ inline long all_reduce_sum(long x) {
 // the global OR gathers the tags on each rank before the Berger-Rigoutsos clustering, which then
 // produces IDENTICAL fine patches everywhere (otherwise the fine BoxArray would differ per rank -> MPI
 // desynchronized). See the note in tag_box.hpp ("the distributed tags will be gathered before clustering").
-inline void all_reduce_or_inplace(char* buf, int n) {
-  if (!comm_active() || n <= 0)
-    return;
-  MPI_Allreduce(MPI_IN_PLACE, buf, n, MPI_CHAR, MPI_BOR, MPI_COMM_WORLD);
+inline void all_reduce_or_inplace(char* buf, std::size_t n) {
+  if (!comm_active() || n == 0) return;
+  while (n != 0) {
+    const int count = static_cast<int>(std::min(
+        n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    MPI_Allreduce(MPI_IN_PLACE, buf, count, MPI_CHAR, MPI_BOR, MPI_COMM_WORLD);
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
+/// Batched exact-consensus witnesses for replicated byte arrays.
+inline void all_reduce_min_inplace(char* buf, std::size_t n) {
+  if (!comm_active() || n == 0) return;
+  while (n != 0) {
+    const int count = static_cast<int>(std::min(
+        n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    MPI_Allreduce(MPI_IN_PLACE, buf, count, MPI_CHAR, MPI_MIN, MPI_COMM_WORLD);
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
+inline void all_reduce_max_inplace(char* buf, std::size_t n) {
+  if (!comm_active() || n == 0) return;
+  while (n != 0) {
+    const int count = static_cast<int>(std::min(
+        n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    MPI_Allreduce(MPI_IN_PLACE, buf, count, MPI_CHAR, MPI_MAX, MPI_COMM_WORLD);
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
+/// Batched structural consensus for canonical integral payloads.
+inline void all_reduce_min_inplace(long* buf, std::size_t n) {
+  if (!comm_active() || n == 0) return;
+  while (n != 0) {
+    const int count = static_cast<int>(std::min(
+        n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    MPI_Allreduce(MPI_IN_PLACE, buf, count, MPI_LONG, MPI_MIN, MPI_COMM_WORLD);
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
+}
+
+inline void all_reduce_max_inplace(long* buf, std::size_t n) {
+  if (!comm_active() || n == 0) return;
+  while (n != 0) {
+    const int count = static_cast<int>(std::min(
+        n, static_cast<std::size_t>(std::numeric_limits<int>::max())));
+    MPI_Allreduce(MPI_IN_PLACE, buf, count, MPI_LONG, MPI_MAX, MPI_COMM_WORLD);
+    buf += count;
+    n -= static_cast<std::size_t>(count);
+  }
 }
 
 #else  // ----- serial -----
@@ -152,8 +231,19 @@ inline double all_reduce_min(double x) {
 inline long all_reduce_sum(long x) {
   return x;
 }
+inline long all_reduce_max(long x) {
+  return x;
+}
+inline long all_reduce_min(long x) {
+  return x;
+}
 inline void all_reduce_sum_inplace(double*, int) {}  // serial: identity
-inline void all_reduce_or_inplace(char*, int) {}     // serial: identity
+inline void all_reduce_max_inplace(double*, int) {}  // serial: identity
+inline void all_reduce_or_inplace(char*, std::size_t) {}   // serial: identity
+inline void all_reduce_min_inplace(char*, std::size_t) {}  // serial: identity
+inline void all_reduce_max_inplace(char*, std::size_t) {}  // serial: identity
+inline void all_reduce_min_inplace(long*, std::size_t) {}  // serial: identity
+inline void all_reduce_max_inplace(long*, std::size_t) {}  // serial: identity
 
 #endif
 

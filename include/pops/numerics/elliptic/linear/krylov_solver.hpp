@@ -62,6 +62,14 @@ inline int validate_tensor_krylov_vcycles(int n_precond_vcycles) {
         "n_precond_vcycles >= 1", "n_precond_vcycles=" + std::to_string(n_precond_vcycles));
   return n_precond_vcycles;
 }
+
+inline bool tensor_krylov_has_affine_boundary_offset(const BCRec& bc) {
+  auto face = [](BCType type, Real value) {
+    return (type == BCType::Dirichlet || type == BCType::Robin) && value != Real(0);
+  };
+  return face(bc.xlo, bc.xlo_val) || face(bc.xhi, bc.xhi_val) ||
+         face(bc.ylo, bc.ylo_val) || face(bc.yhi, bc.yhi_val);
+}
 }  // namespace detail
 
 // Matrix-free BiCGStab, preconditioned by N V-cycles of GeometricMG on the SYMMETRIC part.
@@ -108,33 +116,51 @@ class TensorKrylovSolver {
     lincomb(r_, Real(1), rhs(), Real(-1), r_);  // r_ = rhs - L_int(phi)
     return l2_norm(r_);
   }
-  void solve() { solve(kKrylovDefaultRelTol, kTensorKrylovDefaultMaxIters); }
+  void solve() { solve(kKrylovDefaultRelTol, kTensorKrylovDefaultMaxIters, Real(0)); }
 
   // Preconditioned BiCGStab. phi() is the unknown (warm start: incoming value = starting point);
-  // rhs() the right-hand side. Returns iterations + relative residual + convergence.
-  SolveReport solve(Real rel_tol, int max_iters) {
+  // rhs() the right-hand side. Stops at
+  //   ||r||2 <= max(rel_tol * ||R(0)||2, abs_tol),
+  // where R(0) is the exact affine forcing. The report uses 1 only as the relative-residual
+  // denominator when ||R(0)||2 is exactly zero. Returns iterations + relative residual + convergence.
+  SolveReport solve(Real rel_tol, int max_iters, Real abs_tol = Real(0)) {
     if (max_iters <= 0)
       throw std::invalid_argument("dynamic solver loops require max_iter");
     if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)))
       throw std::invalid_argument("dynamic solver loops require positive finite rel_tol");
-    prepare_solve();  // compute (once) the inhomogeneous Dirichlet BC offsets (matvec + precond)
+    if (abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol)))
+      throw std::invalid_argument("dynamic solver loops require nonnegative finite abs_tol");
+    prepare_solve();  // compute (once) the inhomogeneous physical-BC offsets (matvec + precond)
     // r0 = rhs - L_int(phi)  (true INHOMOGENEOUS residual, warm start respected). Here we KEEP the AFFINE
-    // operator: it folds the Dirichlet data into the residual, exactly what we want for r0. The
+    // operator: it folds the boundary data into the residual, exactly what we want for r0. The
     // equivalent linear system is L_lin x = rhs - c_bc (c_bc = apply_operator(0)); since
     // r0 = rhs - apply_operator(phi) = (rhs - c_bc) - L_lin(phi), r0 is UNCHANGED. The IN-LOOP matvecs,
     // by contrast, act on correction DIRECTIONS and must be LINEAR (apply_operator_lin).
     apply_operator(phi(), v_);                  // v_ = L_int(phi)
     lincomb(r_, Real(1), rhs(), Real(-1), v_);  // r_ = rhs - L_int(phi)
-    const Real bnorm = l2_norm(rhs());
-    const Real norm0 = bnorm > Real(0) ? bnorm : Real(1);  // relative base (zero rhs -> absolute)
+    // The affine problem L_int(phi) = rhs is equivalent to L_lin(phi) = rhs - c_bc.  Relative
+    // convergence therefore scales against the effective linear forcing, not the stored rhs alone.
+    // Reuse t_ here (it is overwritten before its first BiCGStab use) so every solve remains allocation
+    // free.  For a homogeneous operator, retain the historical direct norm of rhs bit-for-bit.
+    Real forcing_norm = Real(0);
+    if (has_op_offset_) {
+      lincomb(t_, Real(1), rhs(), Real(-1), op_offset_);  // t_ = b_eff = rhs - c_bc
+      forcing_norm = l2_norm(t_);
+    } else {
+      forcing_norm = l2_norm(rhs());
+    }
+    const Real report_denom = forcing_norm > Real(0) ? forcing_norm : Real(1);
+    const Real stop =
+        (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
     Real rnorm = l2_norm(r_);
     SolveReport res;
-    res.rel_residual = rnorm / norm0;
-    if (!std::isfinite(static_cast<double>(rnorm))) {
+    res.rel_residual = rnorm / report_denom;
+    if (!std::isfinite(static_cast<double>(forcing_norm)) ||
+        !std::isfinite(static_cast<double>(rnorm))) {
       res.mark_failed(SolveStatus::kInvalidEvaluation);
       return res;
     }
-    if (rnorm <= rel_tol * norm0) {
+    if (rnorm <= stop) {
       res.mark_solved();
       return res;
     }  // already converged
@@ -151,13 +177,13 @@ class TensorKrylovSolver {
       if (!std::isfinite(static_cast<double>(rho)) ||
           !std::isfinite(static_cast<double>(omega))) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);
         return res;
       }
       if (std::fabs(rho) < kTiny || std::fabs(omega) < kTiny) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
@@ -171,13 +197,13 @@ class TensorKrylovSolver {
       const Real rhat_dot_v = dot(rhat_, v_);  // COLLECTIVE
       if (!std::isfinite(static_cast<double>(rhat_dot_v))) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);
         return res;
       }
       if (std::fabs(rhat_dot_v) < kTiny) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
@@ -189,14 +215,14 @@ class TensorKrylovSolver {
       const Real snorm = l2_norm(s_);
       if (!std::isfinite(static_cast<double>(snorm))) {
         res.iters = k;
-        res.rel_residual = snorm / norm0;
+        res.rel_residual = snorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);
         return res;
       }
-      if (snorm <= rel_tol * norm0) {  // convergence at mid-iteration
+      if (snorm <= stop) {  // convergence at mid-iteration
         rnorm = snorm;
         res.iters = k;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_solved();
         return res;
       }
@@ -206,7 +232,7 @@ class TensorKrylovSolver {
       const Real tt = dot(t_, t_);  // COLLECTIVE
       if (!std::isfinite(static_cast<double>(tt))) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
         res.mark_failed(SolveStatus::kInvalidEvaluation);
         return res;
       }
@@ -216,13 +242,13 @@ class TensorKrylovSolver {
       lincomb(r_, Real(1), s_, -omega, t_);
       rnorm = l2_norm(r_);
       res.iters = k;
-      res.rel_residual = rnorm / norm0;
+      res.rel_residual = rnorm / report_denom;
       if (!std::isfinite(static_cast<double>(omega)) ||
           !std::isfinite(static_cast<double>(rnorm))) {
         res.mark_failed(SolveStatus::kInvalidEvaluation);
         return res;
       }
-      if (rnorm <= rel_tol * norm0) {
+      if (rnorm <= stop) {
         res.mark_solved();
         return res;
       }
@@ -237,10 +263,10 @@ class TensorKrylovSolver {
 
   // INHOMOGENEOUS MATRIX-FREE matvec: out = L_int(in) = div(A grad in) - kappa in, ghosts of in filled
   // with op_.bc() (the FULL BC). Reuses the coefficients of op_'s FULL operator (same pointers as
-  // current_residual). AFFINE in in when bcPhi carries a nonzero Dirichlet value: the boundary ghost
-  // equals 2 v - in_interior, so the stencil of boundary cells receives a CONSTANT term c_bc =
-  // apply_operator(0). We use it ONLY for the true residual r0 / residual() (where that constant term
-  // is exactly the Dirichlet data folded into the residual, which is what we want). The IN-LOOP matvecs
+  // current_residual). AFFINE in in when a Dirichlet or Robin face carries a nonzero value: the
+  // boundary ghost has a fixed value-dependent term, so the stencil of boundary cells receives a
+  // CONSTANT term c_bc = apply_operator(0). We use it ONLY for the true residual r0 / residual()
+  // (where that constant term is exactly the boundary data folded into the residual). The IN-LOOP matvecs
   // (on correction directions) go through apply_operator_lin (LINEAR operator).
   void apply_operator(MultiFab& in, MultiFab& out) {
     device_fence();  // a kernel may have written in; wait before the host read of fill_ghosts
@@ -257,7 +283,8 @@ class TensorKrylovSolver {
   // DIRECTIONS (phat = M^{-1} p, shat = M^{-1} s), NOT to the iterate; the operator must be linear there,
   // otherwise the constant term c_bc injected at each matvec breaks the BiCGStab relations (residual that
   // oscillates / diverges). We therefore subtract c_bc, just as we subtract d_bc in the preconditioner. Zero
-  // Dirichlet BC => has_op_offset_ stays false => apply_operator_lin == apply_operator, bit-identical.
+  // Homogeneous Dirichlet/Robin BC => has_op_offset_ stays false => apply_operator_lin ==
+  // apply_operator, bit-identical.
   void apply_operator_lin(MultiFab& in, MultiFab& out) {
     apply_operator(in, out);
     if (has_op_offset_)
@@ -269,9 +296,9 @@ class TensorKrylovSolver {
   // precond_ does NOT carry the cross terms -> diagonal block.
   //
   // The V-cycle of precond_ (precond_.vcycle()) runs at level 0 with its FULL BC bc_. Now if bcPhi
-  // carries a NONZERO Dirichlet value (xlo_val/... != 0), fill_physical_bc fills the ghost by
-  // ghost = 2 v - interior: starting from phi=0, the first pass injects a FIXED source term ~2 v,
-  // INDEPENDENT of in. The raw V-cycle is therefore AFFINE: precond_raw(in) = M^{-1} in + d_bc, with
+  // carries a NONZERO Dirichlet or Robin value, fill_physical_bc injects a FIXED value-dependent
+  // ghost term starting from phi=0, INDEPENDENT of in. The raw V-cycle is therefore AFFINE:
+  // precond_raw(in) = M^{-1} in + d_bc, with
   // d_bc = precond_raw(0) (constant offset, function of the BC and coefficients alone, NOT of in).
   // This offset injected into phat/shat would make phi += alpha phat + omega shat drift by a spurious
   // term alpha d_bc + omega d_bc at each iteration and would break convergence. We therefore SUBTRACT the offset:
@@ -280,11 +307,11 @@ class TensorKrylovSolver {
   // not depend on v). Bit-identical to an internal vcycle_homogeneous(), without touching GeometricMG.
   //
   // Same reason and remedy as apply_operator_lin (linear matvec): the operator AND the preconditioner
-  // are AFFINE under nonzero Dirichlet BC, and BiCGStab applies them to correction DIRECTIONS;
+  // are AFFINE under nonzero Dirichlet/Robin BC, and BiCGStab applies them to correction DIRECTIONS;
   // we linearize both by subtracting their respective offset (c_bc for the matvec, d_bc for the precond).
-  // Only the true residual r0 / residual() keeps the operator affine (the Dirichlet data is folded in there).
+  // Only the true residual r0 / residual() keeps the operator affine (the boundary data is folded in there).
   //
-  // d_bc is computed ONCE per solve (prepare_solve). Zero Dirichlet BC (xlo_val=... =0) =>
+  // d_bc is computed ONCE per solve (prepare_solve). Zero-valued Dirichlet/Robin BC =>
   // has_bc_offset_ stays false => path STRICTLY UNCHANGED (no subtraction), bit-identical.
   void apply_precond(MultiFab& in, MultiFab& out) {
     precond_raw(in, out);
@@ -293,7 +320,7 @@ class TensorKrylovSolver {
   }
 
   // RAW V-cycle of the preconditioner: out = (N MG V-cycles) applied to in, starting from phi=0. AFFINE in in
-  // when bcPhi carries a nonzero Dirichlet value (offset d_bc = precond_raw(0)).
+  // when bcPhi carries a nonzero Dirichlet/Robin value (offset d_bc = precond_raw(0)).
   void precond_raw(MultiFab& in, MultiFab& out) {
     copy_into(precond_.rhs(), in);
     precond_.phi().set_val(Real(0));
@@ -303,18 +330,14 @@ class TensorKrylovSolver {
   }
 
   // Prepare the inhomogeneous BC offsets, ONCE per solve: c_bc = apply_operator(0) for the matvec and
-  // d_bc = precond_raw(0) for the preconditioner. A BC without a nonzero Dirichlet value leaves both
+  // d_bc = precond_raw(0) for the preconditioner. A BC without a nonzero Dirichlet/Robin value leaves both
   // offsets at 0 (has_*_offset_ = false): apply_operator_lin and apply_precond revert to the historical
   // path (no subtraction), STRICTLY bit-identical. We detect inhomogeneity on op_.bc()
   // (matvec) and precond_.bc() (precond) separately. We use phat_ (1 ghost, required by fill_ghosts
   // of apply_operator) as the NULL input; phat_ is overwritten at the 1st iteration (apply_precond(p_, phat_)).
   void prepare_solve() {
-    auto inhomog = [](const BCRec& b) {
-      return b.xlo_val != Real(0) || b.xhi_val != Real(0) || b.ylo_val != Real(0) ||
-             b.yhi_val != Real(0);
-    };
-    has_op_offset_ = inhomog(op_.bc());
-    has_bc_offset_ = inhomog(precond_.bc());
+    has_op_offset_ = detail::tensor_krylov_has_affine_boundary_offset(op_.bc());
+    has_bc_offset_ = detail::tensor_krylov_has_affine_boundary_offset(precond_.bc());
     if (has_op_offset_) {
       phat_.set_val(Real(0));  // null input (1 ghost for fill_ghosts; phat_ overwritten afterward)
       apply_operator(
@@ -356,8 +379,8 @@ class TensorKrylovSolver {
   MultiFab r_, rhat_, p_, v_, s_, t_;  // 0 ghost: pointwise ops
   MultiFab phat_, shat_;               // 1 ghost: inputs of apply_operator (fill_ghosts)
   MultiFab op_offset_;  // c_bc = apply_operator(0): inhomogeneous boundary part of the matvec
-  MultiFab bc_offset_;  // d_bc = precond_raw(0): Dirichlet BC offset of the precond
-  bool has_op_offset_ = false;  // true if the operator BC carries a nonzero Dirichlet value
+  MultiFab bc_offset_;  // d_bc = precond_raw(0): physical-BC offset of the preconditioner
+  bool has_op_offset_ = false;  // true if the operator has a nonzero Dirichlet/Robin value
   bool has_bc_offset_ = false;  // true if the preconditioner BC carries a nonzero value
 };
 

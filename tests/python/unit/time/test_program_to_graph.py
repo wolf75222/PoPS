@@ -7,10 +7,9 @@ import pytest
 
 from pops.model import Module, Rate
 from pops.problem import Case
-from pops.time import Program
-from pops.time.graph import (
-    Branch, Commit, Loop, OperatorCall, ProgramValue, Region, RegionCapture, StateRead,
-    Synchronize, ValueRef,
+from pops.time import (
+    Branch, Commit, GraphProgramValue as ProgramValue, Loop, OperatorCall, Program, Region,
+    RegionCapture, StateRead, Synchronize, ValueRef,
 )
 from pops.time.points import Clock, TimePoint
 
@@ -81,7 +80,7 @@ def test_to_graph_preserves_exact_cross_clock_synchronization():
     state = program.state(block[model.state_handle(space)])
     fast = Clock("fast", owner=program.owner_path)
     target = TimePoint(fast, Fraction(1, 3))
-    from pops.time.synchronization import SampleAndHold
+    from pops.time import SampleAndHold
 
     program.synchronize(state.n, at=target, relation=SampleAndHold(), name="sample")
 

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pops.identity import Identity, make_identity
-from pops.solvers._numeric import exact_open_unit_real, optional_positive_int
+from pops.solvers._numeric import exact_nonnegative_real, exact_open_unit_real, optional_positive_int
 
 
 _HIERARCHY_SOLVER_SCHEMA_VERSION = 1
@@ -27,6 +27,7 @@ class _PreparedCompositeTensorFAC:
     """Authenticated direct hierarchy solver consumed by :meth:`Program.solve`."""
 
     tolerance: Any
+    absolute_tolerance: Any
     max_iterations: int
     identity_data: dict[str, Any]
     identity: Identity
@@ -45,14 +46,17 @@ class CompositeTensorFAC:
 
     ``CompositeTensorFAC`` owns the complete solve contract. On a flat hierarchy it runs the
     authenticated tensor apply through BiCGStab; on a refined hierarchy it runs the equivalent
-    native composite FAC operator. ``max_iter`` and ``rel_tol`` govern both branches. The FAC-only
-    controls shape the refined iteration and are never presented as Krylov options.
+    native composite FAC operator. ``max_iter`` and ``rel_tol`` govern both branches; ``abs_tol`` is
+    the refined FAC absolute floor. The FAC-only controls shape the refined iteration and are never
+    presented as Krylov options.
     """
 
     max_iter: int = _DEFAULT_MAX_ITER
     rel_tol: Any = _DEFAULT_REL_TOL
+    abs_tol: Any = 0.0
     fine_sweeps: int | None = None
     coarse_rel_tol: Any = None
+    coarse_abs_tol: Any = None
     coarse_cycles: int | None = None
     verbose: bool | None = None
     solver_id: str = field(init=False, default="composite_tensor_fac")
@@ -72,6 +76,9 @@ class CompositeTensorFAC:
             exact_open_unit_real(self.rel_tol, where="CompositeTensorFAC(rel_tol=)"),
         )
         object.__setattr__(
+            self, "abs_tol", exact_nonnegative_real(self.abs_tol, where="CompositeTensorFAC(abs_tol=)")
+        )
+        object.__setattr__(
             self,
             "fine_sweeps",
             optional_positive_int(self.fine_sweeps, where="CompositeTensorFAC(fine_sweeps=)"),
@@ -88,6 +95,12 @@ class CompositeTensorFAC:
                 exact_open_unit_real(
                     self.coarse_rel_tol, where="CompositeTensorFAC(coarse_rel_tol=)"
                 ),
+            )
+        if self.coarse_abs_tol is not None:
+            object.__setattr__(
+                self, "coarse_abs_tol", exact_nonnegative_real(
+                    self.coarse_abs_tol, where="CompositeTensorFAC(coarse_abs_tol=)"
+                )
             )
         if self.verbose is not None and type(self.verbose) is not bool:
             raise TypeError(
@@ -107,9 +120,13 @@ class CompositeTensorFAC:
             "options": {
                 "max_iter": self.max_iter,
                 "rel_tol": scalar_data(self.rel_tol),
+                "abs_tol": scalar_data(self.abs_tol),
                 "fine_sweeps": self.fine_sweeps,
                 "coarse_rel_tol": (
                     None if self.coarse_rel_tol is None else scalar_data(self.coarse_rel_tol)
+                ),
+                "coarse_abs_tol": (
+                    None if self.coarse_abs_tol is None else scalar_data(self.coarse_abs_tol)
                 ),
                 "coarse_cycles": self.coarse_cycles,
                 "verbose": self.verbose,
@@ -127,6 +144,7 @@ class CompositeTensorFAC:
         identity_data = self.canonical_identity()
         return _PreparedCompositeTensorFAC(
             tolerance=self.rel_tol,
+            absolute_tolerance=self.abs_tol,
             max_iterations=self.max_iter,
             identity_data=deepcopy(identity_data),
             identity=make_identity("hierarchy-solver", identity_data),

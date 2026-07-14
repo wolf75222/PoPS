@@ -222,6 +222,7 @@ class ResolvedSimulationPlan:
     initial_condition_plan: Any = None
     bootstrap_plan: Any = None
     amr_execution: Any = None
+    amr_providers: Mapping[str, Any] = field(default_factory=dict)
     plan_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
@@ -304,6 +305,8 @@ class ResolvedSimulationPlan:
                 item.verify()
             else:
                 item.component_type.interface.require_manifest(item.component_manifest)
+        for field_plan in self.field_plans.values():
+            field_plan.require_component_inputs(component_inputs)
         object.__setattr__(self, "component_inputs", component_inputs)
         for block in self.blocks:
             if block.numerics is None:
@@ -333,6 +336,8 @@ class ResolvedSimulationPlan:
             self.capabilities, where="ResolvedSimulationPlan.capabilities"))
         object.__setattr__(self, "compile_options", _string_mapping(
             self.compile_options, where="ResolvedSimulationPlan.compile_options"))
+        object.__setattr__(self, "amr_providers", _string_mapping(
+            self.amr_providers, where="ResolvedSimulationPlan.amr_providers"))
         self._validate_amr_authorities()
         object.__setattr__(self, "plan_identity", make_identity("resolved-plan", self._payload()))
 
@@ -389,6 +394,8 @@ class ResolvedSimulationPlan:
             "amr_execution": _evidence(
                 self.amr_execution, where="plan.amr_execution"
             ) if self.amr_execution is not None else None,
+            "amr_providers": _evidence(
+                self.amr_providers, where="plan.amr_providers"),
         }
 
     def verify(self) -> None:
@@ -575,6 +582,10 @@ class InstallPlan:
     @property
     def amr_execution(self) -> Any:
         return self.artifact.plan.amr_execution
+
+    @property
+    def amr_providers(self) -> Mapping[str, Any]:
+        return self.artifact.plan.amr_providers
 
     @property
     def initial_values(self) -> Mapping[Any, Any]:

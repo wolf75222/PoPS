@@ -24,6 +24,7 @@ captured into the step closure), reused across every step and every Krylov itera
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -98,27 +99,27 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
-    src = _solve_program(t, method="cg").emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="cg"))
     for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
                  "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
 
 def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
-    src = _solve_program(t, method="cg", action=RejectAttempt()).emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="cg", action=RejectAttempt()))
     assert "#include <pops/runtime/program/step_transaction.hpp>" in src, src
     assert "pops::runtime::program::StepAttemptRejected" in src, src
     assert "solve_linear failed" in src, src
 
 
 def test_bicgstab_codegen(t):
-    src = _solve_program(t, method="bicgstab").emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="bicgstab"))
     assert "ctx.solve_linear_matfree" in src, src
     assert "pops::ApplyFn{}" in src, "bicgstab uses the identity (empty) preconditioner\n%s" % src
 
 
 def test_richardson_codegen(t):
-    src = _solve_program(t, method="richardson").emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="richardson"))
     assert "ctx.solve_linear_matfree" in src, src
 
 
@@ -133,7 +134,7 @@ def test_gmres_gmg_precond_codegen(t):
     # identity ApplyFn. ADC-637: the precond V-cycle cache lives in a persistent
     # pops::runtime::program::GeometricMgPreconditioner (re-homed to the Schur-free coeff_elliptic_ops.hpp)
     # the named lambda forwards apply() to.
-    src = _solve_program(t, method="gmres", preconditioner=_precond("geometric_mg")).emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="gmres", preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, (
         "the MG V-cycle preconditioner state must be emitted\n%s" % src)
     assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
@@ -144,8 +145,8 @@ def test_gmres_gmg_precond_codegen(t):
 
 
 def test_bicgstab_gmg_precond_codegen(t):
-    src = _solve_program(t, method="bicgstab",
-                         preconditioner=_precond("geometric_mg")).emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="bicgstab",
+                         preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
     assert "->apply(ctx," in src, src
     call = _solve_call(src)
@@ -155,9 +156,9 @@ def test_bicgstab_gmg_precond_codegen(t):
 def test_identity_precond_byte_identical(t):
     # The identity (default) path is unchanged: the empty ApplyFn{}, no MG apply emitted. The explicit
     # Identity() descriptor and the None default lower to the SAME source.
-    src_default = _solve_program(t, method="gmres").emit_cpp_program()
-    src_identity = _solve_program(t, method="gmres",
-                                  preconditioner=_precond("identity")).emit_cpp_program()
+    src_default = emit_cpp_program(_solve_program(t, method="gmres"))
+    src_identity = emit_cpp_program(_solve_program(t, method="gmres",
+                                  preconditioner=_precond("identity")))
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
     assert "pops::ApplyFn{}" in _solve_call(src_default), "identity gmres keeps the empty ApplyFn"
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"

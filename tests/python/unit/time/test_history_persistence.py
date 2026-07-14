@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from pops.time.history_persistence import (
+from pops.time._history.persistence import (
     Dense, HistoryPersistence, Interval, Revolve,
     DEFAULT_HISTORY_PERSISTENCE, resolve_history_persistence,
 )

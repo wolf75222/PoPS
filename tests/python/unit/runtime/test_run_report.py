@@ -60,6 +60,7 @@ def test_public_run_returns_exact_immutable_report():
         "bind_identity": report.bind_identity.to_data(),
         "execution_identity": report.execution_identity.to_data(),
         "artifact_identity": report.artifact_identity.to_data(),
+        "field_providers": [],
     }
     with pytest.raises(FrozenInstanceError):
         report.accepted_steps = 3

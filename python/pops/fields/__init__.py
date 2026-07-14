@@ -52,6 +52,7 @@ from .poisson import (
     PoissonOperator,
     ScreenedPoissonOperator,
 )
+from .providers import ExternalFieldSolver
 from .policies import (
     FailFieldRead,
     FieldAttemptRejected,
@@ -156,6 +157,7 @@ __all__ = [
     "RejectFieldAttempt",
     "ResolvedHierarchyPolicy",
     "ScreenedPoissonOperator",
+    "ExternalFieldSolver",
     "SolveOutcome",
     "SolveStatus",
     "SourceDensity",

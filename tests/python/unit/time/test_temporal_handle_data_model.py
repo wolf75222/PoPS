@@ -10,7 +10,7 @@ from pops.time import (
     HistoryHandle, Program, StageHandle, StagePoint, StateEndpointHandle,
     TimePoint, TimeState,
 )
-from pops.time.history_persistence import Interval
+from pops.time._history.persistence import Interval
 import pops.time as time_api
 import pops.time.handles as temporal_handles
 

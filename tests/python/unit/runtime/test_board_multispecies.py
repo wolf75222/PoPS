@@ -22,6 +22,7 @@ faking.
 Runs BOTH as a script (``python3 test_board_multispecies.py``, the CI-style invocation) and under
 pytest (the test_* functions take no args and importorskip pops.time / pops.physics).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 import pytest
@@ -176,9 +177,9 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     bm, be, bi = _two_fluid_board()
     hmod, he, hi = _two_fluid_handwritten()
     board_spaces = bm.module.state_spaces()
-    bsrc = _two_fluid_program(
-        bm.module, board_spaces[be.name], board_spaces[bi.name]).emit_cpp_program(model=None)
-    hsrc = _two_fluid_program(hmod, he, hi).emit_cpp_program(model=None)
+    bsrc = emit_cpp_program(_two_fluid_program(
+        bm.module, board_spaces[be.name], board_spaces[bi.name]), model=None)
+    hsrc = emit_cpp_program(_two_fluid_program(hmod, he, hi), model=None)
     assert bsrc == hsrc
     # one shared multi-state kernel binds both species, reads cons from each state (sanity)
     assert bsrc.count("pops::for_each_cell") == 1
@@ -200,8 +201,8 @@ def test_same_physical_component_name_needs_no_species_rename():
     )
     assert electrons["density"].name != ions["density"].name
     spaces = model_.module.state_spaces()
-    source = _two_fluid_program(
-        model_.module, spaces["electron_state"], spaces["ion_state"]).emit_cpp_program(model=None)
+    source = emit_cpp_program(_two_fluid_program(
+        model_.module, spaces["electron_state"], spaces["ion_state"]), model=None)
     assert electrons["density"].name in source
     assert ions["density"].name in source
 

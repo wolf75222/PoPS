@@ -3,7 +3,7 @@ from fractions import Fraction
 
 from pops.lib.time.rk import RK4_TABLEAU, SSPRK2_TABLEAU
 from pops.lib.time.ssprk import SSPRK3_TABLEAU
-from pops.time.method_tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
 
 
 def test_classical_tableaux_have_exact_certified_properties():

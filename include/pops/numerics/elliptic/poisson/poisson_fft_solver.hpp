@@ -83,6 +83,9 @@ class PoissonFFTSolver {
 
   // Solve lap(phi) = rhs in place (direct, one forward FFT + inverse).
   void solve() {
+    // PoissonFFT is a host implementation. Own the device->host transition here so every caller,
+    // including a directly coupled asynchronous RHS assembly, observes a complete right-hand side.
+    rhs_.sync_host();
     const int Nx = geom_.domain.nx(), Ny = geom_.domain.ny();
     const ConstArray4 f = rhs_.fab(0).const_array();
     const Box2D v = rhs_.box(0);
@@ -95,6 +98,7 @@ class PoissonFFTSolver {
     for (int j = 0; j < Ny; ++j)
       for (int i = 0; i < Nx; ++i)
         p(v.lo[0] + i, v.lo[1] + j) = phil[static_cast<std::size_t>(j) * Nx + i];
+    phi_.sync_device();
     // phi GHOSTS: the aux derivation (centered grad phi, solve_fields) reads the i+-1/j+-1
     // neighbors, hence the domain-boundary ghosts. GeometricMG fills them while smoothing; this
     // direct solver writes ONLY the valid cells -> without this exchange, the boundary gradient
@@ -171,6 +175,7 @@ class DistributedFFTSolver {
   // Solve lap(phi) = rhs in place: local slab -> flat array -> PoissonFFT (internal MPI transpose)
   // -> rewrite the local slab. Mode k=0 set to zero (phi with zero mean).
   void solve() {
+    rhs_.sync_host();
     const ConstArray4 f = rhs_.fab(0).const_array();
     const Box2D v = rhs_.box(0);  // local slab [0..Nx-1] x [y0..y0+nyl-1]
     std::vector<double> rho(static_cast<std::size_t>(nyl_) * Nx_), phil;
@@ -182,6 +187,7 @@ class DistributedFFTSolver {
     for (int jl = 0; jl < nyl_; ++jl)
       for (int i = 0; i < Nx_; ++i)
         p(v.lo[0] + i, v.lo[1] + jl) = phil[static_cast<std::size_t>(jl) * Nx_ + i];
+    phi_.sync_device();
   }
 
   // Discrete residual ||lap(phi) - rhs|| reduced over all ranks (~round-off: direct solve exact).
@@ -286,6 +292,7 @@ class RemappedFFTSolver {
   // device_fence() after ell_solve() (system_field_solver.hpp) covers the GPU read of the centered grad
   // phi, identical to the PoissonFFTSolver path. Mode k=0 set to zero (phi with zero mean).
   void solve() {
+    rhs_.sync_host();
     // box-major rhs lives ENTIRELY on owner_rank_; each rank ends up with one nyl_ x Nx_ slab.
     std::vector<double> rho_local(static_cast<std::size_t>(nyl_) * Nx_), phi_local;
 #ifdef POPS_HAS_MPI
@@ -339,6 +346,7 @@ class RemappedFFTSolver {
           p(v.lo[0] + i, v.lo[1] + j) = phi_local[static_cast<std::size_t>(j) * Nx_ + i];
     }
 #endif
+    phi_.sync_device();
     // Periodic ghosts on the System layout: only the owner has a fab -> pure intra-box wrap (self-copy),
     // no inter-rank messages, deadlock-free. SAME role as in PoissonFFTSolver::solve() (the centered grad
     // phi of the aux derivation reads the i+-1 / j+-1 ghosts).

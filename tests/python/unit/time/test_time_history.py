@@ -32,6 +32,7 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
     "history 'missing.R' with lag=1 was requested but not initialized".
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import state_refs, typed_state
 
@@ -107,7 +108,7 @@ def test_history_lag_must_be_positive_int(t):
 def test_ab2_macro_lowers(t):
     P = _ab2_program(t)
     assert P.validate() is True, "the AB2 macro must validate"
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ('ctx.history("plasma.R", 1)', 'ctx.store_history("plasma.R"',
                  "ctx.rotate_histories();"):
         assert frag in src, "the AB2 codegen must contain %r\n%s" % (frag, src)
@@ -122,7 +123,7 @@ def test_store_before_read_in_body(t):
     the history line bound to a MultiFab& (``pops::MultiFab& ... = ctx.history(...)``); the bare
     ``ctx.history(...)`` at the top is only the depth-locking registration."""
     P = _ab2_program(t)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     body = src[src.index("ctx.install"):]
     read = body.index("= ctx.history(\"plasma.R\", 1);")  # the bound read, not the bare registration
     assert body.index("ctx.store_history") < read, \
@@ -139,7 +140,7 @@ def test_non_history_schemes_emit_no_rotate(t):
         rate = model.rate("rate", flux=False, sources=())
         block, state = state_refs(t.Program("refs"), "blk", model=model)
         P = factory(block[state], rate=rate)
-        src = P.emit_cpp_program()
+        src = emit_cpp_program(P)
         assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % factory.__name__
         assert "ctx.history(" not in src, "%s must not read a history" % factory.__name__
 
@@ -177,7 +178,7 @@ def test_absent_history_program_lowers(t):
     P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert 'ctx.history("missing.R", 1)' in src, src
     assert "ctx.store_history" not in src, "the absent-history program never stores"
 

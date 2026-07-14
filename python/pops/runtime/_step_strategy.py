@@ -4,12 +4,43 @@ from __future__ import annotations
 import bisect
 import math
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from pops._bootstrap import StepAttemptRejected
-from pops.time.step_strategy import StepStrategy
-from pops.time.step_transaction import StepTransactionReport
+from pops.time._step.strategy import (
+    AdaptiveCFL,
+    ErrorControlledDt,
+    ExternalTimeGrid,
+    FixedDt,
+    StepStrategy,
+)
+from pops.time._step.transaction import StepTransactionReport
+
+
+ControllerFactory = Callable[[StepStrategy, Mapping[str, Any] | None], "StepController"]
+_CONTROLLER_FACTORIES: dict[type[StepStrategy], ControllerFactory] = {}
+
+
+def register_step_controller_factory(
+    strategy_type: type[StepStrategy],
+) -> Callable[[ControllerFactory], ControllerFactory]:
+    """Register the sole runtime materializer for one exact authoring descriptor type."""
+    if not isinstance(strategy_type, type) or not issubclass(strategy_type, StepStrategy) \
+            or strategy_type is StepStrategy:
+        raise TypeError("step controller adapters require a concrete StepStrategy type")
+
+    def register(factory: ControllerFactory) -> ControllerFactory:
+        if not callable(factory):
+            raise TypeError("step controller factory must be callable")
+        existing = _CONTROLLER_FACTORIES.get(strategy_type)
+        if existing is not None and existing is not factory:
+            raise ValueError(
+                "runtime controller factory already registered for %s" % strategy_type.__name__)
+        _CONTROLLER_FACTORIES[strategy_type] = factory
+        return factory
+
+    return register
 
 
 def _stores(engine: Any) -> tuple[str, ...]:
@@ -87,6 +118,7 @@ class StepController(ABC):
 
     def restore_temporal_state(self, temporal: Any) -> None:
         """Restore provider-owned proposal state; stateless controllers need no action."""
+        return None
 
     @abstractmethod
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
@@ -186,9 +218,59 @@ class ExternalTimeGridController(StepController):
         return 1
 
 
+@register_step_controller_factory(FixedDt)
+def _fixed_dt_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController:
+    del controls
+    return FixedDtController(strategy)
+
+
+@register_step_controller_factory(AdaptiveCFL)
+def _adaptive_cfl_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController:
+    return AdaptiveCFLController(strategy, controls)
+
+
+@register_step_controller_factory(ErrorControlledDt)
+def _error_controlled_dt_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController:
+    del controls
+    return ErrorControlledDtController(strategy)
+
+
+@register_step_controller_factory(ExternalTimeGrid)
+def _external_time_grid_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController:
+    values = {} if controls is None else dict(controls)
+    return ExternalTimeGridController(
+        strategy, tuple(float(value) for value in values[strategy.grid_id]))
+
+
+def materialize_step_controller(
+    strategy: StepStrategy, controls: Mapping[str, Any] | None = None,
+) -> StepController:
+    """Materialize a runtime controller through the exact registered adapter only."""
+    strategy.validate_runtime_controls(controls)
+    factory = _CONTROLLER_FACTORIES.get(type(strategy))
+    if factory is None:
+        raise TypeError(
+            "no runtime controller adapter is registered for StepStrategy type %s"
+            % type(strategy).__name__)
+    controller = factory(strategy, controls)
+    if not isinstance(controller, StepController):
+        raise TypeError("step controller factory must return a StepController")
+    if controller.strategy is not strategy:
+        raise TypeError("step controller factory must preserve the exact strategy authority")
+    return controller
+
+
 def resolve_run_strategy(engine: Any) -> StepStrategy:
     """Resolve the sole strategy authenticated by the installed Program."""
-    from pops.time.step_transaction import ensure_step_strategy
+    from pops.time._step.transaction import ensure_step_strategy
 
     selected = getattr(engine, "_step_strategy", None)
     try:
@@ -205,9 +287,7 @@ def _controller(engine: Any, strategy: StepStrategy, controls: Mapping[str, Any]
     strategy.validate_runtime_controls(controls)
     current = getattr(engine, "_step_controller", None)
     if current is None or not current.matches(strategy, controls):
-        current = strategy.runtime_controller(controls)
-        if not isinstance(current, StepController):
-            raise TypeError("StepStrategy.runtime_controller must return a StepController")
+        current = materialize_step_controller(strategy, controls)
         current.restore_temporal_state(getattr(engine, "_temporal_restart_state", None))
         engine._step_controller = current
     return current
@@ -261,6 +341,7 @@ def run_control_payload(
 
 __all__ = [
     "AdaptiveCFLController", "ErrorControlledDtController", "ExternalTimeGridController",
-    "FixedDtController", "StepAttemptRejected", "StepController", "prepare_step_controller",
-    "resolve_run_strategy", "run_control_payload", "run_step_attempt",
+    "FixedDtController", "StepAttemptRejected", "StepController", "materialize_step_controller",
+    "prepare_step_controller", "register_step_controller_factory", "resolve_run_strategy",
+    "run_control_payload", "run_step_attempt",
 ]

@@ -1,5 +1,6 @@
 """Fail-closed generic multi-block implicit Program lowering (ADC-690)."""
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 import pytest
 
@@ -64,7 +65,7 @@ def _program(*, consume=True, coefficient=1):
 
 def test_coupled_implicit_is_one_native_newton_kernel_with_explicit_action():
     _module, program, solved = _program()
-    source = program.emit_cpp_program(model=None)
+    source = emit_cpp_program(program, model=None)
 
     assert len(solved) == 2
     assert source.count("pops::for_each_cell") == 1
@@ -80,7 +81,7 @@ def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_problem_iden
     _module, program, _solved = _program(coefficient=0.5)
     token = next(value for value in program._values
                  if value.op == "solve_coupled_implicit")
-    source = program.emit_cpp_program(model=None)
+    source = emit_cpp_program(program, model=None)
 
     assert token.attrs["problem_kind"] == "coupled_implicit_euler"
     assert token.attrs["problem_identity"].startswith(
@@ -94,14 +95,14 @@ def test_unconsumed_coupled_implicit_is_rejected_by_graph_validation_and_codegen
     with pytest.raises(ValueError, match="consumed exactly once"):
         program.to_graph()
     with pytest.raises(ValueError, match="must have exactly one explicit"):
-        program.emit_cpp_program(model=None)
+        emit_cpp_program(program, model=None)
     with pytest.raises(TypeError, match="not readable"):
         _ = outcome.token
 
 
 def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     _module, program, _solved = _program()
-    source = program.emit_cpp_program(model=None)
+    source = emit_cpp_program(program, model=None)
     guard = source.index("if (!ci_report_")
     first_commit = source.index("ctx.lincomb(", guard)
 
@@ -150,7 +151,7 @@ def test_same_component_names_are_qualified_by_state_space():
         ion_next: solved[ion_n.block],
     })
 
-    source = program.emit_cpp_program(model=None)
+    source = emit_cpp_program(program, model=None)
     assert electron_density.name in source
     assert ion_density.name in source
     assert electron_density.name != ion_density.name
@@ -187,5 +188,5 @@ def test_dense_newton_dimension_follows_the_typed_rate_bundle():
         model=module, state=module.state_handle(right)).next
     program.commit_many({left_next: solved[left_n.block], right_next: solved[right_n.block]})
 
-    source = program.emit_cpp_program(model=None)
+    source = emit_cpp_program(program, model=None)
     assert "pops::detail::mat_inverse<17>" in source

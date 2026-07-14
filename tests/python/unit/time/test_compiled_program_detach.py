@@ -27,7 +27,7 @@ from pops.model import (
 from pops.problem import Case
 from pops.problem.handles import BlockHandle, FieldHandle
 from pops.time import FailRun, Program, StagePoint, TimePoint
-from pops.time.program_detach import detach_compiled_program
+from pops.time._program.detach import detach_compiled_program
 from pops.time.values import ProgramValue
 
 

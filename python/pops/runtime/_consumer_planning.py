@@ -6,7 +6,7 @@ from typing import Any
 
 from pops.codegen.lowering_coverage import LoweringCoverageReport, LoweringCoverageRow
 from pops.identity import Identity, make_identity
-from pops.time.schedule_protocol import UnresolvedScheduleCondition
+from pops.time._schedule.protocol import UnresolvedScheduleCondition
 
 from pops.output._consumer_contracts import (
     ConsumerCursorSet,

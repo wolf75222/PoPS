@@ -109,7 +109,8 @@ TEST(test_composite_fac_tensor, full_tensor_composite_beats_coarse_only) {
   fac.use_cross_terms(true);
   fill(fac.rhs_coarse(), geom_c, f_rhs);
   fill(fac.rhs_fine(), geom_f, f_rhs);
-  const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
+  const Real rfac =
+      fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
   device_fence();
 
   EXPECT_TRUE(std::isfinite(rfac) && rfac < 1e-6)

@@ -32,6 +32,13 @@ def exact_positive_real(value: Any, *, where: str) -> Any:
     return numeric
 
 
+def exact_nonnegative_real(value: Any, *, where: str) -> Any:
+    numeric = exact_finite_real(value, where=where)
+    if numeric < 0:
+        raise ValueError("%s must be >= 0 (got %r)" % (where, value))
+    return numeric
+
+
 def exact_open_unit_real(value: Any, *, where: str) -> Any:
     numeric = exact_finite_real(value, where=where)
     if not 0 < numeric < 1:
@@ -67,6 +74,6 @@ def native_float(value: Any, *, where: str) -> float:
 
 
 __all__ = [
-    "exact_finite_real", "exact_open_unit_real", "exact_positive_real", "native_float",
+    "exact_finite_real", "exact_nonnegative_real", "exact_open_unit_real", "exact_positive_real", "native_float",
     "optional_positive_int", "strict_bool",
 ]

@@ -146,7 +146,7 @@ def test_history_persistence_key_scheme(_t):
         print("-- (A2) skipped: numpy unavailable: %s --" % exc)
         return
     from pops.runtime._system_io_history import restore_histories, serialize_histories
-    from pops.time.history_persistence import Revolve
+    from pops.time._history.persistence import Revolve
 
     hname = "blk.state"
     depth = 5
@@ -374,7 +374,7 @@ def _run_section_b(t):
     sim1.install_program(compiled.so_path)
     _authorize_identity_runtime(sim1, compiled)
     sim1.run(t_end=half * _DT, max_steps=half)
-    from pops.time.history_persistence import Dense
+    from pops.time._history.persistence import Dense
     sim1.set_history_persistence({name: Dense() for name in sim1._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
@@ -453,7 +453,7 @@ def _run_section_c(t):
     sim.install_program(ab2.so_path)
     _authorize_identity_runtime(sim, ab2)
     sim.run(t_end=2 * _DT, max_steps=2)
-    from pops.time.history_persistence import Dense
+    from pops.time._history.persistence import Dense
     sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))

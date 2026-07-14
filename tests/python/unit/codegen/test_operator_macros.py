@@ -1,4 +1,5 @@
 """Final operator-first time factories compose exact typed handles into ordinary Programs."""
+from pops.codegen.program_codegen import emit_cpp_program
 import inspect
 import sys
 
@@ -132,7 +133,7 @@ def test_factory_reused_across_modules():
             explicit_operator=_handle(model, "explicit_rhs"),
             implicit_operator=_handle(model, "implicit"),
         )
-        return program.emit_cpp_program(model=model)
+        return emit_cpp_program(program, model=model)
 
     def no_field_model(name, gain):
         model = Model(name)

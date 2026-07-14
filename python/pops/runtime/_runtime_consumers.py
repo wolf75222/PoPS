@@ -28,7 +28,7 @@ from pops.output.data import (
     OutputSnapshot,
 )
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
-from pops.output.writers import deterministic_target
+from pops.output._writers.common import deterministic_target
 
 from ._consumer import (
     AcceptedSideEffect,

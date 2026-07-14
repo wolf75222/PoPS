@@ -868,7 +868,7 @@ class AmrProgramContext {
   /// Install the direct hierarchy-solver binding and native FAC controls emitted from
   /// CompositeTensorFAC. The block/component identity is authenticated by code generation.
   void configure_composite_tensor_fac(int program_block, int ncomp, int fine_sweeps,
-                                      Real coarse_rel_tol, int coarse_cycles,
+                                      Real coarse_rel_tol, Real coarse_abs_tol, int coarse_cycles,
                                       int verbose) const {
     if (ncomp != 1)
       throw std::invalid_argument("composite tensor FAC requires exactly one component");
@@ -883,7 +883,7 @@ class AmrProgramContext {
       tensor_ncomp_ = ncomp;
     }
     tensor_elliptic_->configure_composite_tensor_fac(
-        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose);
+        fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose);
   }
   /// Solve an authored matrix-free operator. This seam is always Krylov; direct composite hierarchy
   /// solves use solve_composite_tensor_fac so no accepted apply/preconditioner/method is ignored.
@@ -909,7 +909,7 @@ class AmrProgramContext {
 
   /// Solve the configured scalar tensor operator directly over a refined hierarchy. The flat branch
   /// continues through solve_linear_matfree for byte-faithful Krylov parity.
-  SolveReport solve_composite_tensor_fac(int program_block, int ncomp, Real tol,
+  SolveReport solve_composite_tensor_fac(int program_block, int ncomp, Real rel_tol, Real abs_tol,
                                          int max_iter) const {
     require_tensor_binding(program_block, ncomp);
     AmrTensorElliptic& s = configured_tensor_elliptic();
@@ -918,7 +918,7 @@ class AmrProgramContext {
       report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
       return report;
     }
-    return s.solve_composite(tol, max_iter);
+    return s.solve_composite(rel_tol, abs_tol, max_iter);
   }
 
   // --- named-flux primitive: DEFERRED on AMR (v1), fail loud -----------------------------------------

@@ -23,6 +23,7 @@ checks run on real emitted C++ without a model. Runs as a script (``python3 test
 the CI invocation) AND under pytest; the script form drives the same checks and exits non-zero on the
 first failure.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 import pytest
@@ -108,7 +109,7 @@ def test_cse_byte_identical_to_handwritten():
     Q = adctime.eliminate_common_subexpressions(_cse_dup_program())
     H = _cse_handwritten()
     assert Q._ir_hash() == H._ir_hash(), "CSE IR hash != hand-deduped"
-    assert Q.emit_cpp_program() == H.emit_cpp_program(), "CSE C++ != hand-deduped"
+    assert emit_cpp_program(Q) == emit_cpp_program(H), "CSE C++ != hand-deduped"
     # And the duplicated program DIFFERED before the pass (otherwise the test proves nothing).
     assert _cse_dup_program()._ir_hash() != H._ir_hash()
 
@@ -118,7 +119,7 @@ def test_cse_noop_byte_identical_when_nothing_duplicated():
     P = _euler_clean()
     Q = adctime.eliminate_common_subexpressions(P)
     assert Q._ir_hash() == P._ir_hash(), "no-op CSE changed the IR hash"
-    assert Q.emit_cpp_program() == P.emit_cpp_program(), "no-op CSE changed the emitted C++"
+    assert emit_cpp_program(Q) == emit_cpp_program(P), "no-op CSE changed the emitted C++"
 
 
 def test_cse_never_collapses_side_effecting_solve_fields():
@@ -420,7 +421,7 @@ def test_optimize_byte_identical_when_nothing_optimizable():
         P = build()
         Q = P.optimize()
         assert Q._ir_hash() == P._ir_hash(), "optimize changed the hash of an optimal Program (%s)" % P.name
-        assert Q.emit_cpp_program() == P.emit_cpp_program(), "optimize changed the C++ (%s)" % P.name
+        assert emit_cpp_program(Q) == emit_cpp_program(P), "optimize changed the C++ (%s)" % P.name
 
 
 def test_optimize_runs_all_proven_safe_passes():

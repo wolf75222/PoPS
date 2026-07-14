@@ -43,7 +43,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.physics._facade import Model
     from pops.runtime._system import AmrSystem
-    from pops.time.history_persistence import Interval
+    from pops.time._history.persistence import Interval
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_regrid_replay (pops/numpy unavailable: %s)" % exc)

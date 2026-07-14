@@ -9,6 +9,8 @@
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 
+#include <cmath>
+
 namespace pops {
 
 void System::add_block(const std::string& name, const ModelSpec& model, const std::string& limiter,
@@ -680,15 +682,15 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
                          double rel_tol, int max_cycles, int min_coarse, int pre_smooth,
                          int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
-  if (epsilon == 0.0)
-    throw std::runtime_error("System::set_poisson : epsilon != 0 required");
-  if (abs_tol < 0.0)
-    throw std::runtime_error("System::set_poisson : abs_tol >= 0 required");
+  if (!std::isfinite(epsilon) || epsilon == 0.0)
+    throw std::runtime_error("System::set_poisson : finite epsilon != 0 required");
+  if (!std::isfinite(abs_tol) || abs_tol < 0.0)
+    throw std::runtime_error("System::set_poisson : finite abs_tol >= 0 required");
   // ADC-613: the GeometricMG V-cycle knobs. Refuse out-of-domain values STRUCTURALLY here (the
   // Python descriptor already refuses, but the native seam is a public API in its own right and
   // must never silently accept a degenerate cycle). Defaults are the kMG* constants -> historical.
-  if (rel_tol <= 0.0)
-    throw std::runtime_error("System::set_poisson : rel_tol > 0 required");
+  if (!std::isfinite(rel_tol) || rel_tol <= 0.0)
+    throw std::runtime_error("System::set_poisson : finite rel_tol > 0 required");
   if (max_cycles < 1)
     throw std::runtime_error("System::set_poisson : max_cycles >= 1 required");
   if (min_coarse < 1)
@@ -750,9 +752,10 @@ void System::set_field_solver_plan(const std::string& provider_slot,
     if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
         !std::isfinite(provider_coefficients[i]))
       throw std::runtime_error("System::set_field_solver_plan invalid provider-pack entry");
-  if (solver != "geometric_mg" && solver != "fft" && solver != "fft_spectral")
+  const bool external = solver == "external_component_v1";
+  if (!external && solver != "geometric_mg" && solver != "fft" && solver != "fft_spectral")
     throw std::runtime_error("System::set_field_solver_plan unknown solver '" + solver + "'");
-  if (abs_tol < 0.0 || rel_tol <= 0.0 || max_cycles < 1 || min_coarse < 1 ||
+  if (abs_tol < 0.0 || (external ? rel_tol < 0.0 : rel_tol <= 0.0) || max_cycles < 1 || min_coarse < 1 ||
       pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
     throw std::runtime_error("System::set_field_solver_plan invalid multigrid options");
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
@@ -783,8 +786,31 @@ void System::set_field_solver_plan(const std::string& provider_slot,
     registered->second.has_plan = true;
     registered->second.plan = plan;
     registered->second.prepared_providers.clear();
-    registered->second.ell.reset();
+    registered->second.backend.reset();
   }
+}
+
+POPS_EXPORT void System::install_field_solver_components(
+    const std::string& provider_slot,
+    runtime::field::PreparedFieldSolverSpec spec,
+    std::shared_ptr<component::LoadedComponent> topology,
+    std::shared_ptr<component::LoadedComponent> solver) {
+  require_assembling(p_->lifecycle_, "install_field_solver_components");
+  p_->fields_.install_external_solver(
+      provider_slot, std::move(spec), std::move(topology), std::move(solver));
+}
+
+POPS_EXPORT void System::set_field_topology_authority(
+    const std::string& provider_slot, const std::string& provider_kind,
+    const std::string& provenance, const std::string& topology_digest) {
+  require_assembling(p_->lifecycle_, "set_field_topology_authority");
+  p_->fields_.set_topology_authority(
+      provider_slot, provider_kind, provenance, topology_digest);
+}
+
+POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow>
+System::field_topology_report(const std::string& provider_slot) const {
+  return p_->fields_.topology_report(provider_slot);
 }
 
 void System::set_field_boundary_plan(const std::string& provider_slot,
@@ -842,7 +868,7 @@ void System::set_field_boundary_plan(const std::string& provider_slot,
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.has_plan = true;
     registered->second.plan = plan;
-    registered->second.ell.reset();
+    registered->second.backend.reset();
   }
 }
 
@@ -877,7 +903,7 @@ void System::set_field_boundary_dependencies(
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.plan = plan;
     registered->second.has_plan = true;
-    registered->second.ell.reset();
+    registered->second.backend.reset();
   }
 }
 
@@ -897,7 +923,7 @@ void System::set_field_boundary_kernel(const std::string& provider_slot,
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.plan = plan;
     registered->second.has_plan = true;
-    registered->second.ell.reset();
+    registered->second.backend.reset();
   }
 }
 
@@ -913,11 +939,8 @@ void System::set_field_logical_timepoint(const std::string& provider_slot,
   auto registered = p_->fields_.named_fields_.find(provider_slot);
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.plan.boundary_context = plan.boundary_context;
-    if (registered->second.ell && registered->second.plan.has_boundary_kernel) {
-      auto* geometric = std::get_if<GeometricMG>(&*registered->second.ell);
-      if (geometric != nullptr)
-        geometric->set_boundary_context(plan.boundary_context);
-    }
+    if (registered->second.backend && registered->second.plan.has_boundary_kernel)
+      registered->second.backend->configure_boundary(registered->second.plan);
   }
 }
 
@@ -938,11 +961,8 @@ void System::set_field_boundary_parameters(const std::string& provider_slot,
     installed.boundary_parameters = plan.boundary_parameters;
     installed.boundary_context.parameters = plan.boundary_parameters.get();
     installed.boundary_context.parameter_count = plan.boundary_context.parameter_count;
-    if (registered->second.ell && installed.has_boundary_kernel) {
-      auto* geometric = std::get_if<GeometricMG>(&*registered->second.ell);
-      if (geometric != nullptr)
-        geometric->set_boundary_context(installed.boundary_context);
-    }
+    if (registered->second.backend && installed.has_boundary_kernel)
+      registered->second.backend->configure_boundary(installed);
   }
 }
 
@@ -965,7 +985,7 @@ void System::set_field_newton_plan(const std::string& provider_slot, double tole
   if (installed != p_->fields_.named_fields_.end()) {
     installed->second.plan.has_newton = true;
     installed->second.plan.newton = options;
-    installed->second.ell.reset();
+    installed->second.backend.reset();
   }
 }
 
@@ -990,7 +1010,7 @@ void System::set_field_nullspace(const std::string& provider_slot, bool constant
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.has_plan = true;
     registered->second.plan = plan;
-    registered->second.ell.reset();
+    registered->second.backend.reset();
   }
 }
 

@@ -28,6 +28,7 @@ set -eo pipefail
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+source "$HERE/scripts/conda_runtime.sh"
 
 # --- arguments --------------------------------------------------------------------------------------
 DO_CLEAN=0
@@ -56,12 +57,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- conda present + env active ----------------------------------------------------------------------
-if ! command -v conda >/dev/null 2>&1; then
+if ! pops_load_conda; then
   echo "conda not found. Run 'bash scripts/setup_env.sh' first (it bootstraps the env and toolchain)." >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "$(conda info --base)/etc/profile.d/conda.sh"
 if ! conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "conda env '$ENV_NAME' is missing. Create it first: bash scripts/setup_env.sh" >&2
   exit 1

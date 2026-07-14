@@ -29,6 +29,7 @@ set -euo pipefail
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+source "$HERE/scripts/conda_runtime.sh"
 
 # --- git hygiene: ignore the mechanical clang-format sweep in `git blame` (ADC-118) ----------------
 # The repo ships .git-blame-ignore-revs (the full-tree reformat SHA). Point local `git blame` at it so
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- conda present? otherwise guide the bootstrap (no silent install) -------------------------------
-if ! command -v conda >/dev/null 2>&1; then
+if ! pops_load_conda; then
   cat >&2 <<EOF
 conda not found. On a fresh machine, bootstrap Miniforge (conda-forge), then re-run this script:
 

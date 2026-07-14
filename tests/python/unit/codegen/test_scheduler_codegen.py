@@ -23,6 +23,8 @@ genuinely-unlowerable cases (on_end(), a when() over a Python callable) still fa
 ADC-458. The cache RUNTIME cadence in a stepping .so is exercised on ROMEO; the CacheManager is
 unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp. Pure Python: only pops.time / pops.model / pops.dsl.
 """
+from pops.codegen.program_codegen import _check_schedules_lowerable
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 from types import SimpleNamespace
 
@@ -90,7 +92,7 @@ def _emit_field(schedule):
 
 
 def _emit_scratch(schedule):
-    return _scratch_program(schedule).emit_cpp_program(model=None)
+    return emit_cpp_program(_scratch_program(schedule), model=None)
 
 
 # --- always / default byte-identity -----------------------------------------
@@ -137,8 +139,8 @@ def test_when_reuses_program_predicate_token():
         R2, attrs={**R2.attrs, "schedule": _when(P.clock, cond, adctime.Hold())})
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value("U1", U + dt * R2, at=endpoint.point))
-    P._check_schedules_lowerable()  # a Program Bool when() lowers
-    cpp = P.emit_cpp_program(model=None)
+    _check_schedules_lowerable(P)  # a Program Bool when() lowers
+    cpp = emit_cpp_program(P, model=None)
     assert "< 1e-06" in cpp                           # exact predicate threshold
     assert "ctx.cache_should_update" not in cpp       # when() is a predicate, not a period
 
@@ -162,8 +164,8 @@ def test_frozen_when_codegen_is_repeatable_and_keeps_tokens_emission_local():
     P.freeze()
     before = P._ir_hash()
 
-    first = P.emit_cpp_program(model=None)
-    second = P.emit_cpp_program(model=None)
+    first = emit_cpp_program(P, model=None)
+    second = emit_cpp_program(P, model=None)
 
     assert first == second
     assert P._ir_hash() == before
@@ -174,7 +176,7 @@ def test_when_over_python_callable_refuses():
     P = _scratch_program(
         lambda clock: _when(clock, lambda: True, adctime.Hold()))
     try:
-        P._check_schedules_lowerable()
+        _check_schedules_lowerable(P)
     except NotImplementedError as exc:
         assert "ADC-458" in str(exc)
     else:
@@ -185,8 +187,8 @@ def test_when_over_python_callable_refuses():
 def test_clock_tick_domain_lowers_to_qualified_logical_tick():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
-    program._check_schedules_lowerable()
-    cpp = program.emit_cpp_program(model=None)
+    _check_schedules_lowerable(program)
+    cpp = emit_cpp_program(program, model=None)
     assert "ctx.schedule_domain_occurs(" in cpp
     assert "ScheduleDomainKind::kClockTick" in cpp
     assert program.clock.qualified_id in cpp
@@ -195,14 +197,14 @@ def test_clock_tick_domain_lowers_to_qualified_logical_tick():
 def test_amr_level_domain_requires_amr_target_and_lowers_there():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AMRLevel(clock, level=1))))
-    program._check_schedules_lowerable()
+    _check_schedules_lowerable(program)
     try:
-        program.emit_cpp_program(model=None, target="system")
+        emit_cpp_program(program, model=None, target="system")
     except NotImplementedError as exc:
         assert "AMRLevel" in str(exc) and "amr_system" in str(exc)
     else:
         raise AssertionError("AMRLevel must refuse the uniform System target")
-    cpp = program.emit_cpp_program(model=None, target="amr_system")
+    cpp = emit_cpp_program(program, model=None, target="amr_system")
     assert "ScheduleDomainKind::kAmrLevel" in cpp
     assert ", 1))" in cpp
 
@@ -210,7 +212,7 @@ def test_amr_level_domain_requires_amr_target_and_lowers_there():
 def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
     P = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
-    cpp = P.emit_cpp_program(model=None)
+    cpp = emit_cpp_program(P, model=None)
     assert "ScheduleDomainKind::kClockTick" in cpp
     assert "ctx.schedule_domain_occurs(" in cpp
     assert "ctx.cache_should_update(" not in cpp
@@ -234,8 +236,8 @@ def test_stage_domain_refuses_a_different_node_stage_before_emission():
 
 
 def test_amr_flux_weight_is_proved_before_artifact_creation():
-    valid = _scratch_program(lambda clock: adctime.Schedule(
-        adctime.Always(adctime.AcceptedStep(clock)))).emit_cpp_program(
+    valid = emit_cpp_program(_scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock)))),
             model=None, target="amr_system")
     assert "{{1, 1, 1}}" in valid
 
@@ -245,7 +247,7 @@ def test_amr_flux_weight_is_proved_before_artifact_creation():
     endpoint = typed_state(program, "ions", state_name="U").next
     program.commit(endpoint, program.value("bad", state + rate, at=endpoint.point))
     try:
-        program.emit_cpp_program(model=None, target="amr_system")
+        emit_cpp_program(program, model=None, target="amr_system")
     except ValueError as exc:
         assert "dt powers" in str(exc) and "weight * dt * flux" in str(exc)
     else:
@@ -331,7 +333,7 @@ def test_scratch_decl_hoisted_for_skip():
 def test_on_end_refuses_to_lower():
     P = _scratch_program(lambda clock: _at_end(clock, adctime.Hold()))
     try:
-        P._check_schedules_lowerable()
+        _check_schedules_lowerable(P)
     except NotImplementedError as exc:
         assert "AtEnd" in str(exc) and "ConsumerGraph" in str(exc)
     else:

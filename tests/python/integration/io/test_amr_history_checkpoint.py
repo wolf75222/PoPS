@@ -39,7 +39,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.problem import Case
     from pops.runtime._system import AmrSystem
-    from pops.time.history_persistence import Interval
+    from pops.time._history.persistence import Interval
     from tests.python.integration._final_field_program import (
         compile_block_model,
         passive_source_model,

@@ -18,6 +18,7 @@ SEPARATE sub-block (a recording scope), not the flat SSA list, so the body re-ru
     reference x_k = target + (1-omega)^k (x0 - target). Self-skips without numpy / _pops / a compiler /
     Kokkos / install_program (never faking the engine).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -134,7 +135,7 @@ def test_state_bool_still_loud(t):
 
 def test_while_codegen(t):
     P = _convergence_program(t)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ("pops::dot", "std::sqrt", "for (;;)", "if (!(", "break;"):
         assert frag in src, "the generated while loop must contain %r\n%s" % (frag, src)
 

@@ -20,6 +20,7 @@ validation errors #18/#19.
     Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -129,7 +130,7 @@ def test_solve_local_nonlinear_refused_without_model(t):
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("W_next", 1 * W, at=endpoint.point))
     try:
-        P.emit_cpp_program()  # no model
+        emit_cpp_program(P)  # no model
     except NotImplementedError as exc:
         assert "solve_local_nonlinear" in str(exc) or "source" in str(exc), str(exc)
     else:
@@ -186,7 +187,7 @@ def test_reductions_lower_to_adc_reductions(t):
     P.record_scalar("s_c", s_c)
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
     assert "pops::reduce_sum(r" in src and ", 0)" in src, "sum/sum_component reduce over a component"
@@ -201,7 +202,7 @@ def test_fill_boundary_ir_and_codegen(t):
     R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(Uf + P.dt * R, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
 
 
@@ -224,7 +225,7 @@ def test_project_ir_and_codegen(t):
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
     P.commit(endpoint, Up)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert "ctx.apply_projection(0, " in src, "project lowers to ctx.apply_projection\n%s" % src
 
 
@@ -254,7 +255,7 @@ def test_record_scalar_ir_and_codegen(t):
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert 'ctx.record_scalar("rhs_norm", ' in src, "record_scalar lowers to ctx.record_scalar\n%s" % src
 
 

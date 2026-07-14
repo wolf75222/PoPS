@@ -123,12 +123,15 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
   ctx.install([ctx](double h) {
+    ctx.begin_step(h);
+    ctx.set_stage_time(0, 1);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       ctx.solve_fields_from_state(b, U);  // per-stage field solve at the block's own state
       MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
+      ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h R
     }
   });
@@ -235,21 +238,25 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
-  ctx.install([ctx, dt](double /*h*/) {
+  ctx.configure_primary_clock("clock.macro");
+  ctx.install([ctx](double h) {
+    ctx.begin_step(h);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       // stage 1: u1 = U + dt R(U)
+      ctx.set_stage_time(0, 1);
       ctx.solve_fields_from_state(b, U);
       MultiFab u1 = ctx.scratch_state_like(U);
       ctx.lincomb(u1, Real(1), U, Real(0), U);  // u1 <- U
       MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
-      ctx.axpy(u1, Real(dt), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
+      ctx.rhs_into(b, U, R, 0);
+      ctx.axpy(u1, Real(h), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
       // stage 2 (Heun): U <- 1/2 U + 1/2 (U1 + dt R(U1)) = 1/2 U + 1/2 U1 + 1/2 dt R(U1)
+      ctx.set_stage_time(1, 1);
       ctx.solve_fields_from_state(b, u1);  // re-solve fields at the stage-1 state
       MultiFab R1 = ctx.rhs_scratch_like(u1);
-      ctx.rhs_into(b, u1, R1);
-      ctx.axpy(u1, Real(dt), R1);                   // u1 <- U1 + dt R(U1)
+      ctx.rhs_into(b, u1, R1, 0);
+      ctx.axpy(u1, Real(h), R1);                    // u1 <- U1 + dt R(U1)
       ctx.lincomb(U, Real(0.5), U, Real(0.5), u1);  // U <- 1/2 U + 1/2 (U1 + dt R(U1))
     }
   });
@@ -278,6 +285,9 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   sim.set_state("gas", U0);
   sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
+  ctx.begin_step(dt);
+  ctx.set_stage_time(0, 1);
   ctx.solve_fields();
 
   const int b = 0;
@@ -287,8 +297,8 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   MultiFab Rfull = ctx.rhs_scratch_like(U);
   MultiFab Rflux = ctx.rhs_scratch_like(U);
   MultiFab Rsrc = ctx.rhs_scratch_like(U);
-  ctx.rhs_into(b, U, Rfull);
-  ctx.neg_div_flux_default_into(b, U, Rflux);
+  ctx.rhs_into(b, U, Rfull, 0);
+  ctx.neg_div_flux_default_into(b, U, Rflux, 0);
   ctx.source_default_into(b, U, Rsrc);
   MultiFab Rsum = ctx.rhs_scratch_like(U);
   ctx.lincomb(Rsum, Real(1), Rflux, Real(1), Rsrc);  // Rsum = -div F + S
@@ -324,13 +334,15 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
     EXPECT_TRUE(ctx.max_component(divg, 0) < 1e-12) << "divergence(gradient(const)) is 0";
   }
 
-  // fill_boundary runs (halo exchange; valid cells unchanged). apply_projection is a no-op for a block
-  // without a positivity projection (a plain copy). Neither should throw or change the valid cells.
+  // fill_boundary runs (halo exchange; valid cells unchanged). Projection is an explicit block
+  // capability: this block declares none, so applying one must fail rather than silently become an
+  // identity operation.
   const std::vector<double> before = sim.get_state("gas");
   ctx.fill_boundary(U);
-  ctx.apply_projection(b, U);
   EXPECT_TRUE(max_abs_diff(sim.get_state("gas"), before) < 1e-15)
-      << "fill_boundary + no-op projection left the valid cells unchanged";
+      << "fill_boundary left the valid cells unchanged";
+  EXPECT_THROW(ctx.apply_projection(b, U), std::runtime_error)
+      << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
   ctx.register_history("h", 1);

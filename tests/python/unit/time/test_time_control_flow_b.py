@@ -18,6 +18,7 @@ Builds on ADC-404a (Scalar/Bool IR, P.norm2/P.dot, P.while_). This slice adds:
     and match the offline x_N = target + 0.5^N (x0 - target); branch applies the body iff the runtime
     condition holds. Self-skips without numpy / _pops / a compiler / Kokkos (never faking the engine).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -71,7 +72,7 @@ def test_static_range_unrolls(t):
     Uf = P.static_range(U, 3, _fe_body())
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("range_next", Uf, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert src.count("ctx.rhs_into") == 3, "static_range(3) unrolls the body 3 times\n%s" % src
     assert "for (" not in src, "static_range must NOT emit a C++ loop (it is unrolled)\n%s" % src
 
@@ -82,7 +83,7 @@ def test_range_emits_for(t):
     Uf = P.range(U, 3, _fe_body())
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("range_next", Uf, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert "for (int i" in src, "range must emit a C++ for loop\n%s" % src
     assert src.count("ctx.rhs_into") == 1, "range emits the body ONCE (inside the loop)\n%s" % src
 
@@ -99,7 +100,7 @@ def test_branch_emits_if_else(t):
     )
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("branch_next", Uf, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert "pops::norm_inf" in src, "norm_inf must lower to pops::norm_inf\n%s" % src
     assert "if (" in src and "} else {" in src, "branch must emit C++ if/else\n%s" % src
     assert "for (" not in src, "branch alone emits no loop\n%s" % src

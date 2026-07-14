@@ -240,6 +240,8 @@ def test_profile_types_stay_at_their_direct_module_owner():
 
     assert profile_module.Profile is Profile
     assert profile_module.PerformanceSummary is PerformanceSummary
+    assert Profile.__module__ == "pops.runtime._profile"
+    assert PerformanceSummary.__module__ == "pops.runtime._profile"
     assert not hasattr(runtime, "Profile")
     assert not hasattr(runtime, "PerformanceSummary")
     assert Profile.Basic().level == "basic"

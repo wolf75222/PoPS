@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 #define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
-#define POPS_COMPONENT_CATALOG_SHA256_V1 "6a9e3d473ce9fef2ec84c781a51628247017ca0aba8acd28076318058d211e97"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "dfb04cd60f0523d305063096d60b90e00f2a298f8cd4da7a55bc6d7997c5e57e"
 #define POPS_COMPONENT_PROTOCOL_ABI_V1 1u
 #define POPS_COMPONENT_COMMON_ABI_V1 1u
 
@@ -23,11 +23,33 @@ typedef enum PopsNativeInterfaceIdV1 {
   POPS_NATIVE_INTERFACE_TAGGER_V1 = 3,
   POPS_NATIVE_INTERFACE_CLUSTERING_V1 = 4,
   POPS_NATIVE_INTERFACE_TRANSFER_V1 = 5,
-  POPS_NATIVE_INTERFACE_REFLUX_V1 = 6,
-  POPS_NATIVE_INTERFACE_FIELD_SOLVER_V1 = 7,
+  POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2 = 7,
   POPS_NATIVE_INTERFACE_WRITER_V1 = 8,
-  POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V1 = 9,
+  POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2 = 9,
 } PopsNativeInterfaceIdV1;
+
+typedef enum PopsTaggingOpcodeV1 {
+  POPS_TAGGING_ABOVE_V1 = 1,
+  POPS_TAGGING_BELOW_V1 = 2,
+  POPS_TAGGING_MAGNITUDE_ABOVE_V1 = 3,
+  POPS_TAGGING_GRADIENT_ABOVE_V1 = 4,
+  POPS_TAGGING_GRADIENT_BELOW_V1 = 5,
+  POPS_TAGGING_ANY_OF_V1 = 16,
+  POPS_TAGGING_ALL_OF_V1 = 17,
+  POPS_TAGGING_NOT_V1 = 18,
+} PopsTaggingOpcodeV1;
+#define POPS_TAGGING_MAXIMUM_INSTRUCTION_COUNT_V1 128u
+#define POPS_TAGGING_MAXIMUM_STENCIL_TERMS_V1 16u
+#define POPS_TAGGING_NO_STENCIL_V1 ((size_t)-1)
+#define POPS_TAGGING_NON_FINITE_REJECT_V1 1
+#define POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1 "linear_axis_stencil_l2_v1"
+
+static inline int pops_tagging_opcode_is_leaf_v1(int32_t opcode) {
+  switch (opcode) { case POPS_TAGGING_ABOVE_V1: case POPS_TAGGING_BELOW_V1: case POPS_TAGGING_MAGNITUDE_ABOVE_V1: case POPS_TAGGING_GRADIENT_ABOVE_V1: case POPS_TAGGING_GRADIENT_BELOW_V1: return 1; default: return 0; }
+}
+static inline int pops_tagging_opcode_is_logical_v1(int32_t opcode) {
+  switch (opcode) { case POPS_TAGGING_ANY_OF_V1: case POPS_TAGGING_ALL_OF_V1: case POPS_TAGGING_NOT_V1: return 1; default: return 0; }
+}
 
 typedef enum PopsComponentActionV1 {
   POPS_COMPONENT_CONTINUE_V1 = 0,
@@ -291,10 +313,68 @@ typedef struct PopsFieldBoundaryClosureApiV1 {
   PopsFieldBoundaryEvalFnV1 jvp;
 } PopsFieldBoundaryClosureApiV1;
 
+typedef struct PopsTaggingAxisStencilV1 {
+  uint32_t struct_size;
+  int32_t axis;
+  int32_t derivative_order;
+  int32_t formal_order;
+  size_t ghost_lower;
+  size_t ghost_upper;
+  size_t term_count;
+  const int32_t* offsets;
+  const double* coefficients;
+} PopsTaggingAxisStencilV1;
+typedef struct PopsTaggingStencilV1 {
+  uint32_t struct_size;
+  const char* stencil_identity;
+  const char* route;
+  const char* norm;
+  const char* scale;
+  const char* boundary_mode;
+  int32_t dimension;
+  size_t axis_count;
+  const PopsTaggingAxisStencilV1* axes;
+} PopsTaggingStencilV1;
+typedef struct PopsTaggingLeafV1 {
+  uint32_t struct_size;
+  size_t state_index;
+  size_t component;
+  int32_t opcode;
+  double threshold;
+  size_t stencil_index;
+} PopsTaggingLeafV1;
+typedef struct PopsTaggingProgramV1 {
+  uint32_t struct_size;
+  const char* program_identity;
+  size_t stencil_count;
+  const PopsTaggingStencilV1* stencils;
+  size_t leaf_count;
+  const PopsTaggingLeafV1* leaves;
+  size_t refine_instruction_count;
+  const int32_t* refine_opcodes;
+  const int32_t* refine_arguments;
+  size_t coarsen_instruction_count;
+  const int32_t* coarsen_opcodes;
+  const int32_t* coarsen_arguments;
+  int32_t minimum_cycles;
+  int32_t equality_policy;
+  int32_t conflict_policy;
+  int32_t non_finite_policy;
+} PopsTaggingProgramV1;
 typedef struct PopsTaggerRequestV1 {
   uint32_t struct_size;
-  PopsConstFieldViewV1 state;
-  PopsByteViewV1 tags;
+  size_t state_count;
+  const PopsQualifiedConstFieldV1* states;
+  PopsTaggingProgramV1 program;
+  int64_t patch_lower[3];
+  int64_t domain_lower[3];
+  int64_t domain_upper[3];
+  double cell_size[3];
+  uint32_t periodic_axes;
+  PopsByteViewV1 refine_candidates;
+  PopsByteViewV1 coarsen_candidates;
+  PopsByteViewV1 refine_equalities;
+  PopsByteViewV1 coarsen_equalities;
   PopsLogicalTimeV1 logical_time;
   PopsExecutionContextV1 execution;
 } PopsTaggerRequestV1;
@@ -309,6 +389,8 @@ typedef struct PopsClusteringRequestV1 {
   PopsConstByteViewV1 tags;
   const int64_t* extents;
   int32_t dimension;
+  // `boxes` is box-major [lo_0..lo_(d-1), hi_0..hi_(d-1)]. Bounds are
+  // inclusive and relative to the supplied tag region.
   int64_t* boxes;
   size_t box_capacity;
   size_t* box_count;
@@ -338,48 +420,116 @@ typedef struct PopsTransferApiV1 {
   PopsTransferApplyFnV1 apply;
 } PopsTransferApiV1;
 
-typedef struct PopsRefluxRequestV1 {
+typedef struct PopsFieldPatchMetadataV1 {
   uint32_t struct_size;
-  PopsConstFieldViewV1 coarse_integrated;
-  PopsConstFieldViewV1 fine_integrated;
-  PopsFieldViewV1 flux_register;
-  PopsExecutionContextV1 execution;
-} PopsRefluxRequestV1;
-typedef int32_t (*PopsDepositIntegratedFnV1)(
-    void*, const PopsRefluxRequestV1*, PopsComponentStatusV1*);
-typedef struct PopsRefluxApiV1 {
-  PopsComponentTableHeaderV1 header;
-  PopsDepositIntegratedFnV1 deposit_integrated;
-} PopsRefluxApiV1;
+  size_t global_patch_index;
+  int32_t owner_rank;
+  int32_t level;
+  int32_t dimension;
+  int64_t lower[3];
+  int64_t upper[3];
+  // Physical coordinate of the lower face at `lower`, not the global-domain origin.
+  double physical_lower[3];
+  double cell_spacing[3];
+  PopsFieldCenteringV1 centering;
+  uint32_t centering_axes;
+  // Qualified source LayoutPlan identity; materialization is carried by global topology.
+  const char* layout_identity;
+  const char* patch_identity;
+} PopsFieldPatchMetadataV1;
 
-typedef struct PopsFieldSolverRequestV1 {
+typedef enum PopsFieldMaterialRepresentationV1 {
+  POPS_FIELD_MATERIAL_FULL_V1 = 1,
+  POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1 = 2,
+  POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1 = 3,
+  POPS_FIELD_MATERIAL_IDS_V1 = 4,
+  POPS_FIELD_MATERIAL_IDS_WITH_CUT_CELL_FRACTION_V1 = 5
+} PopsFieldMaterialRepresentationV1;
+
+typedef struct PopsFieldGlobalTopologyV1 {
   uint32_t struct_size;
+  const char* topology_recipe_identity;
+  // Qualified authoring LayoutPlan identity, preserved on every FieldView.
+  const char* source_layout_identity;
+  // Exact runtime materialization identity: source layout + geometry + boxes + owners + topology.
+  const char* materialized_layout_identity;
+  int32_t dimension;
+  int64_t domain_lower[3];
+  int64_t domain_upper[3];
+  uint32_t periodic_axes;
+  size_t patch_count;
+  const PopsFieldPatchMetadataV1* patches;
+} PopsFieldGlobalTopologyV1;
+
+typedef struct PopsFieldSolverTopologyLabelV2 {
+  uint32_t struct_size;
+  int32_t id;
+  const char* label;
+  const char* provenance;
+} PopsFieldSolverTopologyLabelV2;
+
+typedef struct PopsFieldSolverPatchV2 {
+  uint32_t struct_size;
+  size_t metadata_index;
   PopsConstFieldViewV1 rhs;
   PopsFieldViewV1 solution;
   PopsConstFieldViewV1 coefficients;
   PopsConstByteViewV1 material_mask;
   PopsConstInt32ViewV1 component_labels;
+} PopsFieldSolverPatchV2;
+
+typedef struct PopsFieldSolverRequestV2 {
+  uint32_t struct_size;
+  PopsFieldGlobalTopologyV1 topology;
+  size_t local_patch_count;
+  const PopsFieldSolverPatchV2* local_patches;
+  size_t topology_label_count;
+  const PopsFieldSolverTopologyLabelV2* topology_labels;
+  const char* topology_provenance;
   const char* topology_digest;
   const char* boundary_contract_json;
   double relative_tolerance;
   double absolute_tolerance;
   int32_t max_iterations;
   PopsExecutionContextV1 execution;
-} PopsFieldSolverRequestV1;
-typedef struct PopsSolveReportV1 {
+} PopsFieldSolverRequestV2;
+
+typedef enum PopsSolveStatusV2 {
+  POPS_SOLVE_SOLVED_V2 = 0,
+  POPS_SOLVE_SINGULAR_V2 = 1,
+  POPS_SOLVE_BREAKDOWN_V2 = 2,
+  POPS_SOLVE_ITERATION_LIMIT_V2 = 3,
+  POPS_SOLVE_INVALID_EVALUATION_V2 = 4,
+  POPS_SOLVE_CAPABILITY_FAILURE_V2 = 5,
+  POPS_SOLVE_INVALID_INPUT_V2 = 6,
+  POPS_SOLVE_INCOMPATIBLE_RHS_V2 = 7
+} PopsSolveStatusV2;
+
+typedef enum PopsSolveActionV2 {
+  POPS_SOLVE_ACTION_NONE_V2 = 0,
+  POPS_SOLVE_ACTION_FAIL_RUN_V2 = 1,
+  POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2 = 2
+} PopsSolveActionV2;
+
+typedef struct PopsSolveReportV2 {
   uint32_t struct_size;
-  int32_t converged;
+  PopsSolveStatusV2 status;
+  PopsSolveActionV2 action;
   int32_t iterations;
-  double initial_residual;
-  double final_residual;
-  PopsComponentStatusV1 status;
-} PopsSolveReportV1;
-typedef int32_t (*PopsFieldSolveFnV1)(
-    void*, const PopsFieldSolverRequestV1*, PopsSolveReportV1*);
-typedef struct PopsFieldSolverApiV1 {
+  // residual_norm / reference_residual_norm, using denominator 1 only when the reference is zero.
+  double relative_residual;
+  // Exact ||R(x0)|| used by max(relative_tolerance * ||R(x0)||, absolute_tolerance).
+  double reference_residual_norm;
+  // Exact ||R(x_final)|| tested against the mixed convergence threshold.
+  double residual_norm;
+  const char* reason;
+} PopsSolveReportV2;
+typedef int32_t (*PopsFieldSolveFnV2)(
+    void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2*);
+typedef struct PopsFieldSolverApiV2 {
   PopsComponentTableHeaderV1 header;
-  PopsFieldSolveFnV1 solve;
-} PopsFieldSolverApiV1;
+  PopsFieldSolveFnV2 solve;
+} PopsFieldSolverApiV2;
 
 typedef struct PopsWriterBoxV1 {
   uint32_t struct_size;
@@ -472,32 +622,43 @@ typedef struct PopsWriterApiV1 {
   PopsWriterCleanupFnV1 rollback;
 } PopsWriterApiV1;
 
-typedef struct PopsFieldTopologyRequestV1 {
+typedef struct PopsFieldTopologyPatchV2 {
   uint32_t struct_size;
-  PopsConstFieldViewV1 geometry;
+  size_t metadata_index;
+  PopsFieldMaterialRepresentationV1 material_representation;
+  PopsConstByteViewV1 material_coverage;
+  PopsConstFieldViewV1 cut_cell_volume_fraction;
+  PopsConstInt32ViewV1 material_ids;
   PopsByteViewV1 material_mask;
   PopsInt32ViewV1 component_labels;
+} PopsFieldTopologyPatchV2;
+typedef struct PopsFieldTopologyRequestV2 {
+  uint32_t struct_size;
+  PopsFieldGlobalTopologyV1 topology;
+  size_t local_patch_count;
+  const PopsFieldTopologyPatchV2* local_patches;
   PopsExecutionContextV1 execution;
-} PopsFieldTopologyRequestV1;
-typedef struct PopsTopologyLabelV1 {
+} PopsFieldTopologyRequestV2;
+typedef struct PopsTopologyLabelV2 {
+  uint32_t struct_size;
   int32_t id;
   const char* label;
   const char* provenance;
-} PopsTopologyLabelV1;
-typedef struct PopsFieldTopologyResultV1 {
+} PopsTopologyLabelV2;
+typedef struct PopsFieldTopologyResultV2 {
   uint32_t struct_size;
   size_t label_count;
-  const PopsTopologyLabelV1* labels;
+  const PopsTopologyLabelV2* labels;
   const char* provenance;
   const char* topology_digest;
   PopsComponentStatusV1 status;
-} PopsFieldTopologyResultV1;
-typedef int32_t (*PopsPrepareTopologyFnV1)(
-    void*, const PopsFieldTopologyRequestV1*, PopsFieldTopologyResultV1*);
-typedef struct PopsFieldTopologyApiV1 {
+} PopsFieldTopologyResultV2;
+typedef int32_t (*PopsPrepareTopologyFnV2)(
+    void*, const PopsFieldTopologyRequestV2*, PopsFieldTopologyResultV2*);
+typedef struct PopsFieldTopologyApiV2 {
   PopsComponentTableHeaderV1 header;
-  PopsPrepareTopologyFnV1 prepare_topology;
-} PopsFieldTopologyApiV1;
+  PopsPrepareTopologyFnV2 prepare_topology;
+} PopsFieldTopologyApiV2;
 
 typedef struct PopsComponentInterfaceEntryV1 {
   PopsNativeInterfaceIdV1 interface_id;
@@ -532,10 +693,9 @@ inline constexpr size_t generated_native_interface_table_size(
     case POPS_NATIVE_INTERFACE_TAGGER_V1: return sizeof(PopsTaggerApiV1);
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return sizeof(PopsClusteringApiV1);
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return sizeof(PopsTransferApiV1);
-    case POPS_NATIVE_INTERFACE_REFLUX_V1: return sizeof(PopsRefluxApiV1);
-    case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V1: return sizeof(PopsFieldSolverApiV1);
+    case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return sizeof(PopsFieldSolverApiV2);
     case POPS_NATIVE_INTERFACE_WRITER_V1: return sizeof(PopsWriterApiV1);
-    case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V1: return sizeof(PopsFieldTopologyApiV1);
+    case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return sizeof(PopsFieldTopologyApiV2);
   }
   return 0;
 }
@@ -548,10 +708,9 @@ inline constexpr const char* generated_native_interface_table_name(
     case POPS_NATIVE_INTERFACE_TAGGER_V1: return "PopsTaggerApiV1";
     case POPS_NATIVE_INTERFACE_CLUSTERING_V1: return "PopsClusteringApiV1";
     case POPS_NATIVE_INTERFACE_TRANSFER_V1: return "PopsTransferApiV1";
-    case POPS_NATIVE_INTERFACE_REFLUX_V1: return "PopsRefluxApiV1";
-    case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V1: return "PopsFieldSolverApiV1";
+    case POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2: return "PopsFieldSolverApiV2";
     case POPS_NATIVE_INTERFACE_WRITER_V1: return "PopsWriterApiV1";
-    case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V1: return "PopsFieldTopologyApiV1";
+    case POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2: return "PopsFieldTopologyApiV2";
   }
   return nullptr;
 }

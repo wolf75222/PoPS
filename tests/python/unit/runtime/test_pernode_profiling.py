@@ -11,6 +11,7 @@ C++. This test pins the generated source only (pure Python, no compile / no _pop
 per-node timing in a run is exercised on a built .so (ROMEO). It uses the REAL engine (pops.time);
 it self-skips only if pops.time is unavailable, never faking it.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import re
 
 import pytest
@@ -44,7 +45,7 @@ def _ssprk3():
 
 def test_per_node_scope_named_by_node():
     """Each work node is wrapped: a ProfileScope marker + a ctx.profile_record under node:<name>."""
-    src = _forward_euler().emit_cpp_program()
+    src = emit_cpp_program(_forward_euler())
     # The RAII-style marker the codegen emits for every wrapped node (issue: "ProfileScope" + "node:").
     assert "ProfileScope" in src, "generated source missing the per-node ProfileScope marker"
     assert "ctx.profile_record(" in src, "generated source missing the per-node profile_record call"
@@ -66,7 +67,7 @@ def test_per_node_scope_named_by_node():
 
 def test_pure_reference_nodes_not_wrapped():
     """The state node binds a MultiFab& and does no work, so it is not wrapped (no node:gas noise)."""
-    src = _forward_euler().emit_cpp_program()
+    src = emit_cpp_program(_forward_euler())
     assert "node:gas" not in src, "the pure state-binding node should not be profiled"
     # The state binding itself is still emitted (it is the base every op clones / commits into).
     assert "ctx.state(0)" in src, "generated source missing the block-0 state binding"
@@ -74,7 +75,7 @@ def test_pure_reference_nodes_not_wrapped():
 
 def test_multistage_wraps_every_work_node():
     """SSPRK3 lowers three rates plus three affine updates; each gets one scope."""
-    src = _ssprk3().emit_cpp_program()
+    src = emit_cpp_program(_ssprk3())
     closes = src.count("ctx.profile_record(")
     assert closes == 6, "SSPRK3 should wrap 6 work nodes, got %d" % closes
     for node in ("node:ssprk3_k", "node:ssprk3_step"):
@@ -84,7 +85,7 @@ def test_multistage_wraps_every_work_node():
 def test_no_profiling_intent_still_valid_cpp():
     """A Program with NO profiling intent still emits valid, complete C++ (the scope is unconditional
     and cheap-when-disabled). The chrono header and the stable ABI surface are present."""
-    src = _forward_euler().emit_cpp_program()
+    src = emit_cpp_program(_forward_euler())
     for tok in ("#include <chrono>", "pops::runtime::program::ProgramContext ctx(sys)",
                 "pops_install_program", "ctx.install(", "std::chrono::steady_clock::now()"):
         assert tok in src, "generated source missing %r" % tok

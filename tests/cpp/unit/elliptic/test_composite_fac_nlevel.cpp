@@ -78,12 +78,12 @@ TEST(CompositeFacNlevelTest, general_two_level_equals_legacy) {
 
   CompositeFacPoisson legacy(geom_c, ba_c, bc, fine_box, r);
   fill(legacy);
-  const Real r_legacy = legacy.solve(40, 80, 1e-10);
+  const Real r_legacy = legacy.solve(40, 80, 1e-10, 0.0);
 
   CompositeFacPoisson general(geom_c, ba_c, bc, fine_box, r);
   fill(general);
   general.force_general_path_for_test(true);  // route the SAME input through the general driver
-  const Real r_general = general.solve(40, 80, 1e-10);
+  const Real r_general = general.solve(40, 80, 1e-10, 0.0);
 
   EXPECT_EQ(r_legacy, r_general) << "general 2-level residual must equal the legacy residual";
 
@@ -149,7 +149,8 @@ TEST(CompositeFacNlevelTest, three_level_nested_mms_order2_and_conservation) {
   mg0.solve(1e-12, 100);
   device_fence();
 
-  const Real rfac = fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*tol=*/1e-9);
+  const Real rfac =
+      fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100, /*rel_tol=*/1e-9, /*abs_tol=*/0.0);
   device_fence();
 
   // (i) finiteness + convergence.

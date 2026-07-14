@@ -12,7 +12,7 @@ from pops import _generated_component_interfaces as generated
 def test_all_required_native_families_are_generated_data_only_contracts():
     expected = {
         "numerical_flux", "ghost_boundary", "field_boundary_closure", "tagger",
-        "clustering", "transfer", "reflux", "field_solver", "writer", "field_topology",
+        "clustering", "transfer", "field_solver", "writer", "field_topology",
     }
     resolved = {name: interfaces.resolve(name) for name in expected}
     assert set(resolved) == expected
@@ -39,12 +39,34 @@ def test_field_topology_and_solver_share_the_topology_contract():
     solver = interfaces.FieldSolver
     assert topology.operations == ("prepare_topology",)
     assert solver.operations == ("solve",)
+    assert topology.version == 2
+    assert topology.cpp_table == "PopsFieldTopologyApiV2"
+    assert solver.version == 2
+    assert solver.cpp_table == "PopsFieldSolverApiV2"
     header = (Path(__file__).resolve().parents[4]
               / "include/pops/runtime/config/generated_component_abi.hpp").read_text(
                   encoding="utf-8")
     assert "PopsInt32ViewV1 component_labels" in header
-    assert "const PopsTopologyLabelV1* labels" in header
+    assert "const PopsTopologyLabelV2* labels" in header
+    assert "typedef struct PopsTopologyLabelV2" in header
+    assert "uint32_t struct_size" in header
+    assert "PopsFieldGlobalTopologyV1 topology" in header
+    assert "const char* source_layout_identity" in header
+    assert "const char* materialized_layout_identity" in header
+    assert "PopsFieldMaterialRepresentationV1 material_representation" in header
+    assert "size_t local_patch_count" in header
+    assert "PopsFieldSolverTopologyLabelV2" in header
+    assert "size_t topology_label_count" in header
+    assert "const char* topology_provenance" in header
     assert header.count("const char* topology_digest") >= 2
+    assert "PopsSolveStatusV2 status" in header
+    assert "PopsSolveActionV2 action" in header
+    assert "double relative_residual" in header
+    assert "double reference_residual_norm" in header
+    assert "double residual_norm" in header
+    assert "const char* reason" in header
+    for retired in ("initial_residual", "final_residual"):
+        assert retired not in header
 
 
 def test_common_pod_abi_version_is_generated_and_catalog_authenticated():

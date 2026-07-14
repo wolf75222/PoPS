@@ -41,7 +41,7 @@ try:
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.codegen.program_codegen import emit_cpp_program
-    from pops.time.method_tableau import RungeKuttaTableau
+    from pops.time._methods.tableau import RungeKuttaTableau
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam

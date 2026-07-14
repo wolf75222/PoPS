@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/amr/tagging/cluster.hpp>  // berger_rigoutsos, ClusterParams
+#include <pops/amr/tagging/clustering_provider.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/amr/regridding/regrid.hpp>   // tag_cells, grow_tags
 #include <pops/amr/tagging/tag_box.hpp>  // TagBox
@@ -15,7 +16,9 @@
 #include <pops/parallel/comm.hpp>    // n_ranks (explicit include, no longer an indirect path)
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -76,9 +79,10 @@ inline void validate_fine_layout_proper_nesting(const BoxArray& fine,
   }
 }
 
-inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
-    TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true,
-    const ClusterParams& cluster = ClusterParams{}, int refinement_ratio = kAmrRefRatio,
+inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout_with_provider(
+    TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated,
+    const amr::ClusteringProvider& clustering,
+    int refinement_ratio = kAmrRefRatio,
     const BoxArray* proper_nesting_parents = nullptr) {
   if (refinement_ratio < 2)
     throw std::runtime_error("regrid_compute_fine_layout: refinement_ratio must be >= 2");
@@ -87,12 +91,10 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
   // Only a replicated level zero is complete locally. Every intermediate parent is distributed.
   const bool parent_replicated = (pk == 0) && coarse_replicated;
   if (!parent_replicated)
-    all_reduce_or_inplace(grown.t.data(), static_cast<int>(grown.t.size()));
-  // ADC-616: the Berger-Rigoutsos clustering params (min_efficiency / min_box_size / max_box_size)
-  // are a PARAMETER now. Default ClusterParams{} == the historical {0.7, 1, 32} -> bit-identical.
-  // The admissible regions are disjoint, so clustering them independently also prevents one box
-  // from bridging two adjacent/sparse parent patches. For level zero, the physical domain is the
-  // parent authority and retains the historical boundary-margin behavior.
+    all_reduce_or_inplace(grown.t.data(), grown.t.size());
+  // The admissible regions are disjoint, so clustering them independently prevents one box from
+  // bridging two adjacent parent patches. The provider only returns parent boxes; PoPS retains
+  // nesting, deterministic ordering and fine-layout publication.
   std::vector<Box2D> admissible;
   const Box2D domain_interior = pdom.grow(-margin);
   if (proper_nesting_parents != nullptr) {
@@ -112,9 +114,13 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     for (int j = region.lo[1]; j <= region.hi[1]; ++j)
       for (int i = region.lo[0]; i <= region.hi[0]; ++i)
         restricted(i, j) = grown.tagged(i, j) ? 1 : 0;
-    std::vector<Box2D> local = berger_rigoutsos(restricted, cluster);
+    std::vector<Box2D> local = clustering.cluster(restricted);
     cl.insert(cl.end(), local.begin(), local.end());
   }
+  std::sort(cl.begin(), cl.end(), [](const Box2D& left, const Box2D& right) {
+    return std::tie(left.lo[0], left.lo[1], left.hi[0], left.hi[1]) <
+           std::tie(right.lo[0], right.lo[1], right.hi[0], right.hi[1]);
+  });
   std::vector<Box2D> fb;  // fine patches (fine level coords = parent x2)
   for (const Box2D& b : cl) {
     fb.push_back(Box2D{{refinement_ratio * b.lo[0], refinement_ratio * b.lo[1]},
@@ -128,6 +134,16 @@ inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
     validate_fine_layout_proper_nesting(
         ba, *proper_nesting_parents, refinement_ratio, margin);
   return {ba, DistributionMapping(static_cast<int>(ba.size()), n_ranks())};
+}
+
+inline std::pair<BoxArray, DistributionMapping> regrid_compute_fine_layout(
+    TagBox grown, const Box2D& pdom, int pk, int margin, bool coarse_replicated = true,
+    const ClusterParams& cluster = ClusterParams{}, int refinement_ratio = kAmrRefRatio,
+    const BoxArray* proper_nesting_parents = nullptr) {
+  const amr::BergerRigoutsosProvider provider(cluster);
+  return regrid_compute_fine_layout_with_provider(
+      std::move(grown), pdom, pk, margin, coarse_replicated, provider,
+      refinement_ratio, proper_nesting_parents);
 }
 
 /// Rebuild ONE fine MultiFab on the IMPOSED layout @p fb / @p dmap (the same one for all blocks in

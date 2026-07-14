@@ -17,6 +17,7 @@ from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
 from pops.params.use_sites import ParamUse, resolve_param_use
+from pops.numerics.indicator_stencils import FOURTH_ORDER_AXIS, SECOND_ORDER_AXIS
 from .limiters import Minmod, limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
@@ -52,7 +53,9 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
     is carried in the descriptor options and threaded to the native ``Weno5::eps`` by ``add_block``
     (cartesian System path; refused loud on the polar / disc / AMR paths, never silently dropped)."""
     if epsilon is None:
-        return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3)
+        return _native(
+            name, "pops::Weno5", "weno5", category="reconstruction",
+            formal_order=5, ghost_depth=3, amr_gradient_stencil=FOURTH_ORDER_AXIS)
     where = "reconstruction.%s(epsilon=)" % ("WENO5" if name == "weno5" else "WENO5Z")
     if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float, Decimal, Fraction)):
         raise TypeError("%s must be an exact Python numeric scalar" % where)
@@ -62,8 +65,10 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
         raise ValueError("%s must be finite" % where)
     if epsilon <= 0:
         raise ValueError("%s must be a positive number or None; got %r" % (where, epsilon))
-    return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3,
-                   epsilon=epsilon)
+    return _native(
+        name, "pops::Weno5", "weno5", category="reconstruction",
+        formal_order=5, ghost_depth=3, amr_gradient_stencil=FOURTH_ORDER_AXIS,
+        epsilon=epsilon)
 
 
 def _muscl(limiter: Any = None) -> Any:
@@ -83,14 +88,14 @@ def _muscl(limiter: Any = None) -> Any:
     native_id = "pops::Minmod" if scheme == "minmod" else "pops::VanLeer"
     return _native(
         "muscl", native_id, scheme, category="reconstruction", limiter=selected,
-        formal_order=2, ghost_depth=2,
+        formal_order=2, ghost_depth=2, amr_gradient_stencil=SECOND_ORDER_AXIS,
     )
 
 
 reconstruction = SimpleNamespace(
     FirstOrder=lambda: _native(
         "firstorder", "pops::NoSlope", "firstorder", category="reconstruction",
-        formal_order=1, ghost_depth=1),
+        formal_order=1, ghost_depth=1, amr_gradient_stencil=SECOND_ORDER_AXIS),
     MUSCL=_muscl,
     WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
     WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),

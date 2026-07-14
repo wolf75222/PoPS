@@ -24,14 +24,14 @@ class _SystemIO(_System):
 
     def set_history_persistence(self, mapping):
         """Attach the per-history persistence policies (ADC-626): @p mapping is ``name -> policy`` (a
-        :class:`pops.time.history_persistence.HistoryPersistence`). The checkpoint reads it to store only
+        :class:`pops.time._history.persistence.HistoryPersistence`). The checkpoint reads it to store only
         the policy-selected slots; a ring absent from the map (or an empty map) persists Dense (the whole
         ring. Idempotent; ``None`` clears it."""
         self._history_persistence = dict(mapping or {})
         return self
 
     def last_restart_report(self):
-        """The typed :class:`~pops.time.history_persistence_report.HistoryReplayReport` of the last
+        """The typed :class:`~pops.time._history.report.HistoryReplayReport` of the last
         restart (stored-vs-recomputed ring slots + replay steps), or ``None`` if no restart has run.
         Metadata-only (ADC-591); populated by :meth:`restart`."""
         return getattr(self, "_last_restart_report", None)

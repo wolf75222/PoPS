@@ -112,7 +112,7 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     CompositeFacPoisson fac(geom_c, ba_c, bc, fb, r);
     fill_f(fac.rhs_coarse(), geom_c);
     fill_f(fac.rhs_fine(), g1);
-    const Real rf = fac.solve(40, 80, 1e-10);
+    const Real rf = fac.solve(40, 80, 1e-10, 0.0);
     const double cc = coarse_checksum(fac), fc = fine_checksum(fac.phi_fine());
     const double sp = std::fmax(spread(cc), spread(rf));
     if (me == 0)
@@ -139,7 +139,7 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     fill_f(fac.rhs_level(0), geom_c);
     fill_f(fac.rhs_level(1), g1);
     fill_f(fac.rhs_level(2), g2);
-    const Real rf = fac.solve(60, 100, 1e-9);
+    const Real rf = fac.solve(60, 100, 1e-9, 0.0);
     const double cc = coarse_checksum(fac);
     const double f1 = fine_checksum(fac.phi_level(1)), f2 = fine_checksum(fac.phi_level(2));
     const double sp = std::fmax(spread(cc), spread(rf));
@@ -166,7 +166,7 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     CompositeFacPoisson fac(geom_c, ba_c, bc, adj, r);
     fill_f(fac.rhs_coarse(), geom_c);
     fill_f(fac.rhs_fine(), g1);
-    const Real rf = fac.solve(60, 100, 1e-9);
+    const Real rf = fac.solve(60, 100, 1e-9, 0.0);
     const double cc = coarse_checksum(fac), fc = fine_checksum(fac.phi_fine());
     const double sp = std::fmax(spread(cc), spread(rf));
     if (me == 0)

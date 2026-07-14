@@ -104,7 +104,7 @@ class HDF5(FormatInterface):
         return RequirementSet({"parallel_io": True} if self.parallel else {})
 
     def writer(self) -> Any:
-        from .writers import HDF5Writer
+        from ._writers.hdf5 import HDF5Writer
         return HDF5Writer()
 
     def consumer_data(self) -> dict[str, Any]:
@@ -124,7 +124,7 @@ class NPZ(FormatInterface):
     extension = ".npz"
 
     def writer(self) -> Any:
-        from .writers import NPZWriter
+        from ._writers.npz import NPZWriter
         return NPZWriter()
 
     def consumer_data(self) -> dict[str, Any]:
@@ -144,7 +144,7 @@ class ParaView(FormatInterface):
     extension = ".vtu"
 
     def writer(self) -> Any:
-        from .writers import ParaViewWriter
+        from ._writers.paraview import ParaViewWriter
         return ParaViewWriter()
 
     def consumer_data(self) -> dict[str, Any]:

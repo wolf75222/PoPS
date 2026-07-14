@@ -14,6 +14,8 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/numerical_defaults.hpp>
+#include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <functional>
 #include <cstddef>
@@ -166,8 +168,10 @@ struct AmrBuildParams {
     bool composite = false;           ///< true: composite FAC field solve (single-block coupler)
     int fac_max_iters = 0;            ///< FAC outer iterations (<= 0 = default kFACDefaultMaxIters)
     int fac_fine_sweeps = 0;          ///< SOR sweeps per fine solve (<= 0 = kFACDefaultFineSweeps)
-    double fac_tol = 0.0;             ///< composite-residual stop (<= 0 = kFACDefaultTol)
+    double fac_rel_tol = 0.0;         ///< relative composite stop (0 = kFACDefaultRelTol)
+    double fac_abs_tol = 0.0;         ///< absolute composite floor (0 = kFACDefaultAbsTol)
     double fac_coarse_rel_tol = 0.0;  ///< internal coarse rel_tol (<= 0 = kFACInitialCoarseRelTol)
+    double fac_coarse_abs_tol = 0.0;  ///< internal coarse abs_tol (0 = kFACInitialCoarseAbsTol)
     int fac_coarse_cycles = 0;        ///< internal coarse cycles (<= 0 = kFACInitialCoarseMaxCycles)
     bool fac_verbose = false;         ///< record the FAC per-iteration residual trace
   } poisson;
@@ -429,6 +433,13 @@ class AmrSystem {
   POPS_EXPORT void install_field_boundary_jvp_component(
       const std::string& name, PreparedBoundaryComponentSpec spec,
       std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_amr_tagger_component(
+      runtime::amr::PreparedTaggerSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_amr_clustering_component(
+      runtime::amr::PreparedClusteringSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void discard_amr_provider_components();
   /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
   /// only after the lazy AmrRuntime has been built and before bind freezes composition.
   POPS_EXPORT void install_interface_flux_component(
@@ -503,10 +514,15 @@ class AmrSystem {
       const std::vector<std::string>& leaf_variables,
       const std::vector<int>& leaf_ops,
       const std::vector<double>& leaf_thresholds,
-      const std::vector<int>& refine_ops, const std::vector<int>& refine_args,
-      const std::vector<int>& coarsen_ops, const std::vector<int>& coarsen_args,
+      const std::vector<int>& leaf_stencil_indices,
+      const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
+      const std::vector<std::int32_t>& refine_ops,
+      const std::vector<std::int32_t>& refine_args,
+      const std::vector<std::int32_t>& coarsen_ops,
+      const std::vector<std::int32_t>& coarsen_args,
       int min_cycles, const std::string& equality_policy,
-      const std::string& conflict_policy, const std::string& provider_identity);
+      const std::string& conflict_policy, const std::string& clock_identity,
+      const std::string& provider_identity);
   /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
   /// independent execution authority and are never inferred from spatial refinement.
   void set_temporal_relations(const std::vector<std::int64_t>& numerators,
@@ -537,14 +553,16 @@ class AmrSystem {
   ///                  the coupler's: single block, 2 levels, ONE mono-box fine patch, replicated
   ///                  coarse -- an out-of-scope hierarchy REFUSES at build (never a silent fallback).
   ///                  false (default) = the historical Option A solve, bit-identical.
-  /// @param fac_max_iters / fac_fine_sweeps / fac_tol / fac_coarse_rel_tol / fac_coarse_cycles /
-  ///        fac_verbose the composite-FAC knobs (<= 0 = the kFAC* default); inert when composite is false.
+  /// @param fac_max_iters / fac_fine_sweeps / fac_rel_tol / fac_abs_tol / fac_coarse_rel_tol /
+  ///        fac_coarse_abs_tol / fac_coarse_cycles / fac_verbose the composite-FAC knobs (0 = the
+  ///        kFAC* default); inert when composite is false.
   /// @throws std::runtime_error if rhs, solver, bc, wall or a FAC knob is outside the supported domain.
   void set_poisson(const std::string& rhs = "charge_density",
                    const std::string& solver = "geometric_mg", const std::string& bc = "auto",
                    const std::string& wall = "none", double wall_radius = 0.0,
                    bool composite = false, int fac_max_iters = 0, int fac_fine_sweeps = 0,
-                   double fac_tol = 0.0, double fac_coarse_rel_tol = 0.0,
+                   double fac_rel_tol = 0.0, double fac_abs_tol = 0.0,
+                   double fac_coarse_rel_tol = 0.0, double fac_coarse_abs_tol = 0.0,
                    int fac_coarse_cycles = 0, bool fac_verbose = false);
 
   /// Install one fully resolved AMR field route.  The native registry key is the digest of the
@@ -563,6 +581,12 @@ class AmrSystem {
                              const std::string& hierarchy, double abs_tol, double rel_tol,
                              int max_cycles, int min_coarse, int pre_smooth,
                              int post_smooth, int bottom_sweeps, int coarse_threshold);
+  void set_field_topology_authority(const std::string& provider_slot,
+                                    const std::string& provider_kind,
+                                    const std::string& provenance,
+                                    const std::string& topology_digest);
+  std::vector<runtime::field::FieldTopologyReportRow> field_topology_report(
+      const std::string& provider_slot) const;
   void set_field_boundary_plan(const std::string& provider_slot,
                                const std::vector<std::string>& kind,
                                const std::vector<double>& alpha,

@@ -21,19 +21,19 @@ def _tracked_python_files(*roots: str) -> tuple[Path, ...]:
     return tuple(
         ROOT / line
         for line in result.stdout.splitlines()
-        if line.endswith(".py")
+        if line.endswith(".py") and (ROOT / line).is_file()
     )
 
 
 def test_retired_program_authoring_modules_and_inference_are_absent():
     assert not (ROOT / "python/pops/time/program_space_resolution.py").exists()
-    source = (ROOT / "python/pops/time/program_core.py").read_text(encoding="utf-8")
+    source = (ROOT / "python/pops/time/_program/operations.py").read_text(encoding="utf-8")
     assert "_default_state_spaces" not in source
     assert "isinstance(state, StateHandle)" in source
 
 
 def test_program_rhs_has_one_required_typed_terms_signature():
-    path = ROOT / "python/pops/time/program_rhs.py"
+    path = ROOT / "python/pops/time/_program/rhs.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     rhs = next(
         node

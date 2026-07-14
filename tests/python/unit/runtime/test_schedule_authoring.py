@@ -5,6 +5,7 @@ cacheable-capability validation, and the honest refusal to lower a non-always sc
 runtime that honors caches / accumulate_dt / checkpoint is the C++ part of ADC-458). These are
 pure-Python: only pops.time / pops.model are needed, no compiled step is run.
 """
+from pops.codegen.program_codegen import _check_schedules_lowerable
 import pytest
 
 from pops import model
@@ -152,7 +153,7 @@ def test_on_end_schedule_refuses_to_lower():
     P, U, _ = _program_state(mod, u)
     fields_from_state(U, schedule=_at_end(P.clock, adctime.Hold()))
     with pytest.raises(NotImplementedError, match="AtEnd"):
-        P._check_schedules_lowerable()
+        _check_schedules_lowerable(P)
 
 
 def test_when_python_callable_refuses_to_lower():
@@ -166,7 +167,7 @@ def test_when_python_callable_refuses_to_lower():
     assert "unsupported_python_callable" in callable_token
     assert isinstance(P._ir_hash(), str)
     with pytest.raises(NotImplementedError, match="ADC-458"):
-        P._check_schedules_lowerable()
+        _check_schedules_lowerable(P)
 
 
 def test_held_solve_fields_now_lowers():
@@ -175,7 +176,7 @@ def test_held_solve_fields_now_lowers():
     mod, u, _, fields_from_state = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Hold()))
-    P._check_schedules_lowerable()   # no raise
+    _check_schedules_lowerable(P)   # no raise
 
 
 def test_skip_now_lowers():
@@ -183,7 +184,7 @@ def test_skip_now_lowers():
     mod, u, _, fields_from_state = _module(cacheable=True)
     P, U, _ = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Skip()))
-    P._check_schedules_lowerable()   # no raise
+    _check_schedules_lowerable(P)   # no raise
 
 
 def test_always_schedule_lowers_fine():
@@ -191,7 +192,7 @@ def test_always_schedule_lowers_fine():
     P, U, _ = _program_state(mod, u)
     fields_from_state(U, schedule=adctime.Schedule(
         adctime.Always(adctime.AcceptedStep(P.clock))))
-    P._check_schedules_lowerable()   # no raise: always() == the default cadence
+    _check_schedules_lowerable(P)   # no raise: always() == the default cadence
 
 
 def test_scheduled_node_serializes_for_codegen():

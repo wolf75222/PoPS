@@ -435,7 +435,7 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         field-solve multigrid), no new numerical kernel (ADC-516).
 
     A scheme other than these two never reaches here: the Python layer
-    (pops.time.program_solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
+    (pops.time._program.solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
     rejects every other preconditioner upstream."""
     scheme = v.attrs.get("preconditioner", "identity")
     if scheme == "identity":
@@ -478,7 +478,7 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
 
 
 def _composite_tensor_fac_options(
-        v: Any) -> tuple[int, Any, int | None, Any, int | None, bool | None]:
+        v: Any) -> tuple[int, Any, Any, int | None, Any, Any, int | None, bool | None]:
     """Authenticate the complete direct-solver identity carried by a hierarchy solve node."""
     identity = v.attrs.get("hierarchy_solver_identity")
     expected_identity = {"schema_version", "solver_id", "capabilities", "options"}
@@ -497,11 +497,12 @@ def _composite_tensor_fac_options(
         raise ValueError("CompositeTensorFAC hierarchy solve capabilities are unauthenticated")
     options = identity["options"]
     expected_options = {
-        "max_iter", "rel_tol", "fine_sweeps", "coarse_rel_tol", "coarse_cycles", "verbose"}
+        "max_iter", "rel_tol", "abs_tol", "fine_sweeps", "coarse_rel_tol", "coarse_abs_tol",
+        "coarse_cycles", "verbose"}
     if not isinstance(options, Mapping) or set(options) != expected_options:
         raise TypeError(
-            "CompositeTensorFAC options must contain exactly max_iter, rel_tol, fine_sweeps, "
-            "coarse_rel_tol, coarse_cycles and verbose")
+            "CompositeTensorFAC options must contain exactly max_iter, rel_tol, abs_tol, fine_sweeps, "
+            "coarse_rel_tol, coarse_abs_tol, coarse_cycles and verbose")
     max_iter = options["max_iter"]
     if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
         raise ValueError("CompositeTensorFAC max_iter must be a positive int")
@@ -521,12 +522,21 @@ def _composite_tensor_fac_options(
     rel_tol = literal_value(options["rel_tol"], where="CompositeTensorFAC rel_tol")
     if isinstance(rel_tol, bool) or not 0 < rel_tol < 1:
         raise ValueError("CompositeTensorFAC rel_tol must be in (0, 1)")
+    abs_tol = literal_value(options["abs_tol"], where="CompositeTensorFAC abs_tol")
+    if isinstance(abs_tol, bool) or abs_tol < 0:
+        raise ValueError("CompositeTensorFAC abs_tol must be >= 0")
     coarse_rel_tol = options["coarse_rel_tol"]
     if coarse_rel_tol is not None:
         coarse_rel_tol = literal_value(
             coarse_rel_tol, where="CompositeTensorFAC coarse_rel_tol")
         if isinstance(coarse_rel_tol, bool) or not 0 < coarse_rel_tol < 1:
             raise ValueError("CompositeTensorFAC coarse_rel_tol must be in (0, 1) or None")
+    coarse_abs_tol = options["coarse_abs_tol"]
+    if coarse_abs_tol is not None:
+        coarse_abs_tol = literal_value(
+            coarse_abs_tol, where="CompositeTensorFAC coarse_abs_tol")
+        if isinstance(coarse_abs_tol, bool) or coarse_abs_tol < 0:
+            raise ValueError("CompositeTensorFAC coarse_abs_tol must be >= 0 or None")
     from pops._ir.literals import scalar_data
     emitted_tol_data = scalar_data(v.attrs["tol"])
     emitted_max_iter = v.attrs.get("max_iter")
@@ -544,7 +554,8 @@ def _composite_tensor_fac_options(
     block_index = v.attrs.get("hierarchy_block_index")
     if isinstance(block_index, bool) or not isinstance(block_index, int) or block_index < 0:
         raise ValueError("CompositeTensorFAC requires an authenticated hierarchy block index")
-    return max_iter, rel_tol, fine_sweeps, coarse_rel_tol, coarse_cycles, verbose
+    return (max_iter, rel_tol, abs_tol, fine_sweeps, coarse_rel_tol, coarse_abs_tol,
+            coarse_cycles, verbose)
 
 
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
@@ -583,12 +594,14 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (sol_sp, op_ncomp))
     if fac_options is not None:
-        _, _, fine_sweeps, coarse_rel_tol, coarse_cycles, verbose = fac_options
+        _, _, _, fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose = fac_options
         prelude.append(
-            "ctx.configure_composite_tensor_fac(%d, %d, %d, static_cast<pops::Real>(%s), %d, %s);"
+            "ctx.configure_composite_tensor_fac(%d, %d, %d, static_cast<pops::Real>(%s), "
+            "static_cast<pops::Real>(%s), %d, %s);"
             % (int(v.attrs["hierarchy_block_index"]), op_ncomp,
                0 if fine_sweeps is None else fine_sweeps,
                scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
+               scalar_cpp(0 if coarse_abs_tol is None else coarse_abs_tol),
                0 if coarse_cycles is None else coarse_cycles,
                -1 if verbose is None else int(verbose)))
     # On a refined AMR hierarchy the mathematical solution is one field per level.  The persistent
@@ -641,9 +654,10 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     if direct_refined:
         if fac_options is None:
             raise ValueError("a direct hierarchy phase requires CompositeTensorFAC")
+        fac_abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(fac_options[2])
         lines.append(
-            "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %d);"
-            % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, max_iter))
+            "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %s, %d);"
+            % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, fac_abs_tol, max_iter))
     else:
         lines.append(
             "pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "

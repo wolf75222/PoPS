@@ -186,6 +186,10 @@ _AMR_AUTHORITY_PROTOCOLS = {
     "execution": ("to_data", "runtime_execution_data"),
 }
 
+_AMR_PROVIDER_PROTOCOL = (
+    "inspect", "resolve_references", "require_component_inputs", "runtime_binding_data",
+)
+
 
 def _authority_data(value: Any, slot: str) -> dict[str, Any]:
     """Authenticate one small AMR authority protocol without naming an implementation class."""
@@ -206,6 +210,24 @@ def _authority_data(value: Any, slot: str) -> dict[str, Any]:
     return data
 
 
+def _provider_data(value: Any, slot: str) -> dict[str, Any]:
+    """Authenticate one open AMR provider through its small immutable protocol."""
+    for method in _AMR_PROVIDER_PROTOCOL:
+        if not callable(getattr(value, method, None)):
+            raise TypeError("AMR.%s must implement %s()" % (slot, method))
+    first, second = value.inspect(), value.inspect()
+    if not isinstance(first, dict) or first != second \
+            or first.get("schema_version") != 1 \
+            or not isinstance(first.get("provider_type"), str) \
+            or not isinstance(first.get("provider_identity"), str):
+        raise TypeError("AMR.%s must expose one deterministic canonical provider identity" % slot)
+    try:
+        json.dumps(first, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("AMR.%s provider identity must be strict JSON data" % slot) from exc
+    return first
+
+
 class AMR(MeshDescriptor):
     """One complete adaptive-layout authority.
 
@@ -224,6 +246,8 @@ class AMR(MeshDescriptor):
         regrid: Any,
         transfer: Any,
         execution: Any,
+        tagger: Any = None,
+        clustering: Any = None,
     ) -> None:
         # Structural snapshots consume ``options()``.  Keeping authorities private prevents the
         # generic snapshotter from recursively treating Schedule implementation helpers as public
@@ -234,6 +258,13 @@ class AMR(MeshDescriptor):
         self._regrid = regrid
         self._transfer = transfer
         self._execution = execution
+        if tagger is None or clustering is None:
+            from pops.lib.amr import BergerRigoutsos, SymbolicTagger
+
+            tagger = SymbolicTagger() if tagger is None else tagger
+            clustering = BergerRigoutsos() if clustering is None else clustering
+        self._tagger = tagger
+        self._clustering = clustering
 
     @property
     def grid(self) -> Any:
@@ -259,6 +290,14 @@ class AMR(MeshDescriptor):
     def execution(self) -> Any:
         return self._execution
 
+    @property
+    def tagger(self) -> Any:
+        return self._tagger
+
+    @property
+    def clustering(self) -> Any:
+        return self._clustering
+
     def _validate_authorities(self) -> None:
         authorities = {
             "hierarchy": self.hierarchy, "tagging": self.tagging,
@@ -266,6 +305,8 @@ class AMR(MeshDescriptor):
             "execution": self.execution,
         }
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
+        _provider_data(self.tagger, "tagger")
+        _provider_data(self.clustering, "clustering")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
             if not callable(getattr(self.grid, method, None)):
                 raise TypeError("AMR.grid must implement %s()" % method)
@@ -310,6 +351,8 @@ class AMR(MeshDescriptor):
             "regrid": self.regrid.to_data(),
             "transfer": self.transfer.inspect(),
             "execution": self.execution.to_data(),
+            "tagger": self.tagger.inspect(),
+            "clustering": self.clustering.inspect(),
         }
 
     def _summary(self) -> str:
@@ -357,6 +400,8 @@ class AMR(MeshDescriptor):
             regrid=self.regrid,
             transfer=self.transfer.resolve_references(resolved),
             execution=self.execution,
+            tagger=self.tagger.resolve_references(resolved),
+            clustering=self.clustering.resolve_references(resolved),
         )
 
     def resolve_amr_authorities(self, context: Any) -> Any:
@@ -369,6 +414,8 @@ class AMR(MeshDescriptor):
             regrid=self.regrid,
             transfer=self.transfer,
             execution=self.execution,
+            tagger=self.tagger,
+            clustering=self.clustering,
             context=context,
         )
 

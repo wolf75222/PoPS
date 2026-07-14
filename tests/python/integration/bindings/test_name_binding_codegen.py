@@ -16,6 +16,7 @@ This pure-Python test (no .so compile, no engine) checks the two halves the code
 Runs as a plain script (``python3 test_name_binding_codegen.py``, the CI invocation) and under pytest.
 Skips cleanly (never fakes the engine) if pops.time cannot import (it needs _pops for the typed registry).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 from pops.numerics.terms import DefaultSource, Flux
@@ -62,7 +63,7 @@ def _flux_program(t, name, blocks):
 def section_a(t):
     print("== (A) the .so exports pops_program_block_name per block, declaration order ==")
     P = _flux_program(t, "plasma_electrons", ["plasma", "electrons", "dust"])
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
 
     chk("pops_program_block_count() { return 3; }" in src,
         "pops_program_block_count returns the block count (3)")
@@ -75,7 +76,7 @@ def section_a(t):
 
     # A single-block Program still carries the table (count 1), so the loader binds it by name too.
     P1 = _flux_program(t, "single", ["gas"])
-    src1 = P1.emit_cpp_program()
+    src1 = emit_cpp_program(P1)
     chk("pops_program_block_count() { return 1; }" in src1, "single-block count is 1")
     chk('case 0: return "gas";' in src1, "single block 0 -> \"gas\"")
 

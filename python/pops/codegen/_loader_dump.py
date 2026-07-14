@@ -27,7 +27,8 @@ class CompiledProblemDumpMixin:
         src = self._generated_cpp
         if src is None:
             # Advanced handles built outside compile_problem have no persisted translation unit.
-            src = program.emit_cpp_program(model=self.model)
+            from pops.codegen.program_codegen import emit_cpp_program
+            src = emit_cpp_program(program, model=self.model)
         name = self.program_name or "problem"
         if str(target).endswith(".cpp"):
             out_path = str(target)

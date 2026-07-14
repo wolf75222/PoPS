@@ -485,7 +485,7 @@ def run_and_restart(
 ) -> ExecutionEvidence:
     """Run, publish, reopen, checkpoint, restore independently and continue bit-identically."""
 
-    from pops.output.writers import read_hdf5, read_paraview
+    from pops.output import read_hdf5, read_paraview
 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)

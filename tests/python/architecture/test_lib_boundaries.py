@@ -208,7 +208,7 @@ def test_canonical_homes_are_outside_lib():
         "RuntimeParam": REPO_ROOT / "python/pops/params/runtime.py",
         "FieldOperator": REPO_ROOT / "python/pops/fields/operator.py",
         "FieldDiscretization": REPO_ROOT / "python/pops/fields/discretization.py",
-        "Program": REPO_ROOT / "python/pops/time/program.py",
+        "Program": REPO_ROOT / "python/pops/time/_program/api.py",
     }
     missing = []
     for name, path in homes.items():

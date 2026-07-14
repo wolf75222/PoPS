@@ -348,7 +348,7 @@ def test_pops_non_codegen_python_has_zero_cpp_impact(tmp_path):
     outputs, targets, plan = _run_plan_cpp_explain(
         tmp_path,
         [
-            "python/pops/time/program.py",
+            "python/pops/time/_program/api.py",
             "docs/whatever.md",
             "CHANGELOG.md",
             "tests/python/unit/time/test_time_condensed_schur.py",
@@ -371,7 +371,7 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
         "include/pops/numerics/time/schemes/splitting.hpp",
         "python/bindings/system/base/system_fields.cpp",
         "python/pops/codegen/program_emit_control.py",
-        "python/pops/time/program.py",
+        "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
     ]
     outputs, targets, plan = _run_plan_cpp_explain(tmp_path, changed)
@@ -383,7 +383,7 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
     assert kinds["include/pops/numerics/time/schemes/splitting.hpp"] == "include-impact"
     assert kinds["python/bindings/system/base/system_fields.cpp"] == "binding-tu-targets"
     assert kinds["python/pops/codegen/program_emit_control.py"] == "codegen-labels"
-    assert kinds["python/pops/time/program.py"] == "none"
+    assert kinds["python/pops/time/_program/api.py"] == "none"
 
 
 def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
@@ -400,7 +400,7 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
         "include/pops/runtime/system.hpp",
         "python/bindings/system/base/system_fields.cpp",
         "python/pops/codegen/program_emit_control.py",
-        "python/pops/time/program.py",
+        "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
     ]
     outputs, _targets, plan = _run_plan_cpp_explain(tmp_path, changed)

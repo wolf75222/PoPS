@@ -243,7 +243,7 @@ class FieldSolveResolver:
 class SolveStatus(Enum):
     CONVERGED = "converged"
     NON_CONVERGED = "non_converged"
-    INCOMPATIBLE = "incompatible"
+    INCOMPATIBLE_RHS = "incompatible_rhs"
     UNAVAILABLE = "unavailable"
 
 
@@ -287,7 +287,8 @@ class SolveOutcome:
             if {row.reference for row in self.context.inputs} != expected:
                 raise ValueError("Accepted FieldContext omits field or boundary dependencies")
         elif self.context is not None and isinstance(self.context.materialization, Accepted):
-            raise ValueError("non-converged/incompatible solve cannot publish Accepted FieldContext")
+            raise ValueError(
+                "non-converged/incompatible-RHS solve cannot publish Accepted FieldContext")
 
     def publish(self) -> FieldContext:
         if self.status is not SolveStatus.CONVERGED or self.context is None:

@@ -25,6 +25,7 @@ The contract this test pins:
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
 on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import pytest
 from pops.numerics.terms import DefaultSource, Flux
 
@@ -94,7 +95,7 @@ def test_parity_noop_when_nothing_dead():
     P = _euler_no_dead()
     Q = adctime.eliminate_dead_nodes(P)
     assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash"
-    assert Q.emit_cpp_program() == P.emit_cpp_program(), "no-op pass changed the emitted C++"
+    assert emit_cpp_program(Q) == emit_cpp_program(P), "no-op pass changed the emitted C++"
 
 
 def test_parity_dead_node_matches_handwritten():
@@ -104,7 +105,7 @@ def test_parity_dead_node_matches_handwritten():
     P_clean = _euler_no_dead()
     Q = adctime.eliminate_dead_nodes(P_dead)
     assert Q._ir_hash() == P_clean._ir_hash(), "optimized hash != hand-written-clean hash"
-    assert Q.emit_cpp_program() == P_clean.emit_cpp_program(), "optimized C++ != hand-written-clean"
+    assert emit_cpp_program(Q) == emit_cpp_program(P_clean), "optimized C++ != hand-written-clean"
     # And the dead program differed BEFORE the pass (otherwise the test proves nothing).
     assert P_dead._ir_hash() != P_clean._ir_hash()
 
@@ -114,7 +115,7 @@ def test_method_form_matches_free_function():
     Q_fn = adctime.eliminate_dead_nodes(P)
     Q_method = P.eliminate_dead_nodes()
     assert Q_method._ir_hash() == Q_fn._ir_hash()
-    assert Q_method.emit_cpp_program() == Q_fn.emit_cpp_program()
+    assert emit_cpp_program(Q_method) == emit_cpp_program(Q_fn)
 
 
 def test_side_effecting_nodes_never_removed():
@@ -198,12 +199,12 @@ def test_buffer_writing_op_with_discarded_result_kept():
              P.value("U1", 1.0 * U,
                               at=typed_state(P, "plasma", state_name="U").next.point))
 
-    before = P.emit_cpp_program()
+    before = emit_cpp_program(P)
     Q = adctime.eliminate_dead_nodes(P)
     after_ops = [(v.op, v.name) for v in Q._values]
     assert ("laplacian", "buf") in after_ops, "top-level buffer-writing laplacian wrongly removed"
     # No node is dead here -> exact no-op.
-    assert Q.emit_cpp_program() == before
+    assert emit_cpp_program(Q) == before
     assert Q._ir_hash() == P._ir_hash()
 
 
@@ -228,7 +229,7 @@ def test_control_flow_input_kept():
     assert "while" in ops and "state" in ops
     # No node was dead (state feeds the while, while is committed) -> exact no-op.
     assert Q._ir_hash() == P._ir_hash()
-    assert Q.emit_cpp_program() == P.emit_cpp_program()
+    assert emit_cpp_program(Q) == emit_cpp_program(P)
 
 
 def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source():

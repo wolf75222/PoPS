@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Multi-stage compiled time Programs: SSPRK2 + RK4 parity (epic ADC-399 / ADC-407).
 
-`Program.emit_cpp_program` lowers a multi-stage scheme (intermediate scratch states + a `lincomb`
+`pops.codegen.program_codegen.emit_cpp_program` lowers a multi-stage scheme (scratch states + a `lincomb`
 commit) to a problem.so. This test builds SSPRK2 and RK4 Programs, compiles + installs + runs each,
 and checks parity against an OFFLINE stage-by-stage reference computed from the same runtime
 primitives (`set_state` + `solve_fields` + `eval_rhs`) -- the exact stages the compiled program

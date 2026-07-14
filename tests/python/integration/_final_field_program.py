@@ -150,6 +150,8 @@ def resolve_periodic_field_program(
     target: str,
     n: int,
     regrid_every: int = 2,
+    field_solver: Any = None,
+    components: tuple[Any, ...] = (),
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -180,7 +182,7 @@ def resolve_periodic_field_program(
             boundaries=(
                 BoundaryCondition(AllPhysicalBoundaries(), Periodic()),
             ),
-            solver=GeometricMG(),
+            solver=GeometricMG() if field_solver is None else field_solver,
             nullspace=ConstantNullspace(),
             gauge=MeanValueGauge(0.0),
             hierarchy_policy=(
@@ -230,7 +232,8 @@ def resolve_periodic_field_program(
             transfer=transfer,
             execution=AMRExecution.synchronous(),
         )
-    return pops.resolve(pops.validate(case), layout=layout)
+    return pops.resolve(
+        pops.validate(case), layout=layout, components=components)
 
 
 def compile_block_model(model: Model, *, target: str) -> Any:

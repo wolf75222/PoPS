@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
 #include "boundary_component_install.hpp"
 
+#include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <limits>
@@ -14,6 +15,90 @@
 // RELATIVE order (no overload set is reordered -- every AmrSystem method name here is unique). The class
 // name and the .def names are unchanged, so the legacy-name architecture gate still finds them here.
 namespace {
+
+pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(
+    const py::dict& row, const py::dict& execution) {
+  pops::runtime::amr::PreparedTaggerSpec spec;
+  spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
+  spec.component_id = py::cast<std::string>(row["component_id"]);
+  spec.manifest_identity =
+      py::cast<std::string>(row["component_manifest_identity"]);
+  spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
+  spec.clock_identity = py::cast<std::string>(row["clock_identity"]);
+  const py::dict capability = py::cast<py::dict>(row["tagging_capability"]);
+  spec.leaf_opcodes =
+      py::cast<std::vector<std::int32_t>>(capability["leaf_opcode_ids"]);
+  spec.logical_opcodes =
+      py::cast<std::vector<std::int32_t>>(capability["logical_opcode_ids"]);
+  spec.indicator_stencil_routes =
+      py::cast<std::vector<std::string>>(capability["indicator_stencil_routes"]);
+  spec.maximum_stencil_terms =
+      py::cast<std::size_t>(capability["maximum_stencil_terms"]);
+  spec.maximum_instruction_count =
+      py::cast<std::size_t>(capability["maximum_instruction_count"]);
+  const std::string non_finite_policy =
+      py::cast<std::string>(capability["non_finite_policy"]);
+  if (non_finite_policy != "reject")
+    throw std::invalid_argument(
+        "AMR Tagger native adapter requires non_finite_policy='reject'");
+  spec.non_finite_policy = POPS_TAGGING_NON_FINITE_REJECT_V1;
+  spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
+  spec.execution =
+      pops::python::detail::make_component_execution_context(execution);
+  return spec;
+}
+
+pops::runtime::amr::PreparedTaggingProgram::Stencil amr_tagging_stencil_from_python(
+    const py::dict& row) {
+  using Program = pops::runtime::amr::PreparedTaggingProgram;
+  Program::Stencil result;
+  result.identity = py::cast<std::string>(row["identity"]);
+  result.route = py::cast<std::string>(row["route"]);
+  result.norm = py::cast<std::string>(row["norm"]);
+  result.scale = py::cast<std::string>(row["scale"]);
+  result.boundary_mode = py::cast<std::string>(row["boundary_mode"]);
+  result.dimension = py::cast<std::int32_t>(row["dimension"]);
+  for (const py::handle value : py::cast<py::list>(row["axes"])) {
+    const py::dict axis = py::cast<py::dict>(value);
+    std::vector<double> coefficients;
+    for (const py::handle coefficient_value : py::cast<py::list>(axis["coefficients"])) {
+      const py::dict coefficient = py::cast<py::dict>(coefficient_value);
+      if (coefficient.size() != 1 || !coefficient.contains("binary64"))
+        throw std::invalid_argument(
+            "AMR Tagger stencil coefficient is not canonical binary64 data");
+      const std::string encoded = py::cast<std::string>(coefficient["binary64"]);
+      std::size_t consumed = 0;
+      const double parsed = std::stod(encoded, &consumed);
+      if (consumed != encoded.size() || !std::isfinite(parsed))
+        throw std::invalid_argument(
+            "AMR Tagger stencil coefficient is not finite canonical binary64 data");
+      coefficients.push_back(parsed);
+    }
+    result.axes.push_back(Program::AxisStencil{
+        py::cast<std::int32_t>(axis["axis"]),
+        py::cast<std::int32_t>(axis["derivative_order"]),
+        py::cast<std::int32_t>(axis["formal_order"]),
+        py::cast<std::size_t>(axis["ghost_lower"]),
+        py::cast<std::size_t>(axis["ghost_upper"]),
+        py::cast<std::vector<std::int32_t>>(axis["offsets"]),
+        std::move(coefficients)});
+  }
+  return result;
+}
+
+pops::runtime::amr::PreparedClusteringSpec amr_clustering_spec_from_python(
+    const py::dict& row, const py::dict& execution) {
+  pops::runtime::amr::PreparedClusteringSpec spec;
+  spec.provider_identity = py::cast<std::string>(row["provider_identity"]);
+  spec.component_id = py::cast<std::string>(row["component_id"]);
+  spec.manifest_identity =
+      py::cast<std::string>(row["component_manifest_identity"]);
+  spec.layout_identity = py::cast<std::string>(row["layout_identity"]);
+  spec.interface_version = py::cast<std::uint32_t>(row["interface_version"]);
+  spec.execution =
+      pops::python::detail::make_component_execution_context(execution);
+  return spec;
+}
 
 // Assembly seams: per-block composition, native block, and refinement tagging.
 void bind_amr_assembly(py::class_<AmrSystem>& cls) {
@@ -77,6 +162,31 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            "Bind one exact boundary field Handle to native provider storage.")
       .def("_discard_boundary_plans", &AmrSystem::discard_boundary_plans,
            "Roll back one failed pre-block boundary authority transaction.")
+      .def(
+          "_install_amr_tagger_component",
+          [](AmrSystem& system,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& binding, const py::dict& execution) {
+            system.install_amr_tagger_component(
+                amr_tagger_spec_from_python(binding, execution),
+                std::move(component));
+          },
+          py::arg("component"), py::arg("binding"),
+          py::arg("execution_context"))
+      .def(
+          "_install_amr_clustering_component",
+          [](AmrSystem& system,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& binding, const py::dict& execution) {
+            system.install_amr_clustering_component(
+                amr_clustering_spec_from_python(binding, execution),
+                std::move(component));
+          },
+          py::arg("component"), py::arg("binding"),
+          py::arg("execution_context"))
+      .def("_discard_amr_provider_components",
+           &AmrSystem::discard_amr_provider_components,
+           "Roll back one failed external AMR provider transaction.")
       .def(
           "_install_ghost_boundary_component",
           [](AmrSystem& system, const std::string& name,
@@ -200,11 +310,39 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
       .def("_set_bootstrap_refinement", &AmrSystem::set_bootstrap_refinement,
            py::arg("block"), py::arg("variable"), py::arg("threshold"),
            py::arg("provider_identity"))
-      .def("_set_bootstrap_tagging", &AmrSystem::set_bootstrap_tagging,
+      .def("_set_bootstrap_tagging",
+           [](AmrSystem& system,
+              const std::vector<std::string>& leaf_blocks,
+              const std::vector<std::string>& leaf_variables,
+              const std::vector<int>& leaf_ops,
+              const std::vector<double>& leaf_thresholds,
+              const std::vector<int>& leaf_stencil_indices,
+              const py::list& stencil_rows,
+              const std::vector<std::int32_t>& refine_ops,
+              const std::vector<std::int32_t>& refine_args,
+              const std::vector<std::int32_t>& coarsen_ops,
+              const std::vector<std::int32_t>& coarsen_args,
+              int min_cycles, const std::string& equality_policy,
+              const std::string& conflict_policy,
+              const std::string& clock_identity,
+              const std::string& provider_identity) {
+             std::vector<pops::runtime::amr::PreparedTaggingProgram::Stencil> stencils;
+             stencils.reserve(stencil_rows.size());
+             for (const py::handle row : stencil_rows)
+               stencils.push_back(
+                   amr_tagging_stencil_from_python(py::cast<py::dict>(row)));
+             system.set_bootstrap_tagging(
+                 leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
+                 leaf_stencil_indices, stencils, refine_ops, refine_args,
+                 coarsen_ops, coarsen_args, min_cycles, equality_policy,
+                 conflict_policy, clock_identity, provider_identity);
+           },
            py::arg("leaf_blocks"), py::arg("leaf_variables"), py::arg("leaf_ops"),
-           py::arg("leaf_thresholds"), py::arg("refine_ops"), py::arg("refine_args"),
+           py::arg("leaf_thresholds"), py::arg("leaf_stencil_indices"),
+           py::arg("stencils"), py::arg("refine_ops"), py::arg("refine_args"),
            py::arg("coarsen_ops"), py::arg("coarsen_args"), py::arg("min_cycles"),
            py::arg("equality_policy"), py::arg("conflict_policy"),
+           py::arg("clock_identity"),
            py::arg("provider_identity"))
       // PHI tag on |grad phi| (D4) added to the union of regrid tags: also refines where the
       // norm of the potential gradient exceeds grad_threshold (diocotron ring edge). MULTI-BLOCK
@@ -225,8 +363,10 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("rhs") = "charge_density", py::arg("solver") = "geometric_mg",
           py::arg("bc") = "auto", py::arg("wall") = "none", py::arg("wall_radius") = 0.0,
           py::arg("composite") = false, py::arg("fac_max_iters") = 0,
-          py::arg("fac_fine_sweeps") = 0, py::arg("fac_tol") = 0.0,
-          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_cycles") = 0,
+          py::arg("fac_fine_sweeps") = 0, py::arg("fac_rel_tol") = 0.0,
+          py::arg("fac_abs_tol") = 0.0,
+          py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_abs_tol") = 0.0,
+          py::arg("fac_coarse_cycles") = 0,
           py::arg("fac_verbose") = false)
       .def("set_field_solver_plan", &AmrSystem::set_field_solver_plan,
            py::arg("provider_slot"), py::arg("provider_identity"),
@@ -238,6 +378,26 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
            py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
            py::arg("coarse_threshold"))
+      .def("_set_field_topology_authority",
+           &AmrSystem::set_field_topology_authority,
+           py::arg("provider_slot"), py::arg("provider_kind"),
+           py::arg("provenance"), py::arg("topology_digest"))
+      .def(
+          "_field_topology_report",
+          [](const AmrSystem& system, const std::string& provider_slot) {
+            py::list report;
+            for (const auto& row : system.field_topology_report(provider_slot)) {
+              py::dict item;
+              item["patch_identity"] = row.patch_identity;
+              item["topology_digest"] = row.topology_digest;
+              item["provenance"] = row.provenance;
+              item["material_points"] = row.material_points;
+              item["connected_components"] = row.connected_components;
+              report.append(std::move(item));
+            }
+            return report;
+          },
+          py::arg("provider_slot"))
       .def("register_elliptic_field", &AmrSystem::register_elliptic_field,
            py::arg("block"), py::arg("field"), py::arg("phi_comp"),
            py::arg("gx_comp"), py::arg("gy_comp"))

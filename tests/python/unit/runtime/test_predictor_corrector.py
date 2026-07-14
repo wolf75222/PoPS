@@ -34,6 +34,7 @@ electric source, so the default source is never double-counted (an unknown sourc
 Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
 never fakes the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -157,7 +158,7 @@ def _unknown_source_program(model, name="unknown_src"):
     return P
 
 
-src = _electric_fe_program(m_named).emit_cpp_program(model=m_named)
+src = emit_cpp_program(_electric_fe_program(m_named), model=m_named)
 # sources=["electric"] excludes "default" (ADC-425) -> the flux base is the flux-only primitive, NOT
 # ctx.rhs_into (which would fold the default source); the named electric source is axpy'd on top.
 chk("ctx.neg_div_flux_default_into(0, " in src and "ctx.rhs_into(" not in src,
@@ -171,7 +172,7 @@ chk("ctx.axpy(" in src, "the named source is accumulated onto R via axpy (R += S
 
 # Unknown source name -> clear ValueError (spec error 1).
 unknown_model = named_source_model("unknown_src")
-chk(raises(KeyError, lambda: _unknown_source_program(unknown_model).emit_cpp_program(
+chk(raises(KeyError, lambda: emit_cpp_program(_unknown_source_program(unknown_model),
     model=unknown_model)),
     "an unknown source_term name in rhs raises ValueError")
 
@@ -203,18 +204,18 @@ def _extra_fe_program(model, srcs, name="extra_fe"):
 
 
 both_extra_only = _both_source_model("extra_only")
-src_extra_only = _extra_fe_program(both_extra_only, ["extra"]).emit_cpp_program(
+src_extra_only = emit_cpp_program(_extra_fe_program(both_extra_only, ["extra"]),
     model=both_extra_only)
 chk("ctx.neg_div_flux_default_into(0, " in src_extra_only and "ctx.rhs_into(" not in src_extra_only,
     "rhs(sources=['extra']) on a default-source model uses the flux-only base (no double-count)")
 both_extra_default = _both_source_model("extra_default")
-src_extra_default = _extra_fe_program(
-    both_extra_default, ["default", "extra"]).emit_cpp_program(model=both_extra_default)
+src_extra_default = emit_cpp_program(_extra_fe_program(
+    both_extra_default, ["default", "extra"]), model=both_extra_default)
 chk("ctx.rhs_into(0, " in src_extra_default,
     "rhs(sources=['default','extra']) folds the default via rhs_into + the extra source axpy'd")
 
 # A named-source rhs without a model cannot read the coefficients -> NotImplementedError.
-chk(raises(NotImplementedError, lambda: _electric_fe_program(m_named).emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: emit_cpp_program(_electric_fe_program(m_named))),
     "rhs with named sources is refused without a model")
 
 
@@ -247,7 +248,7 @@ def predictor_corrector_program(model, name="predictor_corrector_poisson_lorentz
 
 # The predictor-corrector emits (with a model) -- it uses named sources + local solves.
 pc_codegen_model = named_source_model("pc_codegen")
-chk(bool(predictor_corrector_program(pc_codegen_model).emit_cpp_program(model=pc_codegen_model)),
+chk(bool(emit_cpp_program(predictor_corrector_program(pc_codegen_model), model=pc_codegen_model)),
     "the full predictor-corrector Program emits C++ (named sources + Lorentz local solves)")
 
 # ---- (B)/(C) end-to-end: skip unless the install_program binding is present ----

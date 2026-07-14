@@ -52,16 +52,16 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self.so_path = so_path
         # Code emission has completed before the loader is constructed.  Retain a clone-owned,
         # registry-free Program for inspection/runtime metadata, never the authoring Program graph.
-        from pops.time.program import Program
+        from pops.time._program.api import Program
         resolved_program = program
         if isinstance(program, Program):
-            from pops.time.program_detach import detach_compiled_program
+            from pops.time._program.detach import detach_compiled_program
             resolved_program = detach_compiled_program(program)
         self.program = resolved_program
         if program_graph is None and self.program is not None:
             program_graph = self.program.to_graph()
         if program_graph is not None:
-            from pops.time.graph import ProgramGraph
+            from pops.time import ProgramGraph
 
             if type(program_graph) is not ProgramGraph:
                 raise TypeError("CompiledProblem program_graph must be an exact ProgramGraph")

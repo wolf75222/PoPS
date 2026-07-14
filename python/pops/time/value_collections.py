@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
 
+from pops.time.value_support import _ProgramValueBase
+
 
 class StageStateSet:
     """A coherent, immutable ``block -> State ProgramValue`` stage view."""
@@ -13,7 +15,6 @@ class StageStateSet:
     __pops_ir_immutable__ = True
 
     def __init__(self, name: Any, mapping: Any) -> None:
-        from pops.time.values import ProgramValue
         if not isinstance(name, str) or not name:
             raise TypeError("StageStateSet name must be a non-empty string")
         if not isinstance(mapping, Mapping):
@@ -23,7 +24,7 @@ class StageStateSet:
             from pops.problem.handles import BlockHandle
             if not isinstance(block, BlockHandle):
                 raise TypeError("StageStateSet keys must be BlockHandle values")
-            if not (isinstance(state, ProgramValue) and state.vtype == "state"):
+            if not (isinstance(state, _ProgramValueBase) and state.vtype == "state"):
                 raise ValueError("StageStateSet[%r] must be a State value" % (block,))
             if state.block != block:
                 raise ValueError("StageStateSet[%r] must contain that block's State value" % block)

@@ -6,6 +6,7 @@ A `solve_fields` node carrying `Schedule(Every(...), off=Hold())` must codegen t
 check (the cache RUNTIME cadence runs in a compiled .so -- ROMEO; the CacheManager is unit-tested by
 tests/cpp/integration/runtime/test_cache_manager.cpp). Other ops/policies still refuse to lower (not yet supported).
 """
+from pops.codegen.program_codegen import _check_schedules_lowerable
 from types import SimpleNamespace
 
 import pytest
@@ -73,7 +74,7 @@ def _emit(P, mod):
 
 def test_held_solve_fields_lowers_and_emits_cache_branch():
     P, mod = _held_program(lambda clock: _every(clock, 3, adctime.Hold()))
-    P._check_schedules_lowerable()                # must NOT raise: solve_fields + hold is lowerable
+    _check_schedules_lowerable(P)                # must NOT raise: solve_fields + hold is lowerable
     cpp = _emit(P, mod)
     assert "schedule_is_due" in cpp, "due check emitted"
     assert "cache_store_aux" in cpp, "recompute branch stores the aux"
@@ -109,7 +110,7 @@ def test_skip_policy_on_solve_fields_now_lowers():
     # its stale content off-cadence) -- it no longer refuses. See test_scheduler_codegen for the full
     # policy/kind matrix.
     P, mod = _held_program(lambda clock: _every(clock, 5, adctime.Skip()))
-    P._check_schedules_lowerable()                 # no raise
+    _check_schedules_lowerable(P)                 # no raise
     cpp = _emit(P, mod)
     assert "skip: stale aux off-cadence" in cpp
     assert "schedule_is_due" in cpp
@@ -129,4 +130,4 @@ def test_hold_on_non_every_kind_now_lowers():
     assert "ScheduleDomainKind::kClockTick" in cpp
     with pytest.raises(NotImplementedError, match="AtEnd"):
         P, _ = _held_program(lambda clock: _at_end(clock, adctime.Hold()))
-        P._check_schedules_lowerable()
+        _check_schedules_lowerable(P)

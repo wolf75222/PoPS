@@ -1,6 +1,9 @@
 """ADC-652: structural State/Rate, owner and authoring-region non-bypass tests."""
 from __future__ import annotations
 
+import inspect
+from pathlib import Path
+
 from typed_program_support import commits_by_block, state_refs, typed_state
 
 import pytest
@@ -189,7 +192,20 @@ def test_where_dot_and_linear_problem_reject_cross_block_fields():
         program.solve(
             LinearProblem(operator, left, initial_guess=right),
             solver=CG(max_iter=2),
-        )
+    )
+
+
+def test_source_capture_skips_every_nested_pops_time_builder_frame():
+    program = Program("source_location")
+    temporal = typed_state(program, "fluid", state_name="U")
+    program.capture_source_locations()
+
+    call_line = inspect.currentframe().f_lineno + 1
+    value = program.value("authored_here", temporal.n)
+
+    filename, line = value.source_location.rsplit(":", 1)
+    assert Path(filename).resolve() == Path(__file__).resolve()
+    assert int(line) == call_line
 
 
 def test_freeze_guards_metadata_mutations_transactionally():

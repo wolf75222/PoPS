@@ -37,7 +37,7 @@ try:
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import AmrSystem
     from pops.time import FailRun
-    from pops.time.method_tableau import RungeKuttaTableau
+    from pops.time._methods.tableau import RungeKuttaTableau
     from tests.python.integration._final_field_program import (
         compile_block_model,
         resolve_periodic_field_program,

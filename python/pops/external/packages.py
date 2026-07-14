@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, ClassVar
 
 from pops.identity import Identity, canonical_bytes, make_identity
 from pops.interfaces import ComponentInterface
@@ -168,6 +168,29 @@ def _parameter_names(manifest: ComponentManifest) -> set[str]:
     return names
 
 
+def _freeze_parameter_value(value: Any) -> Any:
+    """Detach the canonical component-parameter tree from caller-owned containers."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            key: _freeze_parameter_value(item) for key, item in sorted(value.items())
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_parameter_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_parameter_value(item) for item in value)
+    return value
+
+
+def _thaw_parameter_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_parameter_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw_parameter_value(item) for item in value]
+    if isinstance(value, frozenset):
+        return frozenset(_thaw_parameter_value(item) for item in value)
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ExternalComponentType:
     package: SourceComponentPackage = field(repr=False)
@@ -183,11 +206,17 @@ class ExternalComponentType:
             canonical_bytes(parameters)
         except (TypeError, ValueError) as exc:
             raise TypeError("component parameters must be canonical values") from exc
-        return ExternalComponent(self, MappingProxyType(dict(sorted(parameters.items()))))
+        return ExternalComponent(self, _freeze_parameter_value(parameters))
 
 
 @dataclass(frozen=True, slots=True)
 class ExternalComponent:
+    # The package, manifest, interface and canonical parameter mapping are all frozen and
+    # content-authenticated.  The authoring/compiler snapshot may therefore retain this exact
+    # authority instead of recursively cloning the package graph (which would also lose the
+    # intentional identity relationship used by resolve component matching).
+    __pops_ir_immutable__: ClassVar[bool] = True
+
     component_type: ExternalComponentType
     parameters: Mapping[str, Any]
 
@@ -205,7 +234,7 @@ class ExternalComponent:
             "component_manifest": self.component_manifest.manifest_digest.token,
             "source_package": self.package_identity.token,
             "interface": self.component_type.interface.to_data(),
-            "parameters": dict(self.parameters),
+            "parameters": _thaw_parameter_value(self.parameters),
         }
 
 

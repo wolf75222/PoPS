@@ -12,6 +12,7 @@ from pops.codegen.program_emit_solve import (
 )
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.linalg import LinearProblem
+from pops.numerics.terms import DefaultSource, Flux
 from pops.solvers import krylov
 from pops.time import FailRun, Program, StagePoint, TimePoint
 
@@ -38,8 +39,8 @@ def _emit(*, sources, field_coupled=False):
             program, iterate, field=typed_field(program, "potential"), name="newton_fields")
         if field_coupled else None
     )
-    r0 = program._rhs_primitive(
-        name="frozen_rhs", state=iterate, fields=fields, flux=True, sources=sources)
+    terms = [Flux()] if sources == [] else [Flux(), DefaultSource()]
+    r0 = program.rhs(name="frozen_rhs", state=iterate, fields=fields, terms=terms)
     operator = program.matrix_free_operator(
         "newton_jacobian", domain="state", range_="state", ncomp=1)
     jacvec = []

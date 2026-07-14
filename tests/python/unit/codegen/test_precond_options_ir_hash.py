@@ -9,6 +9,7 @@ explicit ctor ``GeometricMgPreconditioner(nu1, nu2, nbottom, min_coarse, n_vcycl
 Source-only: the emit + IR hash are exercised at the authoring/lowering layer (no _pops runtime, no
 compile). Runs under pytest AND standalone. Skips (never fakes) if pops is not importable.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 
@@ -65,7 +66,7 @@ def test_configured_precond_busts_ir_hash_and_adds_attr():
 
 def test_default_precond_emits_historical_ctor():
     mg_default = _solve_program(_mg())
-    src_default = mg_default.emit_cpp_program()
+    src_default = emit_cpp_program(mg_default)
     # The default GeometricMG preconditioner emits the no-arg ctor, byte-identical to pre-644.
     assert "GeometricMgPreconditioner>();" in src_default
     assert "GeometricMgPreconditioner>(2, 2, 50" not in src_default
@@ -74,7 +75,7 @@ def test_default_precond_emits_historical_ctor():
 def test_configured_precond_emits_explicit_ctor():
     override = _solve_program(_mg(n_vcycles=3, pre_sweeps=1, post_sweeps=1, bottom_sweeps=80,
                                   min_coarse=4))
-    src = override.emit_cpp_program()
+    src = emit_cpp_program(override)
     # nu1, nu2, nbottom, min_coarse, n_vcycles in fixed positional order.
     assert "GeometricMgPreconditioner>(1, 1, 80, 4, 3)" in src
 

@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
-from pops.time.program_transaction import authoring_transaction
+from pops.time._authoring import authoring_transaction
 from pops.time.residual_common import CanonicalDescriptor, residual_names
 
 SOLVE_STATUSES = (

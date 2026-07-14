@@ -118,7 +118,7 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
     elif v.op == "synchronize":
         (source,) = v.inputs
         relation = v.attrs.get("relation")
-        from pops.time.synchronization import SampleAndHold, relation_data
+        from pops.time._schedule.synchronization import SampleAndHold, relation_data
 
         expected = relation_data(SampleAndHold())
         if relation != expected:

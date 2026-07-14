@@ -157,7 +157,7 @@ def test_linear_problem_lowers_to_solve_linear_shaped_record():
 def test_linear_problem_lower_matches_program_solve_linear_attrs():
     # The lowered record's method / preconditioner / tol / max_iter / restart must equal the attrs
     # the Program's P.solve_linear op emits for the same choices (single source of the lowering).
-    from pops.time.program_solve import _lower_krylov_method, _lower_preconditioner
+    from pops.time._program.solve import _lower_krylov_method, _lower_preconditioner
     from pops.solvers import krylov, preconditioners
     method, precond = krylov.BiCGStab(max_iter=80), preconditioners.Identity()
     M = MatrixFreeOperator("apply")

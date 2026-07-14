@@ -6,7 +6,7 @@ import pytest
 from pops.model import Module, StateHandle
 from pops.problem import Case
 from pops.time import Program
-from pops.time.program_detach import detach_compiled_program
+from pops.time._program.detach import detach_compiled_program
 
 
 def test_state_handle_carries_its_authoritative_space_without_live_registry_lookup():

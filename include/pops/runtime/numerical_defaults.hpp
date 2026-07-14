@@ -49,8 +49,10 @@ inline constexpr int kMGDefaultCoarseThreshold = 0;
 // Composite FAC defaults.
 inline constexpr int kFACDefaultMaxIters = 30;
 inline constexpr int kFACDefaultFineSweeps = 400;
-inline constexpr Real kFACDefaultTol = Real(1e-9);
+inline constexpr Real kFACDefaultRelTol = Real(1e-9);
+inline constexpr Real kFACDefaultAbsTol = Real(0);
 inline constexpr Real kFACInitialCoarseRelTol = Real(1e-12);
+inline constexpr Real kFACInitialCoarseAbsTol = Real(0);
 inline constexpr int kFACInitialCoarseMaxCycles = 100;
 
 // FFT Poisson route facts.
@@ -115,15 +117,16 @@ struct EbThresholds {
 };
 
 /// The composite FAC Poisson knobs (ADC-614): the AMR composite elliptic solver's outer iteration
-/// budget, per-fine-patch SOR sweeps, composite-residual tolerance, the internal coarse-level
-/// GeometricMG tolerance/cycles, and the verbose diagnostics flag. Defaults are the kFAC* constants,
-/// so a CompositeFacPoisson driven with a default-constructed options struct reproduces today's
-/// composite solve bit-for-bit.
+/// budget, per-fine-patch SOR sweeps, mixed composite-residual tolerance, the internal coarse-level
+/// GeometricMG tolerance/cycles, and the verbose diagnostics flag. The outer solve stops at
+/// max(rel_tol * ||R(0)||inf, abs_tol), where R(0) is the exact composite affine forcing.
 struct CompositeFacOptions {
   int max_iters = kFACDefaultMaxIters;               ///< FAC two-way iterations.
   int fine_sweeps = kFACDefaultFineSweeps;           ///< SOR sweeps per fine-patch solve.
-  Real tol = kFACDefaultTol;                         ///< composite-residual stop.
+  Real rel_tol = kFACDefaultRelTol;                  ///< relative composite-residual tolerance.
+  Real abs_tol = kFACDefaultAbsTol;                  ///< absolute composite-residual floor.
   Real coarse_rel_tol = kFACInitialCoarseRelTol;     ///< internal coarse GeometricMG rel_tol.
+  Real coarse_abs_tol = kFACInitialCoarseAbsTol;     ///< internal coarse GeometricMG abs_tol.
   int coarse_cycles = kFACInitialCoarseMaxCycles;    ///< internal coarse GeometricMG max_cycles.
   bool verbose = false;                              ///< record the per-iteration residual trace.
 };

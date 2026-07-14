@@ -260,6 +260,8 @@ struct AmrSystem::Impl {
   std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans_;
   std::map<std::string, std::string> block_state_identities_;
   std::map<std::string, std::string> boundary_field_routes_;
+  std::shared_ptr<runtime::amr::PreparedTaggerComponent> amr_tagger_component_;
+  std::shared_ptr<runtime::amr::PreparedClusteringComponent> amr_clustering_component_;
   struct BootstrapArray {
     std::string centering;
     int ncomp = 0;
@@ -321,11 +323,14 @@ struct AmrSystem::Impl {
     std::vector<std::string> leaf_variables;
     std::vector<int> leaf_ops;
     std::vector<double> leaf_thresholds;
-    std::vector<int> refine_ops, refine_args;
-    std::vector<int> coarsen_ops, coarsen_args;
+    std::vector<int> leaf_stencil_indices;
+    std::vector<runtime::amr::PreparedTaggingProgram::Stencil> stencils;
+    std::vector<std::int32_t> refine_ops, refine_args;
+    std::vector<std::int32_t> coarsen_ops, coarsen_args;
     int min_cycles = 0;
     int equality_policy = 0;
     int conflict_policy = 0;
+    std::string clock_identity;
     std::string provider_identity;
   };
   std::unique_ptr<TaggingSpec> tagging_spec;
@@ -369,8 +374,10 @@ struct AmrSystem::Impl {
   bool p_composite = false;
   int p_fac_max_iters = 0;
   int p_fac_fine_sweeps = 0;
-  double p_fac_tol = 0.0;
+  double p_fac_rel_tol = 0.0;
+  double p_fac_abs_tol = 0.0;
   double p_fac_coarse_rel_tol = 0.0;
+  double p_fac_coarse_abs_tol = 0.0;
   int p_fac_coarse_cycles = 0;
   bool p_fac_verbose = false;
 
@@ -642,8 +649,10 @@ struct AmrSystem::Impl {
     bp.poisson.composite = p_composite;
     bp.poisson.fac_max_iters = p_fac_max_iters;
     bp.poisson.fac_fine_sweeps = p_fac_fine_sweeps;
-    bp.poisson.fac_tol = p_fac_tol;
+    bp.poisson.fac_rel_tol = p_fac_rel_tol;
+    bp.poisson.fac_abs_tol = p_fac_abs_tol;
     bp.poisson.fac_coarse_rel_tol = p_fac_coarse_rel_tol;
+    bp.poisson.fac_coarse_abs_tol = p_fac_coarse_abs_tol;
     bp.poisson.fac_coarse_cycles = p_fac_coarse_cycles;
     bp.poisson.fac_verbose = p_fac_verbose;
     return bp;
@@ -862,6 +871,11 @@ struct AmrSystem::Impl {
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(rblocks),
                                            S.base_per, S.replicated_coarse, S.wall);
+    runtime->set_component_logical_time(macro_step_, t);
+    if (amr_tagger_component_)
+      runtime->install_external_tagger(amr_tagger_component_);
+    if (amr_clustering_component_)
+      runtime->install_external_clustering(amr_clustering_component_);
     if (!boundary_plans_.empty())
       runtime->install_boundary_storage_routes(boundary_field_routes_);
     if (!temporal_relations_.empty() || cfg.level_count == 1)
@@ -907,14 +921,19 @@ struct AmrSystem::Impl {
             runtime->block_cons_vars(static_cast<std::size_t>(block)),
             tagging_spec->leaf_variables[index], "");
         leaves.push_back(AmrRuntime::TaggingProgram::Leaf{
-            static_cast<std::size_t>(block), component, tagging_spec->leaf_ops[index],
-            static_cast<Real>(tagging_spec->leaf_thresholds[index])});
+            static_cast<std::size_t>(block), static_cast<std::size_t>(component),
+            tagging_spec->leaf_ops[index], tagging_spec->leaf_thresholds[index],
+            tagging_spec->leaf_stencil_indices[index] < 0
+                ? POPS_TAGGING_NO_STENCIL_V1
+                : static_cast<std::size_t>(tagging_spec->leaf_stencil_indices[index])});
       }
       runtime->set_tagging_program(
-          std::move(leaves), tagging_spec->refine_ops, tagging_spec->refine_args,
+          tagging_spec->stencils, std::move(leaves),
+          tagging_spec->refine_ops, tagging_spec->refine_args,
           tagging_spec->coarsen_ops, tagging_spec->coarsen_args,
           tagging_spec->min_cycles, tagging_spec->equality_policy,
-          tagging_spec->conflict_policy, tagging_spec->provider_identity);
+          tagging_spec->conflict_policy, tagging_spec->clock_identity,
+          tagging_spec->provider_identity);
     }
     if (cfg.explicit_bootstrap) {
       if (tagging_spec) {
@@ -1464,6 +1483,41 @@ POPS_EXPORT void AmrSystem::install_field_boundary_jvp_component(
   P->force_runtime_ = true;
 }
 
+POPS_EXPORT void AmrSystem::install_amr_tagger_component(
+    runtime::amr::PreparedTaggerSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_amr_tagger_component");
+  if (P->built || P->amr_tagger_component_)
+    throw std::runtime_error(
+        "AmrSystem external Tagger requires one installation before runtime build");
+  P->amr_tagger_component_ = std::make_shared<runtime::amr::PreparedTaggerComponent>(
+      std::move(spec), std::move(component));
+}
+
+POPS_EXPORT void AmrSystem::install_amr_clustering_component(
+    runtime::amr::PreparedClusteringSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_amr_clustering_component");
+  if (P->built || P->amr_clustering_component_)
+    throw std::runtime_error(
+        "AmrSystem external Clustering requires one installation before runtime build");
+  P->amr_clustering_component_ =
+      std::make_shared<runtime::amr::PreparedClusteringComponent>(
+          std::move(spec), std::move(component));
+}
+
+POPS_EXPORT void AmrSystem::discard_amr_provider_components() {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "discard_amr_provider_components");
+  if (P->built)
+    throw std::runtime_error(
+        "AmrSystem cannot discard AMR providers after runtime build");
+  P->amr_tagger_component_.reset();
+  P->amr_clustering_component_.reset();
+}
+
 POPS_EXPORT void AmrSystem::install_interface_flux_component(
     runtime::multiblock::AxisAlignedInterface route,
     runtime::multiblock::PreparedInterfaceFluxSpec spec,
@@ -1934,18 +1988,24 @@ void AmrSystem::set_bootstrap_tagging(
     const std::vector<std::string>& leaf_variables,
     const std::vector<int>& leaf_ops,
     const std::vector<double>& leaf_thresholds,
-    const std::vector<int>& refine_ops, const std::vector<int>& refine_args,
-    const std::vector<int>& coarsen_ops, const std::vector<int>& coarsen_args,
+    const std::vector<int>& leaf_stencil_indices,
+    const std::vector<runtime::amr::PreparedTaggingProgram::Stencil>& stencils,
+    const std::vector<std::int32_t>& refine_ops,
+    const std::vector<std::int32_t>& refine_args,
+    const std::vector<std::int32_t>& coarsen_ops,
+    const std::vector<std::int32_t>& coarsen_args,
     int min_cycles, const std::string& equality_policy,
-    const std::string& conflict_policy, const std::string& provider_identity) {
+    const std::string& conflict_policy, const std::string& clock_identity,
+    const std::string& provider_identity) {
   require_assembling_amr(p_->bound_, "set_bootstrap_tagging");
   const std::size_t leaf_count = leaf_blocks.size();
   if (p_->built || p_->tagging_spec || p_->bootstrap_tag_spec || leaf_count == 0 ||
       leaf_variables.size() != leaf_count || leaf_ops.size() != leaf_count ||
-      leaf_thresholds.size() != leaf_count || refine_ops.empty() ||
+      leaf_thresholds.size() != leaf_count || leaf_stencil_indices.size() != leaf_count ||
+      refine_ops.empty() ||
       refine_ops.size() != refine_args.size() ||
       coarsen_ops.size() != coarsen_args.size() || min_cycles < 0 ||
-      provider_identity.empty())
+      clock_identity.empty() || provider_identity.empty())
     throw std::runtime_error(
         "AmrSystem::set_bootstrap_tagging requires one exact pre-build graph manifest");
   if (std::any_of(leaf_blocks.begin(), leaf_blocks.end(),
@@ -1968,8 +2028,9 @@ void AmrSystem::set_bootstrap_tagging(
     throw std::runtime_error("AmrSystem::set_bootstrap_tagging has an unknown policy");
   p_->tagging_spec = std::make_unique<Impl::TaggingSpec>(Impl::TaggingSpec{
       leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
+      leaf_stencil_indices, stencils,
       refine_ops, refine_args, coarsen_ops, coarsen_args,
-      min_cycles, equality, conflict, provider_identity});
+      min_cycles, equality, conflict, clock_identity, provider_identity});
 }
 
 void AmrSystem::set_temporal_relations(
@@ -2018,8 +2079,9 @@ void AmrSystem::set_phi_refinement(double grad_threshold) {
 
 void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
                             const std::string& bc, const std::string& wall, double wall_radius,
-                            bool composite, int fac_max_iters, int fac_fine_sweeps, double fac_tol,
-                            double fac_coarse_rel_tol, int fac_coarse_cycles, bool fac_verbose) {
+                            bool composite, int fac_max_iters, int fac_fine_sweeps,
+                            double fac_rel_tol, double fac_abs_tol, double fac_coarse_rel_tol,
+                            double fac_coarse_abs_tol, int fac_coarse_cycles, bool fac_verbose) {
   require_assembling_amr(p_->bound_, "set_poisson");  // frozen once pops.bind completes (ADC-592)
   // single-block/explicit CONTRACT (cf. set_compiled_block): AMR wires a SINGLE elliptic
   // solver (GeometricMG, the AmrCouplerMP template default) and a SINGLE right-hand side
@@ -2042,9 +2104,14 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
     throw std::runtime_error(
         "AmrSystem::set_poisson : fac_max_iters/fac_fine_sweeps/fac_coarse_cycles >= 0 required "
         "(0 = default)");
-  if (fac_tol < 0.0 || fac_tol >= 1.0 || fac_coarse_rel_tol < 0.0 || fac_coarse_rel_tol >= 1.0)
+  if (!std::isfinite(fac_rel_tol) || fac_rel_tol < 0.0 || fac_rel_tol >= 1.0 ||
+      !std::isfinite(fac_abs_tol) || fac_abs_tol < 0.0 ||
+      !std::isfinite(fac_coarse_rel_tol) || fac_coarse_rel_tol < 0.0 ||
+      fac_coarse_rel_tol >= 1.0 || !std::isfinite(fac_coarse_abs_tol) ||
+      fac_coarse_abs_tol < 0.0)
     throw std::runtime_error(
-        "AmrSystem::set_poisson : fac_tol/fac_coarse_rel_tol in [0, 1) required (0 = default)");
+        "AmrSystem::set_poisson : fac_rel_tol/fac_coarse_rel_tol must be in [0, 1), "
+        "fac_abs_tol/fac_coarse_abs_tol must be finite and nonnegative (0 = default)");
   p_->p_rhs = rhs;
   p_->p_solver = solver;
   p_->p_bc = bc;
@@ -2053,8 +2120,10 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
   p_->p_composite = composite;
   p_->p_fac_max_iters = fac_max_iters;
   p_->p_fac_fine_sweeps = fac_fine_sweeps;
-  p_->p_fac_tol = fac_tol;
+  p_->p_fac_rel_tol = fac_rel_tol;
+  p_->p_fac_abs_tol = fac_abs_tol;
   p_->p_fac_coarse_rel_tol = fac_coarse_rel_tol;
+  p_->p_fac_coarse_abs_tol = fac_coarse_abs_tol;
   p_->p_fac_coarse_cycles = fac_coarse_cycles;
   p_->p_fac_verbose = fac_verbose;
 }
@@ -2119,6 +2188,56 @@ void AmrSystem::set_field_solver_plan(
   plan.mg_opts.nbottom = bottom_sweeps;
   plan.mg_opts.coarse_threshold = coarse_threshold;
   p_->force_runtime_ = true;
+}
+
+void AmrSystem::set_field_topology_authority(
+    const std::string& provider_slot, const std::string& provider_kind,
+    const std::string& provenance, const std::string& topology_digest) {
+  require_assembling_amr(p_->bound_, "set_field_topology_authority");
+  const auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem::set_field_topology_authority unknown provider slot");
+  if (provider_kind.empty() || provenance.empty() || topology_digest.empty())
+    throw std::runtime_error(
+        "AmrSystem::set_field_topology_authority requires complete topology provenance");
+  found->second.topology_provider_kind = provider_kind;
+  found->second.topology_provenance = provenance;
+  found->second.topology_digest = topology_digest;
+}
+
+std::vector<runtime::field::FieldTopologyReportRow>
+AmrSystem::field_topology_report(const std::string& provider_slot) const {
+  const auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error("AmrSystem::field_topology_report unknown provider slot");
+  const auto& plan = found->second;
+  if (plan.topology_provider_kind.empty() || plan.topology_provenance.empty() ||
+      plan.topology_digest.empty())
+    throw std::runtime_error(
+        "AmrSystem::field_topology_report topology authority is incomplete");
+  // A declared recipe is not a materialized topology.  Field plans force the AmrRuntime route,
+  // whose named solver is allocated lazily on the first solve and invalidated on every regrid.
+  // Until then the only honest report is an empty one.
+  if (!p_->built || !p_->runtime)
+    return {};
+  const auto patches = p_->runtime->field_topology_patches(provider_slot);
+  if (!patches)
+    return {};
+  std::vector<runtime::field::FieldTopologyReportRow> report;
+  report.reserve(patches->size());
+  for (const PatchBox& patch : *patches) {
+    const auto nx = static_cast<std::size_t>(patch.ihi - patch.ilo + 1);
+    const auto ny = static_cast<std::size_t>(patch.jhi - patch.jlo + 1);
+    if (nx != 0 && ny > std::numeric_limits<std::size_t>::max() / nx)
+      throw std::overflow_error("AMR field topology material-point count overflow");
+    report.push_back({
+        "builtin:hierarchy/level=" + std::to_string(patch.level) + "/box=[" +
+            std::to_string(patch.ilo) + "," + std::to_string(patch.jlo) + "]-[" +
+            std::to_string(patch.ihi) + "," + std::to_string(patch.jhi) + "]",
+        plan.topology_digest, plan.topology_provenance, nx * ny, 1});
+  }
+  return report;
 }
 
 void AmrSystem::set_field_boundary_plan(const std::string& provider_slot,
@@ -2818,6 +2937,8 @@ void AmrSystem::step(double dt) {
       p_->push_macro_step_to_engine();
       p_->clock_restore_pending_ = false;
     }
+    if (p_->runtime)
+      p_->runtime->set_component_logical_time(p_->macro_step_, p_->t);
     // COMPILED time-program path (epic ADC-511 / ADC-508): when a Program is installed, its macro-step
     // closure REPLACES the native AmrRuntime::step body (parity SystemStepper::step routing to program_
     // step_), wrapped by the GLOBAL substeps/stride cadence. The closure drives the per-level Lie/Strang
@@ -2875,6 +2996,8 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
       p_->push_macro_step_to_engine();
       p_->clock_restore_pending_ = false;
     }
+    if (p_->runtime)
+      p_->runtime->set_component_logical_time(p_->macro_step_, p_->t);
     const double hx = p_->cfg.L / p_->cfg.n;  // coarse grid spacing (dx_coarse)
     // A Program is always on the runtime engine: compute its CFL bound there, then run the Program.
     if (p_->program_.step_) {

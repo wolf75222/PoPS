@@ -321,11 +321,15 @@ class _AmrSystemInstall(_AmrSystem):
             raise ValueError("resolved AMR field install plan identity/target mismatch")
         field_plan.__post_init__()
         options = field_plan.native_options
+        provider = options["solver_provider"]
+        if provider["provider_kind"] != "builtin_v1":
+            raise RuntimeError(
+                "external FieldSolver v2 must have been refused for AMR during resolve")
         routes = options["provider_pack"]
         output_route = options["output_route"]
         from pops.identity import canonical_bytes
         solver = field_plan.discretization.solver
-        if options["solver"] != "geometric_mg":
+        if provider["solver"]["route"] != "geometric_mg":
             raise ValueError("AMR field plan requires GeometricMG")
         mg_fn = getattr(solver, "mg_options", None)
         mg = mg_fn() if callable(mg_fn) else {}
@@ -346,7 +350,7 @@ class _AmrSystemInstall(_AmrSystem):
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],
             [route["coefficient"] for route in routes],
-            options["solver"], options["hierarchy"],
+            provider["solver"]["route"], options["hierarchy"],
             native_float(mg.get("abs_tol", 0.0),
                          where="AMR field plan absolute tolerance"),
             native_float(mg_args["rel_tol"],
@@ -354,6 +358,10 @@ class _AmrSystemInstall(_AmrSystem):
             mg_args["max_cycles"], mg_args["min_coarse"], mg_args["pre_smooth"],
             mg_args["post_smooth"], mg_args["bottom_sweeps"],
             mg_args["coarse_threshold"])
+        topology = provider["topology"]
+        self._s._set_field_topology_authority(
+            slot, topology["provider_kind"], topology["provenance"],
+            topology["topology_digest"])
         faces = options["boundary_faces"]
         if faces is not None:
             self._s.set_field_boundary_plan(

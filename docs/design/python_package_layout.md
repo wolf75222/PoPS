@@ -54,6 +54,12 @@ Nested sub-packages keep the same rules: `pops.mesh.{_amr,boundaries,geometry,ma
 `pops.solvers.{elliptic,krylov,nonlinear}`, `pops.moments.closures`,
 `pops.codegen.solvers`, `pops.runtime.amr`,
 `pops.lib.{time,models,models.moments,initial,amr}`.
+The temporal package has one private acyclic implementation split by ownership:
+`pops.time.{_graph,_history,_methods,_program,_schedule,_step}`. The public façade remains
+`pops.time`; the former flat implementation modules do not exist and have no forwarding shims.
+`_program` may consume the other temporal packages, while none of those lower layers may import
+`_program`. Compiler and runtime materialization are consumer-side adapters and are never imported
+from temporal source, including through lazy imports.
 
 ## Layering DAG
 

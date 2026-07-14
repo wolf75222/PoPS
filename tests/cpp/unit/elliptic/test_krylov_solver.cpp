@@ -89,6 +89,68 @@ static void fill_mms_rhs(GeometricMG& mg, const Geometry& geom, const Box2D& dom
   }
 }
 
+// Materialize c_bc = L_int(0) independently of TensorKrylovSolver. This lets the regression build a
+// deliberately cancelling stored RHS, rhs = c_bc + b_eff, and verify that the solve is normalized by
+// the small effective forcing b_eff rather than by the large affine boundary offset.
+static void fill_affine_operator_offset(GeometricMG& op, MultiFab& offset) {
+  MultiFab zero(op.box_array(), op.dmap(), 1, 1);
+  zero.set_val(Real(0));
+  device_fence();
+  fill_ghosts(zero, op.geom().domain, op.bc());
+  apply_laplacian(zero, op.geom(), offset, op.op_coef(), op.op_eps(), op.op_kappa(),
+                  op.op_eps_y(), op.op_a_xy(), op.op_a_yx());
+}
+
+struct AffineForcingReport {
+  SolveReport probe;
+  SolveReport converged;
+  SolveReport warm;
+  double true_relative_residual;
+};
+
+static AffineForcingReport affine_forcing_case(BCType type) {
+  constexpr int n = 24;
+  constexpr Real boundary_value = Real(1e3);
+  constexpr Real tight_tol = Real(1e-9);
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba = BoxArray::from_domain(dom, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = type;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = boundary_value;
+  bc.dx = geom.dx();
+  bc.dy = geom.dy();
+  if (type == BCType::Robin) {
+    bc.xlo_alpha = bc.xhi_alpha = bc.ylo_alpha = bc.yhi_alpha = Real(1);
+    bc.xlo_beta = bc.xhi_beta = bc.ylo_beta = bc.yhi_beta = Real(0.25);
+  }
+
+  GeometricMG op(geom, ba, bc);
+  op.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  GeometricMG precond(geom, ba, bc);
+  MultiFab offset(ba, op.dmap(), 1, 0);
+  MultiFab effective(ba, op.dmap(), 1, 0);
+  fill_affine_operator_offset(op, offset);
+  for (int li = 0; li < effective.local_size(); ++li) {
+    Array4 forcing = effective.fab(li).array();
+    for_each_cell(effective.box(li), PoissonRhsKernel{forcing, geom});
+  }
+  lincomb(op.rhs(), Real(1), offset, Real(1), effective);
+
+  TensorKrylovSolver kry(op, precond, 1);
+  op.phi().set_val(Real(0));
+  // With the correct scale, the initial relative residual is one and cannot pass a 0.5 tolerance.
+  // Normalizing by the huge stored rhs instead would incorrectly publish a zero-iteration solve.
+  const SolveReport probe = kry.solve(Real(0.5), 1);
+
+  op.phi().set_val(Real(0));
+  const SolveReport converged = kry.solve(tight_tol, 300);
+  const double effective_norm = std::sqrt(static_cast<double>(dot(effective, effective)));
+  const double true_relative_residual = static_cast<double>(kry.residual()) / effective_norm;
+  const SolveReport warm = kry.solve(tight_tol, 300);
+  return AffineForcingReport{probe, converged, warm, true_relative_residual};
+}
+
 // (B) un cas MMS : construit l'operateur PLEIN (op) + le preconditionneur SYMETRIQUE (precond, sans
 // termes croises), resout par BiCGStab, renvoie iterations + convergence ; rapporte le V-cycle MG
 // SEUL en contraste (meme operateur op, vcycle direct). n = resolution, c = amplitude croisee,
@@ -263,6 +325,72 @@ static DirichletReport dirichlet_mms(int n, double V) {
   }
   return DirichletReport{kr.solved(), static_cast<double>(kr.rel_residual), all_reduce_max(dmg),
                          all_reduce_max(dex), std::fabs(V) + 1.0};
+}
+
+TEST(test_krylov_solver, affine_boundary_detection_is_typed_per_face) {
+  BCRec bc;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = Real(7);
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Foextrap;
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+
+  bc.xlo = BCType::Dirichlet;
+  EXPECT_TRUE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+  bc.xlo = BCType::Foextrap;
+  bc.yhi = BCType::Robin;
+  EXPECT_TRUE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+  bc.yhi_val = Real(0);
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+}
+
+TEST(test_krylov_solver, affine_boundary_forcing_uses_effective_rhs_scale) {
+  comm_init();
+  for (const BCType type : {BCType::Dirichlet, BCType::Robin}) {
+    SCOPED_TRACE(type == BCType::Dirichlet ? "Dirichlet" : "Robin");
+    const AffineForcingReport report = affine_forcing_case(type);
+    EXPECT_EQ(report.probe.iters, 1);
+    EXPECT_TRUE(report.converged.solved());
+    EXPECT_LT(report.converged.rel_residual, Real(1e-9));
+    EXPECT_LT(report.true_relative_residual, 1e-9);
+    EXPECT_TRUE(report.warm.solved());
+    EXPECT_EQ(report.warm.iters, 0);
+    EXPECT_LT(report.warm.rel_residual, Real(1e-9));
+  }
+}
+
+TEST(test_krylov_solver, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
+  comm_init();
+  constexpr int n = 8;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+
+  GeometricMG op(geometry, boxes, bc);
+  op.set_cross_terms([](Real, Real) { return Real(0); },
+                     [](Real, Real) { return Real(0); });
+  GeometricMG precond(geometry, boxes, bc);
+  TensorKrylovSolver solver(op, precond);
+  solver.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
+  solver.phi().set_val(Real(1e-6));
+  const Real initial_residual = solver.residual();
+  ASSERT_GT(initial_residual, Real(0));
+  ASSERT_LT(initial_residual, Real(1));
+
+  // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
+  const SolveReport exact_only =
+      solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
+  EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
+
+  solver.phi().set_val(Real(1e-6));
+  const Real reset_residual = solver.residual();
+  const SolveReport absolute = solver.solve(
+      Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
+  EXPECT_TRUE(absolute.solved());
+  EXPECT_EQ(absolute.iters, 0);
+  EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));
 }
 
 TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {

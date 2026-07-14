@@ -1,4 +1,4 @@
-"""pops.time codegen (epic ADC-399 / ADC-401, ADC-407): Program.emit_cpp_program.
+"""Temporal codegen (epic ADC-399 / ADC-401, ADC-407): compiler-owned emit_cpp_program.
 
 `emit_cpp_program` lowers the Program IR to the C++ source of a problem.so by a topological SSA walk.
 This test pins the generated source: the stable .so ABI (pops_program_abi_key via the
@@ -11,6 +11,7 @@ the codegen still cannot lower -- named sources beyond 'default', a commit of an
 must be REFUSED with a clear error, never silently mis-lowered. Pure Python (no compile); skips if pops
 is unavailable.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from types import SimpleNamespace
 
 from typed_program_support import solve_field, solve_field_blocks, state_refs, typed_state
@@ -77,8 +78,6 @@ def _field_plans(program):
 
 
 def _emit(program, model=None):
-    from pops.codegen.program_codegen import emit_cpp_program
-
     return emit_cpp_program(
         program, model=model, field_plans=_field_plans(program))
 
@@ -149,7 +148,7 @@ def test_named_source_refused(t):
     endpoint = temporal.next
     P.commit(endpoint, P.value("U1", U + dt * R, at=endpoint.point))
     try:
-        P.emit_cpp_program()
+        emit_cpp_program(P)
     except NotImplementedError as exc:
         assert "source" in str(exc).lower()
     else:
@@ -226,7 +225,7 @@ def test_uncommitted_refused(t):
     # An empty Program (no commit) must fail validation, not emit garbage.
     P = t.Program("empty")
     try:
-        P.emit_cpp_program()
+        emit_cpp_program(P)
     except ValueError:
         pass
     else:

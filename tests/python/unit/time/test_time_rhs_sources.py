@@ -25,6 +25,7 @@ whether ``"default"`` is among the requested sources.
 
 Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import solve_field, state_refs, typed_state
 
@@ -115,8 +116,8 @@ def one_step_program(name, sources, flux=True, model=None):
 print("== (A) rhs source routing: IR + codegen ==")
 m = decay_model()
 
-src_default = one_step_program("p_default", ["default"], model=m).emit_cpp_program(model=m)
-src_empty = one_step_program("p_empty", [], model=m).emit_cpp_program(model=m)
+src_default = emit_cpp_program(one_step_program("p_default", ["default"], model=m), model=m)
+src_empty = emit_cpp_program(one_step_program("p_empty", [], model=m), model=m)
 
 # sources=["default"] keeps the historical ctx.rhs_into (flux + default source), unchanged.
 chk("ctx.rhs_into(0," in src_default and "ctx.neg_div_flux_default_into(" not in src_default,
@@ -141,14 +142,14 @@ chk(one_step_program("p", ["default"])._ir_hash() == h_default,
 # A named-source rhs on a model WITH a non-empty default source now lowers (no double-count): the base
 # is rhs_into (default folded) iff 'default' is listed; the named source is axpy'd on top either way.
 named_default_model = decay_model_with_named()
-src_named_on_default = one_step_program(
-    "p_nd", ["default", "decay"], model=named_default_model).emit_cpp_program(
+src_named_on_default = emit_cpp_program(one_step_program(
+    "p_nd", ["default", "decay"], model=named_default_model),
         model=named_default_model)
 chk("ctx.rhs_into(0," in src_named_on_default,
     "sources=['default','decay'] uses rhs_into base (default folded) + named axpy (no double-count)")
 named_only_model = decay_model_with_named("rhs_named_only")
-src_named_only = one_step_program(
-    "p_no", ["decay"], model=named_only_model).emit_cpp_program(model=named_only_model)
+src_named_only = emit_cpp_program(one_step_program(
+    "p_no", ["decay"], model=named_only_model), model=named_only_model)
 chk("ctx.neg_div_flux_default_into(0," in src_named_only,
     "sources=['decay'] (no 'default') uses flux-only base + named axpy")
 

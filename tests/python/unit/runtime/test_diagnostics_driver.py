@@ -26,7 +26,7 @@ try:
     from pops.linalg.norms import L1, L2, LInf
     from pops.model import Module
     from pops.problem import Case
-    from pops.time.schedule import every, always, on_start, on_end
+    from pops.time._schedule.api import every, always, on_start, on_end
     from pops.runtime._diagnostics_driver import (diagnostic_due, measure_reduction,
                                                   fire_diagnostics)
     from pops.runtime._system import System

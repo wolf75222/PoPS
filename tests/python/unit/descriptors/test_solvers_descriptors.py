@@ -386,18 +386,25 @@ def test_composite_fac_defaults_and_domain():
     from pops.solvers.options import CompositeFAC
     d = CompositeFAC()
     # None -> the 0 wire sentinels used by the composite tensor FAC provider.
-    assert d.options() == {"max_iters": None, "fine_sweeps": None, "tol": None,
-                           "coarse_rel_tol": None, "coarse_cycles": None, "verbose": False}
+    assert d.options() == {"max_iters": None, "fine_sweeps": None, "rel_tol": None,
+                           "abs_tol": None,
+                           "coarse_rel_tol": None, "coarse_abs_tol": None,
+                           "coarse_cycles": None, "verbose": False}
     kw = d.set_poisson_kwargs()
     assert kw["composite"] is True and kw["fac_max_iters"] == 0
-    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, tol=1e-8, coarse_rel_tol=1e-11,
-                       coarse_cycles=50, verbose=True)
+    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, rel_tol=1e-8, abs_tol=1e-14,
+                       coarse_rel_tol=1e-11, coarse_abs_tol=1e-15, coarse_cycles=50,
+                       verbose=True)
     assert cfg.set_poisson_kwargs() == {"composite": True, "fac_max_iters": 10,
-                                        "fac_fine_sweeps": 200, "fac_tol": 1e-8,
-                                        "fac_coarse_rel_tol": 1e-11, "fac_coarse_cycles": 50,
+                                        "fac_fine_sweeps": 200, "fac_rel_tol": 1e-8,
+                                        "fac_abs_tol": 1e-14,
+                                        "fac_coarse_rel_tol": 1e-11,
+                                        "fac_coarse_abs_tol": 1e-15, "fac_coarse_cycles": 50,
                                         "fac_verbose": True}
-    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"tol": 1.5}, {"coarse_rel_tol": 0.0},
-                {"coarse_cycles": 0}):
+    assert CompositeFAC(abs_tol=0.0).abs_tol == 0.0
+    assert CompositeFAC(coarse_abs_tol=0.0).coarse_abs_tol == 0.0
+    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"rel_tol": 1.5}, {"abs_tol": -1.0},
+                {"coarse_rel_tol": 0.0}, {"coarse_abs_tol": -1.0}, {"coarse_cycles": 0}):
         with pytest.raises(ValueError):
             CompositeFAC(**bad)
     for bad in ({"max_iters": 1.9}, {"max_iters": True}, {"fine_sweeps": False},

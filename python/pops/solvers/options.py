@@ -12,7 +12,8 @@ from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.solvers._numeric import (
-    exact_open_unit_real, native_float, optional_positive_int, strict_bool,
+    exact_nonnegative_real, exact_open_unit_real, exact_positive_real, native_float,
+    optional_positive_int, strict_bool,
 )
 
 
@@ -115,17 +116,22 @@ class CompositeFAC(Descriptor):
     category = "amr_composite"
     native_id = "pops::CompositeFacPoisson"
 
-    def __init__(self, max_iters: Any = None, fine_sweeps: Any = None, tol: Any = None,
-                 coarse_rel_tol: Any = None, coarse_cycles: Any = None,
+    def __init__(self, max_iters: Any = None, fine_sweeps: Any = None, rel_tol: Any = None,
+                 abs_tol: Any = None, coarse_rel_tol: Any = None,
+                 coarse_abs_tol: Any = None, coarse_cycles: Any = None,
                  verbose: bool = False) -> None:
         # ``None`` stays an explicit authoring default. The native 0 sentinel is introduced only by
         # set_poisson_kwargs(), the actual Python/native boundary.
         self.max_iters = optional_positive_int(max_iters, where="CompositeFAC(max_iters=)")
         self.fine_sweeps = optional_positive_int(fine_sweeps, where="CompositeFAC(fine_sweeps=)")
-        self.tol = (None if tol is None else exact_open_unit_real(
-            tol, where="CompositeFAC(tol=)"))
+        self.rel_tol = (None if rel_tol is None else exact_open_unit_real(
+            rel_tol, where="CompositeFAC(rel_tol=)"))
+        self.abs_tol = (None if abs_tol is None else exact_nonnegative_real(
+            abs_tol, where="CompositeFAC(abs_tol=)"))
         self.coarse_rel_tol = (None if coarse_rel_tol is None else exact_open_unit_real(
             coarse_rel_tol, where="CompositeFAC(coarse_rel_tol=)"))
+        self.coarse_abs_tol = (None if coarse_abs_tol is None else exact_nonnegative_real(
+            coarse_abs_tol, where="CompositeFAC(coarse_abs_tol=)"))
         self.coarse_cycles = optional_positive_int(
             coarse_cycles, where="CompositeFAC(coarse_cycles=)")
         self.verbose = strict_bool(verbose, where="CompositeFAC(verbose=)")
@@ -135,18 +141,24 @@ class CompositeFAC(Descriptor):
         return "composite_fac"
 
     def options(self) -> dict:
-        return {"max_iters": self.max_iters, "fine_sweeps": self.fine_sweeps, "tol": self.tol,
-                "coarse_rel_tol": self.coarse_rel_tol, "coarse_cycles": self.coarse_cycles,
+        return {"max_iters": self.max_iters, "fine_sweeps": self.fine_sweeps,
+                "rel_tol": self.rel_tol, "abs_tol": self.abs_tol,
+                "coarse_rel_tol": self.coarse_rel_tol, "coarse_abs_tol": self.coarse_abs_tol,
+                "coarse_cycles": self.coarse_cycles,
                 "verbose": self.verbose}
 
     def set_poisson_kwargs(self) -> dict:
         """The AmrSystem.set_poisson keyword args this descriptor lowers to (0 = native default)."""
         return {"composite": True, "fac_max_iters": self.max_iters or 0,
                 "fac_fine_sweeps": self.fine_sweeps or 0,
-                "fac_tol": (0.0 if self.tol is None else native_float(
-                    self.tol, where="CompositeFAC(tol=)")),
+                "fac_rel_tol": (0.0 if self.rel_tol is None else native_float(
+                    self.rel_tol, where="CompositeFAC(rel_tol=)")),
+                "fac_abs_tol": (0.0 if self.abs_tol is None else native_float(
+                    self.abs_tol, where="CompositeFAC(abs_tol=)")),
                 "fac_coarse_rel_tol": (0.0 if self.coarse_rel_tol is None else native_float(
                     self.coarse_rel_tol, where="CompositeFAC(coarse_rel_tol=)")),
+                "fac_coarse_abs_tol": (0.0 if self.coarse_abs_tol is None else native_float(
+                    self.coarse_abs_tol, where="CompositeFAC(coarse_abs_tol=)")),
                 "fac_coarse_cycles": self.coarse_cycles or 0,
                 "fac_verbose": self.verbose}
 

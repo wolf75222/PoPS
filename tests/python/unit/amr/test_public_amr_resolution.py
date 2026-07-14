@@ -94,6 +94,10 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert graph.refine.context.layout == layout_plan.layout_for(graph.refine.indicator)
     assert graph.refine.context.discretization.kind == "discretization"
     assert graph.refine.context.stencil.kind == "stencil"
+    assert graph.refine.context.lowering.route == "linear_axis_stencil_l2_v1"
+    assert graph.refine.context.lowering.dimension == 2
+    assert [axis.offsets for axis in graph.refine.context.lowering.axes] == [
+        (-1, 1), (-1, 1)]
     assert authorities.initial_conditions.layout_plan_id == layout_plan.qualified_id
     assert authorities.bootstrap.tagging == authorities.tagging.graph
 
@@ -126,6 +130,8 @@ def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_rati
 
 
 def test_runtime_authority_installs_exact_temporal_relation_without_spatial_inference():
+    from pops import interfaces
+    from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
     from pops.amr import AMRClockRelation, AMRExecution
     from pops._platform_contracts import (
         ExecutionContext,
@@ -134,6 +140,8 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
     )
     from pops.runtime._runtime_authorities import install_runtime_authorities
 
+    tagging_abi = NATIVE_TAGGING_PROGRAM_ABI
+
     class Engine:
         _s = None
         installed = None
@@ -141,10 +149,14 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
         def set_temporal_relations(self, numerators, denominators, policies):
             self.installed = (numerators, denominators, policies)
 
+    layout_identity = "test::adaptive-layout"
     artifact = SimpleNamespace(
         blocks=(),
         plan=SimpleNamespace(blocks=(), field_plans={}),
-        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=True),)),
+        layout_plan=SimpleNamespace(
+            qualified_id=layout_identity,
+            layouts=(SimpleNamespace(adaptive=True),),
+        ),
     )
     execution_context = ExecutionContext(
         backend=proven_serial_manifest(
@@ -164,25 +176,63 @@ def test_runtime_authority_installs_exact_temporal_relation_without_spatial_infe
         bootstrap_plan=None,
         params={},
         execution_context=execution_context,
+        components={},
+        amr_providers={
+            "clustering": {
+                "schema_version": 1,
+                "provider_type": "builtin_amr_clustering",
+                "provider_id": "pops.lib.amr::berger_rigoutsos",
+                "provider_identity": "test::clustering-provider",
+                "native_interface": interfaces.Clustering.to_data(),
+                "minimum_efficiency": 0.7,
+                "minimum_box_size": 1,
+                "maximum_box_size": 32,
+                "layout_identity": layout_identity,
+            },
+            "tagger": {
+                "schema_version": 1,
+                "provider_type": "builtin_amr_tagger",
+                "provider_id": "pops.lib.amr::symbolic_tagger",
+                "provider_identity": "test::tagger-provider",
+                "native_interface": interfaces.Tagger.to_data(),
+                "layout_identity": layout_identity,
+                "clock_identity": "test::clock",
+                "tagging_graph_identity": "test::tagging-graph",
+                "tagging_capability": {
+                    "schema_version": 1,
+                    "capability_type": "amr_tagging_program",
+                    "leaf_opcodes": list(tagging_abi["leaf_opcodes"]),
+                    "leaf_opcode_ids": list(tagging_abi["leaf_opcodes"].values()),
+                    "logical_opcodes": list(tagging_abi["logical_opcodes"]),
+                    "logical_opcode_ids": list(tagging_abi["logical_opcodes"].values()),
+                    "candidate_outputs": list(tagging_abi["candidate_outputs"]),
+                    "indicator_stencil_routes": list(
+                        tagging_abi["indicator_stencil_routes"]),
+                    "maximum_stencil_terms": tagging_abi[
+                        "maximum_stencil_terms"],
+                    "maximum_instruction_count": tagging_abi[
+                        "maximum_instruction_count"],
+                    "non_finite_policy": tagging_abi["non_finite_policy"],
+                    "persistent_hysteresis": tagging_abi["persistent_hysteresis"],
+                },
+            },
+        },
     )
     engine = Engine()
     install_runtime_authorities(engine, install_plan)
     assert engine.installed == ([3], [1], ["integral_only"])
 
 
-def test_tagging_resolution_preserves_explicit_hysteresis_equality_and_conflict():
+def test_tagging_resolution_refuses_unimplemented_persistent_hysteresis():
     from pops.amr import ConflictPolicy, EqualityPolicy, Hysteresis
 
     authored = Hysteresis(min_cycles=3, equality=EqualityPolicy.COARSEN)
-    _, layout, _, authorities = _resolved_target(
-        hysteresis=authored,
-        conflict_policy=ConflictPolicy.ERROR,
-    )
-    graph = authorities.tagging.graph.graph
-    assert layout.tagging.hysteresis == authored
-    assert graph.hysteresis == authored
-    assert graph.hysteresis.equality is EqualityPolicy.COARSEN
-    assert graph.conflict_policy is ConflictPolicy.ERROR
+    with pytest.raises(
+            NotImplementedError, match="persistent tagging state; it is never accepted"):
+        _resolved_target(
+            hysteresis=authored,
+            conflict_policy=ConflictPolicy.ERROR,
+        )
 
 
 def test_tagging_authority_requires_exact_explicit_policy_types():
@@ -233,19 +283,25 @@ def test_runtime_tagging_compiles_refine_and_coarsen_to_data_only_vm():
             self.call = args
 
     native = NativeProbe()
-    flow_bootstrap_tagging(native, authorities.bootstrap, params)
+    flow_bootstrap_tagging(
+        native, authorities.bootstrap, params, clock_identity="case::clock")
     assert native.call is not None
-    (blocks, variables, leaf_ops, thresholds, refine_ops, refine_args,
-     coarsen_ops, coarsen_args, min_cycles, equality, conflict, provider) = native.call
+    (blocks, variables, leaf_ops, thresholds, stencil_indices, stencils,
+     refine_ops, refine_args, coarsen_ops, coarsen_args, min_cycles,
+     equality, conflict, clock, provider) = native.call
     assert blocks == ["tracer", "tracer"]
     # The runtime VM consumes the scalar component token, not the aggregate state handle.
     assert variables == ["u", "u"]
     assert leaf_ops == [4, 5]
     assert thresholds == [0.10, 0.04]
+    assert stencil_indices == [0, 0]
+    assert len(stencils) == 1
+    assert stencils[0]["route"] == "linear_axis_stencil_l2_v1"
     assert (refine_ops, refine_args) == ([4], [0])
     assert (coarsen_ops, coarsen_args) == ([5], [1])
     assert (min_cycles, equality, conflict) == (0, "hold", "refine_wins")
-    assert provider == authorities.tagging.graph.qualified_id
+    assert clock == "case::clock"
+    assert provider.startswith("pops.bound-amr-tagging-program.v1:sha256:")
 
 
 def test_layout_preserves_heterogeneous_transitions_before_provider_refusal():

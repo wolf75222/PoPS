@@ -38,7 +38,7 @@ def test_example_script_runs_outputs_and_restart_without_mock_or_fallback(tmp_pa
     assert "PoPS final multiphysics acceptance:" in completed.stdout
     assert "bit-identical restart: step 2" in completed.stdout
 
-    from pops.output.writers import read_hdf5, read_paraview
+    from pops.output import read_hdf5, read_paraview
 
     hdf5 = read_hdf5(output / "accepted" / "two_fluid.h5")
     paraview = read_paraview(output / "accepted" / "two_fluid.vtu")

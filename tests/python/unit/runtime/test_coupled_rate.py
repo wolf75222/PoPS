@@ -5,6 +5,8 @@ returns a typed RateBundle -- one Rate per participating block. P.call lowers it
 per-block rate values usable in affine combinations. This is the IR/authoring slice (pure
 Python, locally testable); the C++ coupled-rate kernel codegen is the deferred runtime part.
 """
+from pops.codegen.program_codegen import _check_lowerable
+from pops.codegen.program_codegen import emit_cpp_program
 import pytest
 
 from pops import model
@@ -155,7 +157,7 @@ def test_coupled_rate_now_lowers_to_cpp():
                 "i1", i_n + P.dt * C[i_n.block],
                 at=states["ions"].next.point),
     })
-    P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate
-    src = P.emit_cpp_program(model=None)
+    _check_lowerable(P, None)  # no longer raises for a cons-only coupled_rate
+    src = emit_cpp_program(P, model=None)
     assert src.count("pops::for_each_cell") == 1
     assert "const pops::Real ne =" in src and "const pops::Real ni =" in src

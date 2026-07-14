@@ -25,6 +25,7 @@ extension is reached only through the internal engine selected behind `pops.bind
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -258,11 +259,212 @@ class _Unavailable:
         return "<unavailable %s: %s>" % (self.measure, self.reason)
 
 
-# PerformanceSummary (the printable wrapper over the parsed report) is split into
-# ``_profile_summary`` for the 500-line cap (ADC-550) and re-exported here so
-# The internal engine module re-exports ``PerformanceSummary``. It imports the parsing
-# helpers, the Profile level and the _Unavailable sentinel back from this module.
-from pops.runtime._profile_summary import PerformanceSummary  # noqa: E402,F401
+class PerformanceSummary:
+    """A printable, typed wrapper around the native profile report (Spec 5 criteria 41-43).
+
+    Built from the structured ``profile_snapshot()`` dict when available, or from the legacy string
+    :meth:`System.profile_report` returns. It exposes the report as a structured dict
+    (:meth:`to_dict` / :meth:`to_json`)
+    and typed views: :meth:`by_program_node`, :meth:`by_native_brick`, :meth:`by_solver`,
+    :meth:`by_elliptic`, :meth:`by_amr_mpi`, :meth:`by_memory`. Views read the parsed native tables; a
+    view the build does not surface returns an :class:`_Unavailable` sentinel
+    (``bool(view) is False``) rather than a faked zero.
+    """
+
+    def __init__(self, report: Any, profile: Any = None) -> None:
+        self._snapshot = dict(report) if isinstance(report, dict) else None
+        self._report_text = "" if self._snapshot is not None else (report or "")
+        self._profile = profile if profile is not None else Profile.Basic()
+        self._parsed = (_parse_snapshot(self._snapshot)
+                        if self._snapshot is not None else _parse_report(self._report_text))
+
+    @property
+    def profile(self) -> Any:
+        """The :class:`Profile` level the run requested."""
+        return self._profile
+
+    @property
+    def raw_report(self) -> Any:
+        """The exact legacy string the native profiler returned, or ``""`` for snapshot input."""
+        return self._report_text
+
+    @property
+    def source(self) -> Any:
+        """``"snapshot"`` for structured C++ input, ``"text"`` for the legacy parser path."""
+        return "snapshot" if self._snapshot is not None else "text"
+
+    def scopes(self) -> Any:
+        """All timed scopes: ``{name: {count, total_s, mean_s, min_s, max_s}}``."""
+        return dict(self._parsed["scopes"])
+
+    def counters(self) -> Any:
+        """All integer counters: ``{name: int}``."""
+        return dict(self._parsed["counters"])
+
+    def total_s(self) -> Any:
+        """Sum of every scope's total wall-clock time (seconds)."""
+        return self._parsed["total_s"]
+
+    def by_program_node(self) -> Any:
+        """Per-program-node timings (the ``node:<name>`` scopes the compiled step emits).
+
+        Keys are the bare node names (``rhs2``, ``solve_fields1``, ...). Empty on a native step
+        (no compiled Program); populated under a compiled ``.so`` step.
+        """
+        return {
+            name[len(_NODE_PREFIX):]: dict(fields)
+            for name, fields in self._parsed["scopes"].items()
+            if name.startswith(_NODE_PREFIX)
+        }
+
+    def by_native_brick(self) -> Any:
+        """Declare unavailable per-native-brick timings.
+
+        The native runtime times Program nodes and coarse phases, not individual bricks. The absent
+        granularity is declared rather than represented by a fabricated zero.
+        """
+        return _Unavailable(
+            "by_native_brick",
+            "native runtime times program nodes / phases, not individual bricks")
+
+    def by_solver(self) -> Any:
+        """Return the elliptic field-solve phase and any ``solve_fields`` Program node."""
+        out = {}
+        for name, fields in self._parsed["scopes"].items():
+            if name in _SOLVER_SCOPES:
+                out[name] = dict(fields)
+            elif name.startswith(_NODE_PREFIX) and _SOLVER_NODE_HINT in name:
+                out[name[len(_NODE_PREFIX):]] = dict(fields)
+        return out
+
+    def by_elliptic(self) -> Any:
+        """Return emitted elliptic counters and coarsest-grid solve timing.
+
+        ``mg_cycles``, ``krylov_iters`` and ``mg_levels`` are native counters;
+        ``elliptic_bottom`` is a timing entry. A build that emits none of these declares the view
+        unavailable instead of fabricating values.
+        """
+        out = {
+            name: self._parsed["counters"][name]
+            for name in _ELLIPTIC_COUNTERS
+            if name in self._parsed["counters"]
+        }
+        bottom = self._parsed["scopes"].get(_ELLIPTIC_TIME_SCOPE)
+        if bottom is not None:
+            out[_ELLIPTIC_TIME_SCOPE] = dict(bottom)
+        if not out:
+            return _Unavailable(
+                "by_elliptic",
+                "elliptic-solver counters need a field-solve under profiling on a _pops build "
+                "that emits them (mg_cycles / krylov_iters / mg_levels / elliptic_bottom)")
+        return out
+
+    def by_amr_mpi(self) -> Any:
+        """Return emitted AMR/MPI phase timings and counters.
+
+        Timing scopes and integer counters are matched by the canonical AMR/MPI tokens. A host,
+        serial, or non-AMR report declares this dimension unavailable.
+        """
+        out = {}
+        for name, fields in self._parsed["scopes"].items():
+            if any(token in name for token in _AMR_MPI_TIME_TOKENS):
+                out[name] = dict(fields)
+        for name, value in self._parsed["counters"].items():
+            if name in out:
+                continue
+            if any(token in name for token in _AMR_MPI_COUNTER_TOKENS):
+                out[name] = value
+        if not out:
+            return _Unavailable(
+                "by_amr_mpi",
+                "AMR / MPI phase timings and counters (regrid / fill_boundary / halo_exchange / "
+                "reflux / average_down / mpi_reductions) populate only under a distributed AMR run; "
+                "no scope is emitted on a host / non-AMR build")
+        return out
+
+    def by_memory(self) -> Any:
+        """Return scratch allocation count and peak buffer size when emitted."""
+        present = {
+            name: self._parsed["counters"][name]
+            for name in _MEMORY_COUNTERS
+            if name in self._parsed["counters"]
+        }
+        if not present:
+            return _Unavailable(
+                "by_memory",
+                "scratch memory counters populate only under a compiled Kokkos step")
+        return present
+
+    def to_dict(self) -> Any:
+        """Return the complete structured report and availability-aware typed views."""
+        return {
+            "profile": self._profile.level,
+            "source": self.source,
+            "schema_version": self._parsed.get("schema_version", 0),
+            "enabled": self._parsed.get("enabled"),
+            "total_s": self.total_s(),
+            "scopes": self.scopes(),
+            "counters": self.counters(),
+            "views": {
+                "by_program_node": self.by_program_node(),
+                "by_native_brick": _view_to_dict(self.by_native_brick()),
+                "by_solver": self.by_solver(),
+                "by_elliptic": _view_to_dict(self.by_elliptic()),
+                "by_amr_mpi": _view_to_dict(self.by_amr_mpi()),
+                "by_memory": _view_to_dict(self.by_memory()),
+            },
+        }
+
+    def to_json(self, path: Any = None) -> Any:
+        """Serialize :meth:`to_dict` to JSON and optionally write it to ``path``."""
+        text = json.dumps(self.to_dict(), indent=2, sort_keys=True)
+        if path is not None:
+            with open(path, "w", encoding="ascii") as handle:
+                handle.write(text)
+        return text
+
+    def __str__(self) -> Any:
+        if not self._parsed["scopes"] and not self._parsed["counters"]:
+            return "PerformanceSummary(%s): no profiling data recorded" % self._profile.level
+        lines = [
+            "PerformanceSummary (%s, total %.6f s, %d scopes)"
+            % (self._profile.level, self.total_s(), len(self._parsed["scopes"]))
+        ]
+        for name, fields in self._parsed["scopes"].items():
+            lines.append(
+                "  %-24s count=%d total=%.6fs mean=%.6fs"
+                % (
+                    name,
+                    fields.get("count", 0),
+                    fields.get("total_s", 0.0),
+                    fields.get("mean_s", 0.0),
+                )
+            )
+        if self._parsed["counters"]:
+            counters = "  ".join(
+                "%s=%d" % (key, value)
+                for key, value in self._parsed["counters"].items()
+            )
+            lines.append("counters: %s" % counters)
+        return "\n".join(lines)
+
+    def print(self) -> None:
+        """Print the human-readable summary."""
+        print(str(self))
+
+    def __repr__(self) -> Any:
+        return "PerformanceSummary(profile=%r, scopes=%d, counters=%d)" % (
+            self._profile.level,
+            len(self._parsed["scopes"]),
+            len(self._parsed["counters"]),
+        )
+
+
+def _view_to_dict(view: Any) -> Any:
+    """Serialize a typed view without hiding unavailable measures."""
+    if isinstance(view, _Unavailable):
+        return view.to_dict()
+    return {"available": True, "entries": view}
 
 
 __all__ = ["Profile", "PerformanceSummary"]

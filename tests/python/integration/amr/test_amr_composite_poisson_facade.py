@@ -78,7 +78,11 @@ def test_composite_fac_knobs_refuse_out_of_domain():
     sim = AmrSystem(n=16, L=1.0, periodic=True)
     sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     with pytest.raises((RuntimeError, ValueError)):
-        sim.set_poisson(composite=True, fac_tol=2.0)
+        sim.set_poisson(composite=True, fac_rel_tol=2.0)
+    with pytest.raises((RuntimeError, ValueError)):
+        sim.set_poisson(composite=True, fac_abs_tol=-1.0)
+    with pytest.raises((RuntimeError, ValueError)):
+        sim.set_poisson(composite=True, fac_coarse_abs_tol=-1.0)
     with pytest.raises((RuntimeError, ValueError)):
         sim.set_poisson(composite=True, fac_max_iters=-1)
 
@@ -87,10 +91,13 @@ def test_descriptor_lowering_matches_set_poisson_kwargs():
     """(4) GeometricMG(amr_composite=CompositeFAC(...)) lowers to the exact set_poisson kwargs."""
     from pops.solvers.elliptic import GeometricMG
     from pops.solvers.options import CompositeFAC
-    g = GeometricMG(amr_composite=CompositeFAC(max_iters=10, tol=1e-8, verbose=True))
+    g = GeometricMG(
+        amr_composite=CompositeFAC(max_iters=10, rel_tol=1e-8, abs_tol=1e-14, verbose=True))
     kw = g.amr_composite.set_poisson_kwargs()
-    assert kw == {"composite": True, "fac_max_iters": 10, "fac_fine_sweeps": 0, "fac_tol": 1e-8,
-                  "fac_coarse_rel_tol": 0.0, "fac_coarse_cycles": 0, "fac_verbose": True}
+    assert kw == {"composite": True, "fac_max_iters": 10, "fac_fine_sweeps": 0,
+                  "fac_rel_tol": 1e-8, "fac_abs_tol": 1e-14,
+                  "fac_coarse_rel_tol": 0.0, "fac_coarse_abs_tol": 0.0,
+                  "fac_coarse_cycles": 0, "fac_verbose": True}
     # Default GeometricMG(): no composite lowering at all (byte-identical Option A).
     assert GeometricMG().amr_composite is None
 

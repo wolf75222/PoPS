@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
@@ -14,10 +15,50 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <stdexcept>
+#include <string>
 
 using namespace pops;
 
 static constexpr double kPi = 3.14159265358979323846;
+
+static void expect_zero_probe_forcing_scale(const BCRec& bc) {
+  constexpr int n = 16;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, n);
+
+  GeometricMG zero_start(geometry, boxes, bc);
+  zero_start.rhs().set_val(Real(0));
+  zero_start.phi().set_val(Real(0));
+  const Real forcing_norm = zero_start.current_residual();
+  ASSERT_TRUE(std::isfinite(static_cast<double>(forcing_norm)));
+  ASSERT_GT(forcing_norm, Real(2));  // distinguishes R(0) from the zero-RHS fallback scale 1
+  EXPECT_EQ(zero_start.solve(Real(1), /*max_cycles=*/4), 0);
+  const SolveReport& zero_report = zero_start.last_solve_report();
+  EXPECT_TRUE(zero_report.solved());
+  EXPECT_NEAR(zero_report.rel_residual, Real(1), Real(1e-14));
+
+  GeometricMG warm_start(geometry, boxes, bc);
+  warm_start.rhs().set_val(Real(0));
+  warm_start.phi().set_val(Real(0.375));
+  const Real warm_residual = warm_start.current_residual();
+  ASSERT_TRUE(std::isfinite(static_cast<double>(warm_residual)));
+  ASSERT_GT(warm_residual, Real(0));
+  const Real expected_relative = warm_residual / forcing_norm;
+  const Real warm_tolerance =
+      expected_relative * (Real(1) + Real(128) * std::numeric_limits<Real>::epsilon());
+  EXPECT_EQ(warm_start.solve(warm_tolerance, /*max_cycles=*/4), 0);
+  const SolveReport& warm_report = warm_start.last_solve_report();
+  EXPECT_TRUE(warm_report.solved());
+  EXPECT_NEAR(warm_report.rel_residual, expected_relative, Real(1e-14));
+
+  EXPECT_EQ(warm_start.solve_robust(warm_tolerance, /*max_cycles=*/4), 0);
+  const SolveReport& robust_report = warm_start.last_solve_report();
+  EXPECT_TRUE(robust_report.solved());
+  EXPECT_NEAR(robust_report.rel_residual, expected_relative, Real(1e-14));
+}
 
 // Resout lap(phi)=f pour phi_ex donne, renvoie (cycles, erreur_inf).
 template <class PhiEx, class RhsF>
@@ -87,4 +128,183 @@ TEST(GeometricMgTest, periodic_converges_accurate) {
   std::printf("Periodique : c64=%d e64=%.2e\n", c64, e64);
   EXPECT_TRUE(c64 <= 30) << "per_converged: c64=" << c64;
   EXPECT_TRUE(e64 < 5e-3) << "per_accurate: e64=" << e64;
+}
+
+TEST(GeometricMgTest, periodic_mean_zero_warm_start_exits_without_mutation) {
+  constexpr int n = 32;
+  constexpr Real rel_tol = Real(1e-8);
+
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba = BoxArray::from_domain(dom, n);
+  GeometricMG mg(geom, ba, BCRec{});  // periodic on all four faces
+
+  // A periodic Laplacian is solvable only on the mean-zero subspace.  Subtract the
+  // discrete mean explicitly so this test remains valid for every even resolution,
+  // independently of floating-point summation symmetry.
+  Fab2D& rhs = mg.rhs().fab(0);
+  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
+    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
+      const double x = geom.x_cell(i);
+      const double y = geom.y_cell(j);
+      rhs(i, j, 0) = std::sin(2.0 * kPi * x) * std::sin(2.0 * kPi * y);
+    }
+  const Real rhs_mean = sum(mg.rhs()) / static_cast<Real>(dom.num_cells());
+  for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
+    for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
+      rhs(i, j, 0) -= rhs_mean;
+  mg.phi().set_val(Real(0));
+
+  const int first_cycles = mg.solve(rel_tol, /*max_cycles=*/100);
+  const SolveReport first = mg.last_solve_report();
+  ASSERT_TRUE(first.solved()) << "status=" << first.status_name();
+  ASSERT_GT(first_cycles, 0);
+
+  device_fence();
+  const MultiFab phi_before = mg.phi();
+
+  // A second solve with the same RHS must publish a solved, zero-cycle report and preserve
+  // the warm-start iterate bit-for-bit.  No explicit absolute floor is supplied: this catches
+  // the old relative-criterion path that needlessly re-cycled an already converged state.
+  const int second_cycles = mg.solve(rel_tol, /*max_cycles=*/100);
+  const SolveReport second = mg.last_solve_report();
+  ASSERT_TRUE(second.solved()) << "status=" << second.status_name();
+  EXPECT_EQ(second_cycles, 0);
+  EXPECT_EQ(second.iters, 0);
+  EXPECT_LE(second.rel_residual, rel_tol);
+
+  device_fence();
+  Real max_delta = Real(0);
+  for (int li = 0; li < mg.phi().local_size(); ++li) {
+    const ConstArray4 before = phi_before.fab(li).const_array();
+    const ConstArray4 after = mg.phi().fab(li).const_array();
+    const Box2D valid = mg.phi().box(li);
+    for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
+      for (int i = valid.lo[0]; i <= valid.hi[0]; ++i)
+        max_delta = std::max(max_delta, std::fabs(after(i, j, 0) - before(i, j, 0)));
+  }
+  EXPECT_EQ(max_delta, Real(0));
+}
+
+TEST(GeometricMgTest, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
+  constexpr int n = 8;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+
+  GeometricMG mg(geometry, boxes, bc);
+  mg.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
+  mg.phi().set_val(Real(1e-6));
+  const Real initial_residual = mg.current_residual();
+  ASSERT_GT(initial_residual, Real(0));
+  ASSERT_LT(initial_residual, Real(1));
+
+  // A unit fallback in the stop would accept this nonzero residual at rel_tol=1. The correct
+  // zero-forcing threshold is exactly zero, so at least one V-cycle must be attempted.
+  EXPECT_EQ(mg.solve(Real(1), /*max_cycles=*/1, /*abs_tol=*/Real(0)), 1);
+
+  mg.phi().set_val(Real(1e-6));
+  const Real reset_residual = mg.current_residual();
+  EXPECT_EQ(mg.solve(Real(1e-8), /*max_cycles=*/1, /*abs_tol=*/Real(2) * reset_residual), 0);
+  EXPECT_TRUE(mg.last_solve_report().solved());
+  EXPECT_NEAR(mg.last_solve_report().rel_residual, reset_residual, Real(1e-14));
+
+  mg.phi().set_val(Real(1e-6));
+  EXPECT_NE(mg.solve_robust(Real(1), /*max_cycles=*/1, /*abs_tol=*/Real(0)), 0);
+  mg.phi().set_val(Real(1e-6));
+  const Real robust_residual = mg.current_residual();
+  EXPECT_EQ(mg.solve_robust(Real(1e-8), /*max_cycles=*/1,
+                            /*abs_tol=*/Real(2) * robust_residual),
+            0);
+  EXPECT_TRUE(mg.last_solve_report().solved());
+  EXPECT_NEAR(mg.last_solve_report().rel_residual, robust_residual, Real(1e-14));
+}
+
+TEST(GeometricMgTest, inhomogeneous_dirichlet_uses_zero_probe_scale) {
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  bc.xlo_val = Real(1.0);
+  bc.xhi_val = Real(-0.5);
+  bc.ylo_val = Real(0.75);
+  bc.yhi_val = Real(-1.25);
+  expect_zero_probe_forcing_scale(bc);
+}
+
+TEST(GeometricMgTest, inhomogeneous_robin_uses_zero_probe_scale) {
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Robin;
+  bc.xlo_alpha = bc.xhi_alpha = bc.ylo_alpha = bc.yhi_alpha = Real(1);
+  bc.xlo_beta = bc.xhi_beta = bc.ylo_beta = bc.yhi_beta = Real(0.25);
+  bc.xlo_val = Real(1.5);
+  bc.xhi_val = Real(-0.75);
+  bc.ylo_val = Real(0.5);
+  bc.yhi_val = Real(-1.0);
+  expect_zero_probe_forcing_scale(bc);
+}
+
+TEST(GeometricMgTest, nonfinite_rhs_and_residual_are_invalid_evaluations) {
+  constexpr int n = 8;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, n);
+
+  for (const Real invalid : {std::numeric_limits<Real>::quiet_NaN(),
+                             std::numeric_limits<Real>::infinity()}) {
+    GeometricMG mg(geometry, boxes, BCRec{});
+    mg.rhs().set_val(invalid);
+    EXPECT_TRUE(std::isinf(static_cast<double>(norm_inf(mg.rhs()))));
+    EXPECT_EQ(mg.solve(Real(1e-8), /*max_cycles=*/4), 0);
+    const SolveReport& report = mg.last_solve_report();
+    EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
+    EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
+    EXPECT_FALSE(report.solved());
+    EXPECT_TRUE(std::isinf(static_cast<double>(report.rel_residual)));
+  }
+
+  GeometricMG invalid_iterate(geometry, boxes, BCRec{});
+  invalid_iterate.rhs().set_val(Real(0));
+  invalid_iterate.phi().set_val(std::numeric_limits<Real>::infinity());
+  EXPECT_TRUE(std::isinf(static_cast<double>(invalid_iterate.current_residual())));
+  EXPECT_EQ(invalid_iterate.solve(Real(1e-8), /*max_cycles=*/4), 0);
+  EXPECT_EQ(invalid_iterate.last_solve_report().status,
+            SolveStatus::kInvalidEvaluation);
+
+  GeometricMG invalid_robust(geometry, boxes, BCRec{});
+  invalid_robust.rhs().set_val(std::numeric_limits<Real>::quiet_NaN());
+  EXPECT_EQ(invalid_robust.solve_robust(Real(1e-8), /*max_cycles=*/4), 0);
+  EXPECT_EQ(invalid_robust.last_solve_report().status,
+            SolveStatus::kInvalidEvaluation);
+}
+
+TEST(GeometricMgTest, rejects_nonfinite_or_out_of_domain_controls) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  GeometricMG mg(Geometry{domain, 0.0, 1.0, 0.0, 1.0},
+                 BoxArray(std::vector<Box2D>{domain}), BCRec{});
+  const Real nan = std::numeric_limits<Real>::quiet_NaN();
+  EXPECT_THROW((void)mg.solve(nan, 4), std::invalid_argument);
+  EXPECT_THROW((void)mg.solve(Real(1e-8), 0), std::invalid_argument);
+  EXPECT_THROW((void)mg.solve(Real(1e-8), 4, nan), std::invalid_argument);
+  EXPECT_THROW((void)mg.solve_robust(nan, 4), std::invalid_argument);
+  EXPECT_THROW(mg.set_abs_tol(nan), std::invalid_argument);
+}
+
+TEST(GeometricMgTest, nullspace_compatibility_rejects_nonfinite_moment) {
+  const Box2D domain = Box2D::from_extents(4, 4);
+  const BoxArray boxes(std::vector<Box2D>{domain});
+  const DistributionMapping mapping(1, 1);
+  MultiFab rhs(boxes, mapping, 1, 0);
+  rhs.set_val(std::numeric_limits<Real>::quiet_NaN());
+  const FieldNullspacePlan plan =
+      constant_mean_zero_nullspace("nonfinite-test", "unit-test");
+
+  try {
+    (void)require_field_nullspace_compatible(rhs, plan);
+    FAIL() << "a non-finite nullspace compatibility moment must be rejected";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("non-finite compatibility moment"),
+              std::string::npos)
+        << error.what();
+  }
 }

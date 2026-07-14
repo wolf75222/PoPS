@@ -21,6 +21,7 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     _pops) and locally once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent,
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import solve_field, solve_field_blocks, typed_field, typed_state
 
@@ -131,7 +132,7 @@ def section_a(t):
         endpoint = typed_state(P, blk, state_name="U").next
         P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
     chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
 
@@ -145,7 +146,7 @@ def section_a(t):
     Pro.commit(endpoint_a, Pro.value(
         "a1", Ua + Pro.dt * Ra, at=endpoint_a.point))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
-    src_ro = Pro.emit_cpp_program()
+    src_ro = emit_cpp_program(Pro)
     chk("ctx.state(1)" in src_ro, "the read-only block still binds its index (ctx.state(1))")
 
     # A double commit is rejected at build time.
@@ -183,7 +184,7 @@ def section_a(t):
         "b1", Ubc + Pc.dt * Pc.rhs(
             state=Ubc, terms=[Flux(), DefaultSource()]),
         at=endpoint_b.point))
-    src_c = Pc.emit_cpp_program()
+    src_c = emit_cpp_program(Pc)
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
     chk("std::vector<const pops::MultiFab*>" in src_c,
@@ -222,7 +223,7 @@ def section_a(t):
 
     ranged = Pcf.range(Ubcf, 2, _cf_body)
     Pcf.commit(endpoint_b, Pcf.value("b_next", ranged, at=endpoint_b.point))
-    src_cf = Pcf.emit_cpp_program()
+    src_cf = emit_cpp_program(Pcf)
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")
 

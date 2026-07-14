@@ -54,18 +54,12 @@ namespace runtime {
 namespace program {
 
 namespace detail {
-/// FAC reports a composite infinity norm while solve_linear exposes a relative tolerance.  Match the
-/// established Krylov zero-RHS convention exactly: every non-zero RHS, including ||rhs|| < 1, keeps
-/// its own scale; only the homogeneous RHS substitutes one to avoid division by zero.
-inline Real tensor_fac_relative_scale(Real rhs_norm) {
-  return rhs_norm > Real(0) ? rhs_norm : Real(1);
-}
-
 /// Native FAC controls. CompositeTensorFAC owns the outer tolerance and iteration budget; those are
 /// joined with these optional overrides only at the native direct-solve boundary.
 struct TensorFacControls {
   std::optional<int> fine_sweeps;
   std::optional<Real> coarse_rel_tol;
+  std::optional<Real> coarse_abs_tol;
   std::optional<int> coarse_cycles;
   std::optional<bool> verbose;
 };
@@ -77,13 +71,17 @@ inline void validate_tensor_fac_controls(const TensorFacControls& options) {
       (!std::isfinite(static_cast<double>(*options.coarse_rel_tol)) ||
        *options.coarse_rel_tol <= Real(0) || *options.coarse_rel_tol >= Real(1)))
     throw std::invalid_argument("CompositeTensorFAC coarse_rel_tol must be finite and in (0, 1)");
+  if (options.coarse_abs_tol &&
+      (!std::isfinite(static_cast<double>(*options.coarse_abs_tol)) ||
+       *options.coarse_abs_tol < Real(0)))
+    throw std::invalid_argument("CompositeTensorFAC coarse_abs_tol must be finite and nonnegative");
   if (options.coarse_cycles && *options.coarse_cycles <= 0)
     throw std::invalid_argument("CompositeTensorFAC coarse_cycles must be positive");
 }
 
-inline TensorFacControls tensor_fac_controls(int fine_sweeps, Real coarse_rel_tol,
+inline TensorFacControls tensor_fac_controls(int fine_sweeps, Real coarse_rel_tol, Real coarse_abs_tol,
                                              int coarse_cycles, int verbose) {
-  if (fine_sweeps < 0 || coarse_rel_tol < Real(0) || coarse_cycles < 0)
+  if (fine_sweeps < 0 || coarse_rel_tol < Real(0) || coarse_abs_tol < Real(0) || coarse_cycles < 0)
     throw std::invalid_argument(
         "CompositeTensorFAC wire options use zero for native default or a positive override");
   if (verbose < -1 || verbose > 1)
@@ -92,17 +90,22 @@ inline TensorFacControls tensor_fac_controls(int fine_sweeps, Real coarse_rel_to
   TensorFacControls options{
       fine_sweeps == 0 ? std::nullopt : std::optional<int>(fine_sweeps),
       coarse_rel_tol == Real(0) ? std::nullopt : std::optional<Real>(coarse_rel_tol),
+      coarse_abs_tol == Real(0) ? std::nullopt : std::optional<Real>(coarse_abs_tol),
       coarse_cycles == 0 ? std::nullopt : std::optional<int>(coarse_cycles),
       verbose == -1 ? std::nullopt : std::optional<bool>(verbose == 1)};
   validate_tensor_fac_controls(options);
   return options;
 }
 
-inline CompositeFacOptions tensor_fac_options(const TensorFacControls& controls, Real tol,
-                                              int max_iter) {
+inline CompositeFacOptions tensor_fac_options(const TensorFacControls& controls, Real rel_tol,
+                                              Real abs_tol, int max_iter) {
   validate_tensor_fac_controls(controls);
-  if (!std::isfinite(static_cast<double>(tol)) || tol <= Real(0))
-    throw std::invalid_argument("CompositeTensorFAC Program solver tolerance must be finite and positive");
+  if (!std::isfinite(static_cast<double>(rel_tol)) || rel_tol <= Real(0))
+    throw std::invalid_argument(
+        "CompositeTensorFAC Program solver rel_tol must be finite and positive");
+  if (!std::isfinite(static_cast<double>(abs_tol)) || abs_tol < Real(0))
+    throw std::invalid_argument(
+        "CompositeTensorFAC Program solver abs_tol must be finite and nonnegative");
   if (max_iter <= 0)
     throw std::invalid_argument("CompositeTensorFAC Program solver max_iter must be positive");
   // CompositeFacOptions is the single native source of truth for omitted FAC knobs. The
@@ -110,11 +113,14 @@ inline CompositeFacOptions tensor_fac_options(const TensorFacControls& controls,
   // override the canonical native defaults.
   CompositeFacOptions options;
   options.max_iters = max_iter;
-  options.tol = tol;
+  options.rel_tol = rel_tol;
+  options.abs_tol = abs_tol;
   if (controls.fine_sweeps)
     options.fine_sweeps = *controls.fine_sweeps;
   if (controls.coarse_rel_tol)
     options.coarse_rel_tol = *controls.coarse_rel_tol;
+  if (controls.coarse_abs_tol)
+    options.coarse_abs_tol = *controls.coarse_abs_tol;
   if (controls.coarse_cycles)
     options.coarse_cycles = *controls.coarse_cycles;
   if (controls.verbose)
@@ -138,19 +144,19 @@ class AmrTensorElliptic {
 
   /// Install the hierarchy-solver controls. Zero marks omitted numeric knobs and -1 marks omitted
   /// verbosity; those values resolve from CompositeFacOptions, the sole native defaults authority.
-  void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, int coarse_cycles,
-                                      int verbose) {
+  void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, Real coarse_abs_tol,
+                                      int coarse_cycles, int verbose) {
     fac_controls_ = detail::tensor_fac_controls(
-        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose);
+        fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose);
   }
 
-  /// Join native controls with CompositeTensorFAC tolerance / iteration budget. Public on this
+  /// Join native controls with CompositeTensorFAC tolerances / iteration budget. Public on this
   /// internal driver so the bridge is inspectable and unit-testable without constructing AMR storage.
-  CompositeFacOptions composite_fac_options(Real tol, int max_iter) const {
+  CompositeFacOptions composite_fac_options(Real rel_tol, Real abs_tol, int max_iter) const {
     if (!fac_controls_)
       throw std::logic_error(
           "AmrTensorElliptic requires configure_composite_tensor_fac before a composite solve");
-    return detail::tensor_fac_options(*fac_controls_, tol, max_iter);
+    return detail::tensor_fac_options(*fac_controls_, rel_tol, abs_tol, max_iter);
   }
 
   /// True iff there is >= one populated fine level (level 1 carries >= one patch for this block). The
@@ -207,7 +213,7 @@ class AmrTensorElliptic {
   /// pops::CompositeFacPoisson wholesale. This is a direct solver with a structurally authenticated
   /// tensor operator; MPI multilevel and unequal diagonal tensor coefficients report capability failure
   /// precisely (mono-rank) rather than publishing a partial value.
-  SolveReport solve_composite(Real tol, int max_iter) {
+  SolveReport solve_composite(Real rel_tol, Real abs_tol, int max_iter) {
     const int L = eng_->nlev();
     if (L < 2)
       return SolveReport::capability_failure();
@@ -221,10 +227,9 @@ class AmrTensorElliptic {
     // Reject that unsupported solver/operator pair explicitly instead of solving a different
     // operator by ignoring eps_y.
     for (int k = 0; k < L; ++k) {
-      const LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
-      MultiFab diagonal_delta(lb.eps_x.box_array(), lb.eps_x.dmap(), 1, 0);
-      pops::lincomb(diagonal_delta, Real(1), lb.eps_x, Real(-1), lb.eps_y);
-      if (pops::norm_inf(diagonal_delta) != Real(0))
+      LevelBuffers& lb = levels_[static_cast<std::size_t>(k)];
+      pops::lincomb(lb.diagonal_delta, Real(1), lb.eps_x, Real(-1), lb.eps_y);
+      if (pops::norm_inf(lb.diagonal_delta) != Real(0))
         return SolveReport::capability_failure();
     }
 
@@ -252,30 +257,14 @@ class AmrTensorElliptic {
       copy0(fac_->phi_level(k), lb.initial_guess);
     }
 
-    // solve_linear's public tolerance is relative, whereas FAC consumes
-    // an absolute composite infinity-norm tolerance.  Use the same max norm FAC reports, across the
-    // whole tower, so the adapter does not silently reinterpret a relative tolerance as an absolute
-    // one. FAC and the generic Krylov path use different native norms (composite infinity vs
-    // global L2), but share the same relative convention. rhs_norm == 0 is explicit: scale == 1, so a
-    // homogeneous problem receives a finite absolute tolerance and reports its absolute residual.
-    Real rhs_norm = 0;
-    for (int k = 0; k < L; ++k)
-      rhs_norm = std::max(rhs_norm, pops::norm_inf(fac_->rhs_level(k)));
-    const Real scale = detail::tensor_fac_relative_scale(rhs_norm);
-    const Real absolute_tol = tol * scale;
-
-    const CompositeFacOptions options = composite_fac_options(absolute_tol, max_iter);
+    // The FAC owns the exact composite R(0), mixed stop, iteration count and scientific relative
+    // residual.  rel_tol/abs_tol are the outer composite controls, while the independently authored
+    // coarse_rel_tol/coarse_abs_tol stay on every internal GeometricMG solve; no RHS-norm adapter may
+    // reinterpret either contract.
+    const CompositeFacOptions options = composite_fac_options(rel_tol, abs_tol, max_iter);
     fac_->set_options(options);
-    const Real residual = fac_->solve(options.max_iters, options.fine_sweeps, options.tol);
-
-    SolveReport report;
-    report.rel_residual = residual / scale;
-    if (std::isfinite(static_cast<double>(report.rel_residual)) && report.rel_residual <= tol)
-      report.mark_solved();
-    else
-      report.mark_failed(std::isfinite(static_cast<double>(report.rel_residual))
-                             ? SolveStatus::kIterationLimit
-                             : SolveStatus::kInvalidEvaluation);
+    fac_->solve(options.max_iters, options.fine_sweeps, options.rel_tol, options.abs_tol);
+    const SolveReport report = fac_->last_solve_report();
     if (!report.solved_value_available())
       return report;
     // Publication is atomic with respect to solve success: reconstruction cannot observe a partial
@@ -291,6 +280,7 @@ class AmrTensorElliptic {
     MultiFab eps_x, eps_y, a_xy, a_yx;  ///< tensor coefficient A = [[eps_x, a_xy], [a_yx, eps_y]]
     MultiFab rhs;                        ///< condensed right-hand side (-Lap phi^n - g div F)
     MultiFab flux;                       ///< transient explicit-flux scratch (2-comp, if the body uses it)
+    MultiFab diagonal_delta;             ///< persistent diagonal-anisotropy capability check scratch
     MultiFab initial_guess;              ///< gathered per-level initial guess for the next solve attempt
     MultiFab phi;                        ///< published composite potential of this level
     bool built = false;
@@ -317,6 +307,7 @@ class AmrTensorElliptic {
     lb.a_yx = MultiFab(ba, dm, 1, 1);
     lb.rhs = MultiFab(ba, dm, 1, 0);
     lb.flux = MultiFab(ba, dm, 2, 1);
+    lb.diagonal_delta = MultiFab(ba, dm, 1, 0);
     lb.initial_guess = MultiFab(ba, dm, 1, 1);
     lb.phi = MultiFab(ba, dm, 1, 1);
     lb.eps_x.set_val(Real(0));
@@ -325,6 +316,7 @@ class AmrTensorElliptic {
     lb.a_yx.set_val(Real(0));
     lb.rhs.set_val(Real(0));
     lb.flux.set_val(Real(0));
+    lb.diagonal_delta.set_val(Real(0));
     lb.initial_guess.set_val(Real(0));
     lb.phi.set_val(Real(0));
     lb.built = true;

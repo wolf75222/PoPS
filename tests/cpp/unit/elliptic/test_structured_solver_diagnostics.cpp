@@ -67,7 +67,8 @@ TEST(test_structured_solver_diagnostics, Runs) {
 
     CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, ratio);
     fac.set_verbose(true);
-    const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2, /*tol=*/Real(1e-8));
+    const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2,
+                                    /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
     const RuntimeDiagnosticsReport& report = fac.diagnostics_report();
     ASSERT_TRUE(std::isfinite(static_cast<double>(residual))) << "FAC residual finite";
     ASSERT_TRUE(report.source == "pops.numerics.elliptic.composite_fac_poisson")

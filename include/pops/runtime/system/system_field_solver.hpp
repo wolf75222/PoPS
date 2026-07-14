@@ -18,6 +18,7 @@
 #include <pops/runtime/context/wall_predicate.hpp>       // detail::wall_predicate
 #include <pops/runtime/config/generated_component_catalog.hpp>
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions (ADC-613 V-cycle knobs)
+#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <algorithm>
 #include <cstdlib>  // getenv
@@ -167,12 +168,11 @@ class SystemFieldSolver {
     if (phi_src_polar_)
       out.polar_source = *phi_src_polar_;
     for (auto& item : named_fields_) {
-      if (!item.second.ell) {
+      if (!item.second.backend) {
         out.named_unbuilt.push_back(item.first);
         continue;
       }
-      out.named_potentials.emplace(
-          item.first, std::visit([](auto& e) { return MultiFab(e.phi()); }, *item.second.ell));
+      out.named_potentials.emplace(item.first, item.second.backend->snapshot());
     }
     out.diagnostics = diagnostics_;
     return out;
@@ -191,12 +191,12 @@ class SystemFieldSolver {
     for (auto& item : named_fields_) {
       if (std::find(snapshot.named_unbuilt.begin(), snapshot.named_unbuilt.end(), item.first) !=
           snapshot.named_unbuilt.end()) {
-        item.second.ell.reset();
+        item.second.backend.reset();
         continue;
       }
       const auto saved = snapshot.named_potentials.find(item.first);
-      if (saved != snapshot.named_potentials.end() && item.second.ell)
-        std::visit([&](auto& e) { e.phi() = saved->second; }, *item.second.ell);
+      if (saved != snapshot.named_potentials.end() && item.second.backend)
+        item.second.backend->restore(saved->second);
     }
     diagnostics_ = snapshot.diagnostics;
   }
@@ -267,9 +267,9 @@ class SystemFieldSolver {
   //     centered gradient are written to (the model declares them as aux_field slots; a source then
   //     reads them like any other named aux). gx_comp / gy_comp < 0 => the field declares fewer than 3
   //     aux slots and the gradient is not derived (only phi is written).
-  //   - a DEDICATED elliptic solver instance (cartesian GeometricMG / FFT), built lazily the SAME way
-  //     as the default ell_ (ensure_named_elliptic mirrors ensure_elliptic's poisson operator), so the
-  //     native solver is REUSED, not reimplemented. The default Poisson path (ell_) is untouched.
+  //   - one DEDICATED backend instance, built lazily behind the same protocol for builtin and
+  //     external providers. Builtin backends reuse the native GeometricMG / FFT implementations;
+  //     the default Poisson path (ell_) is untouched.
   // The RHS = sum over blocks of s.named_poisson_rhs[name] (the per-field brick, ADC-428), assembled
   // exactly like assemble_poisson_rhs but reading the named closures.
   struct FieldSolveConfig {
@@ -298,6 +298,148 @@ class SystemFieldSolver {
     FieldNewtonOptions newton{};
     FieldNullspacePlan nullspace{};
     GeometricMgOptions mg_opts{};
+    std::string topology_provider_kind;
+    std::string topology_provenance;
+    std::string topology_digest;
+  };
+
+  class NamedFieldBackend {
+   public:
+    virtual ~NamedFieldBackend() = default;
+    virtual MultiFab& rhs() = 0;
+    virtual MultiFab& phi() = 0;
+    [[nodiscard]] virtual MultiFab snapshot() = 0;
+    virtual void restore(const MultiFab&) = 0;
+    virtual void configure_boundary(FieldSolveConfig&) = 0;
+    virtual void prepare_rhs(SystemFieldSolver&, MultiFab&, const FieldSolveConfig&) = 0;
+    virtual SolveReport solve(SystemFieldSolver&, const FieldSolveConfig&) = 0;
+    virtual void finalize(SystemFieldSolver&, const FieldSolveConfig&) = 0;
+    [[nodiscard]] virtual std::vector<runtime::field::FieldTopologyReportRow>
+    topology_report() const = 0;
+  };
+
+  class BuiltinNamedFieldBackend final : public NamedFieldBackend {
+   public:
+    using Solver = std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>;
+
+    template <class T, class... Args>
+    BuiltinNamedFieldBackend(
+        std::in_place_type_t<T> type, std::string topology_digest,
+        std::string topology_provenance, std::size_t material_points,
+        Args&&... args)
+        : solver_(type, std::forward<Args>(args)...),
+          topology_digest_(std::move(topology_digest)),
+          topology_provenance_(std::move(topology_provenance)),
+          material_points_(material_points) {}
+
+    MultiFab& rhs() override {
+      return std::visit([](auto& solver) -> MultiFab& { return solver.rhs(); }, solver_);
+    }
+    MultiFab& phi() override {
+      return std::visit([](auto& solver) -> MultiFab& { return solver.phi(); }, solver_);
+    }
+    [[nodiscard]] MultiFab snapshot() override {
+      return std::visit([](auto& solver) { return MultiFab(solver.phi()); }, solver_);
+    }
+    void restore(const MultiFab& value) override { phi() = value; }
+    void configure_boundary(FieldSolveConfig& plan) override {
+      if (!plan.has_boundary_kernel) return;
+      auto* geometric = std::get_if<GeometricMG>(&solver_);
+      if (geometric == nullptr)
+        throw std::runtime_error(
+            "System: prepared boundary providers require GeometricMG");
+      geometric->set_boundary_context(plan.boundary_context);
+    }
+    void prepare_rhs(
+        SystemFieldSolver& owner, MultiFab& value,
+        const FieldSolveConfig& plan) override {
+      require_field_nullspace_compatible(value, plan.nullspace);
+      if (owner.p_eps_ == Real(1)) return;
+      scale(value, Real(1) / owner.p_eps_);
+    }
+    SolveReport solve(SystemFieldSolver&, const FieldSolveConfig& plan) override {
+      return std::visit(
+          [&plan](auto& solver) {
+            using T = std::decay_t<decltype(solver)>;
+            if constexpr (std::is_same_v<T, GeometricMG>) {
+              if (plan.has_boundary_kernel && plan.boundary_kernel.observes_iteration)
+                solver.solve();
+              else
+                solver.solve(plan.mg_opts.rel_tol, plan.mg_opts.max_cycles,
+                             plan.mg_opts.abs_tol);
+              return solver.last_solve_report();
+            } else {
+              solver.solve();
+              SolveReport direct;
+              direct.mark_solved();
+              return direct;
+            }
+          },
+          solver_);
+    }
+    void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan) override {
+      apply_field_gauge(phi(), plan.nullspace);
+    }
+    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow>
+    topology_report() const override {
+      if (topology_digest_.empty() || topology_provenance_.empty()) return {};
+      return {{"builtin:domain", topology_digest_, topology_provenance_,
+               material_points_, 1}};
+    }
+    GeometricMG* geometric() { return std::get_if<GeometricMG>(&solver_); }
+
+   private:
+    Solver solver_;
+    std::string topology_digest_;
+    std::string topology_provenance_;
+    std::size_t material_points_ = 0;
+  };
+
+  class ExternalNamedFieldBackend final : public NamedFieldBackend {
+   public:
+    ExternalNamedFieldBackend(
+        const BoxArray& boxes, const DistributionMapping& mapping,
+        std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component)
+        : rhs_(boxes, mapping, 1, 1), phi_(boxes, mapping, 1, 1),
+          component_(std::move(component)) {
+      if (!component_)
+        throw std::invalid_argument("external named field backend has no component pair");
+    }
+
+    MultiFab& rhs() override { return rhs_; }
+    MultiFab& phi() override { return phi_; }
+    [[nodiscard]] MultiFab snapshot() override { return MultiFab(phi_); }
+    void restore(const MultiFab& value) override { phi_ = value; }
+    void configure_boundary(FieldSolveConfig& plan) override {
+      if (plan.has_boundary_kernel)
+        throw std::runtime_error(
+            "System: external FieldSolver v2 cannot consume generated dynamic boundary kernels");
+    }
+    void prepare_rhs(
+        SystemFieldSolver& owner, MultiFab& value,
+        const FieldSolveConfig& plan) override {
+      require_field_nullspace_compatible(value, plan.nullspace);
+      if (owner.p_eps_ != Real(1)) scale(value, Real(1) / owner.p_eps_);
+    }
+    SolveReport solve(SystemFieldSolver& owner, const FieldSolveConfig&) override {
+      return component_->solve(rhs_, phi_, owner.owner_->geom, owner.owner_->per_);
+    }
+    void finalize(SystemFieldSolver& owner, const FieldSolveConfig& plan) override {
+      apply_field_gauge(phi_, plan.nullspace);
+      if (owner.owner_->periodic_)
+        fill_boundary(phi_, owner.owner_->dom, owner.owner_->per_);
+      else
+        fill_ghosts(phi_, owner.owner_->dom, owner.named_field_bc(plan));
+    }
+    [[nodiscard]] std::vector<runtime::field::FieldTopologyReportRow>
+    topology_report() const override {
+      return component_->topology_report();
+    }
+
+   private:
+    MultiFab rhs_;
+    MultiFab phi_;
+    std::shared_ptr<runtime::field::PreparedFieldSolverComponent> component_;
   };
 
   struct NamedField {
@@ -312,12 +454,14 @@ class SystemFieldSolver {
     bool has_plan = false;
     FieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
-    std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell;
+    std::unique_ptr<NamedFieldBackend> backend;
   };
   std::map<std::string, NamedField> named_fields_;
   // Field plans are installed before compiled block loaders register their output components.
   // Keep the exact per-provider plan independently, then attach it when register_named_field runs.
   std::map<std::string, FieldSolveConfig> named_field_plans_;
+  std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
+      external_field_components_;
 
   std::vector<std::string> provider_slots() const {
     std::vector<std::string> result;
@@ -331,8 +475,61 @@ class SystemFieldSolver {
     auto found = named_fields_.find(slot);
     if (found == named_fields_.end())
       throw std::runtime_error("System: unknown qualified field provider slot '" + slot + "'");
-    ensure_named_elliptic(found->second);
-    return std::visit([](auto& solver) -> MultiFab& { return solver.phi(); }, *found->second.ell);
+    ensure_named_backend(found->second, slot);
+    return found->second.backend->phi();
+  }
+
+  void set_topology_authority(const std::string& slot, const std::string& provider_kind,
+                              const std::string& provenance, const std::string& digest) {
+    if (provider_kind.empty() || provenance.empty() || digest.empty())
+      throw std::invalid_argument("field topology authority is incomplete");
+    auto found = named_field_plans_.find(slot);
+    if (found == named_field_plans_.end())
+      throw std::runtime_error("field topology authority names an unknown provider slot");
+    found->second.topology_provider_kind = provider_kind;
+    found->second.topology_provenance = provenance;
+    found->second.topology_digest = digest;
+    auto registered = named_fields_.find(slot);
+    if (registered != named_fields_.end()) {
+      registered->second.plan = found->second;
+      registered->second.backend.reset();
+    }
+  }
+
+  void install_external_solver(
+      const std::string& slot, runtime::field::PreparedFieldSolverSpec spec,
+      std::shared_ptr<component::LoadedComponent> topology,
+      std::shared_ptr<component::LoadedComponent> solver) {
+    auto found = named_field_plans_.find(slot);
+    if (found == named_field_plans_.end() || found->second.solver != "external_component_v1")
+      throw std::runtime_error(
+          "external field solver requires its exact resolved provider plan first");
+    if (spec.provider_slot != slot)
+      throw std::invalid_argument("external field solver provider slot mismatch");
+    external_field_components_[slot] =
+        std::make_shared<runtime::field::PreparedFieldSolverComponent>(
+            std::move(spec), std::move(topology), std::move(solver));
+    found->second.topology_provider_kind = "external_component_v1";
+    found->second.topology_provenance = "pending-component-materialization";
+    found->second.topology_digest.clear();
+    auto registered = named_fields_.find(slot);
+    if (registered != named_fields_.end()) {
+      registered->second.plan = found->second;
+      registered->second.backend.reset();
+    }
+  }
+
+  std::vector<runtime::field::FieldTopologyReportRow> topology_report(
+      const std::string& slot) const {
+    auto field = named_fields_.find(slot);
+    if (field != named_fields_.end() && field->second.backend)
+      return field->second.backend->topology_report();
+    auto external = external_field_components_.find(slot);
+    if (external != external_field_components_.end())
+      return external->second->topology_report();
+    if (named_field_plans_.find(slot) == named_field_plans_.end())
+      throw std::runtime_error("unknown qualified field provider slot");
+    return {};
   }
 
   void prepare_boundary_dependencies(NamedField& field, int stage_block,
@@ -940,14 +1137,7 @@ class SystemFieldSolver {
     // CONSTANT permittivity eps != 1: lap phi = f/eps (1/eps scaling of the rhs), like the
     // cartesian. (variable/aniso eps(x) is refused by ensure_elliptic_polar.)
     if (p_eps_ != Real(1)) {
-      const Real inv = Real(1) / p_eps_;
-      for (int li = 0; li < rhs.local_size(); ++li) {
-        Array4 r = rhs.fab(li).array();
-        const Box2D v = rhs.box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            r(i, j, 0) *= inv;
-      }
+      scale(rhs, Real(1) / p_eps_);
     }
     pell_->solve();
     device_fence();
@@ -1000,14 +1190,7 @@ class SystemFieldSolver {
       // operator carries eps directly (apply_epsilon_field / apply_epsilon_anisotropic_field), the
       // rhs stays f as is.
       if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
-        const Real inv = Real(1) / p_eps_;
-        for (int li = 0; li < rhs.local_size(); ++li) {
-          Array4 r = rhs.fab(li).array();
-          const Box2D v = rhs.box(li);
-          for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-            for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-              r(i, j, 0) *= inv;
-        }
+        scale(rhs, Real(1) / p_eps_);
       }
       trace_mark("solve_fields: before ell_solve");
       SolveReport report = ell_solve();
@@ -1078,14 +1261,7 @@ class SystemFieldSolver {
     MultiFab& rhs = pell_->rhs();
     assemble_poisson_rhs_from_blocks(rhs, U_stages);
     if (p_eps_ != Real(1)) {
-      const Real inv = Real(1) / p_eps_;
-      for (int li = 0; li < rhs.local_size(); ++li) {
-        Array4 r = rhs.fab(li).array();
-        const Box2D v = rhs.box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            r(i, j, 0) *= inv;
-      }
+      scale(rhs, Real(1) / p_eps_);
     }
     pell_->solve();
     device_fence();
@@ -1123,14 +1299,7 @@ class SystemFieldSolver {
       MultiFab& rhs = ell_rhs();
       assemble_poisson_rhs_from_blocks(rhs, U_stages);
       if (!has_eps_field_ && !has_eps_xy_field_ && p_eps_ != Real(1)) {
-        const Real inv = Real(1) / p_eps_;
-        for (int li = 0; li < rhs.local_size(); ++li) {
-          Array4 r = rhs.fab(li).array();
-          const Box2D v = rhs.box(li);
-          for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-            for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-              r(i, j, 0) *= inv;
-        }
+        scale(rhs, Real(1) / p_eps_);
       }
       report = ell_solve();
       if (!report.solved_value_available()) {
@@ -1168,9 +1337,17 @@ class SystemFieldSolver {
   /// The variable / anisotropic permittivity and reaction coefficients of the DEFAULT Poisson are NOT
   /// carried onto a named field (a named field is a plain Laplacian; its own coefficients are a future
   /// extension). Built lazily; no-op if already built.
-  void ensure_named_elliptic(NamedField& nf) {
-    if (nf.ell)
+  void ensure_named_backend(NamedField& nf, const std::string& slot) {
+    if (nf.backend) return;
+    if (nf.plan.solver == "external_component_v1") {
+      const auto by_slot = external_field_components_.find(slot);
+      if (by_slot == external_field_components_.end())
+        throw std::runtime_error(
+            "System: external field provider has no installed topology+solver component pair");
+      nf.backend = std::make_unique<ExternalNamedFieldBackend>(
+          owner_->ba, owner_->dm, by_slot->second);
       return;
+    }
     const std::string& solver = nf.has_plan ? nf.plan.solver : p_solver;
     const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
     const BCRec pbc = nf.has_plan ? named_field_bc(nf.plan) : poisson_bc();
@@ -1187,27 +1364,36 @@ class SystemFieldSolver {
                                  "' incompatible with a wall -> 'geometric_mg'");
       const bool spectral = (solver == "fft_spectral");
       if (n_ranks() > 1)
-        nf.ell.emplace(std::in_place_type<RemappedFFTSolver>, owner_->geom, owner_->ba, pbc, active,
-                       spectral);
+        nf.backend = std::make_unique<BuiltinNamedFieldBackend>(
+            std::in_place_type<RemappedFFTSolver>, nf.plan.topology_digest,
+            nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
+            owner_->geom, owner_->ba, pbc, active, spectral);
       else
-        nf.ell.emplace(std::in_place_type<PoissonFFTSolver>, owner_->geom, owner_->ba, pbc, active,
-                       spectral);
+        nf.backend = std::make_unique<BuiltinNamedFieldBackend>(
+            std::in_place_type<PoissonFFTSolver>, nf.plan.topology_digest,
+            nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
+            owner_->geom, owner_->ba, pbc, active, spectral);
     } else if (solver == "geometric_mg") {
-      nf.ell.emplace(std::in_place_type<GeometricMG>, owner_->geom, owner_->ba, pbc,
-                     std::move(active), /*replicated=*/false, mg.min_coarse, mg.nu1,
-                     mg.nu2, mg.nbottom, /*cut_cell=*/false,
-                     /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
-                     mg.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
-      std::get<GeometricMG>(*nf.ell).set_abs_tol(mg.abs_tol);
+      auto backend = std::make_unique<BuiltinNamedFieldBackend>(
+          std::in_place_type<GeometricMG>, nf.plan.topology_digest,
+          nf.plan.topology_provenance, static_cast<std::size_t>(owner_->dom.num_cells()),
+          owner_->geom, owner_->ba, pbc, std::move(active), /*replicated=*/false,
+          mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom, /*cut_cell=*/false,
+          /*levelset=*/std::function<Real(Real, Real)>{}, kEbCutFractionFloor,
+          mg.coarse_threshold);  // ADC-644: coarse_threshold (0 = disabled).
+      auto* geometric = backend->geometric();
+      if (geometric == nullptr)
+        throw std::logic_error("System: builtin GeometricMG backend lost its solver type");
+      geometric->set_abs_tol(mg.abs_tol);
+      if (nf.plan.has_boundary_kernel) {
+        geometric->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
+        if (nf.plan.has_newton)
+          geometric->set_field_newton_options(nf.plan.newton);
+      }
+      nf.backend = std::move(backend);
     } else {
       throw std::runtime_error("System: named elliptic field solver '" + solver +
                                "' unsupported (catalog: " + kFieldSolverRouteTokensCsv + ")");
-    }
-    if (nf.plan.has_boundary_kernel) {
-      auto& geometric = std::get<GeometricMG>(*nf.ell);
-      geometric.set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
-      if (nf.plan.has_newton)
-        geometric.set_field_newton_options(nf.plan.newton);
     }
   }
 
@@ -1240,7 +1426,7 @@ class SystemFieldSolver {
 
   /// Solves named field @p field's SECOND elliptic problem from block @p block_idx's stage state
   /// @p U_stage and writes phi (+ centered grad) into the field's OWN aux components (ADC-428):
-  /// assemble f = Sum_s named_poisson_rhs_s[field] -> ell.solve() (the dedicated native solver) ->
+  /// assemble f = Sum_s named_poisson_rhs_s[field] -> backend.solve() ->
   /// aux[phi_comp] = phi, aux[gx_comp]/aux[gy_comp] = centered grad. The SHARED phi/grad (components
   /// 0..2) and the default Poisson (ell_) are NOT touched. The named aux components are then ghost-
   /// filled (the shared aux fill + the per-field halo override). CARTESIAN only (the polar named path is
@@ -1265,57 +1451,20 @@ class SystemFieldSolver {
           "' aux component out of the channel width (add the block that declares "
           "its aux fields before solving)");
     prepare_boundary_dependencies(nf, block_idx, &U_stage);
-    ensure_named_elliptic(nf);
-    if (nf.plan.has_boundary_kernel) {
-      auto* geometric = std::get_if<GeometricMG>(&*nf.ell);
-      if (geometric == nullptr)
-        throw std::runtime_error("System: prepared boundary providers require GeometricMG");
-      geometric->set_boundary_context(nf.plan.boundary_context);
-    }
-    MultiFab& rhs = std::visit([](auto& e) -> MultiFab& { return e.rhs(); }, *nf.ell);
-    MultiFab& phi_mf = std::visit([](auto& e) -> MultiFab& { return e.phi(); }, *nf.ell);
+    ensure_named_backend(nf, field);
+    nf.backend->configure_boundary(nf.plan);
+    MultiFab& rhs = nf.backend->rhs();
+    MultiFab& phi_mf = nf.backend->phi();
     MultiFab published_phi(phi_mf.box_array(), phi_mf.dmap(), phi_mf.ncomp(), phi_mf.n_grow());
     lincomb(published_phi, Real(1), phi_mf, Real(0), phi_mf);
     auto restore_published = [&]() {
       lincomb(phi_mf, Real(1), published_phi, Real(0), published_phi);
     };
     assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
-    require_field_nullspace_compatible(rhs, nf.plan.nullspace);
-    // CONSTANT permittivity eps != 1: lap phi = f/eps (1/eps scaling), like the default Poisson. The
-    // variable / anisotropic eps(x) and reaction kappa of the DEFAULT Poisson are NOT applied to a
-    // named field (plain Laplacian operator; see ensure_named_elliptic).
-    if (p_eps_ != Real(1)) {
-      const Real inv = Real(1) / p_eps_;
-      for (int li = 0; li < rhs.local_size(); ++li) {
-        Array4 r = rhs.fab(li).array();
-        const Box2D v = rhs.box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            r(i, j, 0) *= inv;
-      }
-    }
-    // ADC-613: same resolved rel_tol / max_cycles / abs_tol as the default Poisson for GeometricMG;
-    // FFT keeps the concept-level no-argument solve(). Bit-identical under the default knobs.
-    const GeometricMgOptions& mg = nf.has_plan ? nf.plan.mg_opts : p_mg_opts_;
+    nf.backend->prepare_rhs(*this, rhs, nf.plan);
     SolveReport report;
     try {
-      report = std::visit(
-          [&mg, &nf](auto& e) {
-            using T = std::decay_t<decltype(e)>;
-            if constexpr (std::is_same_v<T, GeometricMG>) {
-              if (nf.plan.has_boundary_kernel && nf.plan.boundary_kernel.observes_iteration)
-                e.solve();
-              else
-                e.solve(mg.rel_tol, mg.max_cycles, mg.abs_tol);
-              return e.last_solve_report();
-            } else {
-              e.solve();
-              SolveReport direct;
-              direct.mark_solved();
-              return direct;
-            }
-          },
-          *nf.ell);
+      report = nf.backend->solve(*this, nf.plan);
       if (!report.solved_value_available()) {
         restore_published();
         return report;
@@ -1325,7 +1474,7 @@ class SystemFieldSolver {
       throw;
     }
     device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as ell_)
-    apply_field_gauge(phi_mf, nf.plan.nullspace);
+    nf.backend->finalize(*this, nf.plan);
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;

@@ -1,0 +1,50 @@
+schema_version = 1
+
+[harness]
+cmake_source = "benchmarks"
+target = "pops_benchmark"
+executable = "bin/pops_benchmark"
+output_schema = "pops.benchmark.v1"
+
+[protocol]
+clock = "steady_clock"
+device_fence = "before_and_after"
+mpi_barrier = "before_and_after"
+rank_aggregation = "max"
+numerical_validation = "outside_timed_region"
+absolute_time_thresholds = false
+default_warmups = 2
+default_repetitions = 7
+
+[[case]]
+id = "arith_halo"
+implementation = "real PoPS MultiFab saxpy/lincomb followed by periodic fill_boundary"
+comparison = "paired ABBA: saxpy_then_fill_boundary over lincomb_then_fill_boundary"
+records = ["saxpy_then_fill_boundary", "lincomb_then_fill_boundary", "saxpy_over_lincomb"]
+
+[case.defaults]
+n = 1024
+tile = 128
+components = 4
+ghost_width = 1
+
+[[case]]
+id = "tensor_krylov"
+implementation = "real PoPS TensorKrylovSolver with GeometricMG preconditioning"
+comparison = "none"
+records = ["bicgstab_geometric_mg"]
+
+[case.defaults]
+n = 128
+tile = 64
+max_iters = 300
+rel_tol = 1e-9
+abs_tol = 0.0
+
+[profiles.romeo_armgpu]
+account = "r250127"
+constraint = "armgpu"
+default_work_root = "/scratch_p/$USER/$SLURM_JOB_ID"
+default_results_root = "$HOME/pops-benchmark-results"
+job_script = "benchmarks/romeo/job_armgpu.sbatch"
+submit_script = "benchmarks/romeo/submit_armgpu.sh"

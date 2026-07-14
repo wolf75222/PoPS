@@ -68,8 +68,12 @@ def flow_amr_layout(
         )
 
 
-def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
+def flow_bootstrap_tagging(
+    sim: Any, bootstrap: Any, params: Any, *, clock_identity: str,
+) -> None:
     """Compile one authenticated tagging graph to the native data-only VM."""
+    if not isinstance(clock_identity, str) or not clock_identity:
+        raise ValueError("pops.bind: AMR tagging requires one exact clock identity")
     data = bootstrap.tagging.runtime_tagging_data(params)
     if type(data) is not dict or data.get("schema_version") != 1 \
             or data.get("graph_type") != "amr_tagging_runtime":
@@ -89,7 +93,9 @@ def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
             raise ValueError("pops.bind: duplicate tagging lowering registration")
         registrations[node_type] = lowering.get("qualified_id")
 
-    leaves: list[tuple[str, str, int, float]] = []
+    leaves: list[tuple[str, str, int, float, int]] = []
+    stencils: list[dict[str, Any]] = []
+    stencil_indices: dict[str, int] = {}
 
     def compile_node(node: Any) -> tuple[list[int], list[int]]:
         if type(node) is not dict or node.get("schema_version") != 1:
@@ -110,7 +116,26 @@ def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
             if not isinstance(variable, str) or not variable \
                     or isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
                 raise TypeError("pops.bind: malformed native tag leaf")
-            leaves.append((block["local_id"], variable, leaf_op, float(threshold)))
+            stencil_index = -1
+            if node_type in {"gradient_above", "gradient_below"}:
+                context = node.get("discrete_context")
+                lowering_data = context.get("stencil_lowering") \
+                    if isinstance(context, dict) else None
+                from pops.numerics.indicator_stencils import DiscreteGradientStencil
+
+                lowering = DiscreteGradientStencil.from_data(lowering_data)
+                canonical = lowering.to_data()
+                identity = lowering.identity
+                stencil_index = stencil_indices.get(identity, -1)
+                if stencil_index < 0:
+                    stencil_index = len(stencils)
+                    stencil_indices[identity] = stencil_index
+                    stencils.append(canonical)
+                elif stencils[stencil_index] != canonical:
+                    raise ValueError(
+                        "pops.bind: AMR stencil identity collision changed coefficients")
+            leaves.append((block["local_id"], variable, leaf_op,
+                           float(threshold), stencil_index))
             return [leaf_op], [len(leaves) - 1]
 
         logical_op = _TAG_LOGICAL_OPS.get(node_type)
@@ -143,11 +168,38 @@ def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
     min_cycles = hysteresis.get("min_cycles")
     if isinstance(min_cycles, bool) or not isinstance(min_cycles, int) or min_cycles < 0:
         raise ValueError("pops.bind: AMR hysteresis min_cycles must be an integer >= 0")
+    from pops.identity import make_identity
+    from pops.identity.semantic import semantic_value
+
+    program_payload = {
+        "schema_version": 1,
+        "program_type": "bound_amr_tagging_program",
+        "resolved_graph_identity": bootstrap.tagging.qualified_id,
+        "stencils": stencils,
+        "leaves": [
+            {"block": block, "variable": variable, "opcode": opcode,
+             "threshold": threshold, "stencil_index": stencil_index}
+            for block, variable, opcode, threshold, stencil_index in leaves
+        ],
+        "refine_opcodes": refine_ops,
+        "refine_arguments": refine_args,
+        "coarsen_opcodes": coarsen_ops,
+        "coarsen_arguments": coarsen_args,
+        "minimum_cycles": min_cycles,
+        "equality_policy": str(hysteresis.get("equality")),
+        "conflict_policy": str(data.get("conflict_policy")),
+    }
+    program_identity = make_identity(
+        "bound-amr-tagging-program",
+        semantic_value(program_payload, where="bound AMR tagging program"),
+    ).token
     sim._set_bootstrap_tagging(
         [row[0] for row in leaves],
         [row[1] for row in leaves],
         [row[2] for row in leaves],
         [row[3] for row in leaves],
+        [row[4] for row in leaves],
+        stencils,
         refine_ops,
         refine_args,
         coarsen_ops,
@@ -155,20 +207,17 @@ def flow_bootstrap_tagging(sim: Any, bootstrap: Any, params: Any) -> None:
         min_cycles,
         str(hysteresis.get("equality")),
         str(data.get("conflict_policy")),
-        bootstrap.tagging.qualified_id,
+        clock_identity,
+        program_identity,
     )
 
 
-# Stable native VM ABI. New node implementations register one opcode here; the graph compiler never
-# dispatches on Python classes and the native loop never calls Python.
-_TAG_LEAF_OPS = {
-    "above": 1,
-    "below": 2,
-    "magnitude_above": 3,
-    "gradient_above": 4,
-    "gradient_below": 5,
-}
-_TAG_LOGICAL_OPS = {"any_of": 16, "all_of": 17, "not": 18}
+# The opcode table is generated from the versioned component catalog and shared with the C ABI.
+# The compiler dispatches only through this data; no Python class-name switch reaches the hot loop.
+from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
+
+_TAG_LEAF_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["leaf_opcodes"])
+_TAG_LOGICAL_OPS = dict(NATIVE_TAGGING_PROGRAM_ABI["logical_opcodes"])
 
 
 def _apply_refine_criterion(

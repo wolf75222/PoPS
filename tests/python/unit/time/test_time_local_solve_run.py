@@ -21,6 +21,7 @@ ProgramContext + for_each_cell + the existing
     once _pops is rebuilt; skips if _pops lacks install_program, numpy/_pops is absent, no compiler/Kokkos
     is visible, or the .so compile fails -- never faking the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -112,7 +113,7 @@ def lorentz_program(name="lorentz_step", model=None):
 # ---- (A) codegen: pure Python, always runs ----
 print("== (A) typed local-linear solve codegen ==")
 m = lorentz_model()
-src = lorentz_program(model=m).emit_cpp_program(model=m)
+src = emit_cpp_program(lorentz_program(model=m), model=m)
 for frag in ("pops::for_each_cell(", "pops::detail::mat_inverse<3>(", "pops::Real M_[3][3];",
              "pops::Real Minv_[3][3];", "auxA(i, j, 3)", "ctx.aux()"):
     chk(frag in src, "generated local-linear solve kernel has %r" % frag)
@@ -120,7 +121,7 @@ chk("a_ * (B_z)" in src and "a_ * ((-B_z))" in src,
     "the Lorentz operator M = I - dt*L reads +/- B_z off the aux")
 
 # Phase-4b ops are refused without the physical model (cannot read the coefficients).
-chk(raises(NotImplementedError, lambda: lorentz_program().emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: emit_cpp_program(lorentz_program())),
     "local-linear solve refused without a model")
 
 # The dense kernel is specialized from the manifest, with no eight-component dispatch cap.
@@ -140,7 +141,7 @@ Wb = Pbig.solve(
     solver=DenseLU(), name="Wb",
 ).consume(action=adctime.FailRun())
 Pbig.commit(endpoint_big, Wb)
-big_src = Pbig.emit_cpp_program(model=big)
+big_src = emit_cpp_program(Pbig, model=big)
 chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
     "n_cons=9 emits exact manifest-sized dense storage")
 

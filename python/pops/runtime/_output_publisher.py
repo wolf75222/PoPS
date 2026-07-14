@@ -9,7 +9,7 @@ from pops.identity import make_identity
 from pops.output._consumer_contracts import ParallelMode
 from pops.output.data import OutputRequest, OutputSnapshot
 from pops.output.provider import consumer_format_data
-from pops.output.writers import PreparedOutputFile
+from pops.output._writers.common import PreparedOutputFile
 
 from ._consumer import (
     AcceptedSideEffect,

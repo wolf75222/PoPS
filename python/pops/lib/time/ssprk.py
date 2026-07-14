@@ -4,7 +4,7 @@ from __future__ import annotations
 from fractions import Fraction
 from typing import Any
 
-from pops.time.method_tableau import RungeKuttaTableau
+from pops.time._methods.tableau import RungeKuttaTableau
 
 from ._factory import program_factory, resolve_solve_action
 from .rk import SSPRK2_TABLEAU, _build_explicit_runge_kutta

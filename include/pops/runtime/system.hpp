@@ -14,6 +14,7 @@
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
 #include <pops/runtime/numerical_defaults.hpp>
+#include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <array>
 #include <cstddef>
@@ -341,6 +342,18 @@ class System {
                              double rel_tol, int max_cycles, int min_coarse,
                              int pre_smooth, int post_smooth, int bottom_sweeps,
                              int coarse_threshold);
+  /// Couple the exact generated FieldTopology and FieldSolver component tables to an already
+  /// authenticated field plan.  Both components stay owned until the System is destroyed.
+  POPS_EXPORT void install_field_solver_components(
+      const std::string& provider_slot,
+      runtime::field::PreparedFieldSolverSpec spec,
+      std::shared_ptr<component::LoadedComponent> topology,
+      std::shared_ptr<component::LoadedComponent> solver);
+  POPS_EXPORT void set_field_topology_authority(
+      const std::string& provider_slot, const std::string& provider_kind,
+      const std::string& provenance, const std::string& topology_digest);
+  POPS_EXPORT std::vector<runtime::field::FieldTopologyReportRow>
+  field_topology_report(const std::string& provider_slot) const;
 
   /// Install the exact xlo/xhi/ylo/yhi field boundary residuals. ``kind`` is
   /// periodic/dirichlet/neumann/mixed; mixed represents alpha*u + beta*du/dn = value.
@@ -1020,7 +1033,7 @@ class System {
   /// Apply block @p b's post-step positivity projection to @p u in place (ADC-177): U <- project(U,
   /// aux) over the valid cells, the SAME closure the native per-step path runs (s.project). A compiled
   /// time Program reaches it through ProgramContext::apply_projection (spec op 21). REUSES the block's
-  /// own projection (set at add_block time); a block without a projection is a NO-OP (cost-free).
+  /// own projection (set at add_block time); a block without that capability is rejected.
   /// POPS_EXPORT so a generated problem.so resolves it across the dlopen boundary.
   POPS_EXPORT void block_project(int b, MultiFab& u);
   /// @name Compiled-Program scalar diagnostics (epic ADC-399 / ADC-414, spec op 23)

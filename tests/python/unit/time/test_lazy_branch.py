@@ -1,10 +1,10 @@
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 import pytest
 
-from pops.time import Program, TimePoint
-from pops.time.graph import Branch, Region
-from pops.time.program_region_validation import validate_program_regions
+from pops.time import Branch, Program, Region, TimePoint
+from pops.time._program.region_validation import validate_program_regions
 from typed_program_support import typed_state
 
 
@@ -116,7 +116,7 @@ def test_branch_codegen_places_each_arm_inside_if_else_only():
     endpoint = typed_state(program, "fluid", state_name="U").next
     program.commit(endpoint, program.value("next", selected, at=endpoint.point))
 
-    source = program.emit_cpp_program()
+    source = emit_cpp_program(program)
     branch_start = source.index("if (")
     else_start = source.index("} else {", branch_start)
     branch_end = source.index("}", else_start + len("} else {"))

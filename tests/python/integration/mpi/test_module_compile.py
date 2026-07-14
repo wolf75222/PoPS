@@ -6,6 +6,7 @@ backend, not a second codegen), and ``compile_problem(model=module, time=P)`` ac
 validates the translation + the emitted .so source (codegen-text); the full Kokkos/AOT compile+run
 is on ROMEO. Pure Python; skips if pops is not importable.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 try:
@@ -90,7 +91,7 @@ def test_pure_module_program_emits():
     # Module authority; field-solving codegen is covered only through a resolved Case field plan.
     P = libtime.ForwardEuler(
         block[state], rate=_op(mod, "transport_rhs"))
-    src = P.emit_cpp_program(model=mod.to_dsl())
+    src = emit_cpp_program(P, model=mod.to_dsl())
     assert "pops_install_program" in src
     # the GeneratedModule descriptor reflects the pure Module's operators
     assert "pops_module_operator_count() { return" in src

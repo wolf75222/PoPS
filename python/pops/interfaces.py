@@ -130,11 +130,12 @@ class ComponentInterface:
 
         variants = tuple(component.component_manifest.target["variants"])
         supported = [dict(row) for row in variants
-                     if row["scalar"] == "float64" and row["device"] == "cpu"]
+                     if row["dimension"] == 2
+                     and row["scalar"] == "float64" and row["device"] == "cpu"]
         if len(supported) != 1:
             raise ComponentPackageError(
                 "target", "component.target",
-                "native component ABI v1 requires one exact float64 CPU target variant")
+                "native component ABI v1 requires one exact 2D float64 CPU target variant")
         return supported[0]
 
 
@@ -165,7 +166,6 @@ FieldBoundaryClosure = resolve("field_boundary_closure")
 Tagger = resolve("tagger")
 Clustering = resolve("clustering")
 Transfer = resolve("transfer")
-Reflux = resolve("reflux")
 FieldSolver = resolve("field_solver")
 Writer = resolve("writer")
 FieldTopology = resolve("field_topology")
@@ -173,6 +173,6 @@ FieldTopology = resolve("field_topology")
 
 __all__ = [
     "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
-    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
+    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer",
     "FieldSolver", "Writer", "FieldTopology",
 ]

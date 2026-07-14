@@ -22,6 +22,7 @@ uses -- iterating to ``max_c |r_c| < tol`` or the budget. No heap / std::functio
 offline Newton taking > 1 iteration and its residual dropping by many orders. Skips (exit 0) without
     numpy / _pops / a compiler / a visible Kokkos, or if the .so compile fails -- never faking the engine.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
@@ -169,7 +170,7 @@ def section_a(t):
 
     # --- the codegen lowers a per-cell Newton kernel ---
     m = reaction_model("react_cg", 2.0)
-    src = reaction_program(t, "react_cg", model=m).emit_cpp_program(model=m)
+    src = emit_cpp_program(reaction_program(t, "react_cg", model=m), model=m)
     for frag in ("auto residual_eval = [&]", "pops::detail::mat_inverse<1>(",
                  "for (int it_ = 0;", "J_[1][1]", "std::fmax(rmax_, std::fabs(r_",
                  "if (rmax_ < static_cast<pops::Real>(1e-12)) break;",
@@ -184,7 +185,7 @@ def section_a(t):
         chk(forbidden not in src, "the Newton kernel has no %r (device-clean)" % forbidden)
 
     # --- refused without a model (the residual's named source needs the model coefficients) ---
-    chk(raises(NotImplementedError, lambda: reaction_program(t, "react_nm").emit_cpp_program()),
+    chk(raises(NotImplementedError, lambda: emit_cpp_program(reaction_program(t, "react_nm"))),
         "the Newton codegen is refused without a model")
 
     # --- n_cons is manifest-sized (the FD Jacobian is an exact N x N stack inverse) ---
@@ -203,7 +204,7 @@ def section_a(t):
                 Pbig.solve(
                     LocalResidual(big_resid, guess), name="W", solver=LocalNewton()
                 ).consume(action=t.FailRun()))
-    big_src = Pbig.emit_cpp_program(model=big)
+    big_src = emit_cpp_program(Pbig, model=big)
     chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real J_[9][9];" in big_src,
         "n_cons=9 emits exact manifest-sized Newton storage")
 

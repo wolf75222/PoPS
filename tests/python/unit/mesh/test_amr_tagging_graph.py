@@ -25,6 +25,7 @@ from pops.mesh._amr import (
     TaggingState,
 )
 from pops.model import Handle, OwnerKind, OwnerPath, ParamHandle
+from pops.numerics.indicator_stencils import SECOND_ORDER_AXIS, gradient_stencil
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,7 @@ def _context(stencil: str = "centered_2"):
         layout=Handle("adaptive", kind="layout", owner=owner),
         discretization=Handle("fv", kind="discretization", owner=owner),
         stencil=Handle(stencil, kind="stencil", owner=owner),
+        lowering=gradient_stencil(SECOND_ORDER_AXIS, dimension=2),
     )
 
 
@@ -150,6 +152,15 @@ def test_gradient_requires_complete_discrete_indicator_context():
             layout=Handle("layout", kind="layout", owner=OwnerPath.case("main")),
             discretization=Handle("fv", kind="operator", owner=OwnerPath.case("main")),
             stencil=Handle("s", kind="stencil", owner=OwnerPath.case("main")),
+            lowering=gradient_stencil(SECOND_ORDER_AXIS, dimension=2),
+        )
+    with pytest.raises(TypeError, match="DiscreteGradientStencil"):
+        DiscreteIndicatorContext(
+            layout=Handle("layout", kind="layout", owner=OwnerPath.case("main")),
+            discretization=Handle(
+                "fv", kind="discretization", owner=OwnerPath.case("main")),
+            stencil=Handle("s", kind="stencil", owner=OwnerPath.case("main")),
+            lowering={"scheme": "centered_2"},
         )
 
 

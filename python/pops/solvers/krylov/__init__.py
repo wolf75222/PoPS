@@ -102,7 +102,7 @@ class _KrylovDescriptor(BrickDescriptor):
     """Executable Krylov descriptor; all algorithm controls travel with this object."""
 
     def prepare_program_solve(self) -> _PreparedKrylov:
-        from pops.time.program_solve import _lower_preconditioner
+        from pops.time._program.solve import _lower_preconditioner
 
         preconditioner, preconditioner_options = _lower_preconditioner(
             self.options.get("preconditioner"))

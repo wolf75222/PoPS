@@ -39,8 +39,10 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kMGDefaultBottomSweeps                | 50      | public_knob      | GeometricMG(bottom_sweeps=) |
 | kFACDefaultMaxIters                   | 30      | public_knob      | Program solver max_iter= on CompositeTensorFAC |
 | kFACDefaultFineSweeps                 | 400     | public_knob      | CompositeTensorFAC(fine_sweeps=) |
-| kFACDefaultTol                        | 1e-9    | public_knob      | Program solver rel_tol= on CompositeTensorFAC |
-| kFACInitialCoarseRelTol               | 1e-12   | public_knob      | CompositeTensorFAC(coarse_rel_tol=) |
+| kFACDefaultRelTol                     | 1e-9    | public_knob      | Composite FAC outer relative residual tolerance (`rel_tol`) |
+| kFACDefaultAbsTol                     | 0       | public_knob      | Composite FAC outer absolute residual floor (`abs_tol`) |
+| kFACInitialCoarseRelTol               | 1e-12   | public_knob      | CompositeTensorFAC(coarse_rel_tol=), distinct internal MG relative tolerance |
+| kFACInitialCoarseAbsTol               | 0       | public_knob      | CompositeTensorFAC(coarse_abs_tol=), distinct internal MG absolute floor |
 | kFACInitialCoarseMaxCycles            | 100     | public_knob      | CompositeTensorFAC(coarse_cycles=) |
 | kFFTDefaultSpectral                   | false   | public_knob      | FFT(spectral=) |
 | kFFTZeroMeanGauge                     | true    | internal_default | fixed gauge |

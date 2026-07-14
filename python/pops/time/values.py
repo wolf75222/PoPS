@@ -16,6 +16,7 @@ from pops._ir.symbolic import ImmutableSymbolic
 from pops.provenance import ProvenanceRecord
 from pops.time.points import point_clock
 from pops.time.value_support import (
+    _ProgramValueBase,
     authoring_source_location as _authoring_source_location,  # noqa: F401
     resolve_temporal_handle as _resolve_handle,
 )
@@ -254,7 +255,7 @@ class _Operator(ImmutableSymbolic):
     __rmul__ = __mul__
 
 
-class ProgramValue(ImmutableSymbolic):
+class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
     """A typed SSA node in a Program IR. Field-like values (State, RHS, scalar_field) support affine
     arithmetic. A ``scalar_field`` is a single-component grid field (the unknown / residual of a
     matrix-free linear solve), DISTINCT from the n_cons conservative ``state`` even though both lower
@@ -484,4 +485,6 @@ class ProgramValue(ImmutableSymbolic):
 
     def __repr__(self) -> str:
         return "<%s %s #%d>" % (self.vtype, self.name, self.id)
-from pops.time.value_collections import StageStateSet, _CoupledResult  # noqa: E402,F401
+
+
+__all__ = ["ProgramValue"]

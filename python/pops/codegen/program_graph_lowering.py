@@ -9,7 +9,7 @@ def emit_program_graph(
     model_graph: Any = None, target: str = "system", field_plans: Any = None,
 ) -> str:
     """Lower exactly ``graph`` through its frozen, graph-equivalent Program adapter."""
-    from pops.time.graph import ProgramGraph
+    from pops.time import ProgramGraph
 
     if type(graph) is not ProgramGraph:
         raise TypeError("emit_program_graph requires an exact immutable ProgramGraph")

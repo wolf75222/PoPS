@@ -89,12 +89,18 @@ struct TagGradPhiAbove {
 static std::vector<double> blob(int n, double cx, double cy, double amp, double base,
                                 double width) {
   std::vector<double> rho(static_cast<std::size_t>(n) * n, base);
+  double perturbation_sum = 0.0;
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
       const double x = (i + 0.5) / n, y = (j + 0.5) / n;
       const double r2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
-      rho[static_cast<std::size_t>(j) * n + i] = base + amp * std::exp(-r2 / (width * width));
+      const double perturbation = amp * std::exp(-r2 / (width * width));
+      rho[static_cast<std::size_t>(j) * n + i] += perturbation;
+      perturbation_sum += perturbation;
     }
+  const double perturbation_mean = perturbation_sum / static_cast<double>(n * n);
+  for (double& value : rho)
+    value -= perturbation_mean;
   return rho;
 }
 
@@ -214,6 +220,7 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
 }
 
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
+  SCOPED_TRACE("three-level bootstrap/regrid/rollback");
   const int N = 32;
   AmrRuntime rt =
       make_three_level_two_block(N, blob(N, 0.32, 0.50, 0.8, 1.0, 0.08));
@@ -226,6 +233,7 @@ static void check_three_level_bootstrap_step_regrid_and_rollback() {
   EXPECT_TRUE(same_box_list(rt.levels(0)[2].U.box_array().boxes(),
                             rt.levels(1)[2].U.box_array().boxes()));
   {
+    SCOPED_TRACE("three-level initial parent/child injection");
     const MultiFab& parent = rt.levels(0)[1].U;
     const MultiFab& child = rt.levels(0)[2].U;
     const Box2D fine = child.box(0);
@@ -286,6 +294,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   //     inchange. On le teste D'ABORD pour ancrer le comportement de reference (la hierarchie figee).
   // ============================================================================================
   {
+    SCOPED_TRACE("frozen hierarchy");
     auto run_frozen = [&]() {
       AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.35, 0.5, 0.8, 1.0, 0.10),
                                      blob(N, 0.65, 0.5, 0.8, 1.0, 0.10));
@@ -318,6 +327,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   //     fixe du build (l'union des tags des deux blobs n'est PAS le patch central [n/4..3n/4]^2).
   // ============================================================================================
   {
+    SCOPED_TRACE("evolving hierarchy");
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
                                    blob(N, 0.70, 0.5, 1.0, 1.0, 0.07));
     rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
@@ -364,6 +374,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   //     en n'activant que le predicat phi (sur |grad phi|), un raffinement est declenche par phi SEUL.
   // ============================================================================================
   {
+    SCOPED_TRACE("union and phi-only tagging");
     // Bloc A : blob a gauche (cx=0.25). Bloc B : blob a droite (cx=0.75). Charges opposees -> phi non
     // trivial (Poisson somme). Predicats par bloc seulement (phi non enregistre) : union = A OU B.
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.25, 0.5, 1.2, 1.0, 0.06),
@@ -419,6 +430,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
   //     donnees finies (report + interp), pas un fab non initialise sur l'ancienne grille.
   // ============================================================================================
   {
+    SCOPED_TRACE("stride-held block regrid");
     AmrRuntime rt = make_two_block(N, L, B0, +1.0, -1.0, blob(N, 0.30, 0.5, 1.0, 1.0, 0.07),
                                    blob(N, 0.70, 0.5, 1.0, 1.0, 0.07), /*stride1=*/4);
     rt.set_regrid(/*every=*/2, /*grow=*/2, /*margin=*/2);
@@ -501,5 +513,49 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
     const std::vector<double> fb = run_facade_frozen();
     EXPECT_EQ(dmax_field(fa, fb), 0.0)
         << "T7_facade_frozen_regrid_every_zero_bit_identical_dmax0";
+  }
+}
+
+TEST(test_amr_multiblock_regrid_union,
+     GradientTaggingRefusesUnproducedNonPeriodicGhosts) {
+  constexpr int n = 16;
+  AmrBuildParams params;
+  params.mesh.n = n;
+  params.mesh.L = 1.0;
+  params.mesh.regrid_every = 0;
+  params.poisson.bc.xlo = params.poisson.bc.xhi = BCType::Dirichlet;
+  params.poisson.bc.ylo = params.poisson.bc.yhi = BCType::Dirichlet;
+  detail::SharedAmrLayout layout = detail::make_shared_amr_layout(params);
+  layout.base_per = Periodicity{false, false};
+  std::vector<AmrRuntimeBlock> blocks;
+  detail::dispatch_model(exb_charge(+1.0, 1.0), [&](auto model) {
+    blocks.push_back(detail::dispatch_amr_block(
+        model, "minmod", "rusanov", layout, "a", flat(n, 1.0),
+        /*has_density=*/true, 1.4, 1, false, false, 1));
+  });
+  // This is the precise invalid state under test: a non-periodic sampled state with no prepared
+  // authority capable of producing its physical ghosts.
+  blocks.front().boundary_plan.reset();
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
+                     std::move(blocks), layout.base_per, layout.replicated_coarse,
+                     layout.wall);
+
+  using Program = runtime::amr::PreparedTaggingProgram;
+  const std::vector<Program::Stencil> stencils{Program::Stencil{
+      "test::centered-gradient",
+      POPS_TAGGING_STENCIL_ROUTE_LINEAR_AXIS_STENCIL_L2_V1,
+      "l2", "inverse_cell_size", "ghost_extension", 2,
+      {Program::AxisStencil{0, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}},
+       Program::AxisStencil{1, 1, 2, 1, 1, {-1, 1}, {-0.5, 0.5}}}}};
+  try {
+    runtime.set_tagging_program(
+        stencils,
+        {Program::Leaf{0, 0, POPS_TAGGING_GRADIENT_ABOVE_V1, 0.1, 0}},
+        {POPS_TAGGING_GRADIENT_ABOVE_V1}, {0}, {}, {}, 0, 0, 0,
+        "test::clock", "test::gradient-tagger");
+    FAIL() << "non-periodic gradient tagging accepted unproduced physical ghosts";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("complete prepared ghost-production authority"),
+              std::string::npos);
   }
 }

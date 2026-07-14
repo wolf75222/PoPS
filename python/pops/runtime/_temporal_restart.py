@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from pops._manifest_protocol import strict_json_loads
-from pops.time.step_strategy import validate_step_strategy_manifest
+from pops.time._step.strategy import validate_step_strategy_manifest
 
 
 _SCHEMA_VERSION = 2

@@ -67,7 +67,7 @@ def _ab2_program(model, name):
 def _state_ring_program(model, name):
     """ADC-635: a depth-3 STATE ring (Interval(2) -> stores {0,2}, replays slot 1). A single-step
     Markov recurrence so the single-seed replay reconstructs the gap bit-for-bit."""
-    from pops.time.history_persistence import Interval
+    from pops.time._history.persistence import Interval
     P = pops.Program(name)
     _case, states = program_states(P, model, ("blk",))
     U = states["blk"]

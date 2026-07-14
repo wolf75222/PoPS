@@ -32,7 +32,7 @@ from pops.params import (  # noqa: E402
 )
 from pops.runtime_environment import validate_dimension, validate_precision  # noqa: E402
 from pops.time import AcceptedStep, Clock, Every  # noqa: E402
-from pops.time.history_persistence import (  # noqa: E402
+from pops.time._history.persistence import (  # noqa: E402
     Dense,
     Interval as HistoryInterval,
     Revolve,

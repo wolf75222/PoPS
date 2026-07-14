@@ -1,3 +1,5 @@
+#include <pops/amr/tagging/tagging_truth.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/config/component_interfaces.hpp>
 #include <pops/runtime/dynamic/component_consumers.hpp>
 
@@ -9,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -47,11 +50,6 @@ struct TransferComponent {
   std::string restart() const { return "stateless"; }
 };
 
-struct RefluxComponent {
-  std::vector<std::string> effects() const { return {"conservative-correction"}; }
-  std::string report() const { return "reflux-report"; }
-};
-
 struct SolverComponent {
   pops::component::EvaluationOutcome<int> evaluate(Context&) const {
     return pops::component::EvaluationOutcome<int>::reject("non-converged");
@@ -77,8 +75,6 @@ static_assert(pops::component::Lowering<ClusteringComponent, Context>);
 static_assert(pops::component::Effects<ClusteringComponent>);
 static_assert(pops::component::Stencil<TransferComponent>);
 static_assert(pops::component::Restart<TransferComponent>);
-static_assert(pops::component::Effects<RefluxComponent>);
-static_assert(pops::component::Report<RefluxComponent>);
 static_assert(pops::component::FallibleEvaluation<SolverComponent, Context&>);
 static_assert(pops::component::Restart<SolverComponent>);
 static_assert(pops::component::Format<WriterComponent, double>);
@@ -106,6 +102,19 @@ TEST(ComponentInterfaces, FallibleOutcomeKeepsTransactionActionExplicit) {
   EXPECT_THROW(pops::component::EvaluationOutcome<int>::retry(""), std::invalid_argument);
 }
 
+TEST(ComponentInterfaces, SolveReportCarriesTypedIncompatibleRhsReason) {
+  pops::SolveReport report;
+  report.mark_failed(
+      pops::SolveStatus::kIncompatibleRhs, pops::SolveAction::kRejectAttempt,
+      "RHS violates the authenticated nullspace compatibility condition");
+  EXPECT_TRUE(report.valid());
+  EXPECT_FALSE(report.solved());
+  EXPECT_STREQ(report.status_name(), "incompatible_rhs");
+  EXPECT_STREQ(report.action_name(), "reject_attempt");
+  EXPECT_EQ(report.reason,
+            "RHS violates the authenticated nullspace compatibility condition");
+}
+
 TEST(ComponentInterfaces, RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen) {
   pops::component::Registry registry;
   const auto& first = registry.register_component(record("pops://external.test/flux@1.0.0", "s1"));
@@ -129,8 +138,70 @@ TEST(ComponentInterfaces, RegistryIsCollisionSafeIdempotentAndExplicitlyFrozen) 
       std::logic_error);
 }
 
-PopsComponentTableHeaderV1 abi_header(std::size_t size, PopsNativeInterfaceIdV1 id) {
-  return {static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, 1,
+TEST(ComponentInterfaces, TaggingTruthPreservesEqualityThroughLogicalRoots) {
+  using pops::amr::TagTruth;
+  const std::array any_unknown{TagTruth::False, TagTruth::Unknown};
+  const std::array any_true{TagTruth::Unknown, TagTruth::True};
+  const std::array all_unknown{TagTruth::True, TagTruth::Unknown};
+  const std::array all_false{TagTruth::Unknown, TagTruth::False};
+
+  EXPECT_EQ(pops::amr::tag_not(TagTruth::Unknown), TagTruth::Unknown);
+  EXPECT_EQ(pops::amr::tag_not(TagTruth::True), TagTruth::False);
+  EXPECT_EQ(pops::amr::tag_any(any_unknown.begin(), any_unknown.end()),
+            TagTruth::Unknown);
+  EXPECT_EQ(pops::amr::tag_any(any_true.begin(), any_true.end()), TagTruth::True);
+  EXPECT_EQ(pops::amr::tag_all(all_unknown.begin(), all_unknown.end()),
+            TagTruth::Unknown);
+  EXPECT_EQ(pops::amr::tag_all(all_false.begin(), all_false.end()), TagTruth::False);
+}
+
+TEST(ComponentInterfaces, TaggingComparisonsRejectNonFiniteBeforeBooleanLogic) {
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW((void)pops::amr::tag_comparison(nan, 0.0, true), std::domain_error);
+  EXPECT_THROW((void)pops::amr::tag_comparison(nan, 0.0, false), std::domain_error);
+  EXPECT_THROW(
+      (void)pops::amr::tag_not(pops::amr::tag_comparison(nan, 0.0, true)),
+      std::domain_error);
+}
+
+TEST(ComponentInterfaces, TaggingEqualityIsMappedBeforeConflictResolution) {
+  using pops::amr::TagConflictPolicy;
+  using pops::amr::TagEqualityPolicy;
+  using pops::amr::TagTruth;
+
+  const auto hold = pops::amr::resolve_tag_decision(
+      TagTruth::Unknown, TagTruth::False, TagEqualityPolicy::Hold,
+      TagConflictPolicy::Error);
+  EXPECT_FALSE(hold.refine);
+  EXPECT_FALSE(hold.coarsen);
+  EXPECT_FALSE(hold.conflict_error);
+
+  const auto refine = pops::amr::resolve_tag_decision(
+      TagTruth::Unknown, TagTruth::False, TagEqualityPolicy::Refine,
+      TagConflictPolicy::Error);
+  EXPECT_TRUE(refine.refine);
+  EXPECT_FALSE(refine.coarsen);
+
+  const auto coarsen = pops::amr::resolve_tag_decision(
+      TagTruth::False, TagTruth::Unknown, TagEqualityPolicy::Coarsen,
+      TagConflictPolicy::Error);
+  EXPECT_FALSE(coarsen.refine);
+  EXPECT_TRUE(coarsen.coarsen);
+
+  const auto equality_conflict = pops::amr::resolve_tag_decision(
+      TagTruth::True, TagTruth::Unknown, TagEqualityPolicy::Coarsen,
+      TagConflictPolicy::Error);
+  EXPECT_TRUE(equality_conflict.conflict_error);
+  const auto refine_wins = pops::amr::resolve_tag_decision(
+      TagTruth::True, TagTruth::Unknown, TagEqualityPolicy::Coarsen,
+      TagConflictPolicy::RefineWins);
+  EXPECT_TRUE(refine_wins.refine);
+  EXPECT_FALSE(refine_wins.coarsen);
+}
+
+PopsComponentTableHeaderV1 abi_header(
+    std::size_t size, PopsNativeInterfaceIdV1 id, std::uint32_t version = 1) {
+  return {static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, version,
           nullptr, nullptr};
 }
 
@@ -327,16 +398,30 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   PopsTaggerApiV1 tagger_api{
       abi_header(sizeof(PopsTaggerApiV1), POPS_NATIVE_INTERFACE_TAGGER_V1),
       +[](void*, const PopsTaggerRequestV1* request, PopsComponentStatusV1* result) {
-        const auto* state = static_cast<const double*>(request->state.data);
-        for (std::size_t i = 0; i < request->tags.size; ++i)
-          request->tags.data[i] = state[i] > 0.0 ? 1u : 0u;
+        const auto* state = static_cast<const double*>(request->states[0].values.data);
+        for (std::size_t i = 0; i < request->refine_candidates.size; ++i)
+          request->refine_candidates.data[i] = state[i] > request->program.leaves[0].threshold;
         *result = ok_status();
         return 0;
       }};
+  const PopsQualifiedConstFieldV1 tag_states{
+      sizeof(PopsQualifiedConstFieldV1), 1, "case::tag-state",
+      abi::const_field_view(tag_values.data(), 2, 2)};
+  const PopsTaggingLeafV1 tag_leaf{
+      sizeof(PopsTaggingLeafV1), 0, 0, 1, 0.0, POPS_TAGGING_NO_STENCIL_V1};
+  const std::int32_t tag_op = 1, tag_arg = 0;
+  std::array<std::uint8_t, 4> coarsen{}, refine_equalities{}, coarsen_equalities{};
   PopsTaggerRequestV1 tag_request{
-      sizeof(PopsTaggerRequestV1),
-      abi::const_field_view(tag_values.data(), 2, 2),
-      {sizeof(PopsByteViewV1), tags.data(), tags.size()}, abi::logical_time(), execution};
+      sizeof(PopsTaggerRequestV1), 1, &tag_states,
+      {sizeof(PopsTaggingProgramV1), "case::tag-program", 0, nullptr, 1, &tag_leaf,
+       1, &tag_op, &tag_arg, 0, nullptr, nullptr, 0, 0, 0,
+       POPS_TAGGING_NON_FINITE_REJECT_V1},
+      {0, 0, 0}, {0, 0, 0}, {1, 1, 0}, {1.0, 1.0, 0.0}, 0,
+      {sizeof(PopsByteViewV1), tags.data(), tags.size()},
+      {sizeof(PopsByteViewV1), coarsen.data(), coarsen.size()},
+      {sizeof(PopsByteViewV1), refine_equalities.data(), refine_equalities.size()},
+      {sizeof(PopsByteViewV1), coarsen_equalities.data(), coarsen_equalities.size()},
+      abi::logical_time(), execution};
   EXPECT_EQ(pops::component::tag_batch(tagger_api, nullptr, tag_request, status), 0);
   EXPECT_EQ(tags, (std::array<std::uint8_t, 4>{0, 1, 0, 1}));
 
@@ -363,6 +448,23 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_EQ(box_count, 1u);
   EXPECT_EQ(boxes, (std::array<std::int64_t, 4>{1, 0, 3, 0}));
 
+  PopsClusteringApiV1 excessive_cluster_api{
+      abi_header(sizeof(PopsClusteringApiV1), POPS_NATIVE_INTERFACE_CLUSTERING_V1),
+      +[](void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* result) {
+        *request->box_count = request->box_capacity + 1;
+        *result = ok_status();
+        return 0;
+      }};
+  box_count = 0;
+  EXPECT_THROW(pops::component::cluster_tags(
+                   excessive_cluster_api, nullptr, cluster_request, status),
+               std::runtime_error);
+  auto missing_cluster_api = cluster_api;
+  missing_cluster_api.cluster = nullptr;
+  EXPECT_THROW(pops::component::cluster_tags(
+                   missing_cluster_api, nullptr, cluster_request, status),
+               std::runtime_error);
+
   std::array<double, 1> transferred{};
   std::array<std::int32_t, 2> ratio{2, 2};
   PopsTransferApiV1 transfer_api{
@@ -388,116 +490,416 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
                    transfer_api, nullptr, wrong_transfer_shape, status),
                std::invalid_argument);
 
-  std::array<double, 2> coarse{1.0, 3.0}, fine{2.0, 7.0}, register_values{};
-  PopsRefluxApiV1 reflux_api{
-      abi_header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
-      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result) {
-        auto* output = static_cast<double*>(request->flux_register.data);
-        const auto* fine_values = static_cast<const double*>(request->fine_integrated.data);
-        const auto* coarse_values = static_cast<const double*>(request->coarse_integrated.data);
-        for (std::size_t i = 0; i < 2; ++i)
-          output[i] += fine_values[i] - coarse_values[i];
-        *result = ok_status();
-        return 0;
-      }};
-  PopsRefluxRequestV1 reflux_request{
-      sizeof(PopsRefluxRequestV1),
-      abi::const_field_view(coarse.data(), 1, 2),
-      abi::const_field_view(fine.data(), 1, 2),
-      abi::field_view(register_values.data(), 1, 2), execution};
-  EXPECT_EQ(pops::component::deposit_reflux(
-                reflux_api, nullptr, reflux_request, status), 0);
-  EXPECT_EQ(register_values, (std::array<double, 2>{1.0, 4.0}));
+  auto overflowing_ghosts = abi::const_field_view(tag_values.data(), 2, 2);
+  overflowing_ghosts.ghost_lower[0] = std::numeric_limits<std::size_t>::max();
+  overflowing_ghosts.ghost_upper[0] = 1;
+  EXPECT_THROW(pops::component::validate_field_view(
+                   overflowing_ghosts, "overflowing ghost test view"),
+               std::invalid_argument);
 
-  static constexpr PopsTopologyLabelV1 label_vocabulary[] = {
-      {1, "island-a", "test-topology"}, {2, "island-b", "test-topology"}};
-  PopsFieldTopologyApiV1 topology_api{
-      abi_header(sizeof(PopsFieldTopologyApiV1), POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V1),
-      +[](void*, const PopsFieldTopologyRequestV1* request,
-          PopsFieldTopologyResultV1* result) {
-        const std::uint8_t mask[] = {1, 1, 0, 1};
-        const std::int32_t labels[] = {1, 1, 0, 2};
-        std::copy(mask, mask + 4, request->material_mask.data);
-        std::copy(labels, labels + 4, request->component_labels.data);
+  static constexpr PopsTopologyLabelV2 label_vocabulary[] = {
+      {sizeof(PopsTopologyLabelV2), 1, "island-a", "test-topology"},
+      {sizeof(PopsTopologyLabelV2), 2, "island-b", "test-topology"}};
+  struct TopologyCallState {
+    int calls = 0;
+  } topology_calls;
+  PopsFieldTopologyApiV2 topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2),
+                 POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void* raw, const PopsFieldTopologyRequestV2* request,
+          PopsFieldTopologyResultV2* result) {
+        auto* state = static_cast<TopologyCallState*>(raw);
+        if (++state->calls != 1 || request->topology.patch_count != 2 ||
+            request->local_patch_count != 2 ||
+            request->topology.periodic_axes != 1 ||
+            std::strcmp(request->topology.topology_recipe_identity,
+                        "test::topology-recipe") != 0)
+          return 8;
+        for (std::size_t local = 0; local < request->local_patch_count; ++local) {
+          const auto& patch = request->local_patches[local];
+          if (patch.material_representation != POPS_FIELD_MATERIAL_FULL_V1 ||
+              patch.material_coverage.data != nullptr ||
+              patch.cut_cell_volume_fraction.data != nullptr ||
+              patch.material_ids.data != nullptr || patch.material_mask.size != 2 ||
+              patch.component_labels.size != 2)
+            return 9;
+          std::fill(patch.material_mask.data, patch.material_mask.data + 2, 1);
+          std::fill(patch.component_labels.data, patch.component_labels.data + 2,
+                    static_cast<std::int32_t>(local + 1));
+        }
         result->label_count = 2;
         result->labels = label_vocabulary;
         result->provenance = "test-topology";
-        result->topology_digest = "topology-v1";
+        result->topology_digest = "topology-v2";
         result->status = ok_status();
         return 0;
       }};
-  PopsFieldTopologyApiV1 rejecting_topology_api{
-      abi_header(sizeof(PopsFieldTopologyApiV1), POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V1),
-      +[](void*, const PopsFieldTopologyRequestV1*,
-          PopsFieldTopologyResultV1* result) {
+  PopsFieldTopologyApiV2 rejecting_topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2),
+                 POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void*, const PopsFieldTopologyRequestV2*,
+          PopsFieldTopologyResultV2* result) {
         result->status = {sizeof(PopsComponentStatusV1), 17,
                           POPS_COMPONENT_REJECT_STEP_V1,
                           "topology rejected by test component"};
         return 0;
       }};
-  const std::string topology_layout =
-      "test::owned-topology-layout-identity-longer-than-small-string-storage";
-  const std::string topology_patch =
-      "test::owned-topology-patch-identity-longer-than-small-string-storage";
-  const auto topology = [&] {
-    std::array<double, 4> geometry{};
-    std::string borrowed_layout = topology_layout;
-    std::string borrowed_patch = topology_patch;
-    const auto geometry_view = abi::const_field_view(
-        geometry.data(), 2, 2, 1, borrowed_layout.c_str(), borrowed_patch.c_str());
-    EXPECT_THROW(pops::component::prepare_field_topology(
-                     rejecting_topology_api, nullptr, geometry_view, execution),
-                 std::runtime_error);
-    auto prepared = pops::component::prepare_field_topology(
-        topology_api, nullptr, geometry_view, execution);
-    std::fill(borrowed_layout.begin(), borrowed_layout.end(), 'x');
-    std::fill(borrowed_patch.begin(), borrowed_patch.end(), 'y');
-    return prepared;
-  }();
-  EXPECT_EQ(topology.topology_digest(), "topology-v1");
-  EXPECT_EQ(topology.component_labels(),
-            (std::vector<std::int32_t>{1, 1, 0, 2}));
-
-  std::array<double, 4> rhs{1.0, 2.0, 0.0, 4.0}, solution{};
-  PopsFieldSolverApiV1 solver_api{
-      abi_header(sizeof(PopsFieldSolverApiV1), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V1),
-      +[](void*, const PopsFieldSolverRequestV1* request, PopsSolveReportV1* report) {
-        if (std::strcmp(request->topology_digest, "topology-v1") != 0) return 7;
-        const auto* rhs_values = static_cast<const double*>(request->rhs.data);
-        auto* solution_values = static_cast<double*>(request->solution.data);
-        std::copy(rhs_values, rhs_values + 4, solution_values);
-        report->converged = 1;
-        report->iterations = 1;
-        report->initial_residual = 1.0;
-        report->final_residual = 0.0;
-        report->status = ok_status();
+  PopsFieldTopologyApiV2 incomplete_topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2),
+                 POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void*, const PopsFieldTopologyRequestV2*,
+          PopsFieldTopologyResultV2* result) {
+        // A successful status is not permission to leave the caller-owned point outputs untouched.
+        result->label_count = 2;
+        result->labels = label_vocabulary;
+        result->provenance = "incomplete-test-topology";
+        result->topology_digest = "incomplete-topology-v2";
+        result->status = ok_status();
         return 0;
       }};
+  static constexpr PopsTopologyLabelV2 undersized_label_vocabulary[] = {
+      {0, 1, "island-a", "undersized-label-test-topology"}};
+  PopsFieldTopologyApiV2 undersized_label_topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2),
+                 POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void*, const PopsFieldTopologyRequestV2* request,
+          PopsFieldTopologyResultV2* result) {
+        for (std::size_t local = 0; local < request->local_patch_count; ++local) {
+          const auto& patch = request->local_patches[local];
+          std::fill(patch.material_mask.data,
+                    patch.material_mask.data + patch.material_mask.size, 1);
+          std::fill(patch.component_labels.data,
+                    patch.component_labels.data + patch.component_labels.size, 1);
+        }
+        result->label_count = 1;
+        result->labels = undersized_label_vocabulary;
+        result->provenance = "undersized-label-test-topology";
+        result->topology_digest = "undersized-label-topology-v2";
+        result->status = ok_status();
+        return 0;
+      }};
+  PopsFieldTopologyApiV2 empty_full_topology_api{
+      abi_header(sizeof(PopsFieldTopologyApiV2),
+                 POPS_NATIVE_INTERFACE_FIELD_TOPOLOGY_V2, 2),
+      +[](void*, const PopsFieldTopologyRequestV2* request,
+          PopsFieldTopologyResultV2* result) {
+        for (std::size_t local = 0; local < request->local_patch_count; ++local) {
+          const auto& patch = request->local_patches[local];
+          std::fill(patch.material_mask.data,
+                    patch.material_mask.data + patch.material_mask.size, 0);
+          std::fill(patch.component_labels.data,
+                    patch.component_labels.data + patch.component_labels.size, 0);
+        }
+        result->label_count = 2;
+        result->labels = label_vocabulary;
+        result->provenance = "empty-full-test-topology";
+        result->topology_digest = "empty-full-topology-v2";
+        result->status = ok_status();
+        return 0;
+      }};
+  std::string topology_layout =
+      "test::owned-topology-layout-identity-longer-than-small-string-storage";
+  std::array<std::string, 2> topology_patches{
+      "test::owned-topology-patch-zero-longer-than-small-string-storage",
+      "test::owned-topology-patch-one-longer-than-small-string-storage"};
+  std::array<PopsFieldPatchMetadataV1, 2> metadata{};
+  for (std::size_t index = 0; index < metadata.size(); ++index) {
+    metadata[index] = {
+        sizeof(PopsFieldPatchMetadataV1), index, 0, 0, 2, {}, {}, {}, {},
+        POPS_FIELD_CENTERING_CELL_V1, 0, topology_layout.c_str(),
+        topology_patches[index].c_str()};
+    metadata[index].lower[0] = static_cast<std::int64_t>(2 * index);
+    metadata[index].upper[0] = static_cast<std::int64_t>(2 * index + 1);
+    metadata[index].lower[1] = metadata[index].upper[1] = 0;
+    metadata[index].cell_spacing[0] = metadata[index].cell_spacing[1] = 0.25;
+  }
+  auto unrepresentable_patch = metadata[0];
+  unrepresentable_patch.lower[0] = std::numeric_limits<std::int64_t>::min();
+  unrepresentable_patch.upper[0] = std::numeric_limits<std::int64_t>::max();
+  EXPECT_THROW(pops::component::validate_field_patch_metadata(
+                   unrepresentable_patch, 0),
+               std::invalid_argument);
+  const std::vector<pops::component::FieldTopologyPatchInputV2> topology_inputs{
+      {0, POPS_FIELD_MATERIAL_FULL_V1, {}, {}, {}},
+      {1, POPS_FIELD_MATERIAL_FULL_V1, {}, {}, {}},
+  };
+  std::array<std::uint8_t, 2> binary_coverage{1, 0};
+  pops::component::FieldTopologyPatchInputV2 binary_input{
+      0, POPS_FIELD_MATERIAL_BINARY_COVERAGE_V1,
+      {sizeof(PopsConstByteViewV1), binary_coverage.data(), binary_coverage.size()},
+      {}, {}};
+  EXPECT_EQ(pops::component::expected_topology_material_mask(binary_input, metadata[0]),
+            (std::vector<std::uint8_t>{1, 0}));
+  binary_coverage[1] = 2;
+  EXPECT_THROW(
+      (void)pops::component::expected_topology_material_mask(binary_input, metadata[0]),
+      std::invalid_argument);
+  binary_coverage[1] = 0;
+
+  std::array<double, 2> cut_fractions{1.0, 0.0};
+  pops::component::FieldTopologyPatchInputV2 cut_input{
+      0, POPS_FIELD_MATERIAL_CUT_CELL_FRACTION_V1, {},
+      abi::const_field_view(cut_fractions.data(), 2, 1, 1,
+                            metadata[0].layout_identity,
+                            metadata[0].patch_identity), {}};
+  EXPECT_EQ(pops::component::expected_topology_material_mask(cut_input, metadata[0]),
+            (std::vector<std::uint8_t>{1, 0}));
+  cut_fractions[1] = std::numeric_limits<double>::quiet_NaN();
+  EXPECT_THROW(
+      (void)pops::component::expected_topology_material_mask(cut_input, metadata[0]),
+      std::invalid_argument);
+  cut_fractions[1] = 0.0;
+  PopsFieldGlobalTopologyV1 global_topology{
+      sizeof(PopsFieldGlobalTopologyV1), "test::topology-recipe",
+      topology_layout.c_str(), "test::materialized-layout", 2, {}, {}, 1,
+      metadata.size(), metadata.data()};
+  global_topology.domain_upper[0] = 3;
+  const auto topology = [&] {
+    EXPECT_THROW(pops::component::prepare_field_topology(
+                     rejecting_topology_api, nullptr, global_topology, topology_inputs,
+                     execution),
+                 std::runtime_error);
+    EXPECT_THROW(pops::component::prepare_field_topology(
+                     incomplete_topology_api, nullptr, global_topology, topology_inputs,
+                     execution),
+                 std::runtime_error);
+    EXPECT_THROW(pops::component::prepare_field_topology(
+                     undersized_label_topology_api, nullptr, global_topology,
+                     topology_inputs, execution),
+                 std::runtime_error);
+    EXPECT_THROW(pops::component::prepare_field_topology(
+                     empty_full_topology_api, nullptr, global_topology, topology_inputs,
+                     execution),
+                 std::runtime_error);
+    auto prepared = pops::component::prepare_field_topology(
+        topology_api, &topology_calls, global_topology, topology_inputs, execution);
+    std::fill(topology_layout.begin(), topology_layout.end(), 'x');
+    for (auto& patch : topology_patches)
+      std::fill(patch.begin(), patch.end(), 'y');
+    return prepared;
+  }();
+  EXPECT_EQ(topology.topology_digest(), "topology-v2");
+  ASSERT_EQ(topology.local_patches().size(), 2u);
+  EXPECT_EQ(topology.local_patches()[0].component_labels,
+            (std::vector<std::int32_t>{1, 1}));
+  EXPECT_EQ(topology.local_patches()[1].component_labels,
+            (std::vector<std::int32_t>{2, 2}));
+
+  std::array<double, 2> rhs_a{1.0, 2.0}, rhs_b{3.0, 4.0};
+  std::array<double, 2> solution_a{}, solution_b{};
+  struct SolverCallState {
+    int calls = 0;
+  } solver_calls;
+  PopsFieldSolverApiV2 solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void* raw, const PopsFieldSolverRequestV2* request, PopsSolveReportV2* report) {
+        auto* state = static_cast<SolverCallState*>(raw);
+        if (++state->calls != 1 || request->topology.patch_count != 2 ||
+            request->local_patch_count != 2 ||
+            request->topology_label_count != 2 || !request->topology_labels ||
+            !request->topology_provenance ||
+            std::strcmp(request->topology_provenance, "test-topology") != 0 ||
+            std::strcmp(request->topology_digest, "topology-v2") != 0 ||
+            std::strcmp(request->topology.topology_recipe_identity,
+                        "test::topology-recipe") != 0)
+          return 7;
+        for (std::size_t index = 0; index < request->topology_label_count; ++index) {
+          const auto& label = request->topology_labels[index];
+          if (label.struct_size < sizeof(PopsFieldSolverTopologyLabelV2) ||
+              label.id != static_cast<std::int32_t>(index + 1) || !label.label ||
+              !label.provenance || std::strcmp(label.provenance, "test-topology") != 0)
+            return 8;
+        }
+        for (std::size_t local = 0; local < request->local_patch_count; ++local) {
+          const auto& patch = request->local_patches[local];
+          if (patch.struct_size < sizeof(PopsFieldSolverPatchV2) ||
+              patch.material_mask.size != 2 || patch.component_labels.size != 2)
+            return 9;
+          const auto* rhs_values = static_cast<const double*>(patch.rhs.data);
+          auto* solution_values = static_cast<double*>(patch.solution.data);
+          std::copy(rhs_values, rhs_values + 2, solution_values);
+        }
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 0.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 0.0;
+        report->reason = "tolerance reached";
+        return 0;
+      }};
+  const auto& owned_metadata = topology.global_patches();
+  const std::vector<pops::component::FieldSolverPatchBindingV2> solver_patches{
+      {0,
+       abi::const_field_view(rhs_a.data(), 2, 1, 1,
+                             owned_metadata[0].layout_identity,
+                             owned_metadata[0].patch_identity),
+       abi::field_view(solution_a.data(), 2, 1, 1,
+                       owned_metadata[0].layout_identity,
+                       owned_metadata[0].patch_identity), {}},
+      {1,
+       abi::const_field_view(rhs_b.data(), 2, 1, 1,
+                             owned_metadata[1].layout_identity,
+                             owned_metadata[1].patch_identity),
+       abi::field_view(solution_b.data(), 2, 1, 1,
+                       owned_metadata[1].layout_identity,
+                       owned_metadata[1].patch_identity), {}},
+  };
   const auto solver_request = pops::component::bind_field_solver_request(
-      topology,
-      abi::const_field_view(rhs.data(), 2, 2, 1, topology_layout.c_str(),
-                            topology_patch.c_str()),
-      abi::field_view(solution.data(), 2, 2, 1, topology_layout.c_str(),
-                      topology_patch.c_str()),
-      execution, {},
+      topology, solver_patches, execution,
       "{\"identity\":\"test::boundary\"}",
       1e-8, 0.0, 10);
-  PopsSolveReportV1 solve_report{};
-  solve_report.struct_size = sizeof(PopsSolveReportV1);
+  auto omitted_vocabulary_request = pops::component::bind_field_solver_request(
+      topology, solver_patches, execution,
+      "{\"identity\":\"test::boundary\"}", 1e-8, 0.0, 10);
+  const_cast<PopsFieldSolverRequestV2&>(omitted_vocabulary_request.request())
+      .topology_labels = nullptr;
+  PopsSolveReportV2 solve_report{};
+  solve_report.struct_size = sizeof(PopsSolveReportV2);
+  EXPECT_THROW(pops::component::solve_field(
+                   solver_api, &solver_calls, omitted_vocabulary_request, solve_report),
+               std::invalid_argument);
+  auto substituted_digest_request = pops::component::bind_field_solver_request(
+      topology, solver_patches, execution,
+      "{\"identity\":\"test::boundary\"}", 1e-8, 0.0, 10);
+  const_cast<PopsFieldSolverRequestV2&>(substituted_digest_request.request())
+      .topology_digest = "substituted-topology";
+  EXPECT_THROW(pops::component::solve_field(
+                   solver_api, &solver_calls, substituted_digest_request, solve_report),
+               std::invalid_argument);
   EXPECT_EQ(pops::component::solve_field(
-                solver_api, nullptr, solver_request, solve_report), 0);
-  EXPECT_EQ(solution, rhs);
+                solver_api, &solver_calls, solver_request, solve_report), 0);
+  EXPECT_EQ(solution_a, rhs_a);
+  EXPECT_EQ(solution_b, rhs_b);
+  EXPECT_EQ(solver_calls.calls, 1);
+  auto topology_mutation_request = pops::component::bind_field_solver_request(
+      topology, solver_patches, execution,
+      "{\"identity\":\"test::boundary\"}", 1e-8, 0.0, 10);
+  PopsFieldSolverApiV2 topology_mutation_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2* request, PopsSolveReportV2* report) {
+        auto* mask = const_cast<std::uint8_t*>(
+            request->local_patches[0].material_mask.data);
+        mask[0] = 0;
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 0.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 0.0;
+        report->reason = "mutated topology";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(
+                   topology_mutation_solver_api, nullptr,
+                   topology_mutation_request, solve_report),
+               std::runtime_error);
+  EXPECT_EQ(topology.local_patches()[0].material_mask,
+            (std::vector<std::uint8_t>{1, 1}));
+  PopsFieldSolverApiV2 false_success_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 0.9;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 0.9;
+        report->reason = "false success";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(
+                   false_success_solver_api, nullptr, solver_request, solve_report),
+               std::runtime_error);
+  PopsFieldSolverApiV2 zero_forcing_false_success_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = POPS_SOLVE_SOLVED_V2;
+        report->action = POPS_SOLVE_ACTION_NONE_V2;
+        report->iterations = 1;
+        report->relative_residual = 1.0e-12;
+        report->reference_residual_norm = 0.0;
+        report->residual_norm = 1.0e-12;
+        report->reason = "false zero-reference success";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(
+                   zero_forcing_false_success_api, nullptr, solver_request, solve_report),
+               std::runtime_error);
+  PopsFieldSolverApiV2 malformed_status_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = static_cast<PopsSolveStatusV2>(17);
+        report->action = POPS_SOLVE_ACTION_REJECT_ATTEMPT_V2;
+        report->iterations = 1;
+        report->relative_residual = 1.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 1.0;
+        report->reason = "malformed status";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(
+                   malformed_status_solver_api, nullptr, solver_request, solve_report),
+               std::runtime_error);
+  PopsFieldSolverApiV2 incoherent_ratio_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = POPS_SOLVE_ITERATION_LIMIT_V2;
+        report->action = POPS_SOLVE_ACTION_FAIL_RUN_V2;
+        report->iterations = 10;
+        report->relative_residual = 0.5;
+        report->reference_residual_norm = 2.0;
+        report->residual_norm = 0.2;
+        report->reason = "ratio does not authenticate residual norms";
+        return 0;
+      }};
+  EXPECT_THROW(pops::component::solve_field(
+                   incoherent_ratio_solver_api, nullptr, solver_request, solve_report),
+               std::runtime_error);
+  PopsFieldSolverApiV2 incompatible_rhs_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2* report) {
+        report->status = POPS_SOLVE_INCOMPATIBLE_RHS_V2;
+        report->action = POPS_SOLVE_ACTION_FAIL_RUN_V2;
+        report->iterations = 0;
+        report->relative_residual = 1.0;
+        report->reference_residual_norm = 1.0;
+        report->residual_norm = 1.0;
+        report->reason = "RHS is incompatible with the declared nullspace";
+        return 0;
+      }};
+  EXPECT_EQ(pops::component::solve_field(
+                incompatible_rhs_solver_api, nullptr, solver_request, solve_report), 0);
+  EXPECT_EQ(solve_report.status, POPS_SOLVE_INCOMPATIBLE_RHS_V2);
+  EXPECT_STREQ(solve_report.reason,
+               "RHS is incompatible with the declared nullspace");
+  PopsFieldSolverApiV2 transport_failure_solver_api{
+      abi_header(sizeof(PopsFieldSolverApiV2), POPS_NATIVE_INTERFACE_FIELD_SOLVER_V2, 2),
+      +[](void*, const PopsFieldSolverRequestV2*, PopsSolveReportV2*) { return 23; }};
+  EXPECT_THROW(pops::component::solve_field(
+                   transport_failure_solver_api, nullptr, solver_request, solve_report),
+               std::runtime_error);
   std::array<double, 3> short_solution{};
+  auto invalid_patches = solver_patches;
+  invalid_patches[0].solution = abi::field_view(
+      short_solution.data(), 1, 3, 1, owned_metadata[0].layout_identity,
+      owned_metadata[0].patch_identity);
   EXPECT_THROW(
       pops::component::bind_field_solver_request(
-          topology,
-          abi::const_field_view(rhs.data(), 2, 2, 1, topology_layout.c_str(),
-                                topology_patch.c_str()),
-          abi::field_view(short_solution.data(), 1, 3, 1,
-                          topology_layout.c_str(), topology_patch.c_str()),
-          execution, {},
+          topology, invalid_patches, execution,
           "{\"identity\":\"test::boundary\"}", 1e-8, 0.0, 10),
       std::invalid_argument);
+
+  std::array<double, 4> ghosted_coefficients{};
+  auto ghosted_patches = solver_patches;
+  ghosted_patches[0].coefficients = abi::const_field_view(
+      ghosted_coefficients.data(), 4, 1, 1,
+      owned_metadata[0].layout_identity, owned_metadata[0].patch_identity);
+  ghosted_patches[0].coefficients.ghost_lower[0] = 1;
+  ghosted_patches[0].coefficients.ghost_upper[0] = 1;
+  EXPECT_NO_THROW((void)pops::component::bind_field_solver_request(
+      topology, ghosted_patches, execution,
+      "{\"identity\":\"test::boundary\"}", 1e-8, 0.0, 10));
 
   struct WriterCallState {
     int publish_count = 0;
@@ -551,9 +953,10 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
       {sizeof(PopsConstByteViewV1), covered_cells.data(), covered_cells.size()},
       abi::const_field_view(cell_volumes.data(), 2, 2, 1, "layout-v1",
                             "geometry-patch")};
+  const std::array<double, 4> writer_values{1.0, 2.0, 3.0, 4.0};
   const PopsWriterPieceV1 writer_piece{
       sizeof(PopsWriterPieceV1), 2, writer_lower.data(), writer_upper.data(),
-      abi::const_field_view(solution.data(), 2, 2, 1, "layout-v1", "state-patch")};
+      abi::const_field_view(writer_values.data(), 2, 2, 1, "layout-v1", "state-patch")};
   const char* component_names[] = {"u"};
   const PopsWriterFieldV1 writer_field{
       sizeof(PopsWriterFieldV1), "field-v1", "block::u", "manifest-v1",

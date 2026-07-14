@@ -116,6 +116,59 @@ class ResolvedFieldInstallPlan:
                     handles.setdefault(handle.qualified_id, handle)
         return tuple(handles[key] for key in sorted(handles))
 
+    def component_bindings(self) -> tuple[dict[str, Any], ...]:
+        """Exact external component pair required by this field provider, if any."""
+        provider = self.native_options["solver_provider"]
+        if provider["provider_kind"] == "builtin_v1":
+            return ()
+        if provider["provider_kind"] != "external_component_v1":
+            raise ValueError("resolved field plan carries an unknown solver provider kind")
+        return provider["topology"], provider["solver"]
+
+    def require_component_inputs(self, components: tuple[Any, ...]) -> None:
+        """Match every authored field component against the explicit resolve inputs."""
+        from pops.external import CompiledComponentArtifact, ExternalComponent
+
+        by_id = {}
+        for component in components:
+            if type(component) is ExternalComponent:
+                component_id = component.component_manifest.component_id
+                manifest = component.component_manifest.manifest_digest.token
+                interface = component.component_type.interface.to_data()
+                source_package = component.package_identity.token
+                parameters = component.to_data()["parameters"]
+            elif type(component) is CompiledComponentArtifact:
+                component.verify()
+                component_id = component.component_id
+                manifest = component.component_manifest.token
+                interface = component.interface.to_data()
+                source_package = (
+                    None if component.source_package is None
+                    else component.source_package.token
+                )
+                parameters = None
+            else:
+                continue
+            by_id[component_id] = (manifest, interface, source_package, parameters)
+        for binding in self.component_bindings():
+            component_id = binding["component_id"]
+            actual = by_id.get(component_id)
+            if actual is None:
+                raise ValueError(
+                    "field %r requires exact component %r in resolve(components=)"
+                    % (self.name, component_id)
+                )
+            expected = (
+                binding["component_manifest_identity"], binding["native_interface"],
+                binding["source_package_identity"])
+            if actual[:3] != expected or (
+                    actual[3] is not None and actual[3] != binding["parameters"]):
+                raise ValueError(
+                    "field %r component %r changed source package, manifest, or native "
+                    "interface identity"
+                    % (self.name, component_id)
+                )
+
 
 def resolve_field_install_plan(
     name: str,
@@ -142,6 +195,7 @@ def resolve_field_install_plan(
         )
     rows: list[LoweringCoverageRow] = []
     layout_contract = field_layout_contract(layout)
+    resolved_topology_recipe = topology_recipe(layout)
     source = "field:%s:operator" % name
     kinds = principal_kinds(operator.equation.lhs)
     if "laplacian" not in kinds or kinds - {"laplacian"}:
@@ -244,16 +298,64 @@ def resolve_field_install_plan(
         solver_options = solver_adapter(target=target, layout=layout)
     except (TypeError, ValueError) as exc:
         _reject(rows, solver_source, "field.solver.layout_incompatible", str(exc))
-    if not isinstance(solver_options, dict) or not isinstance(
-            solver_options.get("native_solver"), str):
+    if not isinstance(solver_options, dict):
         _reject(rows, solver_source, "field.solver.invalid_adapter",
                 "field %r solver returned an invalid native lowering" % name)
-    solver_token = solver_options["native_solver"]
+    provider_kind = solver_options.get("provider_kind")
+    topology_identity = field_identity(
+        "resolved-field-topology", resolved_topology_recipe).token
+    if provider_kind == "external_component_v1":
+        expected_keys = {
+            "provider_id", "provider_kind", "topology", "solver", "request"
+        }
+        if set(solver_options) != expected_keys:
+            _reject(rows, solver_source, "field.solver.invalid_external_provider",
+                    "field %r external solver returned an incomplete provider pack" % name)
+        solver_provider = {
+            **solver_options,
+            "topology_recipe_identity": topology_identity,
+        }
+        solver_label = solver_options["solver"]["component_id"]
+        if boundary_kernel_required or any(boundary_dependencies[kind] for kind in (
+                "states", "fields", "logical_time")):
+            _reject(
+                rows, solver_source, "field.solver.external_boundary_context_unavailable",
+                "field %r uses a dynamic/dependent boundary law, but FieldSolver ABI v2 "
+                "carries only an immutable boundary contract" % name,
+            )
+    else:
+        solver_token = solver_options.get("native_solver")
+        if not isinstance(solver_token, str) or not solver_token:
+            _reject(rows, solver_source, "field.solver.invalid_adapter",
+                    "field %r solver returned an invalid builtin provider" % name)
+        solver_provider = {
+            "schema_version": 1,
+            "provider_kind": "builtin_v1",
+            "solver": {
+                "route": solver_token,
+                "capabilities": dict(solver_options),
+            },
+            "topology": {
+                "provider_kind": "builtin_rectangular_cell_graph_v1",
+                "provenance": "pops.builtin.rectangular-cell-graph.v1",
+                "topology_digest": topology_identity,
+            },
+            "request": None,
+            "topology_recipe_identity": topology_identity,
+        }
+        solver_label = solver_token
     rows.append(LoweringCoverageRow(solver_source, "lowered", (
-        "field-install:%s:solver:%s" % (name, solver_token),)))
+        "field-install:%s:solver:%s" % (name, solver_label),)))
     nonlinear_options = None
     nonlinear_provider = None
     if plan.nonlinear is not None:
+        if provider_kind == "external_component_v1":
+            _reject(
+                rows, "field:%s:nonlinear" % name,
+                "field.solver.external_nonlinear_protocol_unavailable",
+                "field %r combines ExternalFieldSolver v2 with a PoPS-owned nonlinear "
+                "outer iteration; no shared iterate/JVP protocol exists" % name,
+            )
         nonlinear_adapter = getattr(plan.nonlinear, "lower_field_nonlinear", None)
         if not callable(nonlinear_adapter):
             _reject(rows, "field:%s:nonlinear" % name, "field.nonlinear.not_native",
@@ -387,7 +489,7 @@ def resolve_field_install_plan(
             "field-rhs", {
                 "rhs": operator.to_data()["equation"]["equation"]["rhs"],
             }).token,
-        "solver": solver_token,
+        "solver_provider": solver_provider,
         "method": method_options,
         "solver_capabilities": solver_options,
         "nonlinear": nonlinear_options,
@@ -400,7 +502,7 @@ def resolve_field_install_plan(
         "nullspace_assertion": nullspace_assertion,
         "gauge": gauge,
         "hierarchy": hierarchy,
-        "topology_recipe": topology_recipe(layout),
+        "topology_recipe": resolved_topology_recipe,
     }
     report = LoweringCoverageReport(rows)
     data = {

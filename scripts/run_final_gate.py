@@ -16,9 +16,9 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -72,14 +72,56 @@ def _outside_checkout(path: Path) -> Path:
 
 
 def _conda_command(arguments: Sequence[str]) -> list[str]:
-    quoted = " ".join(shlex.quote(value) for value in arguments)
-    include = shlex.quote(str((ROOT / "include").resolve()))
-    command = (
-        'source "$(conda info --base)/etc/profile.d/conda.sh"; '
-        'conda activate "${POPS_ENV_NAME:-pops}"; '
-        "PYTHONPATH= PYTHONNOUSERSITE=1 POPS_INCLUDE=" + include + " " + quoted
-    )
-    return ["bash", "-lc", command]
+    """Run inside the same conda installation selected by the gate process.
+
+    A login shell is deliberately forbidden here: user startup files may rewrite ``PATH`` and
+    select another conda base, making the wheel build in one environment and the conformance gates
+    import an older installation from another. ``conda run`` is non-interactive and preserves one
+    explicit environment identity for every phase.
+    """
+    explicit = os.environ.get("POPS_CONDA_EXE")
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_file() or not os.access(candidate, os.X_OK):
+            raise FinalGateError(
+                "POPS_CONDA_EXE is not an executable file: %s" % candidate)
+        conda = str(candidate.resolve())
+    else:
+        active = os.environ.get("CONDA_EXE")
+        candidates = [Path(active).expanduser()] if active else []
+        discovered = shutil.which("conda")
+        if discovered:
+            candidates.append(Path(discovered))
+        candidates.extend(
+            Path.home() / relative for relative in (
+                "miniforge3/bin/conda",
+                "mambaforge/bin/conda",
+                "anaconda3/bin/conda",
+                "miniconda3/bin/conda",
+            )
+        )
+        conda = next(
+            (str(candidate.resolve()) for candidate in candidates
+             if candidate.is_file() and os.access(candidate, os.X_OK)),
+            None,
+        )
+    if conda is None:
+        raise FinalGateError("conda is unavailable on PATH; run scripts/setup_env.sh first")
+    environment = os.environ.get("POPS_ENV_NAME", "pops")
+    if not environment:
+        raise FinalGateError("POPS_ENV_NAME must not be empty")
+    return [
+        conda,
+        "run",
+        "--no-capture-output",
+        "-n",
+        environment,
+        "/usr/bin/env",
+        "PYTHONPATH=",
+        "PYTHONNOUSERSITE=1",
+        "POPS_INCLUDE=" + str((ROOT / "include").resolve()),
+        *arguments,
+    ]
 
 
 def _resolve_ctest_dir(requested: Path | None) -> Path:

@@ -1,6 +1,7 @@
 """Direct scalar tensor-FAC scheduling on the AMR target."""
 
 from __future__ import annotations
+from pops.codegen.program_codegen import emit_cpp_program
 
 from pathlib import Path
 
@@ -118,15 +119,17 @@ def _build(solver):
     )
     next_state = program.value("next", 1 * reconstructed, at=temporal.next.point)
     program.commit(temporal.next, next_state)
-    return program, program.emit_cpp_program(model=model, target="amr_system")
+    return program, emit_cpp_program(program, model=model, target="amr_system")
 
 
 def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     solver = CompositeTensorFAC(
         max_iter=23,
         rel_tol=3.0e-8,
+        abs_tol=4.0e-13,
         fine_sweeps=7,
         coarse_rel_tol=2.0e-7,
+        coarse_abs_tol=5.0e-14,
         coarse_cycles=9,
         verbose=True,
     )
@@ -152,8 +155,8 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     assert "assembly_source(" in source[publish:synchronized]
 
     expected_configuration = (
-        "ctx.configure_composite_tensor_fac(1, 1, 7, static_cast<pops::Real>(%s), 9, 1);"
-        % scalar_cpp(2.0e-7)
+        "ctx.configure_composite_tensor_fac(1, 1, 7, static_cast<pops::Real>(%s), "
+        "static_cast<pops::Real>(%s), 9, 1);" % (scalar_cpp(2.0e-7), scalar_cpp(5.0e-14))
     )
     assert expected_configuration in source[:branch]
     solve_line = next(
@@ -162,6 +165,7 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
     )
     assert "ctx.solve_composite_tensor_fac(1, 1," in solve_line
     assert "static_cast<pops::Real>(%s)" % scalar_cpp(3.0e-8) in solve_line
+    assert "static_cast<pops::Real>(%s)" % scalar_cpp(4.0e-13) in solve_line
     assert solve_line.rstrip().endswith(", 23);")
 
     solve = next(value for value in program._values if value.op == "solve_linear")
@@ -181,12 +185,13 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
 def test_omitted_fac_controls_emit_native_default_sentinels_only():
     _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
     expected = (
-        "ctx.configure_composite_tensor_fac(1, 1, 0, static_cast<pops::Real>(%s), 0, -1);"
-        % scalar_cpp(0)
+        "ctx.configure_composite_tensor_fac(1, 1, 0, static_cast<pops::Real>(%s), "
+        "static_cast<pops::Real>(%s), 0, -1);" % (scalar_cpp(0), scalar_cpp(0))
     )
     assert expected in source
-    assert "ctx.solve_composite_tensor_fac(1, 1, static_cast<pops::Real>(%s), 13);" % (
-        scalar_cpp(4.0e-8)
+    assert "ctx.solve_composite_tensor_fac(1, 1, static_cast<pops::Real>(%s), " \
+           "static_cast<pops::Real>(%s), 13);" % (
+        scalar_cpp(4.0e-8), scalar_cpp(0)
     ) in source
 
 

@@ -1,10 +1,8 @@
 """pops.time -- compiled time-program DSL (the temporal LANGUAGE, builder-mode IR).
 
-A ``Program`` is a restricted, COMPILED numerical program describing one time step. Python
-only BUILDS a typed IR; it never executes a numerical stage. The C++ lowering lives in
-``pops.codegen.program_codegen`` and is reached through ``Program.emit_cpp_program`` (a lazy
-delegator), so this package imports only ``pops._ir`` / ``pops.model`` -- never ``pops.codegen``,
-``_pops``, or ``pops.lib`` at module scope (Spec 4 acyclic graph: time -> {ir, model}).
+A ``Program`` is a restricted numerical-program description for one time step. Python only
+BUILDS a typed IR; it never executes a numerical stage. Compiler and runtime layers consume this
+package through explicit adapters, while :mod:`pops.time` remains an inert authoring authority.
 
 This package is the time LANGUAGE only: ``Program``, the ``ProgramValue`` /
 ``StageStateSet`` values, the ``Schedule`` scheduler (``always`` / ``every`` / ``when`` /
@@ -17,46 +15,46 @@ cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.
 from pops.time.handles import (  # noqa: F401
     HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
 )
-from pops.time.history import CopyCurrent  # noqa: F401
-from pops.time.history_persistence import (  # noqa: F401
+from pops.time._history.policy import CopyCurrent  # noqa: F401
+from pops.time._history.persistence import (  # noqa: F401
     Dense, HistoryPersistence, Interval, Revolve,
 )
-from pops.time.graph import (  # noqa: F401
+from pops.time._graph import (  # noqa: F401
     Branch, Commit, Loop, OperatorCall, ProgramGraph, ProgramValue as GraphProgramValue,
     Region, RegionCapture, Solve, StateRead, Synchronize,
     Unknown, ValueRef,
 )
-from pops.time.method_properties import (  # noqa: F401
+from pops.time._methods.properties import (  # noqa: F401
     AdditiveMethodCertificate, AdditiveMethodProperties, MethodCertificate,
     MethodProperties, ProgramMethodCertificate, SSPCertificate, UnknownOrder,
     certify_program_graph,
 )
-from pops.time.method_tableau import (  # noqa: F401
+from pops.time._methods.tableau import (  # noqa: F401
     AdditiveRungeKuttaTableau, RungeKuttaTableau,
 )
-from pops.time.passes_facade import (  # noqa: F401
+from pops.time._program.pass_api import (  # noqa: F401
     eliminate_common_subexpressions,
     eliminate_dead_nodes,
     eliminate_redundant_field_solves,
     optimize,
 )
-from pops.time.program import Program
+from pops.time._program.api import Program
 from pops.time.solve_outcome import (  # noqa: F401
     FailRun, FieldSolveOutcome, RejectAttempt, ResidualSolution, SOLVE_STATUSES, SolveAction,
     SolveOutcome,
 )
-from pops.time.step_strategy import (  # noqa: F401
+from pops.time._step.strategy import (  # noqa: F401
     AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy,
 )
 from pops.time.solve_problem import (  # noqa: F401
     CoupledImplicitEuler, LocalLinear, LocalResidual,
 )
-from pops.time.step_transaction import (  # noqa: F401
+from pops.time._step.transaction import (  # noqa: F401
     ALL_PROVISIONAL_STORES, AcceptanceGuard, BlockProjection, GuardRole,
     ProjectAndRecheck, ProvisionalStore, StepTransactionPlan, StepTransactionReport,
 )
 from pops.time.points import Clock, StagePoint, TimePoint  # noqa: F401
-from pops.time.schedule import (  # noqa: F401
+from pops.time._schedule.api import (  # noqa: F401
     AMRLevel, AcceptedStep, AccumulateDt, Always, AtEnd, AtStart, Attempt,
     ClockTick, Domain, Error, Event, EventHandle, Every, Hold, OffPolicy,
     Schedule, ScheduleAction, ScheduleComment, ScheduleDomainIR, ScheduleDueIR,
@@ -64,10 +62,12 @@ from pops.time.schedule import (  # noqa: F401
     Skip, Stage, Trigger, WallOutput, When, Zero,
     always, every, on_end, on_start, when,
 )
-from pops.time.synchronization import (  # noqa: F401
+from pops.time._schedule.synchronization import (  # noqa: F401
     SampleAndHold, SynchronizationRelation,
 )
-from pops.time.values import StageStateSet, ProgramValue  # noqa: F401
+from pops.time._schedule.protocol import UnresolvedScheduleCondition  # noqa: F401
+from pops.time.value_collections import StageStateSet  # noqa: F401
+from pops.time.values import ProgramValue  # noqa: F401
 
 __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
@@ -91,8 +91,9 @@ __all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
            "EventHandle", "Event", "WallOutput", "Trigger", "Always", "Every",
            "AtStart", "AtEnd", "When", "OffPolicy", "Hold", "Skip", "Zero",
            "AccumulateDt", "Error",
-           "ScheduleTimeline", "ScheduleDueKind", "ScheduleAction", "ScheduleComment",
-           "ScheduleDomainIR", "ScheduleDueIR", "ScheduleOffIR", "ScheduleLoweringIR",
-           "always", "every", "when", "on_start", "on_end",
+            "ScheduleTimeline", "ScheduleDueKind", "ScheduleAction", "ScheduleComment",
+            "ScheduleDomainIR", "ScheduleDueIR", "ScheduleOffIR", "ScheduleLoweringIR",
+            "UnresolvedScheduleCondition",
+            "always", "every", "when", "on_start", "on_end",
            "eliminate_dead_nodes", "eliminate_common_subexpressions",
            "eliminate_redundant_field_solves", "optimize"]

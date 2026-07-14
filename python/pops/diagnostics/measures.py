@@ -42,7 +42,7 @@ class _Measure(Descriptor):
     it never reads a cell. Subclasses set :attr:`category` + :attr:`scheme` (the native
     reduction identity shared with the legacy factory) and declare their reduction metadata via
     :meth:`capabilities` / :meth:`requirements`. ``cadence`` is any inert schedule object (e.g.
-    ``pops.time.schedule.every(20)``) or an int step interval; it is stored, not interpreted.
+    ``pops.time._schedule.api.every(20)``) or an int step interval; it is stored, not interpreted.
     """
 
     #: The native diagnostic reduction scheme this measure lowers to (an inert authoring label;

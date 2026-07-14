@@ -604,7 +604,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     from pops.codegen._layout_resolution import ResolvedRuntimeLayouts
     from pops.runtime._runtime_mesh_lowering import system_config_from_layout
     from pops.runtime._system import System
-    from pops.time.step_strategy import FixedDt
+    from pops.time._step.strategy import FixedDt
 
     _require_runtime_plan_bundle(plan, runtime_plan)
     layouts = plan.layout
