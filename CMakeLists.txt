@@ -10,6 +10,10 @@ project(PoPS
                    # hdf5-config parallele de spack)
 )
 
+# Shared, exhaustive classification of installed and test-only headers. Both the source package
+# install below and the SKBUILD wheel consume this exact manifest.
+include(cmake/PopsPublicHeaders.cmake)
+
 # Backends par VARIABLE D'ENVIRONNEMENT (pattern WarpX/pyAMReX) : permet `POPS_USE_KOKKOS=ON
 # Kokkos_ROOT=$CONDA_PREFIX pip install .` sans toucher aux flags CMake (pip ne propage pas de
 # -D, mais propage l'environnement ; <Pkg>_ROOT est lu nativement par find_package). La graine
@@ -372,7 +376,7 @@ if(POPS_INSTALL)
   include(GNUInstallDirs)
   include(CMakePackageConfigHelpers)
   install(TARGETS pops EXPORT popsTargets)
-  install(DIRECTORY include/pops DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+  pops_install_public_headers("${CMAKE_INSTALL_INCLUDEDIR}")
   install(EXPORT popsTargets NAMESPACE pops:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/pops)
   configure_package_config_file(cmake/popsConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/popsConfig.cmake

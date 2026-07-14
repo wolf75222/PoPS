@@ -31,6 +31,7 @@ INCLUDE_DIR = REPO_ROOT / "include"
 POPS_CODEGEN = REPO_ROOT / "python" / "pops"
 BINDINGS_DIR = REPO_ROOT / "python" / "bindings"
 CPP_TESTS_DIR = REPO_ROOT / "tests" / "cpp"
+HEADER_MANIFEST = INCLUDE_DIR / "pops_public_headers.manifest"
 
 # Matches ``#include <pops/...>`` both as a real directive and inside a codegen string literal.
 _INCLUDE_RE = re.compile(r"#\s*include\s*<\s*(pops/[^>]+?)\s*>")
@@ -38,25 +39,28 @@ _INCLUDE_RE = re.compile(r"#\s*include\s*<\s*(pops/[^>]+?)\s*>")
 # The quarantined, non-production headers (paths relative to include/, i.e. ``pops/...``).
 # The two AMR reference oracles and the two zero-reference validation bricks were DELETED under
 # ADC-608 (git history preserves them); the assertions below tolerate their absence via (b). The
-# rest are legitimate TEST-ONLY headers kept in place and fenced from production by (a).
-_QUARANTINED = (
+# rest are legitimate TEST-ONLY headers classified by the packaging manifest and fenced from
+# production by (a). This keeps quarantine and installation classification in one source of truth.
+_DELETED_QUARANTINED = (
     # Deleted (dead AMR reference oracles).
     "pops/numerics/time/reference/amr_reflux.hpp",
     "pops/numerics/time/reference/amr_level.hpp",
     # Deleted (zero-reference validation bricks).
     "pops/validation/physics/langmuir.hpp",
     "pops/validation/physics/two_fluid_isothermal.hpp",
-    # Test-only, fenced in place (each justified by >=1 tests/cpp reference).
-    "pops/numerics/time/integrators/ssprk.hpp",
-    "pops/numerics/time/schemes/imex.hpp",
-    "pops/numerics/time/schemes/splitting.hpp",
-    "pops/numerics/elliptic/interface/elliptic_interface.hpp",
-    "pops/runtime/program/external_riemann_brick.hpp",
-    "pops/coupling/system/system_coupler.hpp",
-    "pops/parallel/load_balance.hpp",
-    "pops/runtime/builders/factory/brick_catalog.hpp",
-    "pops/validation/physics/advection_diffusion.hpp",
 )
+
+
+def _manifest_test_only():
+    rows = []
+    for raw in HEADER_MANIFEST.read_text(encoding="utf-8").splitlines():
+        row = raw.strip()
+        if row.startswith("test-only "):
+            rows.append(row.removeprefix("test-only "))
+    return tuple(rows)
+
+
+_QUARANTINED = _DELETED_QUARANTINED + _manifest_test_only()
 
 
 def _pops_includes(text):

@@ -109,23 +109,16 @@ if(TARGET MPI::MPI_CXX)
   endif()
 endif()
 
-# Signature de l'arbre d'en-tetes du coeur, BAKED dans la cle d'ABI du module (pops/runtime/abi_key.hpp
+# Signature des en-tetes PUBLICS installes, BAKED dans la cle d'ABI du module (pops/runtime/abi_key.hpp
 # via -DPOPS_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
 # (pops.dsl.pops_header_signature) et la bake dans le loader .so : les cles concordent quand les en-tetes
 # concordent, divergent sinon -> add_native_block leve une erreur explicite (pas d'UB silencieux).
-# CALCUL (miroir bit-pour-bit de pops_header_signature) : sha256 du concatene TRIE, pour chaque .hpp/.h
-# sous include/, de "<chemin relatif>\n<sha256 du contenu>\n".
-# CONFIGURE_DEPENDS : CMake re-genere (donc recalcule la signature) si un en-tete est AJOUTE/SUPPRIME.
-# Une EDITION de contenu d'en-tete n'invalide pas le glob ; un simple `cmake --build` peut alors garder
-# une signature perimee -> compile_native rejetterait les loaders (erreur EXPLICITE, jamais d'UB). Le
-# flux standard `cmake -S . -B build-py ... && cmake --build` reconfigure et recalcule : c'est le mode
-# nominal. Apres une edition d'en-tete sans reconfigure, relancer la configuration (re-`cmake -S`).
+# CALCUL (miroir bit-pour-bit de pops_header_signature) : sha256 du concatene TRIE, pour chaque ligne
+# `public` du manifeste partage, de "<chemin relatif>\n<sha256 du contenu>\n". Les neuf en-tetes de
+# test n'entrent ni dans l'installation ni dans l'identite ABI publiee.
 set(_pops_include "${CMAKE_CURRENT_SOURCE_DIR}/../include")
-file(GLOB_RECURSE _pops_headers CONFIGURE_DEPENDS RELATIVE "${_pops_include}"
-     "${_pops_include}/*.hpp" "${_pops_include}/*.h")
-list(SORT _pops_headers)
 set(_pops_hdr_blob "")
-foreach(_h ${_pops_headers})
+foreach(_h IN LISTS POPS_PUBLIC_HEADERS)
   file(SHA256 "${_pops_include}/${_h}" _h_digest)
   string(APPEND _pops_hdr_blob "${_h}\n${_h_digest}\n")
 endforeach()
@@ -142,10 +135,21 @@ set_target_properties(_pops PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${POPS_PY_PKG})
 # site-packages/pops/. Resultat : `pip install .` -> `import pops` SANS PYTHONPATH (pattern
 # pyAMReX/WarpX). Le flux dev presets+PYTHONPATH reste inchange (SKBUILD absent).
 if(SKBUILD)
+  execute_process(
+    COMMAND "${Python_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/scripts/check_packaging_manifest.py"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    RESULT_VARIABLE _pops_packaging_preflight_result
+    OUTPUT_VARIABLE _pops_packaging_preflight_stdout
+    ERROR_VARIABLE _pops_packaging_preflight_stderr)
+  if(NOT _pops_packaging_preflight_result EQUAL 0)
+    message(FATAL_ERROR
+      "PoPS packaging preflight failed before wheel assembly:\n"
+      "${_pops_packaging_preflight_stdout}${_pops_packaging_preflight_stderr}")
+  endif()
   install(TARGETS _pops LIBRARY DESTINATION pops)
   # External AOT packages compile against the exact headers whose signature is baked into _pops.
   # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
-  install(DIRECTORY "${_pops_include}/pops" DESTINATION pops/include)
+  pops_install_public_headers("pops/include")
 endif()
 # Copy the pure-Python package (pops/ and every sub-package) into the build tree next to _pops.
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat

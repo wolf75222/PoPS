@@ -38,24 +38,45 @@ def _pops_module() -> Any:
 # module MUST share the same C++ ABI (same headers, compiler, standard). We materialize the
 # "header signature" in the ABI key (pops/runtime/abi_key.hpp, token POPS_HEADER_SIG) ; the
 # module build bakes it (CMake) and compile_native re-bakes it (-D flag) by computing it IDENTICALLY.
-# The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here : sha256 of the
-# sorted concatenation "<relpath>\n<sha256(content)>\n" of each .hpp/.h under include/. cf. abi_key.hpp.
+# The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here:
+# sha256 of the sorted concatenation "<relpath>\n<sha256(content)>\n" for every `public` row in
+# include/pops_public_headers.manifest. Test-only or untracked headers never enter the published ABI.
 def pops_header_signature(include: Any) -> str:
-    """Stable signature of the pops header tree under @p include : sha256 of the sorted concatenation
-    "<relative path>\\n<sha256 of content>\\n" of each .hpp/.h. EXACT MIRROR of the CMake computation
-    (python/CMakeLists.txt) : if a header changes, the signature changes on both sides, so the ABI
-    key diverges and add_native_block raises an explicit error (never silent UB)."""
+    """Signature of the exact installed-public-header manifest under ``include``."""
     import hashlib
-    import os
+
+    manifest = os.path.join(include, "pops_public_headers.manifest")
+    try:
+        with open(manifest, encoding="utf-8") as source:
+            rows = source.read().splitlines()
+    except OSError as exc:
+        raise RuntimeError("PoPS public-header manifest is missing from %s" % include) from exc
+
+    public = []
+    for line_number, raw in enumerate(rows, 1):
+        row = raw.strip()
+        if not row or row.startswith("#"):
+            continue
+        parts = row.split(maxsplit=1)
+        if len(parts) != 2 or parts[0] not in ("public", "test-only"):
+            raise RuntimeError("invalid PoPS public-header manifest row %d" % line_number)
+        if parts[0] == "public":
+            public.append(parts[1])
+    if not public:
+        raise RuntimeError("PoPS public-header manifest declares no public headers")
+
     entries = []
-    for root, _dirs, files in os.walk(include):
-        for fn in files:
-            if fn.endswith((".hpp", ".h")):
-                p = os.path.join(root, fn)
-                rel = os.path.relpath(p, include).replace(os.sep, "/")  # CMake writes paths with '/' (even on Windows)
-                with open(p, "rb") as f:
-                    digest = hashlib.sha256(f.read()).hexdigest()
-                entries.append("%s\n%s\n" % (rel, digest))
+    for rel in sorted(public):
+        if rel.startswith("/") or ".." in rel.split("/") or not rel.startswith("pops/") \
+                or not rel.endswith((".hpp", ".h")):
+            raise RuntimeError("invalid public header path in PoPS manifest: %s" % rel)
+        path = os.path.join(include, *rel.split("/"))
+        try:
+            with open(path, "rb") as source:
+                digest = hashlib.sha256(source.read()).hexdigest()
+        except OSError as exc:
+            raise RuntimeError("PoPS public header is missing: %s" % rel) from exc
+        entries.append("%s\n%s\n" % (rel, digest))
     blob = "".join(sorted(entries)).encode()
     return hashlib.sha256(blob).hexdigest()
 
