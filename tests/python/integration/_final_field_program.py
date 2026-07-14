@@ -158,7 +158,6 @@ def resolve_periodic_field_program(
     rate = model.operators["explicit_rhs"]
     flux = model.fluxes["transport"]
     field_operator = model.field_operators["electrostatic"]
-    field_provider = next(iter(field_operator.providers)).provider
 
     case = pops.Case("%s-case" % name)
     block = case.block(block_name, model)
@@ -189,7 +188,7 @@ def resolve_periodic_field_program(
             ),
         ),
     )
-    program = factory(state_instance, rate, field_provider)
+    program = factory(state_instance, rate, field_instance)
     case.program(program)
 
     if target == "system":

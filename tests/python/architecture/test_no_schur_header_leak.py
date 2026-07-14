@@ -1,18 +1,10 @@
-"""ADC-587: the generic runtime facade and a Schur-free Program must not leak Schur/Lorentz.
+"""The final generic Program runtime must not leak retired Schur/Lorentz machinery.
 
-The Phase-4 refactor splits the condensed-Schur / Lorentz operator out of the ProgramContext
-runtime facade into ``include/pops/coupling/schur/program/`` so that:
-
-  1. ``include/pops/runtime/program/program_context.hpp`` -- the generic seam a generated problem.so
-     always includes -- carries ZERO Schur/Lorentz/electrostatic tokens and no longer #includes the
-     Schur condensation / geometric multigrid / Lorentz eliminator headers; and
-  2. a Program whose IR has NO Schur op emits a .so whose #include set excludes ``coupling/schur/**``
-     (only a condensed-Schur Program pulls the operator module in).
-
-This file pins part 1 as a pure SOURCE-PARSE check (no ``pops`` / ``_pops`` import), so the
-source-only architecture gate always executes it. Part 2 needs the compiled ``_pops`` extension
-(``import pops`` loads it) and lives in tests/python/unit/codegen/test_program_schur_include.py,
-the tier the CI shards run WITH the module built.
+``ProgramContext`` is the backend-neutral seam included by every generated artifact.  Global
+implicit work is authored as a matrix-free ``LinearProblem`` and a hierarchy provider is selected
+explicitly; there is no public Schur program, solver or source-stage route.  This source-only gate
+therefore locks the generic facade and native bindings against accidentally reintroducing that
+retired vocabulary or its compatibility controls.
 """
 import pathlib
 
@@ -29,9 +21,8 @@ RETIRED_NATIVE_HEADERS = (
     "include/pops/numerics/linalg/lorentz_eliminator.hpp",
 )
 
-# Tokens that must never appear in the generic runtime facade after the split (case-insensitive,
-# whole-word where it matters). ``electrostatic`` and ``CondensedSchur`` catch the operator names;
-# ``GeometricMG`` catches the multigrid preconditioner state that moved out.
+# Tokens that must never appear in the generic runtime facade (case-insensitive, whole-word where it
+# matters).  Provider-specific multigrid state belongs to the elliptic provider implementation.
 _FORBIDDEN_TOKENS = ("schur", "lorentz", "electrostatic", "condensedschur", "geometricmg")
 
 # Headers the facade must no longer include (the split moved their consumers to the Schur module).
@@ -49,9 +40,9 @@ def test_program_context_has_no_schur_tokens():
     lowered = text.lower()
     offenders = [tok for tok in _FORBIDDEN_TOKENS if tok in lowered]
     assert not offenders, (
-        "program_context.hpp must be Schur/Lorentz-free after the ADC-587 split, but it still "
-        "mentions %s -- move the offending material into "
-        "include/pops/coupling/schur/program/" % offenders
+        "program_context.hpp must remain backend-neutral, but it still mentions retired "
+        "Schur/Lorentz machinery %s; move provider-specific work behind the generic elliptic "
+        "provider seam" % offenders
     )
 
 

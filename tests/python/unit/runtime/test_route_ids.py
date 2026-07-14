@@ -11,7 +11,7 @@ checks pin the layer at the pure pops-package level, without stepping a System o
   3  typed descriptors lower to routes: Spatial(flux=HLL()) -> riemann.hll.
   4  explicit / IMEX time treatments expose their typed time route.
   5  an unknown route is refused, never defaulted (resolve raises, listing the valid set).
-  6  historical alias spellings resolve to their canonical route.
+  6  historical alias spellings are rejected; each route has one stable spelling.
   7  the routes() inspection surface reports the chosen routes and their limitations.
   8  set_poisson pre-validates route tokens and rejects untyped BC/wall selectors before C++.
   9  the external-flux "user" token stays a plain token (no native route).
@@ -22,10 +22,10 @@ test_runtime_inspection_reports.py.
 """
 
 import pytest
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
-from pops.runtime.bricks import Periodic
+from pops.runtime._system import System  # noqa: E402 - advanced runtime seam
+from pops.runtime.bricks import Periodic  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 from pops.runtime._bricks_scheme import _FLUX_SCHEMES  # noqa: E402
@@ -112,10 +112,13 @@ def test_unknown_family_names_the_valid_families():
         assert family in message, "family %r not listed: %r" % (family, message)
 
 
-def test_alias_spellings_resolve_to_canonical_route():
-    # Group 6: historical alias spellings resolve to the canonical route object (identity).
-    assert routes.resolve("source", "lorentz") is routes.SOURCE_MAGNETIC
-    assert routes.resolve("time", "ssprk2") is routes.TIME_EXPLICIT
+def test_historical_route_aliases_are_rejected():
+    # Group 6: aliases are not an executable compatibility layer. Presets such as SSPRK2 live in
+    # pops.lib.time and lower to the one canonical route themselves.
+    with pytest.raises(ValueError, match="unknown source route"):
+        routes.resolve("source", "lorentz")
+    with pytest.raises(ValueError, match="unknown time route"):
+        routes.resolve("time", "ssprk2")
 
 
 def test_routes_inspection_surface():

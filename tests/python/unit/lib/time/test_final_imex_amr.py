@@ -250,7 +250,9 @@ def test_amr_aggregate_accepts_an_external_hierarchy_protocol_by_identity():
         execution=authored.execution,
     )
     assert extended.available().ok
-    assert extended.capabilities().get("transition_ratios") == [2, 2]
+    ratios = extended.capabilities().get("transition_ratios")
+    assert ratios == [2]
+    assert len(ratios) == extended.hierarchy.max_levels - 1
 
 
 def test_transfer_registry_accepts_an_external_policy_protocol():
