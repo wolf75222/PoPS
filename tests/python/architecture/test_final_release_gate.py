@@ -147,16 +147,21 @@ def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
         preflight._wheel_evidence(tmp_path, gates, release)
 
 
-def test_tag_release_cannot_race_or_bypass_wheel_and_final_gate():
+def test_tag_release_cannot_race_or_bypass_supported_matrix_wheel_and_final_gate():
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
     wheels = (ROOT / ".github" / "workflows" / "wheels.yml").read_text()
+    ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
     build = (ROOT / "scripts" / "build_python.sh").read_text()
 
+    assert "uses: ./.github/workflows/ci.yml" in release
+    assert "force_full: true" in release
     assert "uses: ./.github/workflows/wheels.yml" in release
-    assert "needs: [wheel, validate]" in release
+    assert "needs: [full-source-matrix, wheel, validate]" in release
     assert "run_final_gate.py --wheel" in release
     assert "release_preflight.py" in release
     assert 'gh release create "$GITHUB_REF_NAME" wheelhouse/*.whl' in release
+    assert "workflow_call:" in ci
+    assert "FORCE_FULL: ${{ inputs.force_full || false }}" in ci
     assert "workflow_call:" in wheels
     assert "gh release upload" not in wheels
     assert "--wheel-dir" in build
