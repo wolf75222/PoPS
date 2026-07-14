@@ -240,11 +240,11 @@ MultiFab* GenericKrylov::rhs_ns_ = nullptr;
 TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const KrylovResult r = cg_solve(*A_, x, *rhs_, kRelTol, 500);
+  const SolveReport r = cg_solve(*A_, x, *rhs_, kRelTol, 500);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("CG        : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-  EXPECT_TRUE(r.converged) << "cg_converged";
+              r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.solved()) << "cg_converged";
   EXPECT_TRUE(r.iters > 1) << "cg_iters_gt_1 iters=" << r.iters;
   EXPECT_TRUE(r.rel_residual <= kRelTol * 10) << "cg_residual_small rel_residual=" << r.rel_residual;
   EXPECT_TRUE(err < kRecoverTol) << "cg_recovers_exact err=" << err;
@@ -254,11 +254,11 @@ TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
 TEST_F(GenericKrylov, bicgstab_converges_with_identity_preconditioner) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const KrylovResult r = bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500);
+  const SolveReport r = bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("BiCGStab  : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-  EXPECT_TRUE(r.converged) << "bicgstab_converged";
+              r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.solved()) << "bicgstab_converged";
   EXPECT_TRUE(r.iters > 1) << "bicgstab_iters_gt_1 iters=" << r.iters;
   EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
       << "bicgstab_residual_small rel_residual=" << r.rel_residual;
@@ -277,11 +277,11 @@ TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
   const Real h = geom_->dx();  // = geom.dy() on the unit square (uniform)
   const Real lambda_max = Real(1) + kAlpha * Real(8) / (h * h);
   const Real omega = Real(1) / lambda_max;
-  const KrylovResult r = richardson_solve(*A_, x, *rhs_, omega, kRelTol, 200000);
+  const SolveReport r = richardson_solve(*A_, x, *rhs_, omega, kRelTol, 200000);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("Richardson: %s in %d iters (rel=%.2e, omega=%.4f) | max|x - exact| = %.3e\n",
-              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
-  EXPECT_TRUE(r.converged) << "richardson_converged";
+              r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
+  EXPECT_TRUE(r.solved()) << "richardson_converged";
   EXPECT_TRUE(r.iters > 1) << "richardson_iters_gt_1 iters=" << r.iters;
   EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
       << "richardson_residual_small rel_residual=" << r.rel_residual;
@@ -292,11 +292,11 @@ TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
 TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const KrylovResult r = gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 30);
+  const SolveReport r = gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 30);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(SPD): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-  EXPECT_TRUE(r.converged) << "gmres_spd_converged";
+              r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.solved()) << "gmres_spd_converged";
   EXPECT_TRUE(r.iters > 1) << "gmres_spd_iters_gt_1 iters=" << r.iters;
   EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
       << "gmres_spd_residual_small rel_residual=" << r.rel_residual;
@@ -308,21 +308,21 @@ TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
 TEST_F(GenericKrylov, gmres_converges_where_cg_stagnates_on_nonsymmetric_operator) {
   MultiFab x_cg(*ba_, *dm_, 1, 1);
   x_cg.set_val(0.0);
-  const KrylovResult rc = cg_solve(*A_ns_, x_cg, *rhs_ns_, kRelTol, 500);
+  const SolveReport rc = cg_solve(*A_ns_, x_cg, *rhs_ns_, kRelTol, 500);
   const Real err_cg = max_abs_diff(x_cg, *phi_exact_mf_);
   std::printf(
       "CG(nonsym): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e (expected to NOT "
       "recover)\n",
-      rc.converged ? "CONVERGED" : "FAILED", rc.iters, rc.rel_residual, err_cg);
-  EXPECT_TRUE(!(rc.converged && err_cg < kRecoverTol)) << "cg_stagnates_on_nonsymmetric";
+      rc.solved() ? "CONVERGED" : "FAILED", rc.iters, rc.rel_residual, err_cg);
+  EXPECT_TRUE(!(rc.solved() && err_cg < kRecoverTol)) << "cg_stagnates_on_nonsymmetric";
 
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const KrylovResult r = gmres_solve(*A_ns_, ApplyFn{}, x, *rhs_ns_, kRelTol, 500, 30);
+  const SolveReport r = gmres_solve(*A_ns_, ApplyFn{}, x, *rhs_ns_, kRelTol, 500, 30);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(nsy): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r.converged ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
-  EXPECT_TRUE(r.converged) << "gmres_nonsym_converged";
+              r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
+  EXPECT_TRUE(r.solved()) << "gmres_nonsym_converged";
   EXPECT_TRUE(r.iters > 1) << "gmres_nonsym_iters_gt_1 iters=" << r.iters;
   EXPECT_TRUE(r.rel_residual <= kRelTol * 10)
       << "gmres_nonsym_residual_small rel_residual=" << r.rel_residual;
@@ -360,7 +360,7 @@ TEST_F(GenericKrylov, gmres_restart_is_exact_or_rejected) {
 TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   MultiFab x_limit(*ba_, *dm_, 1, 1);
   x_limit.set_val(0.0);
-  const KrylovResult limited = richardson_solve(*A_, x_limit, *rhs_, Real(1e-12), kRelTol, 1);
+  const SolveReport limited = richardson_solve(*A_, x_limit, *rhs_, Real(1e-12), kRelTol, 1);
   EXPECT_FALSE(limited.solved_value_available());
   EXPECT_EQ(limited.status, SolveStatus::kIterationLimit);
   EXPECT_EQ(limited.action, SolveAction::kFailRun);
@@ -368,7 +368,7 @@ TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   ApplyFn zero_op = [](MultiFab& out, const MultiFab&) { out.set_val(0.0); };
   MultiFab x_break(*ba_, *dm_, 1, 1);
   x_break.set_val(0.0);
-  const KrylovResult breakdown = cg_solve(zero_op, x_break, *rhs_, kRelTol, 10);
+  const SolveReport breakdown = cg_solve(zero_op, x_break, *rhs_, kRelTol, 10);
   EXPECT_FALSE(breakdown.solved_value_available());
   EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
   EXPECT_EQ(breakdown.action, SolveAction::kFailRun);

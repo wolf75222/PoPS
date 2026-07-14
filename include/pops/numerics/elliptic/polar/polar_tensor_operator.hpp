@@ -9,7 +9,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 

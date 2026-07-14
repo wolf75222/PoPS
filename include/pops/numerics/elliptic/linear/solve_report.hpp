@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief SolveReport / KrylovResult -- the shared result type of every Krylov solve in
+/// @brief SolveReport -- the authoritative result type of every iterative solve in
 ///        `include/pops/numerics/elliptic/linear`.
 ///
 /// One definition shared by krylov_solver.hpp (the GeometricMG-coupled BiCGStab, TensorKrylovSolver)
@@ -63,12 +63,11 @@ inline const char* solve_action_name(SolveAction action) {
   return "reject_attempt";
 }
 
-/// Outcome of a solve: iterations performed, final relative residual, explicit status/action, plus
-/// the historical `converged` flag kept in sync for existing KrylovResult users.
+/// Outcome of a solve: iterations performed, final relative residual and one authoritative
+/// status/action pair. Callers query `solved()`; no mutable boolean can contradict the status.
 struct SolveReport {
   int iters = 0;          ///< number of iterations performed
   Real rel_residual = 0;  ///< ||r_final|| / ||b|| (global L2 norm; base 1 when ||b|| == 0)
-  bool converged = false; ///< compatibility: true iff status == kSolved
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
 
@@ -79,12 +78,10 @@ struct SolveReport {
   const char* action_name() const { return solve_action_name(action); }
 
   void mark_solved() {
-    converged = true;
     status = SolveStatus::kSolved;
     action = SolveAction::kNone;
   }
   void mark_failed(SolveStatus failed_status, SolveAction failed_action = SolveAction::kFailRun) {
-    converged = false;
     status = failed_status;
     action = failed_action;
   }
@@ -95,8 +92,5 @@ struct SolveReport {
     return report;
   }
 };
-
-/// Backward-compatible name used by the Krylov solver APIs.
-using KrylovResult = SolveReport;
 
 }  // namespace pops

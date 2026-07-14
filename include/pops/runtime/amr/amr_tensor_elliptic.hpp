@@ -13,7 +13,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>            // pops::lincomb (device-clean copy / negate)
 #include <pops/mesh/storage/multifab.hpp>            // MultiFab / DistributionMapping
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>  // CompositeFacPoisson (composite FAC elliptic)
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>       // SolveReport
+#include <pops/numerics/elliptic/linear/solve_report.hpp>       // SolveReport
 #include <pops/parallel/comm.hpp>                    // pops::n_ranks (MPI-multilevel refusal)
 #include <pops/runtime/amr/amr_runtime.hpp>          // AmrRuntime (the engine this helper reads)
 

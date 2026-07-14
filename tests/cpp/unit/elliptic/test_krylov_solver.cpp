@@ -124,7 +124,7 @@ static TensorSolveCaseReport solve_case(int n, double c, bool non_sym) {
                                   [](Real, Real) { return Real(1); });
 
   TensorKrylovSolver kry(op, precond, /*n_precond_vcycles=*/1);
-  const KrylovResult kr = kry.solve(Real(1e-10), 300);
+  const SolveReport kr = kry.solve(Real(1e-10), 300);
 
   // CONTRASTE : V-cycle MG SEUL sur le MEME operateur plein (lisseur 5 points, croises explicites).
   GeometricMG mg(geom, ba, bc);
@@ -144,7 +144,8 @@ static TensorSolveCaseReport solve_case(int n, double c, bool non_sym) {
   const char* st =
       (rn < 1e-6 * r0) ? "CONVERGE" : (rn < r0 ? "stagne (incomplet)" : "DIVERGE/STAGNE");
 
-  return TensorSolveCaseReport{kr.iters, kr.converged, static_cast<double>(kr.rel_residual), r0, rn, cyc, st};
+  return TensorSolveCaseReport{kr.iters, kr.solved(), static_cast<double>(kr.rel_residual), r0, rn,
+                               cyc, st};
 }
 
 // (A) A = I : ecart MAX phi_krylov vs phi_mg (Poisson canonique), reduit sur tous les rangs.
@@ -245,7 +246,7 @@ static DirichletReport dirichlet_mms(int n, double V) {
   fill(op);
   GeometricMG precond(geom, ba, bc);
   TensorKrylovSolver kry(op, precond, 1);
-  const KrylovResult kr = kry.solve(Real(1e-10), 300);
+  const SolveReport kr = kry.solve(Real(1e-10), 300);
 
   // ecart MAX a la reference MG (consistance) et a l'analytique phi_exact = V + sin sin (cellules valides).
   double dmg = 0, dex = 0;
@@ -260,7 +261,7 @@ static DirichletReport dirichlet_mms(int n, double V) {
         dex = std::fmax(dex, std::fabs(a(i, j) - ex));
       }
   }
-  return DirichletReport{kr.converged, static_cast<double>(kr.rel_residual), all_reduce_max(dmg),
+  return DirichletReport{kr.solved(), static_cast<double>(kr.rel_residual), all_reduce_max(dmg),
                          all_reduce_max(dex), std::fabs(V) + 1.0};
 }
 

@@ -58,7 +58,7 @@ public pops/numerics/elliptic/interface/field_nonlinear.hpp
 public pops/numerics/elliptic/interface/field_nullspace.hpp
 public pops/numerics/elliptic/interface/field_provider.hpp
 public pops/numerics/elliptic/linear/generic_krylov.hpp
-public pops/numerics/elliptic/linear/krylov_result.hpp
+public pops/numerics/elliptic/linear/solve_report.hpp
 public pops/numerics/elliptic/linear/krylov_solver.hpp
 public pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
 public pops/numerics/elliptic/mg/composite_fac_poisson.hpp

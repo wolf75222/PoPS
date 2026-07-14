@@ -31,7 +31,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>
 #include <pops/parallel/comm.hpp>
@@ -43,7 +43,7 @@
 
 namespace pops {
 
-// KrylovResult is defined in krylov_result.hpp (included above), shared with generic_krylov.hpp.
+// SolveReport is defined in solve_report.hpp (included above), shared with generic_krylov.hpp.
 
 namespace detail {
 inline GeometricMG& validate_tensor_krylov_preconditioner(GeometricMG& op, GeometricMG& precond) {
@@ -112,7 +112,7 @@ class TensorKrylovSolver {
 
   // Preconditioned BiCGStab. phi() is the unknown (warm start: incoming value = starting point);
   // rhs() the right-hand side. Returns iterations + relative residual + convergence.
-  KrylovResult solve(Real rel_tol, int max_iters) {
+  SolveReport solve(Real rel_tol, int max_iters) {
     if (max_iters <= 0)
       throw std::invalid_argument("dynamic solver loops require max_iter");
     if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)))
@@ -128,7 +128,7 @@ class TensorKrylovSolver {
     const Real bnorm = l2_norm(rhs());
     const Real norm0 = bnorm > Real(0) ? bnorm : Real(1);  // relative base (zero rhs -> absolute)
     Real rnorm = l2_norm(r_);
-    KrylovResult res;
+    SolveReport res;
     res.rel_residual = rnorm / norm0;
     if (!std::isfinite(static_cast<double>(rnorm))) {
       res.mark_failed(SolveStatus::kInvalidEvaluation);

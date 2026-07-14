@@ -16,7 +16,7 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>      // field_postprocess, FieldPostProcess
 #include <pops/numerics/elliptic/interface/elliptic_solver.hpp>       // EllipticSolver
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>          // GeometricMG
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>         // TensorKrylovSolver, KrylovResult
+#include <pops/numerics/elliptic/linear/krylov_solver.hpp>         // TensorKrylovSolver, SolveReport
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>    // PoissonFFTSolver, DistributedFFTSolver
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver, PolarEllipticSolver
 
@@ -57,7 +57,7 @@ static_assert(LinearSolver<GeometricMG>,
               "GeometricMG doit modeler LinearSolver (solve(rel_tol, max_cycles) -> int)");
 static_assert(
     LinearSolver<TensorKrylovSolver>,
-    "TensorKrylovSolver doit modeler LinearSolver (solve(rel_tol, max_iters) -> KrylovResult)");
+    "TensorKrylovSolver doit modeler LinearSolver (solve(rel_tol, max_iters) -> SolveReport)");
 
 // Le contrat de socle (rhs/phi/solve()/residual/geom) reste EllipticSolver : tout
 // LinearSolver l'est. On le reverifie pour les deux solveurs iteratifs.
@@ -85,7 +85,7 @@ static_assert(!std::is_same_v<decltype(std::declval<GeometricMG&>().solve(Real(1
               "GeometricMG::solve(tol, iters) rend un compte rendu (int), pas void");
 static_assert(
     !std::is_same_v<decltype(std::declval<TensorKrylovSolver&>().solve(Real(1e-8), 1)), void>,
-    "TensorKrylovSolver::solve(tol, iters) rend un compte rendu (KrylovResult), pas void");
+    "TensorKrylovSolver::solve(tol, iters) rend un compte rendu (SolveReport), pas void");
 
 // =====================================================================================
 // (3) FieldPostProcessor : phi -> aux/grad. field_postprocess (fonction libre) le modele.

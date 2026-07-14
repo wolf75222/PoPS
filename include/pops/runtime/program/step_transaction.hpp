@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 
 #include <stdexcept>
 #include <string>

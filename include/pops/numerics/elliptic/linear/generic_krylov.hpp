@@ -50,7 +50,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>  // pops::KrylovResult (shared)
+#include <pops/numerics/elliptic/linear/solve_report.hpp>  // pops::SolveReport (shared)
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
@@ -60,7 +60,7 @@
 
 namespace pops {
 
-// KrylovResult is shared via krylov_result.hpp (included above), so this header and the
+// SolveReport is shared via solve_report.hpp (included above), so this header and the
 // GeometricMG-coupled krylov_solver.hpp never carry hand-synchronised copies of the struct.
 
 /// Matrix-free operator callback: `out <- A(in)`. The caller supplies any apply (e.g. fill ghosts +
@@ -123,7 +123,7 @@ inline void require_gmres_restart(int restart) {
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs,
+inline SolveReport richardson_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs,
                                      Real omega, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
@@ -136,7 +136,7 @@ inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const Mult
   A(r, phi);                               // r = A(phi)
   lincomb(r, Real(1), rhs, Real(-1), r);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
   if (!std::isfinite(static_cast<double>(rnorm))) {
     res.mark_failed(SolveStatus::kInvalidEvaluation);
@@ -180,7 +180,7 @@ inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const Mult
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs, Real rel_tol,
+inline SolveReport cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs, Real rel_tol,
                              int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
@@ -196,7 +196,7 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
   A(r, phi);                               // r = A(phi)
   lincomb(r, Real(1), rhs, Real(-1), r);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
   if (!std::isfinite(static_cast<double>(rnorm))) {
     res.mark_failed(SolveStatus::kInvalidEvaluation);
@@ -266,7 +266,7 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
+inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
                                    const MultiFab& rhs, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
   detail::require_rel_tol(rel_tol);
@@ -294,7 +294,7 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
   A(v, phi);                               // v = A(phi) (scratch reuse for r0)
   lincomb(r, Real(1), rhs, Real(-1), v);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
   if (!std::isfinite(static_cast<double>(rnorm))) {
     res.mark_failed(SolveStatus::kInvalidEvaluation);
@@ -425,7 +425,7 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
 /// @param max_iters total matvec budget across restarts; <= 0 throws std::invalid_argument.
 /// @param restart   GMRES restart length m (basis size); must be in [1, kGmresRestartMax]. Default 30.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
+inline SolveReport gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
                                 const MultiFab& rhs, Real rel_tol, int max_iters,
                                 int restart = 30) {
   detail::require_max_iter(max_iters);
@@ -470,7 +470,7 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
   Real g[kGmresRestartMax + 1];
   Real y[kGmresRestartMax];
 
-  KrylovResult res;
+  SolveReport res;
   int total_iters = 0;
 
   while (total_iters < max_iters) {

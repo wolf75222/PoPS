@@ -35,8 +35,8 @@ def generate_solver_cpp(solver_brick: Any, func: Any = None) -> str:
     The emitted signature is::
 
         template <class Op>
-        pops::KrylovResult <name>_solve(const Op& A, pops::MultiFab& x,
-                                       const pops::MultiFab& b);
+        pops::SolveReport <name>_solve(const Op& A, pops::MultiFab& x,
+                                      const pops::MultiFab& b);
 
     The operator ``A`` is a value-typed TEMPLATE parameter (a callable
     ``void(pops::MultiFab&, const pops::MultiFab&)``, the same shape ``pops::ApplyFn`` and the
@@ -67,6 +67,7 @@ class _SolverCppLowering:
         self._func = str(func)
         self._var = {}          # IR value id -> C++ token (a MultiFab lvalue or a scalar / bool expr)
         self._scratch = []      # MultiFab scratch field declarations (alloc-once, before the loop)
+        self._converged_expr = None
         # Iteration counters (the ``it`` of ``it = it + 1``): an SSA scalar literal cannot mutate, so
         # the authored counter is a constant in the IR. We bind the FIRST such counter to the real C++
         # loop counter ``pops_iters`` so ``it < max_iter`` is a GENUINE trip bound, not a frozen test.
@@ -91,11 +92,15 @@ class _SolverCppLowering:
     def emit(self) -> str:
         """The full C++ translation unit: the templated kernel + an explicit-double ABI wrapper."""
         body = self._emit_kernel_body()
+        if self._converged_expr is None:
+            raise ValueError(
+                "custom solver codegen requires one explicit non-iteration convergence predicate")
         scratch = "\n".join("  " + ln for ln in self._scratch)
         body_src = "\n".join("  " + ln for ln in body)
         return _SOLVER_CPP_TEMPLATE.format(
             name=json.dumps(self._ir.descriptor.name), func=self._func,
-            scratch=scratch, body=body_src, max_iters=_SOLVER_MAX_ITERS)
+            scratch=scratch, body=body_src, max_iters=_SOLVER_MAX_ITERS,
+            converged=self._converged_expr)
 
     # --- top-level walk ----------------------------------------------------
     def _emit_kernel_body(self) -> list:
@@ -310,10 +315,28 @@ class _SolverCppLowering:
             self._var[cid] = "static_cast<pops::Real>(pops_iters)"
         lines.append("pops_iters = 0;")  # function-scope counter (declared in the kernel template)
         lines.append("for (;; ++pops_iters) {")
-        body = ["if (pops_iters >= %d) break;  // hard safety cap (custom solver)" % _SOLVER_MAX_ITERS]
+        body = [
+            "if (pops_iters >= %d) break;  // hard safety cap"
+            % _SOLVER_MAX_ITERS
+        ]
         for w in v.attrs["cond_block"]:
             self._emit_op(w, body, result_id)
         cond_expr = self._var[v.attrs["cond"].id]
+        convergence_tests = [
+            w for w in v.attrs["cond_block"]
+            if w.op == "compare" and w.inputs
+            and w.inputs[0].id not in self._counter_aliases
+        ]
+        if len(convergence_tests) != 1 or self._converged_expr is not None:
+            raise ValueError(
+                "custom solver loop must expose exactly one non-iteration convergence comparison")
+        # The authored condition means "continue iterating". Its scientific comparison becoming
+        # false is the post-loop convergence witness; the iteration comparison is excluded so
+        # exhausting a budget cannot masquerade as a solved value.
+        scientific_continue = self._var[convergence_tests[0].id]
+        self._converged_expr = "pops_converged"
+        body.append(
+            "if (!(%s)) { pops_converged = true; break; }" % scientific_continue)
         body.append("if (!(%s)) break;" % cond_expr)
         for w in v.attrs["body_block"]:
             self._emit_op(w, body, result_id)
@@ -383,15 +406,16 @@ _SOLVER_CPP_TEMPLATE = '''\
 // fields below are allocated once, before it), and no per-cell name dispatch (criterion 24.9).
 #include <pops/mesh/storage/multifab.hpp>                     // pops::MultiFab
 #include <pops/mesh/storage/mf_arith.hpp>                     // pops::dot / pops::saxpy / pops::lincomb
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>    // pops::KrylovResult
+#include <pops/numerics/elliptic/linear/solve_report.hpp>    // pops::SolveReport
 #include <pops/core/foundation/types.hpp>                     // pops::Real
 #include <cmath>                                             // std::sqrt in lowered norms
 
 // The custom solver kernel: solve A x = b, writing the solution into x (warm-started from x).
-// Returns the iteration count / final relative residual in an pops::KrylovResult.
+// Returns the iteration count / final relative residual in a pops::SolveReport.
 template <class Op>
-inline pops::KrylovResult {func}_solve(const Op& A, pops::MultiFab& x, const pops::MultiFab& b) {{
+inline pops::SolveReport {func}_solve(const Op& A, pops::MultiFab& x, const pops::MultiFab& b) {{
   int pops_iters = 0;  // convergence-loop counter (0 for a loop-free solver)
+  bool pops_converged = false;
 {scratch}
 {body}
   // Final relative residual ||b - A x|| / ||b|| over the SAME shared primitives (a diagnostic, once,
@@ -401,10 +425,16 @@ inline pops::KrylovResult {func}_solve(const Op& A, pops::MultiFab& x, const pop
   pops::lincomb(pops_resid, static_cast<pops::Real>(1), b, static_cast<pops::Real>(-1), pops_resid);
   const pops::Real pops_bnorm = std::sqrt(pops::dot(b, b));
   const pops::Real pops_rnorm = std::sqrt(pops::dot(pops_resid, pops_resid));
-  pops::KrylovResult res;
+  pops::SolveReport res;
   res.iters = pops_iters;
   res.rel_residual = pops_bnorm > pops::Real(0) ? pops_rnorm / pops_bnorm : pops_rnorm;
-  res.converged = pops_iters < {max_iters};
+  if (!std::isfinite(res.rel_residual)) {{
+    res.mark_failed(pops::SolveStatus::kInvalidEvaluation);
+  }} else if ({converged}) {{
+    res.mark_solved();
+  }} else {{
+    res.mark_failed(pops::SolveStatus::kIterationLimit);
+  }}
   return res;
 }}
 '''
