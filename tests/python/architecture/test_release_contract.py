@@ -55,6 +55,7 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
         "public_api_version", "semantic_ir_version", "normalization_version",
         "component_catalog_schema_version", "component_manifest_schema_version",
         "component_registry_version", "capability_vocabulary_version", "native_abi_version",
+        "component_interface_abi_version",
         "checkpoint_envelope_schema_version", "uniform_checkpoint_payload_version",
         "amr_checkpoint_payload_version",
     ):

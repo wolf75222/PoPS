@@ -10,9 +10,10 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kReleaseComponentManifestSchemaVersion = 2;
 inline constexpr int kComponentRegistryVersion = 2;
 inline constexpr int kReleaseCapabilityVocabularyVersion = 1;
+inline constexpr int kComponentInterfaceAbiVersion = 1;
 inline constexpr int kReleaseNativeAbiVersion = 3;
 inline constexpr int kCheckpointEnvelopeSchemaVersion = 1;
 inline constexpr int kUniformCheckpointPayloadVersion = 3;
 inline constexpr int kAmrCheckpointPayloadVersion = 3;
-inline constexpr const char* kContractSha256 = "25ab9573c2060b282fe25c7b8af73f48768bddf7c64616f07bb3a0d5f6d80fa9";
+inline constexpr const char* kContractSha256 = "c8acf57707d46195eef9e52a877d9af384493f626151ee5ce9f03a5fce4723fd";
 }  // namespace pops::release_contract

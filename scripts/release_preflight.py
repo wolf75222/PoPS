@@ -85,6 +85,7 @@ def _static_contract(contract: Any) -> list[str]:
         "component_manifest_schema_version": catalog["component_manifest_schema_version"],
         "component_registry_version": catalog["route_registry_version"],
         "capability_vocabulary_version": catalog["capability_vocabulary_version"],
+        "component_interface_abi_version": catalog["native_interface_abi_version"],
     }
     for name, value in exact.items():
         if source[name] != value:

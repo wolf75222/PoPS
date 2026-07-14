@@ -7,6 +7,7 @@
   "component_manifest_schema_version": 2,
   "component_registry_version": 2,
   "capability_vocabulary_version": 1,
+  "component_interface_abi_version": 1,
   "native_abi_version": 3,
   "checkpoint_envelope_schema_version": 1,
   "uniform_checkpoint_payload_version": 3,
