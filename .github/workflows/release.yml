@@ -16,6 +16,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  full-source-matrix:
+    name: Validate every declared source-build route
+    uses: ./.github/workflows/ci.yml
+    with:
+      force_full: true
+    permissions:
+      contents: read
+      pull-requests: read
+
   wheel:
     name: Build the published wheel
     uses: ./.github/workflows/wheels.yml
@@ -70,7 +79,7 @@ jobs:
 
   release:
     name: Publish the validated release
-    needs: [wheel, validate]
+    needs: [full-source-matrix, wheel, validate]
     runs-on: ubuntu-latest
     permissions:
       contents: write

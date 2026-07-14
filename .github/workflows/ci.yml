@@ -51,6 +51,16 @@ name: CI
 #      push-master when a build/backend path changed, on the nightly cron (03:17 UTC), on
 #      workflow_dispatch, and on a PR carrying the label ci-full.
 on:
+  # The release workflow calls this exact matrix for the tagged commit.  A tag therefore cannot
+  # publish merely because the macOS wheel is healthy while one of the declared Linux source
+  # routes (Serial, OpenMP, or MPI) is broken.
+  workflow_call:
+    inputs:
+      force_full:
+        description: Run the complete Serial, OpenMP, and MPI source matrix.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [master]
     paths-ignore:
@@ -169,11 +179,18 @@ jobs:
       - id: decide
         env:
           FULL_PATHS: ${{ needs.changes.outputs.full }}
+          FORCE_FULL: ${{ inputs.force_full || false }}
         run: |
           full=false
           # Nocturne + manuel : suite complete inconditionnelle (backstop anti-derive + override).
           if [ "${{ github.event_name }}" = "schedule" ] \
-             || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+             || [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+             || [ "${{ github.event_name }}" = "workflow_call" ]; then
+            full=true
+          fi
+          # A reusable workflow keeps the caller's event context (a release is still a tag push),
+          # so the explicit input is the authoritative release-time full-matrix request.
+          if [ "$FORCE_FULL" = "true" ]; then
             full=true
           fi
           # Push master : suite complete UNIQUEMENT si un chemin build/backend a bouge (full_paths).
