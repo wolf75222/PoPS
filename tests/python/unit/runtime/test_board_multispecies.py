@@ -315,9 +315,10 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     e_n, i_n, n_n = (
         states["electrons"].n, states["ions"].n, states["neutrals"].n)
     field_solve = mod.operator_handle("fields")
-    f = field_solve(e_n, i_n, n_n)
-    assert f.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
-    assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
+    f = field_solve(e_n, i_n, n_n).consume(action=adctime.FailRun())
+    token = f.inputs[0].inputs[0]
+    assert token.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
+    assert len(token.inputs) == 3, "all three species contribute to the field solve (none dropped)"
 
 
 def test_duplicate_species_name_raises():

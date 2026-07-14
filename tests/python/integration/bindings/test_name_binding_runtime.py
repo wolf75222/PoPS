@@ -21,10 +21,11 @@ Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocat
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import Flux, SourceTerm
 from pops.codegen import _compile_drivers as compile_drivers
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
-from tests.python.support.typed_program import program_states, synthetic_module
+from tests.python.support.typed_program import program_states
 
 
 def _skip(msg):
@@ -68,15 +69,18 @@ def passive_model(name):
     return m
 
 
-def two_block_program(t, name="nb_two_block"):
+def two_block_program(t, model, name="nb_two_block"):
     """Forward-Euler passive transport of blocks "a" then "b" (P.state order a=0, b=1)."""
     P = t.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("a", "b"))
+    _case, states = program_states(P, model, ("a", "b"))
     for blk in ("a", "b"):
         temporal = states[blk]
         U = temporal.n
-        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
+        R = P.rhs(
+            name="R_" + blk,
+            state=U,
+            terms=[Flux(), SourceTerm(model.module.operator_handle("decay"))],
+        )
         P.commit(temporal.next, P.value(
             blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
@@ -107,8 +111,9 @@ def _run():
 
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
+        model = passive_model("nb_model")
         comp = compile_drivers.compile_problem(
-            model=passive_model("nb_model"), time=two_block_program(t))
+            model=model, time=two_block_program(t, model))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

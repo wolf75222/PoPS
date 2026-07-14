@@ -32,6 +32,7 @@ visible Kokkos can build the .so -- never asserting a fake pass.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -109,7 +110,7 @@ def held_program(name="spec3_runtime_held"):
             "schedule": adctime.Schedule(
                 adctime.Every(adctime.AcceptedStep(P.clock), EVERY), off=adctime.Hold()),
         })
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
+    R = P.rhs(name="R", state=U, fields=f, terms=[Flux(), DefaultSource()])
     P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 

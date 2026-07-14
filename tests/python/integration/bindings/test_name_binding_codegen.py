@@ -18,6 +18,7 @@ Skips cleanly (never fakes the engine) if pops.time cannot import (it needs _pop
 """
 import sys
 
+from pops.numerics.terms import DefaultSource, Flux
 from tests.python.support.typed_program import program_states, synthetic_module
 
 
@@ -52,7 +53,7 @@ def _flux_program(t, name, blocks):
     for blk in blocks:
         temporal = states[blk]
         U = temporal.n
-        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+        R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
         P.commit(temporal.next, P.value(
             blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
