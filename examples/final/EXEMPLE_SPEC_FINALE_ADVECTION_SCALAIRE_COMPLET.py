@@ -492,6 +492,17 @@ def _require_same_snapshot(
         raise RuntimeError("%s changed the conservative tracer state" % where)
 
 
+def _require_refined_hierarchy(snapshot: ScalarRuntimeSnapshot, *, where: str) -> None:
+    """Require the AMR acceptance target to execute at least one genuinely refined level."""
+
+    levels = tuple(row[0] for row in snapshot.patch_boxes)
+    if not levels or min(levels) != 0 or not any(level > 0 for level in levels):
+        raise RuntimeError(
+            "%s did not execute the requested refined AMR hierarchy: levels=%r"
+            % (where, levels)
+        )
+
+
 def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
     """Reopen one independently persisted HDF5 and ParaView artifact."""
 
@@ -531,11 +542,13 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
         _reopen_scientific_outputs(accepted_root)
     checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
     accepted = _snapshot(simulation)
+    _require_refined_hierarchy(accepted, where="accepted scalar run")
 
     resumed = pops.bind(artifact, params=params)
     resumed.restart(checkpoint_path)
     restored = _snapshot(resumed)
     _require_same_snapshot(accepted, restored, where="independent strict restart")
+    _require_refined_hierarchy(restored, where="restored scalar run")
     if simulation.bind_identity != resumed.bind_identity:
         raise RuntimeError("fresh bind changed the authenticated scalar install identity")
     if resumed.last_restart_identity is None:
@@ -556,6 +569,7 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     )
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    _require_refined_hierarchy(continuous, where="continued scalar run")
     return ScalarExecutionEvidence(
         hdf5_path=hdf5_path,
         paraview_path=paraview_path,

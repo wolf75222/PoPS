@@ -745,8 +745,8 @@ pas simulés par des placeholders publics.
 Quatre scripts sont des tests d'acceptation, pas des esquisses :
 
 1. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py` : flux conservatif, parité du
-   `Program` SSPRK2 explicite avec `pops.lib.time.SSPRK2`, layout AMR, HDF5/ParaView, checkpoint et
-   continuation bit-identique ;
+   `Program` SSPRK2 explicite avec `pops.lib.time.SSPRK2`, layout AMR avec au moins un niveau raffiné
+   réellement exécuté, HDF5/ParaView, checkpoint et continuation bit-identique ;
 2. `examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py` : deux `StateSpace` d'un même modèle
    sélectionnés dans deux blocs qualifiés, layout Uniform, champ elliptique, couplage, HDF5/ParaView et
    restart bit-identique ;
