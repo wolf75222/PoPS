@@ -13,7 +13,7 @@ the runtime parameters, and the codegen wrappers. The stable user facade
 
 Import-graph rule (Spec 4): this module imports only :mod:`pops.ir`; any
 :mod:`pops.codegen` / ``_pops`` use is LAZY, inside method bodies (the codegen
-wrappers in ``_authoring_codegen`` and the lazy ``_BACKENDS`` metaclass).
+wrappers in ``_authoring_codegen``).
 """
 from __future__ import annotations
 
@@ -32,25 +32,8 @@ from ._authoring_codegen import _CodegenMixin
 from ._freeze import PhysicsFreezable
 
 
-class _BackendLazyMeta(type):
-    """Metaclass exposing ``HyperbolicModel._BACKENDS`` / ``._BACKEND_CAPS`` lazily.
-
-    The single source of truth is :mod:`pops.codegen._compile`; resolving it at class
-    body time would make ``import pops.physics`` pull in codegen, breaking the Spec-4
-    import-graph rule. The metaclass resolves the tables on first CLASS-level access
-    instead, so ``HyperbolicModel._BACKENDS[backend]`` keeps working unchanged.
-    """
-
-    def __getattr__(cls, name: Any) -> Any:
-        if name in ("_BACKENDS", "_BACKEND_CAPS"):
-            from pops.codegen import _compile as _cg
-            return getattr(_cg, name)
-        raise AttributeError(name)
-
-
 class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixin, _RiemannMixin,
-                      _OperatorViewMixin, _EvalMixin, _RuntimeParamsMixin, _CodegenMixin,
-                      metaclass=_BackendLazyMeta):
+                      _OperatorViewMixin, _EvalMixin, _RuntimeParamsMixin, _CodegenMixin):
     """Hyperbolic model written as FORMULAS: conservative variables, primitives (defined by
     expressions), flux, eigenvalues, source, elliptic contribution. cf. module docstring.
 

@@ -1,7 +1,7 @@
 """Compiled per-block model handle (ADC-619 split).
 
 :class:`CompiledModel` -- the result of ``m.compile(...)`` -- packages a per-block
-physics ``.so`` with the metadata needed to wire it (dispatch adder, names, roles,
+physics ``.so`` with the metadata needed to wire it (names, roles,
 gamma, n_aux, params, caps, abi_key, model_hash) plus its runtime-param routing,
 runtime re-verification, static AMR report and route matrix. Split out of
 ``pops.codegen.loader`` for the 500-line cap; ``pops.codegen.loader`` re-exports it
@@ -16,9 +16,7 @@ from typing import Any
 
 class CompiledModel:
     """Result of ``m.compile(...)``: packages the produced ``.so`` + EVERYTHING
-    needed to wire it correctly (dispatch adder, ABI diagnostic,
-    reproducibility). Replaces the historical pair (str so_path,
-    adder_for(backend)) with a single object.
+    needed to wire it correctly (fixed native ABI, metadata and reproducibility).
 
     The metadata is NOT re-read from the ``.so``: Python already holds
     names/roles/gamma/n_aux/params (the HyperbolicModel carries them);
@@ -26,7 +24,7 @@ class CompiledModel:
     diagnostics. cf. DSL_MODEL_DESIGN.md section 3.
     """
 
-    def __init__(self, so_path: Any, backend: Any, adder: Any, cons_names: Any, cons_roles: Any,
+    def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
@@ -37,9 +35,10 @@ class CompiledModel:
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
         self.so_path = so_path
-        self.backend = backend       # "prototype" | "aot" | "production"
+        if backend != "production":
+            raise ValueError("CompiledModel backend must be the native production route")
+        self.backend = backend
         self.target = target         # "system" | "amr_system": targeted facade (native AMR loader if amr_system)
-        self.adder = adder           # method name (Amr)System: add_dynamic_block / add_compiled_block / add_native_block
         self.cons_names = list(cons_names)
         self.state_spaces = list(state_spaces)
         self.cons_roles = list(cons_roles)
@@ -145,7 +144,7 @@ class CompiledModel:
 
     def runtime_param_values(self) -> list:
         """DECLARATION values of the runtime params, parallel to runtime_param_names (default as
-        long as no set_block_params has been called)."""
+        before the canonical BindSchema vector is injected at package installation."""
         return [
             self.params[name].default
             if getattr(self.params[name], "has_default", False)
@@ -252,6 +251,6 @@ class CompiledModel:
 
     def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
-                "adder=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
+                "runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
                 % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
-                   self.adder, self.runtime_param_names, self.abi_key or "", self.model_hash or ""))
+                   self.runtime_param_names, self.abi_key or "", self.model_hash or ""))

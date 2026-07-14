@@ -174,7 +174,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         """Names of the added blocks, in order (useful for a Python integrator).
 
         Delegates to the C++ block registry (single source), so it includes the blocks loaded via
-        add_dynamic_block (.so JIT) and add_compiled_block (.so AOT), not only add_block.
+        blocks installed from a production package, not only direct native blocks.
         """
         return list(self._s.block_names())
 

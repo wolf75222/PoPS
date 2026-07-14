@@ -41,8 +41,7 @@ def _module_with_derived_parameter():
 def _compiled(params):
     return CompiledModel(
         so_path="<compiled-parameter-stub>",
-        backend="aot",
-        adder="add_compiled_block",
+        backend="production",
         cons_names=("u",),
         cons_roles=("Scalar",),
         prim_names=("u",),

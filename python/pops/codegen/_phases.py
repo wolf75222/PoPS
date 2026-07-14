@@ -76,15 +76,6 @@ def resolve(
     detached_layout = resolved_layout
     bind_schema = BindSchema.from_problem(problem)
     compile_values = bind_schema.resolve_compile()
-    def block_backend(name: str) -> str:
-        dynamic = []
-        for slot in (*bind_schema.runtime_slots, *bind_schema.derived_slots):
-            block_ref = slot.handle.block_ref
-            if block_ref is None or block_ref.local_id != name:
-                continue
-            if slot.kind == "runtime" or slot.declaration["phase"] == "bind":
-                dynamic.append(slot)
-        return "aot" if target == "system" and dynamic else backend_token
 
     resolved_blocks = []
     for name, spec in problem._blocks.items():
@@ -105,7 +96,9 @@ def resolve(
             name=name,
             model=_resolve_problem_model(spec["model"]),
             spatial=detached_frozen(spatial),
-            backend=block_backend(name),
+            # Bind-time values cross the native install ABI and are injected before the block
+            # closures are built. A RuntimeParam never selects a second host-marshalled backend.
+            backend=backend_token,
             state_spaces=state_spaces,
             numerics=numerics,
         ))

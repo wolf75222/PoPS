@@ -31,8 +31,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "amr_native_param_guard.hpp"  // detail::reject_excessive_amr_runtime_params (ADC-514 loader guard)
-
 namespace pops {
 
 namespace {
@@ -253,9 +251,6 @@ struct AmrSystem::Impl {
     // COMPILED blocks carry it too (ADC-322): set_compiled_block stores it here from the regenerated
     // .so loader (pops_install_native_amr -> add_compiled_model), so both routings floor like a native block.
     double pos_floor = 0.0;
-    // NATIVE per-block RUNTIME params (ADC-514): SHARED value vector the bricks read; empty -> no
-    // injection, byte-identical. See AmrSystem::set_block_params (amr_system_params.hpp).
-    std::shared_ptr<std::vector<double>> runtime_params;
   };
 
   std::vector<BlockSpec> blocks;
@@ -441,9 +436,6 @@ struct AmrSystem::Impl {
   // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
   // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
   pops::runtime::program::ProgramRuntimeState program_;
-  // NATIVE per-block RUNTIME params (ADC-514, AMR mirror of System::Impl::block_params_): block name ->
-  // SHARED value vector set_block_params retargets WITHOUT recompiling; SEPARATE from program_.block_params_.
-  std::map<std::string, std::shared_ptr<std::vector<double>>> block_params_;
   // ADC-635: the in-window regrid schedule the LAST rebuild_history_slots fired (for the v3 reader's
   // coherence assertion against the checkpoint fingerprint). Reset each rebuild; empty on a clean window.
   std::vector<int> last_replay_regrid_steps_;
@@ -675,10 +667,6 @@ struct AmrSystem::Impl {
     // NAMED AUX group: model-named aux fields (ADC-291) + per-field halo policies (ADC-369).
     bp.named_aux.fields = named_aux_;
     bp.named_aux.halo_policies = named_aux_bc_;
-    // RUNTIME group (ADC-514): the single block's SHARED param vector; empty -> count 0 -> no injection
-    // (byte-identical). The mono coupler re-injects it into cpl->model_ each macro-step.
-    bp.runtime.values = b.runtime_params;
-    bp.runtime.count = b.runtime_params ? static_cast<int>(b.runtime_params->size()) : 0;
     return bp;
   }
 
@@ -801,11 +789,9 @@ struct AmrSystem::Impl {
         // so a loader regenerated against this header floors the Density-role face states like a native
         // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
         // (it never marshals the field) -> inactive, bit-identical. No reject.
-        // Runtime params (ADC-514): thread the SHARED vector so the multi-block builder re-injects it
-        // each macro-step (empty for a param-free model -> no injection).
         rblocks.push_back(b.compiled_block_builder(
             S, b.name, b.density, b.has_density, b.gamma, b.substeps, b.recon_prim, b.imex,
-            b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor, b.runtime_params));
+            b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch
@@ -1311,8 +1297,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
     std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
     AmrCompiledBlockBuilder multi_builder, const std::string& name, bool recon_prim, bool imex,
     int stride, const std::vector<std::string>& implicit_vars,
-    const std::vector<std::string>& implicit_roles, double pos_floor,
-    std::shared_ptr<std::vector<double>> runtime_params) {
+    const std::vector<std::string>& implicit_roles, double pos_floor) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
   require_assembling_amr(p_->bound_,
@@ -1351,9 +1336,6 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
   // -> add_compiled_model). Stored on the block so the MONO path reads it via make_build_params ->
   // AmrBuildParams::pos_floor, and the MULTI path forwards it through the AmrCompiledBlockBuilder.
   b.pos_floor = pos_floor;
-  // NATIVE per-block runtime params (ADC-514): the SHARED vector add_compiled_model seeded from the
-  // model defaults (empty -> no injection); make_build_params (mono) reads it and the builder (multi) threads it.
-  b.runtime_params = std::move(runtime_params);
   b.compiled_hooks_builder = std::move(mono_builder);   // single-block path (AmrCouplerMP)
   b.compiled_block_builder = std::move(multi_builder);  // multi-block path (AmrRuntime)
   p_->blocks.push_back(std::move(b));
@@ -1478,12 +1460,58 @@ namespace {
 // global scope (RTLD_NOLOAD). A TU-local function suffices (no need to export) and avoids
 // depending on a symbol defined elsewhere (pops::abi_key, system.cpp).
 void amr_native_anchor() {}
+
+int compiled_param_name_count(const char* raw) {
+  if (raw == nullptr || *raw == '\0')
+    return 0;
+  int count = 1;
+  for (const char* cursor = raw; *cursor != '\0'; ++cursor)
+    if (*cursor == ',')
+      ++count;
+  return count;
+}
+
+void verify_amr_package(pops::dynlib::handle handle, const std::vector<double>& params) {
+  constexpr const char* context = "AmrSystem::_install_native_block";
+  auto manifest = reinterpret_cast<const char* (*)()>(
+      pops::dynlib::sym(handle, "pops_compiled_route_manifest"));
+  auto count = reinterpret_cast<int (*)()>(
+      pops::dynlib::sym(handle, "pops_compiled_nparams"));
+  auto names = reinterpret_cast<const char* (*)()>(
+      pops::dynlib::sym(handle, "pops_compiled_param_names"));
+  if (manifest == nullptr || count == nullptr || names == nullptr) {
+    pops::dynlib::close(handle);
+    throw std::runtime_error(std::string(context) +
+                             ": strict package metadata is missing; rebuild artifact");
+  }
+  const char* route_manifest = manifest();
+  const char* param_names = names();
+  if (route_manifest == nullptr || param_names == nullptr) {
+    pops::dynlib::close(handle);
+    throw std::runtime_error(std::string(context) + ": package metadata returned null");
+  }
+  try {
+    pops::verify_route_manifest(route_manifest, context);
+  } catch (...) {
+    pops::dynlib::close(handle);
+    throw;
+  }
+  const int expected = count();
+  if (expected < 0 || expected > kMaxRuntimeParams ||
+      compiled_param_name_count(param_names) != expected ||
+      params.size() != static_cast<std::size_t>(expected)) {
+    pops::dynlib::close(handle);
+    throw std::runtime_error(std::string(context) +
+                             ": bound parameter vector disagrees with package metadata");
+  }
+}
 }  // namespace
 
 void AmrSystem::add_native_block(const std::string& name, const std::string& so_path,
                                  const std::string& limiter, const std::string& riemann,
                                  const std::string& recon, const std::string& time, double gamma,
-                                 int substeps, double positivity_floor) {
+                                 int substeps, const std::vector<double>& params,
+                                 double positivity_floor) {
   require_assembling_amr(p_->bound_,
                          "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (substeps < 1)
@@ -1554,16 +1582,19 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
       throw std::runtime_error("AmrSystem::add_native_block : incompatible ABI -- loader '" +
                                loader_key + "' != module '" + module_key + "'");
     }
+    verify_amr_package(h, params);
     using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                  const char*, double, int, double);
+                                  const char*, double, int, const double*, int, double);
     auto install = reinterpret_cast<install_fn_t>(pops::dynlib::sym(h, "pops_install_native_amr"));
     if (!install) {
       pops::dynlib::close(h);
       throw std::runtime_error(
           "AmrSystem::add_native_block : pops_install_native_amr missing from the .dll");
     }
-    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-            time.c_str(), gamma, substeps, positivity_floor);
+    install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(),
+            recon.c_str(), time.c_str(), gamma, substeps,
+            params.empty() ? nullptr : params.data(), static_cast<int>(params.size()),
+            positivity_floor);
   }
 #else
   {
@@ -1606,6 +1637,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
                              "'. Recompile the loader with the SAME compiler, C++ standard and "
                              "pops headers as the _pops module.");
   }
+  verify_amr_package(h, params);
   // AMR native installer of the loader: reinterpret_cast<AmrSystem*>(this) then
   // add_compiled_model<ProdModel>(*amrsys, ...). Scheme marshaled as flat extern "C" arguments. No
   // evolve parameter (single-block AMR, no frozen background block like System). DISTINCT SYMBOL
@@ -1614,7 +1646,7 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // double is the Zhang-Shu positivity floor (ADC-322): old 8-argument loaders carry an ABI key from
   // the pre-floor headers and are REJECTED above, so the 9-argument call never reaches a stale .so.
   using install_fn_t = void (*)(void*, const char*, const char*, const char*, const char*,
-                                const char*, double, int, double);
+                                const char*, double, int, const double*, int, double);
   auto install = reinterpret_cast<install_fn_t>(dlsym(h, "pops_install_native_amr"));
   if (!install) {
     dlclose(h);
@@ -1623,11 +1655,9 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
         "(loader generated for System, or regenerate via "
         "dsl.compile_native(target='amr_system'))");
   }
-  // DEFENSE IN DEPTH (ADC-514): reject a bogus pops_compiled_nparams before add_compiled_model seeds
-  // the value block (closes h on overflow; 0 for an older loader without the symbol, bit-identical).
-  (void)detail::reject_excessive_amr_runtime_params(h);
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
-          time.c_str(), gamma, substeps, positivity_floor);
+          time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
+          static_cast<int>(params.size()), positivity_floor);
   // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
   // installed by set_compiled_block captures code (header template) that lives there. We do NOT close it.
 #endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
@@ -2871,9 +2901,6 @@ RuntimeParams AmrSystem::program_params(int prog_block) const {
   // Unseeded block (no runtime param) -> default RuntimeParams (count 0). Shared subsystem (ADC-594).
   return p_->program_.params(prog_block);
 }
-// NATIVE per-block RUNTIME parameters (ADC-514): register_block_params + set_block_params are defined in
-// this binding-private header, split out to keep the TU on budget; it sees the complete Impl here.
-#include "amr_system_params.hpp"
 // The built multi-block AMR engine the AmrProgramContext driver wraps (nullptr before the lazy build /
 // on the single-block coupler path). install_program forces the runtime build so this is live there.
 AmrRuntime* AmrSystem::engine() const {

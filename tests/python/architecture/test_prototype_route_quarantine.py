@@ -1,11 +1,8 @@
-"""ADC-600: architecture gate quarantining the host/prototype hot-path routes.
+"""ADC-600/ADC-693: architecture gate for the sole production native route.
 
-The prototype/host routes are the JIT ``add_dynamic_block`` (IModel virtual host Rusanov), the AOT
-``add_compiled_block`` (host-marshalled production algorithm, no MPI/AMR/GPU) and the
-``pops.experimental.PythonFlux`` numpy-host backend.  They may stay for internal tests / prototyping
-but must NEVER be taken for the final generic route: the ``pops.compile`` / ``pops.bind`` target
-surface must not reference them, a missing production native route must refuse early (no prototype
-fallback), and ``pops.experimental`` must not leak onto the ``pops`` root.
+The retired JIT and host-marshalled AOT model routes must not be reachable from the final compile,
+bind or runtime surfaces. A missing production route refuses early; no compatibility alias or
+prototype fallback remains. ``pops.experimental`` stays isolated from the root package.
 
 These checks are source-only (they do not import ``pops`` / ``_pops``), so they run without a built
 native extension.  If a legitimate hit appears in a scanned tree, INVESTIGATE it (the target surface
@@ -34,11 +31,11 @@ TARGET_SURFACE = (
 FORBIDDEN_NAMES = ("add_dynamic_block", "add_compiled_block")
 FORBIDDEN_ATTR_CHAIN = "experimental"  # pops.experimental (host numpy PythonFlux)
 
-# The production-only refusal the compile drivers MUST keep (a silent removal is a fallback hole).
-PRODUCTION_ONLY_RE = re.compile(r"require backend='production'")
+# The final backend authority must expose one descriptor and reject retired routes.
+PRODUCTION_ONLY_RE = re.compile(r"BACKEND_DESCRIPTORS\s*=\s*\{_PRODUCTION:\s*Production\}")
 
 # The legal route-tier vocabulary (ADC-600): every backend caps row carries one of these.
-LEGAL_TIERS = {"production", "prototype", "internal"}
+LEGAL_TIERS = {"production"}
 
 
 def _read(path):
@@ -93,13 +90,11 @@ def test_target_surface_does_not_reference_host_prototype_routes():
         "and remove each reference at its source (never allowlist it):\n  " + "\n  ".join(violations))
 
 
-def test_compile_drivers_keeps_the_production_only_refusal():
-    text = _read(POPS / "codegen" / "_compile_drivers.py")
+def test_backend_authority_has_exactly_one_route():
+    text = _read(POPS / "codegen" / "_backends.py")
     assert PRODUCTION_ONLY_RE.search(text), (
-        "_compile_drivers.py must keep the production-only refusal string "
-        "\"require backend='production'\" (ADC-600): a compiled time program refuses a non-production "
-        "backend early, it never falls back to a prototype/host route. A silent removal of this "
-        "guard opens a fallback hole -- restore the refusal.")
+        "_backends.py must expose exactly the Production descriptor; retired route descriptors or "
+        "fallback registries are forbidden")
 
 
 def test_pops_root_does_not_import_experimental():
@@ -116,7 +111,7 @@ def test_pops_root_does_not_import_experimental():
 
 
 def test_backend_caps_rows_carry_a_legal_tier():
-    """Source-only: every _BACKEND_CAPS row declares a tier in {production, prototype, internal}.
+    """Source-only: every _BACKEND_CAPS row declares the production tier.
 
     Parse the assignment in _compile_emit.py (no import) and assert each row dict has a ``tier`` key
     whose value is one of the legal tokens, so a report can always name a route's class honestly.

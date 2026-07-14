@@ -30,7 +30,7 @@ def _model(*, hllc=False, roe=False, wave_speeds=True, n_vars=3,
     """A metadata-only CompiledModel (never built into a .so) carrying the capability flags the
     install-time predicates read (has_hllc / has_roe / has_wave_speeds / n_vars / prim_names)."""
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["density", "momentum_x", "momentum_y"],
         prim_names=list(prim_names), n_vars=n_vars, gamma=None, n_aux=3, params={},
         caps={}, abi_key="", model_hash="", cxx="c++", std="23",

@@ -68,7 +68,7 @@ def _synthetic_compiled():
     U = temporal.n
     P.commit(temporal.next, P.value("U1", 1.0 * U, at=temporal.next.point))
     m = CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=0, params={},
         caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23")

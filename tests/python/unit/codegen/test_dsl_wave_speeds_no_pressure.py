@@ -15,7 +15,8 @@ flux HLL analytique trivial a re-calculer en numpy.
 On verifie :
  (1) facade + evaluateurs numpy : eval_wave_speeds = paire declaree ; max_wave_speed (interprete)
      = max(|smin|, |smax|) SANS eigenvalues ; check_model passe (coherence ws <-> mws).
- (2) [compilateur] le modele SANS 'p' compile (aot) et compiled.has_wave_speeds est vrai.
+ (2) [compilateur] le modele SANS 'p' compile en paquet production et
+     compiled.has_wave_speeds est vrai.
  (3) [compilateur] riemann='hll' construit et tourne : eval_rhs == divergence HLL re-calculee en
      numpy (Davis, sL/sR constants), atol 1e-13.
  (4) [compilateur] riemann='rusanov' sur le MEME modele (max_wave_speed emis depuis la paire) :
@@ -38,7 +39,6 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import _default_cxx
-from pops.physics.bricks import HyperbolicBrick
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -151,8 +151,8 @@ if missing:
 
 tmp = tempfile.mkdtemp(prefix="pops_ws_nop_")
 
-print("== (2) compile aot sans 'p' : wave_speeds emis ==")
-compiled = toy_model().compile(os.path.join(tmp, "acoustic2.so"), INCLUDE, backend="aot")
+print("== (2) compile production sans 'p' : wave_speeds emis ==")
+compiled = toy_model().compile(os.path.join(tmp, "acoustic2.so"), INCLUDE, backend="production")
 chk(getattr(compiled, "has_wave_speeds", False), "compiled.has_wave_speeds (paire explicite, sans 'p')")
 
 n = 32
@@ -182,7 +182,7 @@ m_eig.flux(x=[ae * e2, ae * e1], y=[ae * e2, ae * e1])
 m_eig.eigenvalues(x=[-1.0 * ae, 1.0 * ae], y=[-1.0 * ae, 1.0 * ae])
 m_eig.primitive_vars(e1, e2)
 m_eig.conservative_from([e1, e2])
-c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="aot")
+c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="production")
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
 sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
@@ -203,7 +203,7 @@ m_p.flux(x=[mx, mx * u + p, mx * v], y=[my, my * u, my * v + p])
 m_p.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
 m_p.primitive_vars(rho, u, v)
 m_p.conservative_from([rho, rho * u, rho * v])
-c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="aot")
+c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="production")
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
 sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
@@ -211,46 +211,7 @@ msg = err_msg(lambda: sim.add_equation(
     time=pops.Explicit()))
 chk(msg == "", f"hll accepte sur le modele avec 'p' (historique, message='{msg[:40]}')")
 
-print("== (7) briques hybrides : flag has_wave_speeds propage (sans compilateur machine) ==")
-# HyperbolicBrick.compile passe par emit_cpp_brick : le struct de brique emet wave_speeds selon
-# les MEMES regles ('p' OU paire explicite). CompiledBrick.has_wave_speeds porte l'info jusqu'au
-# CompiledModel hybride (HybridModel._compiled_model) -- sans quoi la garde precoce hll
-# bloquerait a tort un hybride compressible (revue adverse).
-bp = HyperbolicBrick("hybp")
-hrho, hmx, hmy = bp.conservative_vars("rho", "m_x", "m_y",
-                                      roles=["Density", "MomentumX", "MomentumY"])
-hu = bp.primitive("u", hmx / hrho)
-hv = bp.primitive("v", hmy / hrho)
-hp = bp.primitive("p", 1.0 * hrho)
-bp.flux(x=[hmx, hmx * hu + hp, hmx * hv], y=[hmy, hmy * hu, hmy * hv + hp])
-bp.eigenvalues(x=[hu - 1.0, hu, hu + 1.0], y=[hv - 1.0, hv, hv + 1.0])
-bp.primitive_vars(hrho, hu, hv)
-bp.conservative_from([hrho, hrho * hu, hrho * hv])
-cbp = bp.compile()
-chk(cbp.has_wave_speeds and "wave_speeds" in cbp.struct_src,
-    "brique AVEC 'p' : has_wave_speeds vrai, struct emet wave_speeds")
-
-bn = HyperbolicBrick("hybn")
-hc, = bn.conservative_vars("c")
-bn.flux(x=[1.0 * hc], y=[0.0 * hc])
-bn.eigenvalues(x=[1.0 + 0.0 * hc], y=[0.0 * hc])
-bn.primitive_vars(hc)
-bn.conservative_from([hc])
-cbn = bn.compile()
-chk((not cbn.has_wave_speeds) and "wave_speeds" not in cbn.struct_src,
-    "brique SANS 'p' ni paire : has_wave_speeds faux, struct sans wave_speeds")
-
-bw = HyperbolicBrick("hybw")
-hq, = bw.conservative_vars("q")
-bw.flux(x=[2.0 * hq], y=[0.5 * hq])
-bw.wave_speeds(x=(0.0 * hq, 2.0 + 0.0 * hq), y=(0.0 * hq, 0.5 + 0.0 * hq))
-bw.primitive_vars(hq)
-bw.conservative_from([hq])
-cbw = bw.compile()
-chk(cbw.has_wave_speeds and "wave_speeds" in cbw.struct_src,
-    "brique a PAIRE explicite sans 'p' : has_wave_speeds vrai (miroir HyperbolicBrick.wave_speeds)")
-
-print("== (8) wave_speeds_value : formes mixtes (valeur propre constante + dependante de l'etat) ==")
+print("== (7) wave_speeds_value : formes mixtes (valeur propre constante + dependante de l'etat) ==")
 mm = Model("mixshape")
 w1, w2 = mm.conservative_vars("w1", "w2")
 mm.flux(x=[w2, w1], y=[w2, w1])

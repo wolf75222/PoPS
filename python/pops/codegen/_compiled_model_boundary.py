@@ -15,7 +15,7 @@ _SEQUENCE_FIELDS = (
     "state_spaces",
 )
 _SCALAR_FIELDS = (
-    "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target", "adder",
+    "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target",
     "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {

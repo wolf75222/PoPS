@@ -10,11 +10,9 @@ from typing import Any
 from pops.codegen.toolchain import (
     pops_include,
     loader_cxx_std,
-    _default_cxx,
     _probe_cxx_std,
     _check_headers_match_module,
     _warn_kokkos_parity,
-    _native_kokkos_root,
     _native_kokkos_compiler,
     _native_kokkos_flags,
     _run_compile,
@@ -36,78 +34,13 @@ from pops.codegen.compile_provenance import (
     write_artifact_sidecar,
 )
 from pops.codegen.abi import _abi_key_python
-from pops.codegen._compile_emit import (
-    _BACKENDS,
-    emit_cpp_so_source,
-    emit_cpp_aot_source,
-    emit_cpp_native_loader,
-)
+from pops.codegen._compile_emit import emit_cpp_native_loader
 from pops.codegen._backends import lower_backend
 from pops.codegen._compile_command_redact import _redact_compile_command  # noqa: F401
 from pops.codegen.compile_link_flags import deterministic_program_link_flags
 # _module_to_model moved to module_lowering.py (500-line budget); re-exported here so
 # ``from pops.codegen._compile_drivers import _module_to_model`` (and pops.codegen._compile) is unchanged.
 from pops.codegen.module_lowering import _module_to_model  # noqa: F401
-
-
-def compile_so(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
-               std: Any = "c++20", hoist_reciprocals: Any = False) -> Any:
-    """JIT: generate the FULL MODEL (emit_cpp_so_source) and compile a shared
-    library loadable by System.add_dynamic_block (dlopen). Returns so_path.
-    """
-    import tempfile
-    if include is None:
-        include = pops_include()
-    src = emit_cpp_so_source(model, name=name, hoist_reciprocals=hoist_reciprocals)
-    cc = _default_cxx(cxx)
-    if not cc:
-        raise RuntimeError("compile_so: no C++ compiler found")
-    std = _probe_cxx_std(cc, std)
-    with tempfile.TemporaryDirectory() as tmp:
-        cpp = os.path.join(tmp, "model.cpp")
-        with open(cpp, "w") as f:
-            f.write(src)
-        _run_compile([cc, "-shared", "-fPIC", "-std=" + std, "-O2", "-I", include, cpp,
-                      "-o", so_path], "backend jit, compile_so")
-    return so_path
-
-
-def compile_aot(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
-                std: Any = "c++20", hoist_reciprocals: Any = False) -> Any:
-    """Backend "compile" (AOT): generate the FULL MODEL (emit_cpp_aot_source)
-    and compile a .so loadable by System.add_compiled_block. Returns so_path.
-
-    KOKKOS-ONLY: the AOT model includes the pops headers (multifab/for_each),
-    which do NOT compile without POPS_HAS_KOKKOS. So we compile the .so WITH
-    Kokkos (same flags as the native loader), which also aligns its ABI with
-    the _pops module.
-    """
-    import tempfile
-    if include is None:
-        include = pops_include()
-    src = emit_cpp_aot_source(model, name=name, hoist_reciprocals=hoist_reciprocals)
-    if _native_kokkos_root() is None:
-        raise RuntimeError(
-            "compile_aot: PoPS is Kokkos-only -- the AOT model includes the pops headers which "
-            "require Kokkos. Point at an installed Kokkos via POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. "
-            "`export POPS_KOKKOS_ROOT=/path/to/kokkos` (Serial is enough on CPU). "
-            "Run `python -c \"import pops; pops.doctor()\"` for a full diagnosis and copy-paste fixes.")
-    cc = _native_kokkos_compiler(cxx)
-    if not cc:
-        raise RuntimeError("compile_aot: no C++ compiler found")
-    std = _probe_cxx_std(cc, std)
-    kokkos_compile_flags, kokkos_link_flags = _native_kokkos_flags()
-    mpi_compile_flags = _native_mpi_flags()
-    link_extra = ["-undefined", "dynamic_lookup"] if sys.platform == "darwin" else []
-    with tempfile.TemporaryDirectory() as tmp:
-        cpp = os.path.join(tmp, "model_aot.cpp")
-        with open(cpp, "w") as f:
-            f.write(src)
-        _run_compile([cc, "-shared", "-fPIC", "-std=" + std, *_dsl_optflags(), "-I", include]
-                     + kokkos_compile_flags + mpi_compile_flags + link_extra
-                     + [cpp, "-o", so_path] + kokkos_link_flags,
-                     "backend aot, compile_aot")
-    return so_path
 
 
 def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
@@ -163,74 +96,31 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
     return so_path
 
 
-def compile_or_jit(model: Any, so_path: Any, include: Any = None, mode: Any = "jit",
-                   name: Any = None, cxx: Any = None, std: Any = "c++20", target: Any = "system",
-                   hoist_reciprocals: Any = False) -> Any:
-    """Unified API selecting the backend by mode:
-
-    - mode="jit"     -> compile_so (IModel, virtual dispatch: host prototyping);
-    - mode="compile" -> compile_aot (AOT production path, numerically identical to native);
-    - mode="native"  -> compile_native (native zero-copy loader; target consumed here).
-
-    @p target: "system" (default) | "amr_system". ONLY consumed by mode="native".
-    """
-    if mode == "jit":
-        if target != "system":
-            raise ValueError("compile_or_jit: target='amr_system' not supported in mode 'jit' "
-                             "(the AMR path exists only for mode='native')")
-        return compile_so(model, so_path, include, name=name, cxx=cxx, std=std,
-                          hoist_reciprocals=hoist_reciprocals)
-    if mode == "compile":
-        if target != "system":
-            raise ValueError("compile_or_jit: target='amr_system' not supported in mode 'compile' "
-                             "(the AMR path exists only for mode='native')")
-        return compile_aot(model, so_path, include, name=name, cxx=cxx, std=std,
-                           hoist_reciprocals=hoist_reciprocals)
-    if mode == "native":
-        return compile_native(model, so_path, include, name=name, cxx=cxx, std=std, target=target,
-                              hoist_reciprocals=hoist_reciprocals)
-    raise ValueError("compile_or_jit: mode 'jit' | 'compile' | 'native' (received %r)" % mode)
-
-
 # ---------------------------------------------------------------------------
 # compile_model -- full facade (mirrors HyperbolicModel.compile logic)
 # ---------------------------------------------------------------------------
 
-def compile_model(model: Any, so_path: Any = None, include: Any = None, backend: Any = "auto",
+def compile_model(model: Any, so_path: Any = None, include: Any = None, backend: Any = "production",
                   name: Any = None, cxx: Any = None, std: Any = None,
                   require_metadata: Any = False, target: Any = "system",
                   hoist_reciprocals: Any = False) -> Any:
     """Compilation facade by INTENTION: compiles *model* (a ``HyperbolicModel``)
-    into a .so via the engine designated by *backend* and returns its path.
+    into a native fixed-ABI package and returns its path.
 
     This is the free-function equivalent of ``HyperbolicModel.compile``.
     ``dsl.HyperbolicModel.compile`` is a thin wrapper that calls this.
 
-    @p backend: "prototype" | "aot" | "production" | "auto".
+    @p backend: the private ``"production"`` token or ``Production()``.
     @p target:  "system" (default) | "amr_system".
     @p require_metadata: if True, requires physical roles AND explicit gamma.
     Returns so_path.
     """
-    from pops.codegen.toolchain import resolve_auto_backend
-
     m = model
-    # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT())
-    # as well as the legacy string; lower it to the token the _BACKENDS table keys on. A plain
-    # string passes through unchanged so the existing consumers keep working.
     backend = lower_backend(backend)
-    if backend == "auto":
-        backend, _auto_reason = resolve_auto_backend(include)
-    if backend not in _BACKENDS:
-        raise ValueError("compile: backend %r unknown (expected %s + 'auto')"
-                         % (backend, sorted(_BACKENDS)))
     if target not in ("system", "amr_system"):
         raise ValueError("compile: target 'system' | 'amr_system' (received %r)" % (target,))
-    mode, adder = _BACKENDS[backend]
-    if target == "amr_system" and mode != "native":
-        raise ValueError("compile: target='amr_system' exists only for backend='production' "
-                         "(native AMR path); received backend=%r" % (backend,))
     if std is None:
-        std = loader_cxx_std() if mode == "native" else "c++20"
+        std = loader_cxx_std()
     if include is None:
         include = pops_include()
 
@@ -238,14 +128,13 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     # _check_require_metadata lives on the HyperbolicModel: call it via the model.
     m._check_require_metadata(require_metadata, backend)
 
-    kokkos_like = backend in ("production", "aot")
-    eff_cxx = _native_kokkos_compiler(cxx) if kokkos_like else _default_cxx(cxx)
+    eff_cxx = _native_kokkos_compiler(cxx)
     abi_key = _abi_key_python(include, eff_cxx, std)
     from pops.codegen._artifact_identity import model_artifact_spec
 
     semantic_identity, spec_identity = model_artifact_spec(
         m, backend=str(backend), target=str(target), name=name, compiler=eff_cxx,
-        standard=std, abi_key=str(abi_key), kokkos_like=kokkos_like,
+        standard=std, abi_key=str(abi_key),
         hoist_reciprocals=hoist_reciprocals)
 
     # Out-of-source CACHE when so_path is omitted.
@@ -259,7 +148,7 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
     else:
         so_path = _backend_distinct_so_path(so_path, backend)
 
-    out_path = compile_or_jit(m, so_path, include, mode=mode, name=name, cxx=cxx, std=std,
+    out_path = compile_native(m, so_path, include, name=name, cxx=cxx, std=std,
                               target=target, hoist_reciprocals=hoist_reciprocals)
     write_artifact_sidecar(
         out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
@@ -286,19 +175,14 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     if problem_snapshot is not None:
         from pops.problem._snapshot import validate_problem_snapshot
         validate_problem_snapshot(problem_snapshot)
-    # ADDITIVE (Spec 5 sec.12.4, #47-48): resolve the codegen POPS_* environment ONCE. An explicit
-    # argument wins over the env -- debug=True forces keep-generated regardless of POPS_KEEP_GENERATED,
-    # and the resolver leaves the JIT-backdoor gate OFF unless POPS_JIT_BACKDOOR is itself set (loud
-    # warning emitted in from_env when it is). The snapshot is recorded on the returned handle so the
-    # active env state is inspectable (criterion #47), never hidden.
+    # Resolve the codegen POPS_* environment once. An explicit argument wins over the environment;
+    # debug=True forces keep-generated regardless of POPS_KEEP_GENERATED. The immutable snapshot is
+    # recorded on the returned handle so the active compile settings remain inspectable.
     cenv = CodegenEnv.from_env(keep_generated=debug)
     cenv.log("compile_problem: backend=%s target=%s force=%s" % (backend, target, force))
 
-    # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()) as well as the
-    # legacy string; lower it before the production-only guard so both selectors behave the same.
+    # Authenticate the sole final compiler route before inspecting the program graph.
     backend = lower_backend(backend)
-    if backend != "production":
-        raise ValueError("compiled time programs require backend='production'")
     if target not in ("system", "amr_system"):
         raise ValueError("compiled time programs support target='system' | 'amr_system' "
                          "(received %r)" % (target,))

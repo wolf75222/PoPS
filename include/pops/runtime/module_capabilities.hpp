@@ -16,8 +16,8 @@
 /// it. ``supports_partial_imex_mask`` is FALSE: a tree-wide grep finds NO partial-IMEX-mask code path,
 /// so claiming it would be a lie. ``supports_gpu`` is TRUE only under Kokkos AND a real device backend
 /// token (CUDA/HIP); a Kokkos-Serial / OpenMP CPU build reports FALSE. ``supports_stride`` is
-/// route-dependent (the production / native route carries a stride; the AOT / prototype route hardcodes
-/// stride=1), so the facts are queried per @p target.
+/// route-dependent (the installed production package carries a stride while the route-agnostic module
+/// report does not describe one), so the facts are queried per @p target.
 ///
 /// This is a pure free-function / POD header: no System state, no out-of-line definition (kept out of
 /// System::Impl on purpose, so lightweight C++ runtime mocks can share it).
@@ -45,11 +45,9 @@ static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
 /// This versions the report envelope independently from the capability vocabulary above.
 inline constexpr int kCapabilityReportSchemaVersion = 1;
 
-/// The lowering route whose static capabilities are queried. The two generated backends differ in one
-/// honest way: the production / native loader carries a real cell stride, the AOT / prototype flat-array
-/// path hardcodes stride=1 (cf. compiled_block_abi.hpp make_grid). ``kModule`` reports the route-agnostic
-/// facts (the AND-conservative stride, i.e. false).
-enum class CapabilityTarget { kModule, kProduction, kAot };
+/// The lowering route whose static capabilities are queried. ``kProduction`` describes the sole
+/// compiled-package route; ``kModule`` reports route-agnostic facts and therefore leaves stride false.
+enum class CapabilityTarget { kModule, kProduction };
 
 /// The STATIC transport capabilities the built _pops module provides (Spec 5 sec.13.12). A small POD of
 /// booleans + the ABI version, sourced from compile-time tokens only -- it allocates nothing, touches no
@@ -126,8 +124,8 @@ inline constexpr bool kHasMpi =
 ///   - ``supports_uniform`` / ``supports_amr`` = true (both runtimes are built into _pops);
 ///   - ``supports_mpi`` = POPS_HAS_MPI;
 ///   - ``supports_gpu`` = POPS_HAS_KOKKOS AND a device token (else false, conservatively honest);
-///   - ``supports_stride`` = true for the production / native route, false for the AOT / prototype route
-///     (which hardcodes stride=1) and for the route-agnostic ``kModule`` query;
+///   - ``supports_stride`` = true for the production package and false for the route-agnostic
+///     ``kModule`` query;
 ///   - ``supports_named_fields`` = true (the named-aux transport exists, kAuxNamedBase / aux_field);
 ///   - ``supports_partial_imex_mask`` = false (NO C++ path backs it -- reporting true would be a lie).
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
@@ -147,8 +145,6 @@ inline const char* capability_target_name(CapabilityTarget target) {
   switch (target) {
     case CapabilityTarget::kProduction:
       return "production";
-    case CapabilityTarget::kAot:
-      return "aot";
     case CapabilityTarget::kModule:
     default:
       return "module";
@@ -231,26 +227,26 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "production", "host", mpi, gpu, "AMR(ratio!=2)", "AMR(ratio=2)",
                        "use Uniform or the native AMR envelope"),
       capability_route("spatial:finite_volume", "available",
-                       "2D finite-volume route; prototype backend is host-only", kLayoutRouteTokensCsv,
-                       "production|aot|prototype", "host", mpi, gpu),
+                       "2D finite-volume production route", kLayoutRouteTokensCsv,
+                       "production", "host", mpi, gpu),
       capability_route("riemann:rusanov", "available", "requires model max_wave_speed",
-                       kLayoutRouteTokensCsv, "production|aot|prototype", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:hll", "available", "requires physical_flux and wave_speeds",
-                       kLayoutRouteTokensCsv, "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:hllc", "available",
                        "requires Euler/HLLC model capabilities; polar route is unavailable",
-                       kLayoutRouteTokensCsv, "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:roe", "available",
                        "requires Roe dissipation capability; polar route is unavailable",
-                       kLayoutRouteTokensCsv, "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("reconstruction:firstorder", "available", "ghost_depth=1",
                        kLayoutRouteTokensCsv,
-                       "production|aot|prototype", "host", mpi, gpu),
+                       "production", "host", mpi, gpu),
       capability_route("reconstruction:muscl", "available",
                        "ghost_depth=2; native limiters minmod/vanleer", kLayoutRouteTokensCsv,
-                       "production|aot|prototype", "host", mpi, gpu),
+                       "production", "host", mpi, gpu),
       capability_route("reconstruction:weno5", "available", "ghost_depth=3; high-order route is native",
-                       kLayoutRouteTokensCsv, "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("limiter:mc", "unavailable",
                        "catalogued but no native C++ limiter symbol exists", kLayoutRouteTokensCsv,
                        "none",

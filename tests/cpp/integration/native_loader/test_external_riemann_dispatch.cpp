@@ -20,7 +20,6 @@
 #include "gtest_compat.hpp"
 #include <pops/runtime/program/external_riemann_brick.hpp>
 
-#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // compiled_block::residual (native ref)
 #include <pops/physics/bricks/bricks.hpp>                         // CompositeModel / Euler / ...
 
 #include "test_harness.hpp"  // pops::test::Checker
@@ -201,10 +200,10 @@ static int pops_run_test_external_riemann_dispatch() {
   // External brick: the resolved entry point dispatches build_block<Minmod, UserRusanov> inside the .so.
   handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/1, "minmod",
                     /*recon_prim=*/0, /*pos_floor=*/0.0);
-  // Native reference: the SAME path with the native rusanov flux (compiled_block::residual -> make_block).
-  pops::compiled_block::residual<RefModel>(U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy,
-                                          /*periodic=*/true, "minmod", "rusanov",
-                                          /*recon_prim=*/false);
+  // Native reference: the same static leaf with the built-in Rusanov policy.
+  pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
+      U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/true, "minmod",
+      /*recon_prim=*/false, /*pos_floor=*/0.0);
   double dmax = 0.0, nrm = 0.0;
   for (std::size_t k = 0; k < Rext.size(); ++k) {
     const double d = std::fabs(Rext[k] - Rnat[k]);

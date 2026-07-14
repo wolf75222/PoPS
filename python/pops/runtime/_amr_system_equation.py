@@ -31,8 +31,7 @@ else:
 
 
 def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
-    """REJECTS Newton options/diagnostics on the COMPILED AMR path (.so loader, flat ABI
-    add_native_block / pops_install_native_amr) -- wave 3, settle. On the NATIVE side (pops.Model(...)), the
+    """Reject Newton options absent from the compiled AMR package ABI. On the native side, the
     Newton OPTIONS are now wired in single-block (coupler) AND multi-block (engine), and the
     newton_diagnostics REPORT in native multi-block ; but the flat ABI of the .so loader transports NEITHER
     the options (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy) NOR the report. Passed
@@ -54,8 +53,7 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
             or getattr(time, "newton_diagnostics", False)):
         raise ValueError(
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
-            "fail_policy/diagnostics) are not transported by the AMR production path (loader "
-            ".so, flat ABI add_native_block : they would be taken at their defaults silently). "
+            "fail_policy/diagnostics) are not transported by the AMR production package; "
             "They are available only on the internal native engine API (a composed native model, "
             "pops.Model(...) on the AMR layout)." % label)
 
@@ -80,7 +78,7 @@ class _AmrSystemEquation(_AmrSystem):
         return lowered
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
-                     substeps: Any = None) -> Any:
+                     substeps: Any = None, _bind_params: Any = None) -> Any:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
         Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Case`` assembly
@@ -90,8 +88,8 @@ class _AmrSystemEquation(_AmrSystem):
         Dispatch:
 
         - a ModelSpec (pops.Model(...)) -> add_block (native bricks composed on the hierarchy);
-        - a CompiledModel(backend='production', target='amr_system') (m.compile(...)) -> NATIVE path
-          add_native_block: the .so loader inlines add_compiled_model(AmrSystem&), so the block runs
+        - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
+          inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
 
         Time handling is wired to {explicit, imex}: imex treats the stiff source IMPLICITLY
@@ -107,7 +105,7 @@ class _AmrSystemEquation(_AmrSystem):
         - ModelSpec path (pops.Model(...)): FORWARDED to AmrSystem::add_block, which SUPPORTS and
           validates them (parity with the add_block wrapper);
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
-          loader (add_native_block / pops_install_native_amr) does not transport them; they would be taken
+          package ABI does not transport them; they would be taken
           at their defaults SILENTLY (stride=1, full backward-Euler). For a multirate .so or one with a
           partial IMEX mask, use AmrSystem.add_block (native) or add_compiled_model(AmrSystem&) directly
           (C++), which expose stride and the mask.
@@ -128,8 +126,7 @@ class _AmrSystemEquation(_AmrSystem):
         # positivity_floor (ADC-259) IS wired on the NATIVE AMR transport (Density-role face states +
         # C/F fine ghost means). It is threaded below on the ModelSpec (native) branch and on the
         # amr-schur transport (the recursive add_equation on time.hyperbolic). The COMPILED .so path
-        # carries it too now (ADC-322): the regenerated loader marshals it (pops_install_native_amr),
-        # so the CompiledModel branch below forwards it to add_native_block instead of rejecting it.
+        # carries it too: the generated package marshals it through pops_install_native_amr.
 
         nsub = positive_int(
             substeps if substeps is not None else getattr(time, "substeps", 1),
@@ -167,14 +164,10 @@ class _AmrSystemEquation(_AmrSystem):
                             "or a CompiledModel (m.compile(...)); received %r" % type(model).__name__)
 
         compiled = model
-        # Only the NATIVE "production" path targets AmrSystem: it inlines add_compiled_model(AmrSystem&).
-        # The prototype (JIT) / aot .so have no AMR counterpart (add_dynamic_block/add_compiled_block
-        # are mono-level). We therefore require backend='production' + target='amr_system'.
-        if compiled.adder != "add_native_block":
+        if compiled.backend != "production":
             raise ValueError(
-                "AmrSystem.add_equation: only a CompiledModel backend='production' (native path) "
-                "is attachable on AMR; received backend=%r (the prototype/aot .so are mono-level, "
-                "without AMR counterpart)" % compiled.backend)
+                "AmrSystem.add_equation: compiled packages must use backend='production'; "
+                "received backend=%r" % compiled.backend)
         if getattr(compiled, "target", "system") != "amr_system":
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
@@ -201,7 +194,7 @@ class _AmrSystemEquation(_AmrSystem):
                 % (getattr(spatial.flux, "id", "riemann.hll"),
                    getattr(spatial.flux, "native_entry", "?")))
 
-        # The flat ABI of the .so loader (pops_install_native_amr / add_native_block) transports NEITHER the
+        # The package ABI transports NEITHER the
         # multirate cadence (stride) NOR the partial IMEX mask (implicit_vars / implicit_roles):
         # add_compiled_model(AmrSystem&) exposes them only DIRECTLY (C++ path). Passed through the
         # loader, they would take their defaults (stride=1, empty mask = full backward-Euler) SILENTLY.
@@ -211,13 +204,13 @@ class _AmrSystemEquation(_AmrSystem):
         if nstride != 1:
             raise ValueError(
                 "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
-                "(.so loader, flat ABI add_native_block: the block would run at stride=1 silently). "
+                "(the block would otherwise run at stride=1 silently). "
                 "The multirate cadence is available only on the internal native engine API (a "
                 "composed native model, pops.Model(...) on the AMR layout)." % nstride)
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "AmrSystem.add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
-                "transported by the production AMR path (.so loader, flat ABI add_native_block: the "
+                "transported by the production AMR package (the "
                 "mask would be empty = full backward-Euler silently). The partial IMEX mask is "
                 "available only on the internal native engine API (a composed native model, "
                 "pops.Model(...) on the AMR layout).")
@@ -228,7 +221,7 @@ class _AmrSystemEquation(_AmrSystem):
         # positivity_floor (ADC-322): the regenerated .so loader carries the Zhang-Shu floor now
         # (pops_install_native_amr -> add_compiled_model -> set_compiled_block), so it is threaded
         # through instead of rejected. 0 (default) = inactive, bit-identical. The C++
-        # add_native_block validates floor >= 0 and finite (parity with add_block).
+        # The native package seam validates floor >= 0 and finite (parity with add_block).
 
         # PRE-DLOPEN guard at attach (covers the cache HIT, cf. System.add_equation): module
         # _pops stale vs .so compiled against the up-to-date headers -> actionable error, not a dlopen
@@ -238,10 +231,28 @@ class _AmrSystemEquation(_AmrSystem):
         gamma = native_real(
             compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA,
             where="AmrSystem.add_equation.gamma")
-        self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                 spatial.recon, time.kind, gamma, nsub,
-                                 native_real(getattr(spatial, "positivity_floor", 0.0),
-                                             where="AmrSystem.add_equation.positivity_floor"))
+        runtime_names = tuple(getattr(compiled, "runtime_param_names", ()) or ())
+        if _bind_params is None:
+            if runtime_names:
+                raise ValueError(
+                    "AmrSystem.add_equation: compiled package declares runtime parameters; "
+                    "install it through pops.bind so BindSchema resolves one complete vector")
+            bind_values = []
+        else:
+            bind_values = [
+                native_real(value, where="AmrSystem.add_equation.bind_params[%d]" % index)
+                for index, value in enumerate(_bind_params)
+            ]
+            if len(bind_values) != len(runtime_names):
+                raise ValueError(
+                    "AmrSystem.add_equation: bound parameter vector has %d values, expected %d"
+                    % (len(bind_values), len(runtime_names)))
+        self._s._install_native_block(
+            name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
+            gamma, nsub, bind_values,
+            native_real(getattr(spatial, "positivity_floor", 0.0),
+                        where="AmrSystem.add_equation.positivity_floor"),
+        )
         # ADC-291: record the named aux fields the block declares (component of the k-th name =
         # AUX_NAMED_BASE + k), so set_aux_field(block, name, array) can resolve name -> component.
         extra = list(getattr(compiled, "aux_extra_names", []) or [])

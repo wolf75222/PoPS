@@ -1,7 +1,7 @@
 """System unified-install mixin (Spec-4 PR-F): the INTERNAL ``_install_compiled`` seam.
 
 ``_install_compiled`` (the low-level seam that lowers to add_equation / set_poisson /
-set_magnetic_field / set_aux_field / set_block_params / install_program) plus its private
+set_magnetic_field / set_aux_field / install_program) plus its private
 lowering helpers. It is NOT the public entry point (Spec 5 sec.11): authors call
 ``pops.bind(compiled, state=, params=, aux=, solvers=)``, which dispatches System / AmrSystem and
 calls this seam. Mixed into ``System`` via inheritance; methods operate on ``self`` (calling the
@@ -60,7 +60,7 @@ class _SystemUnifiedInstall(_System):
         method is undocumented on the public surface (it carries no ``install`` alias) and may change.
 
         It LOWERS to the existing lower-layer calls
-        (add_equation / set_poisson / set_magnetic_field / set_aux_field / set_block_params /
+        (add_equation / set_poisson / set_magnetic_field / set_aux_field /
         install_program) -- there is NO parallel runtime (Spec section 3). The lower-layer calls stay
         available and unchanged; this seam just sequences them in the right order so the
         install-time validation (section 24) sees a fully-configured simulation.
@@ -134,7 +134,8 @@ class _SystemUnifiedInstall(_System):
                     "install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result, or compiled=None for a native sim (each instance carries its own native "
                     "model)." % type(compiled).__name__)
-        resolved_models = {}  # instance name -> RESOLVED (CompiledModel), reused by the params step
+        resolved_models = {}
+        lowered_instances = {}
         for name, spec in instances.items():
             if not isinstance(spec, Mapping):
                 raise TypeError("install: instances[%r] must be a mapping (initial/spatial/time/model); "
@@ -148,9 +149,26 @@ class _SystemUnifiedInstall(_System):
             resolved_models[name] = model
             spatial = self._lower_spatial(spec.get("spatial"))
             time = spec.get("time")
-            # Capability check (section 24): the selected Riemann flux must be backed by the model.
             self._validate_riemann_capability(model, spatial)
-            self.add_equation(name, model, spatial=spatial, time=time)
+            lowered_instances[name] = (spec, model, spatial, time)
+
+        # Resolve all complete vectors before constructing the first native closure. There is no
+        # post-install mutable parameter channel.
+        bind_schema = getattr(compiled, "bind_schema", None) if compiled is not None else None
+        if bind_schema is not None:
+            per_block_params = self._route_block_params(resolved_models, bind_schema, params)
+        elif params:
+            raise ValueError(
+                "install: parameter values require a compiled artifact carrying BindSchema"
+            )
+        else:
+            per_block_params = {}
+
+        for name, (spec, model, spatial, time) in lowered_instances.items():
+            self.add_equation(
+                name, model, spatial=spatial, time=time,
+                _bind_params=per_block_params.get(name, []),
+            )
             initial = spec.get("initial")
             if initial is not None:
                 self.set_state(name, initial)
@@ -165,15 +183,8 @@ class _SystemUnifiedInstall(_System):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) PARAMS: BindSchema already resolved every supplied/default/derived value to a canonical
-        # ParamHandle. Project the complete block vectors; no name broadcast and no default fallback.
-        bind_schema = getattr(compiled, "bind_schema", None) if compiled is not None else None
-        if bind_schema is not None:
-            self._install_params(resolved_models, bind_schema, params)
-        elif params:
-            raise ValueError(
-                "install: parameter values require a compiled artifact carrying BindSchema"
-            )
+        # (4) Boundary-kernel parameters are independent from model package parameters, which crossed
+        # the package ABI during block installation above.
         for field_plan in field_plans.values():
             self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
@@ -539,12 +550,6 @@ class _SystemUnifiedInstall(_System):
     # as System._route_block_params without building a System. Extracted to _install_param_routing so the
     # Uniform and AMR install seams both delegate to ONE routing implementation.
     _route_block_params = staticmethod(route_block_params)
-
-    def _install_params(self, resolved_models: Any, schema: Any, params: Any) -> None:
-        """Install complete owner-qualified block vectors from BindSchema."""
-        per_block = self._route_block_params(resolved_models, schema, params)
-        for name, values in per_block.items():
-            self._s.set_block_params(name, values)
 
     # Host-testable pure core (ADC-510 program-param routing, mirror of _route_block_params): callable
     # as System._route_program_params without building a System.

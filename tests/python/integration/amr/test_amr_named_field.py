@@ -108,7 +108,7 @@ def _compiled_model(*fields):
     """Return an inert AMR loader record with detached named-field metadata."""
     from pops.codegen._compiled_model_identity import compiled_model_identity
     model = CompiledModel(
-        so_path="/fake.so", backend="production", adder="add_native_block",
+        so_path="/fake.so", backend="production",
         cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"], n_vars=1,
         gamma=None, n_aux=0, params={}, caps={}, abi_key="k", model_hash="h",
         cxx="c++", std="c++20", target="amr_system",

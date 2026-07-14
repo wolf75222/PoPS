@@ -61,9 +61,7 @@ class CompiledReport(Report):
         self.status = status
         # Active codegen POPS_* environment (Spec 5 sec.12.4, #47-48): the resolved CodegenEnv as a
         # plain dict (log_level / codegen_dir / keep_generated / dump_ir / dump_cpp / cache_dir /
-        # profile / autotune / jit_backdoor), or {} when the handle carried no env snapshot. Surfaced
-        # so the env state that governed the compile -- including the UNSAFE jit_backdoor gate -- is
-        # inspectable, never hidden.
+        # profile / autotune), or {} when the handle carried no env snapshot.
         self.env = dict(env) if env else {}
         self.runtime = dict(runtime) if runtime else {}
         self.capabilities = dict(capabilities) if capabilities else {}
@@ -163,9 +161,6 @@ class CompiledReport(Report):
                          % (self.env.get("autotune"),
                             "  (no-op stub: no autotune engine today)"
                             if self.env.get("autotune") not in (None, "off") else ""))
-            backdoor = self.env.get("jit_backdoor")
-            lines.append("    jit_backdoor  : %s%s"
-                         % (backdoor, "  *** UNSAFE debug gate ENABLED ***" if backdoor else ""))
         if self.module_manifest:
             manifest = self.module_manifest
             ops = manifest.get("operators", [])
@@ -262,8 +257,7 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
         capability_report = {}
 
     # The active codegen POPS_* environment snapshot (sec.12.4, #47-48): the resolved CodegenEnv as a
-    # plain dict, or {} for a handle that carries none. Surfacing it keeps the env state -- including
-    # the UNSAFE jit_backdoor gate -- inspectable rather than hidden.
+    # plain dict, or {} for a handle that carries none.
     codegen_env = getattr(compiled, "codegen_env", None)
     env = codegen_env.to_dict() if codegen_env is not None else {}
 

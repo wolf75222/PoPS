@@ -53,10 +53,9 @@ class _AmrSystemInstall(_AmrSystem):
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
         @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,
             "time": <policy>}}; the block is bound by the dict KEY.
-        @param params canonical block-qualified runtime values resolved by BindSchema and routed to
-            ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
-            has no ``set_block_params`` (the native AMR .so loader does not transport runtime params),
-            so a non-empty ``params=`` there raises rather than dropping them silently.
+        @param params canonical block-qualified runtime values resolved by BindSchema. Complete
+            per-package vectors are fixed before native closures are built; Program-owned values
+            route independently through ``set_program_params``.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
         @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
@@ -104,15 +103,12 @@ class _AmrSystemInstall(_AmrSystem):
         for field, solver_brick in solvers.items():
             self._install_solver(field, solver_brick, declared_fields)
 
-        # (2) INSTANCES: add each named block (add_equation, binds the Program block of that name), then
-        # set its initial density. The per-instance detached CompiledModel is mandatory.
-        # resolved_models is reused by step-4b (ADC-514) to route
-        # the native per-block runtime params to set_block_params: it maps each instance name to the
-        # detached CompiledModel add_equation received (target='amr_system' metadata exposes
-        # runtime_param_names).
+        # (2) INSTANCES: resolve every package first, then project complete BindSchema vectors before
+        # installing any block. The per-instance detached CompiledModel is mandatory.
         from pops.codegen.loader import CompiledModel
 
         resolved_models = {}
+        lowered_instances = {}
         for name, spec in instances.items():
             if not isinstance(spec, Mapping):
                 raise TypeError("pops.bind: instances[%r] must be a mapping "
@@ -126,8 +122,26 @@ class _AmrSystemInstall(_AmrSystem):
                 )
             spatial = spec.get("spatial")
             time = spec.get("time")
-            self.add_equation(name, model, spatial=spatial, time=time)
             resolved_models[name] = model
+            lowered_instances[name] = (model, spatial, time)
+
+        if bind_schema is None and compiled is not None:
+            bind_schema = getattr(compiled, "bind_schema", None)
+        if bind_schema is not None:
+            from pops.runtime._install_param_routing import route_block_params
+            per_block_params = route_block_params(resolved_models, bind_schema, params)
+        elif params:
+            raise ValueError(
+                "pops.bind: parameter values require a compiled artifact carrying BindSchema"
+            )
+        else:
+            per_block_params = {}
+
+        for name, (model, spatial, time) in lowered_instances.items():
+            self.add_equation(
+                name, model, spatial=spatial, time=time,
+                _bind_params=per_block_params.get(name, []),
+            )
 
         for field_plan in field_plans.values():
             self._register_field_plan_output(field_plan, resolved_models)
@@ -196,16 +210,7 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: native bootstrap has no payload carrier for space %r" % space
                 )
 
-        # (4b) BindSchema supplies complete block-qualified vectors. Install them on the native
-        # block carrier; a compiled Program receives the same values on its own carrier below.
-        if bind_schema is None and compiled is not None:
-            bind_schema = getattr(compiled, "bind_schema", None)
-        if bind_schema is not None:
-            self._install_block_params(resolved_models, bind_schema, params)
-        elif params:
-            raise ValueError(
-                "pops.bind: parameter values require a compiled artifact carrying BindSchema"
-            )
+        # (4b) Boundary-kernel parameters are independent from package parameters fixed in step 2.
         for field_plan in field_plans.values():
             self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
 
@@ -236,13 +241,6 @@ class _AmrSystemInstall(_AmrSystem):
             self, compiled, instances, solvers or field_plans, aux, params
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
-
-    def _install_block_params(self, resolved_models: Any, schema: Any, params: Any) -> None:
-        """Install complete owner-qualified block vectors from BindSchema."""
-        from pops.runtime._install_param_routing import route_block_params
-        per_block = route_block_params(resolved_models, schema, params)
-        for name, values in per_block.items():
-            self.set_block_params(name, values)
 
     def _install_bootstrap_routes(self, registry: Any) -> None:
         from pops.mesh.amr.transfer import ApplyTransferProvider, ResolvedAMRTransfer

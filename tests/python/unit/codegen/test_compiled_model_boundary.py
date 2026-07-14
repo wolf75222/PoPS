@@ -38,7 +38,6 @@ def _compiled(*, target="system", model_hash="structural:source", identity=None)
     return CompiledModel(
         so_path="<compiled-model-boundary>",
         backend="production",
-        adder="add_native_block",
         cons_names=("u",),
         cons_roles=("Scalar",),
         prim_names=("u",),
@@ -115,8 +114,8 @@ def test_subclass_slot_cannot_hide_an_authoring_builder():
     source = _SourceModel()
     base = _compiled(identity=model_compile_identity(source))
     hidden = HiddenLoader(
-        base.so_path, base.backend, base.adder, base.cons_names, base.cons_roles,
-        base.prim_names, base.n_vars, base.gamma, base.n_aux, base.params, base.caps,
+        base.so_path, base.backend, base.cons_names, base.cons_roles, base.prim_names,
+        base.n_vars, base.gamma, base.n_aux, base.params, base.caps,
         base.abi_key, base.model_hash, base.cxx, base.std,
         definition_identity=base.definition_identity,
     )

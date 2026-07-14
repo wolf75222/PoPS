@@ -24,7 +24,7 @@ def _compiled(*, n_vars, prim_names, hllc=False, roe=False):
     cons = ["rho", "rho_u", "rho_v", "E"][:n_vars] or ["q0", "q1", "q2"]
     roles = ["density", "momentum_x", "momentum_y", "energy"][:n_vars]
     return CompiledModel(
-        so_path="/no/such/pops-euler-route.so", backend="production", adder="add_native_block",
+        so_path="/no/such/pops-euler-route.so", backend="production",
         cons_names=cons, cons_roles=roles, prim_names=list(prim_names), n_vars=n_vars,
         gamma=1.4, n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23",
         model_hash="mh", cxx="c++", std="c++23", hllc=hllc, roe=roe, wave_speeds=True,

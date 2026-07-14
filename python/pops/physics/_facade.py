@@ -286,7 +286,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """PROJECTION PONCTUELLE post-pas U <- P(U, aux) (ADC-177, OPTIONNEL) : une expression par
         composante conservative, appliquee par le System a la FIN de chaque macro-pas ENTIER (jamais
         par etage RK) sur les cellules valides. CONTRAT : idempotente et ponctuelle ; clamps en
-        max/min via abs_/sign. Backends 'aot'/'production' (System) ; 'prototype' et AMR rejetes.
+        max/min via abs_/sign. The native production package carries the projection on System and
+        applies it per level after reflux on AMR.
         Delegue a HyperbolicModel.projection (cf. son contrat complet)."""
         self._m.projection(exprs)
 

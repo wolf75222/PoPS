@@ -267,8 +267,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
 
         A :class:`pops.codegen.env.CodegenEnv` recording the EFFECTIVE settings (env defaults already
         overridden by any explicit argument): log level, codegen dir, keep-generated, dump-IR /
-        dump-CPP, cache dir, profile, autotune level, and the UNSAFE :attr:`CodegenEnv.jit_backdoor`
-        gate. Surfaced in :meth:`inspect` so the active env state is never hidden (criterion #47).
+        dump-CPP, cache dir, profile and autotune level. Surfaced in :meth:`inspect` so the active
+        environment state is never hidden (criterion #47).
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
 

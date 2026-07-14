@@ -1,17 +1,4 @@
-"""pops.codegen._compile_emit : the C++ source-emission layer of the compile pipeline.
-
-Extracted verbatim from ``pops.codegen._compile`` so the model compile pipeline fits the
-Spec-4 file-size budget.  This is the LEAF module: the per-backend capability / adder
-tables, ``model_hash`` (the stable cache key over a model's formulas), ``adder_for`` (the
-System adder name for a backend), and the three ``emit_cpp_*`` source emitters
-(JIT / AOT / native-loader).  The brick / metadata emitters in ``module_codegen`` are
-imported LAZILY inside each ``emit_cpp_*`` function.  ``pops.codegen._compile`` re-imports
-every name so its public surface is unchanged.
-
-The compiler-invocation drivers + the ``compile_problem`` facade live in
-``pops.codegen._compile_drivers`` (they consume ``_BACKENDS`` / ``model_hash`` /
-``emit_cpp_*`` from here).
-"""
+"""C++ source emission for the sole native production package."""
 
 from __future__ import annotations
 
@@ -21,40 +8,8 @@ from typing import Any
 # Backend / capability tables (single source of truth in this module)
 # ---------------------------------------------------------------------------
 
-# HONEST characteristics per backend (cf. DSL_MODEL_DESIGN.md section 5).
-# Serves diagnostics and the device/MPI/AMR guard rails.
-#
-# ADC-600: each row also carries a "tier" naming which class of route it is, so reports say
-# plainly whether a route is production, prototype or internal (never presenting a host/prototype
-# route as official support). The vocabulary is fixed to {production, prototype, internal}:
-#   - "production": the NATIVE zero-copy loader (add_native_block); the target compile/bind surface.
-#   - "prototype":  the JIT IModel virtual-dispatch HOST path (add_dynamic_block, Rusanov); for
-#                   host prototyping only, never a fallback for the target surface.
-#   - "internal":   the AOT host-marshalled path (add_compiled_block); it RUNS the production
-#                   ALGORITHM but through an internal host harness (flat-array marshaling, no
-#                   MPI/AMR/GPU), so it is neither the target route nor a prototype.
 _BACKEND_CAPS = {
-    # backend: (cpu, mpi, amr, gpu, tier)  -- True/False for what the path SUPPORTS today; tier in
-    # {production, prototype, internal} (ADC-600).
-    "prototype": {"cpu": True, "mpi": False, "amr": False, "gpu": False, "tier": "prototype"},
-    "aot": {"cpu": True, "mpi": False, "amr": False, "gpu": False, "tier": "internal"},
-    # production = NATIVE path (add_native_block, #85): same engine as add_block, hence MPI-capable
-    # by construction (halos fill_boundary). amr=True: the native loader now has an AMR counterpart
-    # (m.compile(backend='production', target='amr_system') -> AmrSystem.add_native_block, DSL Phase D)
-    # which inlines add_compiled_model(AmrSystem&) -> SAME AMR hierarchy as AmrSystem.add_block (reflux,
-    # regrid). gpu=False out of CAUTION: the native path is device-clean in C++ (GH200) but the
-    # end-to-end validation from Python (add_native_block on device) is a dedicated PR (DSL sect. 5).
     "production": {"cpu": True, "mpi": True, "amr": True, "gpu": False, "tier": "production"},
-}
-
-# Maps backend name -> (compile mode, System adder method name).
-# "prototype"  -> compile_so  (JIT, IModel, virtual dispatch, host first-order Rusanov)
-# "aot"        -> compile_aot (AOT, host-marshaled PRODUCTION path)
-# "production" -> compile_native (NATIVE LOADER: add_compiled_model<ProdModel>)
-_BACKENDS = {
-    "prototype": ("jit", "add_dynamic_block"),
-    "aot": ("compile", "add_compiled_block"),
-    "production": ("native", "add_native_block"),
 }
 
 
@@ -223,22 +178,6 @@ def model_hash(model: Any, params: Any = None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# adder_for -- System adder name for a backend
-# ---------------------------------------------------------------------------
-
-def adder_for(backend: Any) -> str:
-    """Name of the System method to use to wire the .so produced by
-    ``compile_model(backend=...)``:
-    ``'add_dynamic_block'`` (prototype/JIT), ``'add_compiled_block'`` (aot) or
-    ``'add_native_block'`` (production/native). ValueError if unknown.
-    """
-    if backend not in _BACKENDS:
-        raise ValueError("adder_for: backend %r unknown (expected %s)"
-                         % (backend, sorted(_BACKENDS)))
-    return _BACKENDS[backend][1]
-
-
-# ---------------------------------------------------------------------------
 # _emit_route_manifest -- embedded native route registry signature (ADC-599)
 # ---------------------------------------------------------------------------
 
@@ -259,77 +198,17 @@ def _emit_route_manifest(symbol_name: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Source emitters (emit_cpp_so_source, emit_cpp_aot_source, emit_cpp_native_loader)
+# Native source emitter
 # ---------------------------------------------------------------------------
-
-def emit_cpp_so_source(model: Any, name: Any = None, hoist_reciprocals: Any = False) -> str:
-    """Source of the JIT library (backend "jit"): the FULL MODEL as
-    CompositeModel<GenHyp, GenSrc, GenEll> behind an extern "C" factory
-    (pops_model_nvars / pops_make_model / pops_destroy_model via
-    pops::ModelAdapter). This is what compile_so compiles and what
-    System.add_dynamic_block loads as a coupled block with VIRTUAL DISPATCH
-    (host prototyping).
-    """
-    from pops.codegen.module_codegen import _emit_bricks, _emit_metadata
-    m = model
-    if m._proj is not None:
-        raise ValueError("backend 'prototype' (JIT, IModel) : projection ponctuelle "
-                         "(m.projection) non transportee par ce chemin ; utiliser "
-                         "backend='aot' ou 'production'")
-    if m._elliptic_fields:
-        raise NotImplementedError(
-            "elliptic_field (named multi-elliptic, ADC-428) on backend='jit' is not supported "
-            "yet; the JIT extern-C factory has no hook to register named elliptic fields on the "
-            "System. Use backend='production'. Declared: %s" % sorted(m._elliptic_fields))
-    nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
-    return ('#include <pops/runtime/dynamic/dynamic_model.hpp>\n'
-            '#include <pops/physics/bricks/bricks.hpp>\n'
-            '#include <pops/core/state/variables.hpp>\n'
-            + bricks
-            + '\nnamespace pops_generated { using JitModel = %s; }\n' % composite
-            + 'extern "C" int pops_model_nvars() { return %d; }\n' % nv
-            + 'extern "C" void* pops_make_model() { return new pops::ModelAdapter<pops_generated::JitModel>(); }\n'
-            + 'extern "C" void pops_destroy_model(void* p) { delete static_cast<pops::IModel<%d>*>(p); }\n' % nv
-            + _emit_metadata(m, "pops_generated::JitModel")
-            + _emit_route_manifest("pops_compiled_route_manifest"))
-
-
-def emit_cpp_aot_source(model: Any, name: Any = None, hoist_reciprocals: Any = False) -> str:
-    """Source of the AOT library (backend "compile"): the FULL MODEL as
-    CompositeModel<...> behind the extern "C" ABI of compiled_block_abi.hpp.
-    The .so RUNS the PRODUCTION path (assemble_rhs<Limiter, Flux>, the core's
-    SSPRK2/IMEX) on the generated model: inlined numerics, identical to a
-    native add_block block. As opposed to the "jit" backend (IModel, virtual
-    dispatch).
-    """
-    from pops.codegen.module_codegen import _emit_bricks, _emit_metadata
-    m = model
-    if m._elliptic_fields:
-        raise NotImplementedError(
-            "elliptic_field (named multi-elliptic, ADC-428) on backend='aot' is not supported yet; "
-            "the flat-ABI compiled block cannot register named elliptic fields on the System. Use "
-            "backend='production'. Declared: %s" % sorted(m._elliptic_fields))
-    nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
-    return ('#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>\n'
-            '#include <pops/physics/bricks/bricks.hpp>\n'
-            '#include <pops/core/state/variables.hpp>\n'
-            + bricks
-            + '\nnamespace pops_generated { using AotModel = %s; }\n' % composite
-            + 'POPS_DEFINE_COMPILED_BLOCK(pops_generated::AotModel)\n'
-            + _emit_metadata(m, "pops_generated::AotModel")
-            + _emit_route_manifest("pops_compiled_route_manifest"))
 
 
 def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                            hoist_reciprocals: Any = False) -> str:
-    """Source of the NATIVE LOADER (backend "production"): the FULL MODEL as
-    CompositeModel<...> behind a THIN extern "C" ABI.
+    """Source of the sole production package.
 
-    Unlike the "aot" backend (emit_cpp_aot_source: flat array ABI, where the .so
-    recomputes everything on a local grid and marshals the arrays), the native loader
-    does NOT carry the numerics: it merely INSTALLS the generated model as a NATIVE
-    block of the already-built facade, via the header template
-    pops::add_compiled_model<ProdModel>.
+    The generated module carries the model and installs it directly into the native
+    facade.  The complete, already-resolved BindSchema vector crosses the fixed ABI
+    once and is injected before any closure is constructed.
 
     @p target: "system" (default) | "amr_system". Selects the targeted facade and
     thus the add_compiled_model OVERLOAD called.
@@ -347,7 +226,9 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
             '#include <array>\n'
             '#include <cstddef>\n'
             '#include <string>\n'
+            '#include <utility>\n'
             '#include <pops/runtime/dynamic/abi_key.hpp>\n'
+            '#include <pops/runtime/builders/compiled/model_runtime_params.hpp>\n'
             '#include <pops/physics/bricks/bricks.hpp>\n'
             '#include <pops/core/state/variables.hpp>\n')
     head += ('#include <pops/runtime/builders/compiled/dsl_block.hpp>\n' if target == "system"
@@ -373,9 +254,12 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
         install = ('POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n'
                    '                                    const char* riemann, const char* recon,\n'
                    '                                    const char* time, double gamma, int substeps,\n'
-                   '                                    int evolve, int stride, double pos_floor) {\n'
+                   '                                    int evolve, int stride, const double* params,\n'
+                   '                                    int nparams, double pos_floor) {\n'
                    '  pops::System* s = reinterpret_cast<pops::System*>(sys);\n'
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, pops_generated::ProdModel{},\n'
+                   '  auto model = pops::compiled_model::bind_runtime_params(\n'
+                   '      pops_generated::ProdModel{}, params, nparams);\n'
+                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, evolve != 0, stride,\n'
                    '                                                    pos_floor);\n'
@@ -398,26 +282,24 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
         install = ('POPS_LOADER_API void pops_install_native_amr(void* sys, const char* name,\n'
                    '                                        const char* limiter, const char* riemann,\n'
                    '                                        const char* recon, const char* time,\n'
-                   '                                        double gamma, int substeps, double pos_floor) {\n'
+                   '                                        double gamma, int substeps,\n'
+                   '                                        const double* params, int nparams,\n'
+                   '                                        double pos_floor) {\n'
                    '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
-                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, pops_generated::ProdModel{},\n'
+                   '  auto model = pops::compiled_model::bind_runtime_params(\n'
+                   '      pops_generated::ProdModel{}, params, nparams);\n'
+                   '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
                    '                                                    /*implicit_roles=*/{}, pos_floor);\n'
                    + ell_field_lines +
                    '}\n')
-        # NATIVE per-block RUNTIME PARAMS metadata (ADC-514): the AMR loader exports pops_compiled_nparams
-        # (read by AmrSystem::add_native_block for the kMaxRuntimeParams defence-in-depth guard, mirror of
-        # the AOT path) and pops_compiled_param_names (the CSV of declared runtime-param names, in the
-        # sorted order add_compiled_model seeds them, so the Python route validates set_block_params names
-        # against the .so). Both stay extern "C" default-visibility (dlsym-able). A param-free model emits
-        # nparams 0 + an empty CSV -> the guard is inert and the route reads no names (byte-identical).
-        install += ('extern "C" int pops_compiled_nparams() {\n'
-                    '  return pops::compiled_block::model_nparams<pops_generated::ProdModel>();\n'
-                    '}\n'
-                    'extern "C" const char* pops_compiled_param_names() { return "%s"; }\n'
-                    % ",".join(node.name for node in m.runtime_param_nodes()))
+    install += ('POPS_LOADER_API int pops_compiled_nparams() {\n'
+                '  return pops::compiled_model::runtime_param_count<pops_generated::ProdModel>();\n'
+                '}\n'
+                'POPS_LOADER_API const char* pops_compiled_param_names() { return "%s"; }\n'
+                % ",".join(node.name for node in m.runtime_param_nodes()))
     return (head
             + bricks
             + '\nnamespace pops_generated { using ProdModel = %s; }\n' % composite

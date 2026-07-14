@@ -7,7 +7,7 @@ from typing import Any
 
 def model_artifact_spec(
     model: Any, *, backend: str, target: str, name: Any, compiler: str, standard: str,
-    abi_key: str, kokkos_like: bool, hoist_reciprocals: bool,
+    abi_key: str, hoist_reciprocals: bool,
 ) -> tuple[Any, Any]:
     """Return semantic and artifact-spec identities for one formula model."""
     from pops.codegen.cache import (
@@ -29,13 +29,11 @@ def model_artifact_spec(
         toolchain="%s|%s" % (compiler, standard),
         routes={
             "registry": _registry_cache_key(),
-            "features": _native_feature_key() if kokkos_like else "prototype",
+            "features": _native_feature_key(),
         },
         components={"model_hash": digest, "emitted_name": str(name or "")},
-        flags=(
-            [_platform_cache_key(), *_dsl_optflags()]
-            if kokkos_like else ["prototype-default"]
-        ) + ["hoist_reciprocals=%d" % bool(hoist_reciprocals)],
+        flags=[_platform_cache_key(), *_dsl_optflags(),
+               "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
         libraries=(),
     )
     return semantic, spec

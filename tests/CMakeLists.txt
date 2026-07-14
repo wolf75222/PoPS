@@ -454,7 +454,8 @@ pops_test_source(_src test_config_model_validation)
 pops_add_gtest_suite(NAME test_config_model_validation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_native_aux_named)
-pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_compiled_model_parity)
 pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)

@@ -4,8 +4,7 @@
 // internal (NOT public API) -> it stays under python/bindings, not include/pops. The formerly
 // anonymous-namespace helpers become header-inline (ODR-safe single definition across the TUs).
 // VERBATIM move: bodies unchanged, no logic touched -> production trajectories bit-identical.
-// native_loader.hpp is deliberately NOT included here; the install TU includes it AFTER this
-// header (its templates instantiate on Impl, kept "lower down" per-TU as before).
+// native_loader.hpp is included by the install TU after this private definition.
 #pragma once
 
 #include <pops/runtime/system.hpp>
@@ -24,7 +23,6 @@
 #include <pops/runtime/system/system_field_solver.hpp>  // SystemFieldSolver: elliptic solve + field derivation (Batch B)
 #include <pops/runtime/system/system_stepper.hpp>  // SystemStepper: time advance (step/advance/step_cfl/step_adaptive) (Batch B)
 #include <pops/runtime/system/system_block_store.hpp>  // SystemBlockStore: block management (BlockState + registry + index/copy/write) (Batch B.3)
-#include <pops/runtime/system/system_runtime_params.hpp>  // SystemRuntimeParamsRegistry: per-AOT-block runtime params (ADC-578)
 #include <pops/runtime/system/system_diagnostics_registry.hpp>  // SystemDiagnosticsRegistry: block/stage options + Newton reports (ADC-578)
 #include <pops/runtime/system/system_coupling_registry.hpp>  // SystemCouplingRegistry: couplings + dt bounds + frequency bounds (ADC-578)
 #include <pops/runtime/system/system_domain.hpp>  // SystemDomain: geometry/layout + shared aux + embedded-boundary (ADC-578)
@@ -41,7 +39,6 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // sum
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>      // fill_ghosts, fill_boundary
-#include <pops/runtime/dynamic/dynamic_model.hpp>  // IModel: model loaded at runtime (dynamic block)
 #include <pops/runtime/context/wall_predicate.hpp>  // detail::wall_predicate (wall shared by System/AmrSystem)
 #include <pops/runtime/program/module_metadata.hpp>  // read_module_metadata / required_aux: install-time requirement validation (ADC-446)
 #include <pops/runtime/program/program_context.hpp>  // ProgramContext: wraps the System for the .so dt_bound call (ADC-417)
@@ -50,10 +47,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW layer (ADC-99); <dlfcn.h> on POSIX
 #include <functional>
 #include <limits>  // std::numeric_limits (per-block CFL: dt = min over blocks)
-#include <map>     // std::map (per-block runtime params registry, P7-b)
+#include <map>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -202,14 +198,6 @@ struct System::Impl {
   // object (no copy), so owner_->sp / P->sp in the header templates stay bit-identical.
   SystemBlockStore blocks_;
   std::vector<Species>& sp = blocks_.blocks;
-  // P7-b: RUNTIME parameter values per AOT block, EXTRACTED into SystemRuntimeParamsRegistry
-  // (ADC-578, include/pops/runtime/system/system_runtime_params.hpp). The vector is SHARED
-  // (shared_ptr) with the compiled block closures: writing into it (set_block_params) changes the
-  // block behavior at the next step WITHOUT recompiling. `block_params_` is a REFERENCE ALIAS to the
-  // registry's map (SAME object): native_loader.hpp registers into `P->block_params_[name]`, so the
-  // exact name is kept and the loader header stays byte-unchanged.
-  pops::runtime::system::SystemRuntimeParamsRegistry params_;
-  std::map<std::string, std::shared_ptr<std::vector<double>>>& block_params_ = params_.block_params;
   // Effective numerical/physical block/stage options + OPT-IN IMEX Newton reports, EXTRACTED into
   // SystemDiagnosticsRegistry (ADC-578, include/pops/runtime/system/system_diagnostics_registry.hpp).
   // Stepper-invisible: accessed only here via diagnostics_.* (no alias needed, no MockImpl impact).
@@ -483,10 +471,6 @@ struct System::Impl {
             u(i, j, c) = in[(static_cast<std::size_t>(c) * gny + j) * gnx + i];
     }
   }
-
-  // push_dynamic<NV> (DYNAMIC IModel<NV> block loaded from a .so) was EXTRACTED VERBATIM into
-  // pops::native_loader::push_dynamic (include/pops/runtime/native_loader.hpp, template over Impl);
-  // add_dynamic_block below instantiates it with System::Impl. See SYSTEM_CPP_EXTRACTION_PLAN.md.
 
   struct AcceptedSnapshot {
       std::vector<MultiFab> states;

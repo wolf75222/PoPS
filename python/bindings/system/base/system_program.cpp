@@ -128,9 +128,9 @@ std::map<std::string, Real> System::program_diagnostics() const {
 // COMPILED-PROGRAM RUNTIME PARAMETERS (ADC-510, Spec 5 C5). Seed/overwrite/read the per-PROGRAM-block
 // RuntimeParams the installed step closure reads through ProgramContext::program_params. Delegated to
 // the extracted Program subsystem (ADC-594): the store lives in program_ so a value change reaches the
-// captured ctx -- the no-recompile contract mirrored from the AOT-native set_block_params. The fail-loud
+// captured ctx -- the Program parameter carrier is independent from immutable model-package params. The fail-loud
 // messages keep the "System::set_program_params" wording (unchanged). install_program seeds the
-// defaults; Python's _install_params overwrites the supplied values (validated against the .so metadata).
+// defaults; Python installs the resolved Program vector (validated against the .so metadata).
 void System::seed_program_params(int prog_block, const std::vector<double>& defaults) {
   p_->program_.seed_params(prog_block, defaults);  // idempotent: re-seeding resets to the baseline
 }

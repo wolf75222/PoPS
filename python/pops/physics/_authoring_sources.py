@@ -231,10 +231,9 @@ class _SourceMixin(_HyperbolicModel):
         une PROJECTION (idempotente : P(P(U)) == P(U)) et PONCTUELLE (aucune lecture de voisin). Les
         formules de realisabilite restent cote cas ; les clamps s'ecrivent SANS branche, en max/min
         via abs_ / sign : p.ex. positivite q >= 0 : (q + abs_(q)) / 2. Compilee comme flux/source
-        (CSE comprise, production GPU/MPI -- remplace le callback Python par cellule). Backends
-        'aot' (add_compiled_block) et 'production' System (add_native_block) ; le backend 'prototype'
-        et target='amr_system' la REJETTENT explicitement (jamais d'ignore silencieux). SANS appel :
-        aucun hook emis, chemin bit-identique."""
+        (CSE comprise, production GPU/MPI -- remplace le callback Python par cellule). Le package
+        natif transporte ce hook sur System et l'applique par niveau apres reflux sur AMR. SANS
+        appel : aucun hook emis."""
         exprs = [_wrap(e) for e in exprs]
         if len(exprs) != self.n_vars:
             raise ValueError("projection : %d expressions attendues (une par composante "

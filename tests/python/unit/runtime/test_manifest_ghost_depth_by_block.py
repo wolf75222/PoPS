@@ -72,7 +72,7 @@ def _compiled(blocks):
 
     model = CompiledModel(
         so_path="/nonexistent/ghost-depth.so", backend="production",
-        adder="add_native_block", cons_names=("rho", "mx", "my"), cons_roles=(),
+        cons_names=("rho", "mx", "my"), cons_roles=(),
         prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
         params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
         cxx="c++", std="c++23",

@@ -132,7 +132,7 @@ def main():
         cm = build_iso_model().compile(os.path.join(tmp, "iso_floor_amr.so"), INCLUDE,
                                        backend="production", target="amr_system")
         assert isinstance(cm, CompiledModel)
-        assert cm.adder == "add_native_block" and cm.target == "amr_system"
+        assert cm.backend == "production" and cm.target == "amr_system"
 
         # --- (1) no longer raises + the floor rides the .so; floored run finite on the 1e6 spike ------
         # ADC-341/ADC-324: set_refinement(1e30) is now a MONO-LEVEL hierarchy (no seed fine patch). The

@@ -1,7 +1,7 @@
 """Composable bricks + scheme/time policies (Spec-4 PR-F facade).
 
 Public façade that re-exports the value objects split across ``_bricks_model`` (state /
-transport / source / elliptic bricks + Model composer + hybrid composition + EPM),
+transport / source / elliptic bricks + Model composer + EPM),
 ``_bricks_scheme`` (couplings + Spatial / FiniteVolume + Explicit), ``_bricks_time`` (the
 implicit / split time policies + Role + the mask helpers) and ``_bricks_typed`` (the Spec 5
 sec.14.2.5 typed native-brick constructors : the native elliptic boundary bricks ``Dirichlet`` /
@@ -18,7 +18,7 @@ from pops.runtime._bricks_model import (
     Scalar, FluidState, ExB, CompressibleFlux, IsothermalFlux,
     NoSource, PotentialForce, GravityForce, MagneticLorentzForce, PotentialMagneticForce,
     ChargeDensity, BackgroundDensity, GravityCoupling,
-    Model, CompositeModel, _native_to_brick,
+    Model,
     DivEpsGrad, CompositeRhs, ChargeDensitySource, ElectricFieldFromPotential, EllipticModel,
     div_eps_grad, charge_density, composite_rhs, electric_field_from_potential, elliptic,
     EllipticSolver,
@@ -40,7 +40,7 @@ __all__ = [
     "Scalar", "FluidState", "ExB", "CompressibleFlux", "IsothermalFlux",
     "NoSource", "PotentialForce", "GravityForce", "MagneticLorentzForce", "PotentialMagneticForce",
     "ChargeDensity", "BackgroundDensity", "GravityCoupling",
-    "Model", "CompositeModel", "_native_to_brick",
+    "Model",
     "DivEpsGrad", "CompositeRhs", "ChargeDensitySource", "ElectricFieldFromPotential",
     "EllipticModel", "div_eps_grad", "charge_density", "composite_rhs",
     "electric_field_from_potential", "elliptic", "EllipticSolver",

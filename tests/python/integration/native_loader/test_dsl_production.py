@@ -1,17 +1,15 @@
 """Backend "production" (NATIF) du DSL : un modele euler_poisson ecrit en formules est compile en un
 LOADER .so (compile_native / compile(backend="production")) qui inline le gabarit en-tete
-pops::add_compiled_model<ProdModel>, puis branche dans le System via add_native_block.
-
-A la difference du backend "aot" (add_compiled_block : .so a ABI plate, le bloc recalcule sur une
-grille LOCALE et MARSHALE des tableaux), le loader natif installe le modele genere comme bloc NATIF
-sur le CONTEXTE REEL du System (grid_context) -> le bloc tourne ZERO-COPIE le MEME chemin qu'add_block
+pops::add_compiled_model<ProdModel>, puis branche dans le System via l'installation privee du paquet
+authentifie. Le loader natif installe le modele genere comme bloc NATIF sur le CONTEXTE REEL du
+System (grid_context) -> le bloc tourne ZERO-COPIE le MEME chemin qu'add_block
 (assemble_rhs, fill_boundary, foncteurs nommes device-clean). On verifie donc une parite STRICTE :
 
   1) eval_rhs ET potentiel du bloc "production" == bloc NATIF add_block (precision machine), pour
      plusieurs schemas (minmod+rusanov+conservatif, minmod+hllc+primitif = flux de production) ;
   2) une avance de quelques pas (SSPRK2) reste bit-identique au bloc natif (etat final) ;
   3) GARDE-FOU ABI : un loader dont la cle pops_native_abi_key est falsifiee est REJETE explicitement
-     par add_native_block (pas d'UB silencieux a la frontiere C++).
+     par l'installateur de paquet (pas d'UB silencieux a la frontiere C++).
 
 CRUX (resolution de symboles a travers le dlopen) : le loader appelle des methodes hors-ligne du
 module _pops (install_block / grid_context / ensure_aux_width). Elles sont exportees (POPS_EXPORT) et le
@@ -64,29 +62,33 @@ def main():
     try:
         # Backend "production" via la facade : compile_native sous le capot (loader natif).
         so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend="production")
-        assert e.adder_for("production") == "add_native_block"
+        assert so.backend == "production"
+
+        def spatial(limiter, riemann, recon):
+            from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
+            from pops.numerics.reconstruction import FirstOrder
+            from pops.numerics.reconstruction.limiters import Minmod, VanLeer
+            from pops.numerics.variables import Conservative, Primitive
+            return pops.FiniteVolume(
+                limiter={"none": FirstOrder(), "minmod": Minmod(), "vanleer": VanLeer()}[limiter],
+                riemann={"rusanov": Rusanov(), "hll": HLL(), "hllc": HLLC(), "roe": Roe()}[riemann],
+                recon={"conservative": Conservative(), "primitive": Primitive()}[recon],
+            )
 
         def build_native(limiter, riemann, recon, evolve=True):
             sys = System(n=n, L=L, periodic=True)
-            sys._s.add_native_block("gas", so, limiter=limiter, riemann=riemann, recon=recon,
-                                    time="explicit", gamma=GAMMA, substeps=1, evolve=evolve)
+            sys.add_equation(
+                "gas", model=so, spatial=spatial(limiter, riemann, recon),
+                time=pops.Explicit(), evolve=evolve,
+            )
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys
 
         def build_ref(limiter, riemann, recon, evolve=True):
             sys = System(n=n, L=L, periodic=True)
-            # add_native_block (above) takes string tokens (C++ ABI); the native Spatial takes typed
-            # pops.numerics descriptors (Spec 5 sec.7). Resolve the strings to descriptors.
-            from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
-            from pops.numerics.reconstruction import FirstOrder
-            from pops.numerics.reconstruction.limiters import Minmod, VanLeer
-            from pops.numerics.variables import Conservative, Primitive
-            lim_obj = {"none": FirstOrder(), "minmod": Minmod(), "vanleer": VanLeer()}[limiter]
-            flux_obj = {"rusanov": Rusanov(), "hll": HLL(), "hllc": HLLC(), "roe": Roe()}[riemann]
-            recon_obj = {"conservative": Conservative(), "primitive": Primitive()}[recon]
             sys.block("gas", spec,
-                          spatial=pops.Spatial(limiter=lim_obj, flux=flux_obj, recon=recon_obj),
+                          spatial=spatial(limiter, riemann, recon),
                           time=pops.Explicit(), evolve=evolve)
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
@@ -140,8 +142,10 @@ def main():
         sys = System(n=n, L=L, periodic=True)
         raised = False
         try:
-            sys._s.add_native_block("gas", bad, limiter="minmod", riemann="rusanov",
-                                    recon="conservative", time="explicit", gamma=GAMMA)
+            sys._s._install_native_block(
+                "gas", bad, "minmod", "rusanov", "conservative", "explicit",
+                GAMMA, 1, True, 1, [], 0.0,
+            )
         except RuntimeError as ex:
             raised = True
             assert "incompatible ABI" in str(ex), "message inattendu : %s" % ex

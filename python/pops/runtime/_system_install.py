@@ -1,7 +1,7 @@
 """System install mixin (Spec-4 PR-F): block/equation/coupling installation.
 
 Holds the densest part of :class:`pops.runtime._system.System`: ``add_block`` /
-``add_equation`` (the backend-adder dispatch + explicit-rejection guards),
+``add_equation`` (direct native versus compiled production-package installation),
 ``add_background``, ``add_elliptic_model`` and ``add_coupling``. Mixed into ``System`` via
 inheritance; methods operate on ``self._s`` (the compiled facade) and ``self._aux_field_index``.
 """
@@ -91,30 +91,23 @@ class _SystemInstall(_System):
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, names: Any = None, evolve: bool = True,
-                     stride: Any = None) -> Any:
-        """Adds an equation/block by dispatching on the TYPE of @p model (DSL Phase A).
+                     stride: Any = None, _bind_params: Any = None) -> Any:
+        """Install a native model or one compiled production package.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
         ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
         ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
 
-        Dispatch:
-
-        - a ModelSpec (pops.Model(...)) -> add_block (composed native bricks);
-        - a CompiledModel (m.compile(...)) -> the backend adder (add_dynamic_block for prototype,
-          add_compiled_block for aot, add_native_block for production), with the names/roles/gamma
-          carried by the .so.
-
-        Centralizes the backend <-> adder coupling (an AOT .so must not be plugged into
-        add_dynamic_block, and vice versa). cf. docs/DSL_MODEL_DESIGN.md section 3.
+        A ``ModelSpec`` uses the direct native brick path. A ``CompiledModel`` must be a
+        production package; its complete resolved BindSchema vector is provided privately by
+        :meth:`_install_compiled` and becomes immutable when native closures are created.
 
         @p spatial : pops.FiniteVolume(...) / pops.Spatial(...) (default minmod+rusanov+conservative).
         @p time : pops.Explicit / IMEX (default Explicit). @p substeps : overrides time.substeps.
         @p stride : overrides time.stride (1 = each macro-step, default bit-identical).
-        @p names : component names (length = n_vars of the compiled model). @p evolve : block advances;
-        evolve=False (frozen field) is only wired on the native path (ModelSpec -> add_block, backend
-        'production' -> add_native_block). On backend 'prototype'/'aot' (the .so ABI does not carry
-        evolve) an evolve=False is REJECTED explicitly -> use a native block (add_background).
+        @p names is accepted only by the direct ``ModelSpec`` path. @p evolve controls whether the
+        installed block advances. ``_bind_params`` is an internal complete vector, never a public
+        mutable setter.
         """
         _guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
         # Late imports (the codegen/physics modules import this package: avoid the cycle).
@@ -143,9 +136,8 @@ class _SystemInstall(_System):
                               **_weno_kwargs(spatial))
             return
 
-        # Implicit mask (IMEX): only the composed native path (ModelSpec -> add_block) wires it. The .so
-        # backends (dynamic/aot/production) lack the argument -> REJECT a non-empty mask rather than
-        # ignore it silently (cf. the stride rejection on backend 'aot').
+        # The compiled-package ABI does not carry a per-block implicit mask. Reject it rather than
+        # silently selecting a different treatment.
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
@@ -182,7 +174,6 @@ class _SystemInstall(_System):
         if names is not None and len(names) != compiled.n_vars:
             raise ValueError("add_equation: names= has %d names but block '%s' has %d variables"
                              % (len(names), name, compiled.n_vars))
-        names_arg = list(names) if names is not None else []
 
         # NAMED aux fields (ADC-70 phase 1): table name -> block component, from the ORDERED names of
         # the compiled model (k-th name = component dsl.AUX_NAMED_BASE + k, mirror of the C++ emission).
@@ -213,108 +204,49 @@ class _SystemInstall(_System):
                 "[requested route %s -> %s]"
                 % (getattr(RIEMANN_HLL, "id", "riemann.hll"), RIEMANN_HLL.native_entry))
 
-        # AUTHORITATIVE dispatch by the CompiledModel adder (fixed by the backend, cf. dsl._BACKENDS):
-        # prototype->add_dynamic_block, aot->add_compiled_block, production->add_native_block (#85).
-        adder = compiled.adder
-        if adder == "add_dynamic_block":
-            # JIT, HOST Rusanov order-1 residual: takes only the MUSCL LIMITER (none/minmod/vanleer)
-            # + substeps; no HLLC/Roe flux, no primitive recon. WENO5 (5-point stencil) is
-            # NOT a MUSCL limiter and this path does not run assemble_rhs: we reject it HERE (the
-            # aot/production paths accept weno5 -- the .so grid / native block allocate 3 ghosts).
-            if spatial.limiter == "weno5":
+        if backend != "production":
+            raise ValueError(
+                "add_equation: compiled packages must use backend='production'; got %r" % backend
+            )
+        if names is not None:
+            raise ValueError(
+                "add_equation: names= is not supported for a compiled package; names and roles "
+                "are immutable artifact metadata"
+            )
+        if getattr(spatial, "wave_speed_cache", False):
+            raise ValueError(
+                "add_equation: wave_speed_cache is not carried by the production package ABI; "
+                "use a direct native ModelSpec"
+            )
+        runtime_names = tuple(getattr(compiled, "runtime_param_names", ()) or ())
+        if _bind_params is None:
+            if runtime_names:
                 raise ValueError(
-                    "add_equation: limiter 'weno5' not supported on backend 'prototype' (JIT, host "
-                    "Rusanov order-1 residual, without assemble_rhs); use backend='aot'/'production' "
-                    "(WENO5 wired end to end), or a composed native model (pops.Model(...)) on the "
-                    "internal native engine API.")
-            if spatial.flux != "rusanov":
+                    "add_equation: compiled package declares runtime parameters; install it through "
+                    "pops.bind so BindSchema resolves one complete vector"
+                )
+            bind_values = []
+        else:
+            bind_values = [
+                native_real(value, where="System.add_equation.bind_params[%d]" % index)
+                for index, value in enumerate(_bind_params)
+            ]
+            if len(bind_values) != len(runtime_names):
                 raise ValueError(
-                    "add_equation: backend 'prototype' (JIT, host Rusanov order-1 residual) only exposes "
-                    "riemann='rusanov' (got '%s'); use backend='aot'/'production' for "
-                    "HLLC/Roe" % spatial.flux)
-            # evolve=False (FROZEN block / fixed background) is NOT wired: the add_dynamic_block ABI does
-            # not carry evolve (push_dynamic forces it to true on the C++ side) -> the block would be
-            # advanced SILENTLY. We REJECT it (rather than silent ignore); for a frozen field, use a
-            # native/production block (add_background -> add_block(..., evolve=False)).
-            if not evolve:
-                raise ValueError(
-                    "add_equation: evolve=False not supported on backend 'prototype' (the JIT .so ABI "
-                    "does not carry evolve; the block would be advanced silently). A frozen field "
-                    "(evolve=False / background) is available only on the internal native engine API "
-                    "(a composed native model, pops.Model(...)), not part of the pops.bind surface.")
-            # positivity_floor (ADC-76) is NOT wired on the host JIT path (no assemble_rhs, dedicated
-            # Rusanov order-1 residual): reject rather than silently ignore the floor.
-            if getattr(spatial, "positivity_floor", 0.0) > 0.0:
-                raise ValueError(
-                    "add_equation: positivity_floor not supported on backend 'prototype' (dedicated "
-                    "host residual, without high-order reconstruction); use backend='aot'/'production' "
-                    "or a composed native model (pops.Model(...)) on the internal native engine API.")
-            # NB wave_speed_cache (ADC-199): no dedicated guard here -- the cache requires riemann='hll',
-            # already rejected above on 'prototype' (rusanov order 1 only) -> never silently ignored here.
-            self._s.add_dynamic_block(name, compiled.so_path, nsub, names_arg, spatial.limiter)
-            return
-        if adder == "add_compiled_block":
-            # AOT host-marshaled: limiter x riemann x recon, single-rank (without MPI/AMR). The extern "C"
-            # ABI of the AOT .so (add_compiled_block) does NOT carry a cadence: the block would run at stride=1
-            # SILENTLY. We therefore REJECT stride > 1 on this backend (explicit route) rather than
-            # ignore it. The per-block stride is wired on add_block (composed native) and add_native_block
-            # (backend='production'). We read time.stride AND the stride= override (nstride covers both).
-            if nstride != 1:
-                raise ValueError(
-                    "add_equation: stride=%d not supported on backend 'aot' (the AOT .so ABI does not "
-                    "carry the cadence; the block would run at stride=1 silently). Use "
-                    "backend='production' (native path, cadence wired) or a composed native model "
-                    "(pops.Model(...)) on the internal native engine API." % nstride)
-            # evolve=False (FROZEN block / fixed background) is NOT wired: the add_compiled_block ABI does
-            # not carry evolve (add_compiled_block forces it to true on the C++ side) -> the block would be
-            # advanced SILENTLY. We REJECT it (rejection rather than silent ignore). For a frozen field,
-            # use backend='production' (add_native_block carries evolve) or a composed native model
-            # pops.Model(...) -> add_block(..., evolve=False) (or add_background).
-            if not evolve:
-                raise ValueError(
-                    "add_equation: evolve=False not supported on backend 'aot' (the AOT .so ABI does not "
-                    "carry evolve; the block would be advanced silently). Use "
-                    "backend='production' (native path, evolve wired) or a composed native model "
-                    "(pops.Model(...)) on the internal native engine API for a frozen field.")
-            # wave_speed_cache (ADC-199): the AOT .so ABI does not carry the wave speed cache -> it would
-            # be silently ignored. Reject it (the cache is only wired on the composed native add_block).
-            if getattr(spatial, "wave_speed_cache", False):
-                raise ValueError(
-                    "add_equation: wave_speed_cache not supported on backend 'aot' (the AOT .so ABI does "
-                    "not carry the HLL wave speed cache; it would be silently ignored). It is available "
-                    "only on the internal native engine API (a composed native model, pops.Model(...)).")
-            self._s.add_compiled_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                       spatial.recon, time.kind, nsub, names_arg,
-                                       native_real(
-                                           getattr(spatial, "positivity_floor", 0.0),
-                                           where="System.add_equation.positivity_floor"))
-            return
-        if adder == "add_native_block":
-            # Native zero-copy block; names/roles come from the .so metadata.
-            if names is not None:
-                raise ValueError(
-                    "add_equation: names= not supported on the native path (production); the names and "
-                    "roles are carried by the compiled model metadata (.so)")
-            # PRE-DLOPEN guard at plug time: ALSO covers the cache HIT (where compile_native does not
-            # run) -- a stale _pops module would otherwise give a cryptic dlopen 'symbol not found'.
-            # wave_speed_cache (ADC-199): the add_native_block ABI does not (yet) carry the wave speed
-            # cache -> it would be silently ignored. Reject BEFORE the C++ boundary (and before the ABI
-            # check: a clear message rather than a dlopen error); the cache is wired on add_block.
-            if getattr(spatial, "wave_speed_cache", False):
-                raise ValueError(
-                    "add_equation: wave_speed_cache not supported on backend 'production' (the "
-                    "add_native_block ABI does not carry the HLL wave speed cache; it would be silently "
-                    "ignored). It is available only on the internal native engine API (a composed "
-                    "native model, pops.Model(...)).")
-            check_compiled_matches_module(getattr(compiled, "abi_key", ""))
-            gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
-            gamma = native_real(gamma, where="System.add_equation.gamma")
-            self._s.add_native_block(name, compiled.so_path, spatial.limiter, spatial.flux,
-                                     spatial.recon, time.kind, gamma, nsub, evolve, nstride,
-                                     native_real(getattr(spatial, "positivity_floor", 0.0),
-                                                 where="System.add_equation.positivity_floor"))
-            return
-        raise ValueError("add_equation: adder %r unknown (backend %r)" % (adder, backend))
+                    "add_equation: bound parameter vector has %d values, expected %d"
+                    % (len(bind_values), len(runtime_names))
+                )
+        check_compiled_matches_module(getattr(compiled, "abi_key", ""))
+        gamma = compiled.gamma if compiled.gamma is not None else PHYSICAL_DEFAULT_GAMMA
+        gamma = native_real(gamma, where="System.add_equation.gamma")
+        self._s._install_native_block(
+            name, compiled.so_path, spatial.limiter, spatial.flux, spatial.recon, time.kind,
+            gamma, nsub, evolve, nstride, bind_values,
+            native_real(
+                getattr(spatial, "positivity_floor", 0.0),
+                where="System.add_equation.positivity_floor",
+            ),
+        )
 
     def add_background(self, name: Any, model: Any, density: Any, spatial: Any = None) -> Any:
         """FROZEN species (not advanced): a fixed background that contributes to the system Poisson (and,

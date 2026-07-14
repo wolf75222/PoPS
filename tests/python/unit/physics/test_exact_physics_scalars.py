@@ -11,7 +11,6 @@ import pytest
 from pops.codegen._compile_emit import model_hash
 from pops.ir import ScalarLiteral, scalar_literal
 from pops.model.manifest import coupling_operator_manifest
-from pops.physics.bricks import NativeBrick
 from pops.physics.coupling_presets import (
     ContractedCoupling,
     coupling_operator_args,
@@ -19,6 +18,7 @@ from pops.physics.coupling_presets import (
 )
 from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
+from pops.physics._scalars import canonical_scalar_data, physics_scalar_cpp
 
 
 def _constant_source(*values):
@@ -136,7 +136,7 @@ def test_wave_speed_knobs_emit_and_hash_exact_literals():
     assert model_hash(model._m) != model_hash(decimal_domain._m)
 
 
-def test_gamma_and_native_brick_fields_use_scalar_cpp():
+def test_gamma_and_native_lowering_helpers_preserve_exact_scalars():
     gamma = Decimal("1.4000000000000000000000000000000000001")
     model = Model("exact_gamma")
     model.gamma(gamma)
@@ -145,16 +145,15 @@ def test_gamma_and_native_brick_fields_use_scalar_cpp():
 
     algebraic = ScalarLiteral.algebraic(
         "sqrt(2)", cpp="std::sqrt(pops::Real(2))")
-    brick = NativeBrick(
-        "pops::ExactBrick",
-        "source",
-        fields={"ratio": Fraction(1, 3), "root": algebraic, "decimal": gamma},
-    )
-    source = brick.emit("ExactBrick")
-    assert "pops::Real(1) / pops::Real(3)" in source
-    assert "std::sqrt(pops::Real(2))" in source
-    assert str(gamma) in source
-    json.dumps(brick.to_data())
+    assert physics_scalar_cpp(Fraction(1, 3), where="native.ratio") == \
+        "(pops::Real(1) / pops::Real(3))"
+    assert physics_scalar_cpp(algebraic, where="native.root") == "std::sqrt(pops::Real(2))"
+    assert str(gamma) in physics_scalar_cpp(gamma, where="native.decimal")
+    json.dumps({
+        "ratio": canonical_scalar_data(Fraction(1, 3), where="native.ratio"),
+        "root": canonical_scalar_data(algebraic, where="native.root"),
+        "decimal": canonical_scalar_data(gamma, where="native.decimal"),
+    })
 
 
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), Decimal("NaN")])
@@ -185,8 +184,6 @@ def test_units_targets_and_unsupported_algebraic_values_are_never_erased():
     density = src.block("gas").role("density")
     with pytest.raises(TypeError, match="unit annotation"):
         src.add("gas", role="density", expr=density * unit)
-    with pytest.raises(TypeError, match="unit annotation"):
-        NativeBrick("pops::Bad", "source", fields={"rate": unit})
 
 
 @pytest.mark.parametrize("value", [True, 0, -1, float("nan"), float("inf")])

@@ -30,9 +30,8 @@ class _AmrSystemProgram(_AmrSystem):
             runs the section-24 .so requirement validation: block instance / solver). The .so must
             export pops_install_program_amr (target='amr_system'); a target='system' .so is rejected
             at the C++ loader with an actionable message. NATIVE mode (so_path is None) has no Program
-            -- the step-2 blocks drive the native AMR loop, and the native per-block runtime params were
-            already routed to set_block_params in step 4b (ADC-514), so @p params here holds only the
-            names NOT consumed by an instance (empty on a native install, since step 4b rejected any).
+            -- the step-2 blocks drive the native AMR loop. Package parameters were fixed before their
+            closures were constructed; @p params remains available for Program-owned slots.
           - (5b) COMPILED-PROGRAM RUNTIME PARAMS (parity ADC-510): route the remaining params to the
             per-PROGRAM-block set_program_params, AFTER install_program seeded each block's declaration
             defaults. A name declared by no Program kernel raises (no silent drop).

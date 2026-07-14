@@ -291,47 +291,6 @@ state_after_1 = sim_imex.density("ne").copy()
 chk(changed(state_before_1, state_after_1),
     "IMEX stride=2 substeps=2, pas 1 : le bloc RATTRAPE")
 
-# ---- 8. AOT : Explicit(stride>1) + backend='aot' leve une erreur claire --------
-# Le bloc compile AOT (.so) ne transporte PAS la cadence dans son ABI extern "C" : System.add_equation
-# doit REJETER stride > 1 plutot que de tourner a stride=1 en silence. La garde est purement Python et
-# leve AVANT le dlopen du .so : un CompiledModel FACTICE (backend='aot', .so inexistant) suffit, donc
-# le sous-test ne depend PAS d'un compilateur (deterministe en CI minimale).
-print("== AOT : stride>1 + backend='aot' rejete explicitement ==")
-fake_aot = CompiledModel(
-    so_path="/inexistant.so", backend="aot", adder="add_compiled_block",
-    cons_names=["rho", "rho_u", "rho_v", "E"],
-    cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
-    prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=1.4, n_aux=3, params={}, caps={},
-    abi_key="k", model_hash="h", cxx="c++", std="c++20")
-
-sim_aot = System(n=16, periodic=True)
-try:
-    sim_aot.add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), time=pops.Explicit(stride=2))
-    chk(False, "add_equation(stride=2, backend='aot') doit lever ValueError")
-except ValueError as ex:
-    chk("stride" in str(ex) and "aot" in str(ex),
-        "add_equation(stride=2, backend='aot') leve une ValueError claire (stride/aot)")
-
-# stride override via add_equation(stride=) AUSSI rejete (couvre les deux sources de cadence).
-sim_aot2 = System(n=16, periodic=True)
-try:
-    sim_aot2.add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), stride=3)
-    chk(False, "add_equation(stride=3 override, backend='aot') doit lever ValueError")
-except ValueError as ex:
-    chk("stride" in str(ex) and "aot" in str(ex),
-        "add_equation(stride= override, backend='aot') leve une ValueError claire")
-
-# stride=1 (defaut) : la garde stride NE doit PAS lever (le .so inexistant echoue plus loin au dlopen,
-# RuntimeError) -- on verifie juste que ce n'est PAS la ValueError de stride.
-sim_aot_ok = System(n=16, periodic=True)
-try:
-    sim_aot_ok.add_equation("gas", fake_aot, spatial=pops.FiniteVolume(), time=pops.Explicit(stride=1))
-    chk(False, "add_equation(stride=1, backend='aot') : attendu un echec au dlopen (.so inexistant)")
-except ValueError as ex:
-    chk(False, "add_equation(stride=1, backend='aot') ne doit PAS lever de ValueError stride (%s)" % ex)
-except Exception:  # noqa: BLE001  RuntimeError du dlopen attendu : la garde stride a laisse passer
-    chk(True, "add_equation(stride=1, backend='aot') : pas de rejet stride (echec au dlopen attendu)")
-
 # ---- 9. Validation des entrees ------------------------------------------------
 print("== validation des entrees ==")
 try:

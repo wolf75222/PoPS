@@ -214,7 +214,7 @@ def test_compiled_model_has_no_competing_layout_inspector():
     # A tiny stub CompiledModel (no .so dlopen needed) exposes no retired AMR-specific inspector.
     from pops.codegen.loader import CompiledModel
     cm = CompiledModel(
-        so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
+        so_path="<stub>", backend="production", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     assert not hasattr(cm, "inspect_amr")
@@ -230,7 +230,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     from pops.problem._snapshot import AuthoringSnapshot
 
     cm = CompiledModel(
-        so_path="<stub>", backend="aot", adder="add_native_block", cons_names=["rho"],
+        so_path="<stub>", backend="production", cons_names=["rho"],
         cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     from pops.codegen._compiled_model_identity import compiled_model_identity
@@ -244,12 +244,12 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     resolved = ResolvedSimulationPlan(
         snapshot=snapshot,
         target="amr_system",
-        backend="aot",
+        backend="production",
         layout=carried,
         layout_plan=layout_plan,
         time=None,
         blocks=(ResolvedBlock(
-            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "aot", ("U",)),),
+            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "production", ("U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},

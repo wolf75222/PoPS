@@ -47,7 +47,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         source.param(declaration)
     aux = ["B_z", "phi_bg"][:n_aux]
     component = CompiledModel(
-        so_path="<stub-amr>", backend="production", adder="add_native_block",
+        so_path="<stub-amr>", backend="production",
         cons_names=["rho", "mx", "my"],
         cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux,

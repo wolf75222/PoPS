@@ -60,12 +60,12 @@ _ALLOWED = _STEPPING | _MUTATIONS | _DIAGNOSTICS | _IO
 # these raises a precise AttributeError (never recommends the legacy engine setters).
 _BLOCKED = frozenset({
     "add_block", "add_equation", "add_background", "add_coupling", "add_elliptic_model",
-    "add_dynamic_block", "add_compiled_block", "add_native_block",
+    "_install_native_block",
     # The named couplings (add_ionization / add_collision / add_thermal_exchange) are gone (ADC-595):
     # they are presets routed through add_coupling, which stays blocked here.
     "set_poisson",
     "install_program", "set_program_cadence", "set_refinement", "set_phi_refinement",
-    "set_block_params", "set_program_params",
+    "set_program_params",
     "set_disc_domain", "set_geometry_mode", "set_epsilon_field", "_install_compiled",
 })
 

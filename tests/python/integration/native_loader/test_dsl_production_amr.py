@@ -130,7 +130,7 @@ def main():
                           backend="production", target="amr_system")
         so_t = cm_t.so_path
         assert isinstance(cm_t, CompiledModel)
-        assert cm_t.adder == "add_native_block" and cm_t.target == "amr_system"
+        assert cm_t.backend == "production" and cm_t.target == "amr_system"
         assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
         spec_t = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
                            transport=pops.CompressibleFlux(), source=pops.NoSource(),

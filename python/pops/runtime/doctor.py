@@ -70,7 +70,6 @@ def _descriptor_tokens() -> Any:
     # printed list stays the historical set while still being sourced from the catalog.
     high_order = ["weno5"] if "weno5" in recon_tokens else []
     dsl_limiters = _ordered(["none", *limiter_tokens, *high_order], _LIMITER_ORDER)
-    dsl_limiters_low = [t for t in dsl_limiters if t != "weno5"]
     # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
     # GeometricMG plus the FFT discrete / spectral schemes.
     poisson = {
@@ -83,7 +82,6 @@ def _descriptor_tokens() -> Any:
         "riemann": riemann_tokens,
         "riemann_polar": [t for t in riemann_tokens if t in _POLAR_RIEMANN],
         "dsl_limiters": dsl_limiters,
-        "dsl_limiters_low": dsl_limiters_low,
         "poisson": poisson,
     }
 
@@ -167,13 +165,13 @@ def doctor(verbose: bool = True) -> Any:
         except RuntimeError as e:
             checks["include"] = (False, "pops headers not found (set POPS_INCLUDE) : %s" % e)
 
-        # 5c. Kokkos root for the DSL production/aot backend (the tutorial's "no DSL backend" blocker).
+        # 5c. Kokkos root for the production package compiler.
         # PoPS is Kokkos-only : every DSL .so that includes the pops headers MUST compile against an
         # installed Kokkos (Serial is enough on CPU), found via POPS_KOKKOS_ROOT / Kokkos_ROOT.
         kroot = _tc._native_kokkos_root()
         if kroot is None:
             checks["kokkos_root"] = (False,
-                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> DSL backend='production'/'aot' cannot compile "
+                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> production package cannot compile "
                 "(the tutorial dead-ends on 'no DSL backend'). Fix (conda) :\n"
                 "      conda env config vars set POPS_KOKKOS_ROOT=\"$CONDA_PREFIX\"\n"
                 "      conda env config vars set Kokkos_ROOT=\"$CONDA_PREFIX\"\n"
@@ -199,20 +197,6 @@ def doctor(verbose: bool = True) -> Any:
     checks["threads"] = (True, "OMP_NUM_THREADS=%s ; first System created=%s"
                          % (os.environ.get("OMP_NUM_THREADS", "(default)"),
                             _threading._first_system_built))
-
-    # 7. POPS_JIT_BACKDOOR (Spec 5 sec.12.4, criterion #48): the UNSAFE debug gate must never be
-    # silently honored. Surface it loudly here (in addition to compiled.inspect()) so a stray export
-    # is visible at a glance. OK when unset / disabled; FAIL (loud) when enabled -- a debug-only
-    # escape hatch in a healthy environment. No backdoor behavior is wired; this is the guard only.
-    # Read the env directly (no codegen import, so doctor stays lightweight even without numpy); the
-    # truthy convention mirrors pops.codegen.env.jit_backdoor_enabled.
-    _backdoor = os.environ.get("POPS_JIT_BACKDOOR", "").strip().lower() in ("1", "on", "true",
-                                                                            "yes", "y")
-    if _backdoor:
-        checks["jit_backdoor"] = (False, "POPS_JIT_BACKDOOR is SET -> the UNSAFE debug JIT gate is "
-                                         "ENABLED. Never set this in production; unset it to disable.")
-    else:
-        checks["jit_backdoor"] = (True, "disabled (POPS_JIT_BACKDOOR unset -- the safe default)")
 
     if verbose:
         for cname, (ok, detail) in checks.items():
@@ -250,7 +234,6 @@ def capabilities() -> Any:
     poisson_fft = tok["poisson"]["fft"]
     poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
-    dsl_limiters_low = list(tok["dsl_limiters_low"])
     from pops.runtime_environment import runtime_environment_report
     runtime_env = runtime_environment_report()
     return {
@@ -355,30 +338,15 @@ def capabilities() -> Any:
             "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
                             "PolarTensorKrylovSolver provider",
             "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
-                   "one composite tensor solve, then reconstruct-all-levels ; no native "
-                   "source-stage route",
+                   "one composite tensor solve, then reconstruct-all-levels through the Program",
         },
         "backends_dsl": {
-            "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "
-                       "baked compiler + matching headers), aot otherwise ; reason set on "
-                       "CompiledModel.backend_auto_reason ; explicit backend = short-circuit",
-            # ADC-600: each backend row carries "tier" (production | prototype | internal) so the
-            # report names plainly whether a route is the target production route, a host prototype
-            # route, or an internal host-marshalled harness (never a fallback for the target surface).
-            "prototype": {"adder": "add_dynamic_block", "tier": "prototype",
-                          "riemann": [t for t in riemann_all if t == "rusanov"],
-                          "limiter": dsl_limiters_low, "stride": False,
-                          "evolve_false": False, "mpi": False, "amr": False},
-            "aot": {"adder": "add_compiled_block", "tier": "internal",
-                    "riemann": list(riemann_all),
-                    "limiter": dsl_limiters, "stride": False,
-                    "evolve_false": False, "mpi": False, "amr": False,
-                    "runtime_params": True},
-            "production": {"adder": "add_native_block", "tier": "production",
+            "default": "production package; compiler, headers and module ABI must match",
+            "production": {"tier": "production",
                            "riemann": list(riemann_all),
                            "limiter": dsl_limiters, "stride": True,
                            "evolve_false": True, "mpi": True, "amr": "target='amr_system'",
-                           "stability_hooks": True},
+                           "stability_hooks": True, "bind_params": "fixed at install"},
         },
         "io": {
             "write": ["vtk (.vti cartesian)", "npz",
@@ -439,8 +407,7 @@ def capabilities() -> Any:
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs backend='production' target='amr_system', on polar a "
-                         "System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
+                         "AMR path needs target='amr_system'; the "
                          "opt-in single-block composite-FAC Poisson path (facade-reachable via "
                          "GeometricMG(amr_composite=CompositeFAC(...)), ADC-645) does not yet carry "
                          "named aux to the fine level",

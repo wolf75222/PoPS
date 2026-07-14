@@ -62,7 +62,7 @@ def _compiled(model=None, *, wave_speeds=True, n_vars=2):
     model (the source-kind derivation reads it)."""
     cons = ["w1", "w2", "w3"][:n_vars]
     c = CompiledModel(
-        so_path="/no/such/pops-ws-provider.so", backend="production", adder="add_native_block",
+        so_path="/no/such/pops-ws-provider.so", backend="production",
         cons_names=cons, cons_roles=["custom"] * n_vars, prim_names=[], n_vars=n_vars, gamma=1.4,
         n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="mh",
         cxx="c++", std="c++23", wave_speeds=wave_speeds, target="system")

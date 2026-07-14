@@ -5,7 +5,7 @@
 //      historical observable strings ("assembling"/"bound"/"running") for every pre-existing call
 //      sequence, and the NEW checkpointed / finalized states + refusals are reachable only through the
 //      new explicit transitions (no current caller). The inverted refusals are argued here.
-//   2. The structured reports (params_report / options_report / layout_report / newton_report_ptr) the
+//   2. The structured reports (options_report / layout_report / newton_report_ptr) the
 //      registries expose for a runtime report -- the ADC-578 "define ownerships + structured reports"
 //      acceptance.
 #include <gtest/gtest.h>
@@ -14,7 +14,6 @@
 #include <string>
 
 #include <pops/runtime/system/system_lifecycle.hpp>
-#include <pops/runtime/system/system_runtime_params.hpp>
 #include <pops/runtime/system/system_diagnostics_registry.hpp>
 #include <pops/runtime/system/system_coupling_registry.hpp>
 #include <pops/runtime/system/system_domain.hpp>
@@ -114,20 +113,6 @@ TEST(SystemLifecycle, NewStatesNeverSurfaceWithoutTheExplicitTransition) {
 }
 
 // --- 2. Registry structured reports --------------------------------------------------------------
-TEST(SystemRuntimeParamsRegistry, ParamsReportListsSizesInNameOrder) {
-  pops::runtime::system::SystemRuntimeParamsRegistry reg;
-  reg.block_params["ions"] = std::make_shared<std::vector<double>>(std::vector<double>{1.0, 2.0});
-  reg.block_params["gas"] = std::make_shared<std::vector<double>>(std::vector<double>{3.0});
-  EXPECT_TRUE(reg.has("ions"));
-  EXPECT_FALSE(reg.has("absent"));
-  const auto report = reg.params_report();
-  ASSERT_EQ(report.size(), 2u);
-  EXPECT_EQ(report[0].first, "gas") << "std::map iterates sorted by name";
-  EXPECT_EQ(report[0].second, 1u);
-  EXPECT_EQ(report[1].first, "ions");
-  EXPECT_EQ(report[1].second, 2u);
-}
-
 TEST(SystemDiagnosticsRegistry, OptionsAndNewtonReportsRoundTrip) {
   pops::runtime::system::SystemDiagnosticsRegistry reg;
   pops::EffectiveBlockOptions opt;

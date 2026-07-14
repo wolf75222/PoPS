@@ -1,7 +1,6 @@
 """Model bricks : state / transport / source / elliptic value objects (Spec-4 PR-F).
 
-The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec), the
-HYBRID composition path (``CompositeModel`` + ``_native_to_brick``) and the elliptic physical
+The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec) and the elliptic physical
 model (EPM) bricks/helpers. ``pops.runtime.bricks`` re-exports everything here together with the
 scheme/time policies in ``_bricks_scheme``. ``ModelSpec`` comes from the loaded extension via
 ``pops._bootstrap``.
@@ -42,9 +41,8 @@ class FluidState:
     the flow evacuates the background (rho -> ~0). It does NOT modify the conserved state (only the
     velocity estimate). 0 (default) = inactive (bit-identical). This is independent of the spatial
     positivity_floor (the Zhang-Shu reconstruction limiter): the two address different failure modes
-    and must be enabled separately. Honored on the native pops.Model(...) / System / AmrSystem path;
-    the compiled/DSL path (pops.CompositeModel / JIT / AOT) does not carry it yet, so set it on the
-    native path.
+    and must be enabled separately. It is carried by the native ``ModelSpec`` route; generated
+    production packages carry their own immutable transport parameters.
     """
 
     def __init__(self,
@@ -97,14 +95,10 @@ class CompressibleFlux:
 
 
 class IsothermalFlux:
-    """Isothermal Euler flux (compiled/DSL transport brick).
+    """Isothermal Euler flux for the native ``ModelSpec`` route.
 
-    On the native ``pops.Model(...)`` path ``cs2`` / ``vacuum_floor`` (ADC-77) come from the
-    :class:`FluidState` state. On the compiled/hybrid ``pops.CompositeModel(transport=...)`` path the
-    state is not threaded into the AOT struct, so this brick carries them itself:
-    ``pops.CompositeModel(transport=pops.IsothermalFlux(cs2=..., vacuum_floor=...), ...)``. Both default
-    to the native constants, so an unconfigured ``IsothermalFlux()`` bakes the historical isothermal
-    flux bit-for-bit (``vacuum_floor`` 0 = the quasi-vacuum velocity clamp inactive).
+    ``cs2`` and ``vacuum_floor`` are immutable descriptor values. Generated models use their
+    authenticated BindSchema vector instead of a second mutable parameter channel.
     """
 
     def __init__(self, cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
@@ -257,117 +251,6 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
         raise ValueError("elliptic: ChargeDensity | BackgroundDensity | GravityCoupling")
 
     return spec
-
-
-# --- HYBRID composition: native brick + DSL brick IN A model --------
-# pops.Model(...) composes 100% native bricks into a ModelSpec (C++ tags); pops.dsl.Model(...)
-# generates a 100% DSL model. pops.CompositeModel(...) fills the in-between: MIX, in ONE SINGLE
-# model, NATIVE bricks (pops.ExB / PotentialForce / ChargeDensity ...) and PARTIAL compiled DSL
-# bricks (pops.dsl.HyperbolicBrick(...).compile() / SourceBrick / EllipticBrick). The
-# mix is compiled into ONE composite .so (prototype: backend 'aot'). cf. pops/dsl.py (Phase B).
-def _native_to_brick(obj: Any, role: Any) -> Any:
-    """Translate a NATIVE brick (pops.* object) into a NativeBrick descriptor for the @p role slot.
-    An already-compiled DSL brick (CompiledBrick) passes through unchanged (after slot check)."""
-    from pops.physics.bricks import CompiledBrick, NativeBrick
-    if isinstance(obj, CompiledBrick):
-        if obj.kind != role:
-            raise ValueError("pops.CompositeModel: DSL brick of type %r placed in the %r slot"
-                             % (obj.kind, role))
-        return obj
-    if role == "hyperbolic":
-        if isinstance(obj, ExB):
-            return NativeBrick("pops::ExBVelocity", "hyperbolic", fields={"B0": obj.B0},
-                                   var_names=["n"], n_vars=1, prim_names=["n"])
-        if isinstance(obj, CompressibleFlux):
-            g = exact_real(
-                getattr(obj, "gamma", PHYSICAL_DEFAULT_GAMMA), where="CompressibleFlux.gamma")
-            return NativeBrick("pops::CompressibleFlux", "hyperbolic", fields={"gamma": g},
-                                   var_names=["rho", "rho_u", "rho_v", "E"], n_vars=4,
-                                   prim_names=["rho", "u", "v", "p"], gamma=g)
-        if isinstance(obj, IsothermalFlux):
-            cs2 = exact_real(
-                getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2),
-                where="IsothermalFlux.cs2")
-            # ADC-644: carry vacuum_floor into the baked struct ONLY when active. The native
-            # pops::IsothermalFlux has both members (cs2, vacuum_floor); NativeBrick.emit writes the
-            # fields in insertion order, so omitting vacuum_floor when 0 keeps the generated struct
-            # (and module_hash) byte-identical to today's quasi-vacuum-inactive isothermal flux.
-            vf = exact_real(
-                getattr(obj, "vacuum_floor", PHYSICAL_DEFAULT_VACUUM_FLOOR),
-                where="IsothermalFlux.vacuum_floor", minimum=0)
-            fields = {"cs2": cs2}
-            if vf != 0.0:
-                fields["vacuum_floor"] = vf
-            return NativeBrick("pops::IsothermalFlux", "hyperbolic", fields=fields,
-                                   var_names=["rho", "rho_u", "rho_v"], n_vars=3,
-                                   prim_names=["rho", "u", "v"])
-        raise ValueError("pops.CompositeModel transport: ExB | CompressibleFlux | IsothermalFlux "
-                         "(native) or dsl.HyperbolicBrick(...).compile()")
-    if role == "source":
-        if isinstance(obj, NoSource):
-            return NativeBrick("pops::NoSource", "source", min_vars=1)
-        if isinstance(obj, PotentialForce):
-            return NativeBrick("pops::PotentialForce", "source", fields={"qom": obj.charge},
-                                   min_vars=3)
-        if isinstance(obj, GravityForce):
-            return NativeBrick("pops::GravityForce", "source", min_vars=3)
-        if isinstance(obj, MagneticLorentzForce):
-            # n_aux=4: the brick reads B_z (canonical aux channel 3) -> the composite sizes the aux.
-            return NativeBrick("pops::MagneticLorentzForce", "source",
-                                   fields={"qom": obj.charge}, min_vars=3, n_aux=4)
-        if isinstance(obj, PotentialMagneticForce):
-            # NESTED fields of CompositeSource (public members a / b): the NativeBrick emit
-            # writes `a.qom = ...; b.qom = ...;` in the constructor of the derived struct.
-            return NativeBrick(
-                "pops::CompositeSource<pops::PotentialForce, pops::MagneticLorentzForce>", "source",
-                fields={"a.qom": obj.charge, "b.qom": obj.charge}, min_vars=3, n_aux=4)
-        raise ValueError("pops.CompositeModel source: NoSource | PotentialForce | GravityForce | "
-                         "MagneticLorentzForce | PotentialMagneticForce (native) or "
-                         "dsl.SourceBrick(...).compile()")
-    if role == "elliptic":
-        if isinstance(obj, ChargeDensity):
-            return NativeBrick("pops::ChargeDensity", "elliptic", fields={"q": obj.charge},
-                                   min_vars=1)
-        if isinstance(obj, BackgroundDensity):
-            return NativeBrick("pops::BackgroundDensity", "elliptic",
-                                   fields={"alpha": obj.alpha, "n0": obj.n0}, min_vars=1)
-        if isinstance(obj, GravityCoupling):
-            return NativeBrick("pops::GravityCoupling", "elliptic",
-                                   fields={"sign": obj.sign, "four_pi_G": obj.four_pi_G,
-                                           "rho0": obj.rho0}, min_vars=1)
-        raise ValueError("pops.CompositeModel elliptic: ChargeDensity | BackgroundDensity | "
-                         "GravityCoupling (native) or dsl.EllipticBrick(...).compile()")
-    raise ValueError("pops.CompositeModel: unknown slot %r" % (role,))
-
-
-def CompositeModel(transport: Any, source: Any, elliptic: Any, name: str = "hybrid") -> Any:
-    """Compose a HYBRID model mixing NATIVE bricks and PARTIAL DSL bricks in ONE model.
-
-    Each slot (transport / source / elliptic) is EITHER a native brick (pops.ExB(...),
-    pops.PotentialForce(...), pops.ChargeDensity(...) ...), OR a compiled partial DSL brick
-    (pops.dsl.HyperbolicBrick(...).compile(), pops.dsl.SourceBrick(...).compile(),
-    pops.dsl.EllipticBrick(...).compile()). AT LEAST one slot must be a DSL brick: a
-    100% native composition is written with pops.Model(...) (ModelSpec).
-
-        tr = pops.dsl.HyperbolicBrick("iso") ...        # DSL transport
-        m  = pops.CompositeModel(transport=tr.compile(),
-                                source=pops.PotentialForce(charge=-1.0),   # native source
-                                elliptic=pops.ChargeDensity(charge=-1.0))  # native elliptic
-        co = m.compile(backend="aot")                  # -> CompiledModel
-        sim.add_equation("ions", co, spatial=pops.FiniteVolume(), names=[...])
-
-    Returns an pops.dsl.HybridModel; call .compile(backend="aot") for a CompiledModel pluggable
-    via System.add_equation. (Prototype: only the 'aot' backend is wired.)"""
-    from pops.physics.bricks import CompiledBrick
-    from pops.physics.hybrid import HybridModel
-    tr = _native_to_brick(transport, "hyperbolic")
-    sr = _native_to_brick(source, "source")
-    el = _native_to_brick(elliptic, "elliptic")
-    if not any(isinstance(b, CompiledBrick) for b in (tr, sr, el)):
-        raise ValueError(
-            "pops.CompositeModel: all-native composition; use pops.Model(...) (ModelSpec) for "
-            "a 100% native model. CompositeModel is for MIXING native + DSL in a single model.")
-    return HybridModel(tr, sr, el, name=name)
 
 
 # --- Elliptic model (EPM): Poisson = a composable instance ------------

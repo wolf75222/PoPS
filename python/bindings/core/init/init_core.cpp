@@ -45,13 +45,10 @@ void bind_model_spec_property(py::class_<pops::ModelSpec>& binding, const char* 
 pops::CapabilityTarget parse_capability_target(const std::string& target, const char* where) {
   if (target == "production")
     return pops::CapabilityTarget::kProduction;
-  if (target == "aot")
-    return pops::CapabilityTarget::kAot;
   if (target == "module" || target.empty())
     return pops::CapabilityTarget::kModule;
   throw std::invalid_argument(std::string(where) +
-                              ": target must be 'module', 'production' or 'aot' (got '" + target +
-                              "')");
+                              ": target must be 'module' or 'production' (got '" + target + "')");
 }
 
 py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
@@ -224,7 +221,7 @@ void init_core(py::module_& m) {
 
   // MPI seam COMPILED into the module (POPS_HAS_MPI via the pops INTERFACE under -DPOPS_USE_MPI=ON) plus
   // the MPI include dir(s) used by the build (POPS_MPI_INCLUDE, baked by CMake; '|'-joined). The DSL
-  // "production"/"aot" loaders are compiled OUTSIDE CMake and inherit none of this: dsl.py reads these
+  // Production packages are compiled OUTSIDE CMake and inherit none of this: codegen reads these
   // attributes (_native_mpi_flags) to re-bake -DPOPS_HAS_MPI + -I<inc> so the loader uses comm.hpp's
   // REAL MPI rather than its serial stubs (n_ranks()=1). Without it a distributed layout built inside
   // the loader replicates on every rank (ADC-319). A serial module exposes False / empty.
@@ -273,7 +270,7 @@ void init_core(py::module_& m) {
   // descriptor walk against this so the two cannot SILENTLY disagree; problem.explain_routes sources the
   // route matrix from it. We expose kAbiVersion separately (it versions the capability vocabulary, not
   // the toolchain ABI key) and module_capabilities(target) returns a plain dict (route-dependent: the
-  // production / native route carries a stride, the aot / prototype route does not).
+  // production package carries a stride while the route-agnostic module report does not).
   m.attr("__abi_version__") = static_cast<int>(pops::kAbiVersion);
   m.def(
       "module_capabilities",
@@ -285,8 +282,8 @@ void init_core(py::module_& m) {
       py::arg("target") = "module",
       "Authoritative static capability facts of the built module (Spec 5 sec.13.12, #36): "
       "{abi_version, supports_uniform/amr/mpi/gpu/stride/named_fields/partial_imex_mask}, sourced "
-      "from the C++ compile-time tokens. target in {'module','production','aot'} selects the route "
-      "(stride differs aot vs production).");
+      "from the C++ compile-time tokens. target in {'module','production'} selects whether "
+      "route-specific production facts are included.");
 
   m.def(
       "capability_report",

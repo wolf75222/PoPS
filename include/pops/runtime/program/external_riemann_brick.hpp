@@ -18,16 +18,14 @@
 // `.so`, resolves that entry-point function pointer ONCE at install time, and calls it; the per-cell
 // kernel then runs the statically-instantiated `UserFlux` functor with NO string comparison on the
 // hot path. The only string is the limiter (a 4-way `if` resolved once per install, mirroring the
-// native AOT block in compiled_block_abi.hpp).
+// built-in static-dispatch path).
 //
-// ABI (flat double arrays, component-major c*n*n + j*n + i, like System::copy_state): identical to
-// the AOT compiled block (compiled_block_abi.hpp) so the host marshals an external brick the same
-// way it marshals a generated one. Only the flux is fixed at the `.so`'s compile time instead of
-// dispatched by string.
+// ABI: flat double arrays, component-major c*n*n + j*n + i. This explicit component-package
+// protocol is independent from the model package installation ABI.
 
 #include <pops/runtime/program/external_brick.hpp>
 
-#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // compiled_block::{make_grid,...}
+#include <pops/runtime/builders/compiled/flat_grid.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>  // build_block<Limiter, Flux>, block_n_ghost
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>          // validate_limiter
@@ -67,17 +65,17 @@ template <class Model, class Flux>
 void external_residual(const double* U, double* R, const double* aux_in, int n, double dx,
                        double dy, bool periodic, const std::string& lim, bool recon_prim,
                        double pos_floor) {
-  compiled_block::LocalGrid lg =
-      compiled_block::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
+  flat_grid::LocalGrid lg =
+      flat_grid::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
   MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)),
       Rmf(lg.ba, lg.dm, Model::n_vars, 0);
-  compiled_block::fill_interior(Umf, U, n, Model::n_vars);
+  flat_grid::fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model{};
   BlockClosures clo =
       external_make_block<Model, Flux>(model, lim, ctx, recon_prim, static_cast<Real>(pos_floor));
   clo.rhs_into(Umf, Rmf);
-  compiled_block::extract(Rmf, R, n, Model::n_vars);
+  flat_grid::extract(Rmf, R, n, Model::n_vars);
 }
 
 }  // namespace detail

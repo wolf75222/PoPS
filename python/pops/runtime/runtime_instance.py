@@ -31,9 +31,9 @@ from ._runtime_plan_io import thaw_data
 
 _STRUCTURAL = frozenset({
     "add_block", "add_equation", "add_background", "add_coupling",
-    "add_elliptic_model", "add_dynamic_block", "add_compiled_block", "add_native_block",
+    "add_elliptic_model", "_install_native_block",
     "set_poisson", "install_program", "set_refinement",
-    "set_phi_refinement", "set_block_params", "set_program_params", "_install_compiled",
+    "set_phi_refinement", "set_program_params", "_install_compiled",
 })
 _RETIRED_EXECUTION_BYPASSES = frozenset({"run", "step", "step_cfl"})
 

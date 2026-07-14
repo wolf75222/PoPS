@@ -119,8 +119,9 @@ public pops/runtime/builders/block/block_builder.hpp
 public pops/runtime/builders/block/block_builder_polar.hpp
 public pops/runtime/builders/block/block_seam.hpp
 public pops/runtime/builders/compiled/amr_dsl_block.hpp
-public pops/runtime/builders/compiled/compiled_block_abi.hpp
 public pops/runtime/builders/compiled/dsl_block.hpp
+test-only pops/runtime/builders/compiled/flat_grid.hpp
+public pops/runtime/builders/compiled/model_runtime_params.hpp
 public pops/runtime/builders/compiled/native_loader.hpp
 test-only pops/runtime/builders/factory/brick_catalog.hpp
 public pops/runtime/builders/factory/model_factory.hpp
@@ -170,6 +171,5 @@ public pops/runtime/system/system_domain.hpp
 public pops/runtime/system/system_field_solver.hpp
 public pops/runtime/system/system_lifecycle.hpp
 public pops/runtime/system/system_poisson_options.hpp
-public pops/runtime/system/system_runtime_params.hpp
 public pops/runtime/system/system_stepper.hpp
 test-only pops/validation/physics/advection_diffusion.hpp

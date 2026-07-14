@@ -41,11 +41,11 @@ def chk(cond, label):
 
 
 def fake_production_amr():
-    """CompiledModel FACTICE du chemin production AMR : backend='production', target='amr_system',
-    adder='add_native_block', .so inexistant. La garde stride/masque de add_equation leve AVANT le
+    """CompiledModel FACTICE du chemin production AMR : target='amr_system', .so inexistant.
+    La garde stride/masque de add_equation leve AVANT le
     dlopen du .so, donc le chemin n'est jamais reellement charge."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production", adder="add_native_block",
+        so_path="/inexistant_amr.so", backend="production",
         cons_names=["rho", "rho_u", "rho_v", "E"],
         cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
         prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=1.4, n_aux=3, params={}, caps={},

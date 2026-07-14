@@ -63,8 +63,8 @@ class _CodegenMixin(_HyperbolicModel):
 
         Requires set_primitive_state(...) (Prim layout) and set_conservative_from([...]) (to_conservative,
         which the DSL cannot invert on its own). cse=True (default) factors the common
-        subexpressions (H, c...) into ``cseK_`` locals. Still to do (see ARCHITECTURE_CIBLE.md sect. 3) :
-        Kokkos/CUDA codegen, JIT."""
+        subexpressions (H, c...) into ``cseK_`` locals. The emitted brick is consumed by the native
+        production package compiler."""
         from pops.codegen import module_codegen as _cg
         return _cg.emit_cpp_brick(self, name=name, namespace=namespace, cse=cse,
                                   hoist_reciprocals=hoist_reciprocals)
@@ -92,7 +92,7 @@ class _CodegenMixin(_HyperbolicModel):
 
     def _emit_bricks(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
         """Generate the bricks (hyperbolic + source + elliptic) and the CompositeModel<...> type
-        shared by BOTH backends (JIT IModel and AOT). Source / elliptic OPTIONAL: without
+        consumed by the native package emitter. Source / elliptic OPTIONAL: without
         set_source -> pops::NoSource; without set_elliptic_rhs -> zero rhs (no Poisson coupling).
         @p hoist_reciprocals: codegen option propagated to the bricks (cf. emit_cpp_brick).
         Returns (nv, bricks_code, composite_type)."""
@@ -110,8 +110,8 @@ class _CodegenMixin(_HyperbolicModel):
         return _cg._elliptic_field_registrations(self, nm)
 
     def _emit_metadata(self, model_alias: Any) -> Any:
-        """OPTIONAL metadata symbols of the .so block, read by dlsym on the System side. SHARED by both
-        backends (JIT and AOT). The NAMES + ROLES are always emitted (POPS_EXPORT_BLOCK_METADATA):
+        """Metadata symbols of the native package, read before installation. Names and roles
+        are always emitted (POPS_EXPORT_BLOCK_METADATA):
         they come from the model's VariableSet (single source of truth), the System reads them instead of
         the u0.. fallback / no roles. The GAMMA is emitted (POPS_EXPORT_BLOCK_GAMMA) only if set_gamma(...)
         has been called; otherwise no gamma symbol -> the System keeps its default 1.4 (backward-compat).
@@ -120,26 +120,6 @@ class _CodegenMixin(_HyperbolicModel):
         macro arguments on commas): callers pass a `using ... = CompositeModel<...>`."""
         from pops.codegen import module_codegen as _cg
         return _cg._emit_metadata(self, model_alias)
-
-    def emit_cpp_so_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_so_source."""
-        return _cg_compile().emit_cpp_so_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
-
-    def compile_so(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
-                   std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen._compile.compile_so."""
-        return _cg_compile().compile_so(self, so_path, include=include, name=name, cxx=cxx, std=std,
-                              hoist_reciprocals=hoist_reciprocals)
-
-    def emit_cpp_aot_source(self, name: Any = None, hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen._compile.emit_cpp_aot_source."""
-        return _cg_compile().emit_cpp_aot_source(self, name=name, hoist_reciprocals=hoist_reciprocals)
-
-    def compile_aot(self, so_path: Any, include: Any = None, name: Any = None, cxx: Any = None,
-                    std: str = "c++20", hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen._compile.compile_aot."""
-        return _cg_compile().compile_aot(self, so_path, include=include, name=name, cxx=cxx, std=std,
-                               hoist_reciprocals=hoist_reciprocals)
 
     def emit_cpp_native_loader(self, name: Any = None, target: str = "system",
                                hoist_reciprocals: bool = False) -> Any:
@@ -154,30 +134,6 @@ class _CodegenMixin(_HyperbolicModel):
         return _cg_compile().compile_native(self, so_path, include=include, name=name, cxx=cxx, std=std,
                                   target=target, hoist_reciprocals=hoist_reciprocals)
 
-    def compile_or_jit(self, so_path: Any, include: Any = None, mode: str = "jit", name: Any = None,
-                       cxx: Any = None, std: str = "c++20", target: str = "system",
-                       hoist_reciprocals: bool = False) -> Any:
-        """Thin wrapper: delegates to pops.codegen._compile.compile_or_jit."""
-        return _cg_compile().compile_or_jit(self, so_path, include=include, mode=mode, name=name, cxx=cxx,
-                                  std=std, target=target, hoist_reciprocals=hoist_reciprocals)
-
-    # --- production facade: a single entry point per INTENTION (backend) -----------------
-    # Routes the compilation backend by INTENTION rather than by implementation detail. Each
-    # entry designates one of the existing engines (compile_so / compile_aot) AND the System adder to use
-    # at runtime -- coupled here so that a caller does not wire an AOT .so onto add_dynamic_block (or
-    # vice versa), which would load but with an inconsistent ABI/numerics.
-    #   "prototype"  -> compile_so  (JIT, IModel, virtual dispatch, host first-order Rusanov; fast
-    #                   iteration, to be wired via System.add_dynamic_block);
-    #   "aot"        -> compile_aot (AOT, host-marshaled PRODUCTION path: assemble_rhs<Limiter,
-    #                   Flux>, HLLC/Roe, second order, SSPRK2/IMEX on a LOCAL grid of the .so; numerics
-    #                   identical to native but marshaled arrays, via add_compiled_block);
-    #   "production" -> compile_native (NATIVE LOADER): the .so inlines add_compiled_model<ProdModel>, which
-    #                   installs the generated model as a NATIVE System block (closures over the REAL
-    #                   grid_context). The block runs ZERO-COPY the SAME path as add_block (no
-    #                   marshaling); device-clean by construction (named functors from block_builder).
-    #                   To be wired via System.add_native_block (ABI key verified). This is the path
-    #                   prepared for a real production backend (Kokkos/CUDA codegen = later PR).
-
     def _model_hash(self, params: Any = None) -> Any:
         """Stable hash of the model; delegates to pops.codegen._compile.model_hash."""
         return _cg_compile().model_hash(self, params=params)
@@ -188,13 +144,6 @@ class _CodegenMixin(_HyperbolicModel):
         mask a metadata requirement. Without require_metadata, no-op."""
         if not require_metadata:
             return
-        # backend "prototype" (add_dynamic_block, VIRTUAL dispatch, host first-order Rusanov): NOT a
-        # device-clean production path -> requesting metadata on it is inconsistent (clear error).
-        if backend == "prototype":
-            raise ValueError(
-                "compile: backend 'prototype' (JIT, host virtual dispatch) incompatible with "
-                "require_metadata=True; use backend='aot' or 'production' for the "
-                "device-clean path with guaranteed metadata")
         missing = []
         roles = roles_for(self.cons_names, self.cons_roles)
         if all(r == "Custom" for r in roles):
@@ -207,7 +156,7 @@ class _CodegenMixin(_HyperbolicModel):
                 "would fall back to the System fallback (roles 'custom' / gamma 1.4)"
                 % (self.name, " nor ".join(missing)))
 
-    def compile(self, so_path: Any = None, include: Any = None, backend: str = "auto", name: Any = None,
+    def compile(self, so_path: Any = None, include: Any = None, backend: str = "production", name: Any = None,
                 cxx: Any = None, std: Any = None, require_metadata: bool = False, target: str = "system",
                 hoist_reciprocals: bool = False) -> Any:
         """Thin wrapper: delegates to pops.codegen._compile.compile_model."""
@@ -215,13 +164,6 @@ class _CodegenMixin(_HyperbolicModel):
                                  name=name, cxx=cxx, std=std,
                                  require_metadata=require_metadata, target=target,
                                  hoist_reciprocals=hoist_reciprocals)
-
-    @classmethod
-    def adder_for(cls, backend: Any) -> Any:
-        """Name of the System method to use to wire the .so produced by compile(backend=...):
-        'add_dynamic_block' (prototype/JIT), 'add_compiled_block' (aot) or 'add_native_block'
-        (production/native). Delegates to pops.codegen._compile.adder_for."""
-        return _cg_compile().adder_for(backend)
 
     def emit_cpp_elliptic(self, name: Any = None, namespace: str = "pops_generated", cse: bool = True,
                           hoist_reciprocals: bool = False) -> Any:

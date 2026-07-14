@@ -57,7 +57,7 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
     """
     alpha = RuntimeParam("alpha", default=1.0)
     handle = CompiledModel(
-        so_path="<stub-amr>", backend="production", adder="add_native_block",
+        so_path="<stub-amr>", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=1,
         params={"alpha": alpha},

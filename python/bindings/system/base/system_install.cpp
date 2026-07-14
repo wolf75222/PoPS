@@ -1,14 +1,11 @@
 // ADC-632: install/composition seam of the System facade -- the structural setters guarded by
 // require_assembling (blocks, aux, elliptic/reaction/epsilon fields, disc domain, geometry mode,
 // coupled sources) plus install_program. This TU is the
-// subdivision of system.cpp that instantiates the native_loader templates for the dynamic/compiled/
-// native block loaders; it includes native_loader.hpp AFTER system_impl.hpp so Impl is complete.
+// subdivision of system.cpp that instantiates the production package loader after System::Impl is complete.
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
 #include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (binding-private)
 
-// native_loader.hpp templates instantiate on Impl (add_dynamic/compiled/native_block); included
-// AFTER system_impl.hpp per the historical "templates instantiated lower down" per-TU ordering.
-#include <pops/runtime/builders/compiled/native_loader.hpp>  // .so loading (JIT/AOT/native) + ABI guard
+#include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 
 namespace pops {
@@ -296,7 +293,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
 }
 
 // Real grid context (mesh + BC + aux): used by the add_compiled_model template to build
-// the closures of an AOT-compiled model on the real System fields (native parity, without marshaling).
+// the closures of a compiled production model on the real System fields (without marshaling).
 POPS_EXPORT GridContext System::grid_context() {
   return p_->grid_ctx();
 }
@@ -329,11 +326,11 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // HasPointwiseProjection (make_block). Vide -> le stepper ne l'interroge pas (bit-identique).
   P->sp.back().project = std::move(closures.project);
   // FLUX-ONLY residual -div F(U) (ADC-425): set for native blocks (build_block builds it via
-  // SourceFreeModel<Model>); empty for paths that do not (the host .so prototype loader) ->
+  // SourceFreeModel<Model>); empty only for an incomplete internal closure provider ->
   // block_neg_div_flux_into fails loud rather than silently leaking the default source.
   P->sp.back().rhs_flux_only = std::move(closures.rhs_flux_only);
   // SOURCE-ONLY residual S(U, aux) (ADC-430): set for native blocks (build_block builds it via
-  // SourceInto<Model>); empty for paths that do not (the host .so prototype loader) ->
+  // SourceInto<Model>); empty only for an incomplete internal closure provider ->
   // block_source_into fails loud rather than silently leaking the flux.
   P->sp.back().source_only = std::move(closures.source_only);
   EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
@@ -422,86 +419,18 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
                             r.diagnostics.events};
 }
 
-// Body EXTRACTED VERBATIM into pops::native_loader::add_dynamic_block (native_loader.hpp); instantiated
-// here with System::Impl (defined above, private to this TU). Bit-identical: pure delegation.
-void System::add_dynamic_block(const std::string& name, const std::string& so_path, int substeps,
-                               const std::vector<std::string>& names, const std::string& recon) {
-  require_assembling(p_->lifecycle_, "add_dynamic_block");  // frozen once pops.bind completes (ADC-592)
-  native_loader::add_dynamic_block(this, p_.get(), name, so_path, substeps, names, recon);
-  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
-  opt.route = "dynamic_loader";
-  opt.compiled = false;
-  opt.transport = "dynamic_model";
-  opt.source = "dynamic_model";
-  opt.elliptic = "dynamic_model";
-  opt.limiter = recon;
-  opt.riemann = "rusanov_global";
-  opt.recon = recon;
-  opt.time = "explicit";
-  opt.time_method = "host_euler";
-}
-
-// Body EXTRACTED VERBATIM into pops::native_loader::add_compiled_block (native_loader.hpp); instantiated
-// here with System::Impl. Bit-identical: pure delegation.
-void System::add_compiled_block(const std::string& name, const std::string& so_path,
-                                const std::string& limiter, const std::string& riemann,
-                                const std::string& recon, const std::string& time, int substeps,
-                                const std::vector<std::string>& names, double positivity_floor) {
-  require_assembling(p_->lifecycle_, "add_compiled_block");  // frozen once pops.bind completes (ADC-592)
-  if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
-    throw std::runtime_error(
-        "System::add_compiled_block : positivity_floor >= 0 and finite (0 = inactive)");
-  native_loader::add_compiled_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
-                                    substeps, names, positivity_floor);
-  EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
-  opt.route = "aot_loader";
-  opt.compiled = true;
-  opt.transport = "compiled_artifact";
-  opt.source = "compiled_artifact";
-  opt.elliptic = "compiled_artifact";
-  opt.limiter = limiter;
-  opt.riemann = riemann;
-  opt.recon = recon;
-  opt.time = time;
-  opt.time_method = time;
-  opt.imex = (time == "imex");
-  opt.substeps = substeps;
-  opt.positivity_floor = positivity_floor;
-}
-
-// P7-b: overwrites the SHARED vector of runtime parameter values of block @p name. add_compiled_block
-// registered this vector in p_->block_params_ AND captured it in the block closures: writing
-// into it suffices to change the behavior at the next step, WITHOUT recompiling the .so. Explicit error if
-// the block has no runtime params (vector absent) or if values does not have the right size.
-void System::set_block_params(const std::string& name, const std::vector<double>& values) {
-  // index() raises "System: unknown block '...'" if the block does not exist (same diagnostic as everywhere).
-  (void)p_->blocks_.index(name);
-  auto it = p_->block_params_.find(name);
-  if (it == p_->block_params_.end())
-    throw std::runtime_error(
-        "System::set_block_params : block '" + name +
-        "' has no runtime parameter (declare dsl.Param(..., kind='runtime') and wire via "
-        "backend='aot' / add_compiled_block ; const params are frozen at compile time)");
-  std::vector<double>& pv = *it->second;
-  if (values.size() != pv.size())
-    throw std::runtime_error("System::set_block_params : block '" + name + "' expects " +
-                             std::to_string(pv.size()) + " runtime parameters, received " +
-                             std::to_string(values.size()));
-  pv = values;  // the vector is SHARED with the closures (shared_ptr): effect at the next step
-}
-
-// Body EXTRACTED VERBATIM into pops::native_loader::add_native_block (native_loader.hpp); instantiated
-// here with System::Impl. Bit-identical: pure delegation (this marshals to the unchanged native loader).
+// Load the sole production package and pass the complete canonical BindSchema vector once.
 void System::add_native_block(const std::string& name, const std::string& so_path,
                               const std::string& limiter, const std::string& riemann,
                               const std::string& recon, const std::string& time, double gamma,
-                              int substeps, bool evolve, int stride, double positivity_floor) {
+                              int substeps, bool evolve, int stride,
+                              const std::vector<double>& params, double positivity_floor) {
   require_assembling(p_->lifecycle_, "add_native_block");  // frozen once pops.bind completes (ADC-592)
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "System::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
   native_loader::add_native_block(this, p_.get(), name, so_path, limiter, riemann, recon, time,
-                                  gamma, substeps, evolve, stride, positivity_floor);
+                                  gamma, substeps, evolve, stride, params, positivity_floor);
   EffectiveBlockOptions& opt = p_->diagnostics_.block_options[name];
   opt.route = "native_loader";
   opt.compiled = true;

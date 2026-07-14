@@ -8,8 +8,7 @@ into a typed :class:`CodegenEnv` snapshot. The contract (shared with ``POPS_THRE
     wins (each resolver below takes the explicit value first and falls back to the env);
   * coercion is transparent and lenient (an unparseable value is ignored, never raised -- no
     stricter rejection than passing the argument directly);
-  * a variable whose full machinery does not exist yet is READ and RECORDED on the snapshot (so it
-    is inspectable) and its unbuilt part is an HONEST no-op, never a faked behavior.
+  * only implemented controls are accepted and recorded.
 
 The variables (sec.12.4):
 
@@ -29,12 +28,7 @@ The variables (sec.12.4):
       than ``off`` is an HONEST no-op stub: it is recorded + surfaced in ``inspect()`` but changes
       NOTHING in the emitted code, hence it does NOT enter the cache key (stated, not faked). If a
       future tuner ever changes codegen, it must then enter the cache key.
-  ``POPS_JIT_BACKDOOR``  a DEBUG / UNSAFE gate (criterion #48). DISABLED by default; never implicitly
-      enabled by another option. No backdoor behavior exists -- this resolver's whole job is the
-      GUARD: if the variable is set truthy, it emits a LOUD warning and the flag is surfaced in
-      ``inspect()`` (and :func:`pops.doctor`) so it is never silently honored.
-
-This module imports only the standard library at module scope (``os`` / ``sys`` / ``warnings``); it
+This module imports only the standard library at module scope (``os`` / ``sys``); it
 references no other ``pops`` layer, so it adds no edge to the codegen import graph
 (tests/python/architecture/test_import_graph.py).
 """
@@ -44,7 +38,6 @@ from typing import Any
 
 import os
 import sys
-import warnings
 
 
 # --- recognised env var names (one literal, here) ----------------------------------------------
@@ -57,7 +50,6 @@ ENV_DUMP_CPP = "POPS_DUMP_CPP"
 ENV_CACHE_DIR = "POPS_CACHE_DIR"
 ENV_PROFILE = "POPS_PROFILE"
 ENV_AUTOTUNE = "POPS_AUTOTUNE"
-ENV_JIT_BACKDOOR = "POPS_JIT_BACKDOOR"
 
 # Log levels, quiet-first. A bad value falls back to the quietest honest default.
 _LOG_LEVELS = ("quiet", "info", "debug")
@@ -75,7 +67,7 @@ _AUTOTUNE_ALIASES = {"": _AUTOTUNE_OFF, "0": _AUTOTUNE_OFF, "off": _AUTOTUNE_OFF
                      "1": "basic", "basic": "basic", "on": "basic", "true": "basic", "yes": "basic",
                      "2": "aggressive", "aggressive": "aggressive", "full": "aggressive"}
 
-# Truthy tokens for the boolean gates (keep-generated, jit-backdoor), mirroring _env_truthy in
+# Truthy tokens for boolean controls, mirroring _env_truthy in
 # toolchain.py: anything else (unset / blank / "0" / "off" / ...) is False.
 _TRUTHY = ("1", "on", "true", "yes", "y")
 
@@ -114,16 +106,6 @@ def resolve_autotune(env: Any = None) -> Any:
     return _level(env.get(ENV_AUTOTUNE), _AUTOTUNE_ALIASES, _AUTOTUNE_OFF)
 
 
-def jit_backdoor_enabled(env: Any = None) -> bool:
-    """True iff ``POPS_JIT_BACKDOOR`` is set truthy (criterion #48). DISABLED by default.
-
-    Pure predicate: it reads the env and nothing else. The LOUD warning is emitted once by
-    :meth:`CodegenEnv.from_env` when this is True -- never implicitly by another option.
-    """
-    env = os.environ if env is None else env
-    return _truthy(env.get(ENV_JIT_BACKDOOR))
-
-
 class CodegenEnv:
     """An inert, inspectable snapshot of the active codegen ``POPS_*`` settings (Spec 5 sec.12.4).
 
@@ -134,7 +116,7 @@ class CodegenEnv:
     """
 
     __slots__ = ("log_level", "codegen_dir", "keep_generated", "dump_ir", "dump_cpp",
-                 "cache_dir", "profile", "autotune", "jit_backdoor", "_frozen")
+                 "cache_dir", "profile", "autotune", "_frozen")
 
     def __setattr__(self, name: str, value: Any) -> None:
         if getattr(self, "_frozen", False):
@@ -148,7 +130,7 @@ class CodegenEnv:
     def __init__(self, *, log_level: Any = _LOG_QUIET, codegen_dir: Any = None,
                  keep_generated: Any = False, dump_ir: Any = False, dump_cpp: Any = False,
                  cache_dir: Any = None, profile: Any = None,
-                 autotune: Any = _AUTOTUNE_OFF, jit_backdoor: Any = False) -> None:
+                 autotune: Any = _AUTOTUNE_OFF) -> None:
         self.log_level = log_level
         self.codegen_dir = codegen_dir
         self.keep_generated = bool(keep_generated)
@@ -157,23 +139,16 @@ class CodegenEnv:
         self.cache_dir = cache_dir
         self.profile = profile
         self.autotune = autotune
-        self.jit_backdoor = bool(jit_backdoor)
 
     @classmethod
-    def from_env(cls, *, codegen_dir: Any = None, keep_generated: Any = None, env: Any = None,
-                 warn: bool = True) -> Any:
+    def from_env(cls, *, codegen_dir: Any = None, keep_generated: Any = None,
+                 env: Any = None) -> Any:
         """Resolve the snapshot, EXPLICIT arguments winning over the environment (sec.12.4).
 
         @p codegen_dir  an explicit codegen directory (wins over ``POPS_CODEGEN_DIR``);
         @p keep_generated  an explicit keep flag, e.g. ``compile_problem(debug=True)`` (wins over
             ``POPS_KEEP_GENERATED`` -- ``True`` forces keep, ``False``/``None`` defers to the env);
-        @p env  an env mapping (defaults to ``os.environ``; injected by the tests);
-        @p warn  emit the loud JIT-backdoor warning when the gate is set (default True; the tests
-            disable it to assert the flag without spamming the captured warnings).
-
-        The JIT-backdoor gate is NEVER enabled implicitly: it is True only if ``POPS_JIT_BACKDOOR``
-        is itself set truthy, and when True a single ``UserWarning`` is emitted here so the unsafe
-        state is loud, never silent.
+        @p env an env mapping (defaults to ``os.environ``; injected by tests).
         """
         env = os.environ if env is None else env
 
@@ -183,19 +158,6 @@ class CodegenEnv:
         # POPS_KEEP_GENERATED: an explicit True forces keep; otherwise the env decides.
         eff_keep = bool(keep_generated) if keep_generated else _truthy(env.get(ENV_KEEP_GENERATED))
 
-        backdoor = jit_backdoor_enabled(env)
-        if backdoor and warn:
-            warnings.warn(
-                "POPS_JIT_BACKDOOR is set: the UNSAFE debug JIT backdoor gate is ENABLED. This is a "
-                "debug-only escape hatch and must never be set in production; no backdoor behavior is "
-                "wired today, but the flag is surfaced in compiled.inspect() / pops.doctor() so it is "
-                "never silently honored. Unset POPS_JIT_BACKDOOR to disable.",
-                UserWarning, stacklevel=2)
-            # A second, immediately-flushed stderr line: a captured-warnings filter must not be able
-            # to make an enabled unsafe gate fully silent.
-            print("pops: WARNING POPS_JIT_BACKDOOR enabled (unsafe debug gate)", file=sys.stderr,
-                  flush=True)
-
         return cls(
             log_level=resolve_log_level(env),
             codegen_dir=eff_dir,
@@ -204,8 +166,7 @@ class CodegenEnv:
             dump_cpp=_truthy(env.get(ENV_DUMP_CPP)),
             cache_dir=env.get(ENV_CACHE_DIR) or None,
             profile=env.get(ENV_PROFILE) or None,
-            autotune=resolve_autotune(env),
-            jit_backdoor=backdoor)
+            autotune=resolve_autotune(env))
 
     @property
     def verbose(self) -> bool:
@@ -254,15 +215,15 @@ class CodegenEnv:
         return {"log_level": self.log_level, "codegen_dir": self.codegen_dir,
                 "keep_generated": self.keep_generated, "dump_ir": self.dump_ir,
                 "dump_cpp": self.dump_cpp, "cache_dir": self.cache_dir, "profile": self.profile,
-                "autotune": self.autotune, "jit_backdoor": self.jit_backdoor}
+                "autotune": self.autotune}
 
     def __repr__(self) -> str:
         return ("CodegenEnv(log_level=%r, codegen_dir=%r, keep_generated=%s, dump_ir=%s, "
-                "dump_cpp=%s, autotune=%r, jit_backdoor=%s)"
+                "dump_cpp=%s, autotune=%r)"
                 % (self.log_level, self.codegen_dir, self.keep_generated, self.dump_ir,
-                   self.dump_cpp, self.autotune, self.jit_backdoor))
+                   self.dump_cpp, self.autotune))
 
 
-__all__ = ["CodegenEnv", "resolve_log_level", "resolve_autotune", "jit_backdoor_enabled",
+__all__ = ["CodegenEnv", "resolve_log_level", "resolve_autotune",
            "ENV_LOG", "ENV_CODEGEN_LOG", "ENV_CODEGEN_DIR", "ENV_KEEP_GENERATED", "ENV_DUMP_IR",
-           "ENV_DUMP_CPP", "ENV_CACHE_DIR", "ENV_PROFILE", "ENV_AUTOTUNE", "ENV_JIT_BACKDOOR"]
+           "ENV_DUMP_CPP", "ENV_CACHE_DIR", "ENV_PROFILE", "ENV_AUTOTUNE"]
