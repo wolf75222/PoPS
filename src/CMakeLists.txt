@@ -69,12 +69,7 @@ if(POPS_BUILD_PYTHON)
       JOB_POOL_COMPILE pops_heavy_module_tu)
   endforeach()
 
-  set(_pops_header_blob "")
-  foreach(_pops_header IN LISTS POPS_PUBLIC_HEADERS)
-    file(SHA256 "${POPS_PUBLIC_HEADER_ROOT}/${_pops_header}" _pops_header_digest)
-    string(APPEND _pops_header_blob "${_pops_header}\n${_pops_header_digest}\n")
-  endforeach()
-  string(SHA256 POPS_NATIVE_HEADER_SIGNATURE "${_pops_header_blob}")
+  pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)
 
   set(POPS_NATIVE_MPI_INCLUDE "")
   if(TARGET MPI::MPI_CXX)

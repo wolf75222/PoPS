@@ -10,8 +10,8 @@ project(PoPS
                    # hdf5-config parallele de spack)
 )
 
-# Shared, exhaustive classification of installed and test-only headers. Both the source package
-# install below and the SKBUILD wheel consume this exact manifest.
+# Shared, exhaustive API/ABI/SDK/test-only header contract. Both the source package install and the
+# SKBUILD wheel consume it; every installed category enters the native header signature.
 include(cmake/PopsPublicHeaders.cmake)
 
 # Backends par VARIABLE D'ENVIRONNEMENT (pattern WarpX/pyAMReX) : permet `POPS_USE_KOKKOS=ON
@@ -378,7 +378,7 @@ if(POPS_INSTALL)
   include(GNUInstallDirs)
   include(CMakePackageConfigHelpers)
   install(TARGETS pops EXPORT popsTargets)
-  pops_install_public_headers("${CMAKE_INSTALL_INCLUDEDIR}")
+  pops_install_headers("${CMAKE_INSTALL_INCLUDEDIR}")
   install(EXPORT popsTargets NAMESPACE pops:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/pops)
   configure_package_config_file(cmake/popsConfig.cmake.in
     ${CMAKE_CURRENT_BINARY_DIR}/popsConfig.cmake

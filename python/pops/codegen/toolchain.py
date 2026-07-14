@@ -39,45 +39,58 @@ def _pops_module() -> Any:
 # "header signature" in the ABI key (pops/runtime/abi_key.hpp, token POPS_HEADER_SIG) ; the
 # module build bakes it (CMake) and compile_native re-bakes it (-D flag) by computing it IDENTICALLY.
 # The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here:
-# sha256 of the sorted concatenation "<relpath>\n<sha256(content)>\n" for every `public` row in
-# include/pops_public_headers.manifest. Test-only or untracked headers never enter the published ABI.
+# sha256 of the sorted concatenation
+# "<category> <relpath>\n<sha256(content)>\n" for every installed row in
+# include/pops_headers.manifest. api, abi, sdk-root and sdk-support all enter the published ABI;
+# test-only or untracked files never do.
 def pops_header_signature(include: Any) -> str:
-    """Signature of the exact installed-public-header manifest under ``include``."""
+    """Signature of the exact normalized installed-header contract under ``include``."""
     import hashlib
 
-    manifest = os.path.join(include, "pops_public_headers.manifest")
+    manifest = os.path.join(include, "pops_headers.manifest")
     try:
         with open(manifest, encoding="utf-8") as source:
             rows = source.read().splitlines()
     except OSError as exc:
-        raise RuntimeError("PoPS public-header manifest is missing from %s" % include) from exc
+        raise RuntimeError("PoPS installed-header manifest is missing from %s" % include) from exc
 
-    public = []
+    categories = ("api", "abi", "sdk-root", "sdk-support", "test-only")
+    installed_categories = categories[:-1]
+    installed = []
+    seen = set()
     for line_number, raw in enumerate(rows, 1):
         row = raw.strip()
         if not row or row.startswith("#"):
             continue
         parts = row.split(maxsplit=1)
-        if len(parts) != 2 or parts[0] not in ("public", "test-only"):
-            raise RuntimeError("invalid PoPS public-header manifest row %d" % line_number)
-        if parts[0] == "public":
-            public.append(parts[1])
-    if not public:
-        raise RuntimeError("PoPS public-header manifest declares no public headers")
+        if len(parts) != 2 or parts[0] not in categories:
+            raise RuntimeError("invalid PoPS installed-header manifest row %d" % line_number)
+        category, rel = parts
+        if rel.startswith("/") or ".." in rel.split("/") or not rel.startswith("pops/") \
+                or not rel.endswith((".hpp", ".h", ".inc")):
+            raise RuntimeError("invalid header path in PoPS manifest: %s" % rel)
+        if rel in seen:
+            raise RuntimeError("duplicate header path in PoPS manifest: %s" % rel)
+        seen.add(rel)
+        if category != "test-only":
+            installed.append((category, rel))
+
+    present = {category for category, _ in installed}
+    missing = [category for category in installed_categories if category not in present]
+    if missing:
+        raise RuntimeError(
+            "PoPS installed-header manifest has empty categories: %s" % ", ".join(missing))
 
     entries = []
-    for rel in sorted(public):
-        if rel.startswith("/") or ".." in rel.split("/") or not rel.startswith("pops/") \
-                or not rel.endswith((".hpp", ".h")):
-            raise RuntimeError("invalid public header path in PoPS manifest: %s" % rel)
+    for category, rel in sorted(installed):
         path = os.path.join(include, *rel.split("/"))
         try:
             with open(path, "rb") as source:
                 digest = hashlib.sha256(source.read()).hexdigest()
         except OSError as exc:
-            raise RuntimeError("PoPS public header is missing: %s" % rel) from exc
-        entries.append("%s\n%s\n" % (rel, digest))
-    blob = "".join(sorted(entries)).encode()
+            raise RuntimeError("PoPS installed header is missing: %s" % rel) from exc
+        entries.append("%s %s\n%s\n" % (category, rel, digest))
+    blob = "".join(entries).encode()
     return hashlib.sha256(blob).hexdigest()
 
 

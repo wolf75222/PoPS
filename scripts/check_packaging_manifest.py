@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Fail closed before packaging files from the working tree.
 
-Only Git-tracked Python sources may enter the wheel, and every tracked C++ header must have one
-classification in the shared installed-header manifest.  This rejects sync/editor copies before a
-directory glob can silently package names such as ``module 2.py`` or ``header 3.hpp``.
+Only Git-tracked Python sources may enter the wheel, and every tracked C++ header or include
+fragment must have one classification in the shared installed-header contract. This rejects
+sync/editor copies before a directory glob can silently package names such as ``module 2.py`` or
+``header 3.hpp``.
 """
 from __future__ import annotations
 
@@ -16,8 +17,10 @@ from typing import Iterable
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST_REL = PurePosixPath("include/pops_public_headers.manifest")
-HEADER_SUFFIXES = {".h", ".hpp"}
+MANIFEST_REL = PurePosixPath("include/pops_headers.manifest")
+HEADER_SUFFIXES = {".h", ".hpp", ".inc"}
+HEADER_CATEGORIES = ("api", "abi", "sdk-root", "sdk-support", "test-only")
+INSTALLED_HEADER_CATEGORIES = HEADER_CATEGORIES[:-1]
 PYTHON_SOURCE_SUFFIXES = {".py", ".pyi", ".typed"}
 PACKAGING_ROOTS = (PurePosixPath("include/pops"), PurePosixPath("python/pops"))
 
@@ -28,12 +31,36 @@ class PackagingManifestError(RuntimeError):
 
 @dataclass(frozen=True)
 class HeaderManifest:
-    public: tuple[PurePosixPath, ...]
+    api: tuple[PurePosixPath, ...]
+    abi: tuple[PurePosixPath, ...]
+    sdk_root: tuple[PurePosixPath, ...]
+    sdk_support: tuple[PurePosixPath, ...]
     test_only: tuple[PurePosixPath, ...]
 
     @property
     def all_headers(self) -> frozenset[PurePosixPath]:
-        return frozenset((*self.public, *self.test_only))
+        return frozenset((*self.installed_headers, *self.test_only))
+
+    @property
+    def installed_headers(self) -> tuple[PurePosixPath, ...]:
+        """Every shipped/signed header; sdk-support is included but is not standalone."""
+        return tuple(sorted((*self.api, *self.abi, *self.sdk_root, *self.sdk_support)))
+
+    @property
+    def standalone_headers(self) -> frozenset[PurePosixPath]:
+        """Supported direct-include roots; sdk-support is intentionally absent."""
+        return frozenset((*self.api, *self.abi, *self.sdk_root))
+
+    @property
+    def signed_rows(self) -> tuple[tuple[str, PurePosixPath], ...]:
+        """Normalized installed rows authenticated by POPS_HEADER_SIG."""
+        rows = (
+            *(("api", path) for path in self.api),
+            *(("abi", path) for path in self.abi),
+            *(("sdk-root", path) for path in self.sdk_root),
+            *(("sdk-support", path) for path in self.sdk_support),
+        )
+        return tuple(sorted(rows))
 
 
 def read_manifest(root: Path = ROOT) -> HeaderManifest:
@@ -52,9 +79,10 @@ def read_manifest(root: Path = ROOT) -> HeaderManifest:
             category, value = row.split(maxsplit=1)
         except ValueError as exc:
             raise PackagingManifestError(
-                f"{MANIFEST_REL}:{line_number}: expected '<public|test-only> pops/...'") from exc
+                f"{MANIFEST_REL}:{line_number}: expected "
+                "'<api|abi|sdk-root|sdk-support|test-only> pops/...'") from exc
         relative = PurePosixPath(value)
-        if category not in {"public", "test-only"}:
+        if category not in HEADER_CATEGORIES:
             raise PackagingManifestError(
                 f"{MANIFEST_REL}:{line_number}: unknown category {category!r}")
         if relative.is_absolute() or ".." in relative.parts or not relative.parts \
@@ -66,11 +94,24 @@ def read_manifest(root: Path = ROOT) -> HeaderManifest:
                 f"{MANIFEST_REL}:{line_number}: duplicate header {relative.as_posix()}")
         classified[relative] = category
 
-    public = tuple(sorted(path for path, kind in classified.items() if kind == "public"))
-    test_only = tuple(sorted(path for path, kind in classified.items() if kind == "test-only"))
-    if not public:
-        raise PackagingManifestError(f"{MANIFEST_REL} declares no public headers")
-    return HeaderManifest(public=public, test_only=test_only)
+    by_category = {
+        category: tuple(sorted(path for path, kind in classified.items() if kind == category))
+        for category in HEADER_CATEGORIES
+    }
+    missing_categories = [
+        category for category in INSTALLED_HEADER_CATEGORIES if not by_category[category]
+    ]
+    if missing_categories:
+        raise PackagingManifestError(
+            f"{MANIFEST_REL} declares no headers for installed categories: "
+            + ", ".join(missing_categories))
+    return HeaderManifest(
+        api=by_category["api"],
+        abi=by_category["abi"],
+        sdk_root=by_category["sdk-root"],
+        sdk_support=by_category["sdk-support"],
+        test_only=by_category["test-only"],
+    )
 
 
 def git_tracked_files(root: Path = ROOT) -> frozenset[PurePosixPath]:
@@ -158,7 +199,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         "PACKAGING-MANIFEST: OK: "
-        f"{len(manifest.public)} public, {len(manifest.test_only)} test-only headers"
+        f"{len(manifest.api)} api, {len(manifest.abi)} abi, "
+        f"{len(manifest.sdk_root)} sdk-root, {len(manifest.sdk_support)} sdk-support, "
+        f"{len(manifest.test_only)} test-only headers"
     )
     return 0
 

@@ -82,13 +82,13 @@ if(POPS_NATIVE_MPI_INCLUDE)
   target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}")
 endif()
 
-# Signature des en-tetes PUBLICS installes, BAKED dans la cle d'ABI du module (pops/runtime/abi_key.hpp
+# Signature du contrat exact des en-tetes installes, BAKEE dans la cle d'ABI du module (pops/runtime/abi_key.hpp
 # via -DPOPS_HEADER_SIG). Le backend DSL "production" (dsl.compile_native) recalcule la MEME signature
 # (pops.dsl.pops_header_signature) et la bake dans le loader .so : les cles concordent quand les en-tetes
 # concordent, divergent sinon -> add_native_block leve une erreur explicite (pas d'UB silencieux).
 # CALCUL (miroir bit-pour-bit de pops_header_signature) : sha256 du concatene TRIE, pour chaque ligne
-# `public` du manifeste partage, de "<chemin relatif>\n<sha256 du contenu>\n". Les neuf en-tetes de
-# test n'entrent ni dans l'installation ni dans l'identite ABI publiee.
+# installee, de "<categorie> <chemin relatif>\n<sha256 du contenu>\n". Les en-tetes test-only
+# n'entrent ni dans l'installation ni dans l'identite ABI publiee.
 target_compile_definitions(_pops PRIVATE POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
 message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${POPS_NATIVE_HEADER_SIGNATURE}")
 
@@ -115,7 +115,7 @@ if(SKBUILD)
   install(TARGETS _pops LIBRARY DESTINATION pops)
   # External AOT packages compile against the exact headers whose signature is baked into _pops.
   # Keep them inside the wheel so installed-package compilation never reaches back into a checkout.
-  pops_install_public_headers("pops/include")
+  pops_install_headers("pops/include")
 endif()
 # Copy the pure-Python package (pops/ and every sub-package) into the build tree next to _pops.
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat

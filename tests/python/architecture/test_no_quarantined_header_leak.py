@@ -32,7 +32,7 @@ POPS_CODEGEN = REPO_ROOT / "python" / "pops"
 BINDINGS_DIR = REPO_ROOT / "python" / "bindings"
 RUNTIME_DIR = REPO_ROOT / "src" / "runtime"
 CPP_TESTS_DIR = REPO_ROOT / "tests" / "cpp"
-HEADER_MANIFEST = INCLUDE_DIR / "pops_public_headers.manifest"
+HEADER_MANIFEST = INCLUDE_DIR / "pops_headers.manifest"
 
 # Matches ``#include <pops/...>`` both as a real directive and inside a codegen string literal.
 _INCLUDE_RE = re.compile(r"#\s*include\s*<\s*(pops/[^>]+?)\s*>")
