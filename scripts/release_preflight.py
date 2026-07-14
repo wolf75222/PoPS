@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tomllib
 from typing import Any
+import zipfile
 
 from final_release_contract import (
     FINAL_EXAMPLES,
@@ -30,7 +31,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 4
 
 
 class PreflightError(RuntimeError):
@@ -193,6 +194,39 @@ def _checkpoint_tree(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _wheel_evidence(directory: Path, gates: dict[str, Any], contract: Any) -> None:
+    evidence = gates["official_build"]["evidence"]
+    if not isinstance(evidence, dict) or set(evidence) != {"wheel"}:
+        raise PreflightError("official build evidence must contain exactly one retained wheel")
+    wheel = evidence["wheel"]
+    if not isinstance(wheel, dict) or set(wheel) != {"path", "sha256", "size"}:
+        raise PreflightError("official build wheel evidence is malformed")
+    if not isinstance(wheel["size"], int) or wheel["size"] <= 0:
+        raise PreflightError("official build wheel has an invalid size")
+    relative = Path(wheel["path"])
+    _artifact_file(directory, wheel["path"], wheel["sha256"], label="release wheel")
+    path = (directory / relative).resolve()
+    if path.stat().st_size != wheel["size"]:
+        raise PreflightError("official build wheel size drifted")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            metadata_names = [name for name in archive.namelist()
+                              if name.endswith(".dist-info/METADATA")]
+            if len(metadata_names) != 1:
+                raise PreflightError("release wheel has no unique METADATA record")
+            metadata = archive.read(metadata_names[0]).decode("utf-8")
+    except (OSError, UnicodeDecodeError, zipfile.BadZipFile) as exc:
+        raise PreflightError("release wheel is unreadable: %s" % exc) from exc
+    fields = {}
+    for line in metadata.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            fields.setdefault(key, value)
+    if fields.get("Name", "").lower() != "pops" \
+            or fields.get("Version") != contract.PACKAGE_VERSION:
+        raise PreflightError("release wheel name/version disagrees with the release contract")
+
+
 def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
     examples = gates["examples"]["evidence"]
     reopen = gates["artifact_reopen"]["evidence"]
@@ -296,6 +330,7 @@ def _evidence(path: Path, contract: Any, commit: str, runtime: dict[str, str]) -
                 raise PreflightError("derived release gate %s must not invent a command" % name)
         else:
             _command_evidence(directory, commands, gate=name)
+    _wheel_evidence(directory, gates, contract)
     for name in ("native_conformance", "python_conformance"):
         evidence = gates[name]["evidence"]
         expected = {"required_lane"} if name == "native_conformance" \

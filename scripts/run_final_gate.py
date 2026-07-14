@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,7 +37,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 4
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -345,6 +346,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="output JSON path outside this checkout")
     parser.add_argument("--ctest-dir", type=Path,
                         help="configured CTest build tree; auto-detected otherwise")
+    parser.add_argument(
+        "--wheel", type=Path,
+        help="validate and install this already-built release wheel instead of rebuilding it; "
+             "all native, Python, example, restart, documentation and provenance gates still run",
+    )
     args = parser.parse_args(argv)
     try:
         require_source_contract(ROOT)
@@ -359,7 +365,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         recorder = Recorder(evidence_root, {})
 
         recorder.run("official_build", ["bash", "scripts/setup_env.sh"])
-        recorder.run("official_build", ["bash", "scripts/build_python.sh"])
+        wheel_directory = evidence_root / "wheels"
+        if args.wheel is None:
+            recorder.run("official_build", [
+                "bash", "scripts/build_python.sh", "--wheel-dir", str(wheel_directory),
+            ])
+        else:
+            supplied_wheel = args.wheel.expanduser().resolve()
+            if not supplied_wheel.is_file() or supplied_wheel.suffix != ".whl":
+                raise FinalGateError("--wheel must name one readable wheel artifact")
+            try:
+                supplied_wheel.relative_to(ROOT)
+            except ValueError:
+                pass
+            else:
+                raise FinalGateError("--wheel must be outside the checkout")
+            wheel_directory.mkdir(parents=True)
+            retained_wheel = wheel_directory / supplied_wheel.name
+            shutil.copy2(supplied_wheel, retained_wheel)
+            recorder.run("official_build", _conda_command([
+                "python", "-m", "pip", "install", "--force-reinstall", "--no-deps",
+                str(retained_wheel),
+            ]))
+        wheels = tuple(wheel_directory.glob("pops-*.whl"))
+        if len(wheels) != 1:
+            raise FinalGateError("official build did not retain exactly one PoPS wheel")
+        wheel = wheels[0]
+        recorder.rows["official_build"]["evidence"] = {
+            "wheel": {
+                "path": str(wheel.relative_to(evidence_root)),
+                "sha256": _sha256(wheel),
+                "size": wheel.stat().st_size,
+            },
+        }
         recorder.run("official_build", _conda_command(["cmake", "--preset", "serial"]))
         recorder.run("official_build", _conda_command(["cmake", "--build", "--preset", "serial"]))
         doctor_code = (

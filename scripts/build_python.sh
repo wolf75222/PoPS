@@ -18,6 +18,8 @@
 #   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
 #   bash scripts/build_python.sh --fresh    # --clean AND `ccache -C`: a true COLD compile (measuring)
 #   bash scripts/build_python.sh --mpi      # also build the distributed MPI backend (POPS_USE_MPI=ON)
+#   bash scripts/build_python.sh --wheel-dir /tmp/wheels
+#                                           # build, retain, then install that exact wheel
 #   POPS_HEAVY_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
 #   bash scripts/build_python.sh -- -e      # pass extra args through to pip (here: editable install)
 #
@@ -31,17 +33,23 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 DO_CLEAN=0
 DO_FRESH=0
 WITH_MPI=0
+WHEEL_DIR=""
 EXTRA_PIP=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) DO_CLEAN=1 ;;
     --fresh) DO_CLEAN=1; DO_FRESH=1 ;;
     --mpi)   WITH_MPI=1 ;;
+    --wheel-dir)
+      shift
+      [[ $# -gt 0 ]] || { echo "--wheel-dir requires a directory" >&2; exit 2; }
+      WHEEL_DIR="$1"
+      ;;
     -h|--help)
       sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     --) shift; EXTRA_PIP=("$@"); break ;;
-    *) echo "unknown argument: $1 (use --clean | --fresh | --mpi | --help, or -- <pip args>)" >&2
+    *) echo "unknown argument: $1 (use --clean | --fresh | --mpi | --wheel-dir DIR | --help, or -- <pip args>)" >&2
        exit 2 ;;
   esac
   shift
@@ -112,15 +120,45 @@ fi
 # --- build + install --------------------------------------------------------------------------------
 [[ $WITH_MPI -eq 1 ]] && { export POPS_USE_MPI=ON; echo "MPI backend: ON"; }
 cd "$HERE"
-pip_args=(install -v . -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
+  WHEEL_DIR="$HERE/$WHEEL_DIR"
+fi
+if [[ -n "$WHEEL_DIR" ]]; then
+  mkdir -p "$WHEEL_DIR"
+  shopt -s nullglob
+  existing_wheels=("$WHEEL_DIR"/*.whl)
+  if [[ ${#existing_wheels[@]} -ne 0 ]]; then
+    echo "--wheel-dir must be empty; refusing stale release artifacts in $WHEEL_DIR" >&2
+    exit 2
+  fi
+  pip_args=(wheel -v . --no-deps --wheel-dir "$WHEEL_DIR" \
+    -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+else
+  pip_args=(install -v . -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+fi
 if python -c "import scikit_build_core, pybind11" >/dev/null 2>&1; then
-  pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+  if [[ -n "$WHEEL_DIR" ]]; then
+    pip_args=(wheel -v . --no-deps --no-build-isolation --wheel-dir "$WHEEL_DIR" \
+      -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+  else
+    pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+  fi
 else
   echo "note: scikit-build-core/pybind11 not in '$ENV_NAME'; using pip build isolation"
   echo "      (slower, unpinned build deps). Add 'scikit-build-core' to environment.yml + 'conda env update' to fix."
 fi
 echo "--- python -m pip ${pip_args[*]} ${EXTRA_PIP[*]} ---"
 python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
+if [[ -n "$WHEEL_DIR" ]]; then
+  built_wheels=("$WHEEL_DIR"/pops-*.whl)
+  if [[ ${#built_wheels[@]} -ne 1 ]]; then
+    echo "release build must produce exactly one pops wheel in $WHEEL_DIR" >&2
+    exit 1
+  fi
+  echo "--- installing exact retained wheel ${built_wheels[0]} ---"
+  python -m pip install --force-reinstall --no-deps "${built_wheels[0]}"
+  echo "release wheel: ${built_wheels[0]}"
+fi
 
 # --- diagnose ---------------------------------------------------------------------------------------
 # ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree

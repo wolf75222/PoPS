@@ -24,6 +24,7 @@ def _load(name: str, path: Path):
 
 contract = _load("final_release_contract", SCRIPTS / "final_release_contract.py")
 gate = _load("_final_release_gate_test", SCRIPTS / "run_final_gate.py")
+preflight = _load("_release_preflight_test", SCRIPTS / "release_preflight.py")
 
 
 def _write_final_source_tree(root: Path) -> None:
@@ -117,3 +118,46 @@ def test_artifact_reopen_requires_and_records_npz(tmp_path):
     npz.unlink()
     with pytest.raises(gate.FinalGateError, match="HDF5, NPZ and ParaView"):
         gate._reopen_outputs(tmp_path, example=Path("final.py"))
+
+
+def test_release_evidence_authenticates_the_exact_retained_wheel(tmp_path):
+    wheel = tmp_path / "wheels" / "pops-0.3.0-cp312-cp312-macosx_11_0_arm64.whl"
+    wheel.parent.mkdir()
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "pops-0.3.0.dist-info/METADATA",
+            "Metadata-Version: 2.3\nName: PoPS\nVersion: 0.3.0\n",
+        )
+    gates = {
+        "official_build": {
+            "evidence": {
+                "wheel": {
+                    "path": str(wheel.relative_to(tmp_path)),
+                    "sha256": gate._sha256(wheel),
+                    "size": wheel.stat().st_size,
+                },
+            },
+        },
+    }
+    release = type("ReleaseContract", (), {"PACKAGE_VERSION": "0.3.0"})
+
+    preflight._wheel_evidence(tmp_path, gates, release)
+    gates["official_build"]["evidence"]["wheel"]["size"] += 1
+    with pytest.raises(preflight.PreflightError, match="size drifted"):
+        preflight._wheel_evidence(tmp_path, gates, release)
+
+
+def test_tag_release_cannot_race_or_bypass_wheel_and_final_gate():
+    release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+    wheels = (ROOT / ".github" / "workflows" / "wheels.yml").read_text()
+    build = (ROOT / "scripts" / "build_python.sh").read_text()
+
+    assert "uses: ./.github/workflows/wheels.yml" in release
+    assert "needs: [wheel, validate]" in release
+    assert "run_final_gate.py --wheel" in release
+    assert "release_preflight.py" in release
+    assert 'gh release create "$GITHUB_REF_NAME" wheelhouse/*.whl' in release
+    assert "workflow_call:" in wheels
+    assert "gh release upload" not in wheels
+    assert "--wheel-dir" in build
+    assert "--force-reinstall --no-deps" in build

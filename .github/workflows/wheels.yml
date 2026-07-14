@@ -4,27 +4,20 @@
 # + PIC and linked into `_pops.*.so`, and cibuildwheel runs delocate-wheel to bundle any remaining
 # dynamic dependency. Kokkos stays ON and mandatory (adc_cpp is Kokkos-only).
 #
-# Triggers: on a vX.Y.Z tag (attach the wheel to the GitHub Release made by release.yml) and on
-# demand (workflow_dispatch). It is SEPARATE from ci.yml's required `gate` (an artifact build, not a
-# correctness gate), and deliberately does NOT run on PRs: ci.yml's required gate-python already
-# builds `_pops` WITH Kokkos and runs the python suite on every PR, so the only signal unique to this
-# job is the packaging path (cibuildwheel + delocate + static-Kokkos link + pyproject). To validate
-# that before cutting a release, run this workflow manually (workflow_dispatch) on the candidate.
+# Release tags invoke this as a reusable workflow from release.yml.  That caller then installs this
+# exact artifact for the complete release gate before it is allowed to create a GitHub Release.  A
+# manual dispatch remains available for packaging-only rehearsal; there is no independent tag race.
 name: Wheels
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
-  contents: write  # attach the wheel to the Release on a tag (gh release upload); read otherwise
+  contents: read
 
 concurrency:
   group: wheels-${{ github.ref }}
-  # A tag build ships a release artifact and must not be cancelled; only redundant manual re-runs on
-  # the same ref supersede each other (a fresh dispatch cancels a stale one on that ref).
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
@@ -148,25 +141,3 @@ jobs:
           name: pops-macos-arm64-cp312
           path: wheelhouse/*.whl
           if-no-files-found: error
-
-      # On a vX.Y.Z tag, attach the wheel to the Release. release.yml (a separate workflow on the same
-      # tag) is the sole creator of the Release from CHANGELOG.md; both start together, so wait for it
-      # to exist before uploading rather than racing it (the long wheel build makes this near-certain,
-      # the poll is insurance). We do NOT create the Release here, to keep release.yml's CHANGELOG notes.
-      - name: Attach wheel to the Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for i in $(seq 1 15); do
-            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then break; fi
-            echo "waiting for release $GITHUB_REF_NAME (attempt $i/15)..."; sleep 20
-          done
-          # Best-effort: if release.yml has not created the Release (e.g. it errored), do NOT fail the
-          # job -- the wheel is already saved as a build artifact. A red wheels job here would falsely
-          # read as a wheel-build failure rather than a release-creation problem.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" wheelhouse/*.whl --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            echo "::warning::Release $GITHUB_REF_NAME not found after wait; wheel retained as artifact, not attached."
-          fi
