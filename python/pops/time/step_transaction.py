@@ -10,7 +10,13 @@ from pops.time.step_strategy import StepStrategy
 
 
 class ProvisionalStore(str, Enum):
-    """Runtime-owned stores whose writes are provisional until macro-step acceptance."""
+    """Implemented runtime-owned stores made provisional until macro-step acceptance.
+
+    This enumeration is a capability manifest, not a wishlist.  In particular, PoPS does not yet
+    expose a stochastic Program primitive or a core-owned, counter-based RNG stream, so no ``rng``
+    store is advertised.  Adding one requires native snapshot/restart ownership and a deterministic
+    stream-allocation contract; storing an opaque process-global generator here would be misleading.
+    """
 
     STATES = "states"
     FIELDS = "fields"
@@ -19,7 +25,6 @@ class ProvisionalStore(str, Enum):
     CACHES = "caches"
     SOLVER_WARM_STARTS = "solver_warm_starts"
     HISTORIES = "histories"
-    RNG = "rng"
     CLOCKS = "clocks"
     SCHEDULES = "schedules"
     CONSUMERS = "consumers"

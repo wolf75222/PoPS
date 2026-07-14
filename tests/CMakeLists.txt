@@ -422,6 +422,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_riemann_capabilities
   test_newton_robustness
   test_elliptic_interface
+  test_field_nullspace
   test_field_context
   test_system_registries
 )

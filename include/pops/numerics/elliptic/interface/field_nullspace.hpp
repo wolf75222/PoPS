@@ -78,6 +78,17 @@ struct FieldNullspacePlan {
   bool empty() const { return bases.empty(); }
 };
 
+/// Stable identity for one connected material component supplied by a prepared topology provider.
+/// Labels are positive integers in the co-distributed label fields passed to
+/// labelled_mean_zero_nullspace(); zero denotes an inactive cell.  The topology provider, not the
+/// field solver, owns how those labels were derived (structured grid, embedded boundary, external
+/// mesh, ...).  This keeps the nullspace layer independent of concrete geometry classes.
+struct FieldConnectedComponent {
+  int label = 0;
+  std::string identity;
+  std::string provenance;
+};
+
 namespace detail {
 
 struct FieldBasisMomentKernel {
@@ -387,6 +398,145 @@ inline FieldNullspacePlan constant_mean_zero_nullspace(std::string identity,
       result.identity + ":constant", std::move(provenance), result.identity + ":recipe",
       0, {}, {}, {cell_measure}});
   result.gauges.push_back(FieldGaugeConstraint{result.bases[0].identity, Real(0)});
+  return result;
+}
+
+/// Materialise one constant nullspace basis per connected-component label.
+///
+/// This is an installation-time operation.  Component discovery may be implemented by any topology
+/// provider, but the provider must hand the solver exact, co-distributed integer label fields.  The
+/// function validates the complete label vocabulary collectively, builds immutable basis masks, and
+/// creates one independent mean-zero gauge per component.  No registry or string lookup remains in
+/// the solve hot path, and RHS compatibility is still checked by require_field_nullspace_compatible()
+/// without projection.
+inline FieldNullspacePlan labelled_mean_zero_nullspace(
+    std::string identity, std::string layout_identity, FieldNullspaceScope scope,
+    const std::vector<std::shared_ptr<const MultiFab>>& labels,
+    std::vector<FieldConnectedComponent> components,
+    std::vector<std::shared_ptr<const MultiFab>> coverage,
+    std::vector<Real> cell_measure, int field_component = 0) {
+  if (identity.empty() || layout_identity.empty())
+    throw std::invalid_argument(
+        "labelled field nullspace requires non-empty plan and layout identities");
+  if (labels.empty())
+    throw std::invalid_argument("labelled field nullspace requires at least one label field");
+  if (components.empty())
+    throw std::invalid_argument(
+        "labelled field nullspace requires at least one connected component");
+  if (cell_measure.size() != labels.size())
+    throw std::invalid_argument(
+        "labelled field nullspace requires one cell measure per hierarchy level");
+  if (scope == FieldNullspaceScope::Composite && coverage.size() != labels.size())
+    throw std::invalid_argument(
+        "composite labelled field nullspace requires one coverage mask per hierarchy level");
+  if (scope != FieldNullspaceScope::Composite && !coverage.empty())
+    throw std::invalid_argument(
+        "uniform/level-local labelled field nullspace must not carry composite coverage");
+
+  std::sort(components.begin(), components.end(),
+            [](const FieldConnectedComponent& left, const FieldConnectedComponent& right) {
+              return left.label < right.label;
+            });
+  for (std::size_t index = 0; index < components.size(); ++index) {
+    const auto& component = components[index];
+    if (component.label <= 0 || component.identity.empty() || component.provenance.empty())
+      throw std::invalid_argument(
+          "connected field components require a positive label, identity and provenance");
+    if (index != 0 && components[index - 1].label == component.label)
+      throw std::invalid_argument("connected field component labels must be unique");
+    for (std::size_t previous = 0; previous < index; ++previous)
+      if (components[previous].identity == component.identity)
+        throw std::invalid_argument("connected field component identities must be unique");
+  }
+
+  std::vector<std::vector<std::shared_ptr<MultiFab>>> masks(components.size());
+  std::vector<double> counts(components.size() + 1, 0.0);
+  for (std::size_t level = 0; level < labels.size(); ++level) {
+    if (!labels[level] || labels[level]->ncomp() != 1)
+      throw std::invalid_argument(
+          "connected-component label fields must be materialized one-component MultiFabs");
+    if (!(cell_measure[level] > Real(0)))
+      throw std::invalid_argument("field nullspace cell measures must be positive");
+    if (scope == FieldNullspaceScope::Composite) {
+      if (!coverage[level] || coverage[level]->ncomp() != 1 ||
+          coverage[level]->box_array().boxes() != labels[level]->box_array().boxes() ||
+          coverage[level]->dmap().ranks() != labels[level]->dmap().ranks())
+        throw std::invalid_argument(
+            "composite field nullspace coverage must be co-distributed with component labels");
+    }
+    for (auto& per_component : masks)
+      per_component.push_back(std::make_shared<MultiFab>(
+          labels[level]->box_array(), labels[level]->dmap(), 1, 0));
+
+    for (int li = 0; li < labels[level]->local_size(); ++li) {
+      const ConstArray4 source = labels[level]->fab(li).const_array();
+      std::vector<Array4> outputs;
+      outputs.reserve(components.size());
+      for (auto& per_component : masks)
+        outputs.push_back(per_component[level]->fab(li).array());
+      const Box2D valid = labels[level]->box(li);
+      for (int j = valid.lo[1]; j <= valid.hi[1]; ++j) {
+        for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
+          const Real raw = source(i, j, 0);
+          const Real integral = std::nearbyint(raw);
+          int selected = -1;
+          if (!std::isfinite(raw) || raw < Real(0) || raw != integral ||
+              integral > static_cast<Real>(std::numeric_limits<int>::max())) {
+            counts.back() += 1.0;
+          } else if (integral > Real(0)) {
+            const int label = static_cast<int>(integral);
+            const auto found = std::lower_bound(
+                components.begin(), components.end(), label,
+                [](const FieldConnectedComponent& component, int value) {
+                  return component.label < value;
+                });
+            if (found == components.end() || found->label != label) {
+              counts.back() += 1.0;
+            } else {
+              selected = static_cast<int>(std::distance(components.begin(), found));
+              counts[static_cast<std::size_t>(selected)] += 1.0;
+            }
+          }
+          for (std::size_t component = 0; component < outputs.size(); ++component)
+            outputs[component](i, j, 0) =
+                component == static_cast<std::size_t>(selected) ? Real(1) : Real(0);
+        }
+      }
+    }
+  }
+  all_reduce_sum_inplace(counts.data(), static_cast<int>(counts.size()));
+  if (counts.back() != 0.0)
+    throw std::runtime_error(
+        "connected-component label fields contain invalid or undeclared positive labels");
+  for (std::size_t component = 0; component < components.size(); ++component)
+    if (!(counts[component] > 0.0))
+      throw std::runtime_error("connected field component '" + components[component].identity +
+                               "' has no material cells");
+
+  FieldNullspacePlan result;
+  result.identity = std::move(identity);
+  result.layout_identity = std::move(layout_identity);
+  result.scope = scope;
+  for (std::size_t component = 0; component < components.size(); ++component) {
+    FieldNullspaceBasis basis;
+    basis.identity = components[component].identity;
+    basis.provenance = components[component].provenance;
+    basis.recipe_identity = result.identity + ":component-label:" +
+                            std::to_string(components[component].label);
+    basis.field_component = field_component;
+    basis.masks.reserve(masks[component].size());
+    for (auto& mask : masks[component])
+      basis.masks.push_back(std::move(mask));
+    basis.coverage = coverage;
+    basis.cell_measure = cell_measure;
+    result.gauges.push_back(FieldGaugeConstraint{basis.identity, Real(0)});
+    result.bases.push_back(std::move(basis));
+  }
+  std::vector<const MultiFab*> layouts;
+  layouts.reserve(labels.size());
+  for (const auto& label : labels)
+    layouts.push_back(label.get());
+  validate_field_nullspace_basis(layouts, result);
   return result;
 }
 
