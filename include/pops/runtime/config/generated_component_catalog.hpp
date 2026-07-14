@@ -238,17 +238,6 @@ inline constexpr RouteInfo kWallRoutes[] = {
 };
 inline constexpr const char* kWallRouteTokensCsv = "none|circle";
 
-struct RouteAliasInfo {
-  RouteFamily family;
-  const char* alias;
-  int canonical_index;
-};
-inline constexpr RouteAliasInfo kRouteAliases[] = {
-  {RouteFamily::kTime, "ssprk2", 0},
-  {RouteFamily::kSource, "lorentz", 3},
-  {RouteFamily::kSource, "potential_lorentz", 4},
-};
-
 struct LimiterTag { const char* name; int n_ghost; };
 inline constexpr LimiterTag kLimiters[] = {
   {"none", 1},
@@ -283,9 +272,7 @@ inline constexpr SourceTag kSources[] = {
   {"potential", 3, "(q/m) rho E electrostatic force"},
   {"gravity", 3, "rho g gravity force"},
   {"magnetic", 3, "q v x B_z magnetized Lorentz force (explicit regime)"},
-  {"lorentz", 3, "alias of 'magnetic'"},
   {"potential_magnetic", 3, "electrostatic + Lorentz, summed"},
-  {"potential_lorentz", 3, "alias of 'potential_magnetic'"},
 };
 
 struct EllipticTag { const char* name; const char* summary; };
@@ -319,9 +306,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 1;
-inline constexpr const char* kComponentCatalogSha256 = "9fe7f27d7d8320c1fcf531ffa60316043c26f9345c47e262cc1980ccc488aff0";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d";
-inline constexpr const char* kRouteRegistrySignature = "v2:37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d";
+inline constexpr const char* kComponentCatalogSha256 = "9d247899ba03bd6e893f2fb8071e6eb1407c4590269fb72ed3abe2c003743128";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661";
+inline constexpr const char* kRouteRegistrySignature = "v2:58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

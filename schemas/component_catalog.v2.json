@@ -487,9 +487,7 @@
           "native_entry": "pops::SSPRK2",
           "requirements": [],
           "limitations": [],
-          "aliases": [
-            "ssprk2"
-          ],
+          "aliases": [],
           "metadata": {}
         },
         {
@@ -809,9 +807,7 @@
           "limitations": [
             "explicit regime (stiff regime -> condensed Schur stage)"
           ],
-          "aliases": [
-            "lorentz"
-          ],
+          "aliases": [],
           "metadata": {
             "min_vars": 3,
             "parameters": [
@@ -830,9 +826,7 @@
             "aux B_z channel"
           ],
           "limitations": [],
-          "aliases": [
-            "potential_lorentz"
-          ],
+          "aliases": [],
           "metadata": {
             "min_vars": 3,
             "parameters": [

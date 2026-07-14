@@ -244,7 +244,6 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
         if len(routes) > 255:
             raise CatalogError(f"{name}.routes uses reserved wire id 255")
         tokens: set[str] = set()
-        aliases: set[str] = set()
         cpp_ids: set[str] = set()
         for index, route in enumerate(routes):
             route = _exact(route, {
@@ -254,7 +253,7 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             token = route["token"]
             if not isinstance(token, str) or re.fullmatch(r"[a-z][a-z0-9_]*", token) is None:
                 raise CatalogError(f"{name}.routes[{index}].token is not canonical")
-            if token in tokens or token in aliases:
+            if token in tokens:
                 raise CatalogError(f"duplicate route token {name}.{token}")
             tokens.add(token)
             if isinstance(route["wire_id"], bool) or not isinstance(route["wire_id"], int) \
@@ -269,12 +268,9 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                 raise CatalogError(f"{name}.{token}.native_entry must be canonical and non-empty")
             _strings(route["requirements"], f"{name}.{token}.requirements")
             _strings(route["limitations"], f"{name}.{token}.limitations")
-            for alias in _strings(route["aliases"], f"{name}.{token}.aliases"):
-                if re.fullmatch(r"[a-z][a-z0-9_]*", alias) is None:
-                    raise CatalogError(f"route alias {name}.{alias} is not canonical")
-                if alias in tokens or alias in aliases:
-                    raise CatalogError(f"duplicate route alias {name}.{alias}")
-                aliases.add(alias)
+            if _strings(route["aliases"], f"{name}.{token}.aliases"):
+                raise CatalogError(
+                    f"{name}.{token}.aliases must be empty; final route IDs have one spelling")
             if not isinstance(route["metadata"], dict):
                 raise CatalogError(f"{name}.{token}.metadata must be an object")
             metadata_fields = {
@@ -350,7 +346,6 @@ def _render_routes(catalog: dict[str, Any], digest: str,
                    semantic_digest: str | None = None) -> str:
     semantic_digest = semantic_digest or digest
     tables: dict[str, tuple[Any, ...]] = {}
-    aliases: dict[str, dict[str, str]] = {}
     metadata: dict[str, dict[str, dict[str, Any]]] = {}
     cpp: dict[str, dict[str, Any]] = {}
     brick_rows: list[dict[str, Any]] = []
@@ -360,9 +355,6 @@ def _render_routes(catalog: dict[str, Any], digest: str,
             row["token"], row["native_entry"], tuple(row["requirements"]),
             tuple(row["limitations"]),
         ) for row in family["routes"])
-        aliases[name] = {
-            alias: row["token"] for row in family["routes"] for alias in row["aliases"]
-        }
         metadata[name] = {row["token"]: row["metadata"] for row in family["routes"]}
         cpp[name] = {
             "enum": family["cpp_enum"], "table": family["cpp_table"],
@@ -393,7 +385,6 @@ def _render_routes(catalog: dict[str, Any], digest: str,
         "COMPONENT_CATALOG_SEMANTIC_SHA256": semantic_digest,
         "ROUTE_REGISTRY_SIGNATURE": signature,
         "ROUTE_TABLES": tables,
-        "ROUTE_ALIASES": aliases,
         "ROUTE_METADATA": metadata,
         "ROUTE_CPP_BINDINGS": cpp,
         "ROUTE_COMPONENT_DEFAULTS": catalog["route_component_defaults"],
@@ -501,23 +492,6 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
             "",
         ))
 
-    out.extend((
-        "struct RouteAliasInfo {",
-        "  RouteFamily family;",
-        "  const char* alias;",
-        "  int canonical_index;",
-        "};",
-        "inline constexpr RouteAliasInfo kRouteAliases[] = {",
-    ))
-    for family in families:
-        for row in family["routes"]:
-            for alias in row["aliases"]:
-                out.append(
-                    f"  {{RouteFamily::k{_camel(family['name'])}, {_cpp_string(alias)}, "
-                    f"{row['wire_id']}}},"
-                )
-    out.extend(("};", ""))
-
     by_name = {family["name"]: family for family in families}
     limiter = by_name["limiter"]
     out.extend((
@@ -565,11 +539,6 @@ def _render_cpp(catalog: dict[str, Any], digest: str,
     for row in source["routes"]:
         m = row["metadata"]
         out.append(f"  {{{_cpp_string(row['token'])}, {m['min_vars']}, {_cpp_string(m['summary'])}}},")
-        for alias in row["aliases"]:
-            out.append(
-                f"  {{{_cpp_string(alias)}, {m['min_vars']}, "
-                f"{_cpp_string('alias of ' + repr(row['token']))}}},"
-            )
     out.extend(("};", ""))
 
     elliptic = by_name["elliptic"]

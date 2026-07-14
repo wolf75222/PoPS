@@ -96,7 +96,7 @@ struct ModelSpec {
  public:
   detail::FrozenModelValue<std::string> transport;  ///< REQUIRED: exb/compressible/isothermal
   detail::FrozenModelValue<std::string> source;     ///< none/potential/gravity/magnetic/...
-      ///< | "magnetic"/"lorentz" | "potential_magnetic"/"potential_lorentz"
+      ///< | "magnetic" | "potential_magnetic"
   detail::FrozenModelValue<std::string> elliptic;  ///< REQUIRED: charge/background/gravity
 
   detail::FrozenModelValue<double> B0;            ///< ExBVelocity: magnetic field

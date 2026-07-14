@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 1
 
-COMPONENT_CATALOG_SHA256 = '9fe7f27d7d8320c1fcf531ffa60316043c26f9345c47e262cc1980ccc488aff0'
+COMPONENT_CATALOG_SHA256 = '9d247899ba03bd6e893f2fb8071e6eb1407c4590269fb72ed3abe2c003743128'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:37044374a600e265670b2d4a697dbb678dd1f1729dc411884d847e457c2ea80d'
+ROUTE_REGISTRY_SIGNATURE = 'v2:58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -123,19 +123,6 @@ ROUTE_TABLES = {'riemann': (('rusanov',
                  ('composite', 'per-block elliptic bricks summed', (), ())),
  'wall': (('none', 'no wall (fully periodic/physical domain)', (), ()),
           ('circle', 'pops::make_wall_predicate(circle)', ('wall_radius > 0',), ()))}
-
-ROUTE_ALIASES = {'riemann': {},
- 'limiter': {},
- 'recon': {},
- 'time': {'ssprk2': 'explicit'},
- 'field_solver': {},
- 'poisson_bc': {},
- 'layout': {},
- 'transport': {},
- 'source': {'lorentz': 'magnetic', 'potential_lorentz': 'potential_magnetic'},
- 'elliptic': {},
- 'poisson_rhs': {},
- 'wall': {}}
 
 ROUTE_METADATA = {'riemann': {'rusanov': {'needs_wave_speeds': False,
                          'needs_hllc_struct': False,

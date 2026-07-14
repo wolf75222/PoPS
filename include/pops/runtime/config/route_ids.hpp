@@ -13,9 +13,6 @@ namespace detail {
 template <std::size_t N>
 inline int parse_route_index(const RouteInfo (&table)[N], RouteFamily family,
                              const std::string& token, const char* context) {
-  for (const RouteAliasInfo& alias : kRouteAliases)
-    if (alias.family == family && token == alias.alias)
-      return alias.canonical_index;
   for (const RouteInfo& route : table)
     if (token == route.token)
       return route.index;

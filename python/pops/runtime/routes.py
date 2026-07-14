@@ -9,7 +9,7 @@ wire token toward the C++ ABI are the bounded adapters (``pops.runtime._system_i
 token (``str`` subclass), so the crossing stays byte-identical while the identity, requirements,
 limitations and native entry point become typed and inspectable.
 
-All route declarations, wire IDs, aliases, capabilities and entry points come from
+All route declarations, wire IDs, capabilities and entry points come from
 ``schemas/component_catalog.v2.json``. Checked-in Python and C++ products are generated together;
 this module contains behavior only and cannot drift into a second registry.
 """
@@ -23,7 +23,6 @@ from ._generated_component_routes import (
     COMPONENT_CATALOG_SEMANTIC_SHA256,
     COMPONENT_CATALOG_SHA256,
     COMPONENT_MANIFEST_SCHEMA_VERSION,
-    ROUTE_ALIASES as _GENERATED_ROUTE_ALIASES,
     ROUTE_COMPONENT_DEFAULTS as _GENERATED_COMPONENT_DEFAULTS,
     ROUTE_FAMILY_INTERFACES as _GENERATED_FAMILY_INTERFACES,
     ROUTE_METADATA as _GENERATED_ROUTE_METADATA,
@@ -168,7 +167,6 @@ class Route(str):
 
 
 _TABLES = _freeze_catalog_value(_GENERATED_ROUTE_TABLES)
-_ALIASES = _freeze_catalog_value(_GENERATED_ROUTE_ALIASES)
 _COMPONENT_DEFAULTS = _freeze_catalog_value(_GENERATED_COMPONENT_DEFAULTS)
 _FAMILY_INTERFACES = _freeze_catalog_value(_GENERATED_FAMILY_INTERFACES)
 
@@ -191,8 +189,7 @@ def resolve(family: str, token: str, context: str = "routes") -> Route:
     if routes is None:
         raise ValueError("%s: unknown route family %r (valid: %s)"
                          % (context, family, "|".join(sorted(_REGISTRY))))
-    canonical = _ALIASES.get(family, {}).get(token, token)
-    route = routes.get(canonical)
+    route = routes.get(token)
     if route is None:
         raise ValueError(
             "%s: unknown %s route %r (valid: %s); typed routes never fall back to a default"
