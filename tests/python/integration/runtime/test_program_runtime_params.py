@@ -32,9 +32,16 @@ try:
     import numpy as np
 
     import pops
-    from pops import time as adctime
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div
     from pops.params import RuntimeParam, ConstParam
-    from pops.physics._facade import Model
+    from pops.physics import Model
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        compiler_model,
+    )
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -60,15 +67,24 @@ def raises(exc_types, fn):
 
 def _decay_model(declaration, *, with_handle=False):
     """Scalar density with no transport and a named source reading a typed ``k`` declaration."""
-    m = Model("decay")
-    (rho,) = m.conservative_vars("rho")
+    frame = Rectangle(
+        "decay-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    m = Model("decay", frame=frame)
+    state = m.state("U", components=("rho",))
+    (rho,) = state
     k_handle = m.param(declaration)
     k = m.value(k_handle)
-    m.primitive_vars(rho=rho)
-    m.conservative_from([rho])
-    m.flux(x=[rho * 0.0], y=[rho * 0.0])      # no transport: isolate the source contribution
-    m.eigenvalues(x=[rho * 0.0], y=[rho * 0.0])
-    m.source_term("decay", [k * rho])         # S = k * rho reads the runtime param k
+    flux = m.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (rho * 0.0,), y_axis: (rho * 0.0,)},
+        waves={x_axis: (rho * 0.0,), y_axis: (rho * 0.0,)},
+    )
+    source = m.source("decay", on=state, value=(k * rho,))
+    m.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
     return (m, k_handle) if with_handle else m
 
 
@@ -89,10 +105,10 @@ def _decay_program(model, name="decay_runtime"):
     state = module.state_handle(next(iter(module.state_spaces().values())))
     problem = Case(name=name + "-case")
     block = problem.block("gas", model)
-    P = adctime.Program(name)
-    endpoint = P.state(block, state)
+    P = pops.Program(name)
+    endpoint = P.state(block[state])
     U = endpoint.n
-    S = P._source("decay", state=U)
+    S = module.operator_handle("decay")(U, name="decay")
     P.commit(endpoint.next, P.value("U1", U + P.dt * S, at=endpoint.next.point))
     return P
 
@@ -101,7 +117,7 @@ def _decay_program(model, name="decay_runtime"):
 print("== (A) compiled-Program runtime-param codegen + routing (pure Python) ==")
 runtime_model = _runtime_decay_model(2.0)
 P = _decay_program(runtime_model)
-src_rt = P.emit_cpp_program(model=runtime_model)
+src_rt = P.emit_cpp_program(model=compiler_model(runtime_model))
 chk("ctx.program_params(0)" in src_rt, "runtime source binds ctx.program_params(0)")
 chk("params.get(0)" in src_rt, "runtime source reads params.get(0) (not inlined)")
 chk("pops_program_param_count() { return 1; }" in src_rt, "metadata exports 1 runtime param")
@@ -109,13 +125,14 @@ chk('"k"' in src_rt and "pops_program_param_name" in src_rt, "metadata exports t
 chk("a later phase" not in src_rt, "the old 'a later phase' reject text is gone")
 
 const_model = _const_decay_model(2.0)
-src_const = _decay_program(const_model).emit_cpp_program(model=const_model)
+src_const = _decay_program(const_model).emit_cpp_program(
+    model=compiler_model(const_model))
 chk("params.get(" not in src_const, "const param stays INLINE (no params.get read)")
 chk("ctx.program_params(" not in src_const, "const param -> no per-block RuntimeParams binding")
 chk("pops_program_param_count() { return 0; }" in src_const, "const-only -> 0 runtime params")
 
 from pops.codegen.program_emit_params import program_param_entries  # noqa: E402
-chk(program_param_entries(P, runtime_model) == [(0, "k", 0, 2.0)],
+chk(program_param_entries(P, compiler_model(runtime_model)) == [(0, "k", 0, 2.0)],
     "_program_param_entries routes k -> (block 0, index 0, default 2.0)")
 
 # Qualified routing core: BindSchema materialises defaults and rejects ownerless names.
@@ -129,17 +146,24 @@ route_program = _decay_program(route_model, name="program-param-route")
 route_problem = Case(name="program-param-route")
 gas = route_problem.block("gas", route_model)
 schema = BindSchema.from_problem(route_problem)
-default_values = schema.resolve()
-override_values = schema.resolve({gas[k_handle]: 7.0})
+compile_values = schema.resolve_compile()
+default_values = schema.resolve_bind({}, compile_values=compile_values)
+override_values = schema.resolve_bind(
+    {gas[k_handle]: 7.0}, compile_values=compile_values)
 carrier = SimpleNamespace(
     program=route_program,
-    program_param_routes=tuple(program_param_entries(route_program, route_model)),
+    program_block_routes=((0, "gas"),),
+    program_param_routes=tuple(
+        program_param_entries(route_program, compiler_model(route_model))),
 )
 chk(route_program_params(carrier, schema, default_values) == {0: [2.0]},
     "BindSchema materialises the declaration default")
 chk(route_program_params(carrier, schema, override_values) == {0: [7.0]},
     "qualified handle override routes to block 0")
-chk(raises(TypeError, lambda: schema.resolve({"k": 9.0})),
+chk(raises(
+    TypeError,
+    lambda: schema.resolve_bind({"k": 9.0}, compile_values=compile_values),
+),
     "an ownerless string key is rejected (no broadcast)")
 
 # ---- (B) end-to-end: skips unless the full Kokkos toolchain is present ----
@@ -170,7 +194,7 @@ def make_sim(model):
     # it. No set_poisson: _decay_program has no solve_fields, so install_program needs no solver.
     sim = System(n=n, L=1.0, periodic=True)
     try:
-        cm = model.compile(backend="production")
+        cm = compile_block_model(model, target="system")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("block model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation("gas", cm,
@@ -182,7 +206,7 @@ def make_sim(model):
 
 try:
     compiled_model = _runtime_decay_model(2.0)
-    compiled = pops.codegen.compile_problem(
+    compiled = compile_problem(
         model=compiled_model, time=_decay_program(compiled_model))
 except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
@@ -216,7 +240,7 @@ chk(np.allclose(d6, 3.0 * d2, rtol=1e-9, atol=1e-12),
 
 # The cache is HIT on a second compile of the same Program -> the runtime change needed no recompile.
 c2_model = _runtime_decay_model(2.0)
-c2 = pops.codegen.compile_problem(model=c2_model, time=_decay_program(c2_model))
+c2 = compile_problem(model=c2_model, time=_decay_program(c2_model))
 chk(c2.so_path == compiled.so_path, "cache HIT: same Program -> same .so (the k change recompiled nothing)")
 
 print("%s test_program_runtime_params" % ("FAIL" if fails else "PASS"))

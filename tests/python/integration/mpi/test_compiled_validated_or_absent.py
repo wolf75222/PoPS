@@ -25,10 +25,14 @@ try:
     import numpy as np
 
     import pops
-    from pops import time as adctime
+    from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        scalar_advection_field_model,
+    )
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -42,29 +46,26 @@ def chk(cond, label):
         fails += 1
 
 
-def _fe_program(name="validated_probe"):
-    P = adctime.Program(name)
+def _fe_program(model, name="validated_probe"):
+    P = pops.Program(name)
     dt = P.dt
-    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
-    _case, states = program_states(P, module, ("ions",))
+    module = model.module
+    _case, states = program_states(P, model, ("ions",))
     temporal = states["ions"]
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + dt * R))
+    R = module.operator_handle("explicit_rhs")(U, name="rate")
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 
 
 def transport_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                      transport=pops.IsothermalFlux(),
-                      source=pops.NoSource(),
-                      elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return scalar_advection_field_model("validated_transport")
 
 
 # ---- (1) success -> directly usable ----
 try:
-    compiled = pops.codegen.compile_problem(time=_fe_program(), model=transport_model())
+    model = transport_model()
+    compiled = compile_problem(time=_fe_program(model), model=model)
 except (RuntimeError, Exception) as exc:  # noqa: BLE001 -- no compiler / Kokkos / compile failure
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -79,16 +80,17 @@ sim = System(n=24, L=1.0, periodic=True)
 if not hasattr(sim, "install_program"):
     print("-- install skipped: _pops lacks the install_program binding --")
 else:
-    sim.block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(),
-                                            riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
+    sim.add_equation(
+        "ions", compile_block_model(model, target="system"),
+        spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
+        time=pops.Explicit(method="euler"),
+    )
     sim.set_poisson("charge_density", "geometric_mg")
     n = 24
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
+    sim.set_state("ions", np.stack([rho]))
     # DIRECTLY bindable: install with no intermediate check().
     sim.install_program(compiled.so_path)
     chk(True, "the validated handle installs directly (no check step)")
@@ -97,12 +99,11 @@ else:
 print("== (2) failure -> no artifact escapes ==")
 
 
-def _broken_program():
+def _broken_program(model):
     # An advanced low-level Program that declares an evolved block but never commits it is invalid;
     # compile must fail before any handle exists. A foreign free-name commit is no longer expressible.
-    P = adctime.Program("broken_probe")
-    module = synthetic_module("broken_probe_state", components=("rho", "mx", "my"))
-    program_states(P, module, ("ions",))
+    P = pops.Program("broken_probe")
+    program_states(P, model, ("ions",))
     return P
 
 
@@ -110,8 +111,9 @@ handle_holder = {}
 
 
 def _try_broken():
-    handle_holder["h"] = pops.codegen.compile_problem(time=_broken_program(),
-                                                      model=transport_model())
+    broken_model = transport_model()
+    handle_holder["h"] = compile_problem(
+        time=_broken_program(broken_model), model=broken_model)
 
 
 raised = False

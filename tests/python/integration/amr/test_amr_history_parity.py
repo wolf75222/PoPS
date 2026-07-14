@@ -18,11 +18,16 @@ try:
 
     import pops
     import pops.lib.time as lt
+    from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics._facade import Model
     from pops.runtime._system import AmrSystem, System
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from pops.time import FailRun
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        passive_field_model,
+        resolve_periodic_field_program,
+    )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_history_parity (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -43,26 +48,25 @@ def chk(cond, label):
 
 
 def _passive_source_model(name):
-    """1-variable rho, ZERO flux, linear source S(rho)=_C*rho + elliptic_rhs=rho (a field solve runs).
-    R = c*rho changes every step, so AB2's R_{n-1} ring is load-bearing."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([_C * rho])
-    m.elliptic_rhs(rho)
-    return m
+    """Final scalar/source model; the resolved Case also installs its periodic field solve."""
+    return passive_field_model(name, coefficient=_C)
 
 
-def _ab2_program(name="adc631_ab2"):
-    P = pops.time.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
-    lt.adams_bashforth2(P, states["blk"])
-    return P
+def _ab2_plan(model, *, target, name="adc631_ab2"):
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: lt.AdamsBashforth(
+            state,
+            rate=rate,
+            fields=fields,
+            order=2,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="blk",
+        target=target,
+        n=N,
+    )
 
 
 def _rho0():
@@ -86,9 +90,15 @@ def _system_run(u0):
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         return None, "the built _pops lacks install_program/history_names (rebuild _pops)"
     try:
-        block_cm = _passive_source_model("blkS").compile(backend="production")
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("progS"),
-                                                 time=_ab2_program())
+        model = _passive_source_model("blkS")
+        plan = _ab2_plan(model, target="system")
+        block_cm = compile_block_model(model, target="system")
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:160]
     sim.add_equation("blk", block_cm,
@@ -106,9 +116,16 @@ def _amr_run(u0):
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, "the built _pops lacks AmrSystem.install_program/history_names (rebuild _pops)"
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("progA"),
-                                                 time=_ab2_program(), target="amr_system")
-        block_cm = _passive_source_model("blkA").compile(backend="production", target="amr_system")
+        model = _passive_source_model("blkA")
+        plan = _ab2_plan(model, target="amr_system")
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            target="amr_system",
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:160]
     try:

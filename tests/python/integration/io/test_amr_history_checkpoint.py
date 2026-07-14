@@ -33,12 +33,17 @@ try:
 
     import pops
     import pops.lib.time as lt
+    from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics._facade import Model
+    from pops.problem import Case
     from pops.runtime._system import AmrSystem
     from pops.time.history_persistence import Interval
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        passive_source_model,
+    )
+    from tests.python.support.typed_program import program_states, state_handle
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_checkpoint (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -64,33 +69,27 @@ def chk(cond, label):
 
 
 def _passive_source_model(name):
-    """1-variable rho, ZERO flux, linear source S=_C*rho, elliptic_rhs=rho. The dynamics never read
-    phi/aux, so the replayed steps are independent of the multigrid warm start -- the provably
-    bit-exact replay class. The refinement tags read the density level itself."""
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([_C * rho])
-    m.elliptic_rhs(rho)
-    return m
+    """One scalar with zero transport and a linear source ``S = _C * rho``.
+
+    The field-free dynamics make checkpoint replay independent of solver warm starts, which is the
+    provably bit-exact replay class. Refinement tags read the density level itself.
+    """
+    return passive_source_model(name, coefficient=_C)
 
 
-def _ab2_program(name="adc631_ckpt_ab2"):
+def _ab2_program(model, name="adc631_ckpt_ab2"):
     """AB2 over the R-ring (Dense by default: no keep_history policy). flux=False keeps the body free
     of solve_fields, staying in the warm-start-independent replay class."""
-    P = pops.time.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
-    lt.adams_bashforth2(P, states["blk"], flux=False)
+    module = model.module
+    case = Case("%s-case" % name)
+    state = case.block("blk", module)[state_handle(module)]
+    P = lt.AdamsBashforth(
+        state, rate=module.operator_handle("source_rate"), order=2)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
 
 
-def _state3_program(name="adc631_ckpt_state3"):
+def _state3_program(model, name="adc631_ckpt_state3"):
     """A depth-3 STATE ring (keep_history depth=3, Interval(2) -> stores slots {0,2}, replays slot 1).
 
     The commit is a MARKOV forward-Euler recurrence U^{n+1} = U^n + dt*_C*U^n -- it depends ONLY on U^n,
@@ -100,14 +99,14 @@ def _state3_program(name="adc631_ckpt_state3"):
     subset {0,2}) WITHOUT making the recurrence multi-term (a k-term recurrence would need k seed states,
     which the single-seed replay cannot supply -- the documented replay class). No phi / no flux, so the
     trajectory is independent of the multigrid warm start too."""
-    P = pops.time.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
+    P = pops.Program(name)
+    _case, states = program_states(P, model, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=3, checkpoint_policy=Interval(2))
     # Markov forward-Euler on the linear source (reads U.n only), + a zero-weight prev(2) read that
     # declares the depth-3 ring without breaking the single-step reconstructability of the replay.
-    nxt = P.value("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(2))
+    nxt = P.value(
+        "Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(2), at=U.next.point)
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
@@ -119,15 +118,16 @@ def _blob():
     return 1.0 + 0.5 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / (0.15 ** 2))
 
 
-def _build(program, regrid_every=2):
+def _build(program_factory, regrid_every=2):
     amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, None
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model(program.name + "_m"),
-                                                 time=program, target="amr_system")
-        block_cm = _passive_source_model(program.name + "_b").compile(backend="production",
-                                                                     target="amr_system")
+        model = _passive_source_model("%s_model" % program_factory.__name__.lstrip("_"))
+        program = program_factory(model)
+        compiled = compile_problem(
+            model=model, time=program, target="amr_system")
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile: %s" % str(exc)[:180]
     try:
@@ -159,7 +159,7 @@ def _rings(amr):
 
 def _run_case(program_factory, nsteps, half, label, regrid_every=2):
     """continuous(nsteps) vs [run(half), ckpt, fresh restart, continue]. Returns the comparison data."""
-    cont, err = _build(program_factory(), regrid_every)
+    cont, err = _build(program_factory, regrid_every)
     if cont is None:
         return None, err or "no engine"
     _advance(cont, half)
@@ -167,7 +167,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
     _advance(cont, nsteps - half)
     ref = np.asarray(cont.density("blk"))
 
-    run, _ = _build(program_factory(), regrid_every)
+    run, _ = _build(program_factory, regrid_every)
     _advance(run, half)
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = run.checkpoint(os.path.join(tmp, label))
@@ -178,7 +178,7 @@ def _run_case(program_factory, nsteps, half, label, regrid_every=2):
             key = "history_stored_slots_" + h
             stored = [int(s) for s in d[key]] if key in d else list(range(depth))
             stored_info[h] = (depth, sorted(stored))
-        fresh, _ = _build(program_factory(), regrid_every)
+        fresh, _ = _build(program_factory, regrid_every)
         fresh.restart(ckpt)
         rings_after_restart = _rings(fresh)
         report = fresh.last_restart_report()

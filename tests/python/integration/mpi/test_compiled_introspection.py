@@ -27,7 +27,8 @@ import tempfile
 
 try:
     import pops  # noqa: F401
-    from pops.codegen import Arguments, MemoryEstimate
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen.inspect_compiled import Arguments, MemoryEstimate
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.mesh.cartesian import CartesianMesh
     from pops.layouts import Uniform
@@ -38,25 +39,47 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     sys.exit(0)
 
 
-def _program(name="intro_demo", *, krylov=False, n_vars=3):
-    """A real in-memory Program: a state, an elliptic field solve, a Forward-Euler commit.
+def _program_authoring(name="intro_demo", *, krylov=False, n_vars=3, with_fields=True):
+    """A real in-memory Program: typed Module state, optional field solve and FE commit.
 
     With ``krylov=True`` it also records a matrix-free ``solve_linear`` (Krylov) node, so the IR
     carries the Krylov memory category."""
-    from pops.model import Module
-    from pops.problem import Case
-
     components = ("rho", "mx", "my", "E")[:n_vars]
-    module = Module(name + "-state")
+    from pops.ir.expr import Const
+    from pops.model import Module, Rate
+    from tests.python.support.typed_program import program_states
+
+    module = Module(name + "-model")
     state = module.state_space("U", components)
-    problem = Case(name=name + "-case")
-    block = problem.block("plasma", module)
-    P = adctime.Program(name)
+    variables = module.state_symbols(state)
+    fields = module.field_space("fields", ("phi",))
+    module.operator(
+        name="fields_from_state",
+        signature=(state,) >> fields,
+        kind="field_operator",
+        expr=variables[0],
+    )
+    module.operator(
+        name="flux",
+        signature=(state,) >> Rate(state),
+        kind="grid_operator",
+        expr={
+            "x": [Const(0.0) for _ in variables],
+            "y": [Const(0.0) for _ in variables],
+        },
+    )
+    module.eigenvalues(x=[Const(0.0)], y=[Const(0.0)])
+    module.rate_operator(
+        "explicit_rhs", state_space=module.state_handle(state), flux=True)
+    P = pops.Program(name)
     dt = P.dt
-    endpoint = P.state(block, module.state_handle(state))
+    _case, states = program_states(P, module, ("plasma",))
+    endpoint = states["plasma"]
     U = endpoint.n
-    f = P.solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    if with_fields:
+        module.operator_handle("fields_from_state")(
+            U, name="phi").consume(action=adctime.FailRun())
+    R = module.operator_handle("explicit_rhs")(U, name="rate")
     if krylov:
         # A matrix-free Krylov solve (op x = rhs): lowers to a solve_linear IR node.
         buf = P.scalar_field("buf")
@@ -67,11 +90,21 @@ def _program(name="intro_demo", *, krylov=False, n_vars=3):
             p.laplacian(lap, x)
             return -1.0 * lap
 
+        from pops.linalg import LinearProblem
         from pops.solvers.krylov import CG
+        from pops.time import FailRun
         P.set_apply(A, _apply)
-        P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(endpoint.next, P.value("U1", U + dt * R))
-    return P
+        P.solve(
+            LinearProblem(operator=A, rhs=buf),
+            solver=CG(max_iter=10),
+            name="krylov",
+        ).consume(action=FailRun())
+    P.commit(endpoint.next, P.value("U1", U + dt * R, at=endpoint.next.point))
+    return P, module
+
+
+def _program(name="intro_demo", *, krylov=False, n_vars=3):
+    return _program_authoring(name, krylov=krylov, n_vars=n_vars)[0]
 
 
 def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",), params=None, caps=None):
@@ -316,10 +349,10 @@ def test_metadata_redaction_helper():
 def test_real_compile_populates_metadata_or_skips():
     """A real compile_problem(debug=True) populates compile_command + generated_sources (Kokkos)."""
     print("== real compile_problem metadata (Kokkos-gated; skips if absent) ==")
-    cp = _compiled()
-    program = cp.program
+    program, model = _program_authoring("intro_real_compile", with_fields=False)
     try:
-        compiled = pops.codegen.compile_problem(time=program, debug=True, force=True)
+        compiled = compile_problem(
+            time=program, model=model, debug=True, force=True)
     except Exception as exc:  # noqa: BLE001 -- no compiler / no Kokkos / compile failure: skip cleanly
         print("  [..] real compile skipped (no toolchain / Kokkos): %s" % str(exc)[:90])
         return

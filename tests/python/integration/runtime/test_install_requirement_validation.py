@@ -16,11 +16,15 @@ try:
     import numpy as np
 
     import pops
-    from pops.ir.ops import sqrt
-    from pops.physics._facade import Model
-    from pops import time as adctime
+    import pops.lib.time as libtime
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div, sqrt
+    from pops.physics import Model
+    from pops.problem import Case
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from tests.python.integration._final_field_program import compile_block_model
 except Exception as exc:  # noqa: BLE001
     print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -30,40 +34,52 @@ N = 16
 
 def lorentz_model(name="adc446_model"):
     """An isothermal fluid whose Lorentz linear source reads the aux field B_z (a hard requirement)."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    m = Model(name, frame=frame)
+    state = m.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
     cs = sqrt(0.5)
-    m.flux(x=[mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho + 0.5 * rho])
-    m.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
-                  y=[my / rho - cs, my / rho, my / rho + cs])
-    m.primitive_vars(rho, mx, my)
-    m.conservative_from([rho, mx, my])
+    flux = m.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (mx, mx * mx / rho + 0.5 * rho, mx * my / rho),
+            y_axis: (my, mx * my / rho, my * my / rho + 0.5 * rho),
+        },
+        waves={
+            x_axis: (mx / rho - cs, mx / rho, mx / rho + cs),
+            y_axis: (my / rho - cs, my / rho, my / rho + cs),
+        },
+    )
     bz = m.aux("B_z")
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
+    m.operator(
+        "lorentz",
+        returns=m.local_linear_operator(
+            "lorentz",
+            on=state,
+            matrix=((0.0, 0.0, 0.0), (0.0, 0.0, bz), (0.0, -bz, 0.0)),
+        ),
+    )
+    m.rate("explicit_rhs", equation=ddt(state) == -div(flux))
     return m
 
 
-def lie_program(name="adc446_prog"):
-    P = adctime.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
-    _case, states = program_states(P, module, ("plasma",))
-    temporal = states["plasma"]
-    u = temporal.n
-    fields = P.solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields)
-    P.commit(
-        temporal.next,
-        P.value("u1", u + P.dt * r, at=temporal.next.point),
+def lie_program(model, name="adc446_prog"):
+    case = Case("%s-case" % name)
+    state = case.block("plasma", model)[model.states["U"]]
+    return libtime.ForwardEuler(
+        state,
+        rate=model.operators["explicit_rhs"],
     )
-    return P
 
 
 def make_sim(block_model, with_bz):
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_equation("plasma", block_model.compile(backend="production"),
+    sim.add_equation("plasma", compile_block_model(block_model, target="system"),
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -82,7 +98,7 @@ def main():
         return 0
     m = lorentz_model()
     try:
-        compiled = pops.codegen.compile_problem(model=m, time=lie_program())
+        compiled = compile_problem(model=m, time=lie_program(m))
     except RuntimeError as exc:
         print("skip test_install_requirement_validation (no Kokkos to build the .so: %s)"
               % str(exc)[:120])

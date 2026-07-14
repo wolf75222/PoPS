@@ -8,7 +8,7 @@ An AB2 Program on a 2-level AMR system with ``regrid_every>0``. Two precise asse
        R0 head solve over-converging the multigrid warm start, bounded far below the scheme error; the
        bitwise ring-remap identity on an unchanged layout is locked by the C++
        test_amr_history_ring.RegridRemapKeepsSlotsConsistent case);
-  (ii) REAL regrid (a moving compressible front tags cells) -> the run is stable (finite, coarse mass
+  (ii) REAL regrid (a moving scalar-advection front tags cells) -> the run is stable (finite, coarse mass
        conserved to round-off) and after the regrids EVERY prev(k) global buffer is defined on the NEW
        layout (its flat size == the current sum_k ncomp*nf_k*nf_k) -- the layout-consistency invariant.
 
@@ -21,12 +21,16 @@ try:
 
     import pops
     import pops.lib.time as lt
-    from pops.ir.ops import sqrt
+    from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics._facade import Model
     from pops.runtime._system import AmrSystem
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from pops.time import FailRun
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_regrid (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -46,35 +50,26 @@ def chk(cond, label):
 
 
 def _euler_model(name):
-    """Compressible Euler (density blob disperses as pressure waves -> the tagged region moves, so a
-    real regrid changes the fine layout); elliptic_rhs = rho so a field solve runs."""
-    GAMMA = 1.4
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
-    u, v = rhou / rho, rhov / rho
-    p = (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    pu, pv, pp = m.primitive("u", u), m.primitive("v", v), m.primitive("p", p)
-    H = (E + pp) / rho
-    c = sqrt(GAMMA * pp / rho)
-    m.flux(x=[rhou, rhou * pu + pp, rhou * pv, rho * H * pu],
-           y=[rhov, rhov * pu, rhov * pv + pp, rho * H * pv])
-    m.eigenvalues(x=[pu - c, pu, pu + c], y=[pv - c, pv, pv + c])
-    m.primitive_vars(rho, pu, pv, pp)
-    m.conservative_from([rho, rho * pu, rho * pv,
-                         pp / (GAMMA - 1.0) + 0.5 * rho * (pu * pu + pv * pv)])
-    m.gamma(GAMMA)
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
-    return m
+    """Scalar advection moves the tagged blob while preserving one conservative density."""
+    return scalar_advection_field_model(name)
 
 
-def _ab2_program(name):
-    P = pops.time.Program(name)
-    module = synthetic_module(
-        "%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
-    _case, states = program_states(P, module, ("blk",))
-    lt.adams_bashforth2(P, states["blk"])
-    return P
+def _ab2_plan(model, name):
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: lt.AdamsBashforth(
+            state,
+            rate=rate,
+            fields=fields,
+            order=2,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="blk",
+        target="amr_system",
+        n=N,
+        regrid_every=2,
+    )
 
 
 def _blob(amp=0.5, w=0.12):
@@ -88,11 +83,16 @@ def _build(regrid_every, refine_thr, u0, tag):
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, None
     try:
-        compiled = pops.codegen.compile_problem(model=_euler_model("rg_prog_%s" % tag),
-                                                 time=_ab2_program("rg_ab2_%s" % tag),
-                                                 target="amr_system")
-        block_cm = _euler_model("rg_blk_%s" % tag).compile(backend="production",
-                                                          target="amr_system")
+        model = _euler_model("rg_blk_%s" % tag)
+        plan = _ab2_plan(model, "rg_ab2_%s" % tag)
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            target="amr_system",
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile: %s" % str(exc)[:180]
     try:

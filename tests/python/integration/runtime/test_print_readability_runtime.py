@@ -29,8 +29,8 @@ Pytest + __main__ guard (CI runs ``python3 <file>``).
 import sys
 
 try:
+    import pops
     import pops._pops  # noqa: F401  -- System / AmrSystem need the native runtime
-    from pops import time as adctime
     from pops.codegen.loader import CompiledModel, CompiledProblem
     from tests.python.support.typed_program import program_states, synthetic_module
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
@@ -61,15 +61,12 @@ def _synthetic_compiled():
     """A SYNTHETIC ``CompiledProblem``: a real lowered ``Program`` + a real ``CompiledModel``, NO
     compile (same inert construction as ``test_compiled_introspection``). Nothing here compiles a
     ``.so`` or touches the runtime; only ``CompiledProblem``'s pure-Python metadata wrapper runs."""
-    P = adctime.Program("demo")
-    dt = P.dt
+    P = pops.Program("demo")
     module = synthetic_module("demo_state", components=("rho", "mx", "my"))
     _case, states = program_states(P, module, ("plasma",))
     temporal = states["plasma"]
     U = temporal.n
-    f = P.solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
+    P.commit(temporal.next, P.value("U1", 1.0 * U, at=temporal.next.point))
     m = CompiledModel(
         so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],

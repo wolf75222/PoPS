@@ -21,12 +21,17 @@ try:
 
     import pops
     import pops.lib.time as lt
+    from pops.codegen._compile_drivers import compile_problem
     from pops import _pops
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics._facade import Model
+    from pops.problem import Case
     from pops.runtime._system import AmrSystem
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        passive_source_model,
+    )
+    from tests.python.support.typed_program import program_states, state_handle
 except Exception as exc:  # noqa: BLE001
     print("skip test_amr_history_mpi (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -47,36 +52,27 @@ def chk(cond, label):
 
 
 def _passive_source_model(name):
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([0.6 * rho])
-    m.elliptic_rhs(rho)
-    return m
+    return passive_source_model(name, coefficient=0.6)
 
 
-def _ab2_program(name):
-    P = pops.time.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
-    lt.adams_bashforth2(P, states["blk"])
-    return P
+def _ab2_program(model, name):
+    module = model.module
+    case = Case("%s-case" % name)
+    state = case.block("blk", module)[state_handle(module)]
+    return lt.AdamsBashforth(
+        state, rate=module.operator_handle("source_rate"), order=2)
 
 
-def _state_ring_program(name):
+def _state_ring_program(model, name):
     """ADC-635: a depth-3 STATE ring (Interval(2) -> stores {0,2}, replays slot 1). A single-step
     Markov recurrence so the single-seed replay reconstructs the gap bit-for-bit."""
     from pops.time.history_persistence import Interval
-    P = pops.time.Program(name)
-    module = synthetic_module("%s_state" % name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
+    P = pops.Program(name)
+    _case, states = program_states(P, model, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=3, checkpoint_policy=Interval(2))
-    nxt = P.value("Un", U.n + P.dt * (0.6 * U.n) + 0.0 * U.prev(2))
+    nxt = P.value(
+        "Un", U.n + P.dt * (0.6 * U.n) + 0.0 * U.prev(2), at=U.next.point)
     P.commit(U.next, nxt)
     return P
 
@@ -95,11 +91,13 @@ def _build(distribute_coarse):
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, None
     try:
-        compiled = pops.codegen.compile_problem(
-            model=_passive_source_model("mpi_prog_%d" % distribute_coarse),
-            time=_ab2_program("mpi_ab2_%d" % distribute_coarse), target="amr_system")
-        block_cm = _passive_source_model("mpi_blk_%d" % distribute_coarse).compile(
-            backend="production", target="amr_system")
+        model = _passive_source_model("mpi_blk_%d" % distribute_coarse)
+        compiled = compile_problem(
+            model=model,
+            time=_ab2_program(model, "mpi_ab2_%d" % distribute_coarse),
+            target="amr_system",
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile: %s" % str(exc)[:180]
     try:
@@ -136,13 +134,15 @@ def _build_state_ring(distribute_coarse, regrid_every=4):
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, None
     try:
-        compiled = pops.codegen.compile_problem(
-            model=_passive_source_model("mpi635_prog_%d" % distribute_coarse),
-            time=_state_ring_program("mpi635_ring_%d" % distribute_coarse), target="amr_system")
-        block_cm = _passive_source_model("mpi635_blk_%d" % distribute_coarse).compile(
-            backend="production", target="amr_system")
-        bg_cm = _passive_source_model("mpi635_bg_%d" % distribute_coarse).compile(
-            backend="production", target="amr_system")
+        model = _passive_source_model("mpi635_blk_%d" % distribute_coarse)
+        compiled = compile_problem(
+            model=model,
+            time=_state_ring_program(model, "mpi635_ring_%d" % distribute_coarse),
+            target="amr_system",
+        )
+        block_cm = compile_block_model(model, target="amr_system")
+        bg_model = _passive_source_model("mpi635_bg_%d" % distribute_coarse)
+        bg_cm = compile_block_model(bg_model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile: %s" % str(exc)[:180]
     try:

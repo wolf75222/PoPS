@@ -22,6 +22,7 @@ per-level RUN is validatable on Kokkos CPU (Serial/OpenMP) locally. Self-skips (
 a built _pops / a compiler. Pytest + __main__ guard (CI runs python3 <file>).
 """
 import sys
+from fractions import Fraction
 
 # ADC-627: this file AOT-compiles Program/.so artifacts; give the process-isolated runner headroom.
 POPS_PROCESS_TIMEOUT = 1200
@@ -30,13 +31,18 @@ try:
     import numpy as np
 
     import pops
-    from pops import time as adctime
-    from pops.ir.ops import sqrt
+    import pops.lib.time as libtime
+    from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
-    from pops.physics._facade import Model
     from pops.runtime._system import AmrSystem
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from pops.time import FailRun
+    from pops.time.method_tableau import RungeKuttaTableau
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_reflux (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -56,63 +62,48 @@ def chk(cond, label):
 
 
 def _euler_model(name):
-    """Compressible Euler; elliptic_rhs = rho so a field solve runs. A dispersing blob tags cells -> a
-    real regrid, and a genuine C/F interface where the reflux must fire."""
-    GAMMA = 1.4
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
-    u, v = rhou / rho, rhov / rho
-    p = (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    pu, pv, pp = m.primitive("u", u), m.primitive("v", v), m.primitive("p", p)
-    H = (E + pp) / rho
-    c = sqrt(GAMMA * pp / rho)
-    m.flux(x=[rhou, rhou * pu + pp, rhou * pv, rho * H * pu],
-           y=[rhov, rhov * pu, rhov * pv + pp, rho * H * pv])
-    m.eigenvalues(x=[pu - c, pu, pu + c], y=[pv - c, pv, pv + c])
-    m.primitive_vars(rho, pu, pv, pp)
-    m.conservative_from([rho, rho * pu, rho * pv,
-                         pp / (GAMMA - 1.0) + 0.5 * rho * (pu * pu + pv * pv)])
-    m.gamma(GAMMA)
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
-    return m
+    """Scalar advection moves a blob through a genuine coarse/fine reflux interface."""
+    return scalar_advection_field_model(name)
 
 
-def _ssprk2_program(name):
+def _ssprk2_program(model, name):
     """Canonical SSPRK2 (Heun): U1 = U + dt R(U); U <<= 0.5 U + 0.5 (U1 + dt R(U1))."""
-    P = adctime.Program(name)
-    dt = P.dt
-    module = synthetic_module("%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
-    _case, states = program_states(P, module, ("blk",))
-    temporal = states["blk"]
-    U0 = temporal.n
-    f0 = P.solve_fields("f0", U0)
-    k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.value("U1", U0 + dt * k0)
-    f1 = P.solve_fields("f1", U1)
-    k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.value("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1))
-    P.commit(temporal.next, U2)
-    return P
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: libtime.SSPRK2(
+            state,
+            rate=rate,
+            fields=fields,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="blk",
+        target="amr_system",
+        n=N,
+        regrid_every=2,
+    )
 
 
-def _midpoint_program(name):
+def _midpoint_program(model, name):
     """Midpoint RK2: U1 = U + 0.5 dt R(U); U <<= U + dt R(U1). Effective flux Feff = F1 (the 2nd stage
     only) -- proves the ledger tracks the Program's actual weights, not a hard-coded scheme."""
-    P = adctime.Program(name)
-    dt = P.dt
-    module = synthetic_module("%s_state" % name, components=("rho", "rho_u", "rho_v", "E"))
-    _case, states = program_states(P, module, ("blk",))
-    temporal = states["blk"]
-    U0 = temporal.n
-    f0 = P.solve_fields("f0", U0)
-    k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.value("U1", U0 + 0.5 * dt * k0)
-    f1 = P.solve_fields("f1", U1)
-    k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.value("U2", U0 + dt * k1)
-    P.commit(temporal.next, U2)
-    return P
+    midpoint = RungeKuttaTableau(
+        A=[[], [Fraction(1, 2)]], b=[0, 1], c=[0, Fraction(1, 2)], name="midpoint")
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: libtime.RungeKutta(
+            state,
+            rate=rate,
+            fields=fields,
+            tableau=midpoint,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="blk",
+        target="amr_system",
+        n=N,
+        regrid_every=2,
+    )
 
 
 def _blob(amp=0.5, w=0.12):
@@ -130,11 +121,16 @@ def _run(program_fn, tag, refine_thr=1.2, regrid_every=2, u0=None, nsteps=NSTEPS
     if not hasattr(amr, "install_program"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)", None
     try:
-        compiled = pops.codegen.compile_problem(model=_euler_model("rfx_%s" % tag),
-                                                 time=program_fn("rfx_prog_%s" % tag),
-                                                 target="amr_system")
-        block_cm = _euler_model("rfx_blk_%s" % tag).compile(backend="production",
-                                                            target="amr_system")
+        model = _euler_model("rfx_blk_%s" % tag)
+        plan = program_fn(model, "rfx_prog_%s" % tag)
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            target="amr_system",
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile: %s" % str(exc)[:180], None
     try:

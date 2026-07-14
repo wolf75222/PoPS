@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""ADC-557 real-compiler acceptance: the standard flow lowers the facade once, trace on the handle.
+"""ADC-557 real-compiler acceptance: the standard flow lowers the final model once.
 
-A physics facade ``pops.physics.Model`` compiled through ``compile_problem`` (the standard flow --
-no manual ``m.to_module()``) yields a handle that carries the operator-first Module as the
-lowered-module trace (``compiled.inspect()``) and a compile-time ``module_hash`` for drift
-detection. A native brick ``pops.Model(...)`` (a ``_pops.ModelSpec``), by contrast, has NO backing
-operator-first Module: its trace is honestly absent, never fabricated.
+A final ``pops.physics.Model`` compiled through the internal ``compile_problem`` seam (no
+manual ``m.to_module()``) yields a handle that carries the operator-first Module as the lowered-module
+trace (``compiled.inspect()``) and a compile-time ``module_hash`` for drift detection. The bounded
+native ``ModelSpec`` bridge is rejected before compilation because it has no canonical Module
+authority; a missing trace can therefore never be fabricated.
 
-The pure-Python chain (facade -> lower_and_validate -> handle metadata) is pinned by the unit test
+The pure-Python chain (Model -> lower_and_validate -> handle metadata) is pinned by the unit test
 ``tests/python/unit/codegen/test_module_lowering.py``; this test proves the same claims through a
 REAL ``.so`` compile. Skips cleanly unless the full toolchain is present (like the sibling
 ``test_compile_problem.py``).
@@ -22,9 +22,12 @@ def _skip(msg):
 
 try:
     import pops
-    from pops import time as adctime
-    from pops.physics._facade import Model as PhysicsModel
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.runtime.bricks import (
+        BackgroundDensity, FluidState, IsothermalFlux, Model as NativeBrickModel, NoSource,
+    )
+    from tests.python.integration._final_field_program import scalar_advection_field_model
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001
     _skip("pops unavailable: %s" % exc)
 
@@ -38,72 +41,75 @@ def chk(cond, label):
         fails += 1
 
 
-def _fe_program(name="module_trace_probe"):
-    P = adctime.Program(name)
+def _fe_program(model, name="module_trace_probe"):
+    P = pops.Program(name)
     dt = P.dt
-    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
-    _case, states = program_states(P, module, ("ions",))
+    module = model.module
+    _case, states = program_states(P, model, ("ions",))
     temporal = states["ions"]
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + dt * R))
+    R = module.operator_handle("explicit_rhs")(U, name="rate")
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 
 
 def physics_model():
-    """A facade physics Model (the ADC-557 subject): it carries the operator-first Module view.
+    """A final blackboard Model carrying its operator-first Module view.
 
-    The FE program lowers via ``ctx.rhs_into`` (flux=True + "default"), so the emitted program
-    source only ADDS the inert ``pops_module_*`` metadata descriptors on top of the source the
-    sibling ``test_compile_problem.py`` already compiles -- no extra kernel surface.
+    The FE Program is field-free, while the model still declares a physical field operator. This
+    keeps the smoke focused on trace metadata without inventing an unresolved field-install plan.
     """
-    m = PhysicsModel("ions")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    m.flux(x=[mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho + 0.5 * rho])
-    m.elliptic_rhs(rho - 1.0)
-    return m
+    return scalar_advection_field_model("ions")
 
 
 def bricks_model():
-    """A native brick model (a ``_pops.ModelSpec``): NO backing operator-first Module."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                      transport=pops.IsothermalFlux(),
-                      source=pops.NoSource(),
-                      elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    """The bounded native ModelSpec bridge has no operator-first Module authority."""
+    return NativeBrickModel(
+        state=FluidState.isothermal(cs2=0.5),
+        transport=IsothermalFlux(),
+        source=NoSource(),
+        elliptic=BackgroundDensity(alpha=1.0, n0=0.0),
+    )
 
 
-# Standard flow: pass the facade Model directly, no manual to_module / lower.
+# Standard flow: pass the final Model directly, with no manual Module lowering.
 try:
-    compiled = pops.codegen.compile_problem(time=_fe_program(), model=physics_model())
+    compiled_model = physics_model()
+    compiled = compile_problem(
+        time=_fe_program(compiled_model), model=compiled_model)
 except (RuntimeError, Exception) as exc:  # noqa: BLE001
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
-print("== ADC-557: one lowering, module trace on the handle (facade Model) ==")
+print("== ADC-557: one lowering, module trace on the handle (final Model) ==")
 report = compiled.inspect().to_dict()
 chk(report.get("module_manifest") is not None,
     "compiled.inspect() carries the lowered-module trace (operator-first Module)")
 chk(bool(compiled.module_hash()), "the handle carries a compile-time module_hash for drift detection")
 
-# The trace lists the operator-first operators (flux_default / fields_from_state) without the user
+# The trace lists the operator-first operators (flux_default / electrostatic) without the user
 # ever building a Module by hand.
 ops = [op.get("name") for op in report["module_manifest"].get("operators", [])] \
     if report.get("module_manifest") else []
-chk("flux_default" in ops and "fields_from_state" in ops,
+chk("flux_default" in ops and "electrostatic" in ops,
     "the lowered-module trace lists the operators (%s)" % ops)
 
-# A native brick ModelSpec has NO operator-first Module: the trace is honestly ABSENT (None), never
-# fabricated -- and the compile itself still succeeds (the historical route is unchanged).
-print("== honest absence: a native brick ModelSpec carries no module trace ==")
+# The retired root-level ModelSpec composition no longer enters Program compilation. Its explicit,
+# bounded runtime bridge is rejected before a handle exists, so codegen cannot fabricate a Module
+# trace or hash for it.
+print("== bounded native ModelSpec bridge is absent from Program compilation ==")
+legacy_error = None
 try:
-    compiled_spec = pops.codegen.compile_problem(time=_fe_program("spec_probe"), model=bricks_model())
-except (RuntimeError, Exception) as exc:  # noqa: BLE001
-    _skip("ModelSpec compile failed: %s" % str(exc)[:160])
-chk(compiled_spec.module_manifest is None,
-    "a ModelSpec handle carries NO module_manifest (honest absence)")
-chk(compiled_spec.module_hash() is None,
-    "a ModelSpec handle carries NO module_hash (honest absence)")
+    legacy_program_model = physics_model()
+    compile_problem(
+        time=_fe_program(legacy_program_model, "legacy_bridge_probe"),
+        model=bricks_model(),
+    )
+except TypeError as exc:
+    legacy_error = exc
+chk(legacy_error is not None,
+    "a native ModelSpec bridge is rejected before any compiled handle can escape")
+chk(legacy_error is not None and "CompilerLowerable" in str(legacy_error),
+    "the rejection names the canonical CompilerLowerable/Module boundary")
 
 print("%s test_compile_module_trace" % ("FAIL (%d)" % fails if fails else "PASS"))
 sys.exit(1 if fails else 0)

@@ -12,7 +12,7 @@ try:
     from pops import model
     from pops.ir.expr import Const, Var
     from pops.ir.ops import sqrt
-    from pops import time as adctime
+    from pops.time import FailRun
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_compile (pops unavailable: %s)" % exc)
@@ -20,11 +20,8 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 
 def _op(mod, name):
-    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
-    op = mod.operator_registry().get(name)
-    return model.OperatorHandle(
-        op.name, kind=op.kind, owner=mod.operator_registry().owner_path,
-        signature=op.signature)
+    """Return the exact registry-issued operator handle (never reconstruct one by name)."""
+    return mod.operator_handle(name)
 
 
 def pure_module():
@@ -52,6 +49,8 @@ def pure_module():
                  expr=[[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
     mod.rate_operator(
         "explicit_rhs", state_space=mod.state_handle(u), flux=True, sources=[electric])
+    mod.rate_operator(
+        "transport_rhs", state_space=mod.state_handle(u), flux=True, sources=[])
     return mod
 
 
@@ -61,7 +60,7 @@ def test_module_lowers_to_dsl():
     assert m._m.cons_names == ["rho", "mx", "my"]
     assert "electric" in m._m._source_terms
     assert "lorentz" in m._m._linear_sources
-    assert m._m._elliptic is not None
+    assert "fields_from_state" in m._m._elliptic_fields
     assert m._m._flux and m._m._eig
     assert "explicit_rhs" in m._m._rate_operators
     # The brick codegen (to_primitive / to_conservative) must succeed: a pure Module declares no
@@ -74,20 +73,30 @@ def test_module_lowers_to_dsl():
 
 def test_pure_module_program_emits():
     mod = pure_module()
-    P = adctime.Program("pc")._bind_operators(mod)
     from pops.problem import Case
     problem = Case(name="module-compile")
     block = problem.block("plasma", mod)
     state = mod.state_handle(mod.state_spaces()["U"])
-    libtime.predictor_corrector_local_linear(
-        P, block, state, fields_operator=_op(mod, "fields_from_state"),
-        explicit_rate_operator=_op(mod, "explicit_rhs"), implicit_operator=_op(mod, "lorentz"))
-    # compile_problem(model=Module) lowers the Module internally; emit the .so source (no compile).
+    predictor = libtime.PredictorCorrector(
+        block[state],
+        fields=_op(mod, "fields_from_state"),
+        explicit=_op(mod, "explicit_rhs"),
+        implicit=_op(mod, "lorentz"),
+        solve_action=FailRun(),
+    )
+    assert predictor.validate() is True
+    # Direct Module emission has no Case-owned FieldDiscretization to resolve. Keep the final
+    # PredictorCorrector authoring proof above, then emit a field-free Program through the same exact
+    # Module authority; field-solving codegen is covered only through a resolved Case field plan.
+    P = libtime.ForwardEuler(
+        block[state], rate=_op(mod, "transport_rhs"))
     src = P.emit_cpp_program(model=mod.to_dsl())
     assert "pops_install_program" in src
     # the GeneratedModule descriptor reflects the pure Module's operators
     assert "pops_module_operator_count() { return" in src
-    for op in ("electric", "lorentz", "fields_from_state", "explicit_rhs"):
+    for op in (
+        "electric", "lorentz", "fields_from_state", "explicit_rhs", "transport_rhs"
+    ):
         assert '"%s"' % op in src, op
     print("OK  a pure operator-first Module + generic macro emits a combined .so source")
 
@@ -100,7 +109,8 @@ def test_module_requires_one_state_space():
         mod.to_dsl()
         raise AssertionError("expected a single-StateSpace requirement error")
     except ValueError as exc:
-        assert "exactly one StateSpace" in str(exc)
+        assert "exact block/state route" in str(exc)
+        assert "['U', 'V']" in str(exc)
     print("OK  a Module to compile must declare exactly one StateSpace")
 
 
@@ -108,6 +118,12 @@ def test_decorator_body_rejected():
     mod = model.Module("deco")
     u = mod.state_space("U", ("rho",))
     fields = mod.field_space("fields", ("phi",))
+    mod.operator(
+        name="fields_from_state",
+        signature=(u,) >> fields,
+        kind="field_operator",
+        expr=Var("rho", "cons"),
+    )
 
     @mod.operator(name="electric", signature=(u, fields) >> model.Rate(u), kind="local_source")
     def electric(state, flds):  # a callable body, not an IR expression
@@ -121,19 +137,18 @@ def test_decorator_body_rejected():
     print("OK  a decorator/callable operator body is rejected at compile")
 
 
-def test_multiple_field_operators_rejected():
+def test_multiple_field_operators_lower_distinctly():
     mod = model.Module("twofields")
     u = mod.state_space("U", ("rho",))
     f1 = mod.field_space("fields", ("phi",))
     rho = Var("rho", "cons")
     mod.operator(name="fields_from_state", signature=(u,) >> f1, kind="field_operator", expr=rho)
     mod.operator(name="psi", signature=(u,) >> f1, kind="field_operator", expr=rho)
-    try:
-        mod.to_dsl()
-        raise AssertionError("expected a single-field_operator error")
-    except ValueError as exc:
-        assert "one field_operator" in str(exc)
-    print("OK  multiple field_operators are rejected (single elliptic solve)")
+    lowered = mod.to_dsl()
+    assert set(lowered._m._elliptic_fields) == {"fields_from_state", "psi"}
+    assert lowered._m._elliptic_fields["fields_from_state"] is not \
+        lowered._m._elliptic_fields["psi"]
+    print("OK  multiple field operators retain distinct native providers")
 
 
 def test_explicit_roles_honored():
@@ -155,7 +170,7 @@ def main():
     test_pure_module_program_emits()
     test_module_requires_one_state_space()
     test_decorator_body_rejected()
-    test_multiple_field_operators_rejected()
+    test_multiple_field_operators_lower_distinctly()
     print("OK  test_module_compile")
 
 

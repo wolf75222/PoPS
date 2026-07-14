@@ -29,11 +29,12 @@ try:
     import tempfile
 
     import pops
-    from pops import time as adctime
+    from pops.codegen._compile_drivers import compile_problem
     from pops.codegen.compile_provenance import (
         artifact_sidecar_path, read_artifact_sidecar, StaleArtifactError)
     from pops.identity import make_identity
-    from tests.python.support.typed_program import program_states, synthetic_module
+    from tests.python.integration._final_field_program import scalar_advection_field_model
+    from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001 -- pops/_pops unavailable in this interpreter
     _skip("pops unavailable: %s" % exc)
 
@@ -47,31 +48,33 @@ def chk(cond, label):
         fails += 1
 
 
-def _fe_program(name="stale_debug_probe"):
-    P = adctime.Program(name)
+def _fe_program(model, name="stale_debug_probe"):
+    P = pops.Program(name)
     dt = P.dt
-    module = synthetic_module("%s_state" % name, components=("rho", "mx", "my"))
-    _case, states = program_states(P, module, ("ions",))
+    module = model.module
+    _case, states = program_states(P, model, ("ions",))
     temporal = states["ions"]
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + dt * R))
+    R = module.operator_handle("explicit_rhs")(U, name="rate")
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
     return P
 
 
 def transport_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                      transport=pops.IsothermalFlux(),
-                      source=pops.NoSource(),
-                      elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return scalar_advection_field_model("stale_debug_transport")
+
+
+def _compile(name="stale_debug_probe", so_path=None, **options):
+    model = transport_model()
+    return compile_problem(
+        so_path, time=_fe_program(model, name), model=model, **options)
 
 
 # First fresh compile: reaching a real .so gates the whole test on the toolchain.
 cache_dir = tempfile.mkdtemp()
 os.environ["POPS_CACHE_DIR"] = cache_dir
 try:
-    fresh = pops.codegen.compile_problem(time=_fe_program(), model=transport_model())
+    fresh = _compile()
 except (RuntimeError, Exception) as exc:  # noqa: BLE001 -- no compiler / Kokkos / compile failure
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -88,7 +91,7 @@ print("== (1) stale-sidecar refusal ==")
 # 1a: delete the sidecar (an unverifiable .so) -> the next HIT refuses it.
 os.remove(artifact_sidecar_path(so_path))
 try:
-    pops.codegen.compile_problem(time=_fe_program(), model=transport_model())
+    _compile()
     chk(False, "a cache HIT on a .so with NO sidecar must raise (missing sidecar)")
 except StaleArtifactError as exc:
     chk("sidecar" in str(exc) and so_path in str(exc), "missing sidecar refused, naming the .so")
@@ -98,7 +101,7 @@ side["artifact_identity"] = make_identity("artifact", {"foreign": True}).token
 with open(artifact_sidecar_path(so_path), "w", encoding="utf-8") as f:
     json.dump(side, f, sort_keys=True, separators=(",", ":"))
 try:
-    pops.codegen.compile_problem(time=_fe_program(), model=transport_model())
+    _compile()
     chk(False, "a cache HIT on a .so with a MISMATCHED sidecar must raise")
 except StaleArtifactError as exc:
     chk("failed identity verification" in str(exc) and "artifact_identity" in str(exc),
@@ -110,10 +113,8 @@ print("== (2)+(3) debug provenance sidecar, binary-identical .so ==")
 nodebug_so = os.path.join(tempfile.mkdtemp(), "nodebug.so")
 debug_so = os.path.join(tempfile.mkdtemp(), "debug.so")
 try:
-    nodebug = pops.codegen.compile_problem(
-        nodebug_so, time=_fe_program("bin_identity"), model=transport_model())
-    debug = pops.codegen.compile_problem(
-        debug_so, time=_fe_program("bin_identity"), model=transport_model(), debug=True)
+    nodebug = _compile("bin_identity", nodebug_so)
+    debug = _compile("bin_identity", debug_so, debug=True)
 except (RuntimeError, Exception) as exc:  # noqa: BLE001
     _skip("explicit-path compile failed: %s" % str(exc)[:160])
 

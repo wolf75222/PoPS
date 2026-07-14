@@ -28,6 +28,7 @@ Kokkos CPU (Serial/OpenMP) locally -- unlike GPU (the CUDA run is the ROMEO step
 without pops / a built _pops / a compiler. Pytest + ``__main__`` guard (CI runs ``python3 <file>``).
 """
 import sys
+from fractions import Fraction
 
 # ADC-627 idiom: this file AOT-compiles several Program/.so artifacts; give the
 # process-isolated runner headroom over the default (CI runner speed varies 3-4x).
@@ -37,14 +38,20 @@ try:
     import numpy as np
 
     import pops
-    from pops import time as adctime
-    from pops.time.points import TimePoint
-    from pops.physics._facade import Model
-    from pops.ir.ops import sqrt
+    import pops.lib.time as libtime
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.time.method_tableau import RungeKuttaTableau
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
-    from tests.python.support.typed_program import program_states
+    from pops.time import FailRun
+    from tests.python.integration._final_field_program import (
+        compile_block_model,
+        compiler_model,
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
     print("skip test_amr_program_parity (pops/numpy unavailable: %s)" % exc)
     sys.exit(0)
@@ -64,69 +71,52 @@ def chk(cond, label):
 
 
 def _euler_model(name="adc508_parity_model"):
-    """A compressible Euler block (no required aux); elliptic_rhs = rho so a field solve runs."""
-    GAMMA = 1.4
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars("rho", "rho_u", "rho_v", "E")
-    u, v = rhou / rho, rhov / rho
-    p = (GAMMA - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    pu, pv, pp = m.primitive("u", u), m.primitive("v", v), m.primitive("p", p)
-    H = (E + pp) / rho
-    c = sqrt(GAMMA * pp / rho)
-    m.flux(x=[rhou, rhou * pu + pp, rhou * pv, rho * H * pu],
-           y=[rhov, rhov * pu, rhov * pv + pp, rho * H * pv])
-    m.eigenvalues(x=[pu - c, pu, pu + c], y=[pv - c, pv, pv + c])
-    m.primitive_vars(rho, pu, pv, pp)
-    m.conservative_from([rho, rho * pu, rho * pv,
-                         pp / (GAMMA - 1.0) + 0.5 * rho * (pu * pu + pv * pv)])
-    m.gamma(GAMMA)
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
-    return m
+    """One conservative scalar plus a periodic field solve for context parity."""
+    return scalar_advection_field_model(name)
 
 
-def _ssprk2_program(model, name="adc508_ssprk2"):
+def _ssprk2_program(model, name="adc508_ssprk2", *, target="amr_system"):
     """The canonical SSPRK2 (Heun) Program on one block 'plasma' -- the SAME scheme the native explicit
     AMR advance uses. solve_fields(); R=rhs(U); U1=U+dt R; solve_fields(U1); R1=rhs(U1);
     U <<= 0.5 U + 0.5 (U1 + dt R1)."""
-    P = adctime.Program(name)
-    dt = P.dt
-    _case, states = program_states(P, model, ("plasma",))
-    temporal = states["plasma"]
-    U0 = temporal.n
-    f0 = P.solve_fields("f0", U0)
-    k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.value("U1", U0 + dt * k0, at=TimePoint(P.clock, 1))
-    f1 = P.solve_fields("f1", U1)
-    k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.value(
-        "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=temporal.next.point)
-    P.commit(temporal.next, U2)
-    return P
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: libtime.SSPRK2(
+            state,
+            rate=rate,
+            fields=fields,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="plasma",
+        target=target,
+        n=N,
+    )
 
 
-def _midpoint_program(model, name="adc508_midpoint"):
+def _midpoint_program(model, name="adc508_midpoint", *, target="amr_system"):
     """A CUSTOM 2-stage scheme (midpoint RK2): U1 = U + 0.5 dt R(U); U <<= U + dt R(U1). A DIFFERENT
     combine through the same seam -- proves the Program text drives the integrator."""
-    P = adctime.Program(name)
-    dt = P.dt
-    _case, states = program_states(P, model, ("plasma",))
-    temporal = states["plasma"]
-    U0 = temporal.n
-    f0 = P.solve_fields("f0", U0)
-    k0 = P._rhs_legacy("k0", state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.value("U1", U0 + 0.5 * dt * k0)
-    f1 = P.solve_fields("f1", U1)
-    k1 = P._rhs_legacy("k1", state=U1, fields=f1, flux=True, sources=["default"])
-    U2 = P.value("U2", U0 + dt * k1)
-    P.commit(temporal.next, U2)
-    return P
+    midpoint = RungeKuttaTableau(
+        A=[[], [Fraction(1, 2)]], b=[0, 1], c=[0, Fraction(1, 2)], name="midpoint")
+    return resolve_periodic_field_program(
+        model,
+        lambda state, rate, fields: libtime.RungeKutta(
+            state,
+            rate=rate,
+            fields=fields,
+            tableau=midpoint,
+            solve_action=FailRun(),
+        ),
+        name=name,
+        block_name="plasma",
+        target=target,
+        n=N,
+    )
 
 
 def _init_density():
-    """A smooth, periodic, strictly-positive density field (component 0). Both System and AMR seed via
-    set_density (the SAME coupler_write_coarse helper sets momentum=0 + E from gamma), so the two runs
-    start byte-identical -- the prerequisite of a bit-identical trajectory comparison."""
+    """A smooth periodic scalar seeded through the same density coupler on both runtimes."""
     x = (np.arange(N) + 0.5) / N
     xx, yy = np.meshgrid(x, x, indexing="ij")
     return 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
@@ -135,9 +125,14 @@ def _init_density():
 def test_codegen_emits_amr_install_wrapper():
     """The AMR export installs the recursive, clock-qualified hierarchy driver."""
     print("== codegen emits the recursive AmrProgramContext install wrapper ==")
-    model = _euler_model()
-    prog = _ssprk2_program(model)
-    src = prog.emit_cpp_program(model=model, target="amr_system")
+    model = _euler_model("adc508_wrapper_amr")
+    plan = _ssprk2_program(model, target="amr_system")
+    src = emit_cpp_program(
+        plan.time,
+        compiler_model(model),
+        target="amr_system",
+        field_plans=plan.field_plans,
+    )
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
     chk("AmrProgramContext ctx(sys)" in body,
@@ -152,29 +147,40 @@ def test_codegen_emits_amr_install_wrapper():
         and "is not yet available" not in body,
         "the fail-loud throw is gone (the real driver is emitted)")
     # The System target still emits NO AMR entry.
-    src_sys = prog.emit_cpp_program(model=model)
+    system_model = _euler_model("adc508_wrapper_system")
+    system_plan = _ssprk2_program(system_model, target="system")
+    src_sys = emit_cpp_program(
+        system_plan.time,
+        compiler_model(system_model),
+        field_plans=system_plan.field_plans,
+    )
     chk("pops_install_program_amr" not in src_sys, "the System .so does NOT export the AMR entry")
 
 
-def _system_run(program, model, u0, nsteps=NSTEPS, dt=DT):
+def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     """Install `program` on a single-level System and return (density, potential) after nsteps."""
     sim = System(n=N, L=1.0)
     try:
-        block_cm = model.compile(backend="production")
-        compiled = pops.codegen.compile_problem(model=model, time=program)
+        block_cm = compile_block_model(model, target="system")
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
     sim.add_equation("plasma", block_cm,
                      spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                      time=pops.Explicit(method="ssprk2"))
-    sim.set_density("plasma", u0)  # u0 = the 2D density; momentum=0, E from gamma (coupler_write_coarse)
+    sim.set_density("plasma", u0)
     sim.install_program(compiled.so_path)
     for _ in range(nsteps):
         sim.step(dt)
     return (np.array(sim.get_state("plasma")), np.array(sim.potential())), None
 
 
-def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
+def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     """Install `program` on a single-level AmrSystem (coarse-only Program layout) and return
     (coarse density component-0, coarse potential, coarse mass) after nsteps. Uses the
     ``_install_compiled`` seam (the AMR counterpart of System's compiled install): a native instance
@@ -183,8 +189,14 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
     if not hasattr(amr, "install_program"):
         return None, "the built _pops lacks AmrSystem.install_program (rebuild _pops)"
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=program, target="amr_system")
-        block_cm = model.compile(backend="production", target="amr_system")
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            target="amr_system",
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
@@ -194,7 +206,7 @@ def _amr_run(program, model, u0, nsteps=NSTEPS, dt=DT):
         amr.add_equation("plasma", block_cm,
                          spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
                          time=pops.Explicit(method="ssprk2"))
-        amr.set_density("plasma", u0)  # u0 = the 2D density (same seed as System: momentum=0, E from gamma)
+        amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
     except RuntimeError as exc:
         return None, "install (AMR): %s" % str(exc)[:240]
@@ -218,11 +230,14 @@ def test_single_level_bit_identical_parity():
     model = _euler_model("adc508_parity_ssprk2")
     u0 = _init_density()
 
-    sys_out, sys_err = _system_run(_ssprk2_program(model), model, u0)
+    sys_out, sys_err = _system_run(
+        _ssprk2_program(model, target="system"), model, u0)
     if sys_out is None:
         print("skip (%s)" % sys_err)
         return
-    amr_out, amr_err = _amr_run(_ssprk2_program(model), model, u0)
+    amr_model = _euler_model("adc508_parity_ssprk2")
+    amr_out, amr_err = _amr_run(
+        _ssprk2_program(amr_model, target="amr_system"), amr_model, u0)
     if amr_out is None:
         print("skip (%s)" % amr_err)
         return
@@ -255,7 +270,8 @@ def test_custom_two_stage_runs_and_differs():
     u0 = _init_density()
     m0 = float(u0.mean())  # mean density == coarse mass / area (L=1)
 
-    mid_amr, err = _amr_run(_midpoint_program(model), model, u0)
+    mid_amr, err = _amr_run(
+        _midpoint_program(model, target="amr_system"), model, u0)
     if mid_amr is None:
         print("skip (%s)" % err)
         return
@@ -263,7 +279,8 @@ def test_custom_two_stage_runs_and_differs():
 
     # SSPRK2 on the SAME AMR for the differ-check (same model name -> same .so cache key per Program).
     ss_model = _euler_model("adc508_parity_mid")
-    ss_amr, err2 = _amr_run(_ssprk2_program(ss_model), ss_model, u0)
+    ss_amr, err2 = _amr_run(
+        _ssprk2_program(ss_model, target="amr_system"), ss_model, u0)
     if ss_amr is None:
         print("skip ssprk2 leg (%s)" % err2)
         return
@@ -280,7 +297,8 @@ def test_custom_two_stage_runs_and_differs():
 
     # Bit-identical vs the same midpoint Program on System (the duck-typing holds for a 2nd combine).
     sys_model = _euler_model("adc508_parity_mid")
-    sys_out, sys_err = _system_run(_midpoint_program(sys_model), sys_model, u0)
+    sys_out, sys_err = _system_run(
+        _midpoint_program(sys_model, target="system"), sys_model, u0)
     if sys_out is not None:
         sys_rho = sys_out[0][0]
         chk(np.array_equal(sys_rho, mid_rho),
@@ -288,15 +306,21 @@ def test_custom_two_stage_runs_and_differs():
             % float(np.abs(sys_rho - mid_rho).max()))
 
 
-def _amr_run_cfl(program, model, u0, nsteps=NSTEPS, cfl=0.4):
+def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
     """Install `program` on a single-level AmrSystem and drive it with step_cfl (NOT step). Returns
     (coarse density, program hash, last dt) -- the step_cfl Program route (ADC-508 review fix 1)."""
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     if not hasattr(amr, "install_program") or not hasattr(amr, "step_cfl"):
         return None, "the built _pops lacks AmrSystem.install_program/step_cfl (rebuild _pops)"
     try:
-        compiled = pops.codegen.compile_problem(model=model, time=program, target="amr_system")
-        block_cm = model.compile(backend="production", target="amr_system")
+        compiled = compile_problem(
+            model=model,
+            time=plan.time,
+            target="amr_system",
+            field_plans=plan.field_plans,
+            problem_snapshot=plan.snapshot,
+        )
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
@@ -318,7 +342,7 @@ def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
     reproduce. Same block + IC, but no install_program -> the native engine advances under step_cfl."""
     amr = AmrSystem(n=N, L=1.0, regrid_every=0)
     try:
-        block_cm = model.compile(backend="production", target="amr_system")
+        block_cm = compile_block_model(model, target="amr_system")
     except RuntimeError as exc:
         return None, "compile (AMR native): %s" % str(exc)[:140]
     amr.add_equation("plasma", block_cm,
@@ -344,7 +368,11 @@ def test_step_cfl_routes_through_installed_program():
     u0 = _init_density()
 
     prog_out, err = _amr_run_cfl(
-        _ssprk2_program(model, "adc508_stepcfl_prog"), model, u0)
+        _ssprk2_program(
+            model, "adc508_stepcfl_prog", target="amr_system"),
+        model,
+        u0,
+    )
     if prog_out is None:
         print("skip (%s)" % err)
         return
