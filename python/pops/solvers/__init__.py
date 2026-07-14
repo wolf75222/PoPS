@@ -35,7 +35,7 @@ from .local import DenseLU
 from .nonlinear import LocalNewton, Newton
 from .preconditioners import preconditioners
 from .scopes import Hierarchy, Level, SolveScope
-from .providers import CompositeTensorFAC, HierarchySolveProvider
+from .providers import CompositeTensorFAC
 
 # The flat solver factory surface (``solvers.CG()`` ... ``solvers.Newton()``), the one public
 # factory namespace (the legacy ``pops.lib.solvers.solvers`` shim was removed). The custom-solver
@@ -46,6 +46,7 @@ from .providers import CompositeTensorFAC, HierarchySolveProvider
 solvers = SimpleNamespace(
     CG=CG, BiCGStab=BiCGStab, GMRES=GMRES, Richardson=Richardson,
     Newton=Newton, LocalNewton=LocalNewton, DenseLU=DenseLU,
+    CompositeTensorFAC=CompositeTensorFAC,
 )
 
 __all__ = [
@@ -54,6 +55,6 @@ __all__ = [
     "GeometricMG", "FFT",
     "CG", "BiCGStab", "GMRES", "Richardson",
     "Newton", "LocalNewton", "DenseLU",
-    "SolveScope", "Level", "Hierarchy", "HierarchySolveProvider", "CompositeTensorFAC",
+    "SolveScope", "Level", "Hierarchy", "CompositeTensorFAC",
     "solvers",
 ]

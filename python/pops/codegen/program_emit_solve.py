@@ -324,28 +324,33 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
 
 
 def _composite_tensor_fac_options(
-        v: Any) -> tuple[int | None, Any, int | None, bool | None]:
-    """Authenticate the complete provider identity carried by a hierarchy solve node."""
-    identity = v.attrs.get("hierarchy_provider_identity")
-    expected_identity = {"schema_version", "provider_id", "capabilities", "options"}
+        v: Any) -> tuple[int, Any, int | None, Any, int | None, bool | None]:
+    """Authenticate the complete direct-solver identity carried by a hierarchy solve node."""
+    identity = v.attrs.get("hierarchy_solver_identity")
+    expected_identity = {"schema_version", "solver_id", "capabilities", "options"}
     if not isinstance(identity, Mapping) or set(identity) != expected_identity:
         raise TypeError(
-            "CompositeTensorFAC hierarchy solve requires an exact canonical provider identity")
+            "CompositeTensorFAC hierarchy solve requires an exact canonical solver identity")
     if identity["schema_version"] != 1:
         raise ValueError("CompositeTensorFAC hierarchy solve uses an unsupported identity schema")
-    if identity["provider_id"] != "composite_tensor_fac" \
-            or v.attrs.get("hierarchy_provider") != identity["provider_id"]:
-        raise ValueError("CompositeTensorFAC hierarchy solve provider identity is unauthenticated")
+    if identity["solver_id"] != "composite_tensor_fac" \
+            or v.attrs.get("hierarchy_solver") != identity["solver_id"]:
+        raise ValueError("CompositeTensorFAC hierarchy solve solver identity is unauthenticated")
     capabilities = identity["capabilities"]
     if (not isinstance(capabilities, (list, tuple))
-            or tuple(capabilities) != ("amr_hierarchy", "tensor_elliptic")):
+            or tuple(capabilities) != (
+                "amr_hierarchy", "flat_bicgstab", "scalar", "tensor_elliptic")):
         raise ValueError("CompositeTensorFAC hierarchy solve capabilities are unauthenticated")
     options = identity["options"]
-    expected_options = {"fine_sweeps", "coarse_rel_tol", "coarse_cycles", "verbose"}
+    expected_options = {
+        "max_iter", "rel_tol", "fine_sweeps", "coarse_rel_tol", "coarse_cycles", "verbose"}
     if not isinstance(options, Mapping) or set(options) != expected_options:
         raise TypeError(
-            "CompositeTensorFAC options must contain exactly fine_sweeps, coarse_rel_tol, "
-            "coarse_cycles and verbose")
+            "CompositeTensorFAC options must contain exactly max_iter, rel_tol, fine_sweeps, "
+            "coarse_rel_tol, coarse_cycles and verbose")
+    max_iter = options["max_iter"]
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
+        raise ValueError("CompositeTensorFAC max_iter must be a positive int")
     fine_sweeps, coarse_cycles, verbose = (
         options["fine_sweeps"], options["coarse_cycles"], options["verbose"])
     if fine_sweeps is not None and (
@@ -359,13 +364,33 @@ def _composite_tensor_fac_options(
     if verbose is not None and type(verbose) is not bool:
         raise TypeError("CompositeTensorFAC verbose must be a Python bool or None")
     from pops.model._bind_schema_data import literal_value
+    rel_tol = literal_value(options["rel_tol"], where="CompositeTensorFAC rel_tol")
+    if isinstance(rel_tol, bool) or not 0 < rel_tol < 1:
+        raise ValueError("CompositeTensorFAC rel_tol must be in (0, 1)")
     coarse_rel_tol = options["coarse_rel_tol"]
     if coarse_rel_tol is not None:
         coarse_rel_tol = literal_value(
             coarse_rel_tol, where="CompositeTensorFAC coarse_rel_tol")
         if isinstance(coarse_rel_tol, bool) or not 0 < coarse_rel_tol < 1:
             raise ValueError("CompositeTensorFAC coarse_rel_tol must be in (0, 1) or None")
-    return fine_sweeps, coarse_rel_tol, coarse_cycles, verbose
+    from pops.ir.literals import scalar_data
+    emitted_tol_data = scalar_data(v.attrs["tol"])
+    emitted_max_iter = v.attrs.get("max_iter")
+    if (emitted_tol_data != options["rel_tol"] or isinstance(emitted_max_iter, bool)
+            or not isinstance(emitted_max_iter, int) or emitted_max_iter != max_iter):
+        raise ValueError(
+            "CompositeTensorFAC emitted convergence controls disagree with solver identity")
+    if v.attrs.get("method") != "bicgstab" or v.attrs.get("preconditioner") != "identity" \
+            or v.attrs.get("restart") is not None:
+        raise ValueError("CompositeTensorFAC flat branch must be exact unpreconditioned BiCGStab")
+    emitted_ncomp = v.attrs.get("ncomp")
+    if isinstance(emitted_ncomp, bool) or not isinstance(emitted_ncomp, int) \
+            or emitted_ncomp != 1:
+        raise ValueError("CompositeTensorFAC supports exactly ncomp=1")
+    block_index = v.attrs.get("hierarchy_block_index")
+    if isinstance(block_index, bool) or not isinstance(block_index, int) or block_index < 0:
+        raise ValueError("CompositeTensorFAC requires an authenticated hierarchy block index")
+    return max_iter, rel_tol, fine_sweeps, coarse_rel_tol, coarse_cycles, verbose
 
 
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
@@ -374,19 +399,28 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
     seeds the initial guess (zero, or a copy of the supplied guess), then calls the runtime context's
     generic ``solve_linear_matfree`` seam with the operator's apply lambda.
-    The SolveReport/KrylovResult is checked before the token is published: solved writes may continue,
+    The SolveReport is checked before the token is published: solved writes may continue,
     while non-converged / singular / breakdown / invalid-evaluation reports fail the run instead of
     letting a partial iterate masquerade as a solved value. The trip count is still decided C++-side,
     inside the loop -- invisible to the IR. The result token is the solution field, dereferenced for the
     final copy back into the block state at commit.
 
-    Both uniform and AMR targets use the same context seam. ProgramContext selects the geometry-aware
-    uniform provider; AmrProgramContext selects the flat or composite hierarchy provider. The emitted
-    Program therefore never branches on a concrete solver/runtime class."""
+    Uniform and level-scoped AMR solves use the generic context seam. A direct hierarchy solve emits
+    the flat Krylov call in the flat topology body and the authenticated composite-FAC call in the
+    refined solve-once phase."""
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
     lam = var[op_value.id]  # the apply lambda (already emitted into the prelude)
+    hierarchy_solver = v.attrs.get("hierarchy_solver")
+    direct_refined = bool(var.get(("direct_hierarchy_solve", v.id), False))
+    fac_options = None
+    if hierarchy_solver is not None:
+        if target != "amr_system" or v.attrs.get("scope") != "hierarchy" \
+                or hierarchy_solver != "composite_tensor_fac":
+            raise ValueError(
+                "CompositeTensorFAC lowers only as a direct hierarchy solver for target='amr_system'")
+        fac_options = _composite_tensor_fac_options(v)
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
@@ -394,6 +428,15 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (sol_sp, op_ncomp))
+    if fac_options is not None:
+        _, _, fine_sweeps, coarse_rel_tol, coarse_cycles, verbose = fac_options
+        prelude.append(
+            "ctx.configure_composite_tensor_fac(%d, %d, %d, static_cast<pops::Real>(%s), %d, %s);"
+            % (int(v.attrs["hierarchy_block_index"]), op_ncomp,
+               0 if fine_sweeps is None else fine_sweeps,
+               scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
+               0 if coarse_cycles is None else coarse_cycles,
+               -1 if verbose is None else int(verbose)))
     # On a refined AMR hierarchy the mathematical solution is one field per level.  The persistent
     # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
     # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
@@ -401,11 +444,14 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                  if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
                  else "(*%s)" % sol_sp)
     # Initial guess: zero (default) or a copy of the guess field.
-    if guess_in is None:
-        lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
-    else:
-        lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), "
-                     "%s);" % (sol_sp, sol_sp, var[guess_in.id]))
+    if not direct_refined:
+        if guess_in is None:
+            lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
+        else:
+            lines.append(
+                "ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, "
+                "static_cast<pops::Real>(1), %s);"
+                % (sol_sp, sol_sp, var[guess_in.id]))
     tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
@@ -438,18 +484,16 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     omega = v.attrs.get("omega")
     omega_tok = ("static_cast<pops::Real>(1)" if omega is None
                  else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
-    if (target == "amr_system" and v.attrs.get("scope") == "hierarchy"
-            and v.attrs.get("hierarchy_provider") == "composite_tensor_fac"):
-        fine_sweeps, coarse_rel_tol, coarse_cycles, verbose = (
-            _composite_tensor_fac_options(v))
+    if direct_refined:
+        if fac_options is None:
+            raise ValueError("a direct hierarchy phase requires CompositeTensorFAC")
         lines.append(
-            "ctx.configure_composite_tensor_fac(%d, static_cast<pops::Real>(%s), %d, %s);"
-            % (0 if fine_sweeps is None else fine_sweeps,
-               scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
-               0 if coarse_cycles is None else coarse_cycles,
-               -1 if verbose is None else int(verbose)))
-    lines.append("pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
-                 "%d, %d, %s);"
-                 % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,
-                    omega_tok))
+            "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %d);"
+            % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, max_iter))
+    else:
+        lines.append(
+            "pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
+            "%d, %d, %s);"
+            % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,
+               omega_tok))
     _append_report_guard()

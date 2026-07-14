@@ -1,15 +1,11 @@
-"""Generic hierarchy-scoped tensor solve scheduling on the AMR target.
-
-This is intentionally authored from the final Program primitives: no preset selects the provider,
-scope, initial guess, or condensed reconstruction on the caller's behalf.
-"""
+"""Direct scalar tensor-FAC scheduling on the AMR target."""
 
 from __future__ import annotations
 
 from pops.ir.literals import scalar_cpp
 from pops.linalg import LinearProblem
 from pops.params import ConstParam
-from pops.solvers import BiCGStab, CompositeTensorFAC, Hierarchy
+from pops.solvers import CompositeTensorFAC, Hierarchy
 from pops.time import FailRun, Program
 
 from typed_program_support import state_refs
@@ -58,9 +54,19 @@ def _linear_handle(model):
     )
 
 
-def _emit(provider):
+def _build(solver):
     model = _coupled_model("hierarchy_tensor_model")
     program = Program("hierarchy_tensor_step")._bind_operators(model)
+
+    # Keep the tensor owner at Program block index 1. This makes the emitted/native block binding
+    # test catch any regression to the former sys_block(0) shortcut.
+    dummy_block, state = state_refs(program, "dummy", model=model)
+    dummy_temporal = program.state(dummy_block[state])
+    dummy_next = program.value(
+        "dummy_next", 1 * dummy_temporal.n, at=dummy_temporal.next.point
+    )
+    program.commit(dummy_temporal.next, dummy_next)
+
     block, state = state_refs(program, "blk", model=model)
     temporal = program.state(block[state])
     current = temporal.n
@@ -86,17 +92,16 @@ def _emit(provider):
         th_dt=1.0,
         g=1.0,
     )
-    operator = program.matrix_free_operator("tensor_operator", scope=Hierarchy(), provider=provider)
+    operator = program.matrix_free_operator("tensor_operator", scope=Hierarchy())
 
     def apply(builder, _out, value):
         laplacian = builder.scalar_field("tensor_laplacian")
-        builder.apply_laplacian_coeff(laplacian, value, coefficients)
-        return -1 * laplacian
+        return -1 * builder.apply_laplacian_coeff(laplacian, value, coefficients)
 
     program.set_apply(operator, apply)
     phi = program.solve(
         LinearProblem(operator, rhs, initial_guess=phi_previous, scope=Hierarchy()),
-        solver=BiCGStab(max_iter=23, rel_tol=3.0e-8),
+        solver=solver,
         name="phi",
     ).consume(action=FailRun())
     program.store_history("blk.tensor_phi", phi)
@@ -111,44 +116,73 @@ def _emit(provider):
     )
     next_state = program.value("next", 1 * reconstructed, at=temporal.next.point)
     program.commit(temporal.next, next_state)
-    return program.emit_cpp_program(model=model, target="amr_system")
+    return program, program.emit_cpp_program(model=model, target="amr_system")
 
 
-def test_refined_hierarchy_orders_gather_one_solve_then_publish_and_reconstruct():
-    provider = CompositeTensorFAC(
-        fine_sweeps=7, coarse_rel_tol=2.0e-7, coarse_cycles=9, verbose=True
+def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
+    solver = CompositeTensorFAC(
+        max_iter=23,
+        rel_tol=3.0e-8,
+        fine_sweeps=7,
+        coarse_rel_tol=2.0e-7,
+        coarse_cycles=9,
+        verbose=True,
     )
-    source = _emit(provider)
+    program, source = _build(solver)
 
+    configure = source.index("ctx.configure_composite_tensor_fac(")
+    branch = source.index("if (!ctx.has_refined_hierarchy())")
     gather = source.index("Gather every level before the unique hierarchy-scoped solve")
-    configure = source.index("ctx.configure_composite_tensor_fac(", gather)
-    solve = source.index("ctx.solve_linear_matfree(", configure)
-    publish = source.index("The composite solution is complete", solve)
+    direct = source.index("ctx.solve_composite_tensor_fac(", gather)
+    publish = source.index("The composite solution is complete", direct)
     synchronized = source.index("ctx.advance_synchronized_hierarchy", publish)
-    assert gather < configure < solve < publish < synchronized
-    assert source[gather:synchronized].count("ctx.solve_linear_matfree(") == 1
+    assert configure < branch < gather < direct < publish < synchronized
 
-    gathered = source[gather:solve]
-    assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 0)' in gathered
-    assert "ctx.stage_linear_initial_guess(" in gathered
-    assert "ctx.stage_linear_initial_guess();" not in gathered
+    flat = source[branch:gather]
+    refined = source[gather:synchronized]
+    assert flat.count("ctx.solve_linear_matfree(") == 1
+    assert "ctx.solve_composite_tensor_fac(" not in flat
+    assert refined.count("ctx.solve_composite_tensor_fac(") == 1
+    assert "ctx.solve_linear_matfree(" not in refined
+    assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 1)' in refined[:direct]
+    assert "ctx.stage_linear_initial_guess(" in refined[:direct]
+    assert "ctx.stage_linear_initial_guess();" not in refined[:direct]
     assert "assembly_source(" in source[publish:synchronized]
 
     expected_configuration = (
-        "ctx.configure_composite_tensor_fac(7, static_cast<pops::Real>(%s), 9, 1);"
+        "ctx.configure_composite_tensor_fac(1, 1, 7, static_cast<pops::Real>(%s), 9, 1);"
         % scalar_cpp(2.0e-7)
     )
-    assert expected_configuration in source[configure:solve]
+    assert expected_configuration in source[:branch]
     solve_line = next(
-        line for line in source[solve:].splitlines() if "ctx.solve_linear_matfree(" in line
+        line for line in source[direct:].splitlines()
+        if "ctx.solve_composite_tensor_fac(" in line
     )
+    assert "ctx.solve_composite_tensor_fac(1, 1," in solve_line
     assert "static_cast<pops::Real>(%s)" % scalar_cpp(3.0e-8) in solve_line
-    assert ", 23," in solve_line
+    assert solve_line.rstrip().endswith(", 23);")
+
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["hierarchy_block_index"] == 1
+    assert solve.attrs["ncomp"] == 1
+    assert solve.attrs["method"] == "bicgstab"
+    assert solve.attrs["preconditioner"] == "identity"
+    assert solve.attrs["restart"] is None
+    frozen_identity = solve.attrs["hierarchy_solver_identity"]
+    expected_identity = solver.canonical_identity()
+    assert frozen_identity["solver_id"] == expected_identity["solver_id"]
+    assert tuple(frozen_identity["capabilities"]) == tuple(expected_identity["capabilities"])
+    assert dict(frozen_identity["options"]) == expected_identity["options"]
+    assert "hierarchy_provider" not in solve.attrs
 
 
-def test_omitted_provider_controls_emit_native_default_sentinels_only():
-    source = _emit(CompositeTensorFAC())
+def test_omitted_fac_controls_emit_native_default_sentinels_only():
+    _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
     expected = (
-        "ctx.configure_composite_tensor_fac(0, static_cast<pops::Real>(%s), 0, -1);" % scalar_cpp(0)
+        "ctx.configure_composite_tensor_fac(1, 1, 0, static_cast<pops::Real>(%s), 0, -1);"
+        % scalar_cpp(0)
     )
     assert expected in source
+    assert "ctx.solve_composite_tensor_fac(1, 1, static_cast<pops::Real>(%s), 13);" % (
+        scalar_cpp(4.0e-8)
+    ) in source

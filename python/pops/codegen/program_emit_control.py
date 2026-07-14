@@ -239,10 +239,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
             "AMR hierarchy-scoped lowering supports exactly one top-level solve_linear; multiple "
             "hierarchy barriers require an explicit region schedule")
     solve = scoped[0]
-    if solve.attrs.get("hierarchy_provider") != "composite_tensor_fac":
+    if solve.attrs.get("hierarchy_solver") != "composite_tensor_fac":
         raise NotImplementedError(
-            "AMR hierarchy-scoped solve provider %r is not lowerable; supported provider: "
-            "CompositeTensorFAC()" % solve.attrs.get("hierarchy_provider"))
+            "AMR hierarchy-scoped solver %r is not lowerable; supported solver: "
+            "CompositeTensorFAC()" % solve.attrs.get("hierarchy_solver"))
     split = next(index for index, value in enumerate(program._values) if value is solve)
     control = {"while", "range", "branch"}
     nested = [v.name for v in program._values if v.op in control]
@@ -320,6 +320,10 @@ def _emit_amr_hierarchy_bodies(program: Any, model: Any = None,
 
     def emit_phase(phase: str) -> str:
         var = {}
+        if phase == "solve":
+            # The normal AMR body is the flat-topology branch and executes the authenticated apply
+            # through BiCGStab. Only this gathered solve phase owns the refined direct-FAC call.
+            var[("direct_hierarchy_solve", solve.id)] = True
         lines = registrations() if phase == "gather" else []
         for index, value in enumerate(program._values):
             emitted = []

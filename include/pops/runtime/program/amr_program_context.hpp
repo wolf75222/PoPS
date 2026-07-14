@@ -24,7 +24,7 @@
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_runtime.hpp>     // AmrRuntime (the engine the driver wraps)
-#include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite provider
+#include <pops/runtime/amr/amr_tensor_elliptic.hpp>  // AmrTensorElliptic composite solver
 #include <pops/runtime/context/grid_context.hpp>  // GridContext (per-level Schur assembly seam, ADC-633)
 #include <pops/runtime/amr_system.hpp>          // AmrSystem (the facade: params / block map / engine)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
@@ -76,7 +76,9 @@ class AmrProgramContext {
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   int nlev() const { return eng_->nlev(); }
-  bool has_refined_hierarchy() const { return tensor_elliptic().has_fine_patches(); }
+  bool has_refined_hierarchy() const {
+    return configured_tensor_elliptic().has_fine_patches();
+  }
   /// Reset the per-macro-step flags (called by the install wrapper at the top of each macro-step). Also
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
@@ -657,7 +659,8 @@ class AmrProgramContext {
   /// the flat bit-parity gate). @p role is an AssemblyFieldRole (eps_x / eps_y / a_xy / a_yx / rhs / flux).
   MultiFab& assembly_target(MultiFab& field, int role) const {
     validate_assembly_write_role(role, "AmrProgramContext::assembly_target");
-    AmrTensorElliptic& s = tensor_elliptic();
+    if (!tensor_elliptic_) return field;
+    AmrTensorElliptic& s = *tensor_elliptic_;
     if (!s.has_fine_patches())
       return field;  // flat / no fine patch: the emitted level-0 field is correct as-is.
     return s.target(role, level_);
@@ -667,7 +670,8 @@ class AmrProgramContext {
   /// patch: identity (returns the emitted solution). @p role is kPhi.
   MultiFab& assembly_source(MultiFab& field, int role) const {
     validate_assembly_read_role(role, "AmrProgramContext::assembly_source");
-    AmrTensorElliptic& s = tensor_elliptic();
+    if (!tensor_elliptic_) return field;
+    AmrTensorElliptic& s = *tensor_elliptic_;
     if (!s.has_fine_patches())
       return field;
     return s.phi(level_);
@@ -675,59 +679,72 @@ class AmrProgramContext {
   /// Resolve a hierarchy-scoped solve value for the current publish/reconstruct pass.  Flat AMR is
   /// the identity; a refined hierarchy returns the level solution published by the one composite solve.
   MultiFab& linear_solution(MultiFab& field) const {
-    AmrTensorElliptic& s = tensor_elliptic();
+    if (!tensor_elliptic_) return field;
+    AmrTensorElliptic& s = *tensor_elliptic_;
     return s.has_fine_patches() ? s.phi(level_) : field;
   }
   /// Gather the authored initial guess for the current hierarchy level.  The no-argument overload is
   /// the explicit zero-guess contract; the field overload carries a per-level scalar history such as
   /// condensed-Schur phi^n.  Emitted only inside the refined gather loop.
-  void stage_linear_initial_guess() const { tensor_elliptic().stage_initial_guess(level_, nullptr); }
-  void stage_linear_initial_guess(const MultiFab& guess) const {
-    tensor_elliptic().stage_initial_guess(level_, &guess);
+  void stage_linear_initial_guess() const {
+    configured_tensor_elliptic().stage_initial_guess(level_, nullptr);
   }
-  /// Install the explicit hierarchy-provider controls emitted from CompositeTensorFAC. The generic
-  /// Program solver continues to pass its own tolerance / iteration budget to solve_linear_matfree;
-  /// this seam carries only provider-native FAC controls and no physical field vocabulary.
-  void configure_composite_tensor_fac(int fine_sweeps, Real coarse_rel_tol, int coarse_cycles,
+  void stage_linear_initial_guess(const MultiFab& guess) const {
+    configured_tensor_elliptic().stage_initial_guess(level_, &guess);
+  }
+  /// Install the direct hierarchy-solver binding and native FAC controls emitted from
+  /// CompositeTensorFAC. The block/component identity is authenticated by code generation.
+  void configure_composite_tensor_fac(int program_block, int ncomp, int fine_sweeps,
+                                      Real coarse_rel_tol, int coarse_cycles,
                                       int verbose) const {
-    tensor_elliptic().configure_composite_tensor_fac(
+    if (ncomp != 1)
+      throw std::invalid_argument("composite tensor FAC requires exactly one component");
+    if (tensor_elliptic_ &&
+        (tensor_program_block_ != program_block || tensor_ncomp_ != ncomp))
+      throw std::logic_error(
+          "composite tensor FAC is already configured for another block");
+    if (!tensor_elliptic_) {
+      tensor_elliptic_ =
+          std::make_shared<AmrTensorElliptic>(eng_, sys_block(program_block), ncomp);
+      tensor_program_block_ = program_block;
+      tensor_ncomp_ = ncomp;
+    }
+    tensor_elliptic_->configure_composite_tensor_fac(
         fine_sweeps, coarse_rel_tol, coarse_cycles, verbose);
   }
-  /// Solve the matrix-free condensed-implicit linear system A(phi) = rhs on the hierarchy (ADC-633).
-  /// FLAT (no fine patch): the SAME matrix-free Krylov call as the uniform Program (identical numerics,
-  /// the flat bit-parity path -- the load-bearing acceptance). REFINED (>= one fine patch): drive
-  /// AmrTensorElliptic::solve_composite (the composite FAC over the tower), which reads the per-level
-  /// coefficients / RHS the emitted assembly already wrote through assembly_target and publishes each
-  /// level's potential for assembly_source to read; the emitted @p apply / @p precond are UNUSED on this
-  /// branch (the FAC has its own operator). @p method is a LinearSolveMethod id (program_context.hpp).
-  ///
-  /// On a refined hierarchy the generated driver gathers coefficients, RHS and the authored initial
-  /// guess for every level before calling this function once; only a successful SolveReport publishes
-  /// the per-level potentials, after which reconstruction runs over every level and coupling/reflux
-  /// closes the macro-step.
+  /// Solve an authored matrix-free operator. This seam is always Krylov; direct composite hierarchy
+  /// solves use solve_composite_tensor_fac so no accepted apply/preconditioner/method is ignored.
   SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
                                    const ApplyFn& precond, int method, Real tol, int max_iter,
                                    int restart, Real omega) const {
     validate_linear_solve_method(method, "AmrProgramContext::solve_linear_matfree");
-    AmrTensorElliptic& s = tensor_elliptic();
-    if (!s.has_fine_patches()) {
-      switch (method) {
-        case kLinearSolveCg:
-          return pops::cg_solve(apply, sol, rhs, tol, max_iter);
-        case kLinearSolveGmres:
-          return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-        case kLinearSolveRichardson:
-          return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
-        case kLinearSolveBicgstab:
-          return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-        default:
-          SolveReport report;
-          report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
-          return report;  // validated above
-      }
+    switch (method) {
+      case kLinearSolveCg:
+        return pops::cg_solve(apply, sol, rhs, tol, max_iter);
+      case kLinearSolveGmres:
+        return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
+      case kLinearSolveRichardson:
+        return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
+      case kLinearSolveBicgstab:
+        return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
+      default:
+        SolveReport report;
+        report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+        return report;  // validated above
     }
-    // Refined: the hierarchy driver calls this seam once, after every level has assembled.  FAC publishes
-    // every level before the reconstruct pass starts, so no level can observe a partial solution.
+  }
+
+  /// Solve the configured scalar tensor operator directly over a refined hierarchy. The flat branch
+  /// continues through solve_linear_matfree for byte-faithful Krylov parity.
+  SolveReport solve_composite_tensor_fac(int program_block, int ncomp, Real tol,
+                                         int max_iter) const {
+    require_tensor_binding(program_block, ncomp);
+    AmrTensorElliptic& s = configured_tensor_elliptic();
+    if (!s.has_fine_patches()) {
+      SolveReport report;
+      report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+      return report;
+    }
     return s.solve_composite(tol, max_iter);
   }
 
@@ -806,15 +823,23 @@ class AmrProgramContext {
                              " is not wired on the AMR Program path (v1); " + detail);
   }
 
-  /// The block-0 composite tensor-elliptic driver a condensed-implicit Program routes to on a REFINED
-  /// hierarchy (ADC-633). Lazily created (a flat Program never touches it beyond has_fine_patches()).
+  /// The exact block/component composite tensor-elliptic driver a condensed-implicit Program routes to
+  /// on a REFINED hierarchy (ADC-633). It is created by configure_composite_tensor_fac.
   /// Held via shared_ptr so a copy of the context (the install closure captures ctx BY VALUE) SHARES
   /// the same per-Program elliptic driver -- AmrTensorElliptic owns a unique_ptr (move-only), so a bare
   /// value member would delete the context copy constructor the [=] install lambda needs.
-  AmrTensorElliptic& tensor_elliptic() const {
+  AmrTensorElliptic& configured_tensor_elliptic() const {
     if (!tensor_elliptic_)
-      tensor_elliptic_ = std::make_shared<AmrTensorElliptic>(eng_, sys_block(0));
+      throw std::logic_error(
+          "composite tensor FAC must be configured before hierarchy access");
     return *tensor_elliptic_;
+  }
+
+  void require_tensor_binding(int program_block, int ncomp) const {
+    if (!tensor_elliptic_ || tensor_program_block_ != program_block ||
+        tensor_ncomp_ != ncomp)
+      throw std::logic_error(
+          "composite tensor FAC block/component binding does not match the configured solver");
   }
 
   // --- ADC-639 conservative-reflux helpers ---------------------------------------------------------
@@ -1420,6 +1445,8 @@ class AmrProgramContext {
   mutable bool solved_this_step_ = false;
   mutable std::optional<GeometricMG> mg_precond_;
   mutable std::shared_ptr<AmrTensorElliptic> tensor_elliptic_;
+  mutable int tensor_program_block_{-1};
+  mutable int tensor_ncomp_{0};
 
   // --- ADC-639 conservative-reflux state -----------------------------------------------------------
   // The effective-flux LEDGER: for each tracked MultiFab (keyed by (level, address)) the interface-strip
