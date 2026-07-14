@@ -90,13 +90,14 @@ fi
 export CMAKE_PREFIX_PATH="${CONDA_PREFIX}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export Kokkos_ROOT="${Kokkos_ROOT:-$CONDA_PREFIX}"
 export POPS_KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-$CONDA_PREFIX}"
-# A ccache shared by every checkout, with absolute paths rewritten relative to the repo root that owns
-# all worktrees (git common dir's parent), so the same TU compiled in another worktree is a cache hit.
-main_root="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-main_root="${main_root%/.git}"
-[[ -n "$main_root" && -d "$main_root" ]] || main_root="$HERE"
+# The build and its doctor must always validate this checkout, not whichever worktree last persisted
+# POPS_INCLUDE in the shared conda environment.
+export POPS_INCLUDE="$HERE/include"
+# A stable cache directory is shared by every checkout. Each worktree uses its own root as base_dir:
+# ccache then rewrites its absolute source/build paths to the same relative paths in every worktree.
+# Using the main checkout as base_dir does not cover linked worktrees created as siblings.
 export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/adc-ccache}"
-export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$main_root}"
+export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$HERE}"
 echo "ccache: dir=$CCACHE_DIR basedir=$CCACHE_BASEDIR"
 
 # --- clean / fresh ----------------------------------------------------------------------------------
