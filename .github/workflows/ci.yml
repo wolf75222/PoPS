@@ -381,6 +381,8 @@ jobs:
           cache: pip
 
       - name: Spec 4 architecture tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
         run: |
           # numpy: a hard dependency of the package that pyright must RESOLVE now that the
           # ADC-628 include list covers all of python/pops (the tests themselves stay source-only).

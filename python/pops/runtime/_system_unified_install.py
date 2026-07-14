@@ -14,8 +14,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from pops.runtime._bricks_scheme import Spatial
 from pops.runtime._install_param_routing import route_block_params, route_program_params
-from pops.runtime._engine_descriptors import Spatial
 
 from pops.runtime._bind_validation import (
     collect_missing_arguments as _collect_missing_arguments_impl,
