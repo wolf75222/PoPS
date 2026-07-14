@@ -154,13 +154,6 @@ inline EffectiveBlockOptions make_system_block_options(
   return out;
 }
 
-inline int coupling_role_index_reported(const VariableSet& vs, VariableRole role, int fallback,
-                                 const char* origin, const std::string& block) {
-  if (vs.roles.empty())
-    record_fallback(FallbackCounter::kRolelessComponentIndex);
-  return coupling_role_index(vs, role, fallback, origin, block);
-}
-
 struct System::Impl {
   // BLOCK MANAGEMENT extracted into SystemBlockStore (Batch B.3, last P0 extraction from the god-class):
   // the block struct (formerly Species, renamed BlockState), the ordered registry (blocks_.blocks), the

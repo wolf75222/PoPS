@@ -353,17 +353,9 @@ class ProgramContext {
       // guess and do not publish a failed partial iterate.
       pops::lincomb(polar_tensor_->phi(), Real(1), sol, Real(0), sol);
       pops::lincomb(polar_tensor_->rhs(), Real(-1), rhs, Real(0), rhs);
-      const PolarKrylovResult polar = polar_tensor_->solve(tol, max_iter);
-      SolveReport report;
-      report.iters = polar.iters;
-      report.rel_residual = polar.rel_residual;
-      if (polar.converged) {
+      const SolveReport report = polar_tensor_->solve(tol, max_iter);
+      if (report.solved()) {
         pops::lincomb(sol, Real(1), polar_tensor_->phi(), Real(0), polar_tensor_->phi());
-        report.mark_solved();
-      } else if (std::isfinite(static_cast<double>(polar.rel_residual))) {
-        report.mark_failed(SolveStatus::kIterationLimit);
-      } else {
-        report.mark_failed(SolveStatus::kInvalidEvaluation);
       }
       return report;
     }

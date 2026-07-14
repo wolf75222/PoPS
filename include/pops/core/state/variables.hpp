@@ -168,7 +168,8 @@ inline std::string names_csv(const VariableSet& vs) {
 /// CSV of a VariableSet's roles (role_name, separator ','). A component carrying a user-defined role
 /// label (user_roles, Custom role) emits its LABEL instead of "custom", so the user role round-trips
 /// through the .so ABI (parse_roles_into is the inverse). EMPTY if the model does not provide its
-/// roles (vs.roles empty): the consumer then falls back to indices (backward compatibility).
+/// roles. Final compiled artifacts must provide one role entry per component; an empty result is
+/// therefore valid only for an empty variable set and is rejected at every executable load boundary.
 inline std::string roles_csv(const VariableSet& vs) {
   std::string s;
   for (std::size_t i = 0; i < vs.roles.size(); ++i) {
@@ -186,7 +187,8 @@ inline std::string roles_csv(const VariableSet& vs) {
 /// roles CSV. A canonical token (role_from_name) maps to its enum with an empty user label; a
 /// non-canonical token maps to VariableRole::Custom keeping the token as its user-role label, so a
 /// user role survives the .so ABI round-trip. user_roles stays EMPTY when every token is canonical
-/// (bit-identical to historical roleless / canonical blocks). Empty @p csv leaves both empty.
+/// for an all-canonical set. Empty @p csv leaves both empty so the loader can diagnose missing
+/// metadata before installing the block.
 inline void parse_roles_into(VariableSet& vs, const std::string& csv) {
   if (csv.empty())
     return;
@@ -210,23 +212,34 @@ inline void parse_roles_into(VariableSet& vs, const std::string& csv) {
     vs.user_roles = std::move(labels);
 }
 
-/// Resolve a REQUIRED canonical @p role to its component in @p vs, for a NAMED coupling
-/// (add_collision / add_thermal_exchange / ionization) that historically targeted the canonical
-/// layout. A genuinely ROLELESS set (`roles` empty: a legacy / dynamic block that declares no roles)
-/// returns the canonical @p fallback -- backward compatible. A ROLES-BEARING set that declares some
-/// roles but NOT @p role THROWS: a silent fallback to @p fallback would apply the coupling to the
-/// WRONG component. @p origin / @p block name the error.
-inline int coupling_role_index(const VariableSet& vs, VariableRole role, int fallback,
-                               const char* origin, const std::string& block) {
-  if (vs.roles.empty())
-    return fallback;  // roleless legacy block: keep the canonical fallback
-  const int c = vs.index_of(role);
-  if (c >= 0)
-    return c;
-  throw std::runtime_error(std::string(origin) + " : block '" + block + "' declares roles (" +
-                           roles_csv(vs) + ") but not the role '" + role_name(role) +
-                           "' this coupling requires (no silent fallback to component " +
-                           std::to_string(fallback) + ")");
+/// Resolve one REQUIRED physical role from a complete typed variable descriptor. Missing or partial
+/// role metadata is an invalid executable contract: a canonical component-index guess can silently
+/// apply physics to another quantity after a state reordering. The caller names the subject in the
+/// diagnostic (a block, model, or operator).
+inline int require_role_index(const VariableSet& vs, VariableRole role, const char* origin,
+                              const std::string& subject) {
+  if (vs.size < 0 || static_cast<std::size_t>(vs.size) != vs.names.size() ||
+      vs.roles.size() != vs.names.size() ||
+      (!vs.user_roles.empty() && vs.user_roles.size() != vs.names.size()))
+    throw std::runtime_error(std::string(origin) + " : '" + subject +
+                             "' must declare exactly one role per state component (names=" +
+                             std::to_string(vs.names.size()) + ", roles=" +
+                             std::to_string(vs.roles.size()) + ")");
+  int resolved = -1;
+  for (int component = 0; component < vs.size; ++component) {
+    if (vs.roles[static_cast<std::size_t>(component)] != role)
+      continue;
+    if (resolved >= 0)
+      throw std::runtime_error(std::string(origin) + " : '" + subject +
+                               "' declares the required role '" + role_name(role) +
+                               "' more than once");
+    resolved = component;
+  }
+  if (resolved >= 0)
+    return resolved;
+  throw std::runtime_error(std::string(origin) + " : '" + subject + "' declares roles (" +
+                           roles_csv(vs) + ") but not the required role '" + role_name(role) +
+                           "'");
 }
 
 /// A model's "names" metadata: "cons_csv|prim_csv" (separator '|' between the two sets). Read
@@ -236,7 +249,8 @@ std::string var_names_meta() {
   return names_csv(Model::conservative_vars()) + "|" + names_csv(Model::primitive_vars());
 }
 
-/// A model's "roles" metadata: "cons_roles_csv|prim_roles_csv" (empty side = roles not provided).
+/// A model's "roles" metadata: "cons_roles_csv|prim_roles_csv". Executable artifacts require both
+/// sides to be total and parallel to their corresponding names metadata.
 template <class Model>
 std::string roles_meta() {
   return roles_csv(Model::conservative_vars()) + "|" + roles_csv(Model::primitive_vars());

@@ -9,6 +9,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/elliptic/linear/krylov_result.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -298,15 +299,6 @@ concept PolarLinearSolver = requires(S s, Real tol, int it) {
   requires !std::same_as<decltype(s.solve(tol, it)), void>;
 };
 
-/// Result of a polar BiCGStab solve: iterations, relative residual, convergence. (Same shape as the
-/// cartesian KrylovResult -- we reuse the type if already included; otherwise we declare the local
-/// counterpart.)
-struct PolarKrylovResult {
-  int iters = 0;
-  Real rel_residual = 0;
-  bool converged = false;
-};
-
 /// Choice of the SIMPLE BiCGStab PRECONDITIONER (NO MG V-cycle -- stagnation on polar 1/r^2, cf.
 /// header). Two options, both "simple" (no multigrid hierarchy):
 ///   - Jacobi: pure diagonal M^{-1} = diag^{-1}. The simplest, but the iteration count GROWS like
@@ -410,11 +402,16 @@ class PolarTensorKrylovSolver {
 
   /// MATRIX-FREE BiCGStab preconditioned by precond_ (RadialLine by default, Jacobi as fallback);
   /// fixes the gauge (project_mean) when pin_gauge_ (singular pure Neumann/periodic case). phi() =
-  /// unknown (warm start), rhs() = right-hand side. Returns iterations + relative residual + convergence.
-  PolarKrylovResult solve(Real rel_tol, int max_iters) {
+  /// unknown (warm start), rhs() = right-hand side. Returns the shared linear-solve report.
+  SolveReport solve(Real rel_tol, int max_iters) {
+    SolveReport res;
+    if (max_iters <= 0 || !(rel_tol > Real(0)) ||
+        !std::isfinite(static_cast<double>(rel_tol))) {
+      res.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+      return res;
+    }
     ensure_coeffs();
     prepare_offset();  // c_bc = apply_operator(0) (inhomogeneous part of Dirichlet boundary) once
-    PolarKrylovResult res;
     // MULTI-RANK MPI: ALL ranks (including those without a box, local_size()==0) execute the SAME
     // BiCGStab body. The per-fab operations (lincomb/saxpy/copy/apply_precond/apply_polar_tensor) are
     // no-ops on an empty rank; the COLLECTIVES (dot/l2_norm/project_mean -> all_reduce_sum) are called
@@ -440,8 +437,13 @@ class PolarTensorKrylovSolver {
     const Real norm0 = bnorm > Real(0) ? bnorm : Real(1);
     Real rnorm = l2_norm(r_);
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(bnorm)) ||
+        !std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
 
@@ -452,9 +454,17 @@ class PolarTensorKrylovSolver {
 
     for (int k = 1; k <= max_iters; ++k) {
       const Real rho = dot(rhat_, r_);  // COLLECTIVE
+      if (!std::isfinite(static_cast<double>(rho)) ||
+          !std::isfinite(static_cast<double>(omega))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rho) < kTiny || std::fabs(omega) < kTiny) {
         res.iters = k - 1;
         res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       const Real beta = (rho / rho_prev) * (alpha / omega);
@@ -465,20 +475,33 @@ class PolarTensorKrylovSolver {
         project_mean(phat_);          // gauge: zero-mean correction direction
       apply_operator_lin(phat_, v_);  // v = L_lin(phat) (LINEAR matvec)
       const Real rhat_dot_v = dot(rhat_, v_);
+      if (!std::isfinite(static_cast<double>(rhat_dot_v))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rhat_dot_v) < kTiny) {
         res.iters = k - 1;
         res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       alpha = rho / rhat_dot_v;
       lincomb(s_, Real(1), r_, -alpha, v_);  // s <- r - alpha v
       saxpy(phi_, alpha, phat_);             // phi <- phi + alpha phat
       const Real snorm = l2_norm(s_);
+      if (!std::isfinite(static_cast<double>(snorm))) {
+        res.iters = k;
+        res.rel_residual = snorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (snorm <= rel_tol * norm0) {
         rnorm = snorm;
         res.iters = k;
         res.rel_residual = rnorm / norm0;
-        res.converged = true;
+        res.mark_solved();
         return res;
       }
       apply_precond(s_, shat_);  // shat = M^{-1} s
@@ -486,19 +509,31 @@ class PolarTensorKrylovSolver {
         project_mean(shat_);          // gauge: zero-mean correction direction
       apply_operator_lin(shat_, t_);  // t = L_lin(shat)
       const Real tt = dot(t_, t_);
+      if (!std::isfinite(static_cast<double>(tt))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / norm0;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       omega = tt > kTiny ? dot(t_, s_) / tt : Real(0);
       saxpy(phi_, omega, shat_);             // phi <- phi + omega shat
       lincomb(r_, Real(1), s_, -omega, t_);  // r <- s - omega t
       rnorm = l2_norm(r_);
       res.iters = k;
       res.rel_residual = rnorm / norm0;
+      if (!std::isfinite(static_cast<double>(omega)) ||
+          !std::isfinite(static_cast<double>(rnorm))) {
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (rnorm <= rel_tol * norm0) {
-        res.converged = true;
+        res.mark_solved();
         return res;
       }
       rho_prev = rho;
     }
-    return res;  // max_iters reached: best effort (converged=false)
+    res.mark_failed(SolveStatus::kIterationLimit);
+    return res;  // max_iters reached without convergence: no solved value published
   }
 
  private:

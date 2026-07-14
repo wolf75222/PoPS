@@ -212,8 +212,9 @@ struct BlockMeta {
   VariableSet prim{VariableKind::Primitive, {}, 0, {}};
 };
 
-/// Builds a VariableSet from the CSV names / roles (parallel to names; EMPTY roles = not
-/// provided -> VariableSet without roles, index fallback on the coupling side). @p names_csv empty -> empty set.
+/// Builds a VariableSet from parallel names/roles CSV metadata. Empty or partial role metadata is
+/// represented faithfully here and rejected by `validate_strict_block_meta` before installation.
+/// @p names_csv empty -> empty set.
 inline VariableSet parse_var_set(VariableKind kind, const std::string& names_csv,
                                  const std::string& roles_csv) {
   VariableSet vs{kind, {}, 0, {}};

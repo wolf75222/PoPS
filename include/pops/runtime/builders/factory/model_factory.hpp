@@ -149,8 +149,9 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// brick (c_rho / c_mx / c_my / c_E) from the conservative descriptor @p cons of the TRANSPORT.
 /// This is a TRANSPARENT resolution, with no new user parameter: the native bricks adapt to the
 /// transport layout (density/momentum/energy located by their ROLE and not by a hard-coded index).
-/// An index is only WRITTEN if the role exists in @p cons; otherwise the brick KEEPS its canonical
-/// default (historical behavior for a transport without roles).
+/// Every index required by the selected brick is resolved exactly. Missing/partial role metadata or
+/// an absent required role raises during assembly; canonical component defaults are never executable
+/// authority.
 ///
 /// Member detection via `requires` (if constexpr): the bricks have HETEROGENEOUS index sets
 /// (PotentialForce/GravityForce: rho/mx/my/E; MagneticLorentzForce: mx/my only;
@@ -162,25 +163,21 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// the brick defaults -> no value changes. Resolved AT CONSTRUCTION (host, std::string); never on device.
 template <class Brick>
 POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
-  const int i_rho = cons.index_of(VariableRole::Density);
-  const int i_mx = cons.index_of(VariableRole::MomentumX);
-  const int i_my = cons.index_of(VariableRole::MomentumY);
-  const int i_E = cons.index_of(VariableRole::Energy);
   if constexpr (requires { brk.c_rho; }) {
-    if (i_rho >= 0)
-      brk.c_rho = i_rho;
+    brk.c_rho = require_role_index(cons, VariableRole::Density, "bind_variable_roles",
+                                   "model conservative state");
   }
   if constexpr (requires { brk.c_mx; }) {
-    if (i_mx >= 0)
-      brk.c_mx = i_mx;
+    brk.c_mx = require_role_index(cons, VariableRole::MomentumX, "bind_variable_roles",
+                                  "model conservative state");
   }
   if constexpr (requires { brk.c_my; }) {
-    if (i_my >= 0)
-      brk.c_my = i_my;
+    brk.c_my = require_role_index(cons, VariableRole::MomentumY, "bind_variable_roles",
+                                  "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
-    if (i_E >= 0)
-      brk.c_E = i_E;
+    brk.c_E = require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
+                                 "model conservative state");
   }
   if constexpr (requires {
                   brk.a;
