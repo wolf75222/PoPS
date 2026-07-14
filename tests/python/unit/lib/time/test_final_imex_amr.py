@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from fractions import Fraction
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
+import numpy as np
 import pops
 from pops.codegen import Production
+from pops.identity.semantic import program_semantic_data, semantic_identity_of
 from pops.time.graph import ValueRef
 
 
@@ -42,23 +46,41 @@ def test_cn_heun_tableau_retains_exact_coefficients_and_stage_coordinates():
 
 def test_manual_and_library_imex_are_the_same_graph_and_consume_every_solve():
     example = _example()
-    manual = example.build_authoring(use_preset=False).program
-    preset = example.build_authoring(use_preset=True).program
+    manual_authoring = example.build_authoring(use_preset=False)
+    preset_authoring = example.build_authoring(use_preset=True)
+    manual = manual_authoring.program
+    preset = preset_authoring.program
     manual_graph = manual.to_graph()
     preset_graph = preset.to_graph()
 
     assert manual_graph.graph_hash == preset_graph.graph_hash
     assert manual_graph.to_data() == preset_graph.to_data()
+    assert program_semantic_data(manual) == program_semantic_data(preset)
+    assert semantic_identity_of(program=manual) == semantic_identity_of(program=preset)
+
+    for authored in (manual_authoring, preset_authoring):
+        field_solves = [value for value in authored.program._values if value.op == "solve_fields"]
+        assert len(field_solves) == example.IMEX_CN_HEUN.stages
+        assert all(value.attrs["field"] is authored.diagnostic_field for value in field_solves)
+        assert all(
+            value.field_context.outputs == ("relaxation_potential",)
+            for value in field_solves
+        )
 
     solves = [
         node for node in manual_graph.nodes
         if getattr(node, "op", None) in {
-            "solve_fields", "solve_fields_from_blocks", "solve_linear",
+            "solve_fields", "solve_fields_from_blocks", "solve_linear", "solve_local_linear",
             "solve_residual", "solve_coupled_implicit",
         }
     ]
     outcomes = [node for node in manual_graph.nodes if getattr(node, "op", None) == "solve_outcome"]
-    assert len(solves) == len(outcomes) == example.IMEX_CN_HEUN.stages
+    implicit_solves = sum(
+        coefficient != 0
+        for index, row in enumerate(example.IMEX_CN_HEUN.implicit_A)
+        for coefficient in row[index:index + 1]
+    )
+    assert len(solves) == len(outcomes) == example.IMEX_CN_HEUN.stages + implicit_solves
     for solve in solves:
         consumed = [
             node for node in outcomes
@@ -79,6 +101,74 @@ def test_stage_field_contexts_are_distinct_and_read_at_their_exact_stage():
     assert fields[1].point.time_for("explicit").offset.to_python() == Fraction(1)
     assert fields[0].point.time_for("implicit").offset.to_python() == Fraction(0)
     assert fields[1].point.time_for("implicit").offset.to_python() == Fraction(1)
+
+
+def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
+    example = _example()
+
+    class TwoLevelRuntime:
+        consumer_graph = SimpleNamespace(identity=SimpleNamespace(token="consumer:test"))
+        consumer_cursors = SimpleNamespace(
+            to_data=lambda: {"schema_version": 1, "rows": []},
+        )
+
+        @staticmethod
+        def block_names():
+            return ("tracer",)
+
+        @staticmethod
+        def n_levels():
+            return 2
+
+        @staticmethod
+        def field_provider_slots():
+            return ("case:test::field::fields",)
+
+        @staticmethod
+        def field_provider_levels(_slot):
+            return 2
+
+        @staticmethod
+        def block_level_state_global(_block, level):
+            return np.asarray([0.0, float(level)], dtype=np.float64)
+
+        @staticmethod
+        def field_potential_level_global(_slot, level):
+            return np.asarray([0.0, float(level + 2)], dtype=np.float64)
+
+        @staticmethod
+        def patch_boxes():
+            return ((0, 0, 0, 7, 7), (1, 2, 2, 5, 5))
+
+        @staticmethod
+        def installed_program_hash():
+            return "program:test"
+
+        @staticmethod
+        def time():
+            return 0.125
+
+        @staticmethod
+        def macro_step():
+            return 3
+
+    snapshot = example._snapshot(TwoLevelRuntime())
+    assert tuple(map(len, snapshot.states.values())) == (2,)
+    assert tuple(map(len, snapshot.fields.values())) == (2,)
+    assert example._snapshots_bit_identical(snapshot, snapshot)
+
+    state_levels = list(snapshot.states["tracer"])
+    state_levels[1] = state_levels[1].copy()
+    state_levels[1][0] = -0.0
+    changed_state = replace(snapshot, states={"tracer": tuple(state_levels)})
+    assert not example._snapshots_bit_identical(snapshot, changed_state)
+
+    slot = next(iter(snapshot.fields))
+    field_levels = list(snapshot.fields[slot])
+    field_levels[1] = field_levels[1].copy()
+    field_levels[1][0] = -0.0
+    changed_field = replace(snapshot, fields={slot: tuple(field_levels)})
+    assert not example._snapshots_bit_identical(snapshot, changed_field)
 
 
 def test_field_install_consumes_the_public_amr_layout_contract():

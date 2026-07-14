@@ -41,7 +41,6 @@ from pops.spaces import CellState
 from pops.time import (
     AdaptiveCFL,
     AdditiveRungeKuttaTableau,
-    FailRun,
     LocalLinear,
     Program,
     RejectAttempt,
@@ -81,7 +80,6 @@ class IMEXAMRAuthoring:
     explicit_rate: Any
     implicit_operator: Any
     field_operator: Any
-    field_provider: Any
     finite_volume: Any
     numerics: Any
     case: Any
@@ -103,6 +101,37 @@ class IMEXAMRAuthoring:
 class FinalIMEXAMRCase:
     authoring: IMEXAMRAuthoring
     layout: Any
+
+
+@dataclass(frozen=True, slots=True)
+class IMEXRuntimeSnapshot:
+    """Every accepted runtime value needed for parity and strict restart proofs."""
+
+    time: float
+    macro_step: int
+    states: dict[str, tuple[np.ndarray, ...]]
+    fields: dict[str, tuple[np.ndarray, ...]]
+    patch_boxes: tuple[tuple[int, ...], ...]
+    program_hash: str
+    consumer_graph_identity: str
+    consumer_cursors: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class IMEXExecutionEvidence:
+    """Artifacts plus exact pre/post-restart and continuation snapshots."""
+
+    hdf5_path: Path
+    paraview_path: Path
+    checkpoint_path: Path
+    hdf5_identity: str
+    paraview_identity: str
+    artifact_identity: str
+    level_count: int
+    accepted: IMEXRuntimeSnapshot
+    restored: IMEXRuntimeSnapshot
+    continuous: IMEXRuntimeSnapshot
+    restarted: IMEXRuntimeSnapshot
 
 
 def _stage_point(program: Program, name: str, explicit: Any, implicit: Any) -> StagePoint:
@@ -159,12 +188,16 @@ def _manual_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
                 ),
                 solver=DenseLU(),
                 name="%sstage_solve_%d" % (tag, index),
-            ).consume(action=FailRun())
+            ).consume(action=solve_action)
             stage = program.value("%sstage_%d" % (tag, index), stage, at=point)
 
-        # The field is solved from the actual implicit stage, never the predictor. Its exact
-        # FieldContext can therefore feed the explicit rate at this same StagePoint.
-        outcome = core.field_provider(stage)
+        # Match the library factory exactly: solve the Case-owned field from the implicit coordinate,
+        # then lift its authenticated FieldContext onto the joint additive StagePoint.
+        field_state = program.value(
+            "%sfield_state_%d" % (tag, index), stage,
+            at=point.time_for("implicit"),
+        )
+        outcome = core.diagnostic_field(field_state)
         fields = outcome.consume(action=solve_action)
         fields = program.value("%sfields_%d" % (tag, index), fields, at=point)
 
@@ -201,7 +234,7 @@ def _preset_imex_program(core: IMEXAMRAuthoring, *, solve_action: Any) -> Progra
         core.tracer_state,
         explicit_operator=core.explicit_rate,
         implicit_operator=core.implicit_operator,
-        fields_operator=core.field_provider,
+        fields_operator=core.diagnostic_field,
         tableau=IMEX_CN_HEUN,
         solve_action=solve_action,
     )
@@ -272,8 +305,6 @@ def build_authoring(
         equation=(-laplacian(diagnostic_unknown) == u),
         outputs=(FieldOutput("relaxation_potential", diagnostic_unknown),),
     )
-    field_provider = next(iter(field_operator.providers)).provider
-
     finite_volume = FiniteVolume(
         flux=flux,
         variables=variables.Conservative(state),
@@ -313,7 +344,6 @@ def build_authoring(
         explicit_rate=explicit_rate,
         implicit_operator=implicit_operator,
         field_operator=field_operator,
-        field_provider=field_provider,
         finite_volume=finite_volume,
         numerics=numerics,
         case=case,
@@ -471,6 +501,131 @@ def build_bind_params(core: IMEXAMRAuthoring, *, inlet_value: float = 0.0) -> di
     }
 
 
+def compile_final_case(
+    *, use_preset: bool = False,
+) -> tuple[FinalIMEXAMRCase, Any, Any]:
+    """Compile one exact manual or preset-authored target through the public lifecycle."""
+
+    target = build_final_case(use_preset=use_preset)
+    resolved = pops.resolve(pops.validate(target.authoring.case), layout=target.layout)
+    return target, resolved, pops.compile(resolved)
+
+
+def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
+    """Capture state, solved fields, hierarchy, clocks, identities and consumer cursors."""
+
+    blocks = tuple(simulation.block_names())
+    if blocks != ("tracer",):
+        raise RuntimeError("IMEX acceptance expected exactly the qualified tracer block")
+    level_count = int(simulation.n_levels())
+    if level_count <= 0:
+        raise RuntimeError("IMEX acceptance installed no AMR hierarchy levels")
+    slots = tuple(simulation.field_provider_slots())
+    if not slots:
+        raise RuntimeError("IMEX acceptance installed no resolved diagnostic-field provider")
+    field_level_counts = {
+        slot: int(simulation.field_provider_levels(slot))
+        for slot in slots
+    }
+    if any(count <= 0 for count in field_level_counts.values()):
+        raise RuntimeError("IMEX acceptance installed an empty diagnostic-field hierarchy")
+    return IMEXRuntimeSnapshot(
+        time=float(simulation.time()),
+        macro_step=int(simulation.macro_step()),
+        states={
+            block: tuple(
+                np.asarray(
+                    simulation.block_level_state_global(block, level), dtype=np.float64,
+                ).copy()
+                for level in range(level_count)
+            )
+            for block in blocks
+        },
+        fields={
+            slot: tuple(
+                np.asarray(
+                    simulation.field_potential_level_global(slot, level), dtype=np.float64,
+                ).copy()
+                for level in range(field_level_counts[slot])
+            )
+            for slot in slots
+        },
+        patch_boxes=tuple(
+            tuple(int(value) for value in row)
+            for row in simulation.patch_boxes()
+        ),
+        program_hash=str(simulation.installed_program_hash()),
+        consumer_graph_identity=simulation.consumer_graph.identity.token,
+        consumer_cursors=simulation.consumer_cursors.to_data(),
+    )
+
+
+def _require_same_snapshot(
+    left: IMEXRuntimeSnapshot,
+    right: IMEXRuntimeSnapshot,
+    *,
+    where: str,
+) -> None:
+    """Reject any hidden state, field, topology, identity, clock or schedule drift."""
+
+    if np.asarray(left.time, dtype=np.float64).tobytes() != np.asarray(
+        right.time, dtype=np.float64,
+    ).tobytes():
+        raise RuntimeError("%s changed time" % where)
+    exact = {
+        "macro_step": (left.macro_step, right.macro_step),
+        "patch_boxes": (left.patch_boxes, right.patch_boxes),
+        "program_hash": (left.program_hash, right.program_hash),
+        "consumer_graph_identity": (
+            left.consumer_graph_identity,
+            right.consumer_graph_identity,
+        ),
+        "consumer_cursors": (left.consumer_cursors, right.consumer_cursors),
+        "state routes": (tuple(left.states), tuple(right.states)),
+        "field routes": (tuple(left.fields), tuple(right.fields)),
+    }
+    for name, (expected, actual) in exact.items():
+        if expected != actual:
+            raise RuntimeError("%s changed %s" % (where, name))
+    for category, expected, actual in (
+        ("conservative state", left.states, right.states),
+        ("solved field", left.fields, right.fields),
+    ):
+        for route in expected:
+            if len(expected[route]) != len(actual[route]):
+                raise RuntimeError("%s changed %s %r level count" % (where, category, route))
+            for level, (expected_level, actual_level) in enumerate(
+                zip(expected[route], actual[route], strict=True),
+            ):
+                if not _array_bits_equal(expected_level, actual_level):
+                    raise RuntimeError(
+                        "%s changed %s %r level %d" % (where, category, route, level)
+                    )
+
+
+def _array_bits_equal(left: np.ndarray, right: np.ndarray) -> bool:
+    """Compare dtype, shape and the complete contiguous byte representation."""
+
+    return bool(
+        left.dtype == right.dtype
+        and left.shape == right.shape
+        and left.tobytes(order="C") == right.tobytes(order="C")
+    )
+
+
+def _snapshots_bit_identical(
+    left: IMEXRuntimeSnapshot,
+    right: IMEXRuntimeSnapshot,
+) -> bool:
+    """Return the same strict result enforced by :func:`_require_same_snapshot`."""
+
+    try:
+        _require_same_snapshot(left, right, where="runtime proof")
+    except RuntimeError:
+        return False
+    return True
+
+
 def _existing_artifact(root: Path, suffix: str) -> Path:
     paths = tuple(sorted(root.rglob("*%s" % suffix)))
     if not paths:
@@ -478,7 +633,130 @@ def _existing_artifact(root: Path, suffix: str) -> Path:
     return paths[-1]
 
 
+def _reopen_scientific_outputs(root: Path) -> tuple[Path, Path, str, str]:
+    """Reopen independently persisted HDF5 and ParaView artifacts."""
+
+    from pops.output import read_hdf5, read_paraview
+
+    hdf5_path = _existing_artifact(root, ".h5")
+    paraview_path = _existing_artifact(root, ".vtu")
+    hdf5 = read_hdf5(hdf5_path)
+    paraview = read_paraview(paraview_path)
+    if not hdf5.arrays or not paraview.arrays:
+        raise RuntimeError("published scientific artifacts reopened without arrays")
+    if not all(
+        np.isfinite(value).all()
+        for artifact in (hdf5, paraview)
+        for value in artifact.arrays.values()
+    ):
+        raise RuntimeError("published scientific output contains a non-finite value")
+    return (
+        hdf5_path,
+        paraview_path,
+        hdf5.output_identity.token,
+        paraview.output_identity.token,
+    )
+
+
+def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
+    """Run the manual Program, reopen output, restart fresh, then continue bit-identically."""
+
+    root = Path(output_dir)
+    accepted_root = root / "accepted"
+    target, resolved, artifact = compile_final_case(use_preset=False)
+    params = build_bind_params(target.authoring)
+    simulation = pops.bind(artifact, params=params)
+    controls = dict(target.authoring.run_controls)
+    controls["output_dir"] = accepted_root
+    if pops.run(simulation, **controls) <= 0:
+        raise RuntimeError("the manual IMEX Program executed no accepted macro-step")
+
+    hdf5_path, paraview_path, hdf5_identity, paraview_identity = \
+        _reopen_scientific_outputs(accepted_root)
+    checkpoint_path = Path(simulation.checkpoint(root / "accepted_restart"))
+    if not checkpoint_path.is_file():
+        raise RuntimeError("checkpoint API returned a missing artifact: %s" % checkpoint_path)
+    accepted = _snapshot(simulation)
+
+    resumed = pops.bind(artifact, params=params)
+    resumed.restart(checkpoint_path)
+    restored = _snapshot(resumed)
+    _require_same_snapshot(accepted, restored, where="independent strict restart")
+    if simulation.bind_identity != resumed.bind_identity:
+        raise RuntimeError("fresh bind changed the authenticated IMEX install identity")
+    if resumed.last_restart_identity is None:
+        raise RuntimeError("restart did not publish an authenticated checkpoint identity")
+
+    final_time = 2.0 * float(controls["t_end"])
+    continuation = {
+        "t_end": final_time,
+        "max_steps": int(controls["max_steps"]),
+    }
+    if pops.run(
+        simulation, output_dir=root / "continuous", **continuation,
+    ) <= 0:
+        raise RuntimeError("the uninterrupted IMEX continuation executed no macro-step")
+    if pops.run(
+        resumed, output_dir=root / "restarted", **continuation,
+    ) <= 0:
+        raise RuntimeError("the restarted IMEX continuation executed no macro-step")
+    continuous, restarted = _snapshot(simulation), _snapshot(resumed)
+    _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    return IMEXExecutionEvidence(
+        hdf5_path=hdf5_path,
+        paraview_path=paraview_path,
+        checkpoint_path=checkpoint_path,
+        hdf5_identity=hdf5_identity,
+        paraview_identity=paraview_identity,
+        artifact_identity=artifact.artifact_identity.token,
+        level_count=resolved.resolved_hierarchy.plan.level_count,
+        accepted=accepted,
+        restored=restored,
+        continuous=continuous,
+        restarted=restarted,
+    )
+
+
+def run_preset_parity(
+    output_dir: Any,
+    expected: IMEXRuntimeSnapshot,
+) -> IMEXRuntimeSnapshot:
+    """Prove manual/factory graph semantics and one-step runtime parity."""
+
+    from pops.identity.semantic import program_semantic_data, semantic_identity_of
+
+    manual = build_final_case(use_preset=False)
+    preset, _resolved, artifact = compile_final_case(use_preset=True)
+    manual_program = manual.authoring.program
+    preset_program = preset.authoring.program
+    if manual_program.to_graph().to_data() != preset_program.to_graph().to_data():
+        raise RuntimeError("pops.lib.time.IMEX changed the manual Program graph")
+    if program_semantic_data(manual_program) != program_semantic_data(preset_program):
+        raise RuntimeError("pops.lib.time.IMEX changed normalized Program semantics")
+    if semantic_identity_of(program=manual_program) != semantic_identity_of(
+        program=preset_program,
+    ):
+        raise RuntimeError("pops.lib.time.IMEX changed the semantic Program identity")
+
+    simulation = pops.bind(
+        artifact,
+        params=build_bind_params(preset.authoring),
+    )
+    if pops.run(
+        simulation,
+        t_end=expected.time,
+        max_steps=int(preset.authoring.run_controls["max_steps"]),
+        output_dir=Path(output_dir),
+    ) <= 0:
+        raise RuntimeError("the preset IMEX Program executed no accepted macro-step")
+    actual = _snapshot(simulation)
+    _require_same_snapshot(expected, actual, where="manual/pops.lib.time.IMEX parity")
+    return actual
+
+
 def main(argv: list[str] | None = None) -> None:
+    """Run the final lifecycle, strict continuation and manual/factory parity proofs."""
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--output-dir", type=Path, default=OUTPUT_ROOT,
@@ -487,48 +765,42 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     output_dir = args.output_dir.resolve()
 
-    target = build_final_case()
-    validated = pops.validate(target.authoring.case)
-    resolved = pops.resolve(validated, layout=target.layout)
-    artifact = pops.compile(resolved)
-    params = build_bind_params(target.authoring)
-    simulation = pops.bind(artifact, params=params)
-    controls = dict(target.authoring.run_controls)
-    controls["output_dir"] = output_dir
-    pops.run(simulation, **controls)
+    evidence = run_manual_and_restart(output_dir / "manual")
+    preset = run_preset_parity(output_dir / "preset", evidence.accepted)
+    restart_equal = _snapshots_bit_identical(evidence.accepted, evidence.restored)
+    continuation_equal = _snapshots_bit_identical(evidence.continuous, evidence.restarted)
+    preset_equal = _snapshots_bit_identical(evidence.accepted, preset)
+    finite = bool(
+        all(
+            np.isfinite(value).all()
+            for levels in evidence.restarted.states.values()
+            for value in levels
+        )
+        and all(
+            np.isfinite(value).all()
+            for levels in evidence.restarted.fields.values()
+            for value in levels
+        )
+    )
 
-    from pops.output import read_hdf5, read_paraview
-
-    hdf5_path = _existing_artifact(output_dir, ".h5")
-    paraview_path = _existing_artifact(output_dir, ".vtu")
-    hdf5 = read_hdf5(hdf5_path)
-    if not hdf5.arrays or not read_paraview(paraview_path).arrays:
-        raise RuntimeError("published scientific artifacts reopened without arrays")
-    finite = all(np.isfinite(value).all() for value in hdf5.arrays.values())
-
-    checkpoint = Path(simulation.checkpoint(str(output_dir / "checkpoints/manual_restart")))
-    if not checkpoint.is_file():
-        raise RuntimeError("checkpoint API returned a missing artifact: %s" % checkpoint)
-    with np.load(checkpoint, allow_pickle=False) as stored:
-        restart_token = str(stored["pops_restart_identity"])
-    restarted = pops.bind(artifact, params=params)
-    restarted.restart(checkpoint)
-    restart_equal = restarted.last_restart_identity.token == restart_token
-    if not restart_equal:
-        raise RuntimeError("accepted-state checkpoint did not restart bit-identically")
-
-    print("HDF5: %s" % hdf5_path)
-    print("ParaView: %s" % paraview_path)
-    print("checkpoint: %s" % checkpoint)
+    print("HDF5: %s" % evidence.hdf5_path)
+    print("ParaView: %s" % evidence.paraview_path)
+    print("checkpoint: %s" % evidence.checkpoint_path)
     print("bit-identical restart: %s" % restart_equal)
+    print("bit-identical continuation: %s" % continuation_equal)
+    print("manual/pops.lib.time.IMEX parity: %s" % preset_equal)
     print("report: " + json.dumps({
-        "artifact": artifact.artifact_identity.token,
+        "artifact": evidence.artifact_identity,
         "checkpoint_restart_bit_identical": restart_equal,
+        "continuation_bit_identical": continuation_equal,
         "finite": finite,
-        "levels": resolved.resolved_hierarchy.plan.level_count,
-        "program_hash": target.authoring.program.to_graph().graph_hash,
-        "runtime_steps": simulation.macro_step(),
-        "runtime_time": simulation.time(),
+        "levels": evidence.level_count,
+        "manual_preset_bit_identical": preset_equal,
+        "program_hash": preset.program_hash,
+        "runtime_steps": evidence.accepted.macro_step,
+        "runtime_time": evidence.accepted.time,
+        "runtime_steps_after_continuation": evidence.restarted.macro_step,
+        "runtime_time_after_continuation": evidence.restarted.time,
     }, sort_keys=True))
 
 

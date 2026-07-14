@@ -8,8 +8,9 @@ operator-first path. It has one runtime route:
 Model -> Case -> validate -> resolve(AMR) -> compile -> bind -> pops.run
 ```
 
-The example does not select a named native time stepper or a separate AMR executor. Its manual
-`Program` and `pops.lib.time.IMEX` spelling must normalize to the same `ProgramGraph` identity.
+The example does not select a named native time stepper or a separate AMR executor. Its executable
+acceptance path compares the manual `Program` and `pops.lib.time.IMEX` spelling node-for-node, checks
+their normalized semantic data and identity, then requires the same accepted runtime snapshot.
 
 ## Exact additive method
 
@@ -29,6 +30,11 @@ Every fallible public solve returns an unreadable `SolveOutcome`. The example co
 `RejectAttempt()`. A failed solve therefore raises the typed native rejection signal before a field,
 state, diagnostic or output can read a partial result. Local affine elimination remains a value
 operation because it has no iterative outcome to classify.
+
+`Model.field_operator(...)` declares the physical equation and its RHS providers. The sole callable
+time-Program authority is the `FieldHandle` returned by `Case.field(operator, discretization)`: both
+the manual graph and `pops.lib.time.IMEX(fields_operator=...)` receive that exact handle. This keeps
+the field outputs, numerical plan and native install route under one Case-owned identity.
 
 ## Transaction and hierarchy
 
@@ -81,7 +87,10 @@ Run the acceptance target with
 python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py --output-dir /tmp/pops-imex-amr
 ```
 
-The command reopens the emitted HDF5 and ParaView files, retains a real accepted-state checkpoint,
-restarts a fresh bound simulation from it, and reports the four authenticated artifact paths/results
-on stdout. A printed success therefore follows the I/O and restart checks; it is not a demonstration
+The command reopens the emitted HDF5 and ParaView files, retains a real accepted-state checkpoint and
+restarts a fresh bound simulation from it. It compares time, macro-step, every AMR level of every
+qualified conservative state and solved-field route, patch topology, Program/consumer identities and
+consumer cursors bit-for-bit. It then advances the uninterrupted and restarted instances once more
+and repeats the complete comparison before exercising the preset parity run. A printed success
+therefore follows real I/O, restart, continuation and manual/factory checks; it is not a demonstration
 placeholder.

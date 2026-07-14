@@ -32,12 +32,17 @@ def test_example_runs_and_every_scientific_format_reopens(tmp_path: Path) -> Non
     assert "ParaView:" in completed.stdout
     assert "checkpoint:" in completed.stdout
     assert "bit-identical restart: True" in completed.stdout
+    assert "bit-identical continuation: True" in completed.stdout
+    assert "manual/pops.lib.time.IMEX parity: True" in completed.stdout
     report_line, = [line for line in completed.stdout.splitlines() if line.startswith("report: ")]
     report = json.loads(report_line.removeprefix("report: "))
     assert report["finite"] is True
     assert report["checkpoint_restart_bit_identical"] is True
+    assert report["continuation_bit_identical"] is True
+    assert report["manual_preset_bit_identical"] is True
     assert report["levels"] == 2
     assert report["runtime_steps"] == 1
+    assert report["runtime_steps_after_continuation"] == 2
 
     from pops.output import read_hdf5, read_npz, read_paraview
 
@@ -84,4 +89,5 @@ def test_normative_example_uses_only_the_final_root_lifecycle() -> None:
         and node.func.value.id == "pops"
         and node.func.attr == "run"
     ]
-    assert len(root_run) == 1
+    # Accepted manual step, uninterrupted continuation, restarted continuation and preset parity.
+    assert len(root_run) == 4
