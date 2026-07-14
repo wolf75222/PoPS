@@ -197,7 +197,7 @@ def emit_cpp_program(
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
-    _check_lowerable(program, authority)
+    _check_lowerable(program, authority, field_plans or {})
     prelude, body = _emit_body(
         program, authority, target=target, field_plans=field_plans or {})
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
@@ -271,7 +271,7 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
 
 
 
-def _check_lowerable(program: Any, model: Any = None) -> None:
+def _check_lowerable(program: Any, model: Any = None, field_plans: Any = None) -> None:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
@@ -292,7 +292,7 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
                 % (block_name(block), sorted(block_name(item) for item in blocks)))
     _check_schedules_lowerable(program)
     for v in program._values:
-        _check_op_lowerable(program, v, model)
+        _check_op_lowerable(program, v, model, field_plans or {})
     # Dense local and coupled solves are specialized to the complete manifest-sized system.  The
     # emitted ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; no central
     # component-count allowlist, truncating buffer, or scientific-model branch selects N.
@@ -311,7 +311,7 @@ def _check_lowerable(program: Any, model: Any = None) -> None:
 # sim.profile_report(). Every other op that emits a statement is wrapped (rhs / solve_fields /
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
 
-def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
+def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
     node_model = (
@@ -329,7 +329,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "(compile_problem threads it through)" % (v.op, v.name))
         if v.op == "solve_local_nonlinear":  # recurse: the residual sub-block ops must lower too
             for w in v.attrs["residual_block"]:
-                _check_op_lowerable(program, w, model)
+                _check_op_lowerable(program, w, model, field_plans)
         return  # _emit_op lowers it from the model's symbolic coefficients
     if v.op not in _ALLOWED_OPS:
         raise NotImplementedError(
@@ -357,7 +357,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
         )
         for key in keys:
             for w in v.attrs.get(key, []):
-                _check_op_lowerable(program, w, model)
+                _check_op_lowerable(program, w, model, field_plans)
         return
     if v.op == "matrix_free_operator":  # recurse into the apply sub-block (set by set_apply)
         if v.attrs.get("apply_block") is None:
@@ -365,26 +365,19 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "matrix_free_operator '%s' has no apply; call P.set_apply before lowering"
                 % v.name)
         for w in v.attrs["apply_block"]:
-            _check_op_lowerable(program, w, model)
+            _check_op_lowerable(program, w, model, field_plans)
         return
-    if v.op == "solve_fields":
-        # A NAMED elliptic field (ADC-419/ADC-428) drives a SECOND elliptic solve into its own aux
-        # channel. The runtime now hosts it (System::solve_fields_from_state(field, ...) via
-        # ProgramContext); lowering needs the model so the field name can be validated against the
-        # declared m.elliptic_field set (the codegen emits the named ctx call).
+    if v.op in ("solve_fields", "solve_fields_from_blocks"):
+        # Every field solve is routed by the exact authenticated install plan. An OperatorHandle
+        # may denote the model's default provider or any named provider; neither status is inferred
+        # from a spelling or from ``field is None``. The resolved Case field owns discretization,
+        # solver, BC, hierarchy and the native slot, so Program-only emission must refuse when that
+        # authority is absent instead of silently selecting the historical default solver.
         field_ref = v.attrs.get("field")
-        if field_ref is not None:
-            from pops.time.references import field_name
-            field = field_name(field_ref)
-            if model is None:
-                raise NotImplementedError(
-                    "emit_cpp_program cannot lower solve_fields with a named elliptic field "
-                    "('%s') without the physical model that declares it (m.elliptic_field); pass "
-                    "model= (compile_problem threads it through)" % field)
-            if field not in _model_impl(node_model)._elliptic_fields:
-                raise ValueError(
-                    "unknown elliptic_field '%s' in solve_fields '%s'; declared: %s"
-                    % (field, v.name, sorted(_model_impl(node_model)._elliptic_fields)))
+        if field_ref is None:
+            raise ValueError("field solve %r has no exact field identity" % v.name)
+        from pops.codegen.program_emit_field_routes import resolved_field_route
+        resolved_field_route(field_ref, field_plans)
         return
     if v.op == "rhs":
         named_fluxes = _named_fluxes(v)

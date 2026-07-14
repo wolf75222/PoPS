@@ -44,7 +44,7 @@ class _ProgramCall(_ProgramBase):
         self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
             self._validate_schedule(op, schedule, args)
-        result = self._lower_call(op, operator_name, args, name)
+        result = self._lower_call(op, operator_handle, operator_name, args, name)
         # A coupled_rate has no single output ProgramValue (it returns a _CoupledResult): its per-block
         # spaces are tagged inside _lower_coupled_rate, and a schedule on the whole bundle is not
         # meaningful yet -- reject it with a clear message rather than leaking an AttributeError.
@@ -72,7 +72,8 @@ class _ProgramCall(_ProgramBase):
         attrs = dict(result.attrs)
         attrs["operator_handle"] = operator_handle
         field_context = result.field_context
-        if result.op == "solve_fields" and attrs.get("field") is not None:
+        if result.op in ("solve_fields", "solve_fields_from_blocks") \
+                and attrs.get("field") is not None:
             # _lower_field_operator authenticated a registry-issued field selector. Retain the exact
             # public handle (including an alias identity) in both node attrs and field provenance.
             attrs["field"] = operator_handle
@@ -142,7 +143,8 @@ class _ProgramCall(_ProgramBase):
                     "Schedule(trigger, off=Hold()/Skip()/Zero()/AccumulateDt()/Error())"
                     % (consumer, value.name))
 
-    def _lower_call(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_call(self, op: Any, operator_handle: Any, operator_name: Any,
+                    args: Any, name: Any) -> Any:
         # A typed call lowers through the private native RHS projection (self._rhs_primitive(...) /
         # self.source / ...): the public P.rhs reject never sees this internal lowering (the user
         # already invoked an exact operator handle), so there is one path and no re-entrancy
@@ -153,9 +155,10 @@ class _ProgramCall(_ProgramBase):
         if handler is None:
             raise NotImplementedError(
                 "operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
-        return handler(self, op, operator_name, args, name)
+        return handler(self, op, operator_handle, operator_name, args, name)
 
-    def _lower_field_operator(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_field_operator(self, op: Any, operator_handle: Any, operator_name: Any,
+                              args: Any, name: Any) -> Any:
         # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
         # multi-block field solve: every input species contributes to the one shared elliptic RHS
         # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
@@ -163,17 +166,13 @@ class _ProgramCall(_ProgramBase):
         state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
         if len(state_args) > 1:
             result = self._solve_fields_from_blocks(
-                state_args, field=op.handle, name=name)
+                state_args, field=operator_handle, name=name)
             return self._replace_value(result, space=op.signature.output)
-        registry = self._operator_registries[args[0].block.model_owner_path]
-        declaration = next(
-            handle for handle in registry.declaration_index().records()
-            if handle.local_id == operator_name)
-        field = args[0].block[declaration]
-        result = self._solve_fields(name=name, state=args[0], field=field)
+        result = self._solve_fields(name=name, state=args[0], field=operator_handle)
         return self._replace_value(result, space=op.signature.output)
 
-    def _lower_local_source(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_local_source(self, op: Any, _operator_handle: Any, operator_name: Any,
+                            args: Any, name: Any) -> Any:
         fields = args[1] if len(args) > 1 else None
         source_name = op.lowering.get("source", operator_name)
         if source_name == "default":
@@ -184,7 +183,8 @@ class _ProgramCall(_ProgramBase):
                                        sources=["default"])
         return self._source(source_name, state=args[0], fields=fields)
 
-    def _lower_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
+                    args: Any, name: Any) -> Any:
         # grid_operator (flux divergence only) and local_rate (flux + sources per op.lowering).
         fields = args[1] if len(args) > 1 else None
         if op.kind == "grid_operator":
@@ -197,8 +197,8 @@ class _ProgramCall(_ProgramBase):
                                    flux=low.get("flux", True), sources=low.get("sources"),
                                    fluxes=low.get("fluxes"))
 
-    def _lower_local_linear_operator(self, op: Any, operator_name: Any, args: Any,
-                                     name: Any) -> Any:
+    def _lower_local_linear_operator(self, op: Any, _operator_handle: Any,
+                                     operator_name: Any, args: Any, name: Any) -> Any:
         result = self._linear_source(operator_name)
         contexts = [arg.field_context for arg in args
                     if getattr(arg, "vtype", None) == "fields" and arg.field_context is not None]
@@ -208,10 +208,12 @@ class _ProgramCall(_ProgramBase):
         return self._replace_value(
             result, field_context=merge_field_provenance(*contexts))
 
-    def _lower_projection(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_projection(self, op: Any, _operator_handle: Any, operator_name: Any,
+                          args: Any, name: Any) -> Any:
         return self.project(name=name, state=args[0])
 
-    def _lower_coupled_rate(self, op: Any, operator_name: Any, args: Any, name: Any) -> Any:
+    def _lower_coupled_rate(self, op: Any, _operator_handle: Any, operator_name: Any,
+                            args: Any, name: Any) -> Any:
         """Lower a coupled_rate operator to a coupled node plus one per-block rate projection.
 
         A coupled operator (collisions, ionization, ...) of arbitrary arity returns a typed
