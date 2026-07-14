@@ -2,18 +2,19 @@
 """pops.time Phase-4b LOCAL LINEAR SOLVE codegen, end to end (epic ADC-399 / ADC-403).
 
 `emit_cpp_program` now LOWERS the Phase-4 IR ops -- ``source`` (a named ``m.source_term``),
-``apply`` (LU for a named ``m.linear_source``) and ``solve_local_linear`` ((I -/+ a*L) U = rhs solved
-cell by cell via a dense per-cell inverse) -- reusing ProgramContext + for_each_cell + the existing
+``apply`` (LU for a named ``m.linear_source``) and typed ``Program.solve(LocalLinear(...))`` (an
+``(I -/+ a*L) U = rhs`` system solved cell by cell via a dense per-cell inverse) -- reusing
+ProgramContext + for_each_cell + the existing
 ``pops::detail::mat_inverse`` (no flux / solver reimplementation, no heap in the device kernel).
 
-(A) Codegen (pure Python, always runs): the generated C++ of a Lorentz ``solve_local_linear`` contains
+(A) Codegen (pure Python, always runs): the generated C++ of a Lorentz local solve contains
     the per-cell dense-inverse kernel (M = I - dt*L assembled from the aux B_z, mat_inverse, the
     matvec onto the rhs state); manifest-sized systems exceed the old eight-component cap; Phase-4b ops are refused
     without a model.
 
 (B) End-to-end Lorentz parity (skips unless the full toolchain is present): a 3-variable model
     (rho, mx, my) with a Lorentz ``linear_source`` L = [[0,0,0],[0,0,B_z],[0,-B_z,0]], a constant B_z,
-    a non-trivial momentum IC; a Program W = solve_local_linear(I - dt*L, rhs=U); compile_problem ->
+    a non-trivial momentum IC; a Program W = solve(LocalLinear(I - dt*L, rhs=U)); compile_problem ->
     problem.so, install_program, step(dt). The implicit Lorentz rotation has a closed form: with
     k = dt*B_z, den = 1 + k*k, mx' = (mx + k*my)/den, my' = (-k*mx + my)/den, rho unchanged. The
     stepped (mx, my) must match it to round-off. Runs in CI (gate-python rebuilds _pops) and locally
@@ -26,6 +27,7 @@ from typed_program_support import typed_state
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.solvers import DenseLU
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -93,28 +95,33 @@ def lorentz_program(name="lorentz_step", model=None):
     """W = (I - dt*L_lorentz)^{-1} U, committed: one implicit Lorentz rotation of the momentum."""
     P = adctime.Program(name)
     dt = P.dt
-    U = typed_state(P, "plasma", model=model)
-    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
+    authority = model if model is not None else lorentz_model("%s_model" % name)
+    U = typed_state(P, "plasma", model=authority)
+    endpoint = typed_state(P, "plasma", state_name="U", model=authority).next
     Q = P.value(
         "Q", 1.0 * U, at=endpoint.point)  # a State scratch == U (the solve rhs)
-    W = P.solve_local_linear(name="W", operator=P.I - dt * P._linear_source("lorentz"), rhs=Q)
+    linear = authority.module.operator_handle("lorentz")
+    W = P.solve(
+        adctime.LocalLinear(operator=P.I - dt * P.linear_source(linear), rhs=Q),
+        solver=DenseLU(), name="W",
+    ).consume(action=adctime.FailRun())
     P.commit(endpoint, W)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
-print("== (A) solve_local_linear codegen ==")
+print("== (A) typed local-linear solve codegen ==")
 m = lorentz_model()
 src = lorentz_program(model=m).emit_cpp_program(model=m)
 for frag in ("pops::for_each_cell(", "pops::detail::mat_inverse<3>(", "pops::Real M_[3][3];",
              "pops::Real Minv_[3][3];", "auxA(i, j, 3)", "ctx.aux()"):
-    chk(frag in src, "generated solve_local_linear kernel has %r" % frag)
+    chk(frag in src, "generated local-linear solve kernel has %r" % frag)
 chk("a_ * (B_z)" in src and "a_ * ((-B_z))" in src,
     "the Lorentz operator M = I - dt*L reads +/- B_z off the aux")
 
 # Phase-4b ops are refused without the physical model (cannot read the coefficients).
 chk(raises(NotImplementedError, lambda: lorentz_program().emit_cpp_program()),
-    "solve_local_linear refused without a model")
+    "local-linear solve refused without a model")
 
 # The dense kernel is specialized from the manifest, with no eight-component dispatch cap.
 big = Model("too_big")
@@ -126,8 +133,13 @@ Pbig = adctime.Program("big")
 Ub = typed_state(Pbig, "blk", model=big)
 endpoint_big = typed_state(Pbig, "blk", state_name="U", model=big).next
 Qb = Pbig.value("Qb", 1.0 * Ub, at=endpoint_big.point)
-Pbig.commit(endpoint_big, Pbig.solve_local_linear(
-    name="Wb", operator=Pbig.I - Pbig.dt * Pbig._linear_source("L"), rhs=Qb))
+linear_big = big.module.operator_handle("L")
+Wb = Pbig.solve(
+    adctime.LocalLinear(
+        operator=Pbig.I - Pbig.dt * Pbig.linear_source(linear_big), rhs=Qb),
+    solver=DenseLU(), name="Wb",
+).consume(action=adctime.FailRun())
+Pbig.commit(endpoint_big, Wb)
 big_src = Pbig.emit_cpp_program(model=big)
 chk("pops::detail::mat_inverse<9>(" in big_src and "pops::Real M_[9][9];" in big_src,
     "n_cons=9 emits exact manifest-sized dense storage")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pops.time MULTI-COMPONENT matrix-free linear solve (epic ADC-399 / ADC-416).
 
-ADC-416 extends ``P.matrix_free_operator`` + ``P.solve_linear`` from scalar-only to vector /
+ADC-416 extends ``P.matrix_free_operator`` + typed ``P.solve(LinearProblem(...))`` from scalar-only to vector /
 state-valued (multi-component) fields -- the foundation the full condensed_schur macro builds on. The
 operator declares ``domain="state"`` (or ``"vector"``) with an ``ncomp``; its apply runs on an ncomp
 buffer and the runtime Krylov loop (``pops::cg_solve`` etc.) reduces its inner products over ALL
@@ -27,6 +27,7 @@ component 0 alone and leave the rest unsolved.
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
+from pops.linalg import LinearProblem
 from pops.model import StateSpace
 
 from pops.numerics.reconstruction import FirstOrder
@@ -53,7 +54,7 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     """(I - alpha*Lap) x = U on an ncomp-component block, committed back into the block state.
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian (which now runs per component) +
-    the affine algebra; solve_linear drives the runtime multi-component Krylov loop."""
+    the affine algebra; Program.solve drives the runtime multi-component Krylov loop."""
     P = t.Program(name)
     space = StateSpace("U", tuple("c%d" % component for component in range(ncomp)))
     U = typed_state(P, "blk", space=space)
@@ -68,10 +69,11 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
 
     if method is None:
         from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
-        method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
+        method = CG(max_iter=max_iter, rel_tol=tol)
     P.set_apply(A, apply)
-    phi = P.solve_linear(
-        operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter).consume(action=FailRun())
+    phi = P.solve(
+        LinearProblem(A, U), solver=method,
+    ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
     P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
     return P
@@ -94,9 +96,9 @@ def test_state_operator_builds(t):
     P.set_apply(A, apply)
     space = StateSpace("U", ("c0", "c1"))
     U = typed_state(P, "blk", space=space)
-    phi = P.solve_linear(
-        operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10,
-        max_iter=50).consume(action=FailRun())
+    phi = P.solve(
+        LinearProblem(A, U), solver=CG(max_iter=50, rel_tol=1e-10),
+    ).consume(action=FailRun())
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
@@ -151,18 +153,25 @@ def test_solve_rhs_component_count(t):
     P.set_apply(A, lambda P, out, x: x)
     rhs_small = P.scalar_field("rhs2", ncomp=2)  # too few components for the ncomp=3 operator
     try:
-        P.solve_linear(operator=A, rhs=rhs_small, max_iter=10)
+        P.solve(
+            LinearProblem(A, rhs_small), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
     # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
-    outcome = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
+    outcome = P.solve(
+        LinearProblem(A, P.scalar_field("rhs3", ncomp=3)),
+        solver=krylov.CG(max_iter=10),
+    )
     token = next(value for value in P._values if value.op == "solve_linear")
     assert token.attrs["ncomp"] == 3
     outcome.consume(action=FailRun())
     state_space = StateSpace("U", ("c0", "c1", "c2"))
-    P.solve_linear(operator=A, rhs=typed_state(P, "blk", space=state_space), max_iter=10)
+    P.solve(
+        LinearProblem(A, typed_state(P, "blk", space=state_space)),
+        solver=krylov.CG(max_iter=10),
+    ).consume(action=FailRun())
 
 
 def test_typed_state_component_count_is_checked_at_author_time(t):
@@ -173,7 +182,8 @@ def test_typed_state_component_count_is_checked_at_author_time(t):
     A = P.matrix_free_operator("A", domain="state", range_="state", ncomp=3)
     P.set_apply(A, lambda _P, _out, x: x)
     try:
-        P.solve_linear(operator=A, rhs=rhs, max_iter=10)
+        P.solve(
+            LinearProblem(A, rhs), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "StateSpace" in str(exc) and "2 component" in str(exc) and "ncomp=3" in str(exc), str(exc)
     else:
@@ -270,8 +280,10 @@ def _run_one(t, pops, np, ncomp, init):
     try:
         compiled = compile_drivers.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
-            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(max_iter=200),
-                             tol=tol, max_iter=200))
+            time=_mc_program(
+                t, ncomp, name="mc_step%d" % ncomp,
+                method=krylov.CG(max_iter=200, rel_tol=tol),
+                tol=tol, max_iter=200))
         compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])

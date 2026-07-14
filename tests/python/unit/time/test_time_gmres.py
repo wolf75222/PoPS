@@ -2,7 +2,7 @@
 """pops.time GMRES Krylov solver for the compiled time program (epic ADC-399 / ADC-420).
 
 ADC-420 adds restarted GMRES(m) to the matrix-free Krylov core (pops::gmres_solve in
-generic_krylov.hpp) and exposes it as ``P.solve_linear(method="gmres", restart=m)``. GMRES is the
+generic_krylov.hpp) and exposes it through ``P.solve(LinearProblem(...), solver=GMRES(...))``. GMRES is the
 robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnates on a non-self-adjoint
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
@@ -29,6 +29,7 @@ tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on e
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
+from pops.linalg import LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.time import FailRun
@@ -49,21 +50,23 @@ _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD part)
 _BETA = 2.0   # advection strength of the non-symmetric term beta*d/dx (breaks self-adjointness)
 
 
-def _krylov(method):
-    """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
-    takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
+def _krylov(method, *, max_iter, rel_tol=None, restart=None):
+    """Build the exact typed Krylov descriptor selected by the test."""
     from pops.solvers import krylov
-    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear uses only its
-    # .scheme here (its own max_iter= is the authoritative budget), so any positive budget serves.
+    options = {"max_iter": max_iter}
+    if rel_tol is not None:
+        options["rel_tol"] = rel_tol
+    if restart is not None:
+        options["restart"] = restart
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](max_iter=50)
+            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](**options)
 
 
 def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300, restart=30,
                  alpha=_ALPHA):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
-    A pure (SPD) Helmholtz apply; solve_linear drives the runtime GMRES loop. No model needed."""
+    A pure (SPD) Helmholtz apply; Program.solve drives the runtime GMRES loop. No model needed."""
     P = t.Program(name)
     U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
@@ -74,8 +77,11 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
         return x - alpha * lap  # out = in - alpha*Lap(in)
 
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
-                         restart=restart).consume(action=FailRun())
+    phi = P.solve(
+        LinearProblem(A, U),
+        solver=_krylov(
+            method, max_iter=max_iter, rel_tol=tol, restart=restart),
+    ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -106,10 +112,11 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
         return x - alpha * lap + beta * dxdir  # out = in - alpha*Lap(in) + beta*d(in)/dx
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter)
-    if method == "gmres":
-        kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
-    phi = P.solve_linear(**kw).consume(action=FailRun())
+    solver = _krylov(
+        method, max_iter=max_iter, rel_tol=tol,
+        restart=(restart if method == "gmres" else None),
+    )
+    phi = P.solve(LinearProblem(A, U), solver=solver).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.value("phi_next", phi, at=endpoint.point)
     P.commit(endpoint, final)
@@ -145,7 +152,7 @@ def test_gmres_restart_override_in_codegen(t):
 def test_gmres_now_valid_method(t):
     # gmres used to be rejected as unknown; it is now a first-class method.
     P = _spd_program(t, method="gmres")
-    assert P.validate() is True, "the gmres solve_linear Program must validate"
+    assert P.validate() is True, "the GMRES Program.solve graph must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
 
@@ -156,7 +163,8 @@ def test_gmres_max_iter_required(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=bad)
+            P.solve(
+                LinearProblem(A, U), solver=_krylov("gmres", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -171,13 +179,18 @@ def test_gmres_restart_validation(t):
     for bad in (0, -3, 1.5, True, 51):
         # a positive int in the native GMRES basis range is required (True is rejected: bool is not allowed)
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=bad)
+            P.solve(
+                LinearProblem(A, U),
+                solver=_krylov("gmres", max_iter=10, restart=bad),
+            )
         except ValueError as exc:
             assert "restart" in str(exc), str(exc)
         else:
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
     # a positive int restart is accepted
-    P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=8)
+    P.solve(
+        LinearProblem(A, U), solver=_krylov("gmres", max_iter=10, restart=8),
+    ).consume(action=FailRun())
     token = next(value for value in P._values if value.op == "solve_linear")
     assert token.attrs["restart"] == 8, "the restart is stored on the IR node"
 
@@ -189,9 +202,12 @@ def test_restart_rejected_for_non_gmres(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for method in ("cg", "bicgstab", "richardson"):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov(method), max_iter=10, restart=20)
-        except ValueError as exc:
-            assert "restart only applies" in str(exc), str(exc)
+            P.solve(
+                LinearProblem(A, U),
+                solver=_krylov(method, max_iter=10, restart=20),
+            )
+        except TypeError as exc:
+            assert "restart" in str(exc) and "unexpected keyword" in str(exc), str(exc)
         else:
             raise AssertionError("restart on method=%r must raise" % (method,))
 

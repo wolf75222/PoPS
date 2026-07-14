@@ -3,7 +3,7 @@
 
 `emit_cpp_program` now lowers a DYNAMIC matrix-free linear solve: a ``matrix_free_operator`` whose
 apply ``out <- A(in)`` is an IR sub-block (``P.set_apply``, built from ``P.laplacian`` + the affine
-algebra) lowered to a C++ ``pops::ApplyFn`` lambda, and ``P.solve_linear(operator=A, rhs=, method=...)``
+algebra) lowered to a C++ ``pops::ApplyFn`` lambda, and ``P.solve(LinearProblem(...), solver=...)``
 lowered to the runtime context's generic ``solve_linear_matfree`` seam. The iteration is DYNAMIC and
 lives C++-side, inside the loop -- the IR carries
 only the apply, the rhs, the method / tolerance / iteration budget. The persistent scratch (the
@@ -27,6 +27,7 @@ captured into the step closure), reused across every step and every Krylov itera
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
+from pops.linalg import LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.time import FailRun, RejectAttempt
 from pops.numerics.riemann import Rusanov
@@ -46,30 +47,34 @@ def _pops_time():
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD, well-conditioned for CG)
 
 
-def _krylov(method):
-    """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
-    takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
+def _krylov(method, *, max_iter, rel_tol=None, restart=None, preconditioner=None):
+    """Build the exact typed Krylov descriptor selected by the test."""
     from pops.solvers import krylov
-    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear uses only its
-    # .scheme here (its own max_iter= is the authoritative budget), so any positive budget serves.
+    options = {"max_iter": max_iter}
+    if rel_tol is not None:
+        options["rel_tol"] = rel_tol
+    if restart is not None:
+        options["restart"] = restart
+    if preconditioner is not None:
+        options["preconditioner"] = preconditioner
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](max_iter=50)
+            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](**options)
 
 
 def _precond(scheme):
     """Map a preconditioner name to its TYPED pops.solvers.preconditioners descriptor."""
     from pops.solvers import preconditioners
-    return {"identity": preconditioners.Identity, "geometric_mg": preconditioners.GeometricMG,
-            "jacobi": preconditioners.Jacobi, "block_jacobi": preconditioners.BlockJacobi}[scheme]()
+    return {"identity": preconditioners.Identity,
+            "geometric_mg": preconditioners.GeometricMG}[scheme]()
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
                    preconditioner=None, action=None):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
-    The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; solve_linear
+    The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; Program.solve
     drives the runtime Krylov loop. The Program needs no model (the apply is a pure Laplacian). An
-    optional @p preconditioner (a typed descriptor) is threaded into solve_linear."""
+    optional @p preconditioner (a typed descriptor) is carried by the Krylov solver."""
     P = t.Program(name)
     U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
@@ -80,12 +85,13 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
         return x - alpha * lap  # out = in - alpha*Lap(in)
 
     P.set_apply(A, apply)
-    kw = {} if preconditioner is None else {"preconditioner": preconditioner}
     endpoint = typed_state(P, "blk", state_name="U").next
     rhs = P.value("rhs", U, at=endpoint.point)
-    phi = P.solve_linear(
-        operator=A, rhs=rhs, method=_krylov(method), tol=tol, max_iter=max_iter,
-        at=endpoint.point, **kw).consume(action=action or FailRun())
+    solver = _krylov(
+        method, max_iter=max_iter, rel_tol=tol, preconditioner=preconditioner)
+    phi = P.solve(
+        LinearProblem(A, rhs, at=endpoint.point), solver=solver,
+    ).consume(action=action or FailRun())
     P.commit(endpoint, phi)
     return P
 
@@ -164,21 +170,17 @@ def test_cg_gmg_precond_rejected(t):
         try:
             _solve_program(t, method=method, preconditioner=_precond("geometric_mg"))
         except ValueError as exc:
-            assert "CG/Richardson" in str(exc) and "GMRES" in str(exc), str(exc)
+            assert (method in str(exc) and "native preconditioner slot" in str(exc)
+                    and "GMRES or BiCGStab" in str(exc)), str(exc)
         else:
             raise AssertionError("%s + GeometricMG must raise ValueError" % method)
 
 
-def test_planned_precond_rejected(t):
-    # jacobi / block_jacobi are catalogued but have no native kernel yet: rejected with an honest
-    # "planned, not wired" message (a separate issue), never a transitional catch-all.
-    for scheme in ("jacobi", "block_jacobi"):
-        try:
-            _solve_program(t, method="gmres", preconditioner=_precond(scheme))
-        except NotImplementedError as exc:
-            assert "planned, not wired" in str(exc), str(exc)
-        else:
-            raise AssertionError("%s preconditioner must raise NotImplementedError (planned)" % scheme)
+def test_unwired_preconditioners_are_not_published(t):
+    from pops.solvers import preconditioners
+
+    assert not hasattr(preconditioners, "Jacobi")
+    assert not hasattr(preconditioners, "BlockJacobi")
 
 
 def test_string_precond_rejected(t):
@@ -188,8 +190,11 @@ def test_string_precond_rejected(t):
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     try:
-        P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10,
-                       preconditioner="geometric_mg")
+        P.solve(
+            LinearProblem(A, U),
+            solver=_krylov(
+                "gmres", max_iter=10, preconditioner="geometric_mg"),
+        )
     except TypeError as exc:
         assert "preconditioner" in str(exc) and "pops.solvers.preconditioners" in str(exc), str(exc)
     else:
@@ -204,7 +209,7 @@ def test_gmg_precond_validates(t):
 
 def test_solve_validates(t):
     P = _solve_program(t)
-    assert P.validate() is True, "the solve_linear Program must validate"
+    assert P.validate() is True, "the typed linear-solve Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
 
@@ -215,7 +220,8 @@ def test_max_iter_required(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
         try:
-            P.solve_linear(operator=A, rhs=U, max_iter=bad)
+            P.solve(
+                LinearProblem(A, U), solver=_krylov("cg", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -229,7 +235,10 @@ def test_tol_positive(t):
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (0.0, -1e-8):
         try:
-            P.solve_linear(operator=A, rhs=U, max_iter=10, tol=bad)
+            P.solve(
+                LinearProblem(A, U),
+                solver=_krylov("cg", max_iter=10, rel_tol=bad),
+            )
         except ValueError as exc:
             assert "tol" in str(exc), str(exc)
         else:
@@ -237,26 +246,26 @@ def test_tol_positive(t):
 
 
 def test_string_method_rejected(t):
-    # Spec 5 sec.7: solve_linear takes a TYPED pops.solvers.krylov descriptor; a bare string
-    # (known or unknown) is rejected and the error names the typed alternative.
+    # Program.solve takes a typed solver descriptor; known and unknown strings are both refused.
     P = t.Program("p")
     U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in ("cg", "minres"):
         try:
-            P.solve_linear(operator=A, rhs=U, max_iter=10, method=bad)
+            P.solve(LinearProblem(A, U), solver=bad)
         except TypeError as exc:
-            assert "method" in str(exc) and "pops.solvers.krylov" in str(exc), str(exc)
+            assert "solver" in str(exc) and "typed descriptor" in str(exc), str(exc)
         else:
-            raise AssertionError("a string method=%r must raise TypeError" % (bad,))
+            raise AssertionError("a string solver=%r must raise TypeError" % (bad,))
 
 
 def test_operator_must_be_matrix_free(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
     try:
-        P.solve_linear(operator=U, rhs=U, max_iter=10)  # a State is not an operator
+        P.solve(
+            LinearProblem(U, U), solver=_krylov("cg", max_iter=10))
     except ValueError as exc:
         assert "operator" in str(exc), str(exc)
     else:
