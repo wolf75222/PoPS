@@ -8,7 +8,8 @@ from pops.solvers import DenseLU
 from pops.time import LocalLinear
 
 from ._factory import (
-    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+    call_at, call_field_at, field_handle, instance_state, operator_handle,
+    program_factory, resolve_solve_action,
 )
 from ._helpers import _stage_point
 
@@ -21,14 +22,14 @@ def _build_predictor_corrector(
     implicit: Any,
     solve_action: Any,
 ) -> None:
-    fields = operator_handle(fields, "PredictorCorrector fields")
+    fields = field_handle(fields, "PredictorCorrector fields")
     explicit = operator_handle(explicit, "PredictorCorrector explicit")
     implicit = operator_handle(implicit, "PredictorCorrector implicit")
     temporal = instance_state(program, state, "PredictorCorrector")
     initial = temporal.n
     predictor = _stage_point(
         program, "predictor", partitions={"explicit": 0, "implicit": 1})
-    fields_initial = call_at(
+    fields_initial = call_field_at(
         program, fields, initial, name="fields_n", point=predictor,
         solve_action=solve_action)
     rate_initial = call_at(
@@ -47,7 +48,7 @@ def _build_predictor_corrector(
 
     corrector = _stage_point(
         program, "corrector", partitions={"explicit": 1, "implicit": 1})
-    fields_predicted = call_at(
+    fields_predicted = call_field_at(
         program, fields, predicted, name="fields_predicted", point=corrector,
         solve_action=solve_action)
     rate_predicted = call_at(

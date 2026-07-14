@@ -7,7 +7,8 @@ from typing import Any
 from pops.time.method_tableau import RungeKuttaTableau
 
 from ._factory import (
-    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+    call_at, call_field_at, field_handle, instance_state, operator_handle,
+    program_factory, resolve_solve_action,
 )
 from ._helpers import _stage_point
 
@@ -42,7 +43,7 @@ def _build_explicit_runge_kutta(
         raise TypeError("RungeKutta tableau must be an exact RungeKuttaTableau")
     rate = operator_handle(rate, "RungeKutta rate")
     if fields is not None:
-        fields = operator_handle(fields, "RungeKutta fields")
+        fields = field_handle(fields, "RungeKutta fields")
     temporal = instance_state(program, state, "RungeKutta")
     initial = temporal.n
     rates = []
@@ -58,7 +59,7 @@ def _build_explicit_runge_kutta(
                     expression = expression + program.dt * coefficient * rates[previous]
             stage_state = program.value(
                 "%s_U%d" % (tag, stage), expression, at=point)
-        stage_fields = call_at(
+        stage_fields = call_field_at(
             program, fields, stage_state,
             name="%s_fields_%d" % (tag, stage), point=point,
             solve_action=solve_action,

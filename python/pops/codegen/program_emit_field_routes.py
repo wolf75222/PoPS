@@ -15,25 +15,67 @@ def resolved_field_route(field_ref: Any, field_plans: Any) -> tuple[str, Any]:
         raise ValueError("field solve codegen requires resolved field install plans")
     canonical = canonical_handle(field_ref)
     from pops.problem.handles import FieldHandle
-    if isinstance(canonical, FieldHandle):
-        plan = field_plans.get(canonical.local_id)
-        if plan is None:
-            raise ValueError(
-                "Program field %r has no resolved field install plan" % canonical.local_id)
-        return plan.native_options["provider_slot"], plan
-
-    matches = []
-    for plan in field_plans.values():
-        for provider in plan.rhs_providers:
-            declaration = provider.declaration_ref or provider
-            if canonical_handle(declaration).canonical_identity() == canonical.canonical_identity():
-                matches.append(plan)
-                break
-    if len(matches) != 1:
+    if not isinstance(canonical, FieldHandle):
+        raise TypeError(
+            "Program field solves require the case-owned FieldHandle returned by Case.field(...)")
+    plan = field_plans.get(canonical.local_id)
+    if plan is None:
         raise ValueError(
-            "field operator route must match exactly one resolved FieldHandle plan, got %d"
-            % len(matches))
-    return matches[0].native_options["provider_slot"], matches[0]
+            "Program field %r has no resolved field install plan" % canonical.local_id)
+    return plan.native_options["provider_slot"], plan
+
+
+def validate_program_field_routes(program: Any, field_plans: Any) -> None:
+    """Authenticate every Program field solve during ``resolve``.
+
+    Compile is a total projection of a resolved plan, so it must never discover
+    a missing/ambiguous field installation or repair stale output metadata.
+    """
+    if program is None:
+        return
+    roots = list(getattr(program, "_values", ()) or ())
+    dt_bound = getattr(program, "_dt_bound", None)
+    if dt_bound is not None:
+        roots.extend(dt_bound[0])
+    for node in _walk_program_nodes(roots):
+        if getattr(node, "op", None) not in ("solve_fields", "solve_fields_from_blocks"):
+            continue
+        attrs = getattr(node, "attrs", {})
+        field_ref = attrs.get("field") if isinstance(attrs, Mapping) else None
+        if field_ref is None:
+            raise ValueError("Program field solve node has no exact FieldHandle identity")
+        _, plan = resolved_field_route(field_ref, field_plans)
+        context = getattr(node, "field_context", None)
+        if context is None:
+            raise ValueError("Program field solve node has no FieldContext provenance")
+        if canonical_handle(context.field).canonical_identity() != canonical_handle(
+                field_ref).canonical_identity():
+            raise ValueError("Program field solve FieldContext disagrees with its FieldHandle")
+        expected_outputs = tuple(plan.native_options["output_route"]["components"])
+        if tuple(context.outputs) != expected_outputs:
+            raise ValueError(
+                "Program field %r outputs %r disagree with resolved components %r"
+                % (plan.name, tuple(context.outputs), expected_outputs))
+        space_outputs = tuple(getattr(getattr(node, "space", None), "components", ()))
+        if space_outputs != expected_outputs:
+            raise ValueError(
+                "Program field %r value space %r disagrees with resolved components %r"
+                % (plan.name, space_outputs, expected_outputs))
+
+
+def _walk_program_nodes(values: Any) -> Any:
+    for node in values:
+        yield node
+        attrs = getattr(node, "attrs", {})
+        if not isinstance(attrs, Mapping):
+            continue
+        for key in (
+            "cond_block", "body_block", "true_block", "false_block",
+            "apply_block", "residual_block",
+        ):
+            nested = attrs.get(key)
+            if isinstance(nested, (list, tuple)):
+                yield from _walk_program_nodes(nested)
 
 
 def field_point_cpp(program: Any, value: Any, slot: str) -> list[str]:

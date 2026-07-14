@@ -156,6 +156,8 @@ def resolve(
         amr_execution = resolved_amr.execution
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
+    from pops.codegen.program_emit_field_routes import validate_program_field_routes
+    validate_program_field_routes(resolved_time, field_plans)
     snapshot = prepare_problem_snapshot(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence

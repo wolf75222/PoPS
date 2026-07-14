@@ -110,9 +110,6 @@ def rebuild_program(
     out._operator_registries = (
         dict(self._operator_registries) if retain_operator_registries else {}
     )
-    out._default_field_spaces = (
-        dict(self._default_field_spaces) if retain_operator_registries else {}
-    )
     # ProgramValue deliberately has no hash: equality authors an Equation.  Every rewrite map is
     # therefore indexed by the stable SSA id, never by a symbolic object (which would otherwise
     # make dict membership invoke forbidden symbolic equality/truth semantics).

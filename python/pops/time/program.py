@@ -106,7 +106,6 @@ class Program(_ProgramTimeHandles, _ProgramCore, _ProgramLocal, _ProgramCondense
         # Operator registries are indexed by their exact authoring OwnerPath. A coupled Program may
         # bind several models with homonymous operators; there is deliberately no "current" registry.
         self._operator_registries = {}
-        self._default_field_spaces = {}
         # OPTIONAL debug capture of the authoring source location per IR node (ADC-530). DEFAULT OFF:
         # a stack walk per node is too costly for the normal build path, and the location is
         # INSPECTION-ONLY (never serialized into the IR / the hash). Toggle with

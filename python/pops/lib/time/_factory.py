@@ -54,35 +54,72 @@ def operator_handle(value: Any, where: str) -> Any:
     return value
 
 
+def field_handle(value: Any, where: str) -> Any:
+    """Require the single Case-owned authority for a Program field solve."""
+    from pops.problem.handles import FieldHandle
+
+    if not isinstance(value, FieldHandle):
+        raise TypeError(
+            "%s must be the exact FieldHandle returned by Case.field(...)" % where)
+    return value
+
+
 def call_at(
     program: Any,
     handle: Any,
     *candidate_args: Any,
     name: str,
     point: Any,
-    solve_action: Any = None,
 ) -> Any:
-    """Call one typed operator, explicitly consume a field solve, and name its result."""
+    """Call one typed model operator and name its result at an exact point."""
     from ._helpers import _op_space_arity
-    from pops.time import FieldSolveOutcome, SolveAction
 
     arity = _op_space_arity(program, handle)
     # A nullary operator has no ProgramValue from which the callable handle could recover the
     # authoring Program. Presets own that internal lowering boundary explicitly.
     value = handle(program=program) if arity == 0 else handle(*candidate_args[:arity])
-    if isinstance(value, FieldSolveOutcome):
-        if not isinstance(solve_action, SolveAction):
-            raise TypeError(
-                "field operator %r requires solve_action=FailRun(...) or RejectAttempt(...)"
-                % handle.name)
-        value = value.consume(action=solve_action)
-    elif solve_action is not None:
+    return program.value(name, value, at=point)
+
+
+def call_field_at(
+    program: Any,
+    field: Any,
+    *states: Any,
+    name: str,
+    point: Any,
+    solve_action: Any,
+) -> Any:
+    """Solve one Case field at an exact point and consume its typed outcome."""
+    from pops.time import SolveAction, StagePoint, TimePoint
+
+    field = field_handle(field, "time factory field")
+    if not isinstance(solve_action, SolveAction):
         raise TypeError(
-            "solve_action applies only to a field-operator outcome; %r returned %s"
-            % (handle.name, type(value).__name__))
+            "field solve requires solve_action=FailRun(...) or RejectAttempt(...)")
+    solve_point = point
+    if type(point) is StagePoint:
+        try:
+            solve_point = point.time
+        except ValueError:
+            source_points = {state.point for state in states}
+            if len(source_points) != 1 or type(next(iter(source_points))) is not TimePoint:
+                raise ValueError(
+                    "field solve at a partitioned StagePoint requires one unambiguous physical "
+                    "coordinate; materialize the stage state at a TimePoint first") from None
+            solve_point = next(iter(source_points))
+    if type(solve_point) is not TimePoint:
+        raise TypeError("field solve requires an exact TimePoint or StagePoint")
+    aligned = tuple(
+        state if state.point == solve_point else program.value(
+            "%s_state_%d" % (name, index), state, at=solve_point)
+        for index, state in enumerate(states)
+    )
+    outcome = field(*aligned, name=name)
+    value = outcome.consume(action=solve_action)
     return program.value(name, value, at=point)
 
 
 __all__ = [
-    "call_at", "instance_state", "operator_handle", "program_factory", "resolve_solve_action",
+    "call_at", "call_field_at", "field_handle", "instance_state", "operator_handle",
+    "program_factory", "resolve_solve_action",
 ]

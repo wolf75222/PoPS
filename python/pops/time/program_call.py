@@ -40,6 +40,11 @@ class _ProgramCall(_ProgramBase):
         op = resolve_operator_handle(self, operator, where="operator call", values=args)
         operator_name = op.name
         operator_handle = operator
+        if op.kind == "field_operator":
+            raise TypeError(
+                "model field-provider handles describe physical RHS contributions but are not "
+                "Program solve authorities; register the physical FieldOperator with "
+                "Case.field(...) and call the returned case-owned FieldHandle")
         self._check_call_args(op, args)
         self._validate_scheduled_reads(args, consumer="operator %r" % op.name)
         if schedule is not None:
@@ -71,23 +76,13 @@ class _ProgramCall(_ProgramBase):
         # (a Rate(U) cannot be combined with a State(V); an L: U -> U cannot drive a State(V)).
         attrs = dict(result.attrs)
         attrs["operator_handle"] = operator_handle
-        field_context = result.field_context
-        if result.op in ("solve_fields", "solve_fields_from_blocks") \
-                and attrs.get("field") is not None:
-            # _lower_field_operator authenticated a registry-issued field selector. Retain the exact
-            # public handle (including an alias identity) in both node attrs and field provenance.
-            attrs["field"] = operator_handle
-            from pops.time.field_context import FieldContext
-            field_context = FieldContext(
-                operator_handle, field_context.stage_sources, field_context.outputs)
         if schedule is not None:
             attrs["schedule"] = schedule
             schedule.validate_site(clock=result.clock, point=result.point,
                                    where="schedule on operator %r" % op.name)
         result = self._replace_value(
-            result, attrs=attrs, space=op.signature.output, field_context=field_context)
-        if op.kind == "field_operator":
-            return self._field_solve_outcome(result)
+            result, attrs=attrs, space=op.signature.output,
+            field_context=result.field_context)
         return result
 
     def _validate_schedule(self, op: Any, schedule: Any, values: Any = ()) -> Any:
@@ -156,20 +151,6 @@ class _ProgramCall(_ProgramBase):
             raise NotImplementedError(
                 "operator kind %r is not yet lowerable (operator %r)" % (kind, operator_name))
         return handler(self, op, operator_handle, operator_name, args, name)
-
-    def _lower_field_operator(self, op: Any, operator_handle: Any, operator_name: Any,
-                              args: Any, name: Any) -> Any:
-        # A multi-input field operator (e.g. fields_from_species over N species) is the COUPLED
-        # multi-block field solve: every input species contributes to the one shared elliptic RHS
-        # (Sum_s elliptic_rhs_s, the default phi). Route it to solve_fields_from_blocks so no
-        # species is dropped -- a single-input field operator uses the single-block field solve.
-        state_args = [a for a in args if getattr(a, "vtype", None) == "state"]
-        if len(state_args) > 1:
-            result = self._solve_fields_from_blocks(
-                state_args, field=operator_handle, name=name)
-            return self._replace_value(result, space=op.signature.output)
-        result = self._solve_fields(name=name, state=args[0], field=operator_handle)
-        return self._replace_value(result, space=op.signature.output)
 
     def _lower_local_source(self, op: Any, _operator_handle: Any, operator_name: Any,
                             args: Any, name: Any) -> Any:
@@ -292,11 +273,11 @@ class _ProgramCall(_ProgramBase):
 
 # ADC-642: the one operator-kind -> lowering dispatch, keyed on the shared OPERATOR_KINDS
 # vocabulary. grid_operator and local_rate share _lower_rate (it inspects op.kind internally, as
-# before). The intentionally-unlowered kinds (diagnostic / matrix_free_operator / the residuals) have
-# no row and fall through _lower_call's NotImplementedError catch-all. The assert makes an unwired
-# kind fail loudly at import, not silently at runtime.
+# before). Field providers are physical contributions and are rejected above in favour of the
+# Case-owned FieldHandle; the other intentionally-unlowered kinds (diagnostic /
+# matrix_free_operator / residuals) have no row and fall through _lower_call's NotImplementedError
+# catch-all. The assert makes an unwired kind fail loudly at import, not silently at runtime.
 _LOWER_CALL_HANDLERS = {
-    "field_operator": _ProgramCall._lower_field_operator,
     "local_source": _ProgramCall._lower_local_source,
     "grid_operator": _ProgramCall._lower_rate,
     "local_rate": _ProgramCall._lower_rate,

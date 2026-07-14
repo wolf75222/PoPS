@@ -56,7 +56,6 @@ class HyQMOM15Authoring:
     field_instance: Any
     explicit_rate: Any
     implicit_operator: Any
-    field_provider: Any
     program: Any
     components: tuple[str, ...]
 
@@ -112,7 +111,6 @@ def build_authoring() -> HyQMOM15Authoring:
             GradientOutput("grad", potential, sign=-1),
         ),
     )
-    field_provider = next(iter(field_operator.providers)).provider
     # The added field completes the model's FieldSpace. Read all operator handles only after this
     # final authoring mutation so their immutable signatures authenticate that settled space.
     flux = model.fluxes["transport"]
@@ -149,7 +147,7 @@ def build_authoring() -> HyQMOM15Authoring:
         state_instance,
         explicit_operator=explicit_rate,
         implicit_operator=implicit_operator,
-        fields_operator=field_provider,
+        fields_operator=field_instance,
         solve_action=RejectAttempt(),
     )
     program.step_strategy(AdaptiveCFL(0.35))
@@ -175,7 +173,6 @@ def build_authoring() -> HyQMOM15Authoring:
         field_instance=field_instance,
         explicit_rate=explicit_rate,
         implicit_operator=implicit_operator,
-        field_provider=field_provider,
         program=program,
         components=tuple(state.components),
     )

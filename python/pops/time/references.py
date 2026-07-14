@@ -100,8 +100,14 @@ def bind_state_reference(program: Any, declaration: Any) -> tuple[Any, Handle]:
     return block, qualified
 
 
-def bind_field_reference(program: Any, block: Any, field: Any) -> Any:
-    """Authenticate a case-owned field for the exact Case already selected by ``block``."""
+def bind_field_reference(program: Any, block: Any, field: Any) -> tuple[Any, Any, tuple[str, ...]]:
+    """Authenticate one Case field and return its exact Program contract.
+
+    The returned tuple is ``(handle, FieldSpace, output_components)``.  Both
+    the value type consumed by rates and the output names come from the
+    registered physical ``FieldOperator``; Program authoring never guesses a
+    default field layout from a model or from the handle's display name.
+    """
     from pops.problem.handles import FieldHandle
 
     bind_program_block(program, block, where="field operator")
@@ -122,8 +128,62 @@ def bind_field_reference(program: Any, block: Any, field: Any) -> Any:
         raise ValueError(
             "field operator: field registry and state block belong to different Cases")
     registry.canonicalize(field)
-    registry.get(field.local_id)
-    return field
+    registration = registry.get(field.local_id)
+    if registration is None:
+        raise ValueError("field operator %r is absent from its Case registry" % field.local_id)
+    unknown = registration.operator.unknown
+    if getattr(unknown, "block_ref", None) is None:
+        block_registry = getattr(block, "_instance_registry", None)
+        if block_registry is None:
+            raise ValueError("field solve state block is detached from its Case registry")
+        unknown = block_registry.qualify(unknown, allow_existing=True)
+    source_block = getattr(unknown, "block_ref", None)
+    declaration = getattr(unknown, "declaration_ref", None)
+    if source_block is None or declaration is None:
+        raise TypeError(
+            "field operator %r unknown must be a block-qualified FieldSpace"
+            % field.local_id)
+    source_registry = getattr(source_block, "_instance_registry", None)
+    if source_registry is None or source_registry.owner_path != block.owner_path:
+        raise ValueError(
+            "field operator %r unknown belongs to a different or detached Case"
+            % field.local_id)
+    spec = source_registry.spec(source_block.local_id)
+    model = None if spec is None else spec.get("model")
+    field_spaces = getattr(model, "field_spaces", None)
+    if not callable(field_spaces):
+        field_spaces = getattr(getattr(model, "module", None), "field_spaces", None)
+    declared = field_spaces() if callable(field_spaces) else {}
+    output_space = declared.get(declaration.local_id)
+    from pops.model import FieldSpace
+    if not isinstance(output_space, FieldSpace):
+        raise TypeError(
+            "field operator %r unknown %r has no exact FieldSpace declaration"
+            % (field.local_id, declaration.local_id))
+    outputs = tuple(output_space.components)
+    if not outputs or any(not isinstance(name, str) or not name for name in outputs):
+        raise ValueError(
+            "field operator %r must resolve non-empty FieldSpace output components"
+            % field.local_id)
+    provider_spaces = tuple(
+        getattr(contribution.provider, "signature", None).output
+        if getattr(contribution.provider, "signature", None) is not None else None
+        for contribution in registration.operator.providers
+    )
+    if not provider_spaces or any(not isinstance(item, FieldSpace) for item in provider_spaces):
+        raise TypeError(
+            "field operator %r providers must declare exact FieldSpace outputs"
+            % field.local_id)
+    program_space = provider_spaces[0]
+    if any(item != program_space for item in provider_spaces[1:]):
+        raise ValueError(
+            "field operator %r providers disagree on the consumed FieldSpace"
+            % field.local_id)
+    if tuple(program_space.components) != outputs:
+        raise ValueError(
+            "field operator %r provider components %r disagree with field outputs %r"
+            % (field.local_id, tuple(program_space.components), outputs))
+    return field, program_space, outputs
 
 
 def block_name(block: Any) -> str:
@@ -140,18 +200,6 @@ def state_name(state: Any) -> str:
     if not isinstance(state, Handle) or state.kind != "state":
         raise TypeError("expected a qualified state Handle, got %r" % (state,))
     return state.local_id
-
-
-def field_name(field: Any) -> str:
-    """Project a typed named-field selector at a lowering/display boundary."""
-    from pops.model import OperatorHandle
-    from pops.problem.handles import FieldHandle
-
-    if isinstance(field, FieldHandle):
-        return field.local_id
-    if isinstance(field, OperatorHandle) and field.kind == "field_operator":
-        return field.registered_operator_name
-    raise TypeError("expected a FieldHandle or field_operator OperatorHandle, got %r" % field)
 
 
 def canonical_handle(handle: Any) -> Handle:
@@ -200,5 +248,5 @@ def handle_data(handle: Any) -> dict[str, Any]:
 
 __all__ = [
     "bind_field_reference", "bind_program_block", "bind_state_reference", "block_name",
-    "canonical_handle", "field_name", "handle_data", "state_name",
+    "canonical_handle", "handle_data", "state_name",
 ]

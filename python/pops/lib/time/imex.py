@@ -8,7 +8,8 @@ from pops.time import LocalLinear
 from pops.solvers import DenseLU
 
 from ._factory import (
-    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+    call_at, field_handle, instance_state, operator_handle, program_factory,
+    resolve_solve_action,
 )
 from ._helpers import _op_space_arity, _stage_point
 
@@ -33,7 +34,7 @@ def _build_imex(
     explicit_operator = operator_handle(explicit_operator, "IMEX explicit_operator")
     implicit_operator = operator_handle(implicit_operator, "IMEX implicit_operator")
     if fields_operator is not None:
-        fields_operator = operator_handle(fields_operator, "IMEX fields_operator")
+        fields_operator = field_handle(fields_operator, "IMEX fields_operator")
 
     temporal = instance_state(program, state, "IMEX")
     explicit_arity = _op_space_arity(program, explicit_operator)
@@ -124,10 +125,11 @@ def IMEX(
 ) -> Any:
     """Return a generic ordinary IMEX Program for one exact ``block[state]`` handle.
 
-    The explicit rate, implicit local-linear map and optional field operator are exact qualified
-    model handles. ``tableau`` is the complete additive RK configuration. Every field solve remains
-    unreadable until ``solve_action`` explicitly consumes its outcome. No method name, hidden runtime
-    route, fallback operator or preset-specific scheme object participates in lowering.
+    The explicit rate and implicit local-linear map are exact qualified model handles. The optional
+    field solve is the sole case-owned handle returned by ``Case.field(...)``. ``tableau`` is the
+    complete additive RK configuration. Every field solve remains unreadable until ``solve_action``
+    explicitly consumes its outcome. No method name, hidden runtime route, fallback operator or
+    preset-specific scheme object participates in lowering.
     """
     action = resolve_solve_action(solve_action, "IMEX")
     return program_factory(

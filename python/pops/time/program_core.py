@@ -12,7 +12,7 @@ from pops.time.program_clocks import _ProgramClocks
 from pops.time.program_rhs import _ProgramRhs
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import (
-    bind_field_reference, bind_program_block, bind_state_reference, block_name, field_name,
+    bind_field_reference, bind_state_reference, block_name,
 )
 from pops.time.program_value_validation import (
     merge_state_spaces, rate_space_for, require_compatible_spaces,
@@ -192,33 +192,36 @@ class _ProgramCore(
             raise ValueError(
                 "field operator arguments must share one exact TimePoint; synchronize or "
                 "evaluate every coupled block at the same stage first")
-        field = bind_field_reference(self, values[0].block, field)
+        field, field_space, outputs = bind_field_reference(self, values[0].block, field)
         token = (
-            self._solve_fields(name=name, state=values[0], field=field)
+            self._solve_fields(
+                name=name, state=values[0], field=field,
+                field_space=field_space, outputs=outputs)
             if len(values) == 1 else
-            self._solve_fields_from_blocks(values, field=field, name=name)
+            self._solve_fields_from_blocks(
+                values, field=field, field_space=field_space,
+                outputs=outputs, name=name)
         )
         return self._field_solve_outcome(token)
 
-    def _solve_fields(self, name: Any, state: Any, field: Any = None) -> Any:
+    def _solve_fields(
+        self, name: Any, state: Any, *, field: Any,
+        field_space: Any, outputs: Any,
+    ) -> Any:
         """Internal typed field-solve builder used after handle authentication."""
         if not (isinstance(state, ProgramValue) and state.vtype == "state"):
             raise ValueError("solve_fields: a State value is required")
         if field is None:
             raise ValueError("solve_fields: an exact field handle is required")
         attrs = {"field": field}
-        # ADC-588: tag the value with a typed FieldContext (the "solve_fields returns a FieldContext"
-        # contract, now a real object). The default problem exposes the historical phi/grad outputs;
-        # a named field exposes its own single output. The context is build-time metadata only, NEVER
-        # serialized as canonical provenance so validation, rewrites and cache identity agree.
+        # The context is build-time metadata only, NEVER serialized as canonical provenance so
+        # validation, rewrites and cache identity agree. Its outputs are the exact components of the
+        # registered FieldOperator's FieldSpace, never a historical default or field display name.
         from pops.time.field_context import FieldContext
-        output_name = field_name(field)
-        outputs = (output_name,)
         context = FieldContext(field, ((state.block, state.id),), outputs)
-        default_field_space = self._default_field_spaces.get(state.block.model_owner_path)
         return self._new(
             "fields", "solve_fields", (state,), attrs, name, state.block,
-            field_context=context, space=default_field_space)
+            field_context=context, space=field_space)
 
     def _field_solve_outcome(self, token: Any) -> Any:
         """Wrap one internal field-solve token in the mandatory public consumption contract."""
@@ -238,7 +241,10 @@ class _ProgramCore(
 
         return FieldSolveOutcome(self, token, project, outcome_name)
 
-    def _solve_fields_from_blocks(self, states: Any, *, field: Any, name: Any = None) -> Any:
+    def _solve_fields_from_blocks(
+        self, states: Any, *, field: Any, field_space: Any,
+        outputs: Any, name: Any = None,
+    ) -> Any:
         """Build a coupled field solve after its field identity was authenticated."""
         # A coupled solve carries EVERY exact block/state source. It has no singular block owner:
         # projecting onto states[0] would allow only that block to be checked and silently discard
@@ -247,13 +253,8 @@ class _ProgramCore(
         context = FieldContext(
             field,
             tuple((state.block, state.id) for state in states),
-            ("phi", "grad_x", "grad_y"),
+            outputs,
         )
-        field_spaces = {
-            self._default_field_spaces.get(state.block.model_owner_path) for state in states
-        }
-        field_spaces.discard(None)
-        field_space = next(iter(field_spaces)) if len(field_spaces) == 1 else None
         return self._new(
             "fields", "solve_fields_from_blocks", tuple(states), {"field": field}, name, None,
             field_context=context, space=field_space)
@@ -289,26 +290,6 @@ class _ProgramCore(
                 "distinct authoring registries claim canonical Program owner %s"
                 % canonical_owner)
         self._operator_registries[owner] = reg
-        inferred_fields = []
-        for operator_name in reg.names():
-            signature = reg.get(operator_name).signature
-            output = signature.output
-            if getattr(output, "kind", None) == "field" and output not in inferred_fields:
-                inferred_fields.append(output)
-        field_space = inferred_fields[0] if len(inferred_fields) == 1 else None
-        self._default_field_spaces[owner] = field_space
-        # A model may finish declaring imposed aux fields after an early Program binding. Rebinding
-        # before freeze widens already-authored FieldContext values to the registry's now-authoritative
-        # complete FieldSpace by immutable SSA replacement; stale external references canonicalize by
-        # id. This changes the IR hash and never silently keeps the earlier partial type.
-        if field_space is not None:
-            for value in tuple(self._values):
-                if (value.vtype == "fields" and value.block is not None
-                        and value.block.model_owner_path == owner
-                        and value.space != field_space
-                        and (value.space is None
-                             or value.space.name == field_space.name)):
-                    self._replace_value(value, space=field_space)
         return self
 
     def _linear_combine(
