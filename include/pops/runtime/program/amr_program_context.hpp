@@ -83,7 +83,8 @@ class AmrProgramContext {
   /// clears the per-step effective-flux ledger + the live-state-ring record (ADC-639); the PERSISTENT
   /// per-ring flux strips (ring_flux_) survive across steps, as the multistep ring itself does.
   void reset_step() const {
-    solved_this_step_ = false;
+    default_solve_report_.reset();
+    named_solve_reports_.clear();
     flux_ledger_.clear();
     rate_provenance_.clear();
     synchronized_flux_.clear();
@@ -274,26 +275,33 @@ class AmrProgramContext {
   /// levels within the same macro-step is a no-op cache-hit (parity: the body stays atomic, the solve
   /// fires once -- the OncePerStep cadence the native AMR step uses).
   SolveReport solve_fields() const {
-    if (level_ == 0 || !solved_this_step_) {
-      eng_->solve_fields();
-      solved_this_step_ = true;
+    if (level_ == 0 || !default_solve_report_) {
+      default_solve_report_.reset();
+      const SolveReport report = eng_->solve_default_field();
+      if (report.solved())
+        default_solve_report_ = report;
+      return report;
     }
-    SolveReport report;
-    report.mark_solved();
-    return report;
+    return *default_solve_report_;
   }
   /// Per-stage re-solve from a stage state is currently a coarse-only capability.  A fine-level request
   /// is rejected explicitly; it never consumes a stale injected auxiliary field.
   SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     if (level_ == 0) {
       MultiFab& live = state(b);
-      MultiFab saved = live;          // stash the live state
-      live = u_stage;                 // solve from the stage state
-      eng_->solve_fields();
-      live = std::move(saved);        // restore the live state (the commit owns it)
-      solved_this_step_ = true;
+      MultiFab saved = live;  // stash the live state
+      default_solve_report_.reset();
       SolveReport report;
-      report.mark_solved();
+      try {
+        live = u_stage;  // solve from the stage state
+        report = eng_->solve_default_field();
+        live = std::move(saved);  // restore the live state (the commit owns it)
+      } catch (...) {
+        live = std::move(saved);
+        throw;
+      }
+      if (report.solved())
+        default_solve_report_ = report;
       return report;
     }
     throw std::runtime_error(
@@ -304,11 +312,14 @@ class AmrProgramContext {
   SolveReport solve_fields_from_state(const std::string& field, int b,
                                       MultiFab& u_stage) const {
     if (level_ != 0) {
-      SolveReport report;
-      report.mark_solved();
-      return report;  // the coarse solve publishes/injects every level once per stage
+      const auto cached = named_solve_reports_.find(field);
+      if (cached == named_solve_reports_.end())
+        throw std::runtime_error(
+            "AmrProgramContext::solve_fields_from_state(field): fine-level reuse requires an "
+            "accepted coarse SolveReport");
+      return cached->second;  // the coarse solve publishes/injects every level once per stage
     }
-    (void)eng_->provider_potential(field);  // authenticate the exact resolved field route
+    named_solve_reports_.erase(field);
     MultiFab& live = state(b);
     MultiFab published = live;
     SolveReport report;
@@ -321,7 +332,7 @@ class AmrProgramContext {
       throw;
     }
     if (report.solved())
-      solved_this_step_ = true;
+      named_solve_reports_[field] = report;
     return report;
   }
   /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
@@ -337,14 +348,17 @@ class AmrProgramContext {
   SolveReport solve_fields_from_blocks(const std::string& field,
                                        const std::vector<const MultiFab*>& u_stages) const {
     if (level_ != 0) {
-      SolveReport report;
-      report.mark_solved();
-      return report;
+      const auto cached = named_solve_reports_.find(field);
+      if (cached == named_solve_reports_.end())
+        throw std::runtime_error(
+            "AmrProgramContext::solve_fields_from_blocks(field): fine-level reuse requires an "
+            "accepted coarse SolveReport");
+      return cached->second;
     }
     if (u_stages.size() != static_cast<std::size_t>(n_blocks()))
       throw std::runtime_error(
           "AmrProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
-    (void)eng_->provider_potential(field);
+    named_solve_reports_.erase(field);
     std::vector<MultiFab*> live;
     std::vector<MultiFab> published;
     live.reserve(u_stages.size());
@@ -370,7 +384,7 @@ class AmrProgramContext {
       throw;
     }
     if (report.solved())
-      solved_this_step_ = true;
+      named_solve_reports_[field] = report;
     return report;
   }
 
@@ -937,7 +951,8 @@ class AmrProgramContext {
     const auto saved_clocks = level_clocks_;
     const auto saved_live = live_state_rings_;
     const bool saved_rotate = rotate_pending_;
-    const bool saved_solved = solved_this_step_;
+    const auto saved_default_solve_report = default_solve_report_;
+    const auto saved_named_solve_reports = named_solve_reports_;
     const int saved_level = level_;
     const amr::Rational saved_stage_time = stage_time_;
     const auto saved_active_parent = active_parent_;
@@ -981,7 +996,8 @@ class AmrProgramContext {
       level_clocks_ = saved_clocks;
       live_state_rings_ = saved_live;
       rotate_pending_ = saved_rotate;
-      solved_this_step_ = saved_solved;
+      default_solve_report_ = saved_default_solve_report;
+      named_solve_reports_ = saved_named_solve_reports;
       level_ = saved_level;
       stage_time_ = saved_stage_time;
       active_parent_ = saved_active_parent;
@@ -1442,7 +1458,8 @@ class AmrProgramContext {
   AmrSystem* facade_;
   AmrRuntime* eng_;
   mutable int level_ = 0;
-  mutable bool solved_this_step_ = false;
+  mutable std::optional<SolveReport> default_solve_report_;
+  mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable std::optional<GeometricMG> mg_precond_;
   mutable std::shared_ptr<AmrTensorElliptic> tensor_elliptic_;
   mutable int tensor_program_block_{-1};

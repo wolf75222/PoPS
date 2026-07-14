@@ -119,6 +119,7 @@ struct AmrFieldSolveConfig {
 };
 
 namespace detail {
+
 struct AmrHistoryOps;  // ADC-631 multistep history-ring operations (friend of AmrRuntime; amr_history.hpp)
 
 struct BootstrapNodeBilinearKernel {
@@ -1639,7 +1640,8 @@ class AmrRuntime {
     if (it == named_fields_.end())
       throw std::runtime_error("AmrRuntime::named_field_values : unknown qualified field provider '" +
                                provider_slot + "'");
-    solve_fields();  // up-to-date phi (counterpart of potential()); named solve runs inside
+    require_solved_field_report(
+        solve_fields(), "AmrRuntime::named_field_values");
     return coarse_aux_component(it->second.phi_comp);
   }
   /// @}
@@ -1799,7 +1801,8 @@ class AmrRuntime {
   void coupled_source_step(Real dt) {
     if (coupled_sources_.empty())
       return;        // opt-in: no source -> bit-identical path
-    solve_fields();  // aux per level up to date (a term may read phi/grad via a future input)
+    require_solved_field_report(
+        solve_fields(), "AmrRuntime::coupled_source_step");
     for (const auto& cs : coupled_sources_) {
       // PER-LEVEL application: at each level k, the blocks share EXACTLY the same layout
       // (same_layout_or_throw guard), so same local_size() and same local indexing -> we iterate in
@@ -1846,29 +1849,54 @@ class AmrRuntime {
   /// sync_down (per block) + system coarse Poisson (CO-LOCATED SUMMED RHS) + coarse aux + fine
   /// injection. Reproduces AmrSystemCoupler::solve_fields identically, but the system RHS is assembled
   /// by the blocks' add_elliptic_rhs closures (Sum_b elliptic_rhs_b(U_b)) not a compile-time RhsAssembler.
-  void solve_fields() {
-    solve_default_field();
-    solve_named_fields();
+  SolveReport solve_fields() {
+    return run_field_solve_transaction(
+        FieldSolveScope{true, NamedFieldSnapshotScope::kAll, nullptr}, [&]() {
+          SolveReport report = solve_default_field_uncommitted();
+          if (!report.solved() || named_fields_.empty())
+            return report;
+          return solve_named_fields_uncommitted();
+        });
+  }
+
+  SolveReport solve_default_field() {
+    return run_field_solve_transaction(
+        FieldSolveScope{true, NamedFieldSnapshotScope::kNone, nullptr},
+        [&]() { return solve_default_field_uncommitted(); });
+  }
+
+  SolveReport solve_named_fields(const std::string* selected = nullptr) {
+    return run_field_solve_transaction(
+        FieldSolveScope{false, selected == nullptr ? NamedFieldSnapshotScope::kAll
+                                                   : NamedFieldSnapshotScope::kSelected,
+                        selected},
+        [&]() { return solve_named_fields_uncommitted(selected); });
   }
 
   std::int64_t recompute_bootstrap_field(const std::string& field) {
     if (!bootstrap_pending_)
       throw std::runtime_error("AmrRuntime::recompute_bootstrap_field requires a transaction");
+    SolveReport report;
     if (field == "phi") {
-      solve_default_field();
+      report = solve_default_field();
     } else {
       if (!has_named_field(field))
         throw std::runtime_error(
             "AmrRuntime::recompute_bootstrap_field has no runtime field '" + field + "'");
-      solve_named_fields(&field);
+      report = solve_named_fields(&field);
     }
+    if (!report.solved())
+      throw std::runtime_error(
+          "AmrRuntime::recompute_bootstrap_field failed to solve '" + field +
+          "': status=" + report.status_name() + " action=" + report.action_name());
     std::int64_t materialized = 0;
     for (const MultiFab& level : aux_)
       materialized += level.box_array().num_cells();
     return materialized;
   }
 
-  void solve_default_field() {
+ private:
+  SolveReport solve_default_field_uncommitted() {
     ++solve_count_;
     // 1. average_down per block (fine -> coarse) over the whole hierarchy. AMR PROFILING (Spec 5
     // criterion 43): time the restriction cascade into the "average_down" scope + bump its per-solve
@@ -1892,6 +1920,9 @@ class AmrRuntime {
     for (auto& b : blocks_)
       b.add_elliptic_rhs((*b.levels)[0].U, mg_.rhs());
     mg_.solve();
+    const SolveReport report = mg_.last_solve_report();
+    if (!report.solved())
+      return report;
 
     // 3. coarse aux = (phi, grad phi) via the SAME clean path as AmrSystemCoupler: fill the ghosts of
     // phi according to bcPhi_, field_postprocess (phi + grad), fill the ghosts of aux according to
@@ -1905,14 +1936,8 @@ class AmrRuntime {
     // No-op when no named field was set; field_postprocess wrote only comps 0..2, so this never clobbers
     // phi/grad. This is what makes named aux survive a regrid (regrid re-solves -> re-applies).
     apply_named_aux();
-    fill_ghosts_profiled(aux_[0], dom_, aux_bc_);
-    apply_named_aux_bc();  // ADC-369: per-field halo override on the coarse physical ghosts (after the
-                           // shared fill, before injection); no-op when no policy declared.
-    // 4. coarse->fine injection of the aux (parent replicated only at level 1 if coarse replicated).
-    for (int k = 1; k < nlev_; ++k)
-      detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
-                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
-
+    publish_aux_components(default_aux_components());
+    return report;
   }
 
   /// Solves every registered NAMED elliptic field (ADC-428) on the coarse, writes phi (+ centered grad)
@@ -1920,11 +1945,11 @@ class AmrRuntime {
   /// default Poisson block above (steps 2-4) but per named field, reusing a DEDICATED GeometricMG. The
   /// default phi/grad (comps 0..2) are never touched. No-op without a named field (default-only path
   /// stays bit-identical).
-  SolveReport solve_named_fields(const std::string* selected = nullptr) {
+  SolveReport solve_named_fields_uncommitted(const std::string* selected = nullptr) {
     SolveReport completed;
-    completed.mark_solved();
+    bool has_completed_solve = false;
     if (named_fields_.empty())
-      return completed;
+      throw std::runtime_error("AmrRuntime::solve_named_fields has no registered field");
     const Real dx = geom_.dx(), dy = geom_.dy();
     for (auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
@@ -1978,22 +2003,6 @@ class AmrRuntime {
         }
       };
       derive_named_nullspace(nf);
-      std::vector<MultiFab> published_phi;
-      published_phi.reserve(static_cast<std::size_t>(nlev_));
-      for (int k = 0; k < nlev_; ++k) {
-        MultiFab& phi = nf.fac ? nf.fac->phi_level(k) :
-                                 nf.level_mg[static_cast<std::size_t>(k)]->phi();
-        published_phi.emplace_back(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
-        lincomb(published_phi.back(), Real(1), phi, Real(0), phi);
-      }
-      auto restore_published = [&]() {
-        for (int k = 0; k < nlev_; ++k) {
-          MultiFab& phi = nf.fac ? nf.fac->phi_level(k) :
-                                   nf.level_mg[static_cast<std::size_t>(k)]->phi();
-          lincomb(phi, Real(1), published_phi[static_cast<std::size_t>(k)], Real(0),
-                  published_phi[static_cast<std::size_t>(k)]);
-        }
-      };
       const SolveReport* attempted_report = nullptr;
       try {
         if (nf.fac) {
@@ -2006,6 +2015,9 @@ class AmrRuntime {
           attempted_report = &nf.fac->last_solve_report();
           nf.fac->solve();
           completed = nf.fac->last_solve_report();
+          has_completed_solve = true;
+          if (!completed.solved())
+            return completed;
         } else {
           for (int k = 0; k < static_cast<int>(nf.level_mg.size()); ++k) {
             auto& solver = *nf.level_mg[static_cast<std::size_t>(k)];
@@ -2022,14 +2034,12 @@ class AmrRuntime {
               solver.solve(nf.plan.mg_opts.rel_tol, nf.plan.mg_opts.max_cycles,
                            nf.plan.mg_opts.abs_tol);
             completed = solver.last_solve_report();
-            if (!completed.solved()) {
-              restore_published();
+            has_completed_solve = true;
+            if (!completed.solved())
               return completed;
-            }
           }
         }
       } catch (...) {
-        restore_published();
         // The nonlinear and composite solvers historically throw after recording a typed,
         // collective rejection.  Preserve that report as data; unrelated capability, boundary,
         // nullspace, and configuration exceptions still propagate unchanged.
@@ -2064,19 +2074,17 @@ class AmrRuntime {
           }
       }
     }
-    // Ghost-fill the named components (shared aux fill: same routing as the default) + per-field halo
-    // override (ADC-369), then inject coarse->fine so the named field reaches every level. We re-fill the
-    // WHOLE aux: the default comps 0..2 were just written by the Poisson block, so their valid cells are
-    // unchanged -- only ghosts are refreshed (idempotent). Cheap (one extra fill per solve_fields when a
-    // named field exists; none otherwise).
-    fill_ghosts_profiled(aux_[0], dom_, aux_bc_);
-    apply_named_aux_bc();
-    for (int k = 1; k < nlev_; ++k)
-      detail::coupler_inject_aux_mb(aux_[k - 1], aux_[k],
-                                    /*replicated_parent=*/(k == 1) && replicated_coarse_);
+    if (!has_completed_solve)
+      throw std::runtime_error(
+          "AmrRuntime::solve_named_fields selected an unknown field");
+    // Ghost-fill and inject only the components owned by this named solve. Unrelated aux components,
+    // including their physical/inter-box ghosts, are not written by a selected solve.
+    publish_aux_components(named_aux_components(selected));
     // Composite fields own a solved potential on every level. Publish them last so the generic
     // coarse injection above cannot overwrite the refined values.
     for (auto& [field, nf] : named_fields_) {
+      if (selected != nullptr && field != *selected)
+        continue;
       if (!nf.fac && nf.level_mg.size() <= 1)
         continue;
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
@@ -2112,6 +2120,8 @@ class AmrRuntime {
     }
     return completed;
   }
+
+ public:
 
   struct TagVmValue {
     bool matches = false;
@@ -2454,7 +2464,7 @@ class AmrRuntime {
 
     // (R0) PRECONDITION: fields up to date (aux per level, for the |grad phi| criterion). The per-block
     // mass snapshot is NOT needed by the engine (conservation is checked test-side V1).
-    solve_fields();
+    require_solved_field_report(solve_fields(), "AmrRuntime::regrid precondition");
 
     // (R1)+(R2) Resolved tagging VM, or the legacy per-block/phi predicates for callers that have not
     // installed a final provider graph. The resolved path evaluates refine + coarsen roots and keeps
@@ -2555,7 +2565,7 @@ class AmrRuntime {
     // the new grid AND to trigger the fine -> coarse cascade (mf_average_down_mb, in solve_fields) that
     // restores the covered coarse cells (otherwise a mass diagnostic, sum of the coarse only, would
     // count a phantom coarse value under the new patch, X5).
-    solve_fields();
+    require_solved_field_report(solve_fields(), "AmrRuntime::regrid publication");
     ++regrid_count_;
     // AMR PROFILING (Spec 5 criterion 43): a regrid COMPLETED -> bump the per-run "regrid" counter
     // (parity with regrid_count_). The "regrid" TIMING scope (_rg above) already covered the whole
@@ -2613,7 +2623,7 @@ class AmrRuntime {
     // assumed by the multirate, exactly like System::step / AmrSystemCoupler in OncePerStep. phi stays
     // frozen during the blocks' advance (no per-substep re-solve here). When reached from step_cfl this
     // re-solves an unchanged state (a second solve), kept on purpose; see the ADC-318 note in step_cfl.
-    solve_fields();
+    require_solved_field_report(solve_fields(), "AmrRuntime::step");
     for (auto& b : blocks_) {
       // HOLD-THEN-CATCH-UP cadence (cf. AmrRuntimeBlock::stride, #140): the block is HELD as long as
       // (macro_step_+1) % stride != 0, then CATCHES UP at end-of-window by an effective step stride*dt.
@@ -2686,7 +2696,7 @@ class AmrRuntime {
     // drifts the trajectory by ~3e-10 over 20 steps (below the solver tolerance and far below the O(dt^2)
     // scheme error, but nonzero). The de-dup was declined to preserve the exact historical bit-stream
     // (SystemStepper::step_cfl avoids the double solve by INLINING its advance, not by skipping a solve).
-    solve_fields();  // aux up to date: each block's max_speed reads it on the current coarse
+    require_solved_field_report(solve_fields(), "AmrRuntime::cfl_dt");
     Real dt = std::numeric_limits<Real>::infinity();
     last_dt_reason_ = "degenerate";
     for (auto& b : blocks_) {
@@ -2939,13 +2949,13 @@ class AmrRuntime {
   /// Coarse potential (component 0 of the shared aux) as an n*n row-major field. Solves the fields if
   /// needed (counterpart of AmrSystem::potential), then reads aux(0). Identical for all blocks.
   std::vector<double> potential() {
-    solve_fields();
+    require_solved_field_report(solve_fields(), "AmrRuntime::potential");
     return coarse_aux_component(0);
   }
 
   /// Max SYSTEM wave speed (max over the blocks) on the current coarse. Requires the aux up to date.
   Real max_speed() {
-    solve_fields();
+    require_solved_field_report(solve_fields(), "AmrRuntime::max_speed");
     Real w = kAmrDriftSpeedFloor;
     for (auto& b : blocks_) {
       const Real wb = b.max_speed((*b.levels)[0].U, aux_[0]);
@@ -3196,6 +3206,52 @@ class AmrRuntime {
     bool nullspace_ready = false;
   };
 
+  struct FieldSolveSnapshot {
+    struct NamedFieldState {
+      enum class Storage { kUnallocated, kLevelLocal, kComposite };
+      Storage storage = Storage::kUnallocated;
+      std::vector<MultiFab> phi;
+      std::vector<MultiFab> rhs;
+      FieldNullspacePlan nullspace;
+      std::vector<FieldNullspacePlan> level_nullspace;
+      bool nullspace_ready = false;
+    };
+
+    bool has_default = false;
+    MultiFab default_phi;
+    MultiFab default_rhs;
+    std::vector<int> aux_components;
+    std::vector<MultiFab> packed_aux;
+    std::map<std::string, NamedFieldState> named;
+  };
+
+  enum class NamedFieldSnapshotScope { kNone, kSelected, kAll };
+
+  struct FieldSolveScope {
+    bool default_field = false;
+    NamedFieldSnapshotScope named_fields = NamedFieldSnapshotScope::kNone;
+    const std::string* selected_named_field = nullptr;
+  };
+
+  std::vector<int> default_aux_components() const;
+  std::vector<int> named_aux_components(const std::string* selected) const;
+  std::vector<int> field_solve_aux_components(const FieldSolveScope& scope) const;
+  std::vector<MultiFab> pack_aux_components(const std::vector<int>& components);
+  void unpack_aux_components(const std::vector<MultiFab>& packed,
+                             const std::vector<int>& components) noexcept;
+  void publish_aux_components(const std::vector<int>& components);
+  FieldSolveSnapshot capture_field_solve_snapshot(const FieldSolveScope& scope);
+  void restore_field_solve_snapshot(FieldSolveSnapshot&& snapshot) noexcept;
+
+  template <class Solve>
+  SolveReport run_field_solve_transaction(const FieldSolveScope& scope, Solve&& solve);
+
+  static void require_solved_field_report(const SolveReport& report, const char* where) {
+    if (!report.solved())
+      throw std::runtime_error(std::string(where) + ": field solve failed: status=" +
+                               report.status_name() + " action=" + report.action_name());
+  }
+
   void invalidate_named_field_topology() {
     for (auto& [_, field] : named_fields_) {
       field.mg.reset();
@@ -3405,15 +3461,7 @@ class AmrRuntime {
   // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill_ghosts. Overrides
   // only each declared component's physical-face ghosts (aux_halo_override keeps periodic faces
   // periodic). No-op without a policy. Mirror of SystemFieldSolver::apply_named_aux_bc.
-  void apply_named_aux_bc() {
-    if (named_aux_bc_.empty() || aux_.empty())
-      return;
-    for (const auto& [comp, policy] : named_aux_bc_) {
-      if (comp >= aux_ncomp_)
-        continue;
-      fill_physical_bc(aux_[0], dom_, aux_halo_override(aux_bc_, policy), comp);
-    }
-  }
+  void apply_named_aux_bc(MultiFab& packed, const std::vector<int>& components);
 
   // Index of the block named @p name in the registry (-1 if absent). Counterpart of
   // AmrSystem::Impl::block_index (the facade names the blocks; the coupled sources target them by name,
@@ -3593,11 +3641,12 @@ class AmrRuntime {
 }  // namespace pops
 
 // Out-of-line AmrRuntime member definitions kept OUT of this header (its line budget): the
-// composite-reduction folds and the checkpoint hierarchy-rebuild seam (ADC-542). Included last so
-// the full AmrRuntime class is visible.
+// transactional field-publication helpers, composite-reduction folds, and checkpoint
+// hierarchy-rebuild seam (ADC-542). Included last so the full AmrRuntime class is visible.
 // ADC-631 multistep history rings (detail::AmrHistoryOps): store/register/read/rotate, per-level flat
 // checkpoint accessors, the regrid remap hook and the native selective-persistence replay. Included
 // BEFORE amr_restore.hpp so rebuild_hierarchy can call the ring realloc hook (AmrHistoryOps defined).
+#include <pops/runtime/amr/amr_field_solve_transaction.hpp>  // NOLINT(build/include_order)
 #include <pops/runtime/amr/amr_history.hpp>   // NOLINT(build/include_order)
 #include <pops/runtime/amr/amr_restore.hpp>  // NOLINT(build/include_order)
 // ADC-639 conservative-reflux capture: the flux-materialising per-level residual seams

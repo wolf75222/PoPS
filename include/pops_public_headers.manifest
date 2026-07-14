@@ -106,6 +106,7 @@ public pops/physics/bricks/hyperbolic.hpp
 public pops/physics/bricks/source.hpp
 public pops/physics/composition/composite.hpp
 public pops/physics/fluids/euler.hpp
+public pops/runtime/amr/amr_field_solve_transaction.hpp
 public pops/runtime/amr/amr_history.hpp
 public pops/runtime/amr/amr_program_reflux.hpp
 public pops/runtime/amr/amr_restore.hpp
