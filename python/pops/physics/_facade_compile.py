@@ -22,6 +22,16 @@ else:
 class _FacadeCompileMixin(_FacadeModel):
     """Model-hash + compile half of the PDE facade (lazy codegen)."""
 
+    def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
+        """Expose the exact metadata protocol of the composed emit model.
+
+        ``compile_problem`` deliberately retains this facade as its single-model
+        compile authority because operator resolution and code emission both use
+        it.  Artifact introspection must therefore cross the same explicit
+        provider boundary instead of probing the private ``_m`` attribute.
+        """
+        return self._m.__pops_artifact_model_metadata__()
+
     def __pops_compiler_lowering__(self) -> Any:
         """Provide the explicit compiler-provider boundary for this PDE facade."""
         from pops.codegen import CompilerLowering

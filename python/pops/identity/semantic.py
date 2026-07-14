@@ -116,6 +116,7 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
     optional = {"histories", "history_persistence", "dt_bound", "step_transaction"}
     if not expected.issubset(serialized) or not set(serialized).issubset(expected | optional):
         raise TypeError("Program semantic projection received an unsupported IR schema")
+    program_clock_owner = serialized["clock"].get("owner")
     result = {
         "version": serialized["version"],
         "clock": serialized["clock"],
@@ -134,7 +135,45 @@ def program_semantic_data(program: Any) -> dict[str, Any]:
             "nodes": [_semantic_node(row) for row in bound["nodes"]],
             "result": bound["result"],
         }
-    return semantic_value(result, where="Program semantic payload")
+    return semantic_value(
+        _drop_program_presentation(result, program_clock_owner),
+        where="Program semantic payload",
+    )
+
+
+def _drop_program_presentation(value: Any, program_clock_owner: Any) -> Any:
+    """Remove labels that identify an authoring presentation, not a method.
+
+    Program-owned clocks carry the Program's display name in their consumer
+    ``OwnerPath`` and ``StagePoint.name`` is only a label for reports.  Clock
+    names, partition names and exact coordinates remain semantic.  Foreign
+    clock owners are preserved because they are genuine cross-authority
+    references.
+    """
+    if isinstance(value, Mapping):
+        normalized = dict(value)
+        if (
+            set(normalized) == {"schema_version", "name", "owner"}
+            and normalized.get("schema_version") == 1
+            and normalized.get("owner") == program_clock_owner
+        ):
+            normalized["owner"] = None
+        if (
+            set(normalized) == {"schema_version", "name", "partitions"}
+            and normalized.get("schema_version") == 1
+            and isinstance(normalized.get("partitions"), Mapping)
+        ):
+            normalized.pop("name")
+        return {
+            key: _drop_program_presentation(item, program_clock_owner)
+            for key, item in normalized.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _drop_program_presentation(item, program_clock_owner)
+            for item in value
+        ]
+    return value
 
 
 def semantic_value(value: Any, *, where: str) -> Any:

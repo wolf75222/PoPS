@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from fractions import Fraction
+from operator import index
 from typing import Any
 
 from pops.solvers import DenseLU
 from pops.time import LocalLinear
 
 from ._factory import (
-    call_at, instance_state, operator_handle, program_factory, resolve_solve_action,
+    call_at, call_field_at, field_handle, instance_state, operator_handle,
+    program_factory, resolve_solve_action,
 )
 from ._helpers import _block_label, _stage_point
 
@@ -18,6 +20,19 @@ _AB_WEIGHTS = {
     2: (Fraction(3, 2), Fraction(-1, 2)),
     3: (Fraction(23, 12), Fraction(-16, 12), Fraction(5, 12)),
 }
+
+
+def _validated_order(order: Any, supported: Any, scheme: str) -> int:
+    """Return an exact integer order before it is used in names or graph construction."""
+    if isinstance(order, bool):
+        raise ValueError("%s order must be %s" % (scheme, supported))
+    try:
+        normalized = index(order)
+    except TypeError:
+        raise ValueError("%s order must be %s" % (scheme, supported)) from None
+    if normalized not in supported:
+        raise ValueError("%s order must be %s" % (scheme, supported))
+    return int(normalized)
 
 
 def _history(program: Any, temporal: Any, name: str, lag: int, space: Any) -> Any:
@@ -38,15 +53,14 @@ def _build_adams_bashforth(
     order: int,
     solve_action: Any,
 ) -> None:
-    if isinstance(order, bool) or order not in _AB_WEIGHTS:
-        raise ValueError("AdamsBashforth order must be 1, 2, or 3")
+    order = _validated_order(order, (1, 2, 3), "AdamsBashforth")
     rate = operator_handle(rate, "AdamsBashforth rate")
     if fields is not None:
-        fields = operator_handle(fields, "AdamsBashforth fields")
+        fields = field_handle(fields, "AdamsBashforth fields")
     temporal = instance_state(program, state, "AdamsBashforth")
     initial = temporal.n
     point = _stage_point(program, "ab%d_current" % order, 0)
-    stage_fields = call_at(
+    stage_fields = call_field_at(
         program, fields, initial, name="ab%d_fields" % order, point=point,
         solve_action=solve_action,
     ) if fields is not None else None
@@ -76,6 +90,7 @@ def AdamsBashforth(
     solve_action: Any = None,
 ) -> Any:
     """Return an ordinary explicit multistep Program with typed operator dependencies."""
+    order = _validated_order(order, (1, 2, 3), "AdamsBashforth")
     action = resolve_solve_action(solve_action, "AdamsBashforth")
     return program_factory(
         "AdamsBashforth%d" % order,
@@ -97,13 +112,12 @@ def _build_bdf(
     order: int,
     solve_action: Any,
 ) -> None:
-    if isinstance(order, bool) or order not in (1, 2):
-        raise ValueError("BDF order must be 1 or 2")
+    order = _validated_order(order, (1, 2), "BDF")
     implicit = operator_handle(implicit, "BDF implicit")
     if explicit is not None:
         explicit = operator_handle(explicit, "BDF explicit")
     if fields is not None:
-        fields = operator_handle(fields, "BDF fields")
+        fields = field_handle(fields, "BDF fields")
     temporal = instance_state(program, state, "BDF")
     initial = temporal.n
     point = _stage_point(
@@ -111,7 +125,7 @@ def _build_bdf(
         "bdf%d_stage" % order,
         partitions={"explicit": 0, "implicit": 1},
     )
-    stage_fields = call_at(
+    stage_fields = call_field_at(
         program, fields, initial, name="bdf%d_fields" % order, point=point,
         solve_action=solve_action,
     ) if fields is not None else None
@@ -161,6 +175,7 @@ def BDF(
     Globally coupled nonlinear problems remain explicit ``Program.solve(problem, solver=...)``
     authoring; this preset does not guess a Jacobian, preconditioner, or field policy.
     """
+    order = _validated_order(order, (1, 2), "BDF")
     action = resolve_solve_action(solve_action, "BDF")
     return program_factory(
         "BDF%d" % order, _build_bdf,

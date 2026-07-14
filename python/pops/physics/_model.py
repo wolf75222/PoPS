@@ -77,7 +77,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
 
     def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
         """Exact low-level report projection used before a formula model is discarded."""
-        from pops.codegen._compile_emit import _aux_total_n_aux
+        from pops.physics.aux import aux_total_n_aux
 
         runtime_params = self.runtime_param_nodes()
         if any(node.handle is None for node in runtime_params):
@@ -93,7 +93,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
             "n_vars": self.n_vars,
             "params": params,
             "aux_names": tuple(self.aux_extra_names),
-            "n_aux": _aux_total_n_aux(self.aux_names, self.aux_extra_names),
+            "n_aux": aux_total_n_aux(self.aux_names, self.aux_extra_names),
             "capabilities": {},
         }
 

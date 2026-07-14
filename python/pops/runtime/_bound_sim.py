@@ -42,7 +42,9 @@ _DIAGNOSTICS = frozenset({
     "program_report", "reduce_component",
     # Exact, inert restart/transparency reads. These expose the already-installed runtime state and
     # authenticated consumer graph; they cannot mutate composition or bypass Case authorities.
-    "state_global", "field_provider_slots", "field_potential_global",
+    "state_global", "n_levels", "level_state_global", "block_level_state_global",
+    "field_provider_slots", "field_provider_levels", "field_potential_global",
+    "field_potential_level_global",
     "history_names", "history_depth", "history_global", "installed_program_hash",
     "consumer_graph", "consumer_cursors",
 })
