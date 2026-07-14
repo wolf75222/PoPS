@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import zipfile
 
 import pytest
 
@@ -98,3 +99,21 @@ def test_final_gate_pins_native_headers_to_the_validated_checkout():
 
     assert command[:2] == ["bash", "-lc"]
     assert "POPS_INCLUDE=" + str((ROOT / "include").resolve()) in command[2]
+
+
+def test_artifact_reopen_requires_and_records_npz(tmp_path):
+    (tmp_path / "state.h5").write_bytes(b"\x89HDF\r\n\x1a\ncontent")
+    (tmp_path / "state.vtu").write_text("<VTKFile/>", encoding="utf-8")
+    npz = tmp_path / "state.npz"
+    with zipfile.ZipFile(npz, "w") as archive:
+        archive.writestr("state.npy", b"payload")
+
+    evidence, hdf5_paths, npz_paths = gate._reopen_outputs(
+        tmp_path, example=Path("final.py"))
+
+    assert set(evidence) == {"hdf5", "npz", "paraview"}
+    assert hdf5_paths == (tmp_path / "state.h5",)
+    assert npz_paths == (npz,)
+    npz.unlink()
+    with pytest.raises(gate.FinalGateError, match="HDF5, NPZ and ParaView"):
+        gate._reopen_outputs(tmp_path, example=Path("final.py"))

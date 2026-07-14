@@ -30,7 +30,7 @@ from final_release_contract import (
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "python" / "pops" / "_generated_release_contract.py"
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
-EVIDENCE_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 3
 
 
 class PreflightError(RuntimeError):
@@ -215,7 +215,7 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
             raise PreflightError("release evidence source drifted for %s" % key)
         if not isinstance(row["output_root"], str):
             raise PreflightError("release evidence output root is invalid for %s" % key)
-        matching = [log for log, command in zip(logs, command_rows)
+        matching = [log for log, command in zip(logs, command_rows, strict=True)
                     if key in " ".join(command["argv"])]
         if len(matching) != 1:
             raise PreflightError("release evidence has no unique command transcript for %s" % key)
@@ -228,9 +228,9 @@ def _examples_evidence(directory: Path, gates: dict[str, Any]) -> None:
         if not _inside(directory, output_root) or not output_root.is_dir():
             raise PreflightError("release evidence output root is absent for %s" % key)
         reopened = reopen["examples"][key]
-        if not isinstance(reopened, dict) or set(reopened) != {"hdf5", "paraview"}:
+        if not isinstance(reopened, dict) or set(reopened) != {"hdf5", "npz", "paraview"}:
             raise PreflightError("release evidence reopen record is malformed for %s" % key)
-        for format_name in ("hdf5", "paraview"):
+        for format_name in ("hdf5", "npz", "paraview"):
             artifacts = reopened[format_name]
             if not isinstance(artifacts, list) or not artifacts:
                 raise PreflightError("release evidence has no %s output for %s" % (format_name, key))

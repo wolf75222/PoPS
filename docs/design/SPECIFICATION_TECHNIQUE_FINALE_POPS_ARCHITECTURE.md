@@ -788,7 +788,8 @@ La séquence groupée couvre exactement les onze lignes authentifiées suivantes
 5. `python_conformance` : suite Python complète, puis lane obligatoire
    `not mpi and not hdf5` avec JUnit all-pass et sans skip caché ;
 6. `examples` : les quatre scripts exacts depuis le package installé et leurs quatre marqueurs de preuve ;
-7. `artifact_reopen` : parsing indépendant de chaque HDF5/ParaView, puis réouverture HDF5 par `h5py` ;
+7. `artifact_reopen` : parsing indépendant de chaque HDF5/NPZ/ParaView, puis réouverture de chaque
+   HDF5 par `h5py` et de chaque archive/array NPZ par NumPy avec `allow_pickle=False` ;
 8. `strict_restart` : checkpoint réel et digest complet de son arbre pour chaque exemple ;
 9. `documentation` : `docs/check_docs.py` ;
 10. `generated_products` : release contract et component catalog régénérés avec `--check` ;

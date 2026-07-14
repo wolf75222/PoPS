@@ -11,6 +11,7 @@ the attestation again against the live installed extension.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import importlib.util
@@ -21,7 +22,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any
 import xml.etree.ElementTree as ET
 
 from final_release_contract import (
@@ -35,7 +36,7 @@ from final_release_contract import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-EVIDENCE_SCHEMA_VERSION = 2
+EVIDENCE_SCHEMA_VERSION = 3
 REQUIRED_GATES = REQUIRED_RELEASE_GATES
 
 
@@ -235,11 +236,15 @@ def _require_no_hidden_skip(stdout: str) -> None:
             "\n".join(matches[:20]))
 
 
-def _reopen_outputs(output_dir: Path, *, example: Path) -> tuple[dict[str, Any], tuple[Path, ...]]:
+def _reopen_outputs(
+    output_dir: Path, *, example: Path,
+) -> tuple[dict[str, Any], tuple[Path, ...], tuple[Path, ...]]:
     hdf5_paths = sorted(path for path in output_dir.rglob("*.h5") if path.is_file() and path.stat().st_size)
+    npz_paths = sorted(path for path in output_dir.rglob("*.npz") if path.is_file() and path.stat().st_size)
     paraview_paths = sorted(path for path in output_dir.rglob("*.vtu") if path.is_file() and path.stat().st_size)
-    if not hdf5_paths or not paraview_paths:
-        raise FinalGateError("%s did not produce non-empty HDF5 and ParaView artifacts" % example)
+    if not hdf5_paths or not npz_paths or not paraview_paths:
+        raise FinalGateError(
+            "%s did not produce non-empty HDF5, NPZ and ParaView artifacts" % example)
     for path in hdf5_paths:
         if path.read_bytes()[:8] != b"\x89HDF\r\n\x1a\n":
             raise FinalGateError("HDF5 artifact has an invalid signature: %s" % path)
@@ -250,12 +255,17 @@ def _reopen_outputs(output_dir: Path, *, example: Path) -> tuple[dict[str, Any],
             raise FinalGateError("invalid ParaView XML %s: %s" % (path, exc)) from exc
         if root.tag != "VTKFile":
             raise FinalGateError("ParaView artifact is not a VTKFile: %s" % path)
+    for path in npz_paths:
+        if path.read_bytes()[:4] != b"PK\x03\x04":
+            raise FinalGateError("NPZ artifact has an invalid ZIP signature: %s" % path)
     return {
         "hdf5": [{"path": str(path.relative_to(output_dir)), "sha256": _sha256(path)}
                  for path in hdf5_paths],
+        "npz": [{"path": str(path.relative_to(output_dir)), "sha256": _sha256(path)}
+                for path in npz_paths],
         "paraview": [{"path": str(path.relative_to(output_dir)), "sha256": _sha256(path)}
                      for path in paraview_paths],
-    }, tuple(hdf5_paths)
+    }, tuple(hdf5_paths), tuple(npz_paths)
 
 
 def _reopen_hdf5_with_installed_runtime(recorder: Recorder, paths: Sequence[Path]) -> None:
@@ -264,6 +274,25 @@ def _reopen_hdf5_with_installed_runtime(recorder: Recorder, paths: Sequence[Path
         "[h5py.File(path, 'r').close() for path in sys.argv[1:]]; "
         "print('reopened_hdf5=' + str(len(sys.argv) - 1))"
     )
+    recorder.run("artifact_reopen", _conda_command(
+        ["python", "-c", code, *(str(path) for path in paths)]))
+
+
+def _reopen_npz_with_installed_runtime(recorder: Recorder, paths: Sequence[Path]) -> None:
+    code = """
+import sys
+import numpy as np
+
+arrays = 0
+for path in sys.argv[1:]:
+    with np.load(path, allow_pickle=False) as payload:
+        if not payload.files:
+            raise RuntimeError("empty NPZ archive: " + path)
+        for name in payload.files:
+            np.asarray(payload[name])
+            arrays += 1
+print("reopened_npz=%d arrays=%d" % (len(sys.argv) - 1, arrays))
+"""
     recorder.run("artifact_reopen", _conda_command(
         ["python", "-c", code, *(str(path) for path in paths)]))
 
@@ -283,8 +312,10 @@ def _run_examples(recorder: Recorder) -> tuple[dict[str, Any], dict[str, Any], d
         if missing:
             raise FinalGateError("%s did not emit required runtime proof markers %s" % (example, missing))
         checkpoint = _parse_checkpoint(stdout, example=example)
-        reopened[example.as_posix()], hdf5_paths = _reopen_outputs(destination, example=example)
+        reopened[example.as_posix()], hdf5_paths, npz_paths = _reopen_outputs(
+            destination, example=example)
         _reopen_hdf5_with_installed_runtime(recorder, hdf5_paths)
+        _reopen_npz_with_installed_runtime(recorder, npz_paths)
         restarted[example.as_posix()] = {
             "checkpoint": str(checkpoint),
             "tree_sha256": _tree_hash(checkpoint),
