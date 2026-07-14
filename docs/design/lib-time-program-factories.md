@@ -25,10 +25,12 @@ The public catalog is `ForwardEuler`, `SSPRK2`, `SSPRK3`, `RK4`, `RungeKutta`, `
 equivalent manual operations normalize to the same `ProgramGraph` and semantic identity. Order and
 SSP evidence are reconstructed from that graph; factory names never select a runtime route.
 
-The state must be the live instance handle produced by `block[state]`. Operators must be typed
-handles returned by model declarations. There is no `(block, state)` overload, free-string operator,
-`bind_operators`, `linear_combine`, boolean flux selector, legacy IMEX alias or preset-specific native
-stepper. A custom explicit or additive method is configured by an exact `RungeKuttaTableau` or
+The state must be the live instance handle produced by `block[state]`. Rate and local operators must
+be typed handles returned by model declarations. A field solve must instead use the sole Case-owned
+handle returned by `Case.field(...)`; a model field-provider handle is only a physical RHS
+contribution and is rejected as a solve selector. There is no `(block, state)` overload, free-string
+operator, `bind_operators`, `linear_combine`, boolean flux selector, legacy IMEX alias or
+preset-specific native stepper. A custom explicit or additive method is configured by an exact `RungeKuttaTableau` or
 `AdditiveRungeKuttaTableau`; unsupported or incomplete selections fail while the Program is being
 authored. `Lie` and `Strang` take two Program-IR builder callables. Each callable receives its exact
 fraction and endpoint, and the intermediate `StagePoint` retains separate logical coordinates for

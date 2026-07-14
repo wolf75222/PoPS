@@ -144,6 +144,20 @@ aucun fallback vers le premier modèle ne sont admis. `n_vars` égale exactement
 natif livré exige ici exactement un espace d'état nommé par bloc. Cette interface sert aux rapports,
 au calcul mémoire et aux contrôles de bind ; elle ne réintroduit pas une autorité d'authoring.
 
+### 3.3 Contrat natif obligatoire du module Program
+
+Chaque bibliothèque `Program` exporte une seule famille complète de métadonnées qualifiées : identité
+du registre de routes, opérateurs `(owner, name, kind, signature, requirements)`, espaces d'état et
+espaces de champ avec leur owner. Tous les compteurs et accesseurs sont obligatoires, y compris pour
+une table vide. Une valeur vide, un doublon qualifié, un JSON de requirements mal formé, un symbole
+absent ou un registre de routes différent refuse l'artefact avant l'appel de son installer ; un ancien
+module n'est jamais exécuté en sautant l'introspection.
+
+`System` et `AmrSystem` appliquent les mêmes contrôles de requirements sur toutes les plateformes :
+instances de blocs, solveur de champ et champs auxiliaires fournis. En AMR, `B_z` exige une donnée
+installée avant le `Program`; `T_e` est refusé tant qu'aucun provider AMR typé ne l'implémente. Aucun
+canal auxiliaire absent n'est interprété comme zéro et aucune validation n'est reportée au premier pas.
+
 ## 4. Modèle de données Python
 
 ### 4.1 Handle et Expr sont deux familles distinctes
@@ -270,6 +284,14 @@ Les champs couplés séparent pareillement :
 - `FieldOperator` : équation, inconnue, providers physiques et outputs dérivés ;
 - `FieldDiscretizationProtocol` : stencil, BC, solver, nullspace et gauge ;
 - appel dans `Program` : instant logique et politique d'échec.
+
+L'unique autorité callable d'un solve est le `FieldHandle` retourné par
+`field = case.field(operator, discretization)`, puis `field(stage_state)`. Les handles de providers
+du modèle décrivent seulement les contributions physiques au second membre ; ils ne sont jamais une
+route concurrente de solve. Le `FieldContext` reprend exactement les composantes du `FieldSpace`
+enregistré. À `resolve`, chaque nœud de solve doit correspondre à exactement un plan de champ du
+`Case`, avec la même identité et les mêmes outputs ; zéro correspondance, une ambiguïté ou une
+divergence est refusée avant `compile`.
 
 `FieldDiscretization` est l'implémentation builtin de ce protocole, pas une classe centrale à laquelle
 les extensions doivent être ajoutées. Tout provider porte un `provider_id` non vide et projette un
@@ -442,6 +464,15 @@ jamais au résidu. Il n'existe aucune route publique `Schur` ou `CondensedSchur`
 
 Un outcome fallible doit être consommé par une action adaptée à sa phase (`RejectAttempt`, `FailRun`,
 etc.) avant que sa valeur puisse contribuer à un commit ou un effet.
+
+À la frontière native, tous les solveurs itératifs retournent le même `SolveReport` : nombre
+d'itérations, résidu relatif et une unique paire `SolveStatus` / `SolveAction`. Il n'existe pas de
+booléen `converged` parallèle. Une valeur n'est résolue que pour `(kSolved, kNone)` ; toute paire
+incohérente est traitée comme un échec et un appel de construction d'échec sans statut/action d'échec
+est refusé. Le runtime ne publie jamais l'itéré ou le champ muté d'un report en échec et la transaction
+restaure l'ensemble des valeurs acceptées précédentes. Un solveur généré doit porter un critère de
+convergence scientifique explicite, distinct de son budget ; atteindre seulement la limite
+d'itérations produit `kIterationLimit`, jamais un succès fabriqué.
 
 Un schéma IMEX/ARK porte les abscisses exactes de chaque partition dans ses `StagePoint`. Les
 coefficients sont rationnels/exacts lorsqu'ils le sont mathématiquement. Un certificat d'ordre ou SSP
@@ -719,9 +750,10 @@ Quatre scripts sont des tests d'acceptation, pas des esquisses :
 2. `examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py` : deux `StateSpace` d'un même modèle
    sélectionnés dans deux blocs qualifiés, layout Uniform, champ elliptique, couplage, HDF5/ParaView et
    restart bit-identique ;
-3. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py` : parité du `Program` IMEX explicite
-   avec `pops.lib.time.IMEX`, coefficients/stages exacts, `AMRExecution.subcycled()`, regrid/reflux,
-   HDF5/NPZ/ParaView et restart strict ;
+3. `examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py` : parité graphe, identité sémantique et
+   état accepté du `Program` IMEX explicite avec `pops.lib.time.IMEX`, coefficients/stages exacts,
+   `AMRExecution.subcycled()`, regrid/reflux, HDF5/NPZ/ParaView, restart strict et continuation
+   bit-identique ;
 4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : état 15 moments, layout Uniform,
    `pops.lib.time.IMEX`, champ de Poisson, HDF5/ParaView et continuation bit-identique, sans branche de
    scénario dans le compilateur.

@@ -10,6 +10,8 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <stdexcept>
+
 namespace pops {
 
 /// Explicit status of a linear solve. Only kSolved publishes a solved value; every other status is a
@@ -71,7 +73,10 @@ struct SolveReport {
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;
 
-  bool solved() const { return status == SolveStatus::kSolved; }
+  bool valid() const {
+    return (status == SolveStatus::kSolved) == (action == SolveAction::kNone);
+  }
+  bool solved() const { return valid() && status == SolveStatus::kSolved; }
   bool solved_value_available() const { return solved(); }
   bool failed() const { return !solved(); }
   const char* status_name() const { return solve_status_name(status); }
@@ -82,6 +87,10 @@ struct SolveReport {
     action = SolveAction::kNone;
   }
   void mark_failed(SolveStatus failed_status, SolveAction failed_action = SolveAction::kFailRun) {
+    if (failed_status == SolveStatus::kSolved)
+      throw std::invalid_argument("SolveReport::mark_failed requires a failure status");
+    if (failed_action == SolveAction::kNone)
+      throw std::invalid_argument("SolveReport::mark_failed requires an explicit failure action");
     status = failed_status;
     action = failed_action;
   }

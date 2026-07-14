@@ -23,7 +23,7 @@
 //                      CG, and on a NON-symmetric operator (Helmholtz + a one-sided advection term,
 //                      where CG STAGNATES) it converges to phi_exact. The non-symmetric case is the
 //                      gmres-specific guard -- cg_solve on the same operator must NOT recover phi_exact.
-// Each must converge (converged == true, iters > 1, small residual) and recover phi_exact. We also
+// Each must return a solved report (iters > 1, small residual) and recover phi_exact. We also
 // assert that max_iters = 0 throws std::invalid_argument (spec error 13).
 //
 // SERIAL test: no MPI (single box, DistributionMapping(1, 1)); the dot products in the loops are
@@ -235,6 +235,19 @@ MultiFab* GenericKrylov::rhs_ = nullptr;
 MultiFab* GenericKrylov::rhs_ns_ = nullptr;
 
 }  // namespace
+
+TEST(test_solve_report, rejects_incoherent_status_action_pairs) {
+  SolveReport report;
+  report.status = SolveStatus::kSolved;
+  report.action = SolveAction::kFailRun;
+  EXPECT_FALSE(report.valid());
+  EXPECT_FALSE(report.solved());
+  EXPECT_FALSE(report.solved_value_available());
+  EXPECT_THROW(report.mark_failed(SolveStatus::kSolved), std::invalid_argument);
+  EXPECT_THROW(
+      report.mark_failed(SolveStatus::kBreakdown, SolveAction::kNone),
+      std::invalid_argument);
+}
 
 // --- CG (SPD operator) ---
 TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
