@@ -47,7 +47,8 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
-        "field_provider",
+        "field_provider", "projection", "wave_speeds_from_jacobian",
+        "roe_from_jacobian",
     })
 
     def __init__(self, name: Any, *, frame: Any = None) -> None:
@@ -491,6 +492,39 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                     [_wrap(self._to_expr(value)) for value in wave_values[1]])
             self._fluxes[name] = h
         return h
+
+    def projection(self, expressions: Any) -> None:
+        """Install one native pointwise state projection expression per component."""
+        self._dsl.projection(expressions)
+
+    def projection_value(self, state: Any, aux: Any = None) -> Any:
+        """Evaluate the installed pointwise projection through its public host oracle."""
+        return self._dsl.projection_value(state, aux)
+
+    def wave_speeds_from_jacobian(
+        self,
+        x: Any = None,
+        y: Any = None,
+        eig: str = "numeric",
+        blocks: Any = None,
+        fd_eps: Any = None,
+        eig_max_iter: Any = None,
+        im_tol: Any = None,
+    ) -> None:
+        """Install generic signed wave speeds from the full flux Jacobian."""
+        self._dsl.wave_speeds_from_jacobian(
+            x=x,
+            y=y,
+            eig=eig,
+            blocks=blocks,
+            fd_eps=fd_eps,
+            eig_max_iter=eig_max_iter,
+            im_tol=im_tol,
+        )
+
+    def roe_from_jacobian(self) -> None:
+        """Install the generic matrix-sign Roe provider from the flux Jacobian."""
+        self._dsl.roe_from_jacobian()
 
     def source(self, name: Any, on: Any = None, value: Any = None, *, fields: Any = None) -> Any:
         """Declare a named local source term; returns a :class:`SourceHandle`."""

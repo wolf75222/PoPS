@@ -5,11 +5,14 @@ import importlib.util
 from pathlib import Path
 import sys
 
+import numpy as np
 import pytest
 
 from pops.lib.models.moments import HyQMOM15
-from pops.moments import LocalClosure, closure, moment_names
+from pops.moments import LocalClosure, RealizabilityProjection, closure, moment_names
+from pops.frames import Cartesian2D
 from pops.physics import Model
+from pops.time import ProjectAndRecheck, RejectAttempt
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -65,6 +68,39 @@ def test_local_closure_is_model_agnostic_and_order_checked() -> None:
             closure=wrong_order, exact_speeds=False)
 
 
+def test_board_model_exposes_generic_native_hooks_without_a_private_preset_seam() -> None:
+    frame = Cartesian2D()
+    model = Model("generic_native_hooks", frame=frame)
+    state = model.state("U", components=("q",))
+    cached = model.module
+    model.projection((state[0],))
+    projected = model.module
+    assert projected is not cached
+    assert projected.operator_registry().get("projection").kind == "projection"
+    values = np.array([[[2.0, 3.0]]])
+    assert np.array_equal(model.projection_value(values), values)
+
+    model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={frame.x: (state[0],), frame.y: (state[0],)},
+    )
+    cached = model.module
+    model.wave_speeds_from_jacobian()
+    assert model.module is not cached
+    cached = model.module
+    model.roe_from_jacobian()
+    assert model.module is not cached
+    with pytest.raises(ValueError, match="eig 'numeric' \\| 'fd'"):
+        Model("invalid_hook", frame=frame).wave_speeds_from_jacobian(eig="invalid")
+
+    preset_source = (ROOT / "python/pops/lib/models/moments/hyqmom15.py").read_text(
+        encoding="utf-8"
+    )
+    assert "._dsl" not in preset_source
+
+
 def test_final_authoring_derives_field_storage_and_complete_generic_program() -> None:
     target = _load_example().build_authoring()
 
@@ -74,10 +110,55 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
         "phi", "grad_x", "grad_y")
     assert target.field_provider == target.model.operators["fields"]
     assert target.program.transaction_plan() is not None
+    guards = target.program.transaction_plan().guards
+    assert [guard.name for guard in guards] == [
+        "hyqmom15_realizability_density",
+        "hyqmom15_realizability_moment_matrix",
+    ]
+    assert all(type(guard.action) is ProjectAndRecheck for guard in guards)
+    assert all(type(guard.action.on_failure) is RejectAttempt for guard in guards)
     assert len(target.case._consumers.inspect()["nodes"]) == 3
     local_map = target.implicit_operator.signature.output
     assert len(local_map.domain.components) == 15
     assert local_map.domain == local_map.range
+    projection = target.model.module.operator_registry().get("projection")
+    assert projection.kind == "projection"
+
+
+def test_hyqmom15_projection_checks_all_moments_and_refuses_to_manufacture_density() -> None:
+    example = _load_example()
+    target = example.build_authoring()
+    projection = target.realizability
+    assert type(projection) is RealizabilityProjection
+    state = example.build_initial_state(cells=4)["plasma"]
+    assert projection.is_hyqmom15_realizable(state)
+    assert np.array_equal(projection.project_hyqmom15_array(state), state)
+
+    component = {name: index for index, name in enumerate(target.components)}
+    invalid_fourth_moment = state.copy()
+    invalid_fourth_moment[component["M40"]] = -1.0
+    assert not projection.is_hyqmom15_realizable(invalid_fourth_moment)
+    repaired = projection.project_hyqmom15_array(invalid_fourth_moment)
+    assert projection.is_hyqmom15_realizable(repaired)
+    assert not np.array_equal(repaired, invalid_fourth_moment)
+    assert np.array_equal(projection.project_hyqmom15_array(repaired), repaired)
+    emitted_projection = target.model.projection_value(invalid_fourth_moment)
+    assert projection.is_hyqmom15_realizable(emitted_projection)
+    assert np.allclose(emitted_projection, repaired, rtol=1.0e-13, atol=1.0e-13)
+
+    invalid_covariance = state.copy()
+    invalid_covariance[component["M20"]] = 0.0
+    assert not projection.is_hyqmom15_realizable(invalid_covariance)
+    repaired_covariance = projection.project_hyqmom15_array(invalid_covariance)
+    assert projection.is_hyqmom15_realizable(repaired_covariance)
+    emitted_covariance = target.model.projection_value(invalid_covariance)
+    assert projection.is_hyqmom15_realizable(emitted_covariance)
+    assert np.allclose(emitted_covariance, repaired_covariance, rtol=1.0e-13, atol=1.0e-13)
+
+    negative_density = -state
+    assert not projection.is_hyqmom15_realizable(negative_density)
+    assert np.array_equal(
+        projection.project_hyqmom15_array(negative_density), negative_density)
 
 
 def test_final_example_uses_only_the_root_lifecycle_and_public_layout_home() -> None:

@@ -70,7 +70,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         if type(projection) is not BlockProjection:
             raise TypeError("project: projection must be BlockProjection()")
         return self._new("state", "project", (state,), {"projection": projection}, name,
-                         state.block, space=state.space)
+                         state.block, space=state.space, point=state.point,
+                         field_context=state.field_context, state_ref=state.state_ref)
 
     def _acceptance_guard_value(
         self, name: str, value: ProgramValue, condition: ProgramValue, action: Any,
@@ -81,7 +82,8 @@ class _ProgramAuthoring(_ProgramDump, _ProgramConstants, _ProgramBase):
         return self._new(
             value.vtype, "acceptance_guard", (value, condition),
             {"guard": name, "action": action}, value.name, value.block,
-            space=value.space, point=value.point,
+            space=value.space, point=value.point, field_context=value.field_context,
+            state_ref=value.state_ref,
         )
 
     @atomic_authoring

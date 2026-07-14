@@ -92,6 +92,14 @@ class HyQMOM15:
             eps_m00=selected_projection.eps_m00,
             eps_cov=selected_projection.eps_cov,
         )
+        if selected_projection.robust:
+            # The provided model owns the native pointwise state projector.  It is built from all
+            # 15 raw moments (the order-four Gram matrix), not from the closure-local denominator
+            # floors above.  Program acceptance guards invoke this exact registered block
+            # projection through ProjectAndRecheck before any state publication.
+            model.projection(
+                selected_projection.hyqmom15_projection_expressions(expressions.moments)
+            )
         flux = model.flux(
             "transport",
             frame=frame,
@@ -99,11 +107,9 @@ class HyQMOM15:
             components={frame.x: expressions.x, frame.y: expressions.y},
         )
         if exact_speeds:
-            # The blackboard Model owns this PdeModel implementation detail.  The factory
-            # merely requests the generic Jacobian provider; no model-specific lowering exists.
-            model._dsl.wave_speeds_from_jacobian()
+            model.wave_speeds_from_jacobian()
         if roe:
-            model._dsl.roe_from_jacobian()
+            model.roe_from_jacobian()
 
         q_handle = model.param(q_decl)
         omega_handle = model.param(omega_decl)

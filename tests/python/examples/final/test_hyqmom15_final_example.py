@@ -27,12 +27,15 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     assert "HDF5:" in completed.stdout
     assert "ParaView:" in completed.stdout
     assert "checkpoint:" in completed.stdout
+    assert "non-realizable rollback: True" in completed.stdout
     assert "bit-identical restart: True" in completed.stdout
     report_line = next(
         line for line in completed.stdout.splitlines() if line.startswith("report: "))
     report = json.loads(report_line.removeprefix("report: "))
     assert report["finite"] is True
     assert report["n_moments"] == 15
+    assert report["nonrealizable_rollback"] is True
+    assert "hyqmom15_realizability_density" in report["rejection_reason"]
     assert report["runtime_steps"] == 2
 
     from pops.output import read_hdf5, read_paraview
@@ -47,5 +50,9 @@ def test_hyqmom15_example_runs_outputs_and_restarts_bit_identically(tmp_path) ->
     with np.load(output / "manual_restart.npz", allow_pickle=False) as stored:
         assert [str(name) for name in stored["blocks"]] == ["plasma"]
         assert int(stored["macro_step"]) == 1
+        assert [str(name) for name in stored["history_names"]] == ["plasma.plasma"]
         assert "runtime_consumer_graph" in stored
         assert "field_provider_slots" in stored
+    rejected_root = output / "rejected_nonrealizable"
+    assert not rejected_root.exists() or not any(
+        path.is_file() for path in rejected_root.rglob("*"))
