@@ -13,7 +13,9 @@ api pops/amr/hierarchy/amr_hierarchy.hpp
 api pops/amr/hierarchy/refinement_ratio.hpp
 api pops/amr/regridding/regrid.hpp
 api pops/amr/tagging/cluster.hpp
+api pops/amr/tagging/clustering_provider.hpp
 api pops/amr/tagging/tag_box.hpp
+api pops/amr/tagging/tagging_truth.hpp
 api pops/core/foundation/allocator.hpp
 api pops/core/foundation/cold.hpp
 api pops/core/foundation/kokkos_env.hpp
@@ -125,6 +127,7 @@ sdk-support pops/runtime/amr/amr_runtime.hpp
 sdk-support pops/runtime/amr/amr_tensor_elliptic.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_builtins.hpp
 sdk-support pops/runtime/amr/bootstrap_transfer_registry.hpp
+sdk-support pops/runtime/amr/prepared_component_providers.hpp
 api pops/runtime/amr_system.hpp
 sdk-support pops/runtime/builders/block/amr_block_seam.hpp
 sdk-support pops/runtime/builders/block/block_builder.hpp
@@ -183,6 +186,7 @@ sdk-root pops/runtime/program/step_transaction.hpp
 abi pops/runtime/program/wire_ids.hpp
 api pops/runtime/runtime_environment.hpp
 api pops/runtime/system.hpp
+sdk-support pops/runtime/system/prepared_field_solver_component.hpp
 sdk-support pops/runtime/system/system_block_store.hpp
 sdk-support pops/runtime/system/system_coupling_registry.hpp
 sdk-support pops/runtime/system/system_diagnostics_registry.hpp
