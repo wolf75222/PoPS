@@ -55,18 +55,23 @@ def test_reconstruction_weno5z_is_native():
     assert d.scheme == "weno5"
 
 
-def test_catalogued_but_unwired_bricks_are_marked_unavailable():
-    # No native symbol is fabricated: planned bricks refuse via availability(), empty id.
-    for d in (lib.fields.Poisson(), lib.solvers.Newton(),
-              lib.preconditioners.Jacobi(), lib.limiters.MC()):
-        assert d.available().ok is False
-        assert d.native_id == ""
+def test_unwired_placeholder_bricks_are_absent_from_final_catalogs():
+    for catalog, name in (
+        (lib.fields, "Poisson"),
+        (lib.preconditioners, "Jacobi"),
+        (lib.limiters, "MC"),
+    ):
+        assert not hasattr(catalog, name)
+
+    newton = lib.solvers.Newton()
+    assert newton.available().ok is True
+    assert newton.native_id == "pops::FieldNewtonSolver"
 
 
 def test_available_native_ids_exist_and_are_namespaced():
     for d in (lib.fields.GeometricMG(), lib.solvers.CG(max_iter=200),
               lib.solvers.GMRES(max_iter=200),
-              lib.solvers.Schur(), lib.projections.positivity()):
+              lib.projections.positivity()):
         assert d.available().ok
         assert d.native_id.startswith("pops::")
 

@@ -23,11 +23,12 @@ to ~1e-14 (the named fluxes sum to the same -div F).
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_field, typed_state
+from typed_program_support import solve_field, typed_field, typed_state
 
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -194,11 +195,23 @@ chk(eh1._m._model_hash() != eh2._m._model_hash(),
 
 
 # --- codegen: rhs(fluxes=['default']) lowers IDENTICALLY to the current default rhs ---
+def _flux_terms(model, fluxes):
+    if fluxes is None or fluxes == ["default"]:
+        return [Flux(), DefaultSource()]
+    terms = []
+    for flux_name in fluxes:
+        if flux_name == "default":
+            terms.append(Flux())
+        else:
+            terms.append(Flux(model.module.operator_handle(flux_name)))
+    return terms
+
+
 def _fe_program(name, fluxes, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, fluxes=fluxes)
+    f = solve_field(P, U)
+    R = P.rhs(name="R", state=U, fields=f, terms=_flux_terms(model, fluxes))
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
@@ -228,15 +241,16 @@ chk("ctx.neg_div_flux_into(" in src_named, "a named-flux rhs lowers via ctx.neg_
 chk("pops::for_each_cell(" in src_named, "the named flux is evaluated by a per-cell kernel")
 chk("ctx.rhs_into(0, " not in src_named, "a named-flux rhs does NOT call rhs_into (distinct stencil)")
 
-# Validation: unknown flux name -> clear error; mixing default + named -> clear error; named flux
-# without a model -> NotImplementedError.
-chk(raises(ValueError, lambda: _fe_program(
-    "nf_unknown", ["does_not_exist"], model=mdl).emit_cpp_program(model=mdl)),
-    "an unknown flux_term name in rhs raises ValueError")
+# Validation: unknown flux names cannot mint a handle; mixing the default and named selectors is
+# rejected by typed RHS composition; lowering a valid named handle still requires its model.
+chk(raises(KeyError, lambda: _fe_program(
+    "nf_unknown", ["does_not_exist"], model=mdl)),
+    "an unknown flux_term name cannot mint an OperatorHandle")
 chk(raises(ValueError, lambda: _fe_program(
     "nf_mix", ["default", "whole"], model=mdl).emit_cpp_program(model=mdl)),
     "mixing 'default' with a named flux raises ValueError")
-chk(raises(NotImplementedError, lambda: _fe_program("nf_nomodel", ["whole"]).emit_cpp_program()),
+chk(raises(NotImplementedError, lambda: _fe_program(
+    "nf_nomodel", ["whole"], model=mdl).emit_cpp_program()),
     "a named-flux rhs without a model raises NotImplementedError")
 
 # Two named fluxes summing to the whole flux lower to ONE kernel + one neg_div_flux_into (the SUM).
@@ -253,8 +267,8 @@ chk(src_split.count("ctx.neg_div_flux_into(") == 1,
 def _named_field_program(name="nf_ell", model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    f = P.solve_fields("fields_phi2", U, field=typed_field(P, "phi2"))
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
+    f = solve_field(P, U, field=typed_field(P, "phi2"), name="fields_phi2")
+    R = P.rhs(name="R", state=U, fields=f, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
@@ -279,9 +293,9 @@ chk(raises(NotImplementedError, lambda: _named_field_program("nf_nomodel_ell").e
 # An empty field name is rejected at construction (clear error).
 bad_field_program = adctime.Program("x")
 bad_field_state = typed_state(bad_field_program, "b")
-chk(raises(TypeError, lambda: bad_field_program.solve_fields(
-    "f", bad_field_state, field="")),
-    "solve_fields rejects an empty string in place of a typed FieldHandle")
+chk(raises(TypeError, lambda: solve_field(
+    bad_field_program, bad_field_state, field="")),
+    "field evaluation rejects an empty string in place of a typed FieldHandle")
 
 
 # =================== Section B: gated end-to-end parity ===================
@@ -330,7 +344,7 @@ def make_sim(model):
 def _flux_fe_program(name, fluxes, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    R = P._rhs_legacy(name="R", state=U, flux=True, fluxes=fluxes)
+    R = P.rhs(name="R", state=U, terms=_flux_terms(model, fluxes))
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P

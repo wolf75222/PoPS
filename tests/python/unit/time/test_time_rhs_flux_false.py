@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pops.time RHS flux toggle -- P._rhs_legacy(flux=False) is source-only (epic ADC-399 / ADC-430).
+"""pops.time typed RHS composition -- omitting ``Flux`` is source-only (ADC-399 / ADC-430).
 
 Sibling of ADC-425 (which fixed sources=[] on flux=True). The rhs codegen routed on ``sources`` but
 IGNORED ``flux``: a source-only stage (flux=False) still emitted the ``-div F`` base. Masked because
@@ -9,13 +9,13 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
 ``ctx.neg_div_flux_default_into``) and routes a flux=False rhs to a zeroed base + the requested sources.
 
 (A) Codegen / IR (pure Python, always runs):
-    - flux=False, sources=["default"] lowers to ctx.source_default_into (NO ctx.rhs_into, NO
+    - terms=[DefaultSource()] lowers to ctx.source_default_into (NO ctx.rhs_into, NO
       ctx.neg_div_flux_default_into) -- this is THE BUG PROBE: before ADC-430 it emitted a flux base.
-    - flux=False, sources=["s"] (named only) emits NO flux base at all (the zeroed scratch + the named
+    - terms=[SourceTerm(s)] emits NO flux base at all (the zeroed scratch + the named
       axpy is the whole RHS).
-    - flux=False, sources=[] emits NO base and NO source (the zero RHS).
-    - flux=True paths are UNCHANGED (rhs_into / neg_div_flux_default_into), bit-identical to ADC-425.
-    - flux=False + named fluxes is rejected (a source-only stage has no flux to divide).
+    - terms=[] emits NO base and NO source (the zero RHS).
+    - typed Flux paths preserve rhs_into / neg_div_flux_default_into routing.
+    - mixing contradictory legacy selector keywords with terms= is rejected.
 
 (B) End-to-end probe (skips unless the full toolchain is present): a NON-zero-flux advection model
     (F_x = a*rho) WITH a default source S = c*rho. A one-step program U + dt*rhs(flux=False,
@@ -29,10 +29,11 @@ flux=False stage WRONGLY re-added -div F. ADC-430 adds the source-only runtime p
 Run with python3 (PYTHONPATH = built pops package).
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+from typed_program_support import solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -97,8 +98,13 @@ def one_step_program(name, sources, flux=True, model=None):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    fields = P.solve_fields(U) if flux else None
-    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+    fields = solve_field(P, U) if flux else None
+    terms = [Flux()] if flux else []
+    for source in sources:
+        terms.append(
+            DefaultSource() if source == "default" else
+            model.module.operator_handle(source))
+    R = P.rhs(state=U, fields=fields, terms=terms)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value(
         "%s_step" % name, U + P.dt * R, at=endpoint.point))
@@ -127,8 +133,8 @@ def two_block_noflux(name, model=None):
     P = adctime.Program(name)
     Ua = typed_state(P, "a", model=model)
     Ub = typed_state(P, "b", model=model)
-    Ra = P._rhs_legacy(state=Ua, fields=None, flux=False, sources=["default"])
-    Rb = P._rhs_legacy(state=Ub, fields=None, flux=False, sources=["default"])
+    Ra = P.rhs(state=Ua, fields=None, terms=[DefaultSource()])
+    Rb = P.rhs(state=Ub, fields=None, terms=[DefaultSource()])
     endpoint_a = typed_state(P, "a", state_name="U", model=model).next
     endpoint_b = typed_state(P, "b", state_name="U", model=model).next
     P.commit(endpoint_a, P.value(
@@ -181,7 +187,8 @@ chk(h_nf != h_f, "flux=False vs flux=True produce distinct IR hashes")
 def _noflux_named_fluxes(model=None):
     P = adctime.Program("p_bad")
     U = typed_state(P, "plasma", model=model)
-    P._rhs_legacy(state=U, fields=None, flux=False, sources=["default"], fluxes=["fx"])
+    P.rhs(
+        state=U, fields=None, terms=[DefaultSource()], fluxes=["fx"])
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value("p_bad_step", U, at=endpoint.point))
     return P
@@ -191,7 +198,7 @@ rejected = False
 try:
     rejected_model = advect_model()
     _noflux_named_fluxes(model=rejected_model).emit_cpp_program(model=rejected_model)
-except ValueError:
+except TypeError:
     rejected = True
 chk(rejected, "flux=False with named fluxes is rejected (no flux base to divide)")
 
@@ -267,11 +274,11 @@ chk(d_full_vs_src > 1e-6,
 def lie_split_program(name, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])   # flux only (-div F)
+    H = P.rhs(state=U, fields=solve_field(P, U), terms=[Flux()])  # flux only (-div F)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     U1 = P.value(
         "%s_H" % name, U + P.dt * H, at=adctime.TimePoint(P.clock, 1))
-    S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])     # source only on U1
+    S = P.rhs(state=U1, fields=None, terms=[DefaultSource()])  # source only on U1
     P.commit(endpoint, P.value(
         "%s_S" % name, U1 + P.dt * S, at=endpoint.point))
     return P

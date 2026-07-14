@@ -81,6 +81,7 @@ def test_dense_lu_is_executable_only_for_local_linear_problem():
 
 
 def test_final_catalogs_do_not_publish_unavailable_placeholders():
+    import pops.solvers as solvers
     from pops.fields.catalog import fields
     from pops.numerics.projections import projections
     from pops.numerics.reconstruction.limiters import limiters
@@ -93,3 +94,5 @@ def test_final_catalogs_do_not_publish_unavailable_placeholders():
     assert not hasattr(limiters, "Superbee")
     assert not hasattr(preconditioners, "Jacobi")
     assert not hasattr(preconditioners, "BlockJacobi")
+    assert not hasattr(solvers, "Schur")
+    assert not hasattr(solvers, "CondensedSchur")

@@ -22,10 +22,11 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
     no compiler/Kokkos is visible, or the .so compile fails -- never faking the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+from typed_program_support import solve_field, solve_field_blocks, typed_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux, SourceTerm
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -81,28 +82,36 @@ def passive_model(name):
     return m
 
 
-def single_block_program(t, name, block):
+def single_block_program(t, name, block, model):
     """Forward-Euler passive transport of ONE block: U1 = U + dt*(-div F + S_decay)."""
     P = t.Program(name)
     dt = P.dt
-    U = typed_state(P, block)
-    R = P._rhs_legacy(name="R_" + block, state=U, flux=True, sources=["decay"])
-    endpoint = typed_state(P, block, state_name="U").next
+    U = typed_state(P, block, model=model)
+    R = P.rhs(
+        name="R_" + block,
+        state=U,
+        terms=[Flux(), SourceTerm(model.module.operator_handle("decay"))],
+    )
+    endpoint = typed_state(P, block, state_name="U", model=model).next
     P.commit(endpoint, P.value(
         block + "_next", U + dt * R, at=endpoint.point))
     return P
 
 
-def two_block_program(t, name="two_block_passive"):
+def two_block_program(t, model, name="two_block_passive"):
     """Forward-Euler passive transport of TWO blocks ("a", "b") in one program: each block advances
     independently U_blk1 = U_blk + dt*(-div F + S_decay), committed once. The blocks are declared a
     then b -> runtime indices a=0, b=1."""
     P = t.Program(name)
     dt = P.dt
     for blk in ("a", "b"):
-        U = typed_state(P, blk)
-        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        endpoint = typed_state(P, blk, state_name="U").next
+        U = typed_state(P, blk, model=model)
+        R = P.rhs(
+            name="R_" + blk,
+            state=U,
+            terms=[Flux(), SourceTerm(model.module.operator_handle("decay"))],
+        )
+        endpoint = typed_state(P, blk, state_name="U", model=model).next
         P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
     return P
@@ -118,7 +127,7 @@ def section_a(t):
     dt = P.dt
     for blk in ("a", "b"):
         U = typed_state(P, blk)
-        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
+        R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
         endpoint = typed_state(P, blk, state_name="U").next
         P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
@@ -130,8 +139,8 @@ def section_a(t):
     Pro = t.Program("readonly_b")
     Ua = typed_state(Pro, "a")
     Ub = typed_state(Pro, "b")  # noqa: F841 -- declared, read by the coupled charge but never committed
-    fa = Pro.solve_fields(Ua)
-    Ra = Pro._rhs_legacy(state=Ua, fields=fa, sources=["default"])
+    fa = solve_field(Pro, Ua)
+    Ra = Pro.rhs(state=Ua, fields=fa, terms=[Flux(), DefaultSource()])
     endpoint_a = typed_state(Pro, "a", state_name="U").next
     Pro.commit(endpoint_a, Pro.value(
         "a1", Ua + Pro.dt * Ra, at=endpoint_a.point))
@@ -163,14 +172,16 @@ def section_a(t):
     Pc = t.Program("coupled")
     Uac = typed_state(Pc, "a")
     Ubc = typed_state(Pc, "b")
-    Pc.solve_fields_from_blocks([Uac, Ubc])
+    solve_field_blocks(Pc, [Uac, Ubc])
     endpoint_a = typed_state(Pc, "a", state_name="U").next
     endpoint_b = typed_state(Pc, "b", state_name="U").next
     Pc.commit(endpoint_a, Pc.value(
-        "a1", Uac + Pc.dt * Pc._rhs_legacy(state=Uac, sources=["default"]),
+        "a1", Uac + Pc.dt * Pc.rhs(
+            state=Uac, terms=[Flux(), DefaultSource()]),
         at=endpoint_a.point))
     Pc.commit(endpoint_b, Pc.value(
-        "b1", Ubc + Pc.dt * Pc._rhs_legacy(state=Ubc, sources=["default"]),
+        "b1", Ubc + Pc.dt * Pc.rhs(
+            state=Ubc, terms=[Flux(), DefaultSource()]),
         at=endpoint_b.point))
     src_c = Pc.emit_cpp_program()
     chk("ctx.solve_fields_from_blocks(" in src_c,
@@ -179,13 +190,14 @@ def section_a(t):
         "the coupled solve builds a per-block MultiFab pointer vector")
     chk(src_c.count("] = &") >= 2, "each listed block slots its stage state by index")
 
-    # The builder rejects malformed solve_fields_from_blocks arguments.
+    # The callable field handle rejects malformed coupled arguments before outcome creation.
     Pb = t.Program("b")
     Uab = typed_state(Pb, "a")
-    chk(raises(ValueError, lambda: Pb.solve_fields_from_blocks([])),
-        "solve_fields_from_blocks([]) is rejected")
-    chk(raises(ValueError, lambda: Pb.solve_fields_from_blocks([Uab, Uab])),
-        "solve_fields_from_blocks with a block listed twice is rejected")
+    coupled_field = typed_field(Pb, "potential")
+    chk(raises(ValueError, lambda: coupled_field()),
+        "a coupled field solve with no states is rejected")
+    chk(raises(ValueError, lambda: coupled_field(Uab, Uab)),
+        "a coupled field solve with a block listed twice is rejected")
 
     # Control flow (range/while/if) inside a NON-index-0 block must route its body ops to THAT block's
     # runtime index, not silently to 0 (control-flow emitters forward block_idx). Block b
@@ -196,15 +208,15 @@ def section_a(t):
     endpoint_a = typed_state(Pcf, "a", state_name="U").next
     endpoint_b = typed_state(Pcf, "b", state_name="U").next
     Pcf.commit(endpoint_a, Pcf.value(
-        "a_n", Uacf + Pcf.dt * Pcf._rhs_legacy(
-            state=Uacf, flux=True, sources=["default"]),
+        "a_n", Uacf + Pcf.dt * Pcf.rhs(
+            state=Uacf, terms=[Flux(), DefaultSource()]),
         at=endpoint_a.point))
 
     def _cf_body(prog, x):
         return prog.value(
             None,
-            x + prog.dt * prog._rhs_legacy(
-                state=x, flux=True, sources=["default"]),
+            x + prog.dt * prog.rhs(
+                state=x, terms=[Flux(), DefaultSource()]),
             at=endpoint_b.point,
         )
 
@@ -244,11 +256,15 @@ def section_b(t):
 
     # Compile the single-block reference programs (one per block name) and the 2-block program.
     try:
-        comp_a = compile_drivers.compile_problem(model=passive_model("pa_ref"),
-                                     time=single_block_program(t, "fe_a", "a"))
-        comp_b = compile_drivers.compile_problem(model=passive_model("pb_ref"),
-                                     time=single_block_program(t, "fe_b", "b"))
-        comp_ab = compile_drivers.compile_problem(model=passive_model("pab"), time=two_block_program(t))
+        model_a = passive_model("pa_ref")
+        model_b = passive_model("pb_ref")
+        model_ab = passive_model("pab")
+        comp_a = compile_drivers.compile_problem(
+            model=model_a, time=single_block_program(t, "fe_a", "a", model_a))
+        comp_b = compile_drivers.compile_problem(
+            model=model_b, time=single_block_program(t, "fe_b", "b", model_b))
+        comp_ab = compile_drivers.compile_problem(
+            model=model_ab, time=two_block_program(t, model_ab))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 

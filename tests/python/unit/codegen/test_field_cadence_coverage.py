@@ -1,39 +1,83 @@
+"""Final field-cadence coverage: typed schedule plus explicit stale-read policy."""
+from __future__ import annotations
+
 import pytest
 
-from pops.codegen.lowering_coverage import LoweringRejection
-from pops.fields import FieldProblem, HoldPrevious, Recompute
-from pops.ir.expr import Var
-from pops.math import laplacian, unknown
-from pops.time import Clock, always, every
+from pops.fields import (
+    Accepted,
+    FailFieldRead,
+    FieldConsumer,
+    FieldContext,
+    FieldInput,
+    FieldValidity,
+    HoldLastValue,
+    LayoutBinding,
+    RecomputeAtOutput,
+)
+from pops.fields.context import RecomputeField, UseHeldField, UseMaterializedField
+from pops.fields.policies import FieldReadError
+from pops.identity import make_identity
+from pops.model import Handle, OwnerPath
+from pops.time import Clock, TimePoint, always, every
+from pops.time.schedule_lowering import ScheduleDueKind
 
 
-_CLOCK = Clock("field-cadence")
+def _scheduled_field(step: int = 4):
+    owner = OwnerPath.model("cadence-model")
+    clock = Clock("main", owner=owner)
+    point = TimePoint(clock, step=step)
+    layout = LayoutBinding(
+        Handle("mesh", kind="layout", owner=OwnerPath.layout("mesh")), generation=0)
+    context = FieldContext(
+        operator=Handle("poisson", kind="field_operator", owner=owner),
+        inputs=(FieldInput(
+            Handle("rho", kind="state", owner=owner),
+            make_identity("field-input", {"step": step}),
+        ),),
+        clock=clock,
+        point=point,
+        layout=layout,
+        materialization=Accepted(),
+        validity=FieldValidity.valid_at(point, layout),
+    )
+    return clock, context
 
 
-def _problem():
-    phi = unknown("phi")
-    return FieldProblem(
-        name="poisson", unknown=phi,
-        equation=(-laplacian(phi) == Var("rho", "cons")), solver=object())
+def test_every_schedule_and_field_read_policy_cover_due_and_off_cadence_paths():
+    clock, context = _scheduled_field()
+    cadence = every(4, clock=clock)
+    lowering = cadence.native_schedule_ir(where="field materialization")
+    assert lowering.due.kind is ScheduleDueKind.CACHE_PERIOD
+    assert lowering.due.period == 4
+
+    assert isinstance(
+        context.resolve_read(
+            FieldConsumer.PROGRAM, at=context.point, layout=context.layout),
+        UseMaterializedField,
+    )
+    off_cadence = TimePoint(clock, step=5)
+    with pytest.raises(FieldReadError, match="explicit typed field read policy"):
+        context.resolve_read(
+            FieldConsumer.OUTPUT, at=off_cadence, layout=context.layout)
+
+    held = context.resolve_read(
+        FieldConsumer.OUTPUT,
+        at=off_cadence,
+        layout=context.layout,
+        policy=HoldLastValue(on_failure=FailFieldRead()),
+    )
+    recomputed = context.resolve_read(
+        FieldConsumer.OUTPUT,
+        at=off_cadence,
+        layout=context.layout,
+        policy=RecomputeAtOutput(on_failure=FailFieldRead()),
+    )
+    assert isinstance(held, UseHeldField)
+    assert isinstance(recomputed, RecomputeField)
 
 
-def test_nontrivial_field_cadence_is_never_accepted_as_inert_semantics():
-    problem = _problem().solve(every(4, clock=_CLOCK), HoldPrevious())
-    assert not problem.available()
-    with pytest.raises(LoweringRejection, match="ADC-659") as caught:
-        problem.validate()
-    rejection = caught.value
-    assert rejection.gate == "field_cadence_not_lowered"
-    row = next(row for row in rejection.report.rows if row.source == rejection.source)
-    assert row.disposition == "rejected" and row.targets == ()
-    with pytest.raises(LoweringRejection, match="ADC-659"):
-        problem.lower()
-
-
-def test_always_recompute_is_behavior_preserving_and_validates():
-    assert _problem().solve(always(clock=_CLOCK), Recompute()).validate() is True
-
-
-def test_always_hold_is_nontrivial_and_rejected():
-    with pytest.raises(LoweringRejection):
-        _problem().solve(always(clock=_CLOCK), HoldPrevious()).validate()
+def test_always_schedule_has_no_off_cadence_policy_slot():
+    clock, _ = _scheduled_field()
+    schedule = always(clock=clock)
+    assert schedule.is_always() is True
+    assert schedule.to_data()["off"] is None

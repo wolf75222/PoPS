@@ -23,13 +23,15 @@ import tempfile
 
 try:
     import pops  # noqa: F401
-    from pops.codegen import ScratchPlan, build_scratch_plan
+    from pops.numerics.terms import DefaultSource, Flux
+    from pops.codegen.scratch_plan import ScratchPlan, build_scratch_plan
     from pops.codegen.loader import CompiledModel, CompiledProblem
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_scratch_plan (pops unavailable: %s)" % exc)
     sys.exit(0)
 
 from tests.python.unit.runtime._typed_program import (
+    solve_field,
     typed_compiled_artifact,
     typed_program_state,
 )
@@ -40,30 +42,37 @@ def _ssprk3(name="ssprk3"):
 
     Each stage solves the elliptic field from its own stage state, builds the rate, and combines into
     the next stage; the final stage commits. This is the canonical multi-stage step the plan
-    analyzes: the per-stage rate scratch (rhs2 / rhs5 / rhs8) lifetimes do NOT overlap (each is
-    consumed by the very next combine), so they collapse to ONE reused buffer -- a provable reuse."""
+    analyzes: the per-stage rate scratch lifetimes do NOT overlap (each is consumed by the very
+    next combine), so they collapse to ONE reused buffer -- a provable reuse."""
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
     U = temporal.n
-    f0 = P.solve_fields(U)
-    r0 = P._rhs_legacy(state=U, fields=f0, flux=True, sources=["default"])
-    u1 = P.value("U1", U + dt * r0)
-    f1 = P.solve_fields(u1)
-    r1 = P._rhs_legacy(state=u1, fields=f1, flux=True, sources=["default"])
-    u2 = P.value("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
-    f2 = P.solve_fields(u2)
-    r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
-    un = P.value("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
+    from pops.time import StagePoint, TimePoint
+    stage1 = StagePoint("ssprk3_stage_1", {"main": TimePoint(P.clock, 1)})
+    stage2 = StagePoint("ssprk3_stage_2", {"main": TimePoint(P.clock, 1)})
+    f0 = solve_field(P, U)
+    r0 = P.rhs(state=U, fields=f0, terms=[Flux(), DefaultSource()])
+    u1 = P.value("U1", U + dt * r0, at=stage1)
+    f1 = solve_field(P, u1)
+    r1 = P.rhs(state=u1, fields=f1, terms=[Flux(), DefaultSource()])
+    u2 = P.value("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1, at=stage2)
+    f2 = solve_field(P, u2)
+    r2 = P.rhs(state=u2, fields=f2, terms=[Flux(), DefaultSource()])
+    un = P.value(
+        "Un",
+        (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2,
+        at=temporal.next.point,
+    )
     P.commit(temporal.next, un)
     return P
 
 
 def _krylov(name="krylov_demo"):
-    """A Program with a matrix-free ``solve_linear`` (Krylov) node -- exercises the persistent path."""
+    """A Program with a typed matrix-free linear solve -- exercises the persistent path."""
     P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     U = temporal.n
-    f = P.solve_fields("phi", U)
-    r = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = solve_field(P, U, name="phi")
+    r = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
     buf = P.scalar_field("buf")
     A = P.matrix_free_operator("op")
 
@@ -72,10 +81,17 @@ def _krylov(name="krylov_demo"):
         p.laplacian(lap, x)
         return -1.0 * lap
 
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import CG
+    from pops.time import FailRun
     P.set_apply(A, _apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit(temporal.next, P.value("U1", U + P.dt * r))
+    P.solve(
+        LinearProblem(A, buf), solver=CG(max_iter=10),
+    ).consume(action=FailRun())
+    P.commit(
+        temporal.next,
+        P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
     return P
 
 
@@ -115,7 +131,7 @@ def test_scratch_plan_categories():
     P = _ssprk3()
     plan = P.scratch_plan()
     chk(isinstance(plan, ScratchPlan), "scratch_plan() returns a ScratchPlan")
-    # SSPRK3: 3 linear_combine states (U1/U2/Un) + 3 rhs rates (rhs2/rhs5/rhs8), no scalar field.
+    # SSPRK3: 3 linear_combine states (U1/U2/Un) + 3 rhs rates, no scalar field.
     chk(plan.categories["state"] == 3, "3 state scratches (U1/U2/Un linear_combine)")
     chk(plan.categories["rhs"] == 3, "3 rhs scratches (the per-stage rates)")
     chk(plan.categories.get("scalar_field", 0) == 0, "no scalar-field scratch in a plain SSPRK3")
@@ -150,11 +166,12 @@ def test_reuse_is_sound():
     plan = P.scratch_plan()
     chk(plan.buffers_saved > 0, "SSPRK3 reuses at least one buffer")
     chk(plan.buffer_count < plan.scratch_count, "buffer_count < scratch_count (reuse happened)")
-    # The 3 per-stage rates (rhs2/rhs5/rhs8) are each consumed by the next combine -> disjoint -> one
-    # buffer. Assert that rhs5 / rhs8 are reported as reusing rhs2's buffer.
-    reused_names = {r["scratch"] for r in plan.reused}
-    chk("rhs5" in reused_names and "rhs8" in reused_names,
-        "the later per-stage rates reuse an earlier rate's buffer")
+    # The 3 per-stage rates are each consumed by the next combine -> disjoint -> one buffer. Node
+    # ids also count the intervening field calls, so assert this from their typed ``rhs`` operation
+    # rather than freezing incidental generated names.
+    rhs_reuse = [r for r in plan.reused if r["op"] == "rhs"]
+    chk(len(rhs_reuse) == 2 and len({r["buffer"] for r in rhs_reuse}) == 1,
+        "the later per-stage rates reuse the first rate's buffer")
     # SOUNDNESS: for every reused entry, the sharer's live range must NOT overlap the predecessor's.
     live = {r["name"]: r for r in P.scratch_liveness()}
     for entry in plan.reused:
@@ -236,8 +253,11 @@ def test_no_persistent_without_solve():
     print("== a solve-free step has no persistent buffers (exact plan) ==")
     P, _, _, _, _, temporal = typed_program_state("transport_only", block_name="plasma")
     U = temporal.n
-    r = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit(temporal.next, P.value("U1", U + P.dt * r))
+    r = P.rhs(state=U, terms=[Flux()])
+    P.commit(
+        temporal.next,
+        P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
     plan = P.scratch_plan()
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")

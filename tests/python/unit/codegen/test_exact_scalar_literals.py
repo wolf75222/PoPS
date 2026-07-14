@@ -215,6 +215,7 @@ def test_literals_outside_the_real_target_range_fail_with_a_clear_lowering_error
 
 
 def test_solver_controls_keep_exact_literals_until_codegen():
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import Richardson
 
     program = Program("exact_solver_controls")
@@ -223,12 +224,10 @@ def test_solver_controls_keep_exact_literals_until_codegen():
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
     rhs = program.value("rhs", state, at=time_state.next.point)
-    result = program.solve_linear(
-        operator=operator,
-        rhs=rhs,
-        method=Richardson(max_iter=4, omega=Fraction(2, 3)),
-        tol=Decimal("1e-12"),
-        max_iter=4,
+    result = program.solve(
+        LinearProblem(operator, rhs),
+        solver=Richardson(
+            max_iter=4, rel_tol=Decimal("1e-12"), omega=Fraction(2, 3)),
     ).consume(action=FailRun())
     program.commit(time_state.next, result)
 
@@ -242,13 +241,16 @@ def test_solver_controls_keep_exact_literals_until_codegen():
 
 
 def test_solver_iteration_budget_rejects_bool():
+    from pops.linalg import LinearProblem
+    from pops.solvers.krylov import CG
+
     program = Program("bool_budget")
     state = _state(program)
     operator = program.matrix_free_operator("A")
     program.set_apply(operator, lambda P, out, in_: in_)
 
     with pytest.raises(ValueError, match="max_iter"):
-        program.solve_linear(operator=operator, rhs=state, max_iter=True)
+        program.solve(LinearProblem(operator, state), solver=CG(max_iter=True))
 
 
 def test_board_operator_scales_never_erase_annotations_or_mix_number_domains():

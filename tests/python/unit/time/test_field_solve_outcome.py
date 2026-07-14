@@ -13,7 +13,7 @@ def _field_solve():
     program = Program("field_outcome")
     state = typed_state(program, "plasma")
     field = typed_field(program, "potential")
-    return program, state, program.solve_fields(state=state, field=field)
+    return program, state, field(state)
 
 
 def test_field_solve_is_unreadable_and_unconsumed_graph_is_rejected() -> None:

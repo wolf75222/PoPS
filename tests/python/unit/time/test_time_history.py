@@ -37,6 +37,7 @@ from typed_program_support import state_refs, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -55,11 +56,22 @@ def _pops_time():
 _C = 0.75  # source coefficient: S(rho) = _C * rho (a linear ODE rho' = c rho; R changes every step)
 
 
+def _ab2_program(t, name="ab2", model=None):
+    from pops.physics._facade import Model
+
+    if model is None:
+        model = Model(name + "_model")
+        model.conservative_vars("u")
+    rate = model.rate(name + "_rate", flux=False, sources=("default",))
+    block, state = state_refs(t.Program("refs"), "plasma", model=model.module)
+    return lt.AdamsBashforth(block[state], rate=rate, order=2)
+
+
 # ---- (A) codegen / IR: pure Python, always runs ----
 def test_history_builds_state_value(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[DefaultSource()])
     P.store_history("blk.R", R)
     Rp = P.history("blk.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
@@ -93,8 +105,7 @@ def test_history_lag_must_be_positive_int(t):
 
 
 def test_ab2_macro_lowers(t):
-    P = t.Program("ab2")
-    lt.adams_bashforth2(P, *state_refs(P, "plasma"))
+    P = _ab2_program(t)
     assert P.validate() is True, "the AB2 macro must validate"
     src = P.emit_cpp_program()
     for frag in ('ctx.history("plasma.R", 1)', 'ctx.store_history("plasma.R"',
@@ -110,8 +121,7 @@ def test_store_before_read_in_body(t):
     """The store is emitted BEFORE the lag-1 READ (the cold-start fill makes step 0 valid). The read is
     the history line bound to a MultiFab& (``pops::MultiFab& ... = ctx.history(...)``); the bare
     ``ctx.history(...)`` at the top is only the depth-locking registration."""
-    P = t.Program("ab2")
-    lt.adams_bashforth2(P, *state_refs(P, "plasma"))
+    P = _ab2_program(t)
     src = P.emit_cpp_program()
     body = src[src.index("ctx.install"):]
     read = body.index("= ctx.history(\"plasma.R\", 1);")  # the bound read, not the bare registration
@@ -122,18 +132,22 @@ def test_store_before_read_in_body(t):
 
 
 def test_non_history_schemes_emit_no_rotate(t):
-    for sched in ("forward_euler", "SSPRK2", "ssprk3", "rk4"):
-        P = t.Program(sched)
-        getattr(lt, sched)(P, *state_refs(P, "blk"))
+    for factory in (lt.ForwardEuler, lt.SSPRK2, lt.SSPRK3, lt.RK4):
+        from pops.physics._facade import Model
+        model = Model(factory.__name__ + "_model")
+        model.conservative_vars("u")
+        rate = model.rate("rate", flux=False, sources=())
+        block, state = state_refs(t.Program("refs"), "blk", model=model)
+        P = factory(block[state], rate=rate)
         src = P.emit_cpp_program()
-        assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % sched
-        assert "ctx.history(" not in src, "%s must not read a history" % sched
+        assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % factory.__name__
+        assert "ctx.history(" not in src, "%s must not read a history" % factory.__name__
 
 
 def _hist_program(t, name, lag):
     P = t.Program("h")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[DefaultSource()])
     P.store_history(name, R)
     Rp = P.history(
         name, lag=lag, space=U.space, block=U.block, state_ref=U.state_ref)
@@ -158,7 +172,7 @@ def test_absent_history_program_lowers(t):
     U = typed_state(P, "blk")
     Rp = P.history(
         "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))
@@ -215,16 +229,16 @@ def _run_section_b(t):
 
 
     model = _passive_source_model("ab2_prog")
-    P = t.Program("ab2_step")
-    lt.adams_bashforth2(
-        P, *state_refs(P, "blk", model=model.module))
+    rate = model.rate("ab2_rate", flux=False, sources=("default",))
+    block, state = state_refs(t.Program("refs"), "blk", model=model.module)
+    P = lt.AdamsBashforth(block[state], rate=rate, order=2)
     try:
         compiled = compile_drivers.compile_problem(model=model, time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
         return None
 
-    assert compiled.program_name == "ab2_step", "handle carries the program name"
+    assert compiled.program_name == "AdamsBashforth2", "handle carries the program name"
 
     try:
         compiled_model = _passive_source_model("ab2_block").compile(backend="production")
@@ -286,7 +300,7 @@ def _run_section_c(t):
     U = typed_state(P, "blk", model=program_model)
     Rp = P.history(
         "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U", model=program_model).next
     P.commit(endpoint, P.value(
         U + P.dt * (R - Rp), at=endpoint.point))

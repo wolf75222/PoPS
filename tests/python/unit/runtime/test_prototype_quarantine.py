@@ -7,8 +7,7 @@ Runtime proofs (need ``pops`` importable; skip otherwise, never fake):
 * the typed backend descriptors expose an honest ``tier`` (production | prototype | internal);
 * ``pops.experimental`` is importable (internal prototyping) but marked ``__experimental__`` and its
   ``PythonFlux`` is NOT reachable as ``pops.PythonFlux``;
-* a compiled time-Program step body carries no Python-callback token (no ``PyObject`` / ``py::`` /
-  ``std::function`` in the hot step), complementing test_module_codegen's ``pops_module_*`` check.
+* a compiled operator-first time Program carries no Python callback token in its hot step.
 """
 import sys
 
@@ -16,18 +15,9 @@ try:
     import pops
     from pops.codegen._backends import JIT, AOT, Production
     from pops.codegen._compile_drivers import compile_problem
-    from pops.model import OperatorHandle
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_prototype_quarantine (pops unavailable: %s)" % exc)
     sys.exit(0)
-
-
-def _op(m, name):
-    """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
-    op = m.operator_registry().get(name)
-    return OperatorHandle(
-        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
-        signature=op.signature)
 
 
 PRODUCTION_ONLY = "require backend='production'"
@@ -71,39 +61,37 @@ def test_experimental_is_off_the_root():
 
 
 def _program_source():
-    """A tiny compiled time-Program C++ source, built the way test_module_codegen does."""
-    from pops.ir.expr import Const
+    """Build a tiny final-API Program and return its generated C++ source."""
     from pops.physics._facade import Model
+    from pops.problem import Case
     import pops.lib.time as libtime
-    from tests.python.unit.runtime._typed_program import typed_program_state
 
-    m = Model("ep")
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    bz = m.aux("B_z")
-    m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
-    P, _, _, block, state, _ = typed_program_state("pc", model=m, state="U")
-    libtime.predictor_corrector_local_linear(
-        P, block, state, fields_operator=_op(m, "fields_from_state"),
-        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
-    return P.emit_cpp_program(model=m)
+    model = Model("ep")
+    (u,) = model.conservative_vars("u")
+    model.source_term("relax", [-u])
+    model.linear_source("implicit", [[-1.0]])
+    model.rate_operator("explicit_rhs", flux=False, sources=["relax"])
+
+    state_space = next(iter(model.module.state_spaces().values()))
+    state = model.module.state_handle(state_space)
+    block = Case(name="pc-case").block("plasma", model.module)
+    program = libtime.IMEX(
+        block[state],
+        explicit_operator=model.module.operator_handle("explicit_rhs"),
+        implicit_operator=model.module.operator_handle("implicit"),
+    )
+    return program.emit_cpp_program(model=model)
 
 
 def test_program_step_has_no_python_callback_tokens():
-    """The generated step body has no Python/host-callback token (complements module_codegen)."""
-    src = _program_source()
-    assert "pops_install_program" in src, "the source must define the program install entry"
-    body = src.split("pops_install_program", 1)[1]
+    """The generated step body has no Python/host-callback token."""
+    source = _program_source()
+    assert "pops_install_program" in source, "the source must define the program install entry"
+    body = source.split("pops_install_program", 1)[1]
     for token in ("PyObject", "py::", "std::function"):
         assert token not in body, (
             "the compiled Program step body must not reference %r (no Python callback / host "
             "type-erasure in the hot step, ADC-600)" % token)
-    print("OK  compiled Program step body carries no Python-callback token")
 
 
 def main():

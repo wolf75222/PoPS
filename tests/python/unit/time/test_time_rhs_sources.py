@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """pops.time RHS source routing -- P.rhs flux/source selection (epic ADC-399 / ADC-425).
 
-Spec criterion 17: a source is included in an RHS only when EXPLICITLY listed in ``sources``, never
+Spec criterion 17: a source is included in an RHS only when EXPLICITLY listed in ``terms``, never
 summed implicitly. Before ADC-425 the codegen always lowered the default-flux RHS to ``ctx.rhs_into``
-(= -div F + the model's default/composite source), so ``P._rhs_legacy(flux=True, sources=[])`` on a model with
-a default ``m.source`` STILL added that source -- breaking the hyperbolic stage of a Lie/Strang/IMEX
+(= -div F + the model's default/composite source), so a flux-only RHS on a model with a default
+``m.source`` STILL added that source -- breaking the hyperbolic stage of a Lie/Strang/IMEX
 split (which needs "flux but no source"). ADC-425 adds the flux-only runtime primitive
 ``ctx.neg_div_flux_default_into`` (= -div F WITHOUT the default source) and routes the codegen on
 whether ``"default"`` is among the requested sources.
@@ -26,11 +26,12 @@ whether ``"default"`` is among the requested sources.
 Run with python3 (PYTHONPATH = built pops package).
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import state_refs, typed_state
+from typed_program_support import solve_field, state_refs, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource
+from pops.numerics.terms import Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -97,8 +98,13 @@ def one_step_program(name, sources, flux=True, model=None):
     """U^{n+1} = U + dt * rhs(flux=flux, sources=sources), committed on block 'plasma'."""
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    fields = P.solve_fields(U) if flux else None
-    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
+    fields = solve_field(P, U) if flux else None
+    terms = [Flux()] if flux else []
+    for source in sources:
+        terms.append(
+            DefaultSource() if source == "default" else
+            model.module.operator_handle(source))
+    R = P.rhs(state=U, fields=fields, terms=terms)
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value(
         "%s_step" % name, U + P.dt * R, at=endpoint.point))
@@ -123,7 +129,8 @@ chk("ctx.neg_div_flux_default_into(0," in src_empty and "ctx.rhs_into(" not in s
 # program name so only the sources attr differs.
 h_empty = one_step_program("p", [])._ir_hash()
 h_default = one_step_program("p", ["default"])._ir_hash()
-h_named = one_step_program("p", ["decay"])._ir_hash()
+h_named = one_step_program(
+    "p", ["decay"], model=decay_model_with_named("hash-named"))._ir_hash()
 chk(len({h_empty, h_default, h_named}) == 3,
     "sources=[] / ['default'] / ['decay'] produce 3 distinct IR hashes")
 
@@ -214,11 +221,11 @@ chk(float(np.abs(out_default - rho0d).max()) > 1e-6, "sources=['default'] actual
 def lie_split_program(name, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
-    H = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=[])  # flux only (== identity here)
+    H = P.rhs(state=U, fields=solve_field(P, U), terms=[Flux()])  # flux only
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     U1 = P.value(
         "%s_H" % name, U + P.dt * H, at=adctime.TimePoint(P.clock, 1))
-    S = P._rhs_legacy(state=U1, fields=None, flux=False, sources=["default"])    # default source on U1
+    S = P.rhs(state=U1, fields=None, terms=[DefaultSource()])  # default source on U1
     P.commit(endpoint, P.value(
         "%s_S" % name, U1 + P.dt * S, at=endpoint.point))
     return P
@@ -244,10 +251,10 @@ chk(d_lie < 1e-12, "Lie split H(flux,sources=[]);S(source) == offline single-sou
 # zero-flux model it is U + dt*C*rho -- identical to the sources=['default'] one-step above.
 try:
     fe_model = decay_model("decay_fe", C)
-    P_fe = adctime.Program("fe_default")
-    libtime.forward_euler(
-        P_fe, *state_refs(P_fe, "plasma", model=fe_model.module),
-        sources=(DefaultSource(),))
+    fe_rate = fe_model.rate("default_rate", flux=False, sources=("default",))
+    block, state = state_refs(
+        adctime.Program("fe_refs"), "plasma", model=fe_model.module)
+    P_fe = libtime.ForwardEuler(block[state], rate=fe_rate)
     compiled_fe = compile_drivers.compile_problem(model=fe_model, time=P_fe)
 except RuntimeError as exc:
     _skip("compile_problem (forward_euler) could not build the .so: %s" % str(exc)[:160])

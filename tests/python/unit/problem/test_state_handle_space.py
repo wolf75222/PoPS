@@ -15,11 +15,12 @@ def test_state_handle_carries_its_authoritative_space_without_live_registry_look
     ions = module.state_space("ions", ("ni", "ui", "energy"))
     electron_handle = module.state_handle(electrons)
     ion_handle = module.state_handle(ions)
-    block = Case(name="plasma").block("fluid", module)
+    block = Case(name="plasma").block(
+        "fluid", module, states=(electron_handle, ion_handle))
     program = Program("multi-state")
 
-    electron_time = program.state(block, electron_handle)
-    ion_time = program.state(block, ion_handle)
+    electron_time = program.state(block[electron_handle])
+    ion_time = program.state(block[ion_handle])
 
     assert isinstance(electron_handle, StateHandle)
     assert electron_time.space is electrons
@@ -37,10 +38,13 @@ def test_multi_state_space_identity_survives_serialization_and_detachment():
     module = Module("two-states-detached")
     electrons = module.state_space("electrons", ("ne", "ue"))
     ions = module.state_space("ions", ("ni", "ui", "energy"))
-    block = Case(name="plasma-detached").block("fluid", module)
+    electron_handle = module.state_handle(electrons)
+    ion_handle = module.state_handle(ions)
+    block = Case(name="plasma-detached").block(
+        "fluid", module, states=(electron_handle, ion_handle))
     program = Program("multi-state-detached")
-    electron_time = program.state(block, module.state_handle(electrons))
-    ion_time = program.state(block, module.state_handle(ions))
+    electron_time = program.state(block[electron_handle])
+    ion_time = program.state(block[ion_handle])
     _ = electron_time.n, ion_time.n
 
     serialized = program._serialize()

@@ -6,6 +6,7 @@ import pytest
 from typed_program_support import typed_state
 
 from pops.time import Program
+from pops.numerics.terms import Flux
 from pops.time.points import Clock, StagePoint, TimePoint
 from pops.time.schedule import (
     AMRLevel, AcceptedStep, AccumulateDt, Always, Attempt, AtEnd, AtStart,
@@ -56,7 +57,7 @@ def test_domain_rejects_foreign_clock_point_and_stage_requires_stage_point():
 def _scheduled_rate(*, off=None, domain_factory=AcceptedStep):
     program = Program("scheduled")
     state = typed_state(program, "fluid", state_name="U")
-    rate = program._rhs_legacy(state=state.n, sources=[])
+    rate = program.rhs(state=state.n, terms=[Flux()])
     domain = domain_factory(program.clock)
     schedule = Schedule(Every(domain, 2), off=off)
     rate = program._replace_value(rate, attrs={**rate.attrs, "schedule": schedule})

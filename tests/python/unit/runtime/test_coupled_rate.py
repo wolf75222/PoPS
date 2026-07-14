@@ -31,11 +31,11 @@ def _two_fluid_module():
 def _program_states(mod, name, declarations):
     """Build real case-qualified temporal states for a coupled Program."""
     case = Case(name="%s_case" % name)
-    program = adctime.Program(name)._bind_operators(mod)
+    program = adctime.Program(name)
     result = {}
     for block_name, space in declarations:
         block, state = add_typed_block(case, mod, block_name, space)
-        result[block_name] = program.state(block, state)
+        result[block_name] = program.state(block[state])
     return program, result
 
 
@@ -78,12 +78,12 @@ def test_p_call_coupled_rate_returns_indexable_bundle():
     mod, e, i, _ = _two_fluid_module()
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     e_n, i_n = states["electrons"].n, states["ions"].n
-    C = P._call("collision", e_n, i_n)
+    C = mod.operator_handle("collision")(e_n, i_n)
     re_, ri_ = C[e_n.block], C[i_n.block]
     assert re_.vtype == "rhs" and ri_.vtype == "rhs"
     # each per-block rate is usable in an affine combination of its block's state
-    e1 = P.value("e1", e_n + P.dt * re_)
-    i1 = P.value("i1", i_n + P.dt * ri_)
+    e1 = P.value("e1", e_n + P.dt * re_, at=states["electrons"].next.point)
+    i1 = P.value("i1", i_n + P.dt * ri_, at=states["ions"].next.point)
     assert e1.vtype == "state" and i1.vtype == "state"
 
 
@@ -98,14 +98,15 @@ def test_coupled_rate_arbitrary_arity_three_blocks():
                  kind="coupled_rate", expr={"e": [z], "i": [z], "n": [z]})
     P, states = _program_states(mod, "s", (("e", e), ("i", i), ("n", n)))
     en, inn, nn = states["e"].n, states["i"].n, states["n"].n
-    C = P._call("coll3", en, inn, nn)
+    C = mod.operator_handle("coll3")(en, inn, nn)
     assert set(C.keys()) == {en.block, inn.block, nn.block}
 
 
 def test_coupled_rate_bundle_unknown_block_errors():
     mod, e, i, _ = _two_fluid_module()
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
-    C = P._call("collision", states["electrons"].n, states["ions"].n)
+    C = mod.operator_handle("collision")(
+        states["electrons"].n, states["ions"].n)
     with pytest.raises(KeyError):
         _ = C["neutrals"]
 
@@ -116,8 +117,9 @@ def test_coupled_rate_rejects_schedule_clearly():
     mod, e, i, _ = _two_fluid_module()
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     with pytest.raises(ValueError, match="coupled_rate"):
-        P._call("collision", states["electrons"].n, states["ions"].n,
-               schedule=adctime.every(2))
+        mod.operator_handle("collision")(
+            states["electrons"].n, states["ions"].n,
+            schedule=adctime.every(2, clock=P.clock))
 
 
 def test_dump_cpp_plan_shows_coupled_rate_kernel():
@@ -126,8 +128,9 @@ def test_dump_cpp_plan_shows_coupled_rate_kernel():
     mod, e, i, _ = _two_fluid_module()
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     e_n, i_n = states["electrons"].n, states["ions"].n
-    C = P._call("collision", e_n, i_n)
-    P.value("e1", e_n + P.dt * C[e_n.block])
+    C = mod.operator_handle("collision")(e_n, i_n)
+    P.value(
+        "e1", e_n + P.dt * C[e_n.block], at=states["electrons"].next.point)
     plan = P.dump_cpp_plan()
     assert "ADC-457" in plan and "ctx.coupled_rate(" not in plan
     assert "multi-state for_each_cell rate kernel" in plan
@@ -141,12 +144,16 @@ def test_coupled_rate_now_lowers_to_cpp():
     mod, e, i, _ = _two_fluid_module()
     P, states = _program_states(mod, "step", (("electrons", e), ("ions", i)))
     e_n, i_n = states["electrons"].n, states["ions"].n
-    C = P._call("collision", e_n, i_n)
+    C = mod.operator_handle("collision")(e_n, i_n)
     P.commit_many({
         states["electrons"].next:
-            P.value("e1", e_n + P.dt * C[e_n.block]),
+            P.value(
+                "e1", e_n + P.dt * C[e_n.block],
+                at=states["electrons"].next.point),
         states["ions"].next:
-            P.value("i1", i_n + P.dt * C[i_n.block]),
+            P.value(
+                "i1", i_n + P.dt * C[i_n.block],
+                at=states["ions"].next.point),
     })
     P._check_lowerable(None)  # no longer raises for a cons-only coupled_rate
     src = P.emit_cpp_program(model=None)

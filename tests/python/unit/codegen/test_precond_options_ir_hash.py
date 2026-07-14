@@ -16,8 +16,9 @@ from typed_program_support import typed_state
 
 
 def _solve_program(preconditioner=None):
-    """A minimal GMRES solve_linear program (GMRES takes the preconditioner ApplyFn slot)."""
+    """A minimal typed LinearProblem solved by GMRES with an optional preconditioner."""
     import pops.time as t
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import GMRES
     P = t.Program("p")
     U = typed_state(P, "blk")
@@ -29,12 +30,13 @@ def _solve_program(preconditioner=None):
         return x - 0.1 * lap
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=GMRES(max_iter=200), tol=1e-10, max_iter=200, restart=8)
-    if preconditioner is not None:
-        kw["preconditioner"] = preconditioner
     endpoint = typed_state(P, "blk", state_name="U").next
-    kw["rhs"] = P.value("rhs", U, at=endpoint.point)
-    phi = P.solve_linear(**kw).consume(action=t.FailRun())
+    rhs = P.value("rhs", U, at=endpoint.point)
+    solver = GMRES(
+        max_iter=200, rel_tol=1e-10, restart=8, preconditioner=preconditioner)
+    phi = P.solve(
+        LinearProblem(A, rhs), solver=solver,
+    ).consume(action=t.FailRun())
     P.commit(endpoint, phi)
     return P
 

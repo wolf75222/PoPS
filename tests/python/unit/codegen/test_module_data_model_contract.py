@@ -341,13 +341,14 @@ def test_manifest_abi_binding_is_functional_and_rate_inherits_base_layout():
     module.operator(
         "shape_rate", signature=(state,) >> rate,
         kind="local_rate", expr="shape")
-    from pops.time import Program
+    from pops.numerics.terms import Flux
     from pops.problem import Case
+    from pops.time import Program
 
     block = Case(name="shape-case").block("fluid", module)
     program = Program("rate_shape")._bind_operators(module)
-    value = program.state(block, module.state_handle(state)).n
-    rate_value = program._rhs_legacy(state=value, sources=[])
+    value = program.state(block[module.state_handle(state)]).n
+    rate_value = program.rhs(state=value, terms=[Flux()])
     assert rate_value.logical_shape == {
         "vtype": "rhs", "space": "Rate(U)", "n_comp": 2, "layout": "face"}
 

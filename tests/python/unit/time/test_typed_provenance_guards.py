@@ -23,13 +23,14 @@ def test_state_declaration_has_one_complete_space_contract_per_block():
     program = Program("state_contract")
 
     block, declaration = state_refs(program, "fluid", space=state)
-    first = program.state(block, declaration)
-    assert program.state(block, declaration) is first
+    qualified = block[declaration]
+    first = program.state(qualified)
+    assert program.state(qualified) is first
 
     foreign = Program("foreign_contract")
-    _, foreign_declaration = state_refs(foreign, "fluid")
-    with pytest.raises(ValueError, match="not declared|another|expected model_definition"):
-        program.state(block, foreign_declaration)
+    foreign_block, foreign_declaration = state_refs(foreign, "fluid")
+    with pytest.raises(ValueError, match="one Program cannot combine blocks from"):
+        program.state(foreign_block[foreign_declaration])
 
 
 def test_rate_is_strict_tangent_of_complete_state_space():
@@ -48,17 +49,17 @@ def test_linear_combine_rejects_cross_block_structural_and_typed_untyped_bypasse
     left = typed_state(program, "left", space=state)
     right = typed_state(program, "right", space=state)
     with pytest.raises((TypeError, ValueError), match="different blocks|not supported"):
-        program.value(left + right)
+        program.value("cross_block", left + right)
 
     wrong_rate = program._new(
         "rhs", "rhs", (left,), {}, "wrong_rate", left.block, space=Rate(different))
     with pytest.raises(ValueError, match="incompatible structures"):
-        program.value(left + wrong_rate)
+        program.value("wrong_structure", left + wrong_rate)
 
     untyped_rate = program._new(
         "rhs", "rhs", (left,), {}, "untyped_rate", left.block)
-    with pytest.raises(ValueError, match="typed and untyped"):
-        program.value(left + untyped_rate)
+    with pytest.raises(ValueError, match="complete StateSpace"):
+        program.value("untyped_mix", left + untyped_rate)
 
 
 def test_state_preserving_ops_and_timestate_history_keep_space():
@@ -66,25 +67,25 @@ def test_state_preserving_ops_and_timestate_history_keep_space():
     program = Program("propagation")
     temporal = typed_state(program, "fluid", state_name="U", space=state)
     current = temporal.n
-    rate = program._rhs_legacy(state=current, sources=[])
+    rate = program.rhs(state=current, terms=[])
     assert rate.space == Rate(state)
     assert rate.logical_shape["n_comp"] == len(state.components)
     endpoint = temporal.next
     combined = program.value(
-        current + program.dt * rate, at=endpoint.point)
+        "combined", current + program.dt * rate, at=endpoint.point)
     assert combined.space == state
     assert program.fill_boundary(combined).space == state
     assert program.project(combined).space == state
 
     ranged = program.range(
-        combined, 2, lambda builder, value: builder.value(value))
+        combined, 2, lambda builder, value: builder.value("range_step", 1 * value))
     conditional = program.branch(
         program.norm2(ranged) > 0,
-        lambda builder: builder.value(ranged),
+        lambda builder: builder.value("branch_true", 1 * ranged),
         lambda _builder: ranged)
     looped = program.while_(
         conditional, lambda builder, value: builder.norm2(value) > 0,
-        lambda builder, value: builder.value(value))
+        lambda builder, value: builder.value("while_step", 1 * value))
     assert ranged.space == conditional.space == looped.space == state
 
     program.keep_history(temporal, depth=2)
@@ -104,7 +105,7 @@ def test_callback_results_cannot_cross_program_or_region_boundaries():
     with pytest.raises(ValueError, match="different Program"):
         first.while_(
             left, lambda _builder, _value: second.norm2(right) > 0,
-            lambda builder, value: builder.value(value))
+            lambda builder, value: builder.value("while_step", 1 * value))
     with pytest.raises(ValueError, match="different Program|same block"):
         first.range(left, 1, lambda _builder, _value: right)
     with pytest.raises(ValueError, match="different Program"):
@@ -134,13 +135,13 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
     captured = []
 
     def body(builder, value):
-        result = builder.value(value)
+        result = builder.value("captured", 1 * value)
         captured.append(result)
         return result
 
     output = program.range(temporal.n, 1, body)
-    with pytest.raises(ValueError, match="region"):
-        program.value(captured[0])
+    with pytest.raises(ValueError, match="not present|region"):
+        program.value("escaped", captured[0])
     with pytest.raises(ValueError, match="sub-block value"):
         program.commit(temporal.next, captured[0])
 
@@ -148,7 +149,7 @@ def test_subblock_value_and_fabricated_value_cannot_escape_to_top_level():
         program, 999, "state", "state", (), {}, "fabricated", temporal.block,
         space=state, point=temporal.n.point, provenance=_direct_provenance(program))
     with pytest.raises(ValueError, match="not authored"):
-        program.value(fake)
+        program.value("fabricated_escape", fake)
 
     output_next = program.value(
         "output_next", 1 * output, at=temporal.next.point)
@@ -168,7 +169,10 @@ def test_identity_control_body_is_valid_but_keeps_region_metadata_through_rebuil
     assert rebuilt.validate() is True
 
 
-def test_where_dot_and_solve_linear_reject_cross_block_fields():
+def test_where_dot_and_linear_problem_reject_cross_block_fields():
+    from pops.linalg import LinearProblem
+    from pops.solvers import CG
+
     state = StateSpace("U", ("rho",))
     program = Program("field_layout_guards")
     left = typed_state(program, "left", space=state)
@@ -182,7 +186,10 @@ def test_where_dot_and_solve_linear_reject_cross_block_fields():
     operator = program.matrix_free_operator("A")
     operator = program.set_apply(operator, lambda _builder, _out, value: value)
     with pytest.raises(ValueError, match="same block"):
-        program.solve_linear(operator=operator, rhs=left, initial_guess=right, max_iter=2)
+        program.solve(
+            LinearProblem(operator, left, initial_guess=right),
+            solver=CG(max_iter=2),
+        )
 
 
 def test_freeze_guards_metadata_mutations_transactionally():

@@ -29,7 +29,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [10. Elliptic: spectral Poisson (FFT), single-rank and distributed](#10-elliptic-spectral-poisson-fft-single-rank-and-distributed)
 - [11. Extended elliptic: eps(x), screened/Helmholtz, anisotropic](#11-extended-elliptic-epsx-screenedhelmholtz-anisotropic)
 - [12. Full-tensor elliptic: matrix-free Krylov (BiCGStab)](#12-full-tensor-elliptic-matrix-free-krylov-bicgstab)
-- [13. Condensed implicit source: Schur condensation](#13-condensed-implicit-source-schur-condensation)
+- [13. Condensed implicit Program authoring](#13-condensed-implicit-program-authoring)
 - [14. Embedded boundary: Shortley-Weller cut-cell](#14-embedded-boundary-shortley-weller-cut-cell)
 - [15. Disc domain: mask, masked transport, cut-cell transport](#15-disc-domain-mask-masked-transport-cut-cell-transport)
 - [16. Polar geometry: transport and Poisson on a ring (r, theta)](#16-polar-geometry-transport-and-poisson-on-a-ring-r-theta)
@@ -628,10 +628,10 @@ function strang_step(U, dt, T, S):
 `strang_step(...)`. Both are templated on `TransportStep` / `SourceStep`: $T$ and $S$ are
 callables `(MultiFab&, Real) -> void` that advance their subsystem in place, so the integrator is
 agnostic of the physical content (in-house counterpart of `StrangSplitting` / `FractionalTime2OSplitting` of
-muffin). The public production path authors the same composition explicitly through
-`pops.lib.time.lie(...)` or `pops.lib.time.strang(...)` inside a `pops.Program`. `SystemStepper` does
-not select a native split scheme: each subflow, field solve and endpoint is visible in the Program IR,
-and presets are ordinary IR-building functions rather than privileged runtime branches.
+muffin). The public production path calls `pops.lib.time.Lie(block[U], first=T, second=S)` or
+`pops.lib.time.Strang(block[U], first=T, second=S)`; each factory returns an ordinary
+`pops.Program`. No native stepper selects a named split scheme: every subflow, field evaluation and
+endpoint stays visible in the Program IR.
 
 **Constraints / remarks.** Strang gives order 2 only if each sub-step is itself at least
 order 2: an order-1 $S$ or $T$ caps the splitting at order 1, whatever the symmetrization. In a
@@ -706,8 +706,8 @@ function advance_subcycled(system, dt, macro_step, advance_block):
 function advance_subcycled(system, dt, advance_block):
     advance_subcycled(system, dt, 0, advance_block)
 
-function step_cfl(cfl):                           # SystemDriver, choix du macro-pas par CFL
-    solve_fields()                                # aux (phi, grad) a l'instant courant
+function step_cfl(cfl):                           # choix du macro-pas par CFL
+    evaluate_field_operator()                     # champs qualifies a l'instant courant
     h_cell = polar ? min(dr, r_min*dtheta) : min(dx, dy)
     dt = +inf
     for each block b, evolutif:
@@ -722,7 +722,7 @@ function step_cfl(cfl):                           # SystemDriver, choix du macro
     return dt
 
 function step_adaptive(cfl):                       # macro-pas = pas du bloc le plus lent
-    solve_fields()
+    evaluate_field_operator()
     for each block b: w_b = b.evolve ? max_wave_speed(b.U) : 0
     w_min   = min over evolutifs of w_b           # 1e-30 si tous geles
     h_cell  = polar ? min(dr, r_min*dtheta) : min(dx, dy)
@@ -1126,7 +1126,7 @@ function apply_precond(in):                   # M^{-1} a CL homogenes
 
 Validation: `test_krylov_solver`. Case (A) on the canonical Laplacian ($A_{xy} = A_{yx} = 0$, $A = I$, $\kappa = 0$), BiCGStab converges to the same solution as `GeometricMG` at the tolerance. Case (B) on an operator with non-trivial cross terms, BiCGStab converges where the MG V-cycle alone stagnates ($c = 0.1$ to $0.4$) or diverges ($c = 0.7$). Under MPI, the iteration count and the convergence are invariant to the number of ranks (stopping criterion reduced by `all_reduce`).
 
-## 13. Condensed implicit Program preset
+## 13. Condensed implicit Program authoring
 
 **Intuition.** A stiff source that couples potential, velocity and Lorentz force (diocotron at high $\omega_c$) cannot be treated component by component: the cyclotron rotation couples the two velocity components, and the potential reacts to the charge displacement. We theta-discretize the implicit source, eliminate the velocity algebraically via the closed inverse $B^{-1}$ of the 2x2 rotation, which leaves only an elliptic on the potential $\phi^{n+\theta}$ alone (Schur complement), then reconstruct the velocity.
 
@@ -1153,43 +1153,51 @@ $$\mathrm{div} F(i,j) = \frac{F_x(i{+}1,j) - F_x(i{-}1,j)}{2\,dx} + \frac{F_y(i,
 The condensed operator is in general full-tensor (hence the Krylov solver, section 12). Sign convention of the solve: `TensorKrylovSolver` solves $L_{\mathrm{int}} = +\mathrm{div}(A\nabla\phi)$, so $L_{\mathrm{schur}} = -L_{\mathrm{int}}$ and the stage passes $\mathrm{rhs}_{\mathrm{kry}} = -\mathrm{rhs}_{\mathrm{schur}}$ to the solver. After resolution, the velocity is reconstructed by $v^{n+\theta} = B^{-1}(v^n - \theta\, dt\,\nabla\phi^{n+\theta})$ (centered gradient, consistent with the RHS divergence), then extrapolated from the theta-stage to the full step by $U^{n+1} = U^n + \tfrac{1}{\theta}(U^{n+\theta} - U^n)$. The energy, if the Energy role is present, is updated only by the kinetic energy increment $E^{n+1} = E^n + \tfrac{1}{2}\rho^n(|v^{n+1}|^2 - |v^n|^2)$, the Lorentz rotation doing no work and $\rho$ being frozen.
 
 ```python
-T = pops.Program("condensed_source").bind_operators(model)
-q = T.state(block, state)
+from pops.linalg import LinearProblem
+from pops.solvers import CompositeTensorFAC, GMRES, Hierarchy
+from pops.time import FailRun
 
-pops.lib.time.CondensedSchur(
-    T,
-    block,
-    state,
-    alpha=alpha,
-    theta=theta,
-    linear_operator=lorentz_linearization,
-    method=pops.solvers.krylov.BiCGStab(max_iter=400),
-    tol=1e-10,
+T = pops.Program("condensed_source")
+q = T.state(block[state])
+scope = Hierarchy()
+operator = T.matrix_free_operator(
+    "condensed_tensor",
+    domain="state",
+    range_="state",
+    ncomp=len(state.components),
+    scope=scope,
+    provider=CompositeTensorFAC(),
 )
+T.set_apply(operator, apply_condensed_tensor)
+# Application-specific Program IR: assemble the derived RHS from q.n, rho and B^{-1}.
+condensed_rhs = assemble_condensed_rhs(T, q.n, rho, inverse_rotation)
+q_theta = T.solve(
+    LinearProblem(operator=operator, rhs=condensed_rhs, scope=scope),
+    solver=GMRES(max_iter=400, rel_tol=1e-10),
+    name="condensed_stage",
+).consume(action=FailRun())
 ```
 
-The preset authors ordinary Program IR: tensor-coefficient assembly, metric-aware right-hand side,
-one typed matrix-free solve, reconstruction, optional theta extrapolation and optional energy update.
+The method is authored as ordinary Program IR: tensor-coefficient assembly, metric-aware right-hand
+side, one typed matrix-free solve, reconstruction, optional theta extrapolation and optional energy
+update. `LinearProblem` carries the algebra and hierarchy scope; the executable Krylov descriptor
+owns tolerance and iteration budget; `CompositeTensorFAC` names the native hierarchy provider.
 The generated C++ always calls `ctx.solve_linear_matfree`; `ProgramContext` selects the uniform
 Cartesian or polar provider, while `AmrProgramContext` selects the flat or composite hierarchy
-provider. The authored local-linear operator supplies $B^{-1}$; no physics-specific source-stage
-stepper, descriptor or System setter exists.
+provider. The authored operator supplies $B^{-1}$; no physics-specific time preset, source-stage
+stepper or System setter exists.
 
-**Code.** The preset is
-[`python/pops/lib/time/strang.py`](../python/pops/lib/time/strang.py) (`CondensedSchur`). Its generic
-assembly/reconstruction lowering is in
-[`python/pops/codegen/program_emit_condensed.py`](../python/pops/codegen/program_emit_condensed.py),
-the linear-solve protocol in
+**Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
 runtime providers in
 [`include/pops/runtime/program/program_context.hpp`](../include/pops/runtime/program/program_context.hpp),
 [`include/pops/runtime/program/amr_program_context.hpp`](../include/pops/runtime/program/amr_program_context.hpp),
 and [`include/pops/runtime/amr/amr_tensor_elliptic.hpp`](../include/pops/runtime/amr/amr_tensor_elliptic.hpp).
 
-**Constraints / remarks.** Stability: the theta-scheme is unconditionally stable for $\theta \geq 1/2$ ($\theta = 1$ pure implicit, the extrapolation is the identity; $\theta = 1/2$ Crank-Nicolson, extrapolation factor 2). The centered order-2 discretization fixes the Cartesian spatial order; polar emission uses the corresponding $1/r$ metric factors. The condensed sub-flow freezes $\rho$ and is composed explicitly with transport by `pops.lib.time.strang` or `lie`. Safeguard: $c = 0$ and $B_z = 0$ give $A = I$. The solver tolerance and iteration budget are authored controls, never hidden defaults in a native stage.
+**Constraints / remarks.** Stability: the theta-scheme is unconditionally stable for $\theta \geq 1/2$ ($\theta = 1$ pure implicit, the extrapolation is the identity; $\theta = 1/2$ Crank-Nicolson, extrapolation factor 2). The centered order-2 discretization fixes the Cartesian spatial order; polar emission uses the corresponding $1/r$ metric factors. The condensed sub-flow freezes $\rho$ and is composed explicitly with transport through `pops.lib.time.Strang` or `Lie`. Safeguard: $c = 0$ and $B_z = 0$ give $A = I$. The solver tolerance and iteration budget are authored controls, never hidden defaults in a native stage.
 
-Validation: `test_time_condensed_schur`, `test_condensed_generic_parity`,
-`test_amr_schur_solve_linear_emit`, `test_amr_clean_route_program`, and the polar tensor MPI suite.
+Validation belongs to the generic Program solve contract, matrix-free provider tests and the polar
+tensor MPI suite; there is no named condensed time-preset test surface.
 
 
 ---
@@ -1463,8 +1471,9 @@ then solves by matrix-free BiCGStab (handles the non-symmetric of the cross term
 $1/r^2$). Singular operator (pure radial Neumann + periodic theta): gauge fixed by projection onto
 the subspace of zero FV mean (`project_mean`, the iterative counterpart of the mode-0 pinning). The
 9-point stencil reads the diagonal corners filled by `fill_ghosts` (without which the cross term would be wrong at the
-box boundary). The same `pops.lib.time.CondensedSchur` IR is emitted with polar divergence and gradient
-metrics, then `ProgramContext::solve_linear_matfree` selects `PolarTensorKrylovSolver`. Multi-rank MPI /
+box boundary). The same generic `Program.solve(LinearProblem(...), solver=...)` IR carries polar
+divergence and gradient metrics, then `ProgramContext::solve_linear_matfree` selects
+`PolarTensorKrylovSolver`. Multi-rank MPI /
 multi-box is supported by azimuthal splitting under `RadialLine` (the Thomas sweep in r must stay local
 to a box, safeguard `check_radial_columns`) and free 2D tiling under `Jacobi`.
 
@@ -1484,7 +1493,8 @@ Validation: `test_polar_transport_mms` / `test_polar_mms_vr` (polar transport MM
 `test_polar_ring_advection`, `test_polar_fluid_transport`, `test_polar_lorentz_source`,
 `test_polar_conservation_radial_flux` (radial wall, mass conserved), `test_polar_poisson_mms`
 (PolarPoissonSolver, radial order 2), `test_polar_tensor_elliptic_mms` (polar tensor operator),
-`test_time_condensed_schur` (preset Program) and `test_mpi_polar_schur` (polar tensor solve multi-rank).
+`test_time_divergence` (generic matrix-free `div(grad)` Program solve) and
+`test_mpi_polar_schur` (polar tensor solve multi-rank).
 `test_polar_system_step` validates the full polar `System::step` path (field-solve + aux in the local
 basis + SSPRK3 transport + wall). On the Python side: `test_polar_system`, `test_polar_diocotron`,
 `test_polar_rejections`, `test_polar_schur_via_system`, `test_polar_conservation_radial_flux`,
@@ -2136,8 +2146,9 @@ of this page. The goal is not to present a partial capability as complete.
 - GaussPolicy restart/evolve. An experimental policy (re-imposing Gauss at each step, or keeping the
   `phi` evolved by Schur) on a branch (PR #237); the associated experiment is discarded. Not on
   `master`.
-- Condensed implicit Program on AMR. `pops.lib.time.CondensedSchur` gathers coefficients, RHS and the
-  authored initial guess on every level, performs one composite solve, then reconstructs every level.
+- Condensed implicit Program on AMR. A hierarchy-scoped `LinearProblem` gathers coefficients, RHS and
+  the authored initial guess on every level, then an executable Krylov solver with an explicit
+  `CompositeTensorFAC` provider performs one composite solve before reconstruction on every level.
   The current `AmrTensorElliptic` provider accepts nested ratio-2 hierarchies with a replicated
   mono-box coarse level on one MPI rank. Its FAC backend supports equal tensor diagonals plus cross
   terms; unequal `eps_x`/`eps_y`, multilevel MPI and multi-block Program scope return an explicit
@@ -2149,7 +2160,7 @@ of this page. The goal is not to present a partial capability as complete.
   mono-box. The polar tensor/Krylov path (polar Schur) lifts this limit on its perimeter.
 - Cut-cell and Hoffart fidelity. The cut-cell (sections 14, 15) is a numerical capability of the core; it
   is not presented as a proven correction of the growth rates of the Hoffart benchmark.
-- Energy under condensed implicit integration. The preset in section 13 adjusts kinetic energy if an `Energy` role is
+- Energy under condensed implicit integration. The authored method in section 13 adjusts kinetic energy if an `Energy` role is
   declared; the isothermal case does not use the energy equation.
 
 ---

@@ -5,7 +5,7 @@ import pytest
 
 from pops import time as adctime
 from pops.model import (
-    DoubleOwnershipError, Handle, LocalLinearOperator, Module, OperatorHandle,
+    DoubleOwnershipError, Handle, LocalLinearOperator, MissingOwnershipError, Module, OperatorHandle,
     RateSpace, Signature,
 )
 from pops.numerics.terms import Flux, SourceTerm
@@ -41,7 +41,7 @@ def _references(model: Model | Module, *, case_name: str | None = None):
 def _program(model: Model):
     module, block, state = _references(model)
     program = adctime.Program("handles")._bind_operators(module)
-    return program, program.state(block, state).n
+    return program, program.state(block[state]).n
 
 
 def _rate_model(name: str):
@@ -132,7 +132,7 @@ def test_forged_alias_target_cannot_route_to_another_compatible_operator():
 
     _, block, state_declaration = _references(module)
     program = adctime.Program("alias-forgery")._bind_operators(module)
-    state = program.state(block, state_declaration).n
+    state = program.state(block[state_declaration]).n
     assert legitimate(state).attrs["source"] == "first"
     with pytest.raises(ValueError, match="authenticates target.*first"):
         forged(state)
@@ -190,7 +190,7 @@ def test_readable_default_source_alias_has_an_explicit_registered_target():
     source = model.source_term("default", [-u])
     module, block, state_declaration = _references(model)
     program = adctime.Program("default-source")._bind_operators(module)
-    state = program.state(block, state_declaration).n
+    state = program.state(block[state_declaration]).n
 
     assert source.name == "default"
     assert source.registered_operator_name == "source_default"
@@ -199,11 +199,11 @@ def test_readable_default_source_alias_has_an_explicit_registered_target():
     assert program.rhs(state=state, terms=[source]).attrs["sources"] == ("default",)
 
 
-def test_public_handle_routes_require_a_bound_registry():
+def test_qualified_state_automatically_binds_its_authoritative_registry():
     model, source, linear = _model("unbound")
     _, block, state_declaration = _references(model)
     program = adctime.Program("unbound")
-    state = program.state(block, state_declaration).n
+    state = program.state(block[state_declaration]).n
 
     for build in (
         lambda: program.linear_source(linear),
@@ -213,8 +213,7 @@ def test_public_handle_routes_require_a_bound_registry():
         lambda: program.condensed_coeffs(
             state=state, linear_operator=linear, subset=(0, 1), c=1, th_dt=1),
     ):
-        with pytest.raises(ValueError, match="no operators are bound"):
-            build()
+        assert build() is not None
 
 
 def test_lib_time_helpers_preserve_handle_identity_until_resolution():
@@ -223,16 +222,10 @@ def test_lib_time_helpers_preserve_handle_identity_until_resolution():
     first, first_rate = _rate_model("macro-first")
     _, foreign_rate = _rate_model("macro-second")
     module, block, state_declaration = _references(first)
-    program = adctime.Program("macro")._bind_operators(module)
     with pytest.raises(ValueError, match="no operator registry is bound for owner"):
-        libtime.explicit_rk(
-            program, block, state_declaration, rhs_operator=foreign_rate,
-            tableau=libtime.SSPRK2_TABLEAU)
+        libtime.SSPRK2(block[state_declaration], rate=foreign_rate)
 
-    valid = adctime.Program("macro")._bind_operators(module)
-    libtime.explicit_rk(
-        valid, block, state_declaration, rhs_operator=first_rate,
-        tableau=libtime.SSPRK2_TABLEAU)
+    valid = libtime.SSPRK2(block[state_declaration], rate=first_rate)
     assert valid.validate() is True
 
 
@@ -269,7 +262,7 @@ def test_state_space_is_derived_from_the_model_declaration_not_the_call_site():
         signature=operator.signature)
     _, block, state_declaration = _references(module)
     program = adctime.Program("spaces")._bind_operators(module)
-    temporal = program.state(block, state_declaration)
+    temporal = program.state(block[state_declaration])
     state = temporal.n
     linear = program._call(handle)
 
@@ -277,16 +270,41 @@ def test_state_space_is_derived_from_the_model_declaration_not_the_call_site():
     assert state.space is operator_space
     assert program.apply(linear, state=state).space == RateSpace(operator_space)
     with pytest.raises(TypeError, match="unexpected keyword argument 'space'"):
-        program.state(block, state_declaration, space=operator_space)
+        program.state(block[state_declaration], space=operator_space)
+
+
+def test_nullary_operator_call_uses_one_explicit_program_authority():
+    module = Module("nullary")
+    state_space = module.state_space("U", ("u",))
+    module.operator(
+        name="L",
+        kind="local_linear_operator",
+        signature=Signature((), LocalLinearOperator(state_space, state_space)),
+        expr="linear-map",
+    )
+    handle = module.operator_handle("L")
+    _, block, state_declaration = _references(module)
+    program = adctime.Program("nullary")._bind_operators(module)
+    state = program.state(block[state_declaration]).n
+
+    value = handle(program=program)
+    assert value.attrs["operator_handle"] is handle
+    assert value.attrs["linear_source"] == "L"
+
+    with pytest.raises(TypeError, match="only for a nullary call"):
+        handle(state, program=program)
+    with pytest.raises(TypeError, match="must be a pops.Program"):
+        handle(program=object())
 
 
 def test_invalid_typed_state_identity_is_atomic():
     module = Module("invalid-state-model")
     state_space = module.state_space("U", ("u",))
     state_declaration = module.state_handle(state_space)
+    field_space = module.field_space("phi", ("phi",))
+    wrong_kind = module.field_handle(field_space)
     _, block, _ = _references(module)
     qualified = block[state_declaration]
-    wrong_kind = Handle("phi", kind="field", owner=module.owner_path)
     program = adctime.Program("invalid-state")
 
     def snapshot():
@@ -298,10 +316,10 @@ def test_invalid_typed_state_identity_is_atomic():
         )
 
     invalid_calls = (
-        (lambda: program.state("block", state_declaration), TypeError, "BlockHandle"),
-        (lambda: program.state(block, "U"), TypeError, "declared Handle"),
-        (lambda: program.state(block, wrong_kind), TypeError, "expected 'state'"),
-        (lambda: program.state(block, qualified), DoubleOwnershipError, "already-qualified"),
+        (lambda: program.state("block"), TypeError, "final authoring route"),
+        (lambda: program.state(state_declaration), MissingOwnershipError, "block-qualified"),
+        (lambda: program.state(block[wrong_kind]), TypeError, "StateHandle"),
+        (lambda: block[qualified], DoubleOwnershipError, "already block-qualified"),
     )
     for invoke, error, message in invalid_calls:
         before = snapshot()

@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Per-stage elliptic field solve in the compiled time Program (ADC-409).
 
-Each ``P.solve_fields(state=U_stage)`` op now lowers to ``ctx.solve_fields_from_state(0, <U_stage>)``:
+Each consumed callable ``FieldHandle(U_stage)`` now lowers to
+``ctx.solve_fields_from_state(0, <U_stage>)``:
 the elliptic fields are re-solved -- and the shared aux re-filled -- from THAT stage's state, not the
 block's current state. So a field-COUPLED multi-stage scheme (Poisson feedback into the RHS) is exact:
 stage k's RHS reads phi solved from stage k's own state. The compiled Program runs the stages
 sequentially, so stage k's solve overwrites the shared aux before stage k's RHS reads it -- no distinct
 per-stage FieldContext buffer is needed.
 
-(A) Codegen (pure Python, always runs): ``P.solve_fields(state=U_stage)`` lowers to
+(A) Codegen (pure Python, always runs): a consumed field outcome for ``U_stage`` lowers to
     ``ctx.solve_fields_from_state(0, <U_stage var>)`` in the generated C++ (and the bare
     ``ctx.solve_fields();`` no longer appears); the first stage solves from the base state, a later
     stage solves from the intermediate scratch state -- a DISTINCT C++ variable.
@@ -28,11 +29,12 @@ Skips cleanly (exit 0) without the install_program binding / numpy / a compiler 
 never fakes the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+from typed_program_support import solve_field, typed_state
 
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -106,13 +108,14 @@ def heun_program(name="sffs_heun", model=None):
     P = adctime.Program(name)
     dt = P.dt
     U0 = typed_state(P, "plasma", model=model)
-    f0 = P.solve_fields("fields_0", U0)
-    R0 = P._rhs_legacy(name="R0", state=U0, fields=f0, flux=True, sources=["electric"])
+    f0 = solve_field(P, U0, name="fields_0")
+    electric = model.module.operator_handle("electric")
+    R0 = P.rhs(name="R0", state=U0, fields=f0, terms=[Flux(), electric])
     stage1 = adctime.StagePoint(
         "heun_predictor", {"main": adctime.TimePoint(P.clock, 1)})
     U1 = P.value("U1", U0 + dt * R0, at=stage1)
-    f1 = P.solve_fields("fields_1", U1)            # <-- solved from U1, not U0 (ADC-409)
-    R1 = P._rhs_legacy(name="R1", state=U1, fields=f1, flux=True, sources=["electric"])
+    f1 = solve_field(P, U1, name="fields_1")       # <-- solved from U1, not U0 (ADC-409)
+    R1 = P.rhs(name="R1", state=U1, fields=f1, terms=[Flux(), electric])
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value(
         "U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1, at=endpoint.point))
@@ -148,8 +151,11 @@ chk(base_decl is not None and solve_args and solve_args[0] == base_decl.group(1)
 P_fe = adctime.Program("sffs_fe")
 fe_model = named_source_model("sffs_fe_named")
 U = typed_state(P_fe, "plasma", model=fe_model)
-f = P_fe.solve_fields(U)
-R = P_fe._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
+f = solve_field(P_fe, U)
+R = P_fe.rhs(
+    name="R", state=U, fields=f,
+    terms=[Flux(), fe_model.module.operator_handle("electric")],
+)
 endpoint_fe = typed_state(P_fe, "plasma", state_name="U", model=fe_model).next
 P_fe.commit(endpoint_fe, P_fe.value(
     "U1", U + P_fe.dt * R, at=endpoint_fe.point))

@@ -7,9 +7,13 @@ from types import MappingProxyType
 
 import pytest
 
-from pops.fields import FieldProblem
+from pops.descriptors import Descriptor
+from pops.fields import FieldDiscretization, FieldOperator
+from pops.ir import ValueExpr
+from pops.math import laplacian
 from pops.model import (
     DeclarationIndex,
+    FieldSpace,
     Handle,
     Operator,
     OperatorRegistry,
@@ -17,11 +21,12 @@ from pops.model import (
     OwnerPath,
     RateSpace,
     Signature,
+    StateHandle,
     StateSpace,
 )
 from pops.problem import Case
 from pops.problem.handles import BlockHandle, FieldHandle
-from pops.time import Program, StagePoint, TimePoint
+from pops.time import FailRun, Program, StagePoint, TimePoint
 from pops.time.program_detach import detach_compiled_program
 from pops.time.values import ProgramValue
 
@@ -30,38 +35,83 @@ class _Model:
     def __init__(self) -> None:
         self.name = "transport"
         self.owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, self.name)
-        self.state = Handle("u", kind="state", owner=self.owner_path)
         self._registry = OperatorRegistry(owner=self.owner_path)
         space = StateSpace("U", ("u",))
+        self.state = StateHandle("U", owner=self.owner_path, space=space)
+        self.field_space = FieldSpace("psi", ("psi",))
+        self.field = Handle("psi", kind="field", owner=self.owner_path)
         operator = self._registry.register(Operator(
             "decay",
             "local_source",
             Signature((space,), RateSpace(space)),
             lowering={"source": "default"},
         ))
+        provider_operator = self._registry.register(Operator(
+            "psi_provider",
+            "field_operator",
+            Signature((space,), self.field_space),
+            lowering={"field_provider": {"key": "psi_provider"}},
+        ))
         self.rate = next(
             handle
             for handle in self._registry.declaration_index().records()
             if handle.local_id == operator.name
         )
+        self.field_provider = next(
+            handle
+            for handle in self._registry.declaration_index().records()
+            if handle.local_id == provider_operator.name
+        )
 
     def declaration_index(self) -> DeclarationIndex:
-        return DeclarationIndex(owner=self.owner_path, handles=(self.state,))
+        return DeclarationIndex(owner=self.owner_path, handles=(self.state, self.field))
+
+    def field_spaces(self):
+        return {self.field_space.name: self.field_space}
 
     def operator_registry(self) -> OperatorRegistry:
         return self._registry
+
+
+class _FieldMethod(Descriptor):
+    category = "field_method"
+
+    def to_data(self):
+        return {"type": "unit-second-order"}
+
+
+class _FieldSolver(Descriptor):
+    category = "elliptic_solver"
+
+    def to_data(self):
+        return {"type": "unit-krylov"}
+
+
+def _field(case: Case, model: _Model, name: str):
+    unknown = case.qualify(model.field)
+    operator = FieldOperator(
+        name,
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(case.qualify(model.state)),
+        providers=model.field_provider,
+    )
+    return case.field(
+        operator,
+        FieldDiscretization(
+            method=_FieldMethod(), boundaries=(), solver=_FieldSolver()),
+    )
 
 
 def _authored_program():
     model = _Model()
     problem = Case(name="case")
     block = problem.block("fluid", model)
-    field = problem.field(FieldProblem(name="psi"))
-    program = Program("compiled-step")._bind_operators(model)
-    state = program.state(block, model.state)
+    field = _field(problem, model, "psi")
+    program = Program("compiled-step")
+    state = program.state(block[model.state])
     program.keep_history(state, depth=1)
     previous = state.prev.value
-    solved = program.solve_fields("solve-psi", state.n, field=field)
+    solved = field(state.n, name="solve-psi").consume(action=FailRun())
     rate = model.rate(state.n)
     predictor_point = StagePoint(
         "predictor", {"main": TimePoint(state.clock, 1)})
@@ -71,7 +121,7 @@ def _authored_program():
     looped = program.range(
         candidate,
         2,
-        lambda builder, value: builder.value("range-body", value),
+        lambda builder, value: builder.value("range-body", 1 * value),
     )
     program.value(stage, looped)
     final = program.value("final", stage.value, at=state.next.point)
@@ -121,8 +171,9 @@ def test_detach_reowns_values_canonicalizes_handles_and_preserves_ir_identity():
     assert detached._serialize(include_provenance=False) == serialized
     assert detached._ir_hash() == ir_hash
     assert detached._operator_registries == {}
-    assert detached._default_state_spaces == {}
-    assert detached._default_field_spaces == {}
+    assert detached._state_spaces
+    assert all(state_ref.space == space
+               for state_ref, space in detached._state_spaces.items())
     assert isinstance(detached._values, tuple)
     assert isinstance(detached._commits, MappingProxyType)
 
@@ -148,7 +199,7 @@ def test_detach_reowns_values_canonicalizes_handles_and_preserves_ir_identity():
     assert isinstance(detached_field, FieldHandle)
     assert detached_field is not authored["field"]
     assert detached_field.is_resolved and detached_field._field_registry is None
-    assert solved.field_context.field_problem is detached_field
+    assert solved.field_context.field is detached_field
     assert solved.field_context.stage_sources[0][0] is block
 
     rate = next(value for value in values if "operator_handle" in value.attrs)
@@ -176,7 +227,7 @@ def test_source_mutations_and_stale_containers_cannot_change_detached_program():
 
     stale_values.clear()
     authored["model"]._registry.register_alias("decay-alias", "decay")
-    authored["problem"].field(FieldProblem(name="late-field"))
+    _field(authored["problem"], authored["model"], "late-field")
 
     assert detached._serialize() == before
     assert detached._ir_hash() == before_hash

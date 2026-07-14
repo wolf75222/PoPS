@@ -1,7 +1,7 @@
 """Small typed-reference helpers shared by runtime unit tests.
 
-The final Program API accepts only a case-owned ``BlockHandle`` plus the
-model-owned state ``Handle``.  Tests which exercise Program IR in isolation
+The final Program API accepts only the case-qualified ``block[state]`` handle. Tests which exercise
+Program IR in isolation
 still need those real identities; these helpers build the smallest genuine
 Module/Case graph without reviving free-name compatibility.
 """
@@ -14,6 +14,9 @@ from pops.model import Module
 from pops.problem import Case
 from pops.time import Program
 from tests.python.support.layout_plan import resolved_layout_contract
+
+
+_PROGRAM_CONTEXTS: dict[int, tuple[Case, Module, Any, dict[str, Any]]] = {}
 
 
 def module_of(model: Any) -> Module:
@@ -39,8 +42,9 @@ def state_handle(module: Module, state: Any = None) -> Any:
 def add_typed_block(case: Case, model: Any, block_name: str, state: Any = None):
     """Add one real block and return ``(block_handle, state_handle)``."""
     module = module_of(model)
-    block = case.block(block_name, module)
-    return block, state_handle(module, state)
+    declaration = state_handle(module, state)
+    block = case.block(block_name, module, states=(declaration,))
+    return block, declaration
 
 
 def typed_program_state(
@@ -61,6 +65,7 @@ def typed_program_state(
     block, declaration = add_typed_block(case, module, block_name, state)
     program = Program(name)
     temporal = program.state(block[declaration])
+    _PROGRAM_CONTEXTS[id(program)] = (case, module, declaration, {})
     return program, module, case, block, declaration, temporal
 
 
@@ -83,6 +88,80 @@ def typed_program_states(
         block, declaration = add_typed_block(case, module, block_name, state)
         endpoints[block_name] = program.state(block[declaration])
     return program, module, case, endpoints
+
+
+def typed_field(program: Program, name: str = "potential") -> Any:
+    """Build one genuine Case-owned callable FieldHandle for a runtime IR fixture."""
+    try:
+        case, module, declaration, fields = _PROGRAM_CONTEXTS[id(program)]
+    except KeyError as exc:
+        raise ValueError("typed runtime field fixture requires typed_program_state") from exc
+    existing = fields.get(name)
+    if existing is not None:
+        return existing
+
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Signature
+
+    field_module = Module("typed_runtime_field_%s" % name)
+    field_space = field_module.field_space(name, (name,))
+    provider = field_module.operator(
+        name=name + "_provider",
+        signature=Signature((declaration.space,), field_space),
+        kind="field_operator",
+        expr=name + "_provider",
+    )
+    field_block = case.block("typed_field_%s" % name, field_module)
+    unknown = field_block[field_module.field_handle(field_space)]
+    state_block = next(
+        block for block in case.blocks().values()
+        if block.model_owner_path == module.owner_path
+    )
+    state_ref = state_block[declaration]
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self):
+            return {"type": "unit-krylov"}
+
+    operator = FieldOperator(
+        name,
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(state_ref),
+        providers=provider,
+    )
+    field = case.field(
+        operator,
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
+    fields[name] = field
+    return field
+
+
+def solve_field(
+    program: Program,
+    state: Any,
+    *,
+    field: Any = None,
+    name: str | None = None,
+    action: Any = None,
+) -> Any:
+    """Call the final field handle and explicitly consume its fallible outcome."""
+    from pops.time import FailRun
+
+    selected = typed_field(program) if field is None else field
+    return selected(state, name=name).consume(
+        action=FailRun() if action is None else action)
 
 
 def typed_compiled_artifact(

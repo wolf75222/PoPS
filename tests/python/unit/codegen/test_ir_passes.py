@@ -4,8 +4,8 @@
 dead nodes removed. It is SAFE-BY-DEFAULT: a node is removable ONLY if its op is on an explicit
 allow-list of ops proven to allocate a FRESH result scratch and have no other side effect (rhs,
 source, apply, linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce,
-scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers that
-alias a caller-allocated input buffer (schur_rhs, laplacian, ...), the side-effecting ops, solve_linear
+scalar_op, compare) AND no live op consumes its result. EVERY other op -- generic buffer-writers that
+alias a caller-allocated input buffer (laplacian, gradient, ...), the side-effecting ops, solve_linear
 and the sub-block ops -- is kept even with an unconsumed result, so an unknown/new op is never wrongly
 dropped. It NEVER runs on the default ``emit_cpp_program`` path, so it cannot change an existing
 compiled program.
@@ -18,20 +18,19 @@ The contract this test pins:
     that node;
   - side-effecting nodes (fill_boundary / record_scalar / solve_fields) are NEVER removed even with an
     unused result;
-  - BUFFER-WRITERS (schur_rhs and the generic laplacian/gradient/divergence) whose result is discarded
+  - BUFFER-WRITERS (the generic laplacian/gradient/divergence ops) whose result is discarded
     but whose buffer a later op reads by identity are NEVER removed (the safe-by-default whitelist);
   - the ``_ir_hash`` genuinely changes (the IR changed) yet the committed outputs are unchanged.
 
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
 on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops package).
 """
-from pops.params import ConstParam
 import pytest
+from pops.numerics.terms import DefaultSource, Flux
 
-from typed_program_support import commits_by_block, state_refs, typed_state
+from typed_program_support import commits_by_block, solve_field, state_refs, typed_state
 
 adctime = pytest.importorskip("pops.time")
-libtime = pytest.importorskip("pops.lib.time")  # ready schemes (Spec 4)
 
 
 def _commit_signature(prog):
@@ -50,9 +49,8 @@ def _euler_with_dead_rhs():
     P = adctime.Program("forward_euler")
     dt = P.dt
     U = typed_state(P, "plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
+    R = P.rhs("R", state=U, terms=[Flux(), DefaultSource()])
+    P.rhs("dead", state=U, terms=[Flux(), DefaultSource()])  # never consumed
     P.commit(typed_state(P, "plasma", state_name="U").next,
              P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
@@ -64,8 +62,7 @@ def _euler_no_dead():
     P = adctime.Program("forward_euler")
     dt = P.dt
     U = typed_state(P, "plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    R = P.rhs("R", state=U, terms=[Flux(), DefaultSource()])
     P.commit(typed_state(P, "plasma", state_name="U").next,
              P.value("U1", U + dt * R,
                               at=typed_state(P, "plasma", state_name="U").next.point))
@@ -126,8 +123,8 @@ def test_side_effecting_nodes_never_removed():
     P = adctime.Program("side_effects")
     dt = P.dt
     U = typed_state(P, "plasma")
-    fields = P.solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    fields = solve_field(P, U)            # side-effecting (fills ghosts/aux), result unused downstream
+    R = P.rhs("R", state=U, fields=fields, terms=[Flux(), DefaultSource()])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
     P.commit(typed_state(P, "plasma", state_name="U").next,
@@ -157,9 +154,9 @@ def test_chained_dead_nodes_removed():
     P = adctime.Program("chain")
     dt = P.dt
     U = typed_state(P, "plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
+    fields = solve_field(P, U)
+    R = P.rhs("R", state=U, fields=fields, terms=[Flux(), DefaultSource()])
+    dead0 = P.rhs("dead0", state=U, fields=fields, terms=[Flux(), DefaultSource()])
     P.value(
         "dead1", U + dt * dead0,
         at=typed_state(P, "plasma", state_name="U").next.point,
@@ -172,75 +169,6 @@ def test_chained_dead_nodes_removed():
     names = {v.name for v in Q._values}
     assert "dead0" not in names and "dead1" not in names
     assert {"R", "U1"} <= names
-
-
-_ALPHA = 1.0
-
-
-def _lorentz_energy_model(name):
-    """A rho/mx/my/E block (energy at component 3) with the electrostatic-Lorentz linearization J the
-    generic condensed route (ADC-637) resolves. The energy component lets the c_E=3 variant emit the
-    condensed_energy kernel; the c_E=None variant simply omits it."""
-    from pops.ir.ops import sqrt
-    from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics._facade import Model
-    m = Model(name)
-    rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
-    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v, E])
-    m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
-    m.elliptic_rhs(rho)
-    m.aux("grad_x")
-    m.aux("grad_y")
-    m.aux("B_z")
-    author_electrostatic_lorentz(m)
-    return m
-
-
-def _linear_handle(model):
-    from pops.model import OperatorHandle
-    registry = model.operator_registry()
-    operator = registry.operators_of_kind("local_linear_operator")[0]
-    return OperatorHandle(
-        operator.name, kind=operator.kind, owner=registry.owner_path,
-        signature=operator.signature)
-
-
-def test_condensed_buffer_writers_never_removed():
-    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.CondensedSchur`` assembles its RHS
-    with ``P.condensed_rhs(rhs, phi_n, U, ...)`` (ADC-637) -- a top-level op whose RESULT is DISCARDED.
-    Its real effect is filling the caller-allocated ``rhs`` scalar_field buffer, which
-    ``P.solve_linear(rhs=rhs)`` then reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist
-    marks ``condensed_rhs`` dead and drops it -> the emitted C++ loses the fused RHS write and the solve
-    runs on a zero RHS (silent corruption, ``validate()`` stays True). Under the allow-list every
-    buffer-writer is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
-    contains the fused RHS write. Covers theta == 1 (historical IR) and theta < 1 + energy (the extra
-    linear_combine copy / extrapolation / condensed_energy buffer-writers)."""
-    RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
-    for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
-        model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
-        P = adctime.Program("cs")._bind_operators(model)
-        block, state = state_refs(P, "blk")
-        libtime.CondensedSchur(
-            P, block, state, alpha=_ALPHA, theta=theta, c_E=c_E,
-            linear_operator=_linear_handle(model))
-        before = P.emit_cpp_program(model=model)
-        assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
-
-        Q = adctime.eliminate_dead_nodes(P)
-
-        after = Q.emit_cpp_program(model=model)
-        msg = "theta=%r c_E=%r" % (theta, c_E)
-        assert RHS_MARKER in after, "condensed_rhs wrongly dropped (%s)" % msg
-        # Nothing is dead: a pure no-op, byte-for-byte (the buffer-writers + solve are all live).
-        assert after == before, "pass corrupted the condensed_schur C++ (%s)" % msg
-        assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash (%s)" % msg
 
 
 def test_buffer_writing_op_with_discarded_result_kept():
@@ -259,9 +187,13 @@ def test_buffer_writing_op_with_discarded_result_kept():
         p.laplacian(lap, x)
         return -1.0 * lap
 
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import CG
+    from pops.time import FailRun
     P.set_apply(A, apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
+    P.solve(
+        LinearProblem(A, buf), solver=CG(max_iter=10),
+    ).consume(action=FailRun())  # reads buf by BUFFER IDENTITY
     P.commit(typed_state(P, "plasma", state_name="U").next,
              P.value("U1", 1.0 * U,
                               at=typed_state(P, "plasma", state_name="U").next.point))
@@ -307,7 +239,7 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
     program.keep_history(tracked, depth=4, checkpoint_policy=Interval(3))
     program.value("dead", 2 * tracked.n)
     advanced = typed_state(program, "advanced", state_name="U")
-    program.solve_fields(advanced.n)
+    solve_field(program, advanced.n)
     final = program.value(
         "advanced_next", advanced.n, at=advanced.next.point)
     program.commit(advanced.next, final)
@@ -325,7 +257,8 @@ def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source(
         "payload": {"policy": "interval", "k": 3},
     }
     assert rebuilt_fields.field_context.stage_sources == ((rebuilt_state.block, rebuilt_state.id),)
-    rebuilt_fields.field_context.require_read(None, rebuilt_state.block, rebuilt_state.id)
+    rebuilt_fields.field_context.require_read(
+        rebuilt_fields.field_context.field, rebuilt_state.block, rebuilt_state.id)
     assert rebuilt._serialize()["history_persistence"] == [{
         "name": "tracked.U",
         "depth": 4,

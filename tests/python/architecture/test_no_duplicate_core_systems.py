@@ -1,7 +1,7 @@
 """ADC-565: architecture gates against a SECOND core system beside the canonical one.
 
 The target authoring surface has exactly one public stepper (``pops.time.Program``), one
-canonical field-problem home (``pops.fields`` -- ``FieldProblem`` / ``PoissonProblem``), and one
+canonical field-operator home (``pops.fields.FieldOperator`` plus ``FieldDiscretization``), and one
 AMR *configuration* route (``layout=AMR(...)``); ``sim.amr`` is a read-only runtime VIEW. This
 file refuses a duplicate of any of those three.
 
@@ -10,7 +10,7 @@ the boundary):
 
   * ADC-598 ``test_no_legacy_runtime_routes.py`` -- no ``System`` / ``AmrSystem`` front door in the
     target surface, ``target=`` blocked on compile/bind, string selectors on an explicit allowlist,
-    ``Program`` field-solve facade lowers to ``ProgramContext``, AMR layout manifest + ``sim.amr``
+    callable Case field handles lower to ``ProgramContext``, AMR layout manifest + ``sim.amr``
     runtime view. This file does NOT re-check the compile/bind signature (see Q2 in the plan).
   * ADC-532 ``test_lib_time_no_string_selectors.py`` -- lib.time macros select operators by handle.
   * ADC-529 facade-lowering-parity / ``_ir_hash`` equality -- the technique reused in gate 1b.
@@ -67,15 +67,15 @@ _ALLOWED_NON_STEPPER_DATA = {
                       "stepper; carries no step/advance/integrate and is not exported as a stepper",
 }
 
-# The canonical field-problem base + its home package. A second public class exposing a field
-# registration surface (``.field`` / ``register_field``) or subclassing ``*FieldProblem`` OUTSIDE
+# The canonical physical field-operator base + its home package. A second public class exposing a
+# field registration surface (``.field`` / ``register_field``) or subclassing ``*FieldOperator`` OUTSIDE
 # pops/fields would be a parallel field system.
 _FIELD_OPERATOR_HOME = POPS / "fields"
 _FIELD_OPERATOR_BASE_SUFFIX = "FieldOperator"
 _FIELD_REGISTER_METHODS = {"register_field"}
 
-# The bind path consumes, never authors, a field problem: a PoissonProblem(/FieldProblem(
-# construction under pops/runtime would be bind re-declaring a field system.
+# The bind path consumes, never authors, a field plan: constructing ``FieldOperator`` or
+# ``FieldDiscretization`` under pops/runtime would make bind re-declare the field system.
 _BIND_PATH = POPS / "runtime"
 _FIELD_AUTHORING_CTOR_NAMES = {"FieldOperator", "FieldDiscretization"}
 
@@ -231,12 +231,12 @@ def test_lib_time_macro_returns_the_same_program_handle():
 
 
 # ---------------------------------------------------------------------------------------------
-# Gate 1b -- FIELDS: one canonical FieldProblem/PoissonProblem; facade == direct lowering.
+# Gate 1b -- FIELDS: one canonical FieldOperator/FieldDiscretization path and callable handle.
 # ---------------------------------------------------------------------------------------------
 def test_only_pops_fields_defines_a_field_operator_class():
     violations = []
     for path in _target_surface_files():
-        # The canonical home is allowed to define/subclass FieldProblem.
+        # The canonical home is allowed to define/subclass FieldOperator.
         if _FIELD_OPERATOR_HOME in path.parents or path == _FIELD_OPERATOR_HOME:
             continue
         rel = _rel(path)
@@ -288,8 +288,7 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     from pops.fields import FieldDiscretization, FieldOperator
     from pops.ir import ValueExpr
     from pops.math import laplacian
-    from pops.model import Handle
-    from pops.model import Module
+    from pops.model import Module, Signature
     from pops.problem import Case
     from pops.time import Program
 
@@ -308,10 +307,16 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     module = Module("field-parity-model")
     state_space = module.state_space("U", ("u",))
     state_handle = module.state_handle(state_space)
+    field_space = module.field_space("potential", ("potential",))
+    provider = module.operator(
+        name="charge",
+        signature=Signature((state_space,), field_space),
+        kind="field_operator",
+        expr="charge",
+    )
     case = Case(name="field-parity-case")
     block = case.block("gas", module)
-    unknown = Handle("potential", kind="field", owner=module.owner_path)
-    provider = Handle("charge", kind="field_operator", owner=module.owner_path)
+    unknown = block[module.field_handle(field_space)]
     operator = FieldOperator(
         "potential",
         unknown=unknown,

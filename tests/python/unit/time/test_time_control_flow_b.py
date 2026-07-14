@@ -23,6 +23,7 @@ from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 from pops.time import TimePoint
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -38,11 +39,11 @@ def _pops_time():
 
 
 def _fe_body():
-    """A Forward-Euler body x -> x + dt*(-div F): rhs(sources=['default']) lowers with NO model, so it
+    """A Forward-Euler body x -> x + dt*(-div F): typed default terms lower with NO model, so it
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
         return _P.value(
-            x + _P.dt * _P._rhs_legacy(state=x, sources=["default"]),
+            x + _P.dt * _P.rhs(state=x, terms=[Flux(), DefaultSource()]),
             at=TimePoint(_P.clock, step=1),
         )
     return body

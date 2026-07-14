@@ -2,14 +2,14 @@
 """Named multi-elliptic-field runtime (m.elliptic_field), ADC-428 (epic ADC-399, completes ADC-419).
 
 ADC-419 landed the IR + validation + hash for m.elliptic_field("phi2", rhs=, operator=, aux=[...]) but
-P.solve_fields(field=name) raised NotImplementedError (the SECOND elliptic solve + its own aux channel
-were unwired). ADC-428 wires the runtime on the production/system backend: a named field gets
+the named callable field route could not lower its SECOND elliptic solve + own aux channel. ADC-428
+wires the runtime on the production/system backend: a named field gets
 
   - its OWN RHS brick (a function of the conservative state, like m.elliptic_rhs),
   - a DEDICATED native elliptic solver instance (GeometricMG/FFT, reused -- not reimplemented),
   - its OWN aux output channel (the model's named aux_field slots, distinct from the shared phi/grad),
 
-and P.solve_fields(field=name, state=U) lowers to ctx.solve_fields_from_state(field, block, U).
+and calling its exact ``FieldHandle`` with ``U`` lowers to ctx.solve_fields_from_state(field, block, U).
 
 Section A (pure Python, always runs): the named solve_fields op lowers to the named ctx call (NOT the
 default 2-arg one); the default solve_fields lowers byte-identically to before; unknown field / missing
@@ -31,11 +31,12 @@ Section B (gated, self-skip): the OFFLINE REFERENCE is the engine's own default 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_field, typed_state
+from typed_program_support import solve_field, typed_field, typed_state
 
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -126,10 +127,10 @@ def _prog(name, field=None, model=None):
     P = adctime.Program(name)
     U = typed_state(P, "plasma", model=model)
     if field is None:
-        f = P.solve_fields(U)
+        f = solve_field(P, U)
     else:
-        f = P.solve_fields("f_" + field, U, field=typed_field(P, field))
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True)
+        f = solve_field(P, U, field=typed_field(P, field), name="f_" + field)
+    R = P.rhs(name="R", state=U, fields=f, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "plasma", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P

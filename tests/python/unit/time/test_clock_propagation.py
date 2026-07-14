@@ -7,6 +7,7 @@ import pytest
 from typed_program_support import typed_state
 
 from pops.time import Program, SampleAndHold
+from pops.numerics.terms import Flux
 from pops.time.points import Clock, StagePoint, TimePoint
 from pops.time.schedule import AcceptedStep, Every, Hold, Schedule
 from pops.time.program_value_validation import validate_input_clocks
@@ -147,7 +148,7 @@ def test_clock_schedule_refuses_an_unrelated_cross_clock_without_an_execution_re
 def test_dt_dependent_values_and_commits_require_exact_output_points():
     program = Program("explicit_points")
     state = typed_state(program, "fluid", state_name="U")
-    rate = program._rhs_legacy(state=state.n, sources=[])
+    rate = program.rhs(state=state.n, terms=[Flux()])
 
     with pytest.raises(ValueError, match="cannot infer an evaluation point"):
         program.value("ambiguous", state.n + program.dt * rate)

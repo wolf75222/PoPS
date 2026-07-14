@@ -16,10 +16,11 @@ field-coupled case is exercised by test_time_solve_fields_from_state). Skips cle
 without the install_program binding / numpy / a compiler / a visible Kokkos -- never fakes the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+from typed_program_support import solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -97,13 +98,13 @@ def ssprk2_program():
     P = adctime.Program("ssprk2_parity")
     dt = P.dt
     U0 = typed_state(P, "ions")
-    f0 = P.solve_fields(U0)
-    k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
+    f0 = solve_field(P, U0)
+    k0 = P.rhs(state=U0, fields=f0, terms=[Flux(), DefaultSource()])
     stage1 = adctime.StagePoint(
         "ssprk2_stage_1", {"main": adctime.TimePoint(P.clock, 1)})
     U1 = P.value("U1", U0 + dt * k0, at=stage1)
-    f1 = P.solve_fields(U1)
-    k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
+    f1 = solve_field(P, U1)
+    k1 = P.rhs(state=U1, fields=f1, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value(
         "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=endpoint.point))
@@ -114,19 +115,23 @@ def rk4_program():
     P = adctime.Program("rk4_parity")
     dt = P.dt
     U0 = typed_state(P, "ions")
-    k1 = P._rhs_legacy(state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
+    k1 = P.rhs(
+        state=U0, fields=solve_field(P, U0), terms=[Flux(), DefaultSource()])
     stage1 = adctime.StagePoint(
         "rk4_stage_1", {"main": adctime.TimePoint(P.clock, 0.5)})
     U1 = P.value("U1", U0 + 0.5 * dt * k1, at=stage1)
-    k2 = P._rhs_legacy(state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
+    k2 = P.rhs(
+        state=U1, fields=solve_field(P, U1), terms=[Flux(), DefaultSource()])
     stage2 = adctime.StagePoint(
         "rk4_stage_2", {"main": adctime.TimePoint(P.clock, 0.5)})
     U2 = P.value("U2", U0 + 0.5 * dt * k2, at=stage2)
-    k3 = P._rhs_legacy(state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
+    k3 = P.rhs(
+        state=U2, fields=solve_field(P, U2), terms=[Flux(), DefaultSource()])
     stage3 = adctime.StagePoint(
         "rk4_stage_3", {"main": adctime.TimePoint(P.clock, 1)})
     U3 = P.value("U3", U0 + dt * k3, at=stage3)
-    k4 = P._rhs_legacy(state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
+    k4 = P.rhs(
+        state=U3, fields=solve_field(P, U3), terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value(
         "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4,

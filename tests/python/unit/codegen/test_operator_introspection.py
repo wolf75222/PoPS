@@ -14,9 +14,8 @@ try:
     from pops.codegen.loader import CompiledProblem
     from pops.ir.expr import Const
     from pops.physics._facade import Model
-    from pops.problem import Case
-    from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    from typed_program_support import fresh_field_refs
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_introspection (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -24,10 +23,7 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
-    op = m.operator_registry().get(name)
-    return model.OperatorHandle(
-        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
-        signature=op.signature)
+    return m.module.operator_handle(name)
 
 
 def _model():
@@ -40,21 +36,23 @@ def _model():
            y=[my, mx * my / rho, my * my / rho])
     m.source_term("electric", [Const(0.0), rho * (-gx), rho * (-gy)])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
+    m.elliptic_field("fields", rho - 1.0, aux=["grad_x", "grad_y", "B_z"])
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     return m
 
 
 def _time_refs(m):
-    module = m.module
-    block = Case(name="introspection-case").block("plasma", module)
-    state = module.state_handle(module.state_spaces()["U"])
-    return block, state
+    return fresh_field_refs(
+        m,
+        block_name="plasma",
+        field_name="fields",
+        provider=_op(m, "fields"),
+    )
 
 
 def _check(obj):
     ops = obj.list_operators()
-    assert "explicit_rhs" in ops and "fields_from_state" in ops and "lorentz" in ops
+    assert "explicit_rhs" in ops and "fields" in ops and "lorentz" in ops
     signature = obj.operator_signature("explicit_rhs")
     assert signature.output == model.Rate(signature.inputs[0])
     assert obj.operator_capabilities("lorentz")["solve_i_minus_a"] is True
@@ -77,11 +75,10 @@ def test_dsl_model_introspection():
 
 def test_compiled_problem_introspection():
     m = _model()
-    block, state = _time_refs(m)
-    P = adctime.Program("pc")._bind_operators(m)
-    libtime.predictor_corrector_local_linear(
-        P, block, state, fields_operator=_op(m, "fields_from_state"),
-        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
+    state, fields = _time_refs(m)
+    P = libtime.PredictorCorrector(
+        state, fields=fields,
+        explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
     # A CompiledProblem built directly: introspection reads model metadata, never the .so.
     compiled = CompiledProblem(so_path="<not built>", program=P, model=m,
                                    abi_key="k", cxx="clang", std="c++23")
@@ -107,12 +104,10 @@ def test_compiled_problem_introspection():
 def test_compiled_introspection_view_does_not_retain_model_registry():
     def build():
         m = _model()
-        block, state = _time_refs(m)
-        P = adctime.Program("detached-introspection")._bind_operators(m)
-        libtime.predictor_corrector_local_linear(
-            P, block, state, fields_operator=_op(m, "fields_from_state"),
-            explicit_rate_operator=_op(m, "explicit_rhs"),
-            implicit_operator=_op(m, "lorentz"))
+        state, fields = _time_refs(m)
+        P = libtime.PredictorCorrector(
+            state, fields=fields,
+            explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
         registry_ref = weakref.ref(m.operator_registry())
         model_ref = weakref.ref(m)
         compiled = CompiledProblem(

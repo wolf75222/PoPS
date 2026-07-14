@@ -16,9 +16,8 @@ import sys
 
 try:
     from pops import time as adctime
-    from pops import model
-    from pops.problem import Case
-    from tests.python.unit.runtime._typed_program import add_typed_block, typed_program_state
+    from pops.numerics.terms import DefaultSource, Flux
+    from tests.python.unit.runtime._typed_program import solve_field, typed_program_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_program_ir_nodes (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -28,8 +27,10 @@ def _euler(scale=1.0):
     P, _, _, _, _, temporal = typed_program_state(
         "forward_euler", block_name="plasma")
     U = temporal.n
-    R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-    P.commit(temporal.next, P.value("U1", U + (scale * P.dt) * R))
+    R = P.rhs(
+        state=U, fields=solve_field(P, U), terms=[Flux(), DefaultSource()])
+    P.commit(temporal.next, P.value(
+        "U1", U + (scale * P.dt) * R, at=temporal.next.point))
     return P
 
 
@@ -60,16 +61,14 @@ def test_logical_shape_reflects_the_space_tag():
 def test_source_location_capture_is_opt_in_and_out_of_hash():
     # Capture ON records the authoring line; the IR hash is IDENTICAL to the capture-OFF build.
     off = _euler()
-    module = model.Module("forward_euler_model")
-    space = module.state_space("U", ("u",))
-    case = Case(name="forward_euler_case")
-    block, state = add_typed_block(case, module, "plasma", space)
-    on = adctime.Program("forward_euler").capture_source_locations(True)
-    on._bind_operators(module)
-    temporal = on.state(block, state)
+    on, _, _, _, _, temporal = typed_program_state(
+        "forward_euler", block_name="plasma")
+    on.capture_source_locations(True)
     U = temporal.n
-    R = on._rhs_legacy(state=U, fields=on.solve_fields(U), flux=True, sources=["default"])
-    on.commit(temporal.next, on.value("U1", U + (1.0 * on.dt) * R))
+    R = on.rhs(
+        state=U, fields=solve_field(on, U), terms=[Flux(), DefaultSource()])
+    on.commit(temporal.next, on.value(
+        "U1", U + (1.0 * on.dt) * R, at=temporal.next.point))
     located = [n for n in on.ir_nodes() if n["source_location"]]
     assert located, "capture ON must populate at least one source_location"
     loc = located[0]["source_location"]
@@ -87,8 +86,10 @@ def test_space_tag_changes_the_hash():
         P, _, _, _, _, temporal = typed_program_state(
             "forward_euler", components=components)
         U = temporal.n
-        R = P._rhs_legacy(state=U, fields=P.solve_fields(U), flux=True, sources=["default"])
-        P.commit(temporal.next, P.value("U1", U + P.dt * R))
+        R = P.rhs(
+            state=U, fields=solve_field(P, U), terms=[Flux(), DefaultSource()])
+        P.commit(temporal.next, P.value(
+            "U1", U + P.dt * R, at=temporal.next.point))
         return P
     assert build(True)._ir_hash() != build(False)._ir_hash()
     print("OK  the operator-first space tag participates in the IR hash")
@@ -97,7 +98,7 @@ def test_space_tag_changes_the_hash():
 def test_missing_commit_rejected():
     P, _, _, _, _, temporal = typed_program_state("p")
     U = temporal.n
-    P._rhs_legacy(state=U, fields=P.solve_fields(U))
+    P.rhs(state=U, fields=solve_field(P, U), terms=[Flux(), DefaultSource()])
     try:
         P.validate()
         raise AssertionError("a program with no commit must be rejected")
@@ -109,7 +110,10 @@ def test_missing_commit_rejected():
 def test_double_commit_rejected():
     P, _, _, _, _, temporal = typed_program_state("p")
     U = temporal.n
-    U1 = P.value("U1", U + P.dt * P._rhs_legacy(state=U, fields=P.solve_fields(U)))
+    U1 = P.value(
+        "U1", U + P.dt * P.rhs(
+            state=U, fields=solve_field(P, U), terms=[Flux(), DefaultSource()]),
+        at=temporal.next.point)
     P.commit(temporal.next, U1)
     try:
         P.commit(temporal.next, U1)
@@ -122,9 +126,12 @@ def test_double_commit_rejected():
 def test_distinct_field_context_per_stage():
     P, _, _, _, _, temporal = typed_program_state("p")
     U = temporal.n
-    f0 = P.solve_fields(U)
-    U1 = P.value("U1", U + P.dt * P._rhs_legacy(state=U, fields=f0))
-    f1 = P.solve_fields(U1)
+    f0 = solve_field(P, U)
+    U1 = P.value(
+        "U1", U + P.dt * P.rhs(
+            state=U, fields=f0, terms=[Flux(), DefaultSource()]),
+        at=temporal.next.point)
+    f1 = solve_field(P, U1)
     assert f0 is not f1 and f0.id != f1.id
     # Each stage's FieldContext is tagged with the state it was solved from (no stale global aux).
     assert f0.field_context.stage_sources != f1.field_context.stage_sources, (
@@ -158,7 +165,7 @@ def test_program_value_refuses_unknown_mutable_metadata_before_detach():
 
     P, _, _, _, _, temporal = typed_program_state("mutable-extension")
     U = temporal.n
-    rate = P._rhs_legacy(state=U, flux=True, sources=["default"])
+    rate = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     attrs = dict(rate.attrs)
     attrs["extension"] = _MutableExtensionMetadata()
     try:

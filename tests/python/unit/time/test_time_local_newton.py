@@ -27,6 +27,7 @@ from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -132,7 +133,7 @@ def section_a(t):
 
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
-        R = P._rhs_legacy(state=Uit, sources=["default"])
+        R = P.rhs(state=Uit, terms=[Flux(), DefaultSource()])
         return P.value(Uit - U0 - P.dt * R, at=Uit.point)
     chk(raises(ValueError, lambda: P.solve(
         LocalResidual(bad_resid, U), solver=LocalNewton())),

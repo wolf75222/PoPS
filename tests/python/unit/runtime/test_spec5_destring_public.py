@@ -7,8 +7,8 @@ lowers BYTE-IDENTICALLY to the historical token (the IR hash / manifest hash / r
 
 Surfaces covered:
 
-  1. ``P.solve_linear(method=, preconditioner=)`` -- typed pops.solvers.krylov / preconditioners
-     descriptors (CG / GMRES / BiCGStab / Richardson, Identity); a bare string is rejected.
+  1. ``P.solve(LinearProblem(...), solver=...)`` -- typed pops.solvers.krylov / preconditioners
+     descriptors (CG / GMRES / BiCGStab / Richardson, Identity); bare strings are rejected.
   2. ``Model.param`` / board ``param`` / ``Case.param`` -- a canonical declaration from
      ``pops.params``; every registry returns a stable ``ParamHandle`` and formulas read it only
      through ``value(handle)``. The old shorthand and ``kind=`` routes are rejected.
@@ -21,8 +21,9 @@ import sys
 import pytest
 
 
-# --- 1. solve_linear(method=, preconditioner=) ----------------------------------------------
-def _solve_program(method, *, restart=None, preconditioner=None):
+# --- 1. Program.solve with a typed LinearProblem and solver ----------------------------------
+def _solve_program(solver):
+    from pops.linalg import LinearProblem
     from pops.model import Module
     from pops.problem import Case
     import pops.time as t
@@ -33,7 +34,7 @@ def _solve_program(method, *, restart=None, preconditioner=None):
     problem = Case(name="linear-case")
     block = problem.block("blk", module)
     P = t.Program("p")
-    U = P.state(block, state_handle)
+    U = P.state(block[state_handle])
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -42,64 +43,64 @@ def _solve_program(method, *, restart=None, preconditioner=None):
         return x - 0.1 * lap
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U.n, method=method, tol=1e-10, max_iter=200)
-    if preconditioner is not None:
-        kw["preconditioner"] = preconditioner
-    if restart is not None:
-        kw["restart"] = restart
-    phi = P.solve_linear(**kw)
+    phi = P.solve(
+        LinearProblem(A, U.n, at=U.next.point), solver=solver,
+    ).consume(action=t.FailRun())
     P.commit(U.next, phi)
     return P
 
 
-def test_solve_linear_typed_method_byte_identical():
-    """Each typed Krylov descriptor lowers to the SAME IR hash as the historical string token."""
+def test_solve_typed_solver_retains_exact_native_method_identity():
+    """Each typed Krylov descriptor lowers to its exact native method token."""
     from pops.solvers import krylov
     # The internal scheme tokens the runtime keyed on; the typed objects must reproduce them.
-    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear reads only .scheme.
-    cases = [(krylov.CG(max_iter=200), "cg", None), (krylov.BiCGStab(max_iter=200), "bicgstab", None),
-             (krylov.Richardson(max_iter=200), "richardson", None),
-             (krylov.GMRES(max_iter=200), "gmres", 8)]
-    for descriptor, token, restart in cases:
-        P = _solve_program(descriptor, restart=restart)
-        node = next(iter(P._commits.values()))
+    cases = [
+        (krylov.CG(max_iter=200, rel_tol=1e-10), "cg"),
+        (krylov.BiCGStab(max_iter=200, rel_tol=1e-10), "bicgstab"),
+        (krylov.Richardson(max_iter=200, rel_tol=1e-10), "richardson"),
+        (krylov.GMRES(max_iter=200, rel_tol=1e-10, restart=8), "gmres"),
+    ]
+    for descriptor, token in cases:
+        P = _solve_program(descriptor)
+        node = next(value for value in P._values if value.op == "solve_linear")
         assert node.attrs["method"] == token, (descriptor, node.attrs["method"])
         # The IR hash is stable + the typed object never leaks a Python object into the node.
         assert P._ir_hash()
 
 
-def test_solve_linear_default_method_is_cg():
-    """method=None defaults to CG() -- byte-identical to the historical default."""
-    a = _solve_program(None)._ir_hash()
+def test_solve_requires_an_explicit_solver_descriptor():
+    """The final contract has no hidden default solver selection."""
+    import inspect
+    import pops.time as t
+
+    assert inspect.signature(t.Program.solve).parameters["solver"].default is inspect.Parameter.empty
     from pops.solvers import krylov
-    b = _solve_program(krylov.CG(max_iter=200))._ir_hash()
-    assert a == b
+    assert _solve_program(krylov.CG(max_iter=200)).validate() is True
 
 
-def test_solve_linear_string_method_rejected():
+def test_solve_string_solver_rejected():
     from pops.solvers import krylov
     for bad in ("cg", "gmres", "minres"):
         with pytest.raises(TypeError) as exc:
             _solve_program(bad)
         msg = str(exc.value)
-        assert "method" in msg and "pops.solvers.krylov" in msg, msg
-        assert "GMRES" in msg and "CG" in msg, msg
+        assert "solver" in msg or "prepare_program_solve" in msg, msg
     # the typed object is accepted (no raise)
-    _solve_program(krylov.GMRES(max_iter=200), restart=8)
+    _solve_program(krylov.GMRES(max_iter=200, restart=8))
 
 
-def test_solve_linear_typed_preconditioner_byte_identical():
+def test_solve_typed_identity_preconditioner_is_canonical():
     from pops.solvers import krylov, preconditioners
     base = _solve_program(krylov.CG(max_iter=200))._ir_hash()
-    typed = _solve_program(krylov.CG(max_iter=200),
-                           preconditioner=preconditioners.Identity())._ir_hash()
+    typed = _solve_program(krylov.CG(
+        max_iter=200, preconditioner=preconditioners.Identity()))._ir_hash()
     assert typed == base
 
 
-def test_solve_linear_string_preconditioner_rejected():
+def test_solve_string_preconditioner_rejected():
     from pops.solvers import krylov
     with pytest.raises(TypeError) as exc:
-        _solve_program(krylov.CG(max_iter=200), preconditioner="identity")
+        _solve_program(krylov.CG(max_iter=200, preconditioner="identity"))
     msg = str(exc.value)
     assert "preconditioner" in msg and "preconditioners" in msg, msg
 

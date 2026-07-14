@@ -1,7 +1,7 @@
 """Spec 2 (S2-12 / ADC-448): operator-first Program type diagnostics.
 
 When states carry their declared ``StateSpace`` through typed block/state handles and rates/operators
-flow from P.call, the Program type-checks the composition: a value over one StateSpace cannot feed an
+flow from callable typed handles, the Program type-checks the composition: a value over one StateSpace cannot feed an
 operator typed for another, a Rate(U) cannot be combined with a State(V), and an L: U -> U cannot
 drive a solve over State(V). Every state enters through typed block and declaration handles.
 Pure Python; skips if pops is not importable.
@@ -12,8 +12,10 @@ try:
     from pops import model
     from pops.ir.expr import Const
     from pops.physics._facade import Model
+    from pops.numerics.terms import Flux
+    from pops.solvers import DenseLU
     from pops import time as adctime
-    from typed_program_support import typed_state
+    from typed_program_support import solve_field, typed_field, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_validation (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -28,9 +30,19 @@ def _model():
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
     m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
+    m.elliptic_field("fields", rho - 1.0, aux=["grad_x", "grad_y", "B_z"])
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     return m
+
+
+def _operator(model, name):
+    return model.module.operator_handle(name)
+
+
+def _fields(program, state, physical):
+    field = typed_field(
+        program, "fields", provider=_operator(physical, "fields"))
+    return field(state).consume(action=adctime.FailRun())
 
 
 _OTHER = model.StateSpace("V", ("a", "b", "c"))
@@ -56,27 +68,30 @@ def _typed(P, block, space, physical=None):
 def test_well_typed_program_passes():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("ok")._bind_operators(m)
+    P = adctime.Program("ok")
     u_n = _typed(P, "plasma", u, m)
-    fields = P._call("fields_from_state", u_n)
-    rate = P._call("explicit_rhs", u_n, fields)
-    lin = P._call("lorentz", fields)
+    fields = _fields(P, u_n, m)
+    rate = _operator(m, "explicit_rhs")(u_n, fields)
+    lin = _operator(m, "lorentz")(fields)
     rhs = P.value(
         "rhs", u_n + P.dt * rate,
         at=adctime.TimePoint(P.clock, step=1),
     )
-    P.solve_local_linear("ustar", operator=P.I - P.dt * lin, rhs=rhs, fields=fields)
+    P.solve(
+        adctime.LocalLinear(operator=P.I - P.dt * lin, rhs=rhs, fields=fields),
+        solver=DenseLU(), name="ustar",
+    ).consume(action=adctime.FailRun())
     print("OK  a well-typed operator-first program passes")
 
 
 def test_call_input_space_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p")._bind_operators(m)
-    fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
+    P = adctime.Program("p")
+    fields = _fields(P, _typed(P, "plasma", u, m), m)
     wrong = _typed(P, "other", _OTHER, m)
     try:
-        P._call("explicit_rhs", wrong, fields)  # explicit_rhs expects state 'U', got 'V'
+        _operator(m, "explicit_rhs")(wrong, fields)  # explicit_rhs expects state 'U', got 'V'
         raise AssertionError("expected a state-space mismatch error")
     except ValueError as exc:
         assert "expects state 'U'" in str(exc) and "over 'V'" in str(exc), str(exc)
@@ -107,9 +122,9 @@ def test_space_structure_participates_in_program_ir_identity():
 def test_combine_space_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p")._bind_operators(m)
+    P = adctime.Program("p")
     u_n = _typed(P, "plasma", u, m)
-    rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
+    rate = _operator(m, "explicit_rhs")(u_n, _fields(P, u_n, m))  # Rate(U)
     wrong = _typed(P, "other", _OTHER, m)
     try:
         P.value(
@@ -125,27 +140,33 @@ def test_combine_space_mismatch():
 def test_solve_local_linear_domain_mismatch():
     m = _model()
     u = m.state_space("U")
-    P = adctime.Program("p")._bind_operators(m)
-    fields = P._call("fields_from_state", _typed(P, "plasma", u, m))
-    lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
+    P = adctime.Program("p")
+    fields = _fields(P, _typed(P, "plasma", u, m), m)
+    lin = _operator(m, "lorentz")(fields)  # LocalLinearOperator(U, U)
     rhs_v = _typed(P, "other", _OTHER, m)
     try:
-        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v)
+        P.solve(
+            adctime.LocalLinear(operator=P.I - P.dt * lin, rhs=rhs_v),
+            solver=DenseLU(), name="bad")
         raise AssertionError("expected an operator/state domain error")
     except ValueError as exc:
         assert "operator maps StateSpace('U'" in str(exc) \
             and "State over StateSpace('V'" in str(exc), str(exc)
-    print("OK  solve_local_linear rejects L: U->U on a State(V)")
+    print("OK  LocalLinear rejects L: U->U on a State(V)")
 
 
 def test_declared_state_builds_with_typed_handles():
     m = _model()
-    P = adctime.Program("typed")._bind_operators(m)
+    P = adctime.Program("typed")
     u = _typed(P, "plasma", m.state_space("U"), m)
     module = m.module
     declared = module.state_spaces()["U"]
-    fields = P.solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields, sources=["electric"])
+    fields = solve_field(
+        P, u, field=typed_field(P, "fields", provider=_operator(m, "fields")))
+    r = P.rhs(
+        state=u, fields=fields,
+        terms=[Flux(), _operator(m, "electric")],
+    )
     endpoint = typed_state(
         P, "plasma", state_name="U", space=declared,
         model=module, state=module.state_handle(declared),

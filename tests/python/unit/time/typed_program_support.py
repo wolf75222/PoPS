@@ -81,12 +81,11 @@ def _space_key(space: StateSpace | None) -> Any:
     return repr(space.to_data())
 
 
-def _bound_owner_and_space(program: Program) -> tuple[Any, Any]:
+def _bound_owner(program: Program) -> Any:
     registries = getattr(program, "_operator_registries", {})
     if len(registries) != 1:
-        return None, None
-    owner = next(iter(registries))
-    return owner, getattr(program, "_default_state_spaces", {}).get(owner)
+        return None
+    return next(iter(registries))
 
 
 def state_refs(
@@ -135,16 +134,14 @@ def state_refs(
         selected_space = space
         if selected_space is None:
             selected_space = getattr(selected_state, "space", None)
-            if selected_space is None:
-                owner = selected_model.owner_path
-                selected_space = getattr(program, "_default_state_spaces", {}).get(owner)
         model_key: Any = ("explicit", id(selected_model))
+        context.models.setdefault(model_key, selected_model)
     else:
-        owner, inferred_space = _bound_owner_and_space(program)
+        owner = _bound_owner(program)
         bound_registry = None
         if owner is not None:
             bound_registry = program._operator_registries[owner]
-        selected_space = space if space is not None else inferred_space
+        selected_space = space
         model_key = ("proxy", owner, state_name, _space_key(selected_space))
         selected_model = context.models.get(model_key)
         if selected_model is None:
@@ -207,8 +204,73 @@ def fresh_state_refs(
     return state_refs(holder, block_name, state_name=state_name, space=space)
 
 
-def typed_field(program: Program, name: str) -> Any:
-    """Return a case-owned FieldHandle usable by ``Program.solve_fields``."""
+def fresh_field_refs(
+    model: Any,
+    *,
+    block_name: str = "fluid",
+    field_name: str = "potential",
+    provider: Any = None,
+) -> tuple[Any, Any]:
+    """Build one exact factory state reference and its Case-owned field solve authority."""
+    module = getattr(model, "module", model)
+    declarations = tuple(
+        item for item in model.declaration_index().records() if item.kind == "state")
+    if len(declarations) != 1:
+        raise ValueError("fresh field fixture requires exactly one state declaration")
+    state = declarations[0]
+    case = Case(name="typed-field-factory-case")
+    block = case.block(block_name, model, states=(state,))
+
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Module, Signature
+
+    provider_space = getattr(getattr(provider, "signature", None), "output", None)
+    components = (
+        tuple(provider_space.components)
+        if provider_space is not None else (field_name,)
+    )
+    field_module = Module("typed_factory_field_%s" % field_name)
+    field_space = field_module.field_space(field_name, components)
+    if provider is None:
+        provider = field_module.operator(
+            name=field_name + "_provider",
+            signature=Signature((state.space,), field_space),
+            kind="field_operator",
+            expr=field_name + "_provider",
+        )
+    field_block = case.block("typed_field_%s" % field_name, field_module)
+    unknown = field_block[field_module.field_handle(field_space)]
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self) -> dict[str, Any]:
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self) -> dict[str, Any]:
+            return {"type": "unit-krylov"}
+
+    operator = FieldOperator(
+        field_name,
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(block[state]),
+        providers=provider,
+    )
+    field = case.field(
+        operator,
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
+    return block[state], field
+
+
+def typed_field(program: Program, name: str, *, provider: Any = None) -> Any:
+    """Return the callable Case-owned ``FieldHandle`` for the final field-solve route."""
     if not isinstance(name, str) or not name:
         raise TypeError("typed field fixture name must be a non-empty string")
     context = _context(program)
@@ -219,13 +281,28 @@ def typed_field(program: Program, name: str) -> Any:
     from pops.fields import FieldDiscretization, FieldOperator
     from pops.ir import ValueExpr
     from pops.math import laplacian
-    from pops.model import Handle
+    from pops.model import Module, Signature
 
     if not context.models:
         state_refs(program)
-    model = next(iter(context.models.values()))
-    unknown = Handle(name, kind="field", owner=model.owner_path)
-    provider = Handle(name + "_provider", kind="field_operator", owner=model.owner_path)
+    state_block, state_declaration = next(iter(context.blocks.values()))
+    state_ref = state_block[state_declaration]
+    field_module = Module("typed_time_field_%s" % name)
+    provider_space = getattr(getattr(provider, "signature", None), "output", None)
+    components = (
+        tuple(provider_space.components)
+        if provider_space is not None else (name,)
+    )
+    field_space = field_module.field_space(name, components)
+    if provider is None:
+        provider = field_module.operator(
+            name=name + "_provider",
+            signature=Signature((state_declaration.space,), field_space),
+            kind="field_operator",
+            expr=name + "_provider",
+        )
+    field_block = context.case.block("typed_field_%s" % name, field_module)
+    unknown = field_block[field_module.field_handle(field_space)]
 
     class _Method(Descriptor):
         category = "field_method"
@@ -242,7 +319,7 @@ def typed_field(program: Program, name: str) -> Any:
     operator = FieldOperator(
         name,
         unknown=unknown,
-        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(model.state),
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(state_ref),
         providers=provider,
     )
     discretization = FieldDiscretization(
@@ -250,6 +327,43 @@ def typed_field(program: Program, name: str) -> Any:
     field = context.case.field(operator, discretization)
     context.fields[name] = field
     return field
+
+
+def solve_field(
+    program: Program,
+    state: Any,
+    *,
+    field: Any = None,
+    name: str | None = None,
+    action: Any = None,
+) -> Any:
+    """Evaluate one callable field handle and consume its fallible outcome.
+
+    This is test assembly, not a compatibility method on ``Program``: every call crosses the final
+    Case-owned ``FieldHandle`` boundary and records explicit failure handling.
+    """
+    from pops.time import FailRun
+
+    selected = typed_field(program, "potential") if field is None else field
+    outcome = selected(state, name=name)
+    return outcome.consume(action=FailRun() if action is None else action)
+
+
+def solve_field_blocks(
+    program: Program,
+    states: Any,
+    *,
+    field: Any = None,
+    name: str | None = None,
+    action: Any = None,
+) -> Any:
+    """Evaluate one authenticated coupled field handle over exact same-stage states."""
+    from pops.time import FailRun
+
+    values = tuple(states)
+    selected = typed_field(program, "potential") if field is None else field
+    outcome = selected(*values, name=name)
+    return outcome.consume(action=FailRun() if action is None else action)
 
 
 def commits_by_block(program: Program) -> dict[str, Any]:
@@ -261,5 +375,6 @@ def commits_by_block(program: Program) -> dict[str, Any]:
 
 
 __all__ = [
-    "commits_by_block", "fresh_state_refs", "state_refs", "typed_field", "typed_state",
+    "commits_by_block", "fresh_field_refs", "fresh_state_refs", "solve_field",
+    "solve_field_blocks", "state_refs", "typed_field", "typed_state",
 ]

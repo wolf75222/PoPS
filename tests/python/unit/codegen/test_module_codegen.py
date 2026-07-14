@@ -7,14 +7,15 @@ validation, module_metadata.hpp); it must NOT appear in the step body, so operat
 there is no string lookup in a hot kernel. Pure-Python codegen-text check; skips if pops is absent.
 """
 import sys
+from types import SimpleNamespace
 
 try:
     from pops.ir.expr import Const
-    from pops.model import OperatorHandle
+    from pops.numerics.terms import DefaultSource, Flux
     from pops.physics._facade import Model
     from pops import time as adctime
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
-    from typed_program_support import state_refs, typed_state
+    from typed_program_support import fresh_field_refs, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_codegen (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -22,10 +23,7 @@ except Exception as exc:  # pops not importable here -> skip, never fake
 
 def _op(m, name):
     """A typed OperatorHandle for a registered operator (the de-stringed macro selector, ADC-532)."""
-    op = m.operator_registry().get(name)
-    return OperatorHandle(
-        op.name, kind=op.kind, owner=m.operator_registry().owner_path,
-        signature=op.signature)
+    return m.module.operator_handle(name)
 
 
 def _model():
@@ -37,19 +35,44 @@ def _model():
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
     m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
     m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
+    m.elliptic_field("fields", rho - 1.0, aux=["grad_x", "grad_y", "B_z"])
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     return m
 
 
+def _program_inputs(model):
+    return fresh_field_refs(
+        model,
+        block_name="plasma",
+        field_name="fields",
+        provider=_op(model, "fields"),
+    )
+
+
+def _emit(program, model):
+    from pops.codegen.program_codegen import emit_cpp_program
+
+    solve = next(value for value in program._values if value.op == "solve_fields")
+    field = solve.attrs["field"]
+    plan = SimpleNamespace(
+        name=field.local_id,
+        native_options={
+            "provider_slot": field.local_id,
+            "output_route": {"components": list(solve.field_context.outputs)},
+            "boundary_kernel_required": False,
+        },
+    )
+    return emit_cpp_program(
+        program, model=model, field_plans={field.local_id: plan})
+
+
 def test_metadata_block_emitted():
     m = _model()
-    P = adctime.Program("pc")._bind_operators(m)
-    block, state = state_refs(P, "plasma")
-    libtime.predictor_corrector_local_linear(
-        P, block, state, fields_operator=_op(m, "fields_from_state"),
-        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
-    src = P.emit_cpp_program(model=m)
+    state, fields = _program_inputs(m)
+    P = libtime.PredictorCorrector(
+        state, fields=fields,
+        explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
+    src = _emit(P, m)
     # GeneratedModule descriptor + GeneratedProgram coexist in the one .so.
     assert "pops_install_program" in src
     assert "pops_module_operator_count() { return" in src
@@ -58,11 +81,11 @@ def test_metadata_block_emitted():
     assert "pops_module_operator_requirements(int i)" in src
     assert "pops_module_state_space_name(int i)" in src
     assert "pops_module_field_space_name(int i)" in src
-    # The count equals the registry size (flux_default, electric, lorentz, fields_from_state,
+    # The count equals the registry size (flux_default, electric, lorentz, fields,
     # explicit_rhs) and every operator name + its kind is emitted.
     reg = m.operator_registry()
     assert "pops_module_operator_count() { return %d; }" % len(reg) in src
-    for op in ("flux_default", "electric", "lorentz", "fields_from_state", "explicit_rhs"):
+    for op in ("flux_default", "electric", "lorentz", "fields", "explicit_rhs"):
         assert '"%s"' % op in src, "operator %r missing from the module metadata" % op
     for kind in ("grid_operator", "local_source", "local_linear_operator", "field_operator",
                  "local_rate"):
@@ -73,12 +96,11 @@ def test_metadata_block_emitted():
 
 def test_metadata_not_in_step_body():
     m = _model()
-    P = adctime.Program("pc")._bind_operators(m)
-    block, state = state_refs(P, "plasma")
-    libtime.predictor_corrector_local_linear(
-        P, block, state, fields_operator=_op(m, "fields_from_state"),
-        explicit_rate_operator=_op(m, "explicit_rhs"), implicit_operator=_op(m, "lorentz"))
-    src = P.emit_cpp_program(model=m)
+    state, fields = _program_inputs(m)
+    P = libtime.PredictorCorrector(
+        state, fields=fields,
+        explicit=_op(m, "explicit_rhs"), implicit=_op(m, "lorentz"))
+    src = _emit(P, m)
     body = src.split("pops_install_program", 1)[1]
     assert "pops_module_" not in body, \
         "the GeneratedModule metadata must not be referenced in the step body (no hot-path lookup)"
@@ -92,7 +114,8 @@ def test_no_model_empty_module():
     P.commit(
         target.next,
         P.value(
-            "u1", u + P.dt * P._rhs_legacy(state=u, fields=P.solve_fields(u)),
+            "u1", u + P.dt * P.rhs(
+                state=u, terms=[Flux(), DefaultSource()]),
             at=target.next.point,
         ),
     )

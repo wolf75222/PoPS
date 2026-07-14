@@ -38,13 +38,47 @@ def build_model():
     return m, rho, bz
 
 
-def _program_state(model, name):
-    """Create a concrete block and bind the model-declared state by typed handle."""
+def _program_state(model, name, provider):
+    """Create a concrete state plus the Case-owned field solve backed by ``provider``."""
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.ir import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Module
+
     module = model.module
-    block = Case(name="%s-case" % name).block("plasma", model)
+    case = Case(name="%s-case" % name)
+    block = case.block("plasma", model)
     state = module.state_handle(module.state_spaces()["U"])
-    program = adctime.Program(name)._bind_operators(module)
-    return program, program.state(block, state)
+    provider_space = provider.signature.output
+    field_module = Module("%s-field" % name)
+    field_space = field_module.field_space("fields", provider_space.components)
+    field_block = case.block("field-storage", field_module)
+    unknown = field_block[field_module.field_handle(field_space)]
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self):
+            return {"type": "unit-krylov"}
+
+    field = case.field(
+        FieldOperator(
+            "fields",
+            unknown=unknown,
+            equation=-laplacian(ValueExpr(unknown)) == ValueExpr(block[state]),
+            providers=provider,
+        ),
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
+    program = adctime.Program(name)
+    return program, program.state(block[state]), field
 
 
 def test_operator_family_is_total_over_kinds():
@@ -119,9 +153,11 @@ def test_declarers_funnel_into_one_registry():
     assert r_classic.qualified_id == registered_classic.qualified_id
 
     def prog(handle):
-        P, state = _program_state(m, "p")
+        from pops.time import FailRun
+
+        P, state, field = _program_state(m, "p", fields_h)
         U = state.n
-        f = fields_h(U)
+        f = field(U).consume(action=FailRun())
         R = handle(U, f)
         P.commit(state.next, P.value("u1", U + P.dt * R, at=state.next.point))
         return P

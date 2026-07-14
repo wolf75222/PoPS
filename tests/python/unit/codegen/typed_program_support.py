@@ -20,11 +20,15 @@ sys.modules.setdefault(_SPEC.name, _MODULE)
 _SPEC.loader.exec_module(_MODULE)
 
 fresh_state_refs = _MODULE.fresh_state_refs
+fresh_field_refs = _MODULE.fresh_field_refs
 commits_by_block = _MODULE.commits_by_block
 state_refs = _MODULE.state_refs
 typed_field = _MODULE.typed_field
 typed_state = _MODULE.typed_state
+solve_field = _MODULE.solve_field
+solve_field_blocks = _MODULE.solve_field_blocks
 
 __all__ = [
-    "commits_by_block", "fresh_state_refs", "state_refs", "typed_field", "typed_state",
+    "commits_by_block", "fresh_field_refs", "fresh_state_refs", "solve_field",
+    "solve_field_blocks", "state_refs", "typed_field", "typed_state",
 ]

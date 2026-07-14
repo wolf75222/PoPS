@@ -25,6 +25,7 @@ from typed_program_support import typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -95,13 +96,14 @@ def test_solve_local_nonlinear_builds_newton_ir(t):
 def test_solve_local_nonlinear_rejects_non_local_residual(t):
     from pops.solvers.nonlinear import LocalNewton
     from pops.time import LocalResidual
-    # A non-local op (P.rhs / P.solve_fields) inside the residual is rejected: the per-cell kernel cannot
+    # A non-local op (P.rhs / a callable field solve) inside the residual is rejected: the per-cell kernel cannot
     # re-evaluate a halo / global solve at a perturbed stack state.
     P = t.Program("bad")
     U = typed_state(P, "blk")
 
     def bad_residual(P, Uit, U0):
-        R = P._rhs_legacy(state=Uit, sources=["default"])  # a non-local divergence-bearing rhs
+        R = P.rhs(
+            state=Uit, terms=[Flux(), DefaultSource()])  # a non-local divergence-bearing rhs
         return P.value(Uit - U0 - P.dt * R, at=Uit.point)
     try:
         P.solve(LocalResidual(bad_residual, U), name="W", solver=LocalNewton())
@@ -138,7 +140,7 @@ def test_solve_local_nonlinear_refused_without_model(t):
 def test_reductions_build_scalar_values(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     for node in (P.sum(U), P.max(U), P.min(U), P.sum_component(U, 0)):
         assert node.vtype == "scalar" and node.op == "reduce", \
             "a reduction is a scalar 'reduce' op (got %r/%r)" % (node.vtype, node.op)
@@ -172,7 +174,7 @@ def test_reductions_lower_to_adc_reductions(t):
     # A while_ loop whose condition compares a reduction lets the reduce op lower inside the body.
     P = t.Program("p")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     s_sum = P.sum(R)
     s_max = P.max(R)
     s_min = P.min(R)
@@ -196,7 +198,7 @@ def test_fill_boundary_ir_and_codegen(t):
     U = typed_state(P, "blk")
     Uf = P.fill_boundary(U)
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
-    R = P._rhs_legacy(state=Uf, sources=["default"])
+    R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(Uf + P.dt * R, at=endpoint.point))
     src = P.emit_cpp_program()
@@ -216,7 +218,7 @@ def test_fill_boundary_rejects_non_field(t):
 def test_project_ir_and_codegen(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     U1 = P.value(U + P.dt * R, at=endpoint.point)
     Up = P.project(state=U1)
@@ -247,7 +249,7 @@ def test_project_rejects_non_state_and_custom_projection(t):
 def test_record_scalar_ir_and_codegen(t):
     P = t.Program("p")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
     endpoint = typed_state(P, "blk", state_name="U").next
@@ -278,7 +280,7 @@ def test_ir_hash_distinguishes_new_ops(t):
     def _h(build):
         P = t.Program("h")
         U = typed_state(P, "blk")
-        R = P._rhs_legacy(state=U, sources=["default"])
+        R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
         build(P, U, R)
         endpoint = typed_state(P, "blk", state_name="U").next
         P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
@@ -314,7 +316,7 @@ def _reductions_program(t):
     each step, so the diagnostics can be checked against the analytic state."""
     P = t.Program("reductions_step")
     U = typed_state(P, "blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     P.record_scalar("state_sum", P.sum(U))
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
@@ -404,7 +406,7 @@ def _fill_project_program(t):
     P = t.Program("fill_project_step")
     U = typed_state(P, "blk")
     Uf = P.fill_boundary(U)
-    R = P._rhs_legacy(state=Uf, sources=["default"])
+    R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     U1 = P.value(Uf + P.dt * R, at=endpoint.point)
     P.commit(endpoint, P.project(state=U1))

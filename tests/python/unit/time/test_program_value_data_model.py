@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from pops.ir import Equation, SymbolicTruthValueError
+from pops.numerics.terms import DefaultSource, Flux
 from pops.provenance import ProvenanceRecord, SourceSpan
 from pops.time import Program, ProgramValue, TimePoint
 
@@ -39,7 +40,7 @@ def test_program_state_is_an_immutable_nonhashable_program_value():
 def test_program_metadata_is_deeply_immutable():
     program = Program("deep_immutable")
     state = typed_state(program, "plasma")
-    rate = program._rhs_legacy(state=state, flux=True, sources=["default"])
+    rate = program.rhs(state=state, terms=[Flux(), DefaultSource()])
 
     assert rate.attrs["sources"] == ("default",)
     with pytest.raises(AttributeError):

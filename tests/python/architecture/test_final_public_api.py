@@ -87,6 +87,29 @@ def test_case_has_one_registration_spelling_per_family() -> None:
     assert hasattr(program, "solve")
 
 
+def test_program_and_time_library_expose_only_final_authoring_spelling() -> None:
+    import pops.lib.time as libtime
+
+    assert tuple(signature(pops.Program.state).parameters) == ("self", "state", "clock")
+    assert tuple(libtime.__all__) == (
+        "AdamsBashforth", "BDF", "ButcherTableau", "FORWARD_EULER_TABLEAU",
+        "ForwardEuler", "IMEX", "IMEX_EULER_TABLEAU", "Lie", "PredictorCorrector",
+        "RK4", "RK4_TABLEAU", "RungeKutta", "SSPRK2", "SSPRK2_TABLEAU", "SSPRK3",
+        "SSPRK3_TABLEAU", "Strang",
+    )
+    for removed in (
+        "forward_euler", "ssprk2", "ssprk3", "rk4", "rk", "explicit_rk", "strang",
+        "lie", "adams_bashforth", "adams_bashforth2", "bdf", "imex_local",
+        "imex_local_linear", "predictor_corrector_local_linear", "CondensedSchur",
+    ):
+        assert not hasattr(libtime, removed)
+
+    from pops import fields
+
+    for removed in ("FieldProblem", "PoissonProblem", "HoldPrevious"):
+        assert not hasattr(fields, removed)
+
+
 def test_public_state_rejects_opaque_units_until_a_typed_unit_protocol_exists() -> None:
     model = pops.Model("dimension_contract")
     with pytest.raises(TypeError, match="units are unsupported"):

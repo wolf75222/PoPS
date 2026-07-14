@@ -17,10 +17,11 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 never fakes the engine.
 """
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import typed_state
+from typed_program_support import solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -57,8 +58,8 @@ print("== (A) IR + codegen ==")
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
     U = typed_state(P, "ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = solve_field(P, U)
+    R = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value(
         "U1", U + P.dt * R, at=endpoint.point))
@@ -183,8 +184,8 @@ def fe_program(name, *, factor=None):
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
     U = typed_state(P, "ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    f = solve_field(P, U)
+    R = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "ions", state_name="U").next
     P.commit(endpoint, P.value(
         "U1", U + P.dt * R, at=endpoint.point))

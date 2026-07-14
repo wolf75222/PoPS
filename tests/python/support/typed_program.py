@@ -45,17 +45,15 @@ def program_states(
     state: Any = None,
     case_name: str | None = None,
 ) -> tuple[Case, dict[str, Any]]:
-    """Declare every requested state through ``Program.state(BlockHandle, StateHandle)``."""
+    """Declare every requested state through ``Program.state(block[state])``."""
     module = module_of(model)
     declaration = state_handle(module, state)
     names = tuple(block_names)
     if not names or any(not isinstance(name, str) or not name for name in names):
         raise ValueError("program_states requires non-empty block names")
     case = Case(name=case_name or "%s-program-case" % program.name)
-    temporals = {
-        name: program.state(case.block(name, module), declaration)
-        for name in names
-    }
+    blocks = {name: case.block(name, module) for name in names}
+    temporals = {name: program.state(blocks[name][declaration]) for name in names}
     return case, temporals
 
 

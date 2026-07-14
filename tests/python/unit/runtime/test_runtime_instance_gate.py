@@ -246,8 +246,17 @@ def test_runtime_instance_has_one_authored_execution_route():
     assert not hasattr(runtime, "step")
     assert not hasattr(runtime, "step_cfl")
     assert not hasattr(runtime, "run")
+    with pytest.raises(TypeError, match="authenticated object returned by pops.bind"):
+        pops.run(runtime, t_end=1.0, max_steps=1)
+
+
+def test_runtime_engine_rejects_public_strategy_controls():
+    pytest.importorskip("pops._pops")
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_Executor(plan))
+
     with pytest.raises(TypeError, match="does not accept strategy= or cfl="):
-        pops.run(runtime, t_end=1.0, max_steps=1, strategy=FixedDt(1.0))
+        runtime._run(t_end=1.0, max_steps=1, strategy=FixedDt(1.0))
 
 
 def test_consumer_moment_uses_the_accepted_qualified_child_clock_cursor(tmp_path):
@@ -308,7 +317,7 @@ def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp
     plan, graph, manifest = _with_graph(tmp_path)
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    assert pops.run(runtime, t_end=1.0, max_steps=1) == 1
+    assert runtime._run(t_end=1.0, max_steps=1) == 1
 
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert cursor.committed_samples == 1
@@ -328,7 +337,7 @@ def test_run_fails_explicitly_when_max_steps_cannot_reach_t_end(tmp_path):
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
-        runtime.run(2.0, max_steps=1)
+        runtime._run(2.0, max_steps=1)
 
     assert runtime.time() == 1.0
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
@@ -340,7 +349,7 @@ def test_scientific_format_is_a_structural_provider_without_name_dispatch(tmp_pa
     plan, _, _ = _with_graph(tmp_path, output_format=_CustomNPZ())
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    pops.run(runtime, t_end=1.0, max_steps=1)
+    runtime._run(t_end=1.0, max_steps=1)
 
     assert len(tuple(tmp_path.glob("*.npz"))) == 1
 
@@ -362,7 +371,7 @@ def test_malformed_format_provider_is_refused_before_an_effect_exists(tmp_path):
 def test_checkpoint_restart_authenticates_and_restores_consumer_cursors(tmp_path):
     plan, _, manifest = _with_graph(tmp_path / "outputs")
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
-    pops.run(runtime, t_end=1.0, max_steps=1)
+    runtime._run(t_end=1.0, max_steps=1)
     checkpoint = runtime.checkpoint(tmp_path / "restart")
 
     restored = RuntimeInstance(plan, executor=_Executor(plan))
@@ -387,7 +396,7 @@ def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
     )
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    pops.run(runtime, t_end=1.0, max_steps=1)
+    runtime._run(t_end=1.0, max_steps=1)
 
     with np.load(target, allow_pickle=False) as payload:
         cursors = payload["runtime_consumer_cursors"].item()
@@ -400,7 +409,7 @@ def test_checkpoint_consumer_serializes_its_post_accept_cursor(tmp_path):
 def test_checkpoint_refuses_a_different_consumer_graph_before_native_restore(tmp_path):
     plan, _, _ = _with_graph(tmp_path / "outputs")
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
-    pops.run(runtime, t_end=1.0, max_steps=1)
+    runtime._run(t_end=1.0, max_steps=1)
     checkpoint = runtime.checkpoint(tmp_path / "restart")
 
     empty_record = replace(plan.artifact.plan, consumer_graph=ConsumerGraph(()))

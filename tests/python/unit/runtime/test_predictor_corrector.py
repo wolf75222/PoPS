@@ -37,6 +37,9 @@ never fakes the engine.
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
+from pops.solvers import DenseLU
+from pops.time import FailRun, LocalLinear
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -55,7 +58,7 @@ try:
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
-from tests.python.unit.runtime._typed_program import typed_program_state  # noqa: E402
+from tests.python.unit.runtime._typed_program import solve_field, typed_program_state  # noqa: E402
 
 fails = 0
 
@@ -131,8 +134,11 @@ def _electric_fe_program(model, name="electric_fe"):
     """One Forward-Euler step from a single rhs(sources=['electric'])."""
     P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["electric"])
+    f = solve_field(P, U)
+    R = P.rhs(
+        name="R", state=U, fields=f,
+        terms=[Flux(), model.module.operator_handle("electric")],
+    )
     P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
@@ -141,8 +147,11 @@ def _unknown_source_program(model, name="unknown_src"):
     """One Forward-Euler step naming a source the model never declared."""
     P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["does_not_exist"])
+    f = solve_field(P, U)
+    R = P.rhs(
+        name="R", state=U, fields=f,
+        terms=[Flux(), model.module.operator_handle("does_not_exist")],
+    )
     P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
@@ -161,7 +170,7 @@ chk("ctx.axpy(" in src, "the named source is accumulated onto R via axpy (R += S
 
 # Unknown source name -> clear ValueError (spec error 1).
 unknown_model = named_source_model("unknown_src")
-chk(raises(ValueError, lambda: _unknown_source_program(unknown_model).emit_cpp_program(
+chk(raises(KeyError, lambda: _unknown_source_program(unknown_model).emit_cpp_program(
     model=unknown_model)),
     "an unknown source_term name in rhs raises ValueError")
 
@@ -181,8 +190,13 @@ def _both_source_model(name="pc_both"):
 def _extra_fe_program(model, srcs, name="extra_fe"):
     P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
     U = temporal.n
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=srcs)
+    f = solve_field(P, U)
+    terms = [Flux()]
+    if "default" in srcs:
+        terms.append(DefaultSource())
+    if "extra" in srcs:
+        terms.append(model.module.operator_handle("extra"))
+    R = P.rhs(name="R", state=U, fields=f, terms=terms)
     P.commit(temporal.next, P.value("U1", U + P.dt * R))
     return P
 
@@ -208,17 +222,24 @@ def predictor_corrector_program(model, name="predictor_corrector_poisson_lorentz
     P, _, _, _, _, temporal = typed_program_state(name, model=model, state="U")
     dt = P.dt
     U_n = temporal.n
-    f_n = P.solve_fields("fields_n", U_n)
-    R_n = P._rhs_legacy(name="R_n", state=U_n, fields=f_n, flux=True, sources=["electric"])
+    electric = model.module.operator_handle("electric")
+    lorentz = model.module.operator_handle("lorentz")
+    f_n = solve_field(P, U_n, name="fields_n")
+    R_n = P.rhs(name="R_n", state=U_n, fields=f_n, terms=[Flux(), electric])
     U_star_rhs = P.value("U_star_rhs", U_n + dt * R_n)
-    U_star = P.solve_local_linear(name="U_star", operator=P.I - dt * P._linear_source("lorentz"),
-                                  rhs=U_star_rhs, fields=f_n)
-    f_star = P.solve_fields("fields_star", U_star)
-    R_star = P._rhs_legacy(name="R_star", state=U_star, fields=f_star, flux=True, sources=["electric"])
-    C_star = P.apply(operator=P._linear_source("lorentz"), state=U_star, fields=f_star, name="C_star")
+    U_star = P.solve(
+        LocalLinear(operator=P.I - dt * P.linear_source(lorentz), rhs=U_star_rhs, fields=f_n),
+        solver=DenseLU(), name="U_star",
+    ).consume(action=FailRun())
+    f_star = solve_field(P, U_star, name="fields_star")
+    R_star = P.rhs(name="R_star", state=U_star, fields=f_star, terms=[Flux(), electric])
+    C_star = P.apply(operator=lorentz, state=U_star, fields=f_star, name="C_star")
     Q = P.value("Q", U_n + 0.5 * dt * R_n + 0.5 * dt * R_star + 0.5 * dt * C_star)
-    U_np1 = P.solve_local_linear(name="U_np1", operator=P.I - 0.5 * dt * P._linear_source("lorentz"),
-                                 rhs=Q, fields=f_star)
+    U_np1 = P.solve(
+        LocalLinear(
+            operator=P.I - 0.5 * dt * P.linear_source(lorentz), rhs=Q, fields=f_star),
+        solver=DenseLU(), name="U_np1",
+    ).consume(action=FailRun())
     P.commit(temporal.next, U_np1)
     return P
 

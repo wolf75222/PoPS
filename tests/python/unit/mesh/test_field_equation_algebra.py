@@ -7,7 +7,8 @@ The field-equation forms Spec 5 itself uses must be AUTHORABLE as inert, inspect
 
 These build elliptic operator terms (Reaction / CoeffGradient / DivCoeffGrad / EllipticSum);
 nothing computes in Python -- the C++ elliptic solver executes. This test covers the IR
-construction, the principal-kind inspection, and the Poisson-family validation.
+construction and the principal-kind inspection. Physical field validation belongs to
+``FieldOperator`` contract tests; the retired Poisson-problem wrappers are not recreated here.
 """
 
 import pytest
@@ -19,8 +20,6 @@ from pops.math import (  # noqa: E402
     Reaction, CoeffGradient, DivCoeffGrad, EllipticSum, Laplacian, Divergence, Equation)
 from pops.ir.expr import Var, RateTerm  # noqa: E402
 from pops.fields.coefficients import ScalarCoefficient, ReactionCoefficient  # noqa: E402
-from pops.fields import (  # noqa: E402
-    PoissonProblem, ScreenedPoissonProblem, AnisotropicPoissonProblem)
 from pops.model import Handle, OwnerPath  # noqa: E402
 
 
@@ -82,43 +81,6 @@ def test_spec_9_2_headline_form_constructs():
     eq = (-div(eps * grad(phi)) + kappa * phi == charge)
     assert isinstance(eq, Equation)
     assert principal_kinds(eq.lhs) == {"div_coeff_grad", "reaction"}
-
-
-def test_poisson_accepts_principal_operator():
-    phi = unknown("phi")
-    rhs = Var("charge", "cons")
-    PoissonProblem(unknown=phi, equation=(-laplacian(phi) == rhs), solver=object()).validate()
-    eps = ScalarCoefficient(_coefficient_field("eps"))
-    PoissonProblem(unknown=phi, equation=(-div(eps * grad(phi)) == rhs),
-                   solver=object()).validate()
-
-
-def test_screened_requires_reaction():
-    phi = unknown("phi")
-    rhs = Var("charge", "cons")
-    # missing reaction -> rejected
-    bad = ScreenedPoissonProblem(unknown=phi, equation=(-laplacian(phi) == rhs), solver=object())
-    with pytest.raises(ValueError, match="reaction"):
-        bad.validate()
-    # with reaction -> ok
-    ok = ScreenedPoissonProblem(unknown=phi, equation=(-laplacian(phi) + 0.5 * phi == rhs),
-                                solver=object())
-    assert ok.validate() is True
-
-
-def test_anisotropic_requires_div_coeff_grad():
-    phi = unknown("phi")
-    rhs = Var("charge", "cons")
-    eps = ScalarCoefficient(_coefficient_field("eps"))
-    # plain laplacian -> rejected (no variable-coefficient principal operator)
-    bad = AnisotropicPoissonProblem(unknown=phi, equation=(-laplacian(phi) == rhs),
-                                    solver=object())
-    with pytest.raises(ValueError, match="div"):
-        bad.validate()
-    # div(eps*grad(phi)) -> ok
-    ok = AnisotropicPoissonProblem(unknown=phi, equation=(-div(eps * grad(phi)) == rhs),
-                                   solver=object())
-    assert ok.validate() is True
 
 
 def test_terms_are_inert_no_runtime_data():

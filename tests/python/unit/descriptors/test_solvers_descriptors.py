@@ -1,6 +1,6 @@
 """ADC-500 (Spec 5 sec.5.7 / criterion 4 / sec.13.11.1): the pops.solvers central package.
 
-pops.solvers homes the linear / nonlinear / Schur / elliptic solver + preconditioner catalog
+pops.solvers homes the executable linear / nonlinear / elliptic solver + preconditioner catalog
 as inert typed descriptors. These tests construct each entry, exercise the RICH GeometricMG
 parameter surface (typed smoother / coarse / tolerance + capabilities) and its protocol
 (inspect / options / capabilities / lower), check that a bare string is rejected where a typed
@@ -16,7 +16,7 @@ from fractions import Fraction
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
 
-from pops.solvers import elliptic, krylov, nonlinear, schur
+from pops.solvers import elliptic, krylov, nonlinear
 from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.preconditioners import preconditioners
 from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
@@ -26,7 +26,7 @@ from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
 
 def test_solvers_is_top_level_and_exposed():
     assert pops.solvers is solvers
-    for sub in ("elliptic", "krylov", "nonlinear", "schur",
+    for sub in ("elliptic", "krylov", "nonlinear",
                 "options", "tolerances", "preconditioners", "requirements"):
         assert hasattr(solvers, sub), "pops.solvers missing sub-module %r" % sub
 
@@ -118,28 +118,6 @@ def test_nonlinear_surface_contains_only_executable_descriptors():
         "finite_difference_step": 1e-6,
     }
     assert nonlinear.Newton().available().ok is True
-
-
-# --- Schur-condensation solver -----------------------------------------------------------
-
-def test_schur_native_id_and_alias():
-    assert schur.Schur().native_id == "pops::SchurCondensationOperator"
-    assert schur.Schur().scheme == "schur"
-    # CondensedSchur is an alias naming the same native operator (distinct from the
-    # pops.time CondensedSchur splitting POLICY).
-    assert schur.CondensedSchur().native_id == "pops::SchurCondensationOperator"
-    assert schur.CondensedSchur() == schur.Schur()
-
-
-def test_schur_declares_amr_route_capabilities():
-    # Spec 6 sec.4 / sec.9: the Schur-condensation solver runs on AMR (the amr-schur source
-    # stage) and System, under MPI and on the GPU, so it declares every route capability.
-    for d in (schur.Schur(), schur.CondensedSchur()):
-        caps = d.capabilities
-        assert caps["supports_uniform"] is True
-        assert caps["supports_amr"] is True
-        assert caps["supports_mpi"] is True
-        assert caps["supports_gpu"] is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
@@ -290,9 +268,11 @@ def test_preconditioners_catalog():
     pre = solvers.preconditioners
     assert pre.GeometricMG().native_id == "pops::GeometricMG"
     assert pre.GeometricMG().category == "preconditioner"
-    for d in (pre.Identity(), pre.Jacobi(), pre.BlockJacobi()):
-        assert d.available().ok is False
-        assert d.native_id == ""
+    identity = pre.Identity()
+    assert identity.available().ok is True
+    assert identity.native_id == "pops::ApplyFn"
+    for removed in ("Jacobi", "BlockJacobi"):
+        assert not hasattr(pre, removed)
 
 
 # --- requirements vocabulary -------------------------------------------------------------
@@ -321,7 +301,6 @@ def test_lib_solvers_shim_is_removed():
     ns = solvers.solvers
     assert ns.GMRES(max_iter=200).scheme == "gmres"
     assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
-    assert ns.Schur().native_id == "pops::SchurCondensationOperator"
     assert ns.Newton().available().ok is True
     assert ns.LocalNewton().scheme == "newton"
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
@@ -408,7 +387,7 @@ def test_direct_small_grid_refuses_non_positive(bad):
 def test_composite_fac_defaults_and_domain():
     from pops.solvers.options import CompositeFAC
     d = CompositeFAC()
-    # None -> the 0 wire sentinels (native kFAC* defaults), the CondensedSchur fac_* convention.
+    # None -> the 0 wire sentinels used by the composite tensor FAC provider.
     assert d.options() == {"max_iters": None, "fine_sweeps": None, "tol": None,
                            "coarse_rel_tol": None, "coarse_cycles": None, "verbose": False}
     kw = d.set_poisson_kwargs()
@@ -498,16 +477,36 @@ def test_krylov_descriptor_controls_preserve_exact_number_domains():
 
 
 def test_weno5_epsilon_descriptor():
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.numerics import FiniteVolume
     from pops.numerics.reconstruction import reconstruction
+    from pops.numerics.riemann import ScalarUpwind
+    from pops.numerics.variables import Conservative
     # Default: no epsilon option (omit-when-default; the native kWenoEpsilon literal governs).
     assert "epsilon" not in reconstruction.WENO5().options
     assert reconstruction.WENO5(epsilon=1e-30).options["epsilon"] == 1e-30
     with pytest.raises(ValueError, match="epsilon"):
         reconstruction.WENO5(epsilon=-1.0)
-    # The Spatial ride-along (mirror of waves_provider).
-    sp = pops.Spatial(reconstruction=reconstruction.WENO5(epsilon=1e-30))
-    assert sp.weno_epsilon == 1e-30
-    assert pops.Spatial(reconstruction=reconstruction.WENO5()).weno_epsilon is None
+    # The exact descriptor rides in the final typed finite-volume method; no root Spatial facade.
+    frame = Rectangle("weno-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("weno", frame=frame)
+    state = model.state("U", components=("u",))
+    (u,) = state
+    velocity = model.vector("a", frame=frame, components={frame.x: 1, frame.y: 0})
+    flux = model.flux(
+        "F", frame=frame, state=state,
+        components={frame.x: (u,), frame.y: (0 * u,)},
+        waves={frame.x: (1,), frame.y: (0,)},
+    )
+    method = FiniteVolume(
+        flux=flux,
+        variables=Conservative(state),
+        reconstruction=reconstruction.WENO5(epsilon=1e-30),
+        riemann=ScalarUpwind(velocity=velocity),
+    )
+    assert method.reconstruction.options["epsilon"] == 1e-30
+    assert "epsilon" not in reconstruction.WENO5().options
 
 
 if __name__ == "__main__":

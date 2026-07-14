@@ -102,9 +102,10 @@ future validators:
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.
 - `runtime:allocator_lifetime`: Kokkos builds use a process-lifetime managed arena whose blocks are
   returned by a Kokkos finalize hook.
-- `program:condensed_implicit_preset`: `pops.lib.time.CondensedSchur` currently authors a 2D,
-  two-component electrostatic-Lorentz reduction. The Program solve/provider protocol is independent
-  of that preset and can host other operators, dimensions and hierarchy providers.
+- `program:hierarchy_scoped_solve`: a hierarchy-scoped `LinearProblem` requires an explicit
+  matrix-free operator provider such as `CompositeTensorFAC()` and an executable Krylov solver. The
+  currently audited native tensor route is 2D; unsupported dimensions or hierarchy shapes fail
+  capability validation instead of selecting a named time preset.
 
 ## Error Policy
 

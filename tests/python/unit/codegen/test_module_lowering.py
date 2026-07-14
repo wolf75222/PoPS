@@ -20,6 +20,7 @@ Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest
 import sys
 
 import pytest
+from pops.numerics.terms import DefaultSource, Flux
 
 from typed_program_support import typed_state
 
@@ -46,8 +47,8 @@ def _facade_model(name="ep"):
 def _fe_program(model, name="p"):
     P = adctime.Program(name)
     U = typed_state(P, "ep", model=model)
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["electric"])
+    electric = model.module.operator_handle("electric")
+    R = P.rhs(state=U, terms=[Flux(), electric])
     endpoint = typed_state(P, "ep", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
@@ -156,14 +157,14 @@ def test_handle_carries_module_hash_and_trace():
     m = _facade_model("gas")
     _, source_module = lower_and_validate(m, facade=m)
     manifest = module_manifest_of(source_module)
-    handle = CompiledProblem("/tmp/none.so", None, m, "SIG|c++|c++23", "c++", "c++23",
+    program = _fe_program(m, "trace")
+    handle = CompiledProblem("/tmp/none.so", program, m._m, "SIG|c++|c++23", "c++", "c++23",
                              module_manifest=manifest, module_hash=source_module.module_hash())
     assert handle.module_hash() == source_module.module_hash(), \
         "the handle carries the compile-time Module hash (bind drift detection)"
-    # The lowered-module trace is present in inspect() (the operator-first Module manifest).
-    report = handle.inspect().to_dict()
-    assert report["module_manifest"] is not None, "inspect() carries the lowered-module trace"
-    assert report["module_manifest"]["name"] == "gas"
+    # The low-level handle retains the immutable operator-first trace even before a real artifact
+    # is loaded; full inspect() is covered below through the actual compile_problem chain.
+    assert handle.module_manifest.to_dict()["name"] == "gas"
 
 
 # --- 6: the REAL compile_problem chain threads the trace + hash onto the handle -----------------
@@ -206,8 +207,7 @@ def _fe_program_default(model, name="spec"):
     minimal lowering the sibling integration tests compile with a native brick ModelSpec."""
     P = adctime.Program(name)
     U = typed_state(P, "ep", model=model)
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "ep", state_name="U", model=model).next
     P.commit(endpoint, P.value("U1", U + P.dt * R, at=endpoint.point))
     return P
@@ -236,7 +236,10 @@ def test_compile_problem_chain_refuses_a_moduleless_model_duck(monkeypatch, tmp_
 
     cd = _stub_toolchain(monkeypatch, tmp_path)
     model = _ModulelessModel()
-    with pytest.raises(TypeError, match="Module authority|supported model|semantic model identity"):
+    with pytest.raises(
+        TypeError,
+        match="OperatorRegistry|Module authority|supported model|semantic model identity",
+    ):
         cd.compile_problem(time=_fe_program_default(model), model=model,
                            include=str(tmp_path))
 
