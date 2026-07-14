@@ -3,10 +3,10 @@
 Public re-exports for users and for pops.dsl / pops.math rewiring.
 
 Node base classes
-  Expr, _BoardNode
+  Expr
 
 Flux-DSL node classes
-  Const, Var, _Bin, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign
+  Const, Var, Add, Sub, Mul, Div, Pow, Neg, Sqrt, Abs, Sign
 
 Board AST node classes
   Equation, Partial, Gradient, Laplacian,
@@ -69,11 +69,11 @@ from .lowering import (
 
 __all__ = [
     # node classes
-    "Expr", "Const", "Var", "ValueExpr", "parameter_value", "_Bin", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
+    "Expr", "Const", "Var", "ValueExpr", "parameter_value", "Add", "Sub", "Mul", "Div", "Pow", "Compare",
     "BooleanAnd", "BooleanOr", "BooleanNot",
     "Neg", "Sqrt", "Abs", "Sign",
     # board nodes
-    "Equation", "_BoardNode",
+    "Equation",
     "Partial", "Gradient", "GradientMagnitude", "Laplacian",
     "RateTerm", "RateExpr", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral",

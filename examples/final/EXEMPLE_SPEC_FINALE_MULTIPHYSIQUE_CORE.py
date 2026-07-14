@@ -29,8 +29,7 @@ from pops.fields import (
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.ir import ValueExpr
-from pops.ir.expr import Const, Var
+from pops.ir import Const, ValueExpr, Var
 from pops.math import ddt, div, laplacian
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density, Momentum
