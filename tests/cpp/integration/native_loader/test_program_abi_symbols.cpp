@@ -12,10 +12,9 @@
 //  - pops_install_program  (REQUIRED: the macro-step installer);
 //  - pops_program_block_count + pops_program_block_name (REQUIRED: explicit block identities;
 //    positional binding is forbidden);
-//  - pops_program_hash     (optional: the IR key recorded for the checkpoint restart guard);
-//  - pops_program_name     (optional diagnostic name);
-//  - pops_module_operator_count + the pops_module_operator_{name,kind,signature,requirements}
-//    accessor family (Spec 2 install-time typed operator metadata, read_module_metadata).
+//  - pops_program_route_manifest (required route-registry identity);
+//  - the complete owner-qualified pops_module operator/state-space/field-space metadata family.
+// pops_program_hash / pops_program_name remain diagnostic identity symbols.
 // System seam symbols asserted exported from the test executable (resolvable via the process handle):
 //  - the ProgramContext seam accessors a .so calls back into (install_program_step / block_state /
 //    solve_fields / block_rhs_into / register_history / record_program_diagnostic).
@@ -29,6 +28,7 @@
 
 #include "gtest_compat.hpp"
 #include <pops/runtime/dynamic/dynlib.hpp>
+#include <pops/runtime/program/module_metadata.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -49,17 +49,26 @@ std::string stub_source() {
   // clang-format off
   return R"CPP(
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/config/route_ids.hpp>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "abi_symbol_stub"; }
 extern "C" const char* pops_program_hash() { return "deadbeef"; }
 extern "C" int pops_program_block_count() { return 1; }
 extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : ""; }
 extern "C" void pops_install_program(void* /*sys*/) { /* no-op: symbol presence only */ }
 extern "C" int  pops_module_operator_count() { return 1; }
+extern "C" int  pops_module_state_space_count() { return 0; }
+extern "C" int  pops_module_field_space_count() { return 0; }
+extern "C" const char* pops_module_operator_owner(int) { return "model/a"; }
 extern "C" const char* pops_module_operator_name(int) { return "rhs"; }
 extern "C" const char* pops_module_operator_kind(int) { return "hyperbolic"; }
 extern "C" const char* pops_module_operator_signature(int) { return "rhs_into"; }
-extern "C" const char* pops_module_operator_requirements(int) { return ""; }
+extern "C" const char* pops_module_operator_requirements(int) { return "{\"kind\":\"hyperbolic\"}"; }
+extern "C" const char* pops_module_state_space_name(int) { return ""; }
+extern "C" const char* pops_module_state_space_owner(int) { return ""; }
+extern "C" const char* pops_module_field_space_name(int) { return ""; }
+extern "C" const char* pops_module_field_space_owner(int) { return ""; }
 )CPP";
   // clang-format on
 }
@@ -119,27 +128,41 @@ static int pops_run_test_program_abi_symbols(int argc, char** argv) {
 
   int fails = 0;
   // REQUIRED symbols: install_program hard-fails without these.
-  const char* required[] = {"pops_program_abi_key", "pops_install_program",
-                            "pops_program_block_count", "pops_program_block_name"};
+  const char* required[] = {
+      "pops_program_abi_key", "pops_program_route_manifest", "pops_install_program",
+      "pops_program_block_count", "pops_program_block_name", "pops_module_operator_count",
+      "pops_module_state_space_count", "pops_module_field_space_count",
+      "pops_module_operator_owner", "pops_module_operator_name", "pops_module_operator_kind",
+      "pops_module_operator_signature", "pops_module_operator_requirements",
+      "pops_module_state_space_name", "pops_module_state_space_owner",
+      "pops_module_field_space_name", "pops_module_field_space_owner"};
   for (const char* name : required) {
     if (!pops::dynlib::sym(h, name)) {
       std::printf("FAIL required ABI symbol '%s' absent from the stub .so\n", name);
       ++fails;
     }
   }
-  // OPTIONAL-but-present-here symbols: the checkpoint hash guard + the module-metadata accessor family.
-  const char* optional_family[] = {"pops_program_hash",
-                                   "pops_program_name",
-                                   "pops_module_operator_count",
-                                   "pops_module_operator_name",
-                                   "pops_module_operator_kind",
-                                   "pops_module_operator_signature",
-                                   "pops_module_operator_requirements"};
+  // Diagnostic identity symbols are present in every current generated artifact but are not part of
+  // the execution metadata table itself.
+  const char* optional_family[] = {"pops_program_hash", "pops_program_name"};
   for (const char* name : optional_family) {
     if (!pops::dynlib::sym(h, name)) {
       std::printf("FAIL module-metadata ABI symbol '%s' absent from the stub .so\n", name);
       ++fails;
     }
+  }
+
+  try {
+    const auto metadata = pops::runtime::program::read_module_metadata(h);
+    if (metadata.operators.size() != 1 || metadata.operators.front().owner != "model/a" ||
+        metadata.operators.front().name != "rhs") {
+      std::printf("FAIL strict module metadata reader returned the wrong operator identity\n");
+      ++fails;
+    }
+  } catch (const std::exception& error) {
+    std::printf("FAIL strict module metadata reader rejected the complete contract: %s\n",
+                error.what());
+    ++fails;
   }
 
   // The ABI key the stub exports equals the module key literal it was compiled against (the guard

@@ -3034,15 +3034,21 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
   }
-  // Route registry guard (ADC-599): refuse a problem.so whose embedded route manifest
-  // (pops_program_route_manifest) disagrees with the current registry, right after the ABI-key
-  // check. Optional symbol: a pre-ADC-599 .so carries nothing -> verify_route_manifest("") no-op.
+  // Route registry guard: the manifest is mandatory and must match before any installer is called.
   {
     auto manifest_fn =
         reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_route_manifest"));
+    if (!manifest_fn) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "AmrSystem::install_program: pops_program_route_manifest missing; regenerate artifact");
+    }
     try {
-      pops::verify_route_manifest(manifest_fn ? std::string(manifest_fn()) : std::string(),
-                                  "install_program");
+      const char* raw = manifest_fn();
+      if (!raw || raw[0] == '\0')
+        throw std::runtime_error(
+            "AmrSystem::install_program: pops_program_route_manifest returned empty data");
+      pops::verify_route_manifest(std::string(raw), "install_program");
     } catch (...) {
       pops::dynlib::close(h);
       throw;
@@ -3059,15 +3065,10 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
         "with "
         "an AMR-target Program)");
   }
-#if !defined(_WIN32)
-  // Install-time requirement validation (Spec criterion 24, ADC-446/466), AMR subset. The problem.so
-  // carries, per operator, its requirements (pops_module_operator_requirements -> read_module_metadata).
-  // We validate the two requirement kinds that map UNAMBIGUOUSLY to the AMR facade: (b) BLOCK-INSTANCE
-  // (against block_names()) and (c) SOLVER (AMR is always geometric_mg). The (a) AUX-FIELD requirement
-  // (B_z / T_e provided via set_magnetic_field / set_aux_field) has no provides_aux query on the AMR
-  // facade yet, so it is NOT validated here (parity follow-up, Spec 6) -- never a wrong rejection. A
-  // pre-Spec-2 .so (present == false) carries nothing to check -> skip (backward compatible).
-  {
+  // Mandatory install-time requirement validation, including AUX parity with System. B_z is present
+  // only after set_magnetic_field; T_e has no AMR provider yet and is therefore rejected explicitly.
+  // Derived phi/grad and component-keyed named aux fields remain available by construction.
+  try {
     const auto meta = pops::runtime::program::read_module_metadata(h);
     const std::vector<std::string> amr_block_names = block_names();
     auto has_block = [&amr_block_names](const std::string& want) {
@@ -3076,12 +3077,28 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
           return true;
       return false;
     };
+    auto provides_aux = [this](const std::string& name) {
+      if (name == "B_z")
+        return !p_->bz_field.empty();
+      if (name == "T_e")
+        return false;
+      return true;
+    };
     for (const auto& op : meta.operators) {
+      for (const auto& aux : pops::runtime::program::required_aux(op.requirements)) {
+        if (!provides_aux(aux)) {
+          const std::string remedy =
+              aux == "T_e"
+                  ? "the AMR runtime does not implement a typed T_e provider"
+                  : "call set_magnetic_field before installing the Program";
+          throw std::runtime_error("AmrSystem::install_program: operator '" + op.name +
+                                   "' requires aux field '" + aux + "', but " + remedy);
+        }
+      }
       // (b) BLOCK-INSTANCE requirements: an operator that reads another species names the block it needs;
       // reject if it was not added. Verbatim spec message (parity System::install_program).
       for (const auto& blk : pops::runtime::program::required_blocks(op.requirements)) {
         if (!has_block(blk)) {
-          pops::dynlib::close(h);
           throw std::runtime_error("operator '" + op.name + "' requires block instance '" + blk +
                                    "'");
         }
@@ -3090,13 +3107,14 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
       // field operator that requires a DIFFERENT named solver is rejected (verbatim spec message).
       const std::string need_solver = pops::runtime::program::required_solver(op.requirements);
       if (!need_solver.empty() && need_solver != "geometric_mg") {
-        pops::dynlib::close(h);
         throw std::runtime_error("field operator '" + op.name + "' requires solver '" +
                                  need_solver + "'");
       }
     }
+  } catch (...) {
+    pops::dynlib::close(h);
+    throw;
   }
-#endif
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). The Program numbers its blocks in P.state
   // declaration order (the .so's pops_program_block_name table); the AMR facade numbers its blocks in
   // add order (block_names). Bind by NAME, store the program-index -> AMR-block-index map (read by the

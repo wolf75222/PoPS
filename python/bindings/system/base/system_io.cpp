@@ -313,15 +313,21 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
         "'. Recompile the problem module with the SAME compiler, C++ standard and "
         "pops headers as the _pops module.");
   }
-  // Route registry guard (ADC-599): refuse a problem.so whose embedded route manifest
-  // (pops_program_route_manifest) disagrees with the current registry, right after the ABI-key
-  // check. Optional symbol: a pre-ADC-599 .so carries nothing -> verify_route_manifest("") no-op.
+  // Route registry guard: the manifest is mandatory and must match before any installer is called.
   {
     auto manifest_fn = reinterpret_cast<const char* (*)()>(
         pops::dynlib::sym(h, "pops_program_route_manifest"));
+    if (!manifest_fn) {
+      pops::dynlib::close(h);
+      throw std::runtime_error(
+          "System::install_program: pops_program_route_manifest missing; regenerate artifact");
+    }
     try {
-      pops::verify_route_manifest(
-          manifest_fn ? std::string(manifest_fn()) : std::string(), "install_program");
+      const char* raw = manifest_fn();
+      if (!raw || raw[0] == '\0')
+        throw std::runtime_error(
+            "System::install_program: pops_program_route_manifest returned empty data");
+      pops::verify_route_manifest(std::string(raw), "install_program");
     } catch (...) {
       pops::dynlib::close(h);
       throw;
@@ -333,15 +339,9 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     throw std::runtime_error("System::install_program: pops_install_program missing from '" +
                              so_path + "'");
   }
-#if !defined(_WIN32)
-  // Spec-2 criterion 24 (ADC-446): install-time requirement validation. The problem.so carries, per
-  // operator, the aux fields its body reads (pops_module_operator_requirements -> read_module_metadata).
-  // Reject BEFORE installing the program if the simulation did not provide a required field, with a
-  // spec-style message, instead of a cryptic failure mid-step. A pre-Spec-2 .so (present == false) or
-  // an operator with no aux requirement carries nothing to check -> skip (backward compatible). Only
-  // the user-supplied application fields (B_z, T_e) are hard requirements; derived/lazy fields cannot
-  // block (see SystemFieldSolver::provides_aux). POSIX only: read_module_metadata uses dlsym directly.
-  {
+  // Mandatory install-time requirement validation. The complete owner-qualified metadata table is
+  // authenticated before installation on every platform; no pre-metadata artifact can bypass it.
+  try {
     const auto meta = pops::runtime::program::read_module_metadata(h);
     const std::vector<std::string> sys_block_names = block_names();
     const std::string configured_solver = poisson_solver();
@@ -358,7 +358,6 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       // these are hard requirements (provides_aux); the derived fields phi/grad cannot block.
       for (const auto& aux : pops::runtime::program::required_aux(op.requirements)) {
         if (!p_->fields_.provides_aux(aux)) {
-          pops::dynlib::close(h);
           throw std::runtime_error(
               "System::install_program: operator '" + op.name + "' requires aux field '" + aux +
               "', but simulation did not provide it (B_z -> set_magnetic_field, T_e -> "
@@ -370,7 +369,6 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       // verbatim spec message names the operator and the missing instance.
       for (const auto& blk : pops::runtime::program::required_blocks(op.requirements)) {
         if (!has_block(blk)) {
-          pops::dynlib::close(h);
           throw std::runtime_error("operator '" + op.name + "' requires block instance '" + blk +
                                    "'");
         }
@@ -380,13 +378,14 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
       // verbatim spec message names the field operator and the required solver.
       const std::string need_solver = pops::runtime::program::required_solver(op.requirements);
       if (!need_solver.empty() && need_solver != configured_solver) {
-        pops::dynlib::close(h);
         throw std::runtime_error("field operator '" + op.name + "' requires solver '" + need_solver +
                                  "'");
       }
     }
+  } catch (...) {
+    pops::dynlib::close(h);
+    throw;
   }
-#endif
   // NAME-based block binding (Spec 3 criterion 23, ADC-457). A compiled Program numbers its blocks in
   // P.state declaration order (the .so's pops_program_block_name table); the System numbers its blocks
   // in add order (block_names). They need NOT agree -- bind by NAME, not add-order. Read the .so's

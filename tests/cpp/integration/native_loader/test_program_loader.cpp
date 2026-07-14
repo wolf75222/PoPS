@@ -78,10 +78,26 @@ std::string loader_source(bool include_block_identities = true) {
   std::string source = R"CPP(
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/config/route_ids.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
+extern "C" int pops_module_operator_count() { return 1; }
+extern "C" int pops_module_state_space_count() { return 1; }
+extern "C" int pops_module_field_space_count() { return 0; }
+extern "C" const char* pops_module_operator_owner(int) { return "gas"; }
+extern "C" const char* pops_module_operator_name(int) { return "rhs"; }
+extern "C" const char* pops_module_operator_kind(int) { return "local_rate"; }
+extern "C" const char* pops_module_operator_signature(int) { return "(U) -> Rate(U)"; }
+extern "C" const char* pops_module_operator_requirements(int) {
+  return "{\"kind\":\"local_rate\"}";
+}
+extern "C" const char* pops_module_state_space_name(int) { return "U"; }
+extern "C" const char* pops_module_state_space_owner(int) { return "gas"; }
+extern "C" const char* pops_module_field_space_name(int) { return ""; }
+extern "C" const char* pops_module_field_space_owner(int) { return ""; }
 )CPP";
   if (include_block_identities) {
     source += R"CPP(

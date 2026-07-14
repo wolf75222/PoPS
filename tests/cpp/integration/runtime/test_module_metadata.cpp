@@ -1,30 +1,24 @@
 // Locks the GeneratedModule metadata reader (include/pops/runtime/program/module_metadata.hpp,
 // Spec 2 / ADC-442): the typed operator registry a problem.so exports for introspection and
-// install-time validation. OperatorId is the registration index; the reader degrades gracefully on
-// a pre-Spec-2 .so (no pops_module_* symbols) by returning present=false. Deliberately light: it does
-// NOT build a .so (the end-to-end read of a real generated .so is validated on the Kokkos/AOT path,
-// ROMEO); it pins the struct semantics + the absence handling the install path relies on.
+// install-time validation. OperatorId is the registration index; incomplete metadata is rejected
+// before installation. The loader-symbol integration test exercises a real shared object.
 #include <gtest/gtest.h>
 
 #include <pops/runtime/program/module_metadata.hpp>
-
-#include <dlfcn.h>
 
 #include <string>
 #include <vector>
 
 using namespace pops::runtime::program;
 
-TEST(ModuleMetadata, DefaultDescriptorIsAbsent) {
+TEST(ModuleMetadata, DefaultDescriptorIsEmpty) {
   ModuleMetadata empty;
-  EXPECT_TRUE(!empty.present) << "default ModuleMetadata is not present";
   EXPECT_TRUE(empty.operators.empty()) << "default ModuleMetadata has no operators";
   EXPECT_TRUE(empty.find("anything") == nullptr) << "find on an empty descriptor returns nullptr";
 }
 
 TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   ModuleMetadata m;
-  m.present = true;
   m.operators.push_back({0U, "model/a", "fields_from_state", "field_operator", "(U) -> Fields", "{}"});
   m.operators.push_back({1U, "model/a", "explicit_rhs", "local_rate", "(U, Fields) -> Rate(U)",
                          "{\"kind\":\"local_rate\"}"});
@@ -38,18 +32,20 @@ TEST(ModuleMetadata, HandBuiltDescriptorResolvesOperatorsByName) {
   EXPECT_TRUE(m.find("nope") == nullptr) << "find on an unknown operator returns nullptr";
 }
 
-TEST(ModuleMetadata, ReadingHandleWithoutModuleSymbolsIsGraceful) {
-  // Reading a null handle, or a handle that exports no pops_module_* symbols (the running program
-  // itself), yields a not-present descriptor -- the backward-compatible / graceful path the install
-  // routine takes for a pre-Spec-2 .so.
-  EXPECT_TRUE(!read_module_metadata(nullptr).present)
-      << "read_module_metadata(nullptr) is not present";
-  void* self = dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
-  EXPECT_TRUE(!read_module_metadata(self).present)
-      << "reading a handle without pops_module_* symbols is not present";
-  if (self != nullptr) {
-    dlclose(self);
-  }
+TEST(ModuleMetadata, MissingModuleContractIsRejected) {
+  EXPECT_THROW((void)read_module_metadata(pops::dynlib::handle{}), std::runtime_error)
+      << "a null module handle is invalid";
+#if defined(_WIN32)
+  pops::dynlib::handle self = ::GetModuleHandleW(nullptr);
+#else
+  pops::dynlib::handle self = ::dlopen(nullptr, RTLD_NOW | RTLD_LOCAL);
+#endif
+  ASSERT_TRUE(pops::dynlib::valid(self));
+  EXPECT_THROW((void)read_module_metadata(self), std::runtime_error)
+      << "a module without the complete metadata family is rejected";
+#if !defined(_WIN32)
+  pops::dynlib::close(self);
+#endif
 }
 
 TEST(ModuleMetadata, RequiredAuxParsesAuxArray) {
