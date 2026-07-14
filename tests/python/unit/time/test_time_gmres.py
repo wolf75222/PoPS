@@ -290,6 +290,8 @@ def _passive_model(name):
 def _run_one(t, pops, np, program, name):
     """Compile + install + step @p program on a 1-variable block, return the stepped state and rho0,
     or None if the toolchain is unavailable."""
+    import pops.runtime._engine_descriptors as engine
+
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
@@ -305,8 +307,8 @@ def _run_one(t, pops, np, program, name):
         return None
 
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")

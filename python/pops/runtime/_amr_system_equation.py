@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from pops._bootstrap import ModelSpec
 from pops.runtime._numeric import native_real, positive_int
-from pops.runtime.bricks import Spatial, Explicit
+from pops.runtime._engine_descriptors import Spatial, Explicit
 from pops.runtime.routes import check_riemann_capability as _check_riemann_capability
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
@@ -54,8 +54,8 @@ def _reject_newton_amr_compiled(label: Any, time: Any) -> Any:
         raise ValueError(
             "%s : the Newton options/diagnostics (newton_max_iters/rel_tol/abs_tol/fd_eps/damping/"
             "fail_policy/diagnostics) are not transported by the AMR production package; "
-            "They are available only on the internal native engine API (a composed native model, "
-            "pops.Model(...) on the AMR layout)." % label)
+            "They are available only on the internal native engine API (a private ModelSpec on "
+            "the AMR layout)." % label)
 
 
 class _AmrSystemEquation(_AmrSystem):
@@ -65,29 +65,33 @@ class _AmrSystemEquation(_AmrSystem):
         """Return the exact runtime Spatial consumed by AMR install and bound snapshots."""
         if spatial is None:
             return Spatial()
-        if isinstance(spatial, Spatial):
+        if type(spatial) is Spatial:
             return spatial
         runtime_spatial = getattr(spatial, "runtime_spatial", None)
         if not callable(runtime_spatial):
             raise TypeError(
-                "AMR spatial selection must implement runtime_spatial() or be an exact "
-                "runtime Spatial value")
-        lowered = runtime_spatial()
-        if not isinstance(lowered, Spatial):
-            raise TypeError("AMR spatial runtime_spatial() did not return Spatial")
-        return lowered
+                "AMR spatial selection must implement the pops.numerics finite-volume lowering "
+                "protocol or be an exact private Spatial value; got %r"
+                % type(spatial).__name__)
+        first, second = runtime_spatial(), runtime_spatial()
+        if type(first) is not Spatial or type(second) is not Spatial:
+            raise TypeError("runtime_spatial() must return an exact private Spatial value")
+        if first != second:
+            raise ValueError("runtime_spatial() must be deterministic")
+        return first
 
     def add_equation(self, name: Any, model: Any, spatial: Any = None, time: Any = None,
                      substeps: Any = None, _bind_params: Any = None) -> Any:
         """Add the SINGLE AMR equation/block by dispatching on the TYPE of @p model (DSL Phase D).
 
         Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Case`` assembly
-        lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind``;
+        resolved with ``pops.resolve(case, layout=...)``, compiled with ``pops.compile(plan)`` and
+        wired by ``pops.bind``;
         ``add_equation`` stays for that seam and the tests.
 
         Dispatch:
 
-        - a ModelSpec (pops.Model(...)) -> add_block (native bricks composed on the hierarchy);
+        - a private ``ModelSpec`` -> add_block (native bricks composed on the hierarchy);
         - a CompiledModel(backend='production', target='amr_system') installs a package whose loader
           inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
@@ -102,7 +106,7 @@ class _AmrSystemEquation(_AmrSystem):
 
         MULTIRATE CADENCE (stride) and PARTIAL IMEX MASK (implicit_vars / implicit_roles):
 
-        - ModelSpec path (pops.Model(...)): FORWARDED to AmrSystem::add_block, which SUPPORTS and
+        - private ``ModelSpec`` path: FORWARDED to AmrSystem::add_block, which SUPPORTS and
           validates them (parity with the add_block wrapper);
         - CompiledModel production path (.so): explicitly REJECTED (ValueError). The flat ABI of the
           package ABI does not transport them; they would be taken
@@ -110,9 +114,9 @@ class _AmrSystemEquation(_AmrSystem):
           partial IMEX mask, use AmrSystem.add_block (native) or add_compiled_model(AmrSystem&) directly
           (C++), which expose stride and the mask.
 
-        @p spatial: pops.FiniteVolume(...) / pops.Spatial(...) (default minmod+rusanov+conservative).
-        @p time: pops.Explicit (default) or pops.IMEX (implicit stiff source). @p substeps: overrides
-        time.substeps.
+        @p spatial: private adapter lowered from ``pops.numerics.FiniteVolume(...)``.
+        @p time: private engine policy lowered from an explicit ``pops.Program`` or a
+        ``pops.lib.time`` factory. @p substeps: overrides time.substeps.
         """
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "add_equation")  # frozen once pops.bind completes (ADC-592)
@@ -160,8 +164,9 @@ class _AmrSystemEquation(_AmrSystem):
             return
 
         if not isinstance(model, CompiledModel):
-            raise TypeError("AmrSystem.add_equation: model must be an pops.Model(...) (ModelSpec) "
-                            "or a CompiledModel (m.compile(...)); received %r" % type(model).__name__)
+            raise TypeError(
+                "AmrSystem.add_equation: model must be a private ModelSpec or detached "
+                "CompiledModel; received %r" % type(model).__name__)
 
         compiled = model
         if compiled.backend != "production":
@@ -171,8 +176,8 @@ class _AmrSystemEquation(_AmrSystem):
         if getattr(compiled, "target", "system") != "amr_system":
             raise ValueError(
                 "AmrSystem.add_equation: the CompiledModel was compiled for target='system'; "
-                "recompile with m.compile(..., backend='production', target='amr_system') so that "
-                "the loader inlines add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
+                "re-resolve and compile the Case for its AMR layout so that the loader inlines "
+                "add_compiled_model(AmrSystem&) (symbol pops_install_native_amr)")
 
         # recon "primitive" and flux "roe"/"hllc" are WIRED on AMR via dispatch_amr_compiled, with the
         # SAME ADC-590 guard as System.add_equation (shared helper): generic hllc/roe are GENERIC-ONLY
@@ -205,15 +210,15 @@ class _AmrSystemEquation(_AmrSystem):
             raise ValueError(
                 "AmrSystem.add_equation: stride=%d not transported by the production AMR path "
                 "(the block would otherwise run at stride=1 silently). "
-                "The multirate cadence is available only on the internal native engine API (a "
-                "composed native model, pops.Model(...) on the AMR layout)." % nstride)
+                "The multirate cadence is available only on the internal native engine API "
+                "(a private ModelSpec on the AMR layout)." % nstride)
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "AmrSystem.add_equation: implicit_vars / implicit_roles (partial IMEX mask) not "
                 "transported by the production AMR package (the "
                 "mask would be empty = full backward-Euler silently). The partial IMEX mask is "
-                "available only on the internal native engine API (a composed native model, "
-                "pops.Model(...) on the AMR layout).")
+                "available only on the internal native engine API (a private ModelSpec on the "
+                "AMR layout).")
         # Newton options / diagnostics: same flat ABI -> neither the options nor the report transit
         # through the .so loader. Explicit rejection (otherwise iters=2 / no report silently), parity with
         # the stride/mask rejection above and with System.add_equation (compiled backend).
@@ -289,7 +294,7 @@ class _AmrSystemEquation(_AmrSystem):
         base level; it is STATIC (re-applied each step, injected to the fine levels, survives a regrid).
         Call BEFORE the first step (like set_density). Mono-rank facade.
 
-        @p halo (ADC-369): an optional pops.AuxHalo declaring this field's own coarse-level ghost
+        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's coarse-level ghost
         boundary policy (foextrap / dirichlet), applied to the non-periodic faces after the shared aux
         fill. Default None inherits the shared aux BC (bit-identical)."""
         import numpy as np

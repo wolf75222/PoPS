@@ -221,10 +221,9 @@ def test_fft_is_a_real_solver_with_route_constraints():
 def test_fft_rejects_amr_layout_with_precise_message():
     # Spec 6 sec.8: pairing FFT with an AMR layout is a MATHEMATICAL incompatibility -- it must
     # be refused with the PRECISE message (not a vague "AMR unsupported"), naming GeometricMG.
-    from pops.mesh.cartesian import CartesianMesh
     from pops.layouts import Uniform
-    from tests.python.support.layout_plan import final_amr_layout
-    amr = final_amr_layout(CartesianMesh(n=64))
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+    amr = final_amr_layout(cartesian_grid(n=64))
     status = elliptic.FFT().available({"layout": amr})
     assert status.status == "no"
     assert status.reason == "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG()."
@@ -232,7 +231,7 @@ def test_fft_rejects_amr_layout_with_precise_message():
     # the context may BE the layout descriptor, not only wrap it under a "layout" key.
     assert elliptic.FFT().available(amr).status == "no"
     # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
-    assert elliptic.FFT().available({"layout": Uniform(CartesianMesh(n=64))}).status == "partial"
+    assert elliptic.FFT().available({"layout": Uniform(cartesian_grid(n=64))}).status == "partial"
     assert elliptic.FFT().available().status == "partial"
 
 
@@ -255,11 +254,10 @@ def test_fft_available_never_raises_on_odd_context():
 def test_geometric_mg_accepts_amr_layout():
     # GeometricMG is the AMR-capable elliptic solver: it advertises amr and stays available with
     # an AMR layout context (no rejection), so it is the alternative FFT points at.
-    from pops.mesh.cartesian import CartesianMesh
-    from tests.python.support.layout_plan import final_amr_layout
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
     g = elliptic.GeometricMG()
     assert g.capabilities().supports("amr") is True
-    assert g.available(final_amr_layout(CartesianMesh(n=64))).status == "yes"
+    assert g.available(final_amr_layout(cartesian_grid(n=64))).status == "yes"
 
 
 # --- preconditioners ---------------------------------------------------------------------
@@ -468,7 +466,7 @@ def test_krylov_descriptor_controls_preserve_exact_number_domains():
     assert descriptor.options["omega"] == Fraction(2, 3)
     assert isinstance(descriptor.options["omega"], Fraction)
 
-    from pops.ir import ScalarLiteral
+    from pops._ir import ScalarLiteral
     annotated = ScalarLiteral.from_value(Fraction(1, 2), unit="s")
     with pytest.raises(ValueError, match="rel_tol"):
         krylov.CG(max_iter=10, rel_tol=annotated)

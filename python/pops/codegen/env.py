@@ -22,7 +22,8 @@ The variables (sec.12.4):
       ``CompiledProblem.dump_ir`` / ``dump_cpp`` handles into the codegen dir.
   ``POPS_CACHE_DIR``  the out-of-source ``.so`` cache directory (read in :mod:`pops.codegen.cache`;
       recorded here for inspection).
-  ``POPS_PROFILE``  the runtime profiling default (read in :mod:`pops.runtime.profile`; recorded
+  ``POPS_PROFILE``  the internal engine profiling default (read in
+  :mod:`pops.runtime._profile`; recorded
       here for inspection).
   ``POPS_AUTOTUNE``  off / basic / aggressive. No autotune engine exists today, so any value other
       than ``off`` is an HONEST no-op stub: it is recorded + surfaced in ``inspect()`` but changes

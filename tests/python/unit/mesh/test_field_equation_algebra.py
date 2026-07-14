@@ -18,7 +18,7 @@ pytest.importorskip("pops")
 from pops.math import (  # noqa: E402
     laplacian, grad, div, unknown, principal_kinds,
     Reaction, CoeffGradient, DivCoeffGrad, EllipticSum, Laplacian, Divergence, Equation)
-from pops.ir.expr import Var, RateTerm  # noqa: E402
+from pops.math import RateTerm, Var  # noqa: E402
 from pops.fields.coefficients import ScalarCoefficient, ReactionCoefficient  # noqa: E402
 from pops.model import Handle, OwnerPath  # noqa: E402
 

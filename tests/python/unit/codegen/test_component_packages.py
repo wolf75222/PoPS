@@ -16,22 +16,23 @@ from pops.external import (
     load,
 )
 from pops.model import ComponentManifest
-from pops.runtime.platform_manifest import proven_serial_manifest
+from pops.runtime._platform_manifest import proven_serial_manifest
 
 
 def _manifest(*, uri="pops://external.test/fluxes/average", generic=True, entry_points=None):
+    interface = interfaces.NumericalFlux
     return ComponentManifest(
         uri=uri, component_type="numerical_flux", version="1.0.0",
-        facets=("lowering", "stability"),
+        facets=interface.facets,
         signature={"generic": generic, "state_components": 2,
-                   "inputs": ["left", "right", "face", "providers"]},
-        interfaces=interfaces.NumericalFlux.manifest_declarations(),
+                   "inputs": ["left", "right", "face", "providers"],
+                   "native_interface": interface.signature_declaration()},
+        interfaces=interface.manifest_declarations(),
         target={"variants": [{
             "dimension": 2, "scalar": "float64", "device": "cpu", "features": [],
         }]},
         entry_points=entry_points or {
-            "header": "average.hpp", "component": "AverageFlux",
-            "numerical_flux": "numerical_flux", "stability_bound": "stability_bound",
+            "interface_table": "pops_component_interface_v1",
         },
     )
 
@@ -96,7 +97,7 @@ def test_fixed_binary_cannot_claim_template_genericity():
         build_fixed_binary_manifest(
             components={"average": _manifest(generic=True)}, platform=platform,
             binary_path="average.so", binary=b"not-a-binary",
-            symbols=("numerical_flux", "stability_bound"))
+            symbols=("pops_component_interface_v1",))
     assert error.value.code == "fixed_generic_claim"
 
 

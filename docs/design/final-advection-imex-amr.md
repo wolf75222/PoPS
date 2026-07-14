@@ -64,6 +64,21 @@ The adaptive layout owns:
 - conservative state prolongation, restriction, coarse/fine fill and time interpolation;
 - elliptic recomputation after regrid instead of interpolating a stale solved field.
 
+The acceptance target intentionally requests a regrid on every accepted macro-step. The first
+snapshot may still expose zero completed regrids: cadence is a due condition, not proof that a
+non-empty tag set rebuilt the hierarchy. `simulation.amr.explain_regrid()` publishes the native
+`regrid_count` and `topology_epoch`; after the continuation step the example requires both values to
+have increased, and requires the uninterrupted and restarted instances to report identical values.
+`regrid_count` advances only after the native regrid completes, while `topology_epoch` identifies
+the installed hierarchy topology. A scheduled or no-op regrid is therefore never accepted as
+completed runtime evidence.
+
+The same continuation reads `simulation.program_report()` and requires conservative flux-ledger
+entries on both levels 0 and 1. For every reported parent/child synchronization key, the accepted
+phase trace must be exactly `reflux` followed by `average_down`; the uninterrupted and restarted
+reports must agree. This is runtime-owned evidence, not a conclusion inferred from the authored AMR
+descriptor.
+
 Reflux order, halo depth and proper nesting are consequences of the resolved FV and transfer
 providers. They are not repeated as user integers. The diagnostic elliptic solve carries a distinct
 `FieldContext` for every IMEX stage, so a field solved from one stage cannot be read as another.
@@ -90,7 +105,10 @@ python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py --output-dir /tm
 The command reopens the emitted HDF5 and ParaView files, retains a real accepted-state checkpoint and
 restarts a fresh bound simulation from it. It compares time, macro-step, every AMR level of every
 qualified conservative state and solved-field route, patch topology, Program/consumer identities and
-consumer cursors bit-for-bit. It then advances the uninterrupted and restarted instances once more
-and repeats the complete comparison before exercising the preset parity run. A printed success
-therefore follows real I/O, restart, continuation and manual/factory checks; it is not a demonstration
-placeholder.
+consumer cursors bit-for-bit. The snapshot also carries the live completed-regrid count and topology
+epoch, so checkpoint restore, uninterrupted/restarted continuation and manual/factory parity must
+preserve exactly the same AMR generation evidence. It then advances the uninterrupted and restarted
+instances once more, requires a real counter/epoch increase, verifies the accepted multi-level flux
+ledger plus reflux-then-average-down trace, and repeats the complete comparison before exercising the
+preset parity run. A printed success therefore follows real I/O, a completed regrid, restart,
+continuation and manual/factory checks; it is not a demonstration placeholder.

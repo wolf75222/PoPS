@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir import Var  # noqa: F401  -- primitive_vars self-reference check
-from pops.ir.ops import left, right  # noqa: F401  -- Model.left / Model.right sugar
+from pops._ir import Var  # noqa: F401  -- primitive_vars self-reference check
+from pops._ir.ops import left, right  # noqa: F401  -- Model.left / Model.right sugar
 
 from ._modelpkg import model as _model
 from .aux import aux_total_n_aux, roles_for  # noqa: F401  -- used in Model.compile
@@ -393,7 +393,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
 
     def value(self, parameter: Any) -> Any:
         """Return the distinct symbolic Expr read of a registered ParamHandle."""
-        from pops.ir import parameter_value
+        from pops._ir import parameter_value
 
         return parameter_value(self._param_registry, parameter)
 

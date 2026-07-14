@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Spec 5 sec.12.5 (criteria 41-44): the TYPED profiling surface.
 
-``pops.Profile`` (Profile.Basic() / Profile.Advanced(), not profile="advanced") + the
+``pops.runtime._profile.Profile`` (Profile.Basic() / Profile.Advanced(), not
+profile="advanced") + the
 ``PerformanceSummary`` wrapper (printable __str__, to_dict / to_json, by_program_node /
 by_native_brick / by_solver / by_memory) + the ``System.profile(...)`` context manager that
 enables the native profiler on __enter__ and disables it on __exit__.
@@ -24,7 +25,7 @@ import os
 
 import pytest
 
-from pops.runtime.profile import (PerformanceSummary, Profile, _parse_report,
+from pops.runtime._profile import (PerformanceSummary, Profile, _parse_report,
                                    _Unavailable)
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -212,10 +213,10 @@ def test_empty_summary_has_no_data_message():
 
 # ---- (D) ENGINE: the context manager over a real native System ------------------------------
 def _make_stepped_system():
-    """A real native System with one isothermal block, ready to step. Returns (pops, sim, np)."""
+    """A real native System with one isothermal block, ready to step. Returns (sim, np)."""
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
 
@@ -223,44 +224,48 @@ def _make_stepped_system():
     sim = System(n=n, L=1.0, periodic=True)
     sim.block(
         "gas",
-        pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                   transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                   elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-        time=pops.Explicit())
+        engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                   transport=engine.IsothermalFlux(), source=engine.NoSource(),
+                   elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit())
     rho = np.ones((n, n), dtype=float)
     sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
-    return pops, sim, np
+    return sim, np
 
 
-def test_engine_exports_typed_surface():
-    import pops
+def test_profile_types_stay_at_their_direct_module_owner():
+    import pops.runtime._profile as profile_module
+    from pops import runtime
 
-    assert hasattr(pops, "Profile") and hasattr(pops, "PerformanceSummary")
-    assert pops.Profile.Basic().level == "basic"
+    assert profile_module.Profile is Profile
+    assert profile_module.PerformanceSummary is PerformanceSummary
+    assert not hasattr(runtime, "Profile")
+    assert not hasattr(runtime, "PerformanceSummary")
+    assert Profile.Basic().level == "basic"
 
 
 def test_engine_context_manager_enables_then_disables():
-    pops, sim, _ = _make_stepped_system()
+    sim, _ = _make_stepped_system()
     # off by default -- a plain System never enabled.
     assert sim.is_profiling() is False
-    with sim.profile(pops.Profile.Basic()) as prof:
+    with sim.profile(Profile.Basic()) as prof:
         assert sim.is_profiling() is True, "context manager enables on __enter__"
         sim.step(1e-3)
         sim.step(1e-3)
         summary_inside = prof.summary()
-        assert isinstance(summary_inside, pops.PerformanceSummary)
+        assert isinstance(summary_inside, PerformanceSummary)
     # disabled on __exit__.
     assert sim.is_profiling() is False, "context manager disables on __exit__"
     summary = prof.summary()
-    assert isinstance(summary, pops.PerformanceSummary)
+    assert isinstance(summary, PerformanceSummary)
     assert summary.counters().get("steps") == 2
     assert "step" in summary.scopes()
 
 
 def test_engine_off_by_default_contract():
     """A plain run (no with sim.profile()) records NOTHING: profiling stays disabled."""
-    pops, sim, _ = _make_stepped_system()
+    sim, _ = _make_stepped_system()
     sim.step(1e-3)
     assert sim.is_profiling() is False
     summ = PerformanceSummary(sim.profile_report())
@@ -269,13 +274,13 @@ def test_engine_off_by_default_contract():
 
 
 def test_engine_profile_rejects_non_profile_arg():
-    pops, sim, _ = _make_stepped_system()
+    sim, _ = _make_stepped_system()
     with pytest.raises(TypeError):
         sim.profile("advanced")
 
 
 def test_engine_profile_no_arg_uses_env_default():
-    pops, sim, _ = _make_stepped_system()
+    sim, _ = _make_stepped_system()
     saved = os.environ.get("POPS_PROFILE")
     try:
         os.environ["POPS_PROFILE"] = "advanced"

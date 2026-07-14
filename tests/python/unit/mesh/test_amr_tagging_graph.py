@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from pops.mesh.amr import (
+from pops.mesh._amr import (
     Above,
     AllOf,
     AnyOf,

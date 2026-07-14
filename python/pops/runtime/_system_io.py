@@ -4,14 +4,14 @@ VISUALIZATION OUTPUT (vtk/npz/hdf5, serial + parallel-hyperslab), strict restart
 restart of :class:`pops.runtime._system.System`. Pure Python (zero change to the C++ hot path),
 single-rank / rank-0 gather. ATOMIC write (.tmp + os.replace). Mixed into ``System`` via
 inheritance; operates on ``self._s``. ``abi_key`` is the module ABI key, baked into the .so
-metadata, re-exported through ``pops.runtime.bricks``.
+metadata imported by private engine adapters through ``pops.runtime._engine_descriptors``.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.runtime.bricks import abi_key
+from pops.runtime._engine_descriptors import abi_key
 
 if TYPE_CHECKING:
     from pops.runtime._system_contract import _System

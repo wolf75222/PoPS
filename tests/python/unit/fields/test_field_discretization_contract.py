@@ -12,7 +12,7 @@ from pops.fields import (
     MeanValueGauge,
 )
 from pops.fields.bcs import BoundaryCondition, Dirichlet, XMax, XMin
-from pops.ir import ValueExpr
+from pops.math import ValueExpr
 from pops.model import Handle, OwnerPath
 
 

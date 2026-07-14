@@ -198,6 +198,21 @@ struct System::Impl {
   // object (no copy), so owner_->sp / P->sp in the header templates stay bit-identical.
   SystemBlockStore blocks_;
   std::vector<Species>& sp = blocks_.blocks;
+  // ADC-672: immutable per-block ghost-production authorities are installed before any closure is
+  // built. shared_ptr keeps the exact plan alive in GridContext copies captured by generated .so
+  // closures; there is no global BC reconstruction at evaluation time.
+  std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans_;
+  // Exact materialized block -> state Handle identity.  This exists independently of boundary_plans_
+  // so plan-less blocks remain addressable by N-ary boundary components.
+  std::map<std::string, std::string> block_state_identities_;
+  // Exact Handle identity -> native solved-field provider slot.  Installed from the detached
+  // FieldInstallPlan before block construction; never reconstructed from local names.
+  std::map<std::string, std::string> boundary_field_routes_;
+  struct BoundaryStageStateView {
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    std::map<std::string, MultiFab*> states;
+  };
+  std::optional<BoundaryStageStateView> boundary_stage_states_;
   // Effective numerical/physical block/stage options + OPT-IN IMEX Newton reports, EXTRACTED into
   // SystemDiagnosticsRegistry (ADC-578, include/pops/runtime/system/system_diagnostics_registry.hpp).
   // Stepper-invisible: accessed only here via diagnostics_.* (no alias needed, no MockImpl impact).
@@ -372,18 +387,75 @@ struct System::Impl {
   // each step, so the add_block / set_disc_domain order is irrelevant (the mask is materialized / the
   // descriptor set before the 1st step; as long as !eb_set_ the stepper does not select the
   // embedded-boundary advance).
-  GridContext grid_ctx() {
+  GridContext grid_ctx(const std::string& block_name = {}) {
     // ADC-615: carry the resolved cut-cell / EB thresholds into the context so the EB transport
     // advance (BlockRhsEvalEb -> assemble_rhs_eb) uses them; defaults = kEb* (bit-identical).
-    return GridContext{dom,
-                       bc_,
-                       geom,
-                       &aux,
-                       &domain_mask_,
-                       &eb_domain_,
-                       eb_thresholds_.kappa_min,
-                       eb_thresholds_.face_open_eps,
-                       eb_thresholds_.cut_theta_min};
+    std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+    if (!block_name.empty()) {
+      auto found = boundary_plans_.find(block_name);
+      if (found != boundary_plans_.end())
+        boundary_plan = found->second;
+    }
+    GridContext context{dom,
+                        bc_,
+                        geom,
+                        &aux,
+                        &domain_mask_,
+                        &eb_domain_,
+                        eb_thresholds_.kappa_min,
+                        eb_thresholds_.face_open_eps,
+                        eb_thresholds_.cut_theta_min,
+                        boundary_plan};
+    if (boundary_plan && !boundary_plan->state_identity().empty()) {
+      context.boundary_field_registry =
+          [this, block_name, boundary_plan](
+              const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+              const MultiFab* direction, MultiFab* output) {
+            detail::BoundaryFieldRegistry fields;
+            if (boundary_stage_states_ && boundary_stage_states_->point != point)
+              throw std::runtime_error(
+                  "System boundary stage-state registry was used at a different evaluation point");
+            for (const auto& candidate : sp) {
+              if (candidate.state_identity.empty())
+                throw std::runtime_error(
+                    "System boundary state route has no exact qualified identity");
+              const MultiFab* storage = nullptr;
+              if (boundary_stage_states_) {
+                const auto staged = boundary_stage_states_->states.find(candidate.state_identity);
+                if (staged != boundary_stage_states_->states.end()) storage = staged->second;
+              }
+              if (storage == nullptr)
+                storage = candidate.name == block_name ? &state : &candidate.U;
+              fields.bind_state(candidate.state_identity, *storage);
+            }
+            for (const auto& identity : boundary_plan->required_field_identities()) {
+              const auto route = boundary_field_routes_.find(identity);
+              if (route == boundary_field_routes_.end())
+                throw std::runtime_error(
+                    "System boundary field dependency has no exact provider route");
+              fields.bind_field(identity, fields_.provider_potential(route->second));
+            }
+            if (direction != nullptr) {
+              for (const auto& identity : boundary_plan->required_direction_identities()) {
+                if (identity != boundary_plan->state_identity())
+                  throw std::runtime_error(
+                      "System boundary JVP direction has no exact native block storage route");
+                fields.bind_direction(identity, *direction);
+              }
+            }
+            if (output != nullptr) {
+              const auto identities = direction == nullptr
+                  ? boundary_plan->residual_output_identities()
+                  : boundary_plan->jvp_output_identities();
+              if (identities.size() > 1)
+                throw std::runtime_error(
+                    "System boundary operation requires multiple mutable output storages");
+              if (!identities.empty()) fields.bind_output(identities.front(), *output);
+            }
+            return fields;
+          };
+    }
+    return context;
   }
 
   // POLAR grid context (ring pgeom_ + r/theta BC + aux) for the polar block closures
@@ -556,12 +628,12 @@ struct System::Impl {
 };
 
 // Config / geometry / lifecycle guards (formerly anonymous-namespace, now header-inline).
-// Geometry guard (polar-grid project). The geometry CHOICE is carried by the config
-// (pops.CartesianMesh / pops.PolarMesh). "cartesian": historical path, bit-identical. "polar": global
-// ring (r, theta) wired into System.step (Phase 2b): polar transport (assemble_rhs_polar) +
+// Geometry is carried only by the internal config (CartesianGrid -> SystemConfig / advanced
+// pops.mesh.PolarMesh). "cartesian" is the historical bit-identical kernel path; "polar" is the
+// global ring (r, theta) wired into System.step: polar transport (assemble_rhs_polar) +
 // polar Poisson (PolarPoissonSolver) + aux in local basis (e_r, e_theta). We validate HERE the radial
-// bounds of the ring (r_max > r_min >= 0); the Python (PolarMesh) already validates them, but a caller
-// that builds the SystemConfig by hand must also be protected. Any other token is an error.
+// bounds of the ring (r_max > r_min >= 0); pops.mesh.PolarMesh already validates them, but a caller
+// that builds SystemConfig internally must also be protected. Any other token is an error.
 inline void check_geometry(const SystemConfig& c) {
   if (c.geometry == "cartesian")
     return;
@@ -569,7 +641,7 @@ inline void check_geometry(const SystemConfig& c) {
     if (!(c.r_max > c.r_min && c.r_min >= 0.0))
       throw std::runtime_error(
           "System : geometry='polar' requires a ring r_max > r_min >= 0 (r_min > 0 avoids the "
-          "r=0 coordinate singularity) ; cf. pops.PolarMesh");
+          "r=0 coordinate singularity) ; cf. pops.mesh.PolarMesh");
     // nr >= 3 ENFORCED: the radial derivative of the aux (derive_aux_polar) uses a 2nd-order
     // OFF-CENTERED stencil at both walls (reads phi(i+1),phi(i+2) at r_min and phi(i-1),phi(i-2) at r_max). phi is
     // allocated WITHOUT ghost by the direct solver (its valid box IS its allocation): nr < 3 would read
@@ -579,30 +651,31 @@ inline void check_geometry(const SystemConfig& c) {
       throw std::runtime_error(
           "System : geometry='polar' requires nr >= 3 (2nd-order off-centered radial stencil at "
           "the walls ; "
-          "phi without ghost) ; cf. pops.PolarMesh");
+          "phi without ghost) ; cf. pops.mesh.PolarMesh");
     // THETA SPLIT of the transport (theta_boxes, ADC-67). 1 (default) = mono-box, bit-identical. > 1:
     // theta bands -- we require 1 <= theta_boxes <= ntheta (at least one azimuthal cell per band) AND
     // theta_boxes DIVIDES ntheta (EQUAL bands: the per-box split must not depend on the remainder,
-    // and the periodic ring stitches back cleanly). PolarMesh already validates on the Python side; a caller that
-    // builds the SystemConfig by hand is protected here.
+    // and the periodic ring stitches back cleanly). pops.mesh.PolarMesh already validates on the
+    // Python side; a caller that builds SystemConfig internally is protected here.
     const int nth = c.ntheta > 0 ? c.ntheta : c.n;
     if (c.theta_boxes < 1)
       throw std::runtime_error(
-          "System : geometry='polar' requires theta_boxes >= 1 (cf. pops.PolarMesh)");
+          "System : geometry='polar' requires theta_boxes >= 1 (cf. pops.mesh.PolarMesh)");
     if (c.theta_boxes > nth)
       throw std::runtime_error(
           "System : geometry='polar' requires theta_boxes <= ntheta (at least one azimuthal cell "
           "per "
-          "band) ; cf. pops.PolarMesh");
+          "band) ; cf. pops.mesh.PolarMesh");
     if (nth % c.theta_boxes != 0)
       throw std::runtime_error(
           "System : geometry='polar' requires that theta_boxes DIVIDES ntheta (equal azimuthal "
           "bands) ; "
-          "cf. pops.PolarMesh");
+          "cf. pops.mesh.PolarMesh");
     return;
   }
   throw std::runtime_error("System : geometry '" + c.geometry +
-                           "' unknown (cartesian | polar) ; cf. pops.CartesianMesh / pops.PolarMesh");
+                           "' unknown (cartesian | polar); use CartesianGrid authoring or the "
+                           "advanced pops.mesh.PolarMesh descriptor");
 }
 
 // UPSTREAM configuration guard (ADC-299): validate the SystemConfig invariants BEFORE constructing

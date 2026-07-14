@@ -18,24 +18,26 @@ from pops.fields import (
 from pops.identity import make_identity
 from pops.model import Handle, OwnerPath
 from pops.output import HDF5, NPZ
-from pops.runtime._runtime_plan_contracts import RuntimePlanningError
-from pops.runtime._runtime_planning import build_runtime_plans
-from pops.runtime.consumer import (
+from pops.output._consumer_contracts import (
     ConsumerCursorSet,
     ConsumerGraph,
     ConsumerKind,
     ConsumerManifest,
     ConsumerMoment,
-    ConsumerPublicationError,
-    ConsumerPublisher,
     ConsumerQuantity,
-    ConsumerTransaction,
     FailRun,
     ParallelMode,
-    PreparedPublication,
-    PublicationReceipt,
     Retry,
     SkipSampleReported,
+)
+from pops.runtime._runtime_plan_contracts import RuntimePlanningError
+from pops.runtime._runtime_planning import build_runtime_plans
+from pops.runtime._consumer import (
+    ConsumerPublicationError,
+    ConsumerPublisher,
+    ConsumerTransaction,
+    PreparedPublication,
+    PublicationReceipt,
     plan_accepted_side_effects,
 )
 from pops.time import AcceptedStep, Clock, Every, Schedule, TimePoint
@@ -191,23 +193,23 @@ def test_graph_and_plan_are_semantic_and_insertion_order_independent():
     assert len(plan.lowering_coverage.rows) == 2
 
 
-def test_collective_mode_requires_and_records_authenticated_collective():
+def test_collective_mode_requires_a_nonserial_context_before_planning():
     _, serial_runtime = _runtime()
     clock = Clock("solution", owner=OwnerPath.consumer("adc-685-collective"))
     manifest = _manifest_for(
         serial_runtime, "collective", clock, parallel_mode=ParallelMode.COLLECTIVE)
     with pytest.raises(RuntimePlanningError) as error:
         plan_accepted_side_effects(serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
-    assert error.value.code == "consumer_collective_unavailable"
+    assert error.value.code == "collective_consumer_requires_distributed_context"
 
     _, collective_runtime = _runtime(collective=True)
     manifest = _manifest_for(
         collective_runtime, "collective", clock, parallel_mode=ParallelMode.COLLECTIVE)
-    plan = plan_accepted_side_effects(
-        collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
-    assert plan.effects[0].payload.resources[0].collective_ids == (
-        collective_runtime.communication.collectives[0].identity.token,
-    )
+    with pytest.raises(RuntimePlanningError) as error:
+        plan_accepted_side_effects(
+            collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
+    assert error.value.code == "collective_consumer_requires_distributed_context"
+    assert error.value.evidence == {"communicator": "serial"}
 
 
 def test_stale_field_requires_explicit_policy_and_records_recompute_without_solving():

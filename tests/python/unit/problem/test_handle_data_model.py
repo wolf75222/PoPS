@@ -186,7 +186,7 @@ def test_resolved_instance_identity_round_trips_without_losing_origin():
 def test_problem_reauthenticates_canonical_roundtrips_and_rejects_foreign_data():
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
 
     class _Method(Descriptor):

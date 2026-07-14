@@ -11,7 +11,7 @@ Pure Python (no compilation); skips cleanly if pops is not importable. Never fak
 import sys
 
 try:
-    from pops.ir.expr import Const, Var
+    from pops._ir.expr import Const, Var
     from pops.model import (
         OPERATOR_FAMILIES, OPERATOR_KINDS, OperatorHandle, operator_family,
     )
@@ -42,7 +42,7 @@ def _program_state(model, name, provider):
     """Create a concrete state plus the Case-owned field solve backed by ``provider``."""
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Module
 

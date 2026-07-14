@@ -11,7 +11,7 @@ It EXTENDS, and does not re-implement, two existing fences (cited inline so the 
     ``_pops`` / ``pops.codegen`` / ``pops.runtime`` in the symbolic layers, lib included. THIS file's
     gate 2b adds the LAZY (in-function, ``col_offset > 0``) case for lib, which that fence leaves
     alone by design.
-  * ``test_import_graph.py`` locks the lib -> {ir, model, time, physics, moments} module edges. THIS
+  * ``test_import_graph.py`` locks the lib -> {_ir, model, time, physics, moments} module edges. THIS
     file asserts CONTENT (no central class defined or re-exported under lib) and the DIRECTORY set,
     which the layering fence does not check.
 
@@ -42,7 +42,7 @@ _FORBIDDEN_IMPORT_ROOTS = ("_pops", "pops.codegen", "pops.runtime", "pops._pops"
 # (numerics / solvers / mesh are descriptor catalogs used by provided implementations.)
 _ALLOWED_POPS_IMPORT_ROOTS = (
     "pops",  # the public facade used by ready-to-use compositions
-    "pops.ir",
+    "pops._ir",
     "pops.math",
     "pops.model",
     "pops.time",
@@ -110,8 +110,10 @@ def _import_targets(tree):
 # Gate 2a -- DIRECTORY fence: every lib child is an approved ready-implementation family.
 # ---------------------------------------------------------------------------------------------
 def test_lib_child_directories_are_the_strict_allow_set():
-    children = {p.name for p in LIB.iterdir()
-                if p.is_dir() and p.name != "__pycache__"}
+    children = {
+        p.name for p in LIB.iterdir()
+        if p.is_dir() and p.name != "__pycache__" and (p / "__init__.py").is_file()
+    }
     extra = children - _ALLOWED_LIB_CHILD_DIRS
     missing = _ALLOWED_LIB_CHILD_DIRS - children
     assert not extra, (
@@ -201,7 +203,7 @@ def test_canonical_homes_are_outside_lib():
     """Belt-and-braces: the canonical objects DO live in their documented non-lib home, so the
     content fence is guarding a real single-home invariant, not an empty set."""
     homes = {
-        "AMR": REPO_ROOT / "python/pops/mesh/layouts/__init__.py",
+        "AMR": REPO_ROOT / "python/pops/layouts/__init__.py",
         "GeometricMG": REPO_ROOT / "python/pops/solvers/elliptic/_descriptor.py",
         "RuntimeParam": REPO_ROOT / "python/pops/params/runtime.py",
         "FieldOperator": REPO_ROOT / "python/pops/fields/operator.py",

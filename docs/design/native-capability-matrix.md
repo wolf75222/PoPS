@@ -33,7 +33,7 @@ Every route row is a plain metadata record with these fields:
 | `feature` | Stable feature token, for example `layout:AMR`, `elliptic:fft_amr`, or `checkpoint:parallel_hdf5`. |
 | `route_id` | Stable native route identifier. Today it equals `feature`; it is explicit so route IDs can diverge later without breaking tests. |
 | `layout` | Layout envelope the row applies to: `uniform`, `amr`, `uniform|amr`, or `context`. |
-| `backend` | Backend or route required: `production`, `aot`, `prototype`, `runtime`, `module`, or `none`. |
+| `backend` | Execution authority required: `production`, `runtime`, `module`, `native`, `external_cpp`, or `none`. |
 | `platform` | Platform axis: `host`, `mpi`, `gpu`, or `context`. |
 | `mpi` | Whether this row is backed by an MPI-capable route for the current build/artifact. |
 | `gpu` | Whether this row is backed by a GPU-capable route for the current build/artifact. |
@@ -59,15 +59,50 @@ Supported native routes include:
 
 - Uniform single-level layout. A `Uniform(...)` layout with an active AMR refinement criterion
   attached is refused by `Case.validate` by default (ADC-589/ADC-555); the explicit escape is
-  `Uniform(mesh, refine=..., ignore_amr=pops.mesh.amr.IgnoreAMRCriteria())`.
+  `Uniform(mesh, refine=..., ignore_amr=pops.amr.IgnoreAMRCriteria())`.
+  The current native `SystemConfig` has one `n`, one `L`, and no origin, so public
+  `CartesianGrid` lowering requires `lower == (0, 0)`, equal axis lengths, and equal axis cell
+  counts. Its global periodic switch lowers exactly an empty or all-axis typed `PeriodicAxes`
+  partition. Rectangular, anisotropic, translated, and partially periodic grids fail before engine
+  construction; no topology is widened or collapsed.
+- Multiple distinct Uniform layouts in one `RuntimeInstance` when the Program is exactly separable
+  per layout and every directional exchange is backed by an authenticated native `Transfer`
+  component. Mixed Uniform/AMR, heterogeneous AMR, implicit reverse mappings and co-located
+  cross-layout kernels are unavailable rather than collapsed onto a representative layout. The
+  executable route requires exact `FixedDt`, no unresolved aux storage, no `FieldOperator` plan and
+  no boundary plan without a per-layout installation authority. A global CFL step is unavailable
+  until a qualified inter-layout reduction is present. `before-step@1` snapshots every transfer
+  source before any target write, so chains and explicit cycles read one pre-transfer state.
+  Concurrent overwrite transfers to one target at one synchronization point are rejected until an
+  explicit merge operation/provider is selected. The supplied
+  `CONSERVATIVE_CELL_AVERAGE_V1` operation accepts distinct integer-aligned resolutions only on the
+  same physical Cartesian extent and boundary topology. Non-coincident geometry requires a separate
+  coordinate-aware Transfer operation/provider and is refused by this operation.
+- Conservative two-block interfaces through one authenticated native `NumericalFlux` evaluation
+  and opposite residual scattering. Endpoints must be co-located on one layout and their explicit
+  default-flux RHS evaluations must be simultaneous and contiguous in one Program point.
+  Cross-layout interfaces without an explicit Mapping/Transfer provider, shared implicit JVP, and
+  refined or dynamically regridded AMR interfaces are unavailable; AMR accepts only one frozen
+  level.
 - AMR through the native production route with hierarchy depth controlled by resolved resource
-  policy; transfer/reflux kernels currently require `ratio == 2`.
+  policy. Transitions are exactly 2D, isotropic `ratio == (2, 2)`, share one isotropic buffer and
+  one lookahead across the hierarchy, and currently select the exact native policy routes
+  `shared_n_level`, `berger_rigoutsos`, `box_array`, and `round_robin`. Physical transfer providers
+  expose exact dense cell/face-x/face-y/node contracts; restriction, coarse-fine fill and temporal
+  interpolation are cell-centered on the supplied route. Derived fields use `elliptic_solve` and
+  caches use `patch_topology`; unsupported provider contracts fail before artifact creation.
 - Finite-volume spatial discretisation on the 2D core.
 - Native Riemann routes: Rusanov, HLL, HLLC, Roe, subject to model capability requirements.
 - Native reconstruction routes: first-order, MUSCL, WENO5/WENO5-Z.
 - Elliptic GeometricMG on Uniform/AMR and FFT on uniform periodic constant-coefficient grids.
 - Matrix-free Krylov descriptors: CG, BiCGStab, GMRES, Richardson.
 - ProgramContext install on System, and AMR program install when compiled for `target="amr_system"`.
+- Prepared state-boundary residual/JVP pairs on Program matrix-free solves. The exact base
+  `BoundaryEvaluationPoint` is transported into the apply closure, the core RHS is
+  finite-differenced, and the authenticated state-only boundary JVP is added once with persistent
+  conditional scratch. A field-dependent boundary closure under `field_coupled=True` is refused
+  until a qualified tangent-field solve exists. Core field-coupled `rhs_jacvec` currently has an
+  exact provider route only on AMR level 0.
 - Runtime output routes: npz, VTK, HDF5, plus AMR coarse/patch metadata output.
 - Runtime checkpoints: Uniform v1 and strict AMR v3. AMR v3 preserves multi-block/multi-level accepted
   state under active regridding, including topology ownership, clocks, histories and transfer provenance.
@@ -82,6 +117,14 @@ Explicit unsupported rows include:
   history policy that reconstructs omitted slots by replay requires the restart to keep the rank count.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
+- `runtime:explicit_mpi_context` and `runtime:explicit_gpu_context`: the final `RuntimeInstance`
+  provider is host/float64/serial. It refuses an active MPI process, a non-serial communicator or a
+  GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
+  not launch authorization.
+- `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
+  provider ABI does not transport a level-qualified tangent field. The reported error identifies
+  the level-0 field-coupled route as the available route; a multi-level request must fail rather
+  than silently reuse the coarse provider.
 
 ADC-601 also records audited native subsystem limitations as `partial` rows. These rows are not
 hard failures, but they make compatibility and performance constraints visible to reports and
@@ -95,8 +138,15 @@ future validators:
   2D-only, and `validate_dimension()` rejects `Dim != 2` requests.
 - `amr:refinement_ratio`: native AMR hierarchy, patch ranges, reflux and subcycling are `ratio=2`
   only, and `validate_amr_refinement_ratio()` rejects other ratios.
-- `parallel:mpi_world_communicator`: MPI collectives currently use `MPI_COMM_WORLD`.
-- `parallel:custom_communicator`: caller-provided MPI communicators are unavailable.
+- `amr:transition_envelope`: transitions are 2D/isotropic and buffer/lookahead are hierarchy-global.
+- `amr:hierarchy_policy_routes`: only the reported shared hierarchy, clustering, patch-generation,
+  and load-balance routes are installed.
+- `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
+  must match an exact native transfer/materialization provider contract.
+- `parallel:mpi_world_communicator`: legacy native MPI subsystems use `MPI_COMM_WORLD`; this global
+  state is deliberately not an executable route of the final `RuntimeInstance` provider.
+- `parallel:custom_communicator`: caller-provided MPI communicators are representable in the ABI but
+  unavailable until a provider transports the explicit `ExecutionContext` end to end.
 - `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
 - `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.

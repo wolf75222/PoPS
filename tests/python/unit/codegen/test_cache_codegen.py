@@ -1,7 +1,7 @@
 """Spec 3 scheduler cache CODEGEN (ADC-458): a held solve_fields lowers to the cache branch.
 
 A `solve_fields` node carrying `Schedule(Every(...), off=Hold())` must codegen to
-`if (ctx.cache_should_update(id, N)) { solve; ctx.cache_store_aux(id); } else { ctx.cache_restore_aux(id); }`
+`if (ctx.schedule_is_due(id, N, domain)) { solve; ctx.cache_store_aux(id); } else { ctx.cache_restore_aux(id); }`
 -- recompute + cache the System aux every N macro-steps, reuse it in between. This is the emit-level
 check (the cache RUNTIME cadence runs in a compiled .so -- ROMEO; the CacheManager is unit-tested by
 tests/cpp/integration/runtime/test_cache_manager.cpp). Other ops/policies still refuse to lower (not yet supported).
@@ -12,7 +12,7 @@ import pytest
 
 from pops import model
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.ir.expr import Var
+from pops._ir.expr import Var
 from typed_program_support import typed_state
 
 adctime = pytest.importorskip("pops.time")
@@ -75,11 +75,11 @@ def test_held_solve_fields_lowers_and_emits_cache_branch():
     P, mod = _held_program(lambda clock: _every(clock, 3, adctime.Hold()))
     P._check_schedules_lowerable()                # must NOT raise: solve_fields + hold is lowerable
     cpp = _emit(P, mod)
-    assert "cache_should_update" in cpp, "due check emitted"
+    assert "schedule_is_due" in cpp, "due check emitted"
     assert "cache_store_aux" in cpp, "recompute branch stores the aux"
     assert "cache_restore_aux" in cpp, "held branch restores the cached aux"
     # the period N from every(3) reaches the due check
-    assert "cache_should_update" in cpp and ", 3)" in cpp
+    assert "schedule_is_due" in cpp and ", 3," in cpp
 
 
 def test_unscheduled_solve_fields_has_no_cache_branch():
@@ -112,20 +112,21 @@ def test_skip_policy_on_solve_fields_now_lowers():
     P._check_schedules_lowerable()                 # no raise
     cpp = _emit(P, mod)
     assert "skip: stale aux off-cadence" in cpp
-    assert "cache_should_update" in cpp
+    assert "schedule_is_due" in cpp
 
 
 def test_hold_on_non_every_kind_now_lowers():
-    # ADC-458: a hold on on_start lowers to the macro_step()==0 due test; subcycle lowers to a sub-loop.
+    # ADC-677: on_start and clock-tick are qualified by their explicit runtime domains.
     # Only on_end still refuses (a compiled step loop has no end-of-run signal).
     P, mod = _held_program(lambda clock: _at_start(clock, adctime.Hold()))
     cpp = _emit(P, mod)
-    assert "(ctx.macro_step() == 0)" in cpp
+    assert "ctx.schedule_at_start(" in cpp
     assert "cache_store_aux" in cpp
-    with pytest.raises(NotImplementedError, match="ClockTick"):
-        P, _ = _held_program(lambda clock: adctime.Schedule(
-            adctime.Always(adctime.ClockTick(clock))))
-        P._check_schedules_lowerable()
+    P, mod = _held_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.ClockTick(clock))))
+    cpp = _emit(P, mod)
+    assert "ctx.schedule_domain_occurs(" in cpp
+    assert "ScheduleDomainKind::kClockTick" in cpp
     with pytest.raises(NotImplementedError, match="AtEnd"):
         P, _ = _held_program(lambda clock: _at_end(clock, adctime.Hold()))
         P._check_schedules_lowerable()

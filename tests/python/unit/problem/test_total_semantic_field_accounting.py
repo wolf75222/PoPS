@@ -5,14 +5,13 @@ import pops
 from pops.diagnostics import Integral
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh import CartesianMesh
 from pops.layouts import Uniform
-from pops.output import HDF5, ScientificOutput
+from pops.output import ConsumerGraph, HDF5, ScientificOutput
+from pops.output._consumer_contracts import ConsumerKind
 from pops.representations import Conservative
-from pops.runtime import ConsumerGraph
-from pops.runtime.consumer import ConsumerKind
 from pops.spaces import CellState
 from pops.time import every
+from tests.python.support.layout_plan import cartesian_grid
 
 
 def test_block_time_and_diagnostics_never_drop_from_resolved_plan():
@@ -44,7 +43,7 @@ def test_block_time_and_diagnostics_never_drop_from_resolved_plan():
     case.consumers(graph)
 
     validated = pops.validate(case)
-    resolved = pops.resolve(validated, layout=Uniform(CartesianMesh(n=8)))
+    resolved = pops.resolve(validated, layout=Uniform(cartesian_grid(n=8)))
 
     assert resolved.time is program
     assert resolved.consumer_graph is not graph

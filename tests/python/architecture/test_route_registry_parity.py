@@ -147,6 +147,12 @@ def test_documentation_changes_only_the_full_catalog_identity():
     assert behavior_full != full
     assert behavior_semantic != semantic
 
+    common_abi = copy.deepcopy(catalog)
+    common_abi["native_common_abi_version"] += 1
+    common_full, common_semantic = generator._catalog_digests(common_abi)
+    assert common_full != full
+    assert common_semantic != semantic
+
 
 def test_native_behavior_contains_no_hand_written_generated_route_lists():
     generated = _load(PYTHON_ROUTES, "_generated_route_list_fence")

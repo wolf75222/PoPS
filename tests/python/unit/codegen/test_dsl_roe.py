@@ -24,8 +24,8 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.ops import sqrt
+import pops.runtime._engine_descriptors as engine
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -112,17 +112,17 @@ try:
 
     sd = System(n=n, L=1.0, periodic=True)
     sd.set_poisson()
-    sd.add_equation("gas", model=cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                    time=pops.Explicit())
+    sd.add_equation("gas", model=cm, spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                    time=engine.Explicit())
     sd.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
 
     sn = System(n=n, L=1.0, periodic=True)
     sn.set_poisson()
     sn.block("gas",
-                 pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                           transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                           elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0)),
-                 spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()))
+                 engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                           transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                           elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0)),
+                 spatial=engine.Spatial(limiter=Minmod(), flux=Roe()))
     sn.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
 
     for _ in range(8):
@@ -138,8 +138,8 @@ try:
                                                  backend="production")
     s3 = System(n=n, L=1.0, periodic=True)
     s3.set_poisson()
-    s3.add_equation("f", model=cm3, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                    time=pops.Explicit())
+    s3.add_equation("f", model=cm3, spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                    time=engine.Explicit())
     x = (np.arange(n) + 0.5) / n
     vshear = np.tile(0.3 * np.sin(2 * np.pi * x), (n, 1))
     s3.set_primitive_state("f", rho=1.0 + z, u=z, v=vshear)
@@ -155,8 +155,8 @@ try:
                                            backend="production")
     try:
         s = System(n=16, L=1.0, periodic=True)
-        s.add_equation("f", model=cm_no, spatial=pops.FiniteVolume(limiter=Minmod(),
-                                                                  riemann=Roe()))
+        s.add_equation("f", model=cm_no, spatial=engine.Spatial(limiter=Minmod(),
+                                                                  flux=Roe()))
         chk(False, "roe sans capability sur 3-var aurait du lever")
     except (ValueError, RuntimeError) as e:
         chk("roe" in str(e), f"rejet sans capability : {str(e)[:70]}")

@@ -733,20 +733,35 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("rhs_jacvec: in_ must be the apply sub-block's in scalar_field value")
         if not (isinstance(iterate, ProgramValue) and iterate.vtype == "state"):
             raise ValueError("rhs_jacvec: iterate must be the frozen Newton-iterate State (iterate=...)")
-        if not (isinstance(r0, ProgramValue) and r0.is_field()):
-            raise ValueError("rhs_jacvec: r0 must be the precomputed rhs(U^k) State/RHS value (r0=...)")
+        if not (isinstance(r0, ProgramValue) and r0.op == "rhs" and len(r0.inputs) >= 1):
+            raise ValueError("rhs_jacvec: r0 must be an exact precomputed rhs(iterate) value")
+        if r0.inputs[0] is not iterate:
+            raise ValueError("rhs_jacvec: r0 must be computed from the exact frozen iterate")
+        if r0.block != iterate.block or r0.point != iterate.point:
+            raise ValueError(
+                "rhs_jacvec: r0 and iterate must share one exact block and temporal point")
         if not isinstance(field_coupled, bool):
             raise TypeError("rhs_jacvec: field_coupled must be a bool")
         context = getattr(r0, "field_context", None)
-        context_matches = (context is not None
-                           and context.matches(None, iterate.block, iterate.id))
+        field = getattr(context, "field", None)
+        stage_sources = tuple(getattr(context, "stage_sources", ()))
+        context_matches = (
+            field is not None
+            and stage_sources == ((iterate.block, iterate.id),)
+            and len(r0.inputs) == 2
+            and getattr(r0.inputs[1], "vtype", None) == "fields"
+            and getattr(r0.inputs[1], "field_context", None) == context
+        )
         if field_coupled and not context_matches:
             raise ValueError(
-                "rhs_jacvec: field_coupled=True requires r0 computed with fields solved from "
-                "the exact Newton iterate")
+                "rhs_jacvec: field_coupled=True requires r0 computed with one unambiguous field "
+                "context solved only from the frozen iterate")
         if not field_coupled and context is not None:
             raise ValueError(
                 "rhs_jacvec: field_coupled=False requires an r0 with no field-solve provenance")
+        if not field_coupled and len(r0.inputs) != 1:
+            raise ValueError(
+                "rhs_jacvec: field_coupled=False requires r0 to consume only the frozen iterate")
         if flux is not True:
             raise NotImplementedError(
                 "rhs_jacvec cannot linearize flux=False: the matrix-free kernel currently requires "
@@ -757,6 +772,14 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise NotImplementedError(
                 "rhs_jacvec cannot linearize named sources %r yet; use sources=[] (flux-only) or "
                 "sources=['default']" % named_sources)
+        r0_sources = r0.attrs.get("sources")
+        if r0_sources is not None:
+            r0_sources = list(r0_sources)
+        if (r0.attrs.get("flux") is not True or r0_sources != src
+                or r0.attrs.get("fluxes") not in (None, (), [])):
+            raise ValueError(
+                "rhs_jacvec: r0 must use the exact same default-flux/default-source selection "
+                "and may not use a named flux")
         if not isinstance(c_dt, _Coeff):
             try:
                 c_dt = _Coeff({0: _exact_number(c_dt)})

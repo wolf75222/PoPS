@@ -106,10 +106,7 @@ def test_aux_static_derived_and_halo():
     da = aux.DerivedAux("E", expression=None)
     assert sa.options()["kind"] == "static"
     assert da.options()["kind"] == "derived"
-    # AuxHalo is re-exported from pops.mesh.aux (same descriptor, not a copy).
-    from pops.mesh.aux import AuxHalo as MeshAuxHalo
-
-    assert aux.AuxHalo is MeshAuxHalo
+    assert not hasattr(aux, "AuxHalo")
 
 
 def test_numerics_terms_construct_and_options():

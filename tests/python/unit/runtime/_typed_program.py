@@ -102,7 +102,7 @@ def typed_field(program: Program, name: str = "potential") -> Any:
 
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Signature
 
@@ -182,7 +182,7 @@ def typed_compiled_artifact(
     """
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
     from pops.codegen._compiled_model_identity import model_compile_identity
-    from pops.codegen.compiled_artifact import (
+    from pops.codegen._compiled_artifact import (
         CompiledBlockArtifact,
         CompiledSimulationArtifact,
     )
@@ -208,6 +208,9 @@ def typed_compiled_artifact(
     # letting inspection fall back to CompiledModel.params after the artifact boundary.
     state_refs = tuple(commits)
     block_refs = {block_name(ref.block_ref): ref.block_ref for ref in state_refs}
+    state_identities = {
+        block_name(ref.block_ref): ref.qualified_id for ref in state_refs
+    }
     case_owner = next(iter(block_refs.values())).owner_path.nodes[0].name
     schema_problem = Case(name=case_owner)
     schema_modules = {}
@@ -237,9 +240,14 @@ def typed_compiled_artifact(
         backend=backend,
         layout=layout_value,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: target for row in layout_plan.layouts
+        },
         time=program if has_program else None,
         blocks=tuple(
-            ResolvedBlock(name, schema_modules[name], None, backend, ("U",))
+            ResolvedBlock(
+                name, schema_modules[name], None, backend, ("U",),
+                (state_identities[name],))
             for name in names
         ),
         bind_schema=schema,

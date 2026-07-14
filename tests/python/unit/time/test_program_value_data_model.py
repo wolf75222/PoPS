@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pops.ir import Equation, SymbolicTruthValueError
+from pops.math import Equation, SymbolicTruthValueError
 from pops.numerics.terms import DefaultSource, Flux
 from pops.provenance import ProvenanceRecord, SourceSpan
 from pops.time import Program, ProgramValue, TimePoint

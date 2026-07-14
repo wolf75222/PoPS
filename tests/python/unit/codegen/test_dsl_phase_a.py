@@ -5,14 +5,11 @@ docs/DSL_MODEL_DESIGN.md.
 Deux niveaux :
 (1) PUR-PYTHON (aucun compilateur requis) : Param nomme + runtime supporte (P7-b), flux vs eval_flux distincts,
     primitive_vars kwargs (layout ordonne, rho conservatif rejoint le layout sans etre redefini),
-    FiniteVolume(riemann=), et les erreurs explicites (backend inconnu, target amr_system, weno5 sur
-    .so, names= longueur, hllc sans pression, names= sur production natif).
-(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="aot") ET
-    compile(backend="production") -> CompiledModel (adder correct : add_compiled_block vs
-    add_native_block), add_equation + run ; aot et production donnent le MEME etat (memes briques de
-    production). Le seam bas niveau refuse volontairement ``run`` hors ``pops.bind`` ; le test
-    avance donc explicitement par ``step_cfl``. Prouve que production passe bien par le chemin
-    NATIF add_native_block (#85), pas aot.
+    FiniteVolume(riemann=), et les erreurs explicites (backend/target inconnus, hllc sans pression,
+    remplacement de noms interdit sur un package natif).
+(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="production") ->
+    CompiledModel -> add_equation -> chemin natif add_native_block. Le seam bas niveau refuse
+    volontairement ``run`` hors ``pops.bind`` ; le test avance donc explicitement par ``step_cfl``.
 """
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
@@ -25,8 +22,9 @@ import tempfile
 import numpy as np
 
 import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.params import ConstParam, RuntimeParam
 
@@ -140,106 +138,77 @@ def pure_python_checks():
     print("OK  primitive_vars kwargs : layout ordonne, rho conservatif rejoint le layout")
 
     # FiniteVolume : riemann (PAS flux) -> Spatial.flux ; variables -> recon
-    fv = pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(), variables=Primitive())
+    fv = engine.Spatial(limiter=Minmod(), flux=HLLC(), recon=Primitive())
     assert fv.flux == "hllc" and fv.limiter == "minmod" and fv.recon == "primitive", \
         "FiniteVolume(riemann=) -> Spatial.flux"
     print("OK  FiniteVolume(limiter=, riemann=, variables=) remappe sur Spatial")
 
-    # compile : backend inconnu rejete AVANT toute compilation ; target='amr_system' n'existe que pour
-    # le backend natif "production" (DSL Phase D : le loader inline add_compiled_model(AmrSystem&)),
-    # donc le demander avec un autre backend (aot) leve ValueError.
+    # compile : backend et target inconnus sont rejetes AVANT toute compilation.
     expect_raises(ValueError, lambda: m.compile("x.so", INCLUDE, backend="bogus"),
                   "backend inconnu")
     expect_raises(ValueError,
-                  lambda: m.compile("x.so", INCLUDE, backend="aot", target="amr_system"),
-                  "target amr_system hors backend production")
+                  lambda: m.compile("x.so", INCLUDE, backend="production", target="bogus"),
+                  "target inconnu")
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
     sys = System(n=16, periodic=True)
-    fake = CompiledModel(so_path="/inexistant.so", backend="aot", adder="add_compiled_block",
-                             cons_names=["rho", "rho_u", "rho_v", "E"],
-                             cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
-                             prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
-                             n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
-                             abi_key="k", model_hash="h", cxx="c++", std="c++20")
-    # WENO5 est desormais ACCEPTE sur aot/production (la grille .so / le bloc natif allouent
-    # block_n_ghost(limiter) = 3 ghosts) : un fake aot+weno5 passe le garde Python et echoue plus loin
-    # au dlopen (.so inexistant) -> RuntimeError, PAS ValueError (la garde weno5-aot n'existe plus).
+    fake = CompiledModel(so_path="/inexistant.so", backend="production", adder="add_native_block",
+                         cons_names=["rho", "rho_u", "rho_v", "E"],
+                         cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
+                         prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
+                         n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
+                         abi_key="k", model_hash="h", cxx="c++", std="c++20")
+    # WENO5 est accepte par le package natif : il passe la garde Python et echoue seulement au dlopen
+    # du package factice.
     expect_raises(RuntimeError, lambda: sys.add_equation("g", fake,
-                  spatial=pops.FiniteVolume(limiter=WENO5())), "weno5 aot : accepte (echec au dlopen)")
-    # WENO5 reste rejete (ValueError) sur le backend 'prototype' (JIT, residu hote Rusanov ordre 1,
-    # sans assemble_rhs) : ce chemin n'a pas de stencil large a alimenter.
-    fake_proto = CompiledModel(so_path="/inexistant.so", backend="prototype",
-                                   adder="add_dynamic_block", cons_names=["rho", "rho_u", "rho_v", "E"],
-                                   cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
-                                   prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=GAMMA, n_aux=3,
-                                   params={}, caps={}, abi_key="k", model_hash="h", cxx="c++",
-                                   std="c++20")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake_proto,
-                  spatial=pops.FiniteVolume(limiter=WENO5())), "weno5 sur prototype (JIT)")
+                  spatial=engine.Spatial(limiter=WENO5())),
+                  "weno5 production : accepte (echec au dlopen)")
     expect_raises(ValueError, lambda: sys.add_equation("g", fake,
-                  spatial=pops.FiniteVolume(riemann=HLLC())), "hllc sans pression")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake, names=["a", "b"]),
-                  "names= mauvaise longueur")
-    fake_prod = CompiledModel(so_path="/inexistant.so", backend="production",
-                                  adder="add_native_block", cons_names=["rho"], cons_roles=["Density"],
-                                  prim_names=["rho"], n_vars=1, gamma=None, n_aux=3, params={},
-                                  caps={}, abi_key="k", model_hash="h", cxx="c++", std="c++20")
-    expect_raises(ValueError, lambda: sys.add_equation("g", fake_prod, names=["x"]),
+                  spatial=engine.Spatial(flux=HLLC())), "hllc sans pression")
+    expect_raises(ValueError, lambda: sys.add_equation("g", fake, names=["x"]),
                   "names= sur production natif")
-    print("OK  add_equation : erreurs explicites (weno5/prototype, hllc sans p, names=, names= natif)")
+    print("OK  add_equation production : weno5 accepte, hllc sans p et names= rejetes")
 
 
-def end_to_end_checks(cxx):
+def end_to_end_checks():
     n = 32
     tmp = tempfile.mkdtemp()
-    finals = {}
     try:
-        for backend, exp_adder in (("aot", "add_compiled_block"), ("production", "add_native_block")):
-            m = build_euler("euler_%s" % backend)
-            cm = m.compile(os.path.join(tmp, "m_%s.so" % backend), INCLUDE, backend=backend)
-            assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
-            assert cm.backend == backend and cm.adder == exp_adder, \
-                "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
-            assert cm.n_vars == 4 and abs((cm.gamma or 0) - GAMMA) < 1e-12, "metadonnees CompiledModel"
-            assert cm.abi_key and cm.model_hash, "abi_key + model_hash presents"
-            assert "gamma" in cm.params, "params porte le Param gamma"
-            print("OK  %s : compile -> CompiledModel(adder=%s, n_vars=%d, abi_key=%.8s...)"
-                  % (backend, cm.adder, cm.n_vars, cm.abi_key))
+        m = build_euler("euler_production")
+        cm = m.compile(os.path.join(tmp, "m_production.so"), INCLUDE, backend="production")
+        assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
+        assert cm.backend == "production" and cm.adder == "add_native_block"
+        assert cm.n_vars == 4 and abs((cm.gamma or 0) - GAMMA) < 1e-12
+        assert cm.abi_key and cm.model_hash, "abi_key + model_hash presents"
+        assert "gamma" in cm.params, "params porte le Param gamma"
+        print("OK  production : compile -> CompiledModel(add_native_block)")
 
-            s = System(n=n, periodic=True)
-            s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                               variables=Primitive()))
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
-            s.set_state("gas", initial_state(n))
-            nsteps = advance_low_level(s, t_end=0.02, cfl=0.4)
-            assert nsteps > 0, "run a avance"
-            finals[backend] = np.array(s.get_state("gas"))
-            assert np.all(np.isfinite(finals[backend])), "%s : etat fini" % backend
-            print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
-
-        # aot (host-marshale) et production (natif zero-copie) tournent les MEMES briques de
-        # production -> etat final identique (preuve que production != prototype et est numerique-coherent).
-        da = float(np.max(np.abs(finals["aot"] - finals["production"])))
-        print("[phase A] dmax(aot vs production) = %.3e" % da)
-        assert da < 1e-10, "aot et production doivent coincider (memes briques de production), dmax=%.3e" % da
-        print("OK  aot == production (memes briques de production, dmax=%.3e)" % da)
+        s = System(n=n, periodic=True)
+        s.add_equation("gas", cm, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                           recon=Primitive()))
+        s.set_poisson(rhs="charge_density", solver="geometric_mg")
+        s.set_state("gas", initial_state(n))
+        nsteps = advance_low_level(s, t_end=0.02, cfl=0.4)
+        assert nsteps > 0, "run a avance"
+        final = np.array(s.get_state("gas"))
+        assert np.all(np.isfinite(final)), "production : etat fini"
+        print("OK  production : add_equation + run(%d pas) -> etat fini" % nsteps)
 
         # Garde-fou self-ref kwargs (style cible avec Var pre-definies) : u/v/p definies par m.primitive
         # puis passees en primitive_vars(rho=rho, u=u, v=v, p=p). Doit (a) ne PAS produire de NaN
         # (sans le fix, u=u -> `Real u = u;` auto-init) et (b) donner le MEME modele que la forme expr.
         mp = build_euler_predef("euler_predef")
-        cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="aot")
+        cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="production")
         sp = System(n=n, periodic=True)
-        sp.add_equation("gas", cmp_, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                              variables=Primitive()))
+        sp.add_equation("gas", cmp_, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                              recon=Primitive()))
         sp.set_poisson(rhs="charge_density", solver="geometric_mg")
         sp.set_state("gas", initial_state(n))
         advance_low_level(sp, t_end=0.02, cfl=0.4)
         pf = np.array(sp.get_state("gas"))
         assert np.all(np.isfinite(pf)), "primitive_vars kwargs (Var pre-definies) : etat fini, pas de NaN"
-        dp = float(np.max(np.abs(pf - finals["aot"])))
+        dp = float(np.max(np.abs(pf - final)))
         assert dp < 1e-10, "primitive_vars(u=u) Var pre-definie == forme expr (meme modele), dmax=%.3e" % dp
         print("OK  primitive_vars kwargs Var pre-definies : pas de NaN, == forme expr (dmax=%.3e)" % dp)
     finally:
@@ -251,8 +220,8 @@ def modelspec_substeps_check():
     branche ModelSpec d'add_equation appelle _s.add_block DIRECTEMENT avec nsub (pas self.add_block,
     qui retomberait sur time.substeps et IGNORERAIT l'override). Verifie via un espion sur _s.add_block."""
     s = System(n=16, periodic=True)
-    spec = pops.Model(state=pops.FluidState("isothermal", cs2=1.0), transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=-1.0))
+    spec = engine.Model(state=engine.FluidState("isothermal", cs2=1.0), transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=-1.0))
     calls = []
 
     class _Spy:
@@ -261,11 +230,11 @@ def modelspec_substeps_check():
 
     s._s = _Spy()
     # _s.add_block positional : (name, model, limiter, flux, recon, time_kind, substeps, evolve)
-    s.add_equation("ions", spec, time=pops.Explicit(), substeps=10)
+    s.add_equation("ions", spec, time=engine.Explicit(), substeps=10)
     assert calls, "add_equation(ModelSpec) doit appeler _s.add_block"
     assert calls[0][6] == 10, "substeps= ignore pour ModelSpec : recu %r" % (calls[0][6],)
     calls.clear()
-    s.add_equation("ions2", spec, time=pops.Explicit(substeps=3))   # defaut = time.substeps
+    s.add_equation("ions2", spec, time=engine.Explicit(substeps=3))   # defaut = time.substeps
     assert calls[0][6] == 3, "defaut substeps != time.substeps : recu %r" % (calls[0][6],)
     print("OK  substeps= override forwarde pour ModelSpec (10) ; defaut = time.substeps (3)")
 
@@ -292,7 +261,7 @@ def main():
     if not cxx or not os.path.isdir(INCLUDE):
         print("skip  bout-en-bout (compilateur ou en-tetes pops absents)")
     else:
-        end_to_end_checks(cxx)
+        end_to_end_checks()
     print("test_dsl_phase_a : tout est vert")
 
 

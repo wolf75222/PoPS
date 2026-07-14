@@ -16,7 +16,7 @@ PYTHON_BOUNDARY = (
 def test_component_trust_boundary_never_classifies_the_scientific_component_type():
     forbidden_imports = (
         "pops.numerics", "pops.mesh", "pops.solvers", "pops.fields",
-        "pops.runtime.bricks",
+        "pops.runtime._engine_descriptors",
     )
     for path in PYTHON_BOUNDARY:
         source = path.read_text(encoding="utf-8")

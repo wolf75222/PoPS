@@ -196,7 +196,7 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
@@ -229,8 +229,8 @@ def _run_section_b(t):
         except RuntimeError as exc:
             print("-- (B) skipped: model compile failed: %s --" % str(exc)[:140])
             return None
-        s.add_equation("blk", cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                       time=pops.Explicit(method="euler"))
+        s.add_equation("blk", cm, spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                       time=engine.Explicit(method="euler"))
         x = (np.arange(n) + 0.5) / n
         X, Y = np.meshgrid(x, x, indexing="ij")
         rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)

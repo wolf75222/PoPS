@@ -10,9 +10,9 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any
 
-from pops.ir import Equation
-from pops.ir.literals import scalar_data
-from pops.ir.symbolic import ImmutableSymbolic
+from pops._ir import Equation
+from pops._ir.literals import scalar_data
+from pops._ir.symbolic import ImmutableSymbolic
 from pops.provenance import ProvenanceRecord
 from pops.time.points import point_clock
 from pops.time.value_support import (

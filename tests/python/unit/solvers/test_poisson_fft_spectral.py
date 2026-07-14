@@ -33,8 +33,8 @@ import sys
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet, Periodic
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Dirichlet, Periodic
 from pops.mesh.geometry import Disc
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -60,12 +60,12 @@ def solve_phi(n, solver, eps=1e-3):
     demande. Une densite negative est sans objet ici : seul solve_fields est appele."""
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.PotentialForce(charge=1.0),
-                            elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit())
+                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                            transport=engine.IsothermalFlux(),
+                            source=engine.PotentialForce(charge=1.0),
+                            elliptic=engine.ChargeDensity(charge=1.0)),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver=solver, bc=Periodic())
     x = (np.arange(n) + 0.5) / n
     rho = eps * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n))
@@ -98,24 +98,24 @@ chk(e16 < 1e-12, f"n=16 : err rel {e16:.2e} < 1e-12 (pas de terme O(h^2))")
 print("== (4) rejets ==")
 sim = System(n=32, L=1.0, periodic=False)
 sim.block("ions",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                        transport=pops.IsothermalFlux(),
-                        source=pops.PotentialForce(charge=1.0),
-                        elliptic=pops.ChargeDensity(charge=1.0)),
-              spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-              time=pops.Explicit())
+              engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                        transport=engine.IsothermalFlux(),
+                        source=engine.PotentialForce(charge=1.0),
+                        elliptic=engine.ChargeDensity(charge=1.0)),
+              spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+              time=engine.Explicit())
 sim.set_poisson(rhs="charge_density", solver="fft_spectral", bc=Dirichlet(),
                 wall=Disc(radius=0.4))
 msg = err_msg(sim.solve_fields)
 chk("fft_spectral" in msg and "wall" in msg, f"paroi refusee au kind effectif ({msg[:60]}...)")
 sim2 = System(n=32, L=1.0, periodic=True)
 sim2.block("ions",
-               pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                         transport=pops.IsothermalFlux(),
-                         source=pops.PotentialForce(charge=1.0),
-                         elliptic=pops.ChargeDensity(charge=1.0)),
-               spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-               time=pops.Explicit())
+               engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                         transport=engine.IsothermalFlux(),
+                         source=engine.PotentialForce(charge=1.0),
+                         elliptic=engine.ChargeDensity(charge=1.0)),
+               spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+               time=engine.Explicit())
 # ADC-599/584: an unknown solver token is now refused PRE-BIND by set_poisson itself (typed
 # route validation), before any solve; the refusal still lists the valid set incl. fft_spectral.
 msg = err_msg(lambda: sim2.set_poisson(rhs="charge_density", solver="dct", bc=Periodic()))
@@ -128,12 +128,12 @@ def rhs_with(solver):
     n = 32
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.PotentialForce(charge=1.0),
-                            elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit())
+                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                            transport=engine.IsothermalFlux(),
+                            source=engine.PotentialForce(charge=1.0),
+                            elliptic=engine.ChargeDensity(charge=1.0)),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver=solver, bc=Periodic())
     x = (np.arange(n) + 0.5) / n
     rho = 1e-3 * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n)) + 1e-3 * np.sin(

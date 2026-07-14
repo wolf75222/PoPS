@@ -2,10 +2,10 @@
 sa valeur CHANGEE a l'execution SANS recompiler le .so, alors qu'un ``ConstParam`` reste INLINE EN
 DUR (bit-identique a l'historique).
 
-Mecanique (backend "aot", add_compiled_block) : le codegen emet `params.get(<indice>)` pour un param
-runtime (lecture d'un membre pops::RuntimeParams de la brique generee) au lieu d'une constante ; l'ABI du
-.so AOT transporte un bloc plat de valeurs (symboles `_p`) ; System.set_block_params(name, values) ecrit
-dans le bloc PARTAGE -> le comportement change au prochain pas. cf. include/pops/runtime/runtime_params.hpp.
+Mecanique (backend ``production``) : le codegen emet `params.get(<indice>)` pour un param runtime
+(lecture d'un membre pops::RuntimeParams de la brique generee) au lieu d'une constante. Le package
+natif recoit le vecteur de valeurs explicite au bind ; ``set_block_params`` met ensuite a jour le bloc
+partage, donc le comportement change au prochain pas sans recompilation.
 
 Ce test verifie :
   1) NON-REGRESSION : un param const reste inline (codegen byte-identique a un modele sans param runtime ;
@@ -22,7 +22,8 @@ import tempfile
 
 import numpy as np
 
-from pops.ir.ops import sqrt
+import pops.runtime._engine_descriptors as engine
+from pops.math import sqrt
 from pops.params import ConstParam, RuntimeParam
 from pops.physics._facade import Model
 
@@ -87,16 +88,20 @@ def main():
     tmp = tempfile.mkdtemp()
     try:
         m = _build_iso(RuntimeParam("cs2", default=1.0))
-        compiled = m.compile(os.path.join(tmp, "iso_runtime.so"), INCLUDE, backend="aot")
+        compiled = m.compile(
+            os.path.join(tmp, "iso_runtime.so"), INCLUDE, backend="production"
+        )
         assert compiled.runtime_param_names == ["cs2"], \
             "runtime_param_names attendu ['cs2'], recu %r" % compiled.runtime_param_names
-        so = compiled.so_path
 
         def build(cs2):
             sys = System(n=n, L=L, periodic=True)
-            sys._s.add_compiled_block("gas", so, limiter="minmod", riemann="rusanov",
-                                      recon="conservative", time="explicit",
-                                      names=["rho", "rho_u", "rho_v"])
+            sys.add_equation(
+                "gas",
+                compiled,
+                spatial=engine.Spatial(minmod=True),
+                time=engine.Explicit(),
+            )
             sys._s.set_state("gas", Uflat)
             if cs2 is None:
                 raise TypeError("the advanced direct install requires an explicit runtime vector")
@@ -125,23 +130,28 @@ def main():
 
         # (3) PAS DE RECOMPILATION : recompiler le MEME modele (sans so_path) -> cache HIT (meme chemin).
         m2 = _build_iso(RuntimeParam("cs2", default=1.0))
-        c_a = m2.compile(include=INCLUDE, backend="aot")  # cache hors source, keye sur model_hash+abi
-        c_b = m2.compile(include=INCLUDE, backend="aot")  # 2e compile du MEME modele
+        c_a = m2.compile(include=INCLUDE, backend="production")
+        c_b = m2.compile(include=INCLUDE, backend="production")
         assert c_a.so_path == c_b.so_path, "cache : meme modele -> meme chemin .so"
         mtime = os.path.getmtime(c_b.so_path)
         c_c = _build_iso(RuntimeParam("cs2", default=1.0)).compile(
-            include=INCLUDE, backend="aot")
+            include=INCLUDE, backend="production")
         assert os.path.getmtime(c_c.so_path) == mtime, "cache HIT : le .so NE doit PAS etre recompile"
         print("OK  (3) recompiler le meme modele runtime -> cache HIT (.so reutilise, pas recompile)")
 
         # (4) COHERENCE runtime vs const : eval_rhs(runtime cs2=k) == eval_rhs(const cs2=k). On compile un
         # modele a cs2 CONST=2.0 et on le compare au modele runtime apres set_block_params(cs2=2.0).
         mc = _build_iso(ConstParam("cs2", 2.0))
-        so_const = mc.compile(os.path.join(tmp, "iso_const2.so"), INCLUDE, backend="aot").so_path
+        const_compiled = mc.compile(
+            os.path.join(tmp, "iso_const2.so"), INCLUDE, backend="production"
+        )
         sysc = System(n=n, L=L, periodic=True)
-        sysc._s.add_compiled_block("gas", so_const, limiter="minmod", riemann="rusanov",
-                                   recon="conservative", time="explicit",
-                                   names=["rho", "rho_u", "rho_v"])
+        sysc.add_equation(
+            "gas",
+            const_compiled,
+            spatial=engine.Spatial(minmod=True),
+            time=engine.Explicit(),
+        )
         sysc._s.set_state("gas", Uflat)
         Rc = np.array(sysc._s.eval_rhs("gas")).reshape(3, n, n)
 

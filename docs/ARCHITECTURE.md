@@ -347,9 +347,10 @@ four fine cells, closing the coarse/fine coherence.
 
 The time step has two runtime targets that share one generated Program grammar but distinct storage
 providers: `System` on a single-level grid and
-`AmrSystem` on adaptive hierarchy. The construction phase (`set_poisson`, `add_block`,
-`set_density`) is identical from afar: it declares the system Poisson, composes the bricks of
-each block and sets the initial state. It is the macro-step that differs.
+`AmrSystem` on adaptive hierarchy. Both are private execution engines materialized by `pops.bind`
+from one authenticated install plan; their low-level setters and block installers are not authoring
+APIs. The plan declares field providers, composes each block and binds its initial state atomically.
+It is the macro-step that differs.
 
 ### Single-level runtime execution
 
@@ -465,8 +466,12 @@ sequenceDiagram
         end
     end
     Runtime->>Runtime: vérifie les gardes puis commit ou rollback atomique
-    Runtime-->>Utilisateur: RunReport, diagnostics et sorties des états acceptés
+    Runtime-->>Utilisateur: RunReport immuable (pas, horloge, arrêt, identités) et sorties acceptées
 ```
+
+Le `RunReport` compte les macro-pas acceptés et les tentatives rejetées de l'appel, expose le temps et
+le macro-pas finaux ainsi que les identités authentifiées du run, du bind, du contexte d'exécution et
+de l'artefact. Un run qui échoue lève une exception ; il ne retourne jamais un rapport marqué succès.
 
 Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
 sub-flows into the same IR rather than selecting a native `System` stepper branch.
@@ -560,9 +565,13 @@ transport/coupling sub-flows. The AMR conservation suites validate the resulting
 
 **MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_krylov_solver`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
-**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). Device caveats: `add_compiled_model` with extended lambdas is not zero-copy on device (host bounce, nvcc cross-TU limit), the multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
+**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
-**Parity production == add_block.** The production path (native model compiled AOT via `add_compiled_model`) produces the same result as the brick assembly (`add_block`): the parity of the AOT compiled block is validated on CPU/Serial (`test_compiled_model_parity`). The single-process System production has been validated separately. Limit to know: this path is not yet validated on Kokkos Cuda; the workaround by named functors exists and is validated device, but has not been ported to `test_compiled_model_parity` itself.
+**Parity of authenticated generated blocks.** The private native block artifact specializes the same
+catalog-selected templates as the builtin leaf. `test_compiled_model_parity` validates their numerical
+parity on CPU/Serial, and `test_amr_compiled_model` validates the hierarchy installation. This is a
+test oracle, not a second public registration route or a compatibility fallback. The generic native
+component protocol separately proves its exact interface and target variant before installation.
 
 ## Backends
 
@@ -631,13 +640,15 @@ operations (coarse Poisson -> `aux = grad phi` -> advance + regrid Berger-Rigout
 hierarchy in `AmrLevelStack`. The multi-species coupler carried over AMR is `AmrSystemCoupler`
 ([`include/pops/coupling/system/amr_system_coupler.hpp`](../include/pops/coupling/system/amr_system_coupler.hpp)).
 
-The runtime facades `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) and
-`AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap these
-couplers for the multi-block composition; it is they that the Python bindings expose.
+The private engines `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp))
+and `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap
+these couplers for multi-block execution. Pybind exposes only their private installation/execution
+seams, consumed by `pops.bind` and held by `RuntimeInstance`; neither engine is a Python authoring
+surface.
 
 ## Component interfaces and registration
 
-Source components, generated components, builtins and external AOT components cross one manifest
+Source components, generated components, builtins and external compiled components cross one manifest
 trust boundary. `schemas/component_catalog.v2.json` owns the interface vocabulary and the builtin
 route bindings; its generator emits the identical Python and C++ tables. A
 `ComponentManifest.interfaces` row has exactly `name`, `mode` and `binding`. `mode` is one of
@@ -713,7 +724,7 @@ include/pops/
   numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver, composite FAC AMR (mg/composite_fac_poisson)
   numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
   coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, sources couplees
-  runtime/            facades System / AmrSystem, model_factory (briques -> CompositeModel), block builders, chemins DSL (compiled/native/aot), canal aux extensible
+  runtime/            moteurs prives System / AmrSystem, installation authentifiee, block builders, canal aux extensible
   amr/                AmrHierarchy, tag_box, clustering Berger-Rigoutsos, regrid (proper nesting)
   parallel/           seam MPI (comm degenere en serie), load balance (round-robin / SFC)
 ```

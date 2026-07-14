@@ -9,6 +9,16 @@ from pops.codegen import toolchain
 from pops.runtime import defaults
 
 
+def _memory_artifact(*, program=None):
+    """Exact minimum resolved-plan evidence required by the strict memory estimator."""
+    block = SimpleNamespace(name="test", numerics=None, spatial={"ghost_depth": 2})
+    return SimpleNamespace(
+        program=program,
+        install_plan=None,
+        plan=SimpleNamespace(blocks=(block,)),
+    )
+
+
 def test_capability_report_is_explicitly_source_only_only_without_extension(monkeypatch):
     monkeypatch.setattr(capability_reports, "_native_extension", lambda: None)
     report = capability_reports.native_capability_report()
@@ -74,14 +84,14 @@ def test_absolute_memory_estimate_refuses_untyped_shape_before_any_formula(monke
 
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     with pytest.raises(inspect_compiled.MemoryEstimateCapabilityError,
-                       match="mesh.capabilities") as excinfo:
+                       match="CartesianGrid") as excinfo:
         inspect_compiled.build_memory_estimate(SimpleNamespace(), 32)
-    assert excinfo.value.field == "mesh.capabilities"
+    assert excinfo.value.field == "mesh"
 
 
 def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
-    from pops.mesh.cartesian import CartesianMesh
     from pops.layouts import Uniform
+    from tests.python.support.layout_plan import cartesian_grid
 
     class Extension:
         @staticmethod
@@ -93,12 +103,12 @@ def test_absolute_memory_estimate_uses_reported_native_byte_width(monkeypatch):
         def estimate():
             return {"buffer_count": 0, "heavy_kernels": 0}
 
-    mesh = CartesianMesh(n=4)
+    mesh = cartesian_grid(n=4)
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
     estimate = inspect_compiled.build_memory_estimate(
-        SimpleNamespace(program=Program(), install_plan=None), mesh, layout=Uniform(mesh))
+        _memory_artifact(program=Program()), mesh, layout=Uniform(mesh))
     assert estimate.categories["state"] == 2 * 4 * 4 * 16
     assert "16 bytes per cell value" in estimate.assumptions[0]
 
@@ -120,7 +130,7 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
     estimate = inspect_compiled.build_memory_estimate(
-        SimpleNamespace(program=None, install_plan=None), grid, layout=Uniform(grid))
+        _memory_artifact(), grid, layout=Uniform(grid))
     assert estimate.mesh_shape == (3, 5)
     assert estimate.cells == 15
     assert estimate.categories["state"] == 2 * 3 * 5 * 16
@@ -128,7 +138,7 @@ def test_absolute_memory_estimate_accepts_final_cartesian_grid_cells(monkeypatch
 
 def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch):
     from pops.descriptors_report import CapabilitySet
-    from pops.mesh.cartesian import CartesianMesh
+    from tests.python.support.layout_plan import cartesian_grid
 
     class Extension:
         @staticmethod
@@ -149,19 +159,19 @@ def test_absolute_memory_estimate_accepts_strict_final_amr_protocol(monkeypatch)
                 "supports_amr": True,
             })
 
-    mesh = CartesianMesh(n=4)
+    mesh = cartesian_grid(n=4)
     monkeypatch.setattr(inspect_compiled.importlib, "import_module", lambda _name: Extension())
     monkeypatch.setattr(
         inspect_compiled, "_model_metadata", lambda _compiled: ((), 2, {}, (), 0, "U"))
     estimate = inspect_compiled.build_memory_estimate(
-        SimpleNamespace(program=None, install_plan=None), mesh, layout=FinalAMRProtocol())
+        _memory_artifact(), mesh, layout=FinalAMRProtocol())
     assert estimate.layout == "amr"
     assert estimate.categories["amr_patch"] == (2 ** 2 + 2 ** 4) * (2 * 4 * 4 * 16)
 
 
 def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypatch):
     from pops.descriptors_report import CapabilitySet
-    from pops.mesh.cartesian import CartesianMesh
+    from tests.python.support.layout_plan import cartesian_grid
 
     class Extension:
         @staticmethod
@@ -179,5 +189,6 @@ def test_absolute_memory_estimate_refuses_amr_without_transition_ratios(monkeypa
     with pytest.raises(inspect_compiled.MemoryEstimateCapabilityError,
                        match="transition_ratios") as excinfo:
         inspect_compiled.build_memory_estimate(
-            SimpleNamespace(program=None, install_plan=None), CartesianMesh(n=4), layout=IncompleteAMR())
+            _memory_artifact(), cartesian_grid(n=4),
+            layout=IncompleteAMR())
     assert excinfo.value.field == "layout.transition_ratios"

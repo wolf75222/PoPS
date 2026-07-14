@@ -37,7 +37,7 @@ POPS_PROCESS_TIMEOUT = 1200
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.codegen.program_codegen import emit_cpp_program
@@ -171,8 +171,8 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
     sim.add_equation("plasma", block_cm,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="ssprk2"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="ssprk2"))
     sim.set_density("plasma", u0)
     sim.install_program(compiled.so_path)
     for _ in range(nsteps):
@@ -204,8 +204,8 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         # forces ensure_built, which freezes the layout -- set_conservative_state must precede it), then
         # install the compiled time Program on the hierarchy.
         amr.add_equation("plasma", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
     except RuntimeError as exc:
@@ -325,8 +325,8 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
         amr.add_equation("plasma", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_density("plasma", u0)
         amr.install_program(compiled.so_path)
         last_dt = 0.0
@@ -346,8 +346,8 @@ def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
     except RuntimeError as exc:
         return None, "compile (AMR native): %s" % str(exc)[:140]
     amr.add_equation("plasma", block_cm,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="ssprk2"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="ssprk2"))
     amr.set_density("plasma", u0)
     last_dt = 0.0
     for _ in range(nsteps):

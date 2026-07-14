@@ -22,8 +22,8 @@ class _Sim:
     def installed_program_hash(self):
         return self.program_hash
 
-    def checkpoint_temporal_ratios(self):
-        return [2, 3]
+    def checkpoint_temporal_relations(self):
+        return [[0, 1, 2, 1, "integral_only"], [1, 2, 3, 1, "integral_only"]]
 
     def checkpoint_transfer_routes(self):
         return [["fluid.U", "prolong", "route.u", "provider.u", "kernel.linear",
@@ -31,7 +31,20 @@ class _Sim:
                  "2", "2,2", "2", "2"]]
 
     def program_accepted_state_manifest(self):
-        return [["rhs", "program.block.0", "fluid.U", "cell.conservative", "2", "3"]]
+        return [["rhs", "program.block.0", "fluid.U", "cell.conservative",
+                 "clock.macro", "dense.linear", "2", "3"]]
+
+    def program_clock_manifest(self):
+        return [["level", "0", "4", "0", "1", "0.4"],
+                ["logical", "clock.macro", "4"]]
+
+    def program_flux_ledger_manifest(self):
+        return [["program.block.0", "fluid.U", "rate.7", "physical_flux", "1",
+                 "4", "1", "2", "1", "2", "x_plus", "0.125", "0.05"]]
+
+    def program_sync_manifest(self):
+        return [["0", "1", "0", "reflux", "4", "1", "1"],
+                ["0", "1", "0", "average_down", "4", "1", "1"]]
 
 
 def _payload(sim=None):
@@ -47,15 +60,24 @@ def _payload(sim=None):
 def test_contract_names_guarantee_relations_qualified_histories_and_transfer_plans():
     contract = contract_for(_Sim())
     assert contract["guarantee"] == "bit_identical_accepted_state"
-    assert contract["ledger"] == {"accepted_entries": 0, "transaction_depth": 0}
+    assert contract["ledger"]["accepted_entries"] == 1
+    assert contract["ledger"]["transaction_depth"] == 0
+    assert contract["ledger"]["entries"][0][8:10] == ["1", "2"]
     assert contract["level_relations"] == [
-        {"parent": 0, "child": 1, "temporal_ratio": 2, "remainder_policy": "integral_only"},
-        {"parent": 1, "child": 2, "temporal_ratio": 3, "remainder_policy": "integral_only"},
+        {"parent": 0, "child": 1,
+         "temporal_ratio": {"numerator": 2, "denominator": 1},
+         "remainder_policy": "integral_only"},
+        {"parent": 1, "child": 2,
+         "temporal_ratio": {"numerator": 3, "denominator": 1},
+         "remainder_policy": "integral_only"},
     ]
     assert contract["history_qualifications"][0][1:4] == [
         "program.block.0", "fluid.U", "cell.conservative"]
     assert contract["transfer_routes"][0][2:5] == [
         "route.u", "provider.u", "kernel.linear"]
+    assert contract["clocks"][1] == ["logical", "clock.macro", "4"]
+    assert [row[3] for row in contract["synchronization"]] == [
+        "reflux", "average_down"]
 
 
 def test_preflight_returns_exact_native_payload_and_counters():
@@ -71,7 +93,7 @@ def test_preflight_refuses_any_static_provenance_mismatch(mutation):
     if mutation == "owner":
         data["history_qualifications"][0][1] = "program.block.1"
     elif mutation == "ratio":
-        data["level_relations"][0]["temporal_ratio"] = 4
+        data["level_relations"][0]["temporal_ratio"]["numerator"] = 4
     elif mutation == "route":
         data["transfer_routes"][0][3] = "provider.other"
     else:

@@ -31,7 +31,8 @@ _CHILD = textwrap.dedent(
     """
     import math
     import pops
-    from pops.runtime.bricks import Dirichlet
+    from pops.mesh import PolarMesh
+    from pops.runtime._engine_descriptors import Dirichlet
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon
@@ -51,13 +52,13 @@ _CHILD = textwrap.dedent(
                 rho.append(100.0 * g * (1.0 + 0.5 * math.cos(3.0 * th)))
         return rho
 
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     sim.block(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(),
-                        elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", steep_gaussian())
 

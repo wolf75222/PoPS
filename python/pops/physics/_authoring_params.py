@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
-from pops.ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
-from pops.ir.visitors import _children  # noqa: F401
+from pops._ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
+from pops._ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
+from pops._ir.visitors import _children  # noqa: F401
 
 from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
 

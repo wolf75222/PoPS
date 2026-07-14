@@ -32,6 +32,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     from pops.codegen._compile_drivers import compile_problem
     from pops.domain import Rectangle
     from pops.frames import Cartesian2D
@@ -198,8 +199,8 @@ def make_sim(model):
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         _skip("block model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation("gas", cm,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_state("gas", rho0.tolist())
     return sim
 

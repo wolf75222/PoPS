@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from pops.runtime._system_unified_install import validate_install_arguments
+from pops.runtime._bind_validation import validate_install_arguments
 
 if TYPE_CHECKING:
     from pops.runtime._amr_system_contract import _AmrSystem
@@ -28,7 +28,8 @@ class _AmrSystemInstall(_AmrSystem):
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
                           aux: Any = None, solvers: Any = None, field_plans: Any = None,
                           bind_schema: Any = None, initial_values: Any = (),
-                          bootstrap_plan: Any = None, amr_transfer: Any = None) -> Any:
+                          bootstrap_plan: Any = None, amr_transfer: Any = None,
+                          install_plan: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -118,7 +119,8 @@ class _AmrSystemInstall(_AmrSystem):
             if not isinstance(model, CompiledModel):
                 raise TypeError(
                     "pops.bind: instances[%r] must carry a detached target='amr_system' "
-                    "CompiledModel from InstallPlan; rebuild with pops.compile(...)" % name
+                    "CompiledModel from InstallPlan; re-run pops.resolve(case) and "
+                    "pops.compile(plan)" % name
                 )
             spatial = spec.get("spatial")
             time = spec.get("time")
@@ -232,6 +234,13 @@ class _AmrSystemInstall(_AmrSystem):
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
         self._finish_program_install(compiled, so_path, bind_schema, params)
 
+        # The shared-interface scheduler authenticates the materialized per-level MultiFabs. Keep
+        # that structural install inside the bind transaction: after lazy runtime construction, before
+        # the BoundSnapshot and native lifecycle freeze.
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import finalize_runtime_authorities
+            finalize_runtime_authorities(self, install_plan)
+
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
         # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its
@@ -243,15 +252,17 @@ class _AmrSystemInstall(_AmrSystem):
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
     def _install_bootstrap_routes(self, registry: Any) -> None:
-        from pops.mesh.amr.transfer import ApplyTransferProvider, ResolvedAMRTransfer
+        from pops.mesh._amr.transfer import (
+            NativeAMRMaterializationKind,
+            ResolvedAMRTransfer,
+        )
 
         if type(registry) is not ResolvedAMRTransfer:
             raise TypeError("pops.bind: amr_transfer must be an exact AMRTransfer")
         face_vectors = set()
         for entry in registry.entries:
-            action = entry.action
-            provider = action.provider
-            provider_options = provider.options.to_data()
+            native = entry.native_materialization
+            provider_options = native.provider_identity.to_data().get("options", {})
             paired = provider_options.get("paired_subjects")
             if paired is not None:
                 pair = tuple(paired)
@@ -259,12 +270,16 @@ class _AmrSystemInstall(_AmrSystem):
                     raise ValueError("pops.bind: paired face provider has an invalid subject manifest")
                 face_vectors.add(pair)
             key = entry.key.to_data()
-            if type(action) is ApplyTransferProvider:
-                options = action.route.options.to_data()
-                capabilities = action.capabilities
+            if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
+                options = native.options.to_data()
+                capabilities = native.capabilities.transfer
+                if capabilities is None:
+                    raise ValueError(
+                        "pops.bind: physical AMR descriptor omitted transfer capabilities"
+                    )
                 order, ghost = capabilities.order, capabilities.ghost_depth
             else:
-                options = provider_options
+                options = native.options.to_data()
                 order, ghost = 1, (0,)
             dimensions = {row.accuracy.dimension for row in entry.requirements}
             if len(dimensions) != 1:
@@ -279,7 +294,7 @@ class _AmrSystemInstall(_AmrSystem):
             self._s._register_bootstrap_transfer_route(
                 entry.key.identity.token,
                 [row.subject.qualified_id for row in entry.requirements],
-                provider.qualified_id,
+                native.provider_qualified_id,
                 key["space"]["name"],
                 key["centering"]["name"],
                 key["representation"]["name"],
@@ -453,7 +468,7 @@ class _AmrSystemInstall(_AmrSystem):
             if declared is None:
                 raise ValueError(
                     "pops.bind: CompiledModel for block %r lacks elliptic_field_names metadata; "
-                    "rebuild it with pops.compile(...)" % block_name
+                    "re-run pops.resolve(case) and pops.compile(plan)" % block_name
                 )
             names.update(declared)
         return names

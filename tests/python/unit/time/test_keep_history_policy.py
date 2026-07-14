@@ -84,7 +84,7 @@ def test_deterministic_program_with_non_dense_policy_passes_compile_gate():
 
 def test_dense_policy_never_refused_even_with_unknown_op():
     """Dense needs no replay, so the determinism scan never refuses it."""
-    from pops import ReportTree
+    from pops._report import ReportTree
     from pops.time.history_persistence_validate import validate_history_persistence
 
     class FakeOp:
@@ -103,7 +103,7 @@ def test_dense_policy_never_refused_even_with_unknown_op():
 
 def test_non_deterministic_op_refuses_non_dense_policy_verbatim():
     """A non-Dense policy whose replay reaches an op OUTSIDE the vetted allow-list is refused loud."""
-    from pops import ReportTree
+    from pops._report import ReportTree
     from pops.time.history_persistence_validate import validate_history_persistence
 
     class FakeOp:

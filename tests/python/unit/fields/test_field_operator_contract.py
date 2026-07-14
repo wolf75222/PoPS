@@ -12,7 +12,7 @@ from pops.fields import (
     FieldProviderPack,
     GradientOutput,
 )
-from pops.ir import ValueExpr
+from pops.math import ValueExpr
 from pops.math import laplacian
 from pops.model import Handle, OwnerPath
 

@@ -104,7 +104,7 @@ def test_descriptor_hooks_keep_the_role_derived_default():
 def test_pressure_formula_referencing_a_missing_capability_raises():
     # a pressure formula that reads an undeclared aux (B_z) is a missing capability -> clear error
     # at codegen (the pressure(U) hook has no Aux parameter).
-    from pops.ir.expr import Var
+    from pops._ir.expr import Var
     m = physics.Model("euler")
     U = m.state(
         "U", components=["rho", "mx", "my", "E"],

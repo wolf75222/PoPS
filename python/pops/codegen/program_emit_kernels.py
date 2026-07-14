@@ -14,9 +14,10 @@ its public surface is unchanged.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
-from pops.ir.literals import scalar_cpp
+from pops._ir.literals import scalar_cpp
 from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
@@ -125,9 +126,11 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
         if tok == target:
             c_target = coeff
         else:
-            lines.append("ctx.axpy(*%s, %s, %s);" % (acc, _coeff_cpp(coeff), ref))
-    lines.append("ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s);"
-                 % (target, _coeff_cpp(c_target), target, acc))
+            lines.append("ctx.axpy(*%s, %s, %s, dt, %s);"
+                         % (acc, _coeff_cpp(coeff), ref, _coeff_metadata_cpp(coeff)))
+    lines.append(
+        "ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s, dt, %s, {{0, 1, 1}});"
+        % (target, _coeff_cpp(c_target), target, acc, _coeff_metadata_cpp(c_target)))
     return lines
 
 
@@ -148,6 +151,34 @@ def _coeff_cpp(powers: Any) -> str:
             factors = [scalar_cpp(coeff)] + factors
         terms.append(" * ".join(factors))
     return "static_cast<pops::Real>(%s)" % " + ".join(terms)
+
+
+def _coeff_metadata_terms(powers: Any) -> tuple[tuple[int, int, int], ...]:
+    """Return one checked exact native-ledger term per nonzero dt monomial."""
+    terms = []
+    for power, coefficient in sorted(powers.items()):
+        if isinstance(power, bool) or not isinstance(power, int) or power < 0:
+            raise TypeError("AMR conservative coefficient has an invalid dt power")
+        value = coefficient.to_python() if hasattr(coefficient, "to_python") else coefficient
+        try:
+            ratio = Fraction.from_float(value) if isinstance(value, float) else Fraction(value)
+        except (TypeError, ValueError, ZeroDivisionError) as error:
+            raise TypeError(
+                "AMR conservative coefficient is not an exact rational literal") from error
+        if ratio:
+            signed_limit = (1 << 63) - 1
+            if (power > (1 << 31) - 1 or ratio.numerator < -signed_limit
+                    or ratio.numerator > signed_limit or ratio.denominator > signed_limit):
+                raise OverflowError(
+                    "AMR conservative coefficient cannot be represented by the native exact ledger")
+            terms.append((power, ratio.numerator, ratio.denominator))
+    return tuple(terms)
+
+
+def _coeff_metadata_cpp(powers: Any) -> str:
+    """Render the same dt polynomial as checked exact native-ledger metadata."""
+    return "{%s}" % ", ".join(
+        "{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
 
 
 # --- Phase-4b: lower a model's split-source / local-linear ops to per-cell C++ kernels ----------
@@ -199,8 +230,8 @@ def _has_runtime_param(exprs: Any) -> bool:
     A runtime-param read lowers to ``params.get(<index>)``; the kernel binds a ``params`` local from
     ``ctx.program_params(<block>)`` (ADC-510) so a compiled time Program reads the CURRENT value
     without recompiling (mirror of the AOT-native RuntimeParams member, P7-b)."""
-    from pops.ir.values import RuntimeParamRef
-    from pops.ir.visitors import _children
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
     stack = list(exprs)
     while stack:
         e = stack.pop()
@@ -253,7 +284,7 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
     distribution map as the blocks (``aux(ba, dm, ...)`` in System::Impl), and a scratch state comes
     from ``scratch_state_like(state(0))`` which copies that ``(ba, dm)`` -- so ``out``, the input
     state and ``aux`` share one ``(ba, dm)`` and ``fab(li)`` is the same box on every rank. This is the
-    same co-distribution the existing aux-reading kernels (compiled_block_abi / source bricks) rely on.
+    same co-distribution the authenticated native component and source kernels rely on.
 
     @p params_block (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads, or None
     when no formula reads a runtime parameter. When set, bind ``const pops::RuntimeParams params =
@@ -366,6 +397,7 @@ extern "C" void pops_install_program(void* sys) {{
 {prelude}
   ctx.install([=](double dt) {{
     (void)dt;
+    ctx.begin_step(dt);
 {body}
   }});
 }}

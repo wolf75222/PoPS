@@ -4,7 +4,7 @@ from fractions import Fraction
 
 import pytest
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.numerics.reconstruction import WENO5
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import HLL
@@ -14,10 +14,10 @@ from pops.problem._detached import detached_frozen
 
 
 def test_spatial_identity_covers_every_route_and_control_exactly():
-    spatial = pops.FiniteVolume(
+    spatial = engine.Spatial(
         limiter=WENO5(epsilon=Decimal("1e-40")),
-        riemann=HLL(waves=ExplicitPair()),
-        variables=Primitive(),
+        flux=HLL(waves=ExplicitPair()),
+        recon=Primitive(),
         positivity_floor=Fraction(1, 10**30),
         wave_speed_cache=True,
     )
@@ -37,10 +37,10 @@ def test_spatial_identity_covers_every_route_and_control_exactly():
     }
     assert spatial.weno_epsilon == Decimal("1e-40")
 
-    same = pops.FiniteVolume(
+    same = engine.Spatial(
         limiter=WENO5(epsilon=Decimal("1e-40")),
-        riemann=HLL(waves=ExplicitPair()),
-        variables=Primitive(),
+        flux=HLL(waves=ExplicitPair()),
+        recon=Primitive(),
         positivity_floor=Fraction(1, 10**30),
         wave_speed_cache=True,
     )
@@ -49,12 +49,12 @@ def test_spatial_identity_covers_every_route_and_control_exactly():
 
 
 def test_spatial_identity_distinguishes_routes_and_exact_numeric_domains():
-    rational = pops.Spatial(limiter=Minmod(), positivity_floor=Fraction(1, 10))
-    decimal = pops.Spatial(limiter=Minmod(), positivity_floor=Decimal("0.1"))
-    binary64 = pops.Spatial(limiter=Minmod(), positivity_floor=0.1)
+    rational = engine.Spatial(limiter=Minmod(), positivity_floor=Fraction(1, 10))
+    decimal = engine.Spatial(limiter=Minmod(), positivity_floor=Decimal("0.1"))
+    binary64 = engine.Spatial(limiter=Minmod(), positivity_floor=0.1)
 
     assert len({rational.identity(), decimal.identity(), binary64.identity()}) == 3
-    assert rational != pops.Spatial(limiter=Minmod(), flux=HLL(),
+    assert rational != engine.Spatial(limiter=Minmod(), flux=HLL(),
                                     positivity_floor=Fraction(1, 10))
 
 
@@ -67,8 +67,8 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
             native_id="pops_external_flux", scheme="user",
         )
 
-    left = pops.Spatial(flux=external("acme.hll.v1"))
-    right = pops.Spatial(flux=external("acme.hll.v2"))
+    left = engine.Spatial(flux=external("acme.hll.v1"))
+    right = engine.Spatial(flux=external("acme.hll.v2"))
 
     assert left.to_data()["riemann"] == {
         "route": "user", "external_id": "acme.hll.v1",
@@ -77,9 +77,9 @@ def test_external_riemann_identity_includes_the_registered_brick_id():
 
 
 def test_detach_and_freeze_preserve_spatial_identity_and_seal_all_controls():
-    authored = pops.FiniteVolume(
+    authored = engine.Spatial(
         reconstruction=WENO5(epsilon=Fraction(1, 10**18)),
-        riemann=HLL(waves=ExplicitPair()),
+        flux=HLL(waves=ExplicitPair()),
         positivity_floor=Decimal("1e-24"),
         wave_speed_cache=True,
     )
@@ -94,20 +94,3 @@ def test_detach_and_freeze_preserve_spatial_identity_and_seal_all_controls():
     assert detached == authored
     with pytest.raises(RuntimeError, match="frozen by AuthoringSnapshot"):
         detached.weno_epsilon = Decimal("2e-24")
-
-
-def test_internal_token_lowering_preserves_optional_identity_controls():
-    from pops.runtime._bricks_scheme import Spatial
-
-    spatial = Spatial._from_tokens(
-        "weno5", "hll", "primitive",
-        positivity_floor=Fraction(1, 100),
-        wave_speed_cache=True,
-        waves_provider="explicit_pair",
-        weno_epsilon=Decimal("1e-20"),
-    )
-
-    assert spatial.to_data()["waves_provider"] == "explicit_pair"
-    assert spatial.to_data()["weno_epsilon"] == {"kind": "decimal", "value": "1E-20"}
-    with pytest.raises(TypeError, match="wave_speed_cache"):
-        Spatial._from_tokens("none", "rusanov", "conservative", wave_speed_cache=1)

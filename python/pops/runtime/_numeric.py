@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir.literals import exact_numeric_scalar, scalar_to_native
+from pops._ir.literals import exact_numeric_scalar, scalar_to_native
 
 
 def exact_real(

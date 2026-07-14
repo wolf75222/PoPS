@@ -6,10 +6,10 @@ Every schedule kind/policy now LOWERS to C++ (`Program._emit_schedule_wrap`), ge
 per policy/kind on both a field-solve node (output = the System aux) and a scratch node (output = a
 named MultiFab):
 
-  - `every(N)`   -> `if (ctx.cache_should_update(id, N)) { ... }`
-  - `on_start()` -> `if ((ctx.macro_step() == 0)) { ... }`
+  - `every(N)`   -> `if (ctx.schedule_is_due(id, N, exact_domain)) { ... }`
+  - `on_start()` -> `if (ctx.schedule_at_start(exact_domain)) { ... }`
   - `when(cond)` -> reuses the Program Bool predicate token as the due test
-  - `ClockTick` / `AMRLevel` -> typed and preserved, honestly refused before ADC-677
+  - `ClockTick` / `AMRLevel` -> qualified logical-clock / hierarchy-level runtime domains
   - `recompute`  -> the body runs only when due, no else
   - `hold`       -> store/restore the cached value (aux or named scratch) off-cadence
   - `skip`       -> the op runs only when due; the value keeps its stale content (no else)
@@ -80,6 +80,8 @@ def _emit_field(schedule):
         id=17,
         name="fields_from_state",
         op="solve_fields",
+        clock=clock,
+        point=None,
         attrs={} if schedule is None else {"schedule": schedule},
     )
     lines = ["ctx.solve_fields_from_state();"]
@@ -112,13 +114,15 @@ def test_unscheduled_has_no_guard():
 # --- every(N) cadence (kind) ------------------------------------------------
 def test_every_due_test_carries_period():
     cpp = _emit_field(lambda clock: _every(clock, 7, adctime.Hold()))
-    assert "ctx.cache_should_update(" in cpp and ", 7)" in cpp
+    assert "ctx.schedule_is_due(17, 7," in cpp
+    assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
 # --- on_start (kind) --------------------------------------------------------
-def test_on_start_lowers_to_macro_step_zero():
+def test_on_start_lowers_to_domain_start():
     cpp = _emit_field(lambda clock: _at_start(clock, adctime.Hold()))
-    assert "(ctx.macro_step() == 0)" in cpp
+    assert "ctx.schedule_at_start(" in cpp
+    assert "ScheduleDomainKind::kAcceptedStep" in cpp
 
 
 # --- when(cond) (kind) ------------------------------------------------------
@@ -177,38 +181,75 @@ def test_when_over_python_callable_refuses():
         raise AssertionError("when(callable) must refuse to lower")
 
 
-# --- subcycle (kind) --------------------------------------------------------
-def test_clock_tick_domain_refuses_until_multirate_runtime_exists():
+# --- qualified runtime domains ---------------------------------------------
+def test_clock_tick_domain_lowers_to_qualified_logical_tick():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
-    try:
-        program._check_schedules_lowerable()
-    except NotImplementedError as exc:
-        assert "ClockTick" in str(exc) and "ADC-677" in str(exc)
-    else:
-        raise AssertionError("ClockTick must refuse before ADC-677")
+    program._check_schedules_lowerable()
+    cpp = program.emit_cpp_program(model=None)
+    assert "ctx.schedule_domain_occurs(" in cpp
+    assert "ScheduleDomainKind::kClockTick" in cpp
+    assert program.clock.qualified_id in cpp
 
 
-def test_amr_level_domain_refuses_until_amr_clock_runtime_exists():
+def test_amr_level_domain_requires_amr_target_and_lowers_there():
     program = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.AMRLevel(clock, level=1))))
+    program._check_schedules_lowerable()
     try:
-        program._check_schedules_lowerable()
+        program.emit_cpp_program(model=None, target="system")
     except NotImplementedError as exc:
-        assert "AMRLevel" in str(exc) and "ADC-677" in str(exc)
+        assert "AMRLevel" in str(exc) and "amr_system" in str(exc)
     else:
-        raise AssertionError("AMRLevel must refuse before ADC-677")
+        raise AssertionError("AMRLevel must refuse the uniform System target")
+    cpp = program.emit_cpp_program(model=None, target="amr_system")
+    assert "ScheduleDomainKind::kAmrLevel" in cpp
+    assert ", 1))" in cpp
 
 
-def test_clock_tick_on_scratch_node_refuses_honestly():
+def test_clock_tick_on_scratch_node_emits_guard_without_cache_cadence():
     P = _scratch_program(lambda clock: adctime.Schedule(
         adctime.Always(adctime.ClockTick(clock))))
+    cpp = P.emit_cpp_program(model=None)
+    assert "ScheduleDomainKind::kClockTick" in cpp
+    assert "ctx.schedule_domain_occurs(" in cpp
+    assert "ctx.cache_should_update(" not in cpp
+
+
+def test_stage_domain_refuses_a_different_node_stage_before_emission():
+    clock = adctime.Clock("macro")
+    stage_a = adctime.StagePoint("a", {"main": adctime.TimePoint(clock, 0.25)})
+    stage_b = adctime.StagePoint("b", {"main": adctime.TimePoint(clock, 0.5)})
+    schedule = adctime.Schedule(adctime.Always(adctime.Stage(clock, stage_a)))
+    value = SimpleNamespace(
+        id=18, name="crossed_stage", op="solve_fields", clock=clock, point=stage_b,
+        attrs={"schedule": schedule})
+    lines = ["ctx.solve_fields_from_state();"]
     try:
-        P._check_schedules_lowerable()
-    except NotImplementedError as exc:
-        assert "ClockTick" in str(exc) and "ADC-677" in str(exc)
+        _emit_schedule_wrap(None, value, {}, lines, 0)
+    except ValueError as exc:
+        assert "point does not match" in str(exc)
     else:
-        raise AssertionError("ClockTick must refuse before ADC-677")
+        raise AssertionError("a Stage schedule must authenticate the exact node StagePoint")
+
+
+def test_amr_flux_weight_is_proved_before_artifact_creation():
+    valid = _scratch_program(lambda clock: adctime.Schedule(
+        adctime.Always(adctime.AcceptedStep(clock)))).emit_cpp_program(
+            model=None, target="amr_system")
+    assert "{{1, 1, 1}}" in valid
+
+    program = adctime.Program("bad_flux_dimension")
+    state = typed_state(program, "ions")
+    rate = program.rhs(state=state, terms=[Flux(), DefaultSource()])
+    endpoint = typed_state(program, "ions", state_name="U").next
+    program.commit(endpoint, program.value("bad", state + rate, at=endpoint.point))
+    try:
+        program.emit_cpp_program(model=None, target="amr_system")
+    except ValueError as exc:
+        assert "dt powers" in str(exc) and "weight * dt * flux" in str(exc)
+    else:
+        raise AssertionError("an unintegrated conservative flux must fail before artifact creation")
 
 
 # --- policies on a FIELD-SOLVE node (output = aux) --------------------------
@@ -246,7 +287,7 @@ def test_field_error_emits_scheduler_error_else():
 
 def test_field_recompute_runs_only_when_due():
     cpp = _emit_field(lambda clock: _every(clock, 2))
-    assert "if (ctx.cache_should_update(" in cpp
+    assert "if (ctx.schedule_is_due(" in cpp
     assert "cache_store_aux" not in cpp  # recompute does not cache
     assert "cache_restore_aux" not in cpp
 
@@ -260,7 +301,7 @@ def test_scratch_hold_caches_named_scratch():
     assert "ctx.cache_restore_scratch(" in cpp
     # the output scratch is DECLARED before the guard (so both branches see it)
     decl_idx = cpp.index("pops::MultiFab r")
-    guard_idx = cpp.index("if (ctx.cache_should_update(")
+    guard_idx = cpp.index("if (ctx.schedule_is_due(")
     assert decl_idx < guard_idx
 
 
@@ -282,7 +323,7 @@ def test_scratch_decl_hoisted_for_skip():
     # the scratch decl must be OUTSIDE the guard so the (stale) buffer stays in scope for downstream
     cpp = _emit_scratch(lambda clock: _every(clock, 5, adctime.Skip()))
     decl_idx = cpp.index("pops::MultiFab r")
-    guard_idx = cpp.index("if (ctx.cache_should_update(")
+    guard_idx = cpp.index("if (ctx.schedule_is_due(")
     assert decl_idx < guard_idx
 
 

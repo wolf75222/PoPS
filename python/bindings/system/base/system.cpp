@@ -93,6 +93,29 @@ int System::macro_step() const {
 // checkpointed / finalized phases (SystemLifecycle) are reachable only through explicit transitions
 // with no current caller, so the observable strings above are preserved bit-for-bit.
 void System::mark_bound() {
+  if (!p_->block_state_identities_.empty() &&
+      p_->block_state_identities_.size() != p_->sp.size())
+    throw std::runtime_error(
+        "System::mark_bound: block state routes do not exactly cover materialized blocks");
+  for (const auto& block : p_->sp)
+    if (!p_->block_state_identities_.empty() &&
+        (block.state_identity.empty() ||
+         p_->block_state_identities_.find(block.name) == p_->block_state_identities_.end()))
+      throw std::runtime_error(
+          "System::mark_bound: materialized block lacks its exact state route");
+  for (const auto& [name, plan] : p_->boundary_plans_) {
+    const auto found = std::find_if(
+        p_->sp.begin(), p_->sp.end(),
+        [&name](const Impl::Species& block) { return block.name == name; });
+    if (found == p_->sp.end())
+      throw std::runtime_error(
+          "System::mark_bound: prepared boundary plan references unknown block '" + name + "'");
+    if (plan->ncomp() != found->ncomp)
+      throw std::runtime_error(
+          "System::mark_bound: prepared boundary component count differs from block '" + name +
+          "'");
+    (void)plan->has_boundary_linearization();
+  }
   p_->lifecycle_.to_bound();  // Assembling -> Bound; throws the same message on a second bind
 }
 std::string System::lifecycle_state() const {
@@ -123,8 +146,7 @@ int System::n_species() const {
   return p_->blocks_.size();
 }
 std::vector<std::string> System::block_names() const {
-  // SINGLE block registry (store), populated by all add paths: a block loaded via
-  // add_dynamic_block / add_compiled_block (.so) appears there just like an add_block.
+  // SINGLE block registry (store), populated by the native install paths.
   return p_->blocks_.names();
 }
 

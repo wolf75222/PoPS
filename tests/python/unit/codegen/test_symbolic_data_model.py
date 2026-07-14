@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from pops.ir import (
+from pops._ir import (
     Compare, Const, Expr, Partial, SourceLocation, SymbolicTruthValueError, Unknown,
     ValueExpr, Var, diff,
 )
-from pops.ir.visitors import _children, _key
+from pops._ir.visitors import _children, _key
 from pops.model import Handle, OwnerKind, OwnerPath, UnresolvedOwnershipError
 
 

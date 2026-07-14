@@ -1,4 +1,7 @@
 #include "../bindings_detail.hpp"
+#include "boundary_component_install.hpp"
+
+#include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <limits>
 
@@ -71,6 +74,82 @@ void bind_system_assembly(py::class_<System>& cls) {
           // ADC-645: the WENO-Z smoothness regulariser of limiter='weno5' (default = the historical
           // kWenoEpsilon literal, bit-identical; refused on another limiter / the polar path).
           py::arg("weno_epsilon") = static_cast<double>(kWenoEpsilon))
+      .def("_install_boundary_plan", &System::install_boundary_plan, py::arg("name"),
+           py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
+           py::arg("face_values"), py::arg("ncomp"),
+           py::arg("omitted_interface_faces") = std::vector<int>{},
+           py::arg("state_identity") = std::string{},
+           "Install one resolved per-block ghost-production plan before block construction.")
+      .def("_install_block_state_route", &System::install_block_state_route,
+           py::arg("name"), py::arg("state_identity"),
+           "Bind one exact state Handle identity to native block storage.")
+      .def("_install_boundary_field_route", &System::install_boundary_field_route,
+           py::arg("field_identity"), py::arg("provider_slot"),
+           "Bind one exact boundary field Handle to native provider storage.")
+      .def("_discard_boundary_plans", &System::discard_boundary_plans,
+           "Roll back one failed pre-block boundary authority transaction.")
+      .def(
+          "_install_ghost_boundary_component",
+          [](System& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_ghost_boundary_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_residual_component",
+          [](System& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_field_boundary_residual_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_jvp_component",
+          [](System& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_field_boundary_jvp_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_interface_flux_component",
+          [](System& system, std::size_t left_block, std::size_t right_block, int level,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& interface, const py::dict& binding,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
+            auto route = pops::python::detail::interface_route_from_python(
+                interface, left_block, right_block, level);
+            auto spec = pops::python::detail::interface_flux_spec_from_python(
+                interface, binding, parameters_json, target_json, execution);
+            system.install_interface_flux_component(
+                std::move(route), std::move(spec), std::move(component));
+          },
+          py::arg("left_block"), py::arg("right_block"), py::arg("level"),
+          py::arg("component"), py::arg("interface"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def("_interface_evaluation_count", &System::interface_evaluation_count,
+           py::arg("identity"), py::arg("level") = 0)
+      .def("_discard_interface_flux_components",
+           &System::discard_interface_flux_components,
+           "Roll back one failed post-block interface authority transaction.")
       // Newton report (IMEX diagnostics OPT-IN): dict {enabled, converged, max_residual,
       // max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the substeps of the
       // LAST advance of the block. failed_cell = (i, j) of ONE faulty cell or None.
@@ -441,7 +520,7 @@ void bind_system_physics(py::class_<System>& cls) {
           },
           py::arg("bz"))
       // NAMED aux fields (ADC-70 phase 1): by canonical COMPONENT (>= 5). The name -> comp
-      // resolution lives in the Python facade (pops.System.set_aux_field), which calls these two methods.
+      // resolution lives in the private Python System facade, which calls these two methods.
       .def(
           "set_aux_field_component",
           [](System& s, int comp,
@@ -450,7 +529,7 @@ void bind_system_physics(py::class_<System>& cls) {
           },
           py::arg("comp"), py::arg("field"))
       // ADC-369: per-field aux halo policy (bc_type = pops::BCType Foextrap=1 / Dirichlet=2). The Python
-      // facade (pops.System.set_aux_field(..., halo=pops.AuxHalo(...))) resolves name -> comp and calls this.
+      // facade (System.set_aux_field(..., halo=pops.mesh.AuxHalo(...))) resolves name -> comp and calls this.
       .def(
           "set_aux_field_halo_component",
           [](System& s, int comp, int bc_type, double value) {
@@ -473,7 +552,7 @@ void bind_system_physics(py::class_<System>& cls) {
           py::arg("name"), py::arg("rho"))
       // Init from the PRIMITIVES: prim = array (ncomp, n, n) component-major in the order of
       // primitive_vars(name); converted to conservative by the block's model. The Python facade
-      // (pops.System.set_primitive_state(**prims)) assembles this array from the named kwargs.
+      // System.set_primitive_state(**prims) assembles this array from the named kwargs.
       .def(
           "set_primitive_state",
           [](System& s, const std::string& name,

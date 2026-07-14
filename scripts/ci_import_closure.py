@@ -49,7 +49,7 @@ TESTS_DIR = ROOT / "tests" / "python"
 def module_name_for_pops_path(path: Path) -> str | None:
     """Return the dotted ``pops...`` module name for a file under ``python/pops``.
 
-    ``python/pops/runtime/_bound_sim.py`` -> ``pops.runtime._bound_sim`` and a package
+    ``python/pops/runtime/_runtime_instance.py`` -> ``pops.runtime._runtime_instance`` and a package
     ``__init__.py`` -> the package name (``python/pops/runtime/__init__.py`` ->
     ``pops.runtime``). Returns None for a path outside ``python/pops``.
     """

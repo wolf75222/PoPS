@@ -190,7 +190,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     if libraries:
         raise TypeError(
             "compile_problem(libraries=) was removed; compile authenticated source components "
-            "with pops.codegen.compile_component and reference their canonical descriptors")
+            "with pops.external.compile_component and reference their canonical descriptors")
     library_manifests = []
     external_brick_records = []
 

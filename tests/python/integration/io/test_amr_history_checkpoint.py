@@ -32,6 +32,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as lt
     from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
@@ -132,8 +133,8 @@ def _build(program_factory, regrid_every=2):
         return None, "compile: %s" % str(exc)[:180]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_refinement(1.2)  # tags the blob -> a real 2-level hierarchy, regrids at steps 2,4,...
         amr.set_density("blk", _blob())
         amr.install_program(compiled.so_path)

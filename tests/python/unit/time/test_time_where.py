@@ -180,7 +180,7 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
@@ -222,8 +222,8 @@ def _run_section_b(t):
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     # An IC that STRADDLES the floor: a sine swinging through 0.5 so some cells are >= floor and some
     # are < floor (the select must genuinely vary per cell -- non-vacuous).
     x = (np.arange(n) + 0.5) / n

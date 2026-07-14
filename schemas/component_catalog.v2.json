@@ -55,6 +55,140 @@
       "required_args": 1
     }
   ],
+  "native_interface_abi_version": 1,
+  "native_common_abi_version": 1,
+  "native_interface_abis": [
+    {
+      "name": "numerical_flux",
+      "uri": "pops://interfaces/numerical-flux",
+      "version": 1,
+      "cpp_table": "PopsNumericalFluxApiV1",
+      "hot_path": true,
+      "facets": ["lowering", "stability"],
+      "operations": ["evaluate_faces"]
+    },
+    {
+      "name": "ghost_boundary",
+      "uri": "pops://interfaces/ghost-boundary",
+      "version": 1,
+      "cpp_table": "PopsGhostBoundaryApiV1",
+      "hot_path": true,
+      "facets": ["provider", "lowering"],
+      "operations": ["apply_region_batch"]
+    },
+    {
+      "name": "field_boundary_closure",
+      "uri": "pops://interfaces/field-boundary-closure",
+      "version": 1,
+      "cpp_table": "PopsFieldBoundaryClosureApiV1",
+      "hot_path": false,
+      "facets": ["provider", "fallible_evaluation"],
+      "operations": ["residual", "jvp"]
+    },
+    {
+      "name": "tagger",
+      "uri": "pops://interfaces/tagger",
+      "version": 1,
+      "cpp_table": "PopsTaggerApiV1",
+      "hot_path": true,
+      "facets": ["lowering", "fallible_evaluation"],
+      "operations": ["tag_batch"]
+    },
+    {
+      "name": "clustering",
+      "uri": "pops://interfaces/clustering",
+      "version": 1,
+      "cpp_table": "PopsClusteringApiV1",
+      "hot_path": false,
+      "facets": ["lowering", "effects"],
+      "operations": ["cluster"]
+    },
+    {
+      "name": "transfer",
+      "uri": "pops://interfaces/transfer",
+      "version": 1,
+      "cpp_table": "PopsTransferApiV1",
+      "hot_path": true,
+      "facets": ["stencil", "lowering"],
+      "operations": ["apply"]
+    },
+    {
+      "name": "reflux",
+      "uri": "pops://interfaces/reflux",
+      "version": 1,
+      "cpp_table": "PopsRefluxApiV1",
+      "hot_path": true,
+      "facets": ["effects", "fallible_evaluation"],
+      "operations": ["deposit_integrated"]
+    },
+    {
+      "name": "field_solver",
+      "uri": "pops://interfaces/field-solver",
+      "version": 1,
+      "cpp_table": "PopsFieldSolverApiV1",
+      "hot_path": false,
+      "facets": ["lowering", "fallible_evaluation", "report"],
+      "operations": ["solve"]
+    },
+    {
+      "name": "writer",
+      "uri": "pops://interfaces/writer",
+      "version": 1,
+      "cpp_table": "PopsWriterApiV1",
+      "hot_path": false,
+      "facets": ["effects", "fallible_evaluation", "format"],
+      "operations": ["verify", "publish", "discard", "rollback"]
+    },
+    {
+      "name": "field_topology",
+      "uri": "pops://interfaces/field-topology",
+      "version": 1,
+      "cpp_table": "PopsFieldTopologyApiV1",
+      "hot_path": false,
+      "facets": ["provider", "report"],
+      "operations": ["prepare_topology"]
+    }
+  ],
+  "boundary_handle_native_routes": {
+    "boundary_provider": {
+      "interface": "ghost_boundary",
+      "operation": "apply_region_batch"
+    },
+    "corner_resolver": {
+      "interface": "ghost_boundary",
+      "operation": "apply_region_batch"
+    },
+    "numerical_closure": {
+      "interface": "ghost_boundary",
+      "operation": "apply_region_batch"
+    },
+    "conservative_flux": {
+      "interface": "numerical_flux",
+      "operation": "evaluate_faces"
+    },
+    "residual_operator": {
+      "interface": "field_boundary_closure",
+      "operation": "residual"
+    },
+    "linearization_operator": {
+      "interface": "field_boundary_closure",
+      "operation": "jvp"
+    }
+  },
+  "route_family_native_interfaces": {
+    "riemann": "numerical_flux",
+    "limiter": null,
+    "recon": null,
+    "time": null,
+    "field_solver": "field_solver",
+    "poisson_bc": "field_boundary_closure",
+    "layout": null,
+    "transport": null,
+    "source": null,
+    "elliptic": "field_solver",
+    "poisson_rhs": null,
+    "wall": "ghost_boundary"
+  },
   "route_family_interfaces": {
     "riemann": [
       {"name": "requirement", "mode": "value", "binding": "requirements"},

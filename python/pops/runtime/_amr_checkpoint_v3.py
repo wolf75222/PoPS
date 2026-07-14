@@ -21,7 +21,7 @@ def write_v3(owner, sim, path, L, regrid_every, persistence=None):
     import os
     import numpy as np
     from pops import _pops
-    from pops.runtime.bricks import abi_key
+    from pops.runtime._engine_descriptors import abi_key
 
     # Controlled refusal (ADC-597 matrix standard): a block-less engine cannot describe a
     # hierarchy; refuse HERE with the route-specific reason instead of surfacing the raw engine

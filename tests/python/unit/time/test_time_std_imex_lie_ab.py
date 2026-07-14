@@ -13,7 +13,7 @@ from pops.time import Program
 def _authoring(name="time"):
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import LocalLinearOperator, Module, RateSpace, Signature
     from pops.problem import Case

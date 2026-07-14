@@ -112,13 +112,13 @@ def test_run_manifest_strict_round_trip_and_no_numeric_coercion():
                       "output_mode": "current-directory"})
 
 
-def test_uniform_and_amr_run_share_the_typed_strategy_contract():
+def test_internal_engines_do_not_reintroduce_public_strategy_controls():
     for runtime in (System, AmrSystem):
         signature = inspect.signature(runtime.run)
-        assert signature.parameters["strategy"].default is None
+        assert "strategy" not in signature.parameters
+        assert "cfl" not in signature.parameters
         assert signature.parameters["controls"].default is None
         assert signature.parameters["max_steps"].default is inspect.Parameter.empty
-        assert "cfl" not in signature.parameters
 
 
 def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(monkeypatch):
@@ -128,12 +128,14 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
         controls={"t_end": 1.0, "step_transaction": _run_control(), "max_steps": 10,
                   "output_mode": "current-directory"})
     owner = SimpleNamespace(
-        bound_snapshot=snapshot, last_run_identity=run.run_identity)
+        _checkpoint_identities=lambda: (
+            snapshot.semantic_identity, snapshot.artifact_identity, snapshot.bind_identity),
+        last_run_identity=run.run_identity)
     payload = {
         "pops_checkpoint_version": 3, "t": 0.5, "macro_step": 2,
         "abi_key": "test-abi", "state_tracer": np.arange(4, dtype=np.float64),
     }
-    monkeypatch.setattr("pops.runtime.bricks.abi_key", lambda: "test-abi")
+    monkeypatch.setattr("pops.runtime._engine_descriptors.abi_key", lambda: "test-abi")
     restart = seal_checkpoint_payload(owner, payload, runtime_kind="uniform")
 
     class PayloadView:
@@ -155,7 +157,7 @@ def test_checkpoint_manifest_authenticates_exact_payload_and_runtime_identities(
 
 
 def test_checkpoint_without_current_manifest_is_refused(monkeypatch):
-    monkeypatch.setattr("pops.runtime.bricks.abi_key", lambda: "test-abi")
+    monkeypatch.setattr("pops.runtime._engine_descriptors.abi_key", lambda: "test-abi")
     owner = SimpleNamespace(bound_snapshot=_bound_snapshot())
 
     class Historical:

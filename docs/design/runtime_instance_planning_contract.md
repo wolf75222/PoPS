@@ -1,8 +1,8 @@
 # RuntimeInstance planning contract
 
-ADC-684 phase A defines the immutable planning boundary that precedes construction of the single
-internal `RuntimeInstance`. It performs no binary loading, backend initialization, allocation,
-communication, or kernel call.
+This contract defines the immutable planning boundary consumed when constructing the single
+internal `RuntimeInstance`. Planning performs no binary loading, backend initialization,
+allocation, communication, or kernel call.
 
 ## Authorities
 
@@ -39,8 +39,8 @@ shape and re-authenticates every nested identity.
 
 ## Closed runtime requirement vocabulary
 
-Component requirements remain canonical `ComponentManifest` rows. Phase A interprets only the
-following execution-bearing rows:
+Component requirements remain canonical `ComponentManifest` rows. The runtime planner interprets
+only the following execution-bearing rows:
 
 ```text
 {capability: halo, depth: positive-int, resource?: declared-read}
@@ -66,8 +66,11 @@ target clock and policy. Bitwise plans always authenticate rank count, device, r
 reduction strategy. `DeterminismGuarantee.require_assumptions()` rejects any later runtime facts
 that differ; it never silently downgrades the guarantee.
 
-## Deferred cutover
+## Runtime integration boundary
 
-This phase intentionally does not introduce `RuntimeInstance`, replace install adapters, or change
-native runtime APIs. The cutover can consume this bundle after the accepted-state, installed
-component, flux-provider and AMR-clock authorities have been integrated.
+The bundle crosses into execution only through the private implementation of `pops.bind` and
+`pops.run`. Author code neither constructs the planner records nor imports runtime engines.
+`RuntimeInstance` is the opaque bound value returned by `pops.bind`; its explicit read, checkpoint,
+restart and inspection methods are the only supported instance surface. Installation and execution
+must authenticate the bundle's plan, bind, component and layout identities without rebuilding or
+weakening them.

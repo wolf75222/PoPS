@@ -1,21 +1,18 @@
-"""WENO5 sur les chemins .so / CompiledModel (AOT add_compiled_block ET production add_native_block).
+"""WENO5 sur le package natif ``production`` charge par ``add_native_block``.
 
 Le verrou de ce chantier : les chemins compiles allouent desormais l'etat avec block_n_ghost(limiter)
-(3 pour weno5, son stencil 5 points), comme System::add_block (PR #88) -- la grille locale du .so cote
-AOT (compiled_block_abi.hpp), le bloc natif via add_compiled_model cote production. WENO5 etait avant
+(3 pour weno5, son stencil 5 points), comme System::add_block (PR #88). Le bloc natif est construit
+via add_compiled_model cote production. WENO5 etait avant
 REJETE sur ces chemins ("limiter 'weno5' non expose ... 2 ghosts").
 
 On verifie, pour le MEME euler_poisson et limiter="weno5", flux rusanov :
-  (1) AOT (add_compiled_block) : plus de "limiter inconnu" / rejet ; eval_rhs ET potentiel egalent
-      le bloc NATIF add_block weno5 a TOLERANCE SERREE (le .so recalcule sur une grille LOCALE et
-      MARSHALE des tableaux plats -> arrondi de recopie, comme test_dsl_aot ; < 1e-9). Avance saine.
-  (2) production (add_native_block, loader natif zero-copie) : eval_rhs ET potentiel BIT-IDENTIQUES
+  (1) production (add_native_block, loader natif zero-copie) : eval_rhs ET potentiel BIT-IDENTIQUES
       au bloc natif add_block weno5 (MEME make_block / install_block / set_block_ghosts(3) sur les
       vrais MultiFab du System).
-  (3) NO-DEFAULT-CHANGE : none/minmod restent <= 2 ghosts (set_block_ghosts no-op) -> AOT a la meme
-      tolerance serree et production reste BIT-IDENTIQUE au natif. Allocation inchangee.
+  (2) NO-DEFAULT-CHANGE : none/minmod restent <= 2 ghosts (set_block_ghosts no-op) et production
+      reste BIT-IDENTIQUE au natif. Allocation inchangee.
 
-S'auto-saute (exit 0) sans compilateur / en-tetes pops, comme test_dsl_aot / test_dsl_production.
+S'auto-saute (exit 0) sans compilateur / en-tetes pops, comme test_dsl_production.
 """
 from pops.numerics.variables import Conservative
 from pops.numerics.riemann import Rusanov
@@ -25,7 +22,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
@@ -35,10 +32,10 @@ POPS_PROCESS_TIMEOUT = 900
 
 def _native_spec():
     """euler_poisson NATIF compose par briques (reference de parite, cf. test_dsl_production)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                     transport=pops.CompressibleFlux(),
-                     source=pops.GravityForce(),
-                     elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                     transport=engine.CompressibleFlux(),
+                     source=engine.GravityForce(),
+                     elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
 
 def _initial_state(n):
@@ -64,10 +61,8 @@ def main():
     spec = _native_spec()
     tmp = tempfile.mkdtemp()
     try:
-        so_aot = e.compile(os.path.join(tmp, "euler_poisson_aot.so"), INCLUDE, backend="aot")
         so_prod = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE,
                             backend="production")
-        assert e.adder_for("aot") == "add_compiled_block"
         assert e.adder_for("production") == "add_native_block"
 
         # --- reference NATIVE add_block (oracle de parite) ---
@@ -75,55 +70,15 @@ def main():
             sys = System(n=n, L=L, periodic=True)
             lim = {"none": dict(none=True), "minmod": dict(minmod=True),
                    "weno5": dict(weno5=True)}[limiter]
-            sys.block("gas", spec, spatial=pops.Spatial(flux=Rusanov(), recon=Conservative(),
-                                                           **lim), time=pops.Explicit())
+            sys.block("gas", spec, spatial=engine.Spatial(flux=Rusanov(), recon=Conservative(),
+                                                           **lim), time=engine.Explicit())
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             sys.solve_fields()
             return (np.array(sys.eval_rhs("gas")).reshape(4, n, n),
                     np.array(sys.potential()).reshape(n, n))
 
-        # --- (1) AOT : add_compiled_block accepte weno5, parite serree au natif ---
-        def aot(limiter):
-            sys = System(n=n, L=L, periodic=True)
-            sys.add_compiled_block("gas", so_aot, limiter=limiter, riemann="rusanov",
-                                   recon="conservative", time="explicit",
-                                   names=["rho", "rho_u", "rho_v", "E"])
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-            sys.set_state("gas", Uflat)
-            sys.solve_fields()
-            return (np.array(sys.eval_rhs("gas")).reshape(4, n, n),
-                    np.array(sys.potential()).reshape(n, n))
-
-        for limiter in ("none", "minmod", "weno5"):
-            R_ref, phi_ref = ref(limiter)
-            R_aot, phi_aot = aot(limiter)
-            assert float(np.max(np.abs(R_aot))) > 1e-3, "%s : residu AOT trivial" % limiter
-            dphi = float(np.max(np.abs(phi_aot - phi_ref)))
-            dres = float(np.max(np.abs(R_aot - R_ref)))
-            # Tolerance SERREE (pas bit-identique) : le .so AOT recalcule sur une grille LOCALE et
-            # marshale des tableaux plats (arrondi de recopie), comme tout add_compiled_block.
-            assert dphi < 1e-9, "AOT %s : potentiel != natif (%.2e)" % (limiter, dphi)
-            assert dres < 1e-9, "AOT %s : eval_rhs != natif (%.2e)" % (limiter, dres)
-            print("OK  AOT %s : add_compiled_block accepte + eval_rhs/potentiel == add_block (%.1e)"
-                  % (limiter, max(dphi, dres)))
-
-        # avance AOT weno5 : tourne, masse conservee, dynamique non triviale
-        sys = System(n=n, L=L, periodic=True)
-        sys.add_compiled_block("gas", so_aot, limiter="weno5", riemann="rusanov",
-                               recon="conservative", names=["rho", "rho_u", "rho_v", "E"])
-        sys.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sys.set_state("gas", Uflat)
-        mass0 = float(np.array(sys.get_state("gas")).reshape(4, n, n)[0].sum())
-        for _ in range(15):
-            sys.step_cfl(0.4)
-        U1 = np.array(sys.get_state("gas")).reshape(4, n, n)
-        drel = abs(float(U1[0].sum()) - mass0) / mass0
-        assert np.isfinite(U1).all() and U1[0].min() > 0, "AOT weno5 : etat non physique"
-        assert drel < 1e-9, "AOT weno5 : masse non conservee (drel=%.2e)" % drel
-        print("OK  AOT weno5 avance dans le System (SSPRK2, 15 pas, masse drel=%.1e)" % drel)
-
-        # --- (2) production : add_native_block accepte weno5, parite STRICTE (bit-identique) ---
+        # --- production : add_native_block accepte weno5, parite STRICTE (bit-identique) ---
         def prod(limiter):
             sys = System(n=n, L=L, periodic=True)
             sys._s.add_native_block("gas", so_prod, limiter=limiter, riemann="rusanov",
@@ -160,9 +115,9 @@ def main():
 
         def build_ref_step():
             sys = System(n=n, L=L, periodic=True)
-            sys.block("gas", spec, spatial=pops.Spatial(weno5=True, flux=Rusanov(),
+            sys.block("gas", spec, spatial=engine.Spatial(weno5=True, flux=Rusanov(),
                                                            recon=Conservative()),
-                          time=pops.Explicit())
+                          time=engine.Explicit())
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys

@@ -13,7 +13,7 @@ from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet
-from pops.ir.ops import abs_ as _abs, sign as _sign, sqrt as _sqrt
+from pops._ir.ops import abs_ as _abs, sign as _sign, sqrt as _sqrt
 
 
 _HYQMOM15_INDICES = tuple(
@@ -397,11 +397,6 @@ class RealizabilityProjection(Descriptor):
                 % (self.eps_m00, self.eps_cov, self.robust))
 
 
-#: The issue vocabulary spells the projection ``MomentProjection``; it is the SAME
-#: descriptor (an identity alias, so ``isinstance`` / descriptor identity are unchanged).
-MomentProjection = RealizabilityProjection
-
-
 class RealizableSet(Descriptor):
     """The realizable moment cone at ``order`` (an inert capability descriptor).
 
@@ -430,4 +425,4 @@ class RealizableSet(Descriptor):
         return "RealizableSet(order=%d)" % (self.order,)
 
 
-__all__ = ["RealizabilityProjection", "MomentProjection", "RealizableSet"]
+__all__ = ["RealizabilityProjection", "RealizableSet"]

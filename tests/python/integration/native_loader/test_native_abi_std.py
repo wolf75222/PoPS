@@ -28,7 +28,7 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import loader_cxx_std
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._model import HyperbolicModel
 
 

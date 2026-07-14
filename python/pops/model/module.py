@@ -104,11 +104,11 @@ class Module(ModuleFreezable):
         """Build the symbolic value read of one registered parameter.
 
         This explicit conversion keeps :class:`ParamHandle` identity separate
-        from :class:`pops.ir.Expr` algebra: handles retain Boolean equality and
+        from :class:`pops._ir.Expr` algebra: handles retain Boolean equality and
         dictionary-key semantics, while the returned node carries the declared
         compile/bind storage behavior.
         """
-        from pops.ir import parameter_value
+        from pops._ir import parameter_value
 
         return parameter_value(self._param_registry, parameter)
 
@@ -289,10 +289,10 @@ class Module(ModuleFreezable):
         These expressions are the canonical authoring path for operators that read
         several state spaces.  Unlike bare component names, they remain unambiguous
         when, for example, both an electron and ion state contain ``"density"``.
-        They are ordinary immutable :class:`pops.ir.Var` nodes and introduce no
+        They are ordinary immutable :class:`pops._ir.Var` nodes and introduce no
         separate multi-species runtime or lowering path.
         """
-        from pops.ir.expr import Var
+        from pops._ir.expr import Var
         from pops.model.state_symbols import state_component_symbol
 
         handle = self.state_handle(state)

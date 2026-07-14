@@ -404,42 +404,6 @@ def load_cpp_library(path: Any) -> int:
     return _register_manifest(raw.decode("utf-8"))
 
 
-def load_compiled_manifest(path: Any) -> Any:
-    """Read the per-artifact NativeManifest JSON of a compiled block ``.so`` (Spec 5 sec.13.12, #36).
-
-    The sibling of :func:`load_cpp_library` for an AOT model artifact (one built by the DSL through
-    ``POPS_DEFINE_COMPILED_BLOCK``): it dlopens @p path with :func:`ctypes.CDLL` and calls the
-    exported C function ``const char* pops_compiled_manifest()`` -- the JSON the macro emits at the
-    ``.so``'s OWN compile time from the model traits ({abi_version, n_vars, n_aux, n_params,
-    ghost_depth, supports_stride, supports_partial_imex_mask, supports_named_fields, roles,
-    native_entrypoints}). Returns the parsed dict.
-
-    Missing symbols, ``NULL``, legacy schemas and malformed data are hard errors. Runtime loading is
-    not a migration seam; rebuild or migrate the artifact offline before installation.
-    """
-    import ctypes
-    handle = ctypes.CDLL(str(path))  # raises OSError if the path is not a loadable library
-    try:
-        manifest_fn = handle.pops_compiled_manifest
-    except AttributeError as error:
-        raise ValueError(
-            "compiled artifact %r has no current pops_compiled_manifest(); rebuild or migrate "
-            "the artifact offline" % (path,)
-        ) from error
-    manifest_fn.restype = ctypes.c_char_p
-    raw = manifest_fn()
-    if raw is None:
-        raise ValueError("compiled artifact %r returned a NULL native manifest" % (path,))
-    try:
-        from pops._manifest_protocol import strict_json_loads
-        doc = strict_json_loads(raw, where="compiled native manifest JSON")
-    except (ValueError, TypeError) as err:
-        raise ValueError("compiled-artifact manifest of %r is not valid JSON: %s"
-                         % (path, err)) from err
-    from pops.external._artifact_manifest_ops import validate_native_manifest
-    return validate_native_manifest(doc)
-
-
 def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> BrickDescriptor:
     """The ``external_cpp`` descriptor for a loaded brick @p brick_id (raise if not loaded).
 

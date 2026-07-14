@@ -16,6 +16,7 @@
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (OPT-IN IMEX diagnostics, aggregated per block)
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -31,6 +32,8 @@
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
+#include <pops/runtime/multiblock/interface_flux_scheduler.hpp>
+#include <pops/runtime/context/grid_context.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler / ProfileScope: AMR phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/system/system_poisson_options.hpp>  // GeometricMgOptions
 
@@ -44,6 +47,7 @@
 #include <limits>  // std::numeric_limits (initial dt = +inf, min over the blocks)
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied each solve
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -278,6 +282,9 @@ struct SetFieldCoverageKernel {
 /// list is type-erased. Produced by detail::build_amr_block (amr_dsl_block.hpp).
 struct AmrRuntimeBlock {
   std::string name;
+  /// Exact owner-qualified state Handle, installed by the block plan independently of whether this
+  /// block owns a physical boundary authority.
+  std::string state_identity;
   int ncomp = 1;
   double gamma = static_cast<double>(kPhysicalDefaultGamma);
   /// EXPLICIT substeps of the block within ITS effective macro-step: the effective step (stride * dt)
@@ -309,6 +316,10 @@ struct AmrRuntimeBlock {
   /// AmrRuntimeBlock stays MOVABLE (a std::vector<AmrLevelMP> is heavy to move into a std::function,
   /// and the engine ctor needs a stable address for the closures).
   std::shared_ptr<std::vector<AmrLevelMP>> levels;
+  /// Prepared boundary authority plus the late-bound exact runtime storage registry shared by all
+  /// per-level closures of this block.
+  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+  std::shared_ptr<GridContext::BoundaryFieldRegistryFactory> boundary_field_registry;
 
   /// Advances the block by ONE substep of size dt: AMR transport (Berger-Oliger + conservative reflux
   /// + average_down) over the block level stack, with ITS spatial scheme (Limiter, Flux). Captures
@@ -386,6 +397,24 @@ struct AmrRuntimeBlock {
   /// SOURCE-ONLY per-level residual R <- S(U, aux) (NO flux divergence), the exact MIRROR of @ref
   /// level_neg_div_flux (ADC-430). Same signature / device contract as @ref level_rhs.
   std::function<void(MultiFab&, const MultiFab&, const Geometry&, MultiFab&)> level_source;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_rhs_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_neg_div_flux_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_rhs_core_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_neg_div_flux_core_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_boundary_residual_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const MultiFab&, const Geometry&, MultiFab&)>
+      level_boundary_jvp_at_point;
 
   /// FLUX-MATERIALISING per-level residual for conservative reflux (ADC-639): computes R <- -div F + S
   /// EXACTLY as @ref level_rhs, but FIRST writes the face fluxes Fx/Fy (compute_face_fluxes) then derives
@@ -423,6 +452,16 @@ struct AmrRuntimeBlock {
   /// Coarse potential read from the shared aux (component 0) as an n*n row-major field (diagnostic).
   /// Identical for all blocks (shared aux); carried per block for API symmetry.
   std::function<std::vector<double>(const MultiFab&)> potential;
+
+  /// Interface-aware per-level residual.  Like level_rhs, except every face owned by an installed
+  /// shared block interface is omitted; InterfaceFluxScheduler inserts that pair flux exactly once.
+  /// An interface install rejects an empty closure rather than double-counting level_rhs's BC flux.
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_rhs_without_prepared_interfaces;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, const Geometry&, MultiFab&)>
+      level_neg_div_flux_without_prepared_interfaces;
 };
 
 /// AMR multi-block engine at runtime. Owns the SHARED aux per level, the coarse Poisson
@@ -610,13 +649,29 @@ class AmrRuntime {
       refinement *= hierarchy_.refinement_ratios[static_cast<std::size_t>(transition)];
     return refinement;
   }
-  int parent_child_temporal_ratio(int child_level) const {
-    if (child_level < 1 || child_level >= nlev_)
-      throw std::runtime_error("AmrRuntime::parent_child_temporal_ratio level out of bounds");
-    return hierarchy_.refinement_ratios[static_cast<std::size_t>(child_level - 1)];
+  void set_parent_child_temporal_relations(
+      std::vector<::pops::amr::ParentChildClockRelation> relations) {
+    if (relations.size() != hierarchy_.refinement_ratios.size())
+      throw std::runtime_error(
+          "AMR temporal relations must contain exactly one row per coarse/fine transition");
+    for (std::size_t index = 0; index < relations.size(); ++index)
+      if (relations[index].parent_level() != static_cast<int>(index) ||
+          relations[index].child_level() != static_cast<int>(index + 1))
+        throw std::runtime_error("AMR temporal relations must form the contiguous level chain");
+    temporal_relations_ = std::move(relations);
   }
-  const std::vector<int>& checkpoint_temporal_ratios() const {
-    return hierarchy_.refinement_ratios;
+  const ::pops::amr::ParentChildClockRelation& parent_child_temporal_relation(
+      int child_level) const {
+    if (child_level < 1 || child_level >= nlev_)
+      throw std::runtime_error("AmrRuntime::parent_child_temporal_relation level out of bounds");
+    if (temporal_relations_.size() != hierarchy_.refinement_ratios.size())
+      throw std::runtime_error(
+          "AMR Program execution lacks explicit parent/child temporal relations; spatial "
+          "refinement ratios are never reused as time-subcycling ratios");
+    return temporal_relations_[static_cast<std::size_t>(child_level - 1)];
+  }
+  const std::vector<::pops::amr::ParentChildClockRelation>& checkpoint_temporal_relations() const {
+    return temporal_relations_;
   }
   static runtime::amr::SpatialTransferContext bootstrap_transfer_context(
       const MultiFab& coarse, const MultiFab& fine, int coarse_level, int fine_level,
@@ -1297,6 +1352,300 @@ class AmrRuntime {
     fill_level_state_cf_ghosts(b, k, U);
     blocks_[b].level_rhs(U, aux_[k], level_geom(k), R);
   }
+
+  void level_rhs_into_at(
+      std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, MultiFab& R) {
+    if (!blocks_[b].level_rhs_at_point)
+      throw std::runtime_error(
+          "AmrRuntime block has no point-qualified residual closure");
+    fill_level_state_cf_ghosts(b, k, U);
+    blocks_[b].level_rhs_at_point(point, U, aux_[k], level_geom(k), R);
+  }
+
+  bool has_boundary_linearization(std::size_t b) const {
+    if (b >= blocks_.size())
+      throw std::out_of_range("AmrRuntime boundary linearization block is out of range");
+    return blocks_[b].boundary_plan &&
+           blocks_[b].boundary_plan->has_boundary_linearization();
+  }
+
+  void level_rhs_core_into_at(
+      std::size_t b, int k,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, MultiFab& R, bool flux_only) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime core RHS level/block is out of range");
+    if (interface_scheduler_.participates(b, k))
+      throw std::runtime_error(
+          "AmrRuntime implicit core RHS requires a coupled shared-interface solve");
+    auto& closure = flux_only ? blocks_[b].level_neg_div_flux_core_at_point
+                              : blocks_[b].level_rhs_core_at_point;
+    if (!closure)
+      throw std::runtime_error(
+          "AmrRuntime block lacks a point-qualified core residual closure");
+    struct StageStateReset {
+      std::optional<BoundaryStageStateView>* slot = nullptr;
+      ~StageStateReset() {
+        if (slot != nullptr) slot->reset();
+      }
+    } stage_reset;
+    if (!blocks_[b].state_identity.empty()) {
+      if (boundary_stage_states_)
+        throw std::runtime_error("AmrRuntime boundary stage-state registry is already active");
+      boundary_stage_states_.emplace(
+          BoundaryStageStateView{point, {{blocks_[b].state_identity, &U}}});
+      stage_reset.slot = &boundary_stage_states_;
+    }
+    fill_level_state_cf_ghosts(b, k, U);
+    closure(point, U, aux_[k], level_geom(k), R);
+  }
+
+  void level_boundary_residual_into_at(
+      std::size_t b, int k,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, MultiFab& C) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime boundary residual level/block is out of range");
+    if (!has_boundary_linearization(b))
+      throw std::runtime_error(
+          "AmrRuntime block has no executable boundary residual/JVP pair");
+    auto& closure = blocks_[b].level_boundary_residual_at_point;
+    if (!closure)
+      throw std::runtime_error("AmrRuntime block lacks its boundary residual closure");
+    closure(point, U, aux_[k], level_geom(k), C);
+  }
+
+  void level_boundary_jvp_into_at(
+      std::size_t b, int k,
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, const MultiFab& V, MultiFab& J) {
+    if (b >= blocks_.size() || k < 0 || k >= nlev_ || point.level != k)
+      throw std::out_of_range("AmrRuntime boundary JVP level/block is out of range");
+    if (!has_boundary_linearization(b))
+      throw std::runtime_error(
+          "AmrRuntime block has no executable boundary residual/JVP pair");
+    auto& closure = blocks_[b].level_boundary_jvp_at_point;
+    if (!closure)
+      throw std::runtime_error("AmrRuntime block lacks its boundary JVP closure");
+    closure(point, U, V, aux_[k], level_geom(k), J);
+  }
+
+  /// Install one prepared interface route on an AMR level.  The current AMR engine owns one shared
+  /// layout per level, but the same scheduler contract used by Uniform still proves orientation,
+  /// permutation and equal face discretisation before the route becomes executable.
+  void install_level_interface_flux(
+      int k, runtime::multiblock::AxisAlignedInterface route,
+      const PopsExecutionContextV1& execution,
+      runtime::multiblock::InterfaceFluxEvaluatorFactory evaluator_factory) {
+    if (k < 0 || k >= nlev_ || route.level != k || route.left_block >= blocks_.size() ||
+        route.right_block >= blocks_.size())
+      throw std::out_of_range("AmrRuntime interface level/block index is out of range");
+    if (regrid_every_ != 0)
+      throw std::invalid_argument(
+          "AmrRuntime interface v1 requires a frozen hierarchy (regrid_every=0)");
+    const std::size_t left = route.left_block;
+    const std::size_t right = route.right_block;
+    if (!blocks_[left].level_rhs_without_prepared_interfaces ||
+        !blocks_[right].level_rhs_without_prepared_interfaces ||
+        !blocks_[left].level_neg_div_flux_without_prepared_interfaces ||
+        !blocks_[right].level_neg_div_flux_without_prepared_interfaces)
+      throw std::invalid_argument(
+          "AmrRuntime interface blocks lack full/flux-only interface-omitting residuals");
+    const Geometry geometry = level_geom(k);
+    interface_scheduler_.install(
+        std::move(route), (*blocks_[left].levels)[static_cast<std::size_t>(k)].U, geometry,
+        (*blocks_[right].levels)[static_cast<std::size_t>(k)].U, geometry,
+        execution, std::move(evaluator_factory));
+  }
+
+  /// Discard every shared-interface route after a failed pre-bind transaction.
+  void discard_interface_fluxes() { interface_scheduler_.clear(); }
+
+  /// Bind the detached qualified Handle routes to the exact per-level native storages.  The tables
+  /// are authenticated by Python before hierarchy construction; no block/field name is parsed here.
+  void install_boundary_storage_routes(
+      const std::map<std::string, std::string>& field_routes) {
+    std::map<std::string, std::size_t> state_routes;
+    for (std::size_t block = 0; block < blocks_.size(); ++block) {
+      const auto& identity = blocks_[block].state_identity;
+      if (identity.empty() || !state_routes.emplace(identity, block).second)
+        throw std::invalid_argument(
+            "AmrRuntime materialized block state route is empty or duplicated");
+    }
+    auto states = std::make_shared<const std::map<std::string, std::size_t>>(state_routes);
+    auto fields = std::make_shared<const std::map<std::string, std::string>>(field_routes);
+    for (std::size_t current = 0; current < blocks_.size(); ++current) {
+      auto& block = blocks_[current];
+      if (!block.boundary_plan) continue;
+      const auto primary = state_routes.find(block.boundary_plan->state_identity());
+      if (!block.boundary_field_registry ||
+          block.boundary_plan->state_identity().empty() ||
+          primary == state_routes.end() || primary->second != current)
+        throw std::invalid_argument(
+            "AmrRuntime block boundary plan differs from its qualified state route");
+      const auto plan = block.boundary_plan;
+      *block.boundary_field_registry =
+          [this, current, plan, states, fields](
+              const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& state,
+              const MultiFab* direction, MultiFab* output) {
+            if (point.level < 0 || point.level >= nlev_)
+              throw std::out_of_range(
+                  "AmrRuntime boundary storage registry level is out of range");
+            detail::BoundaryFieldRegistry registry;
+            if (boundary_stage_states_ && boundary_stage_states_->point != point)
+              throw std::runtime_error(
+                  "AmrRuntime boundary stage-state registry was used at a different point");
+            for (const auto& [identity, owner] : *states) {
+              MultiFab* storage = nullptr;
+              if (boundary_stage_states_) {
+                const auto staged = boundary_stage_states_->states.find(identity);
+                if (staged != boundary_stage_states_->states.end()) storage = staged->second;
+              }
+              if (storage == nullptr)
+                storage = owner == current
+                    ? &state
+                    : &(*blocks_[owner].levels)[static_cast<std::size_t>(point.level)].U;
+              registry.bind_state(identity, *storage);
+            }
+            for (const auto& identity : plan->required_field_identities()) {
+              const auto route = fields->find(identity);
+              if (route == fields->end())
+                throw std::runtime_error(
+                    "AmrRuntime boundary field dependency has no exact provider route");
+              registry.bind_field(
+                  identity, provider_potential_level(route->second, point.level));
+            }
+            if (direction != nullptr) {
+              for (const auto& identity : plan->required_direction_identities()) {
+                if (identity != plan->state_identity())
+                  throw std::runtime_error(
+                      "AmrRuntime boundary JVP direction has no exact block storage route");
+                registry.bind_direction(identity, *direction);
+              }
+            }
+            if (output != nullptr) {
+              const auto identities = direction == nullptr
+                  ? plan->residual_output_identities()
+                  : plan->jvp_output_identities();
+              if (identities.size() > 1)
+                throw std::runtime_error(
+                    "AmrRuntime boundary operation requires multiple mutable output storages");
+              if (!identities.empty()) registry.bind_output(identities.front(), *output);
+            }
+            return registry;
+          };
+    }
+  }
+
+  void install_level_interface_flux(
+      int k, runtime::multiblock::AxisAlignedInterface route,
+      const PopsExecutionContextV1& execution,
+      runtime::multiblock::InterfaceFluxEvaluator evaluator) {
+    install_level_interface_flux(
+        k, std::move(route), execution,
+        runtime::multiblock::InterfaceFluxEvaluatorFactory(
+            [evaluator = std::move(evaluator)]() mutable { return std::move(evaluator); }));
+  }
+
+  /// Real AMR multi-block residual executor.  All per-block residuals on the level are complete
+  /// before the shared pair flux is evaluated once and scattered, so neither side can consume an
+  /// interface-incomplete residual.
+  void level_rhs_with_interfaces(
+      int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::vector<MultiFab*>& states, const std::vector<MultiFab*>& rhs,
+      const std::vector<int>& flux_only = {}) {
+    if (k < 0 || k >= nlev_ || point.level != k || states.size() != blocks_.size() ||
+        rhs.size() != blocks_.size() || (!flux_only.empty() && flux_only.size() != blocks_.size()))
+      throw std::invalid_argument("AmrRuntime multi-block interface RHS axis mismatch");
+    struct StageStateReset {
+      std::optional<BoundaryStageStateView>* slot = nullptr;
+      ~StageStateReset() {
+        if (slot != nullptr) slot->reset();
+      }
+    } stage_reset;
+    const bool routed = std::any_of(
+        blocks_.begin(), blocks_.end(),
+        [](const AmrRuntimeBlock& block) { return !block.state_identity.empty(); });
+    if (routed) {
+      if (boundary_stage_states_)
+        throw std::runtime_error("AmrRuntime boundary stage-state registry is already active");
+      std::map<std::string, MultiFab*> staged;
+      for (std::size_t block = 0; block < blocks_.size(); ++block) {
+        const auto& identity = blocks_[block].state_identity;
+        if (identity.empty())
+          throw std::runtime_error(
+              "AmrRuntime materialized block has no exact qualified state identity");
+        if (states[block] != nullptr && !staged.emplace(identity, states[block]).second)
+          throw std::runtime_error(
+              "AmrRuntime boundary stage-state registry has a duplicate qualified identity");
+      }
+      boundary_stage_states_.emplace(BoundaryStageStateView{point, std::move(staged)});
+      stage_reset.slot = &boundary_stage_states_;
+    }
+    for (std::size_t block = 0; block < blocks_.size(); ++block) {
+      if ((states[block] == nullptr) != (rhs[block] == nullptr))
+        throw std::invalid_argument("AmrRuntime sparse RHS group has one null storage pointer");
+      if (states[block] == nullptr)
+        continue;
+      const bool flux = !flux_only.empty() && flux_only[block] != 0;
+      if (interface_scheduler_.participates(block, k)) {
+        fill_level_state_cf_ghosts(block, k, *states[block]);
+        auto& closure = flux ? blocks_[block].level_neg_div_flux_without_prepared_interfaces
+                             : blocks_[block].level_rhs_without_prepared_interfaces;
+        if (!closure)
+          throw std::runtime_error("AmrRuntime lost an interface-omitting residual closure");
+        closure(
+            point, *states[block], aux_[k], level_geom(k), *rhs[block]);
+      } else {
+        if (flux) {
+          if (!blocks_[block].level_neg_div_flux_at_point)
+            throw std::runtime_error("AmrRuntime block lacks a point-qualified flux residual");
+          fill_level_state_cf_ghosts(block, k, *states[block]);
+          blocks_[block].level_neg_div_flux_at_point(
+              point, *states[block], aux_[k], level_geom(k), *rhs[block]);
+        } else {
+          level_rhs_into_at(block, k, point, *states[block], *rhs[block]);
+        }
+      }
+    }
+    interface_scheduler_.apply(point, states, rhs);
+  }
+
+  void level_rhs_group(
+      int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
+      const std::vector<MultiFab*>& requested_rhs, const std::vector<int>& requested_flux_only) {
+    if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
+        requested_blocks.size() != requested_rhs.size() ||
+        requested_blocks.size() != requested_flux_only.size())
+      throw std::invalid_argument("AmrRuntime::level_rhs_group has inconsistent vectors");
+    std::vector<MultiFab*> states(blocks_.size(), nullptr);
+    std::vector<MultiFab*> rhs(blocks_.size(), nullptr);
+    std::vector<int> flux_only(blocks_.size(), 0);
+    for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+      const int raw = requested_blocks[request];
+      if (raw < 0 || raw >= static_cast<int>(blocks_.size()))
+        throw std::out_of_range("AmrRuntime::level_rhs_group block index is out of range");
+      const std::size_t block = static_cast<std::size_t>(raw);
+      if (states[block] != nullptr || requested_states[request] == nullptr ||
+          requested_rhs[request] == nullptr ||
+          (requested_flux_only[request] != 0 && requested_flux_only[request] != 1))
+        throw std::invalid_argument(
+            "AmrRuntime::level_rhs_group requires unique blocks and boolean modes");
+      states[block] = requested_states[request];
+      rhs[block] = requested_rhs[request];
+      flux_only[block] = requested_flux_only[request];
+    }
+    level_rhs_with_interfaces(k, point, states, rhs, flux_only);
+  }
+
+  std::size_t interface_evaluation_count(const std::string& identity, int level) const {
+    return interface_scheduler_.evaluation_count(identity, level);
+  }
+  bool has_level_interfaces(int level) const {
+    return interface_scheduler_.has_interfaces(level);
+  }
   /// R <- -div F(U) only (NO default source) for block @p b on level @p k (SourceFreeModel path). Same
   /// fine-level C/F ghost refresh as level_rhs_into (ADC-634).
   void level_neg_div_flux_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
@@ -1305,6 +1654,14 @@ class AmrRuntime {
                                "' has no flux-only per-level residual closure");
     fill_level_state_cf_ghosts(b, k, U);
     blocks_[b].level_neg_div_flux(U, aux_[k], level_geom(k), R);
+  }
+  void level_neg_div_flux_into_at(
+      std::size_t b, int k, const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, MultiFab& R) {
+    if (!blocks_[b].level_neg_div_flux_at_point)
+      throw std::runtime_error("AmrRuntime block has no point-qualified flux residual closure");
+    fill_level_state_cf_ghosts(b, k, U);
+    blocks_[b].level_neg_div_flux_at_point(point, U, aux_[k], level_geom(k), R);
   }
   /// R <- S(U, aux_[k]) only (NO flux) for block @p b on level @p k (the source half of level_rhs).
   void level_source_into(std::size_t b, int k, MultiFab& U, MultiFab& R) {
@@ -3499,9 +3856,16 @@ class AmrRuntime {
   BCRec bcPhi_, aux_bc_;
   bool replicated_coarse_;
   AmrHierarchyLayout hierarchy_;
+  std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
   GeometricMG mg_;
   std::function<bool(Real, Real)> wall_active_;
   std::vector<AmrRuntimeBlock> blocks_;
+  struct BoundaryStageStateView {
+    runtime::multiblock::BoundaryEvaluationPoint point;
+    std::map<std::string, MultiFab*> states;
+  };
+  std::optional<BoundaryStageStateView> boundary_stage_states_;
+  runtime::multiblock::InterfaceFluxScheduler interface_scheduler_;
   // GLOBAL step bounds (add_dt_bound, parity with System) + ACTIVE bound of the last step_cfl.
   struct GlobalDtBound {
     std::string label;

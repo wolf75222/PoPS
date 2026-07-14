@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops.ir.literals import scalar_cpp
+from pops._ir.literals import scalar_cpp
 
 from .dsl import build_solver_ir, _as_descriptor, _SOLVER_MAX_ITERS
 

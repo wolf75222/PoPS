@@ -11,8 +11,8 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const
-    from pops.ir.ops import abs_
+    from pops._ir.expr import Const
+    from pops._ir.ops import abs_
     from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_operator_registry (pops unavailable: %s)" % exc)

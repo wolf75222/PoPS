@@ -8,7 +8,7 @@ pure-Python: only pops.time / pops.model are needed, no compiled step is run.
 import pytest
 
 from pops import model
-from pops.ir.expr import Var
+from pops._ir.expr import Var
 from tests.python.unit.runtime._typed_program import typed_program_state
 
 adctime = pytest.importorskip("pops.time")

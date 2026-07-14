@@ -35,11 +35,11 @@ def _raises(exc_types, fn):
 # =================== Section A: pure Python (codegen + install seam) ===================
 try:
     from pops.codegen._plans import BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan
-    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.codegen.loader import CompiledModel
     from pops.model.bind_schema import BindSchema
     from pops.params import ConstParam
-    from pops.ir.ops import sqrt
+    from pops.math import sqrt
     from pops.physics._facade import Model
     from pops.problem._snapshot import AuthoringSnapshot
     from pops.runtime._amr_system import AmrSystem
@@ -130,9 +130,14 @@ def _install_instances(**models):
         backend="production",
         layout=None,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
+        },
         time=None,
         blocks=tuple(
-            ResolvedBlock(name, source, None, "production", ("U",))
+            ResolvedBlock(
+                name, source, None, "production", ("U",),
+                ("test::%s::state::U" % name,))
             for name in models
         ),
         bind_schema=schema,

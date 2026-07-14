@@ -10,7 +10,6 @@ import pops
 from pops.math import ddt, div
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh.cartesian import CartesianMesh
 from pops.layouts import Uniform
 from pops.numerics import DiscretizationPlan, FiniteVolume
 from pops.numerics.reconstruction import MUSCL
@@ -18,6 +17,7 @@ from pops.numerics.reconstruction.limiters import VanLeer
 from pops.numerics.riemann import ScalarUpwind
 from pops.numerics.variables import Conservative
 from pops.model.ownership import MissingOwnershipError
+from tests.python.support.layout_plan import cartesian_grid
 
 
 def _declarations():
@@ -96,7 +96,7 @@ def test_case_resolves_plan_per_owner_qualified_instance_without_native_import()
     case.program(program)
     pops.validate(case)
     resolved = pops.resolve(
-        case, layout=Uniform(CartesianMesh(n=8, periodic=True)))
+        case, layout=Uniform(cartesian_grid(n=8, periodic=True)))
 
     numerical = resolved.blocks[0].numerics
     assert numerical.block.local_id == "tracer"
@@ -232,7 +232,7 @@ def test_rate_family_accepts_a_small_external_method_protocol() -> None:
 
     case.program(SSPRK2(block[state], rate=rate))
     resolved = pops.resolve(
-        pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))
+        pops.validate(case), layout=Uniform(cartesian_grid(n=8, periodic=True)))
 
     assert resolved.blocks[0].numerics.rates[0].method.to_data()["extension"] \
         == "external-rate-method"
@@ -260,7 +260,7 @@ def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None
 
     case.program(SSPRK2(block[state], rate=rate))
     resolved = pops.resolve(
-        pops.validate(case), layout=Uniform(CartesianMesh(n=8, periodic=True)))
+        pops.validate(case), layout=Uniform(cartesian_grid(n=8, periodic=True)))
     data = resolved.blocks[0].numerics.to_data()
 
     assert [len(data[name]) for name in ("fields", "boundaries", "sources", "interfaces")] \

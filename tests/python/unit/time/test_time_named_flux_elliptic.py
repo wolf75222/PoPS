@@ -35,7 +35,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 def _pops_mods():
     try:
-        from pops.ir.ops import sqrt
+        from pops.math import sqrt
         from pops.physics._facade import Model
         from pops import time as adctime
     except Exception as exc:  # pops not importable here -> skip, never fake
@@ -311,7 +311,7 @@ def _skipB(msg):
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
@@ -329,8 +329,8 @@ def make_sim(model):
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation("plasma", compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)

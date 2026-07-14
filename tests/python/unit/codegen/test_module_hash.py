@@ -13,8 +13,8 @@ import pytest
 
 try:
     from pops import model
-    from pops.ir.expr import Const, Var
-    from pops.ir.ops import sqrt
+    from pops._ir.expr import Const, Var
+    from pops.math import sqrt
     from pops.physics._facade import Model
     from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake

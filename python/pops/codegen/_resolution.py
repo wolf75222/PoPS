@@ -201,10 +201,14 @@ def _layout_name(layout: Any) -> str:
     from pops.mesh import LayoutPlan
 
     if isinstance(layout, LayoutPlan):
-        if len(layout.layouts) != 1:
+        tokens = {
+            row.capabilities.get("layout")
+            for row in layout.layouts
+        }
+        if len(tokens) != 1:
             raise CapabilityResolutionError(
-                "runtime capability resolution requires exactly one normalized layout")
-        caps = layout.layouts[0].capabilities
+                "runtime capability resolution requires one common layout capability family")
+        caps = {"layout": next(iter(tokens))}
     else:
         caps = _projection(getattr(layout, "capabilities", None))
     token = caps.get("layout") if isinstance(caps, Mapping) else None

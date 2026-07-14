@@ -10,8 +10,8 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const, Var
-    from pops.ir.ops import sqrt
+    from pops._ir.expr import Const, Var
+    from pops.math import sqrt
     from pops.time import FailRun
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake

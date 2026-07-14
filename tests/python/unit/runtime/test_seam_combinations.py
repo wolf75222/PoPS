@@ -16,7 +16,7 @@ import sys
 
 try:
     import numpy as np
-    import pops
+    import pops.runtime._engine_descriptors as engine
     from pops.numerics.riemann import HLL, HLLC, Roe, Rusanov
     from pops.numerics.reconstruction.limiters import Minmod
     from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
@@ -46,30 +46,30 @@ _FLUX = {"rusanov": Rusanov, "hll": HLL, "hllc": HLLC, "roe": Roe}
 
 
 def _model(transport):
-    """A native pops.Model for @p transport (composed bricks, no DSL compile)."""
+    """A native engine.Model for @p transport (composed bricks, no DSL compile)."""
     if transport == "exb":
-        return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                          source=pops.NoSource(),
-                          elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+        return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                          source=engine.NoSource(),
+                          elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
     if transport == "isothermal":
-        return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                          transport=pops.IsothermalFlux(),
-                          source=pops.PotentialForce(charge=1.0),
-                          elliptic=pops.ChargeDensity(charge=1.0))
+        return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                          transport=engine.IsothermalFlux(),
+                          source=engine.PotentialForce(charge=1.0),
+                          elliptic=engine.ChargeDensity(charge=1.0))
     if transport == "compressible":
-        return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                          transport=pops.CompressibleFlux(),
-                          source=pops.PotentialForce(charge=-1.0),
-                          elliptic=pops.ChargeDensity(charge=-1.0))
+        return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
+                          transport=engine.CompressibleFlux(),
+                          source=engine.PotentialForce(charge=-1.0),
+                          elliptic=engine.ChargeDensity(charge=-1.0))
     raise AssertionError("unknown transport %r" % transport)
 
 
 def _spatial(transport, flux):
     if flux is None:
-        return pops.Spatial(minmod=True)
+        return engine.Spatial(minmod=True)
     # compressible fluxes reconstruct in primitive variables (matches test_bindings euler path).
     primitive = (transport == "compressible")
-    return pops.Spatial(limiter=Minmod(), flux=_FLUX[flux](), primitive=primitive)
+    return engine.Spatial(limiter=Minmod(), flux=_FLUX[flux](), primitive=primitive)
 
 
 def _seed_density(sim, name, n):

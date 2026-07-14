@@ -3,7 +3,7 @@ import pytest
 from pops import model as model_pkg
 from pops.codegen.lowering_coverage import LoweringRejection
 from pops.codegen.module_lowering import _module_to_model, lower_and_validate
-from pops.ir.expr import Const
+from pops._ir.expr import Const
 
 
 def _lowerable_module():

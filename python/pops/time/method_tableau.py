@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any
 
-from pops.ir.literals import scalar_literal
+from pops._ir.literals import scalar_literal
 
 
 def exact_coefficient(value: Any, where: str) -> Any:

@@ -230,8 +230,7 @@ class ExternalBrickHandle {
 // @p Flux        the narrow two-trace NumericalFlux policy (numerics/fv/numerical_flux.hpp);
 // @p Model       a TOP-LEVEL ALIAS of the CompositeModel the .so instantiates the flux against (write
 //                `using Model = pops::CompositeModel<...>;` first and pass the alias -- a bare
-//                CompositeModel<A, B, C> has a comma the preprocessor would split, exactly like
-//                POPS_DEFINE_COMPILED_BLOCK(MODEL));
+//                CompositeModel<A, B, C> has commas the preprocessor would split);
 // @p reqs_csv    the CSV of model capabilities the brick requires (surfaced in the manifest).
 //
 // The emitted pops_brick_residual instantiates build_block<Limiter, Flux> at the .so's compile time:
@@ -240,9 +239,8 @@ class ExternalBrickHandle {
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
 // same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
-// runtime. A mismatched `.so` may dlopen yet fail unpredictably. There is no load-time Kokkos-ABI
-// check yet (a future safeguard); for now this is the caller's contract, mirroring the AOT
-// compiled-block path (POPS_DEFINE_COMPILED_BLOCK), which carries the same requirement.
+// runtime. Installation must therefore pass through the authenticated component loader, which
+// validates the exact component manifest and platform/ABI evidence before publishing the handle.
 #define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, reqs_csv)                       \
   POPS_REGISTER_BRICK(id, "riemann", reqs_csv);                                             \
   extern "C" int pops_brick_nvars() {                                                       \

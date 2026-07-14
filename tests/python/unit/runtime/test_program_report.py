@@ -12,9 +12,8 @@ Ce test prouve LOCALEMENT (sous un _pops prebuilt, sans codegen / Kokkos obligat
   1. System frais : report installed=False, sections vides et aucune StepTransaction.
   2. Apres avoir peuple une ring d'history (via restore_history, la route bas-niveau bindee), le
      report liste la ring (name / depth / ncomp / initialized).
-  3. Le report passe par la vue BoundSimulation (surface DIAGNOSTIC allowlistee, ADC-583).
-  4. La section program de l'inspection ADC-591 est bien construite DEPUIS le report (source unique).
-  5. to_dict / to_json restent inertes et JSON-serialisables (aucun tableau de champ).
+  3. La section program de l'inspection ADC-591 est bien construite DEPUIS le report (source unique).
+  4. to_dict / to_json restent inertes et JSON-serialisables (aucun tableau de champ).
 
 Ne FALSIFIE jamais le moteur pops : on construit un vrai System / AmrSystem, on skippe si une
 dependance manque. Tourne sous pytest ET comme script (garde __main__)."""
@@ -23,9 +22,8 @@ import sys
 
 try:
     import numpy as np
-    import pops
-    from pops.runtime.bricks import Periodic
-    from pops.runtime._bound_sim import BoundSimulation
+    import pops.runtime._engine_descriptors as engine
+    from pops.runtime._engine_descriptors import Periodic
     from pops.numerics.reconstruction.limiters import Minmod
 except Exception as exc:  # noqa: BLE001
     print("skip test_program_report (pops unavailable: %s)" % exc)
@@ -37,11 +35,11 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 
 
 def _isothermal_model():
-    """Un pops.Model(...) natif (briques composees, PAS de compile DSL) -- aucun .so requis."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                      transport=pops.IsothermalFlux(),
-                      source=pops.PotentialForce(charge=1.0),
-                      elliptic=pops.ChargeDensity(charge=1.0))
+    """Un engine.Model(...) natif (briques composees, PAS de compile DSL) -- aucun .so requis."""
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                      transport=engine.IsothermalFlux(),
+                      source=engine.PotentialForce(charge=1.0),
+                      elliptic=engine.ChargeDensity(charge=1.0))
 
 
 def _fresh_system(n=8):
@@ -49,7 +47,7 @@ def _fresh_system(n=8):
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.block("ions", _isothermal_model(),
-                  spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
+                  spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
     return sim
 
 
@@ -64,6 +62,11 @@ def test_fresh_report_is_empty():
     _check(rep.program_hash == "", "pas de hash sans program installe")
     _check(rep.histories == [], "pas d'history sur un System frais")
     _check(rep.cache == [], "pas de slot de cache sur un System frais")
+    _check(rep.clocks == [], "pas de curseur d'horloge AMR sur un System frais")
+    _check(rep.level_relations == [], "pas de relation temporelle AMR sur un System frais")
+    _check(rep.flux_ledger == [], "pas de contribution de flux acceptee sur un System frais")
+    _check(rep.synchronization == [], "pas de phase de synchronisation sur un System frais")
+    _check(rep.temporal == {}, "pas de curseur temporel Python sans Program installe")
     _check(rep.diagnostics == {}, "pas de diagnostic recorded sur un System frais")
     _check(rep.block_map == [], "block_map vide (identite) sans program")
     # params : liste de lignes {program_block, count, limit}. Sans program installe AUCUNE ligne ne
@@ -83,6 +86,7 @@ def test_fresh_report_is_empty():
     _check(rep.step_transaction == {}, "aucune StepTransaction sans Program installe")
     # JSON-ready : to_dict serialisable, to_json round-trip.
     d = rep.to_dict()
+    _check(d["schema_version"] == 3, "le report porte le schema clocks/ledger/restart")
     _check(d["report_type"] == "program_runtime", "report_type nomme le sous-systeme")
     _check(json.loads(rep.to_json()) == d, "to_json round-trip == to_dict")
     print("ok test_fresh_report_is_empty")
@@ -110,19 +114,6 @@ def test_report_lists_history_after_restore():
     _check(row["ncomp"] == ncomp, "ncomp de la ring = ncomp du bloc")
     _check(row["initialized"] is True, "la ring est initialisee")
     print("ok test_report_lists_history_after_restore")
-
-
-def test_report_through_bound_simulation_view():
-    """program_report est expose sur la vue BoundSimulation (surface DIAGNOSTIC allowlistee)."""
-    sim = _fresh_system()
-    if not hasattr(sim, "program_report"):
-        print("skip test_report_through_bound_simulation_view (pops lacks program_report; rebuild pops)")
-        return
-    view = BoundSimulation(sim)
-    rep = view.program_report()  # doit passer par l'allowlist _DIAGNOSTICS, pas lever
-    _check(rep.report_type == "program_runtime", "la vue relaie program_report")
-    _check(rep.installed is False, "meme report inerte via la vue")
-    print("ok test_report_through_bound_simulation_view")
 
 
 def test_inspection_program_section_from_report():

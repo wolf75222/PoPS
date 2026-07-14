@@ -2,14 +2,14 @@
 """Options et diagnostics du Newton de la source implicite IMEX (audit 2026-06, chantier 2).
 
 Verifie :
-  - NO-DEFAULT-CHANGE : pops.IMEX() == pops.IMEX(newton_max_iters=2, newton_fd_eps=1e-7) (etats
+  - NO-DEFAULT-CHANGE : engine.IMEX() == engine.IMEX(newton_max_iters=2, newton_fd_eps=1e-7) (etats
     bit-identiques, le chemin par defaut est la boucle historique) ;
   - newton_diagnostics=True -> sim.newton_report(name) rend un rapport coherent (enabled,
     converged, residu fini, iterations <= budget, diagnostics structures) ;
   - newton_fail_policy="warn" expose aussi un rapport structure, sans stderr a parser ;
   - tolerance active (rel_tol) -> converge et n'utilise pas plus que le budget ;
   - source LINEAIRE (PotentialForce) : 1 iteration Newton suffit (etats ~identiques a 2 iterations) ;
-  - rejets explicites : options Newton avec pops.Explicit(), newton_report sans diagnostics,
+  - rejets explicites : options Newton avec engine.Explicit(), newton_report sans diagnostics,
     newton_max_iters < 1, options Newton sur un modele compile (add_equation).
 
 Invariants par assert ; imprime "OK test_newton_options" en cas de succes.
@@ -20,8 +20,8 @@ import sys
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -35,10 +35,10 @@ def chk(cond, label):
 
 
 def fluid(charge=-1.0):
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                     transport=pops.CompressibleFlux(),
-                     source=pops.PotentialForce(charge=charge),
-                     elliptic=pops.ChargeDensity(charge=charge))
+    return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
+                     transport=engine.CompressibleFlux(),
+                     source=engine.PotentialForce(charge=charge),
+                     elliptic=engine.ChargeDensity(charge=charge))
 
 
 def gaussian(n):
@@ -49,8 +49,8 @@ def gaussian(n):
 
 def run(n=24, steps=4, **imex_kw):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("e", fluid(), spatial=pops.FiniteVolume(limiter=Minmod()),
-                  time=pops.IMEX(**imex_kw))
+    sim.block("e", fluid(), spatial=engine.Spatial(limiter=Minmod()),
+                  time=engine.IMEX(**imex_kw))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("e", gaussian(n).ravel())
     for _ in range(steps):
@@ -117,8 +117,8 @@ chk(np.allclose(u1, u_def, rtol=1e-12, atol=1e-13),
 print("== rejets explicites ==")
 sim5 = System(n=16, L=1.0, periodic=True)
 try:
-    sim5.block("e", fluid(), time=pops.Explicit(),
-                   spatial=pops.FiniteVolume())
+    sim5.block("e", fluid(), time=engine.Explicit(),
+                   spatial=engine.Spatial())
     sim5._s.block("e2", fluid(), "minmod", "rusanov", "conservative", "explicit",
                       1, True, 1, [], [], 5)  # newton_max_iters=5 en explicite
     chk(False, "options Newton en explicite auraient du lever")
@@ -130,7 +130,7 @@ try:
 except RuntimeError as e:
     chk("diagnostics" in str(e), f"newton_report sans diagnostics -> erreur : {e}")
 try:
-    pops.IMEX(newton_max_iters=0)
+    engine.IMEX(newton_max_iters=0)
     chk(False, "newton_max_iters=0 aurait du lever")
 except ValueError as e:
     chk(True, f"IMEX(newton_max_iters=0) -> ValueError : {e}")

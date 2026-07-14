@@ -49,8 +49,8 @@ def test_brick_availability_is_explainable_for_a_planned_brick():
 
 
 def test_availability_never_returns_a_bare_bool_on_the_descriptor_family():
-    from pops.mesh.cartesian import CartesianMesh  # noqa: PLC0415
-    status = CartesianMesh(n=8).available()
+    from pops.mesh import PolarMesh  # noqa: PLC0415
+    status = PolarMesh(0.1, 1.0, 8, 16).available()
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
 

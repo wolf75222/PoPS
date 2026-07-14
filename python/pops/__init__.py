@@ -11,6 +11,7 @@ from ._inspect import explain, inspect
 from ._version import __version__
 from .physics.board import Model
 from .problem import Case
+from .runtime.run_report import RunReport, RunStopReason
 from .time.program import Program
 
 
@@ -18,6 +19,8 @@ __all__ = [
     "Model",
     "Program",
     "Case",
+    "RunReport",
+    "RunStopReason",
     "validate",
     "inspect",
     "explain",

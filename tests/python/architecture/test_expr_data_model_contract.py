@@ -1,4 +1,4 @@
-"""Every current and future ``pops.ir.Expr`` node inherits one data-model contract.
+"""Every current and future internal ``pops._ir.Expr`` node inherits one data-model contract.
 
 This is intentionally source-only: the architecture lane can enforce the hierarchy before
 the native extension is built.  The transitive discovery means adding an Expr subclass in
@@ -80,7 +80,7 @@ def test_every_expr_subclass_transitively_inherits_immutable_symbolic(repo_root:
 
 
 def test_immutable_symbolic_defines_all_four_python_safety_barriers(repo_root: Path):
-    path = repo_root / "python" / "pops" / "ir" / "symbolic.py"
+    path = repo_root / "python" / "pops" / "_ir" / "symbolic.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     base = next(
         node for node in tree.body

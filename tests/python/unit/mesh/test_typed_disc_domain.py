@@ -101,7 +101,7 @@ def test_descriptors_inspect_and_available_honestly():
 try:
     import numpy as np
     import pops
-    from pops.runtime.bricks import Dirichlet
+    from pops.runtime._engine_descriptors import Dirichlet
     import pops._pops  # noqa: F401
     _HAVE_ENGINE = True
 except ImportError:  # pragma: no cover - environment without the build

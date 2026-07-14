@@ -51,9 +51,9 @@ def _coefficients(condition: Any) -> tuple[Any, Any, Any]:
 
 
 def _as_expr(value: Any) -> Any:
-    from pops.ir.expr import Expr, _wrap
+    from pops._ir.expr import Expr, _wrap
     from pops.model import Handle
-    from pops.ir.handle_expr import ValueExpr
+    from pops._ir.handle_expr import ValueExpr
 
     if isinstance(value, Handle):
         return ValueExpr(value)
@@ -88,9 +88,9 @@ class _ExprCpp:
         return index
 
     def emit(self, value: Any) -> str:
-        from pops.ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
-        from pops.ir.handle_expr import ValueExpr
-        from pops.ir.values import RuntimeParamRef
+        from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
+        from pops._ir.handle_expr import ValueExpr
+        from pops._ir.values import RuntimeParamRef
         from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
 
         value = _as_expr(value)
@@ -157,7 +157,7 @@ def _parameter_handles(plan: Any) -> tuple[Any, ...]:
 
 def _face_struct(face: int, condition: Any, *, symbol: int, cpp: _ExprCpp,
                  unknown: Any) -> str:
-    from pops.ir.lowering import diff
+    from pops._ir.lowering import diff
 
     alpha, beta, value = (_as_expr(item) for item in _coefficients(condition))
     a = cpp.emit(alpha)

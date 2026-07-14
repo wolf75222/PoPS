@@ -8,20 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import copy
-from types import SimpleNamespace
 from typing import Any
 
-from pops.descriptors import Descriptor, _native
-
-
-spatial = SimpleNamespace(
-    FiniteVolumeResidual=lambda **options: _native(
-        "fv_residual", "pops::SpatialDiscretisation", "fv", category="spatial", **options),
-    FluxDivergence=lambda **options: _native(
-        "flux_divergence", "pops::SpatialDiscretisation", "fv", category="spatial", **options),
-    SourceAssembly=lambda **options: _native(
-        "source_assembly", "pops::SpatialDiscretisation", "fv", category="spatial", **options),
-)
+from pops.descriptors import Descriptor
 
 
 def _brick(value: Any, *, category: str, where: str) -> Any:
@@ -230,4 +219,4 @@ class FiniteVolume(Descriptor):
         )
 
 
-__all__ = ["FiniteVolume", "spatial"]
+__all__ = ["FiniteVolume"]

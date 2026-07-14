@@ -7,9 +7,9 @@ shape, reconstructs every nested value, and authenticates every supplied identit
 from __future__ import annotations
 
 from collections.abc import Mapping
-from types import MappingProxyType
 from typing import Any, ClassVar
 
+from pops._frozen_data import freeze_data, thaw_data
 from pops.identity import Identity, make_identity
 
 
@@ -28,28 +28,6 @@ def nonnegative_integer(value: Any, where: str) -> int:
 def positive_integer(value: Any, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise TypeError("%s must be an integer >= 1" % where)
-    return value
-
-
-def freeze_data(value: Any, where: str) -> Any:
-    if value is None or isinstance(value, (bool, int, str, bytes)):
-        return value
-    if isinstance(value, float):
-        raise TypeError("%s cannot contain binary floats" % where)
-    if isinstance(value, Mapping):
-        if any(not isinstance(key, str) or not key for key in value):
-            raise TypeError("%s mapping keys must be non-empty strings" % where)
-        return MappingProxyType({key: freeze_data(item, "%s.%s" % (where, key)) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return tuple(freeze_data(item, "%s[]" % where) for item in value)
-    raise TypeError("%s contains opaque %s" % (where, type(value).__name__))
-
-
-def thaw_data(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: thaw_data(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [thaw_data(item) for item in value]
     return value
 
 

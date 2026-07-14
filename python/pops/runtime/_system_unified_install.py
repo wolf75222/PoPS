@@ -3,8 +3,9 @@
 ``_install_compiled`` (the low-level seam that lowers to add_equation / set_poisson /
 set_magnetic_field / set_aux_field / install_program) plus its private
 lowering helpers. It is NOT the public entry point (Spec 5 sec.11): authors call
-``pops.bind(compiled, state=, params=, aux=, solvers=)``, which dispatches System / AmrSystem and
-calls this seam. Mixed into ``System`` via inheritance; methods operate on ``self`` (calling the
+``pops.bind(artifact, initial_state=..., params=..., aux=..., resources=..., initial_values=...)``;
+binding dispatches to the private System / AmrSystem engine and calls this seam. Mixed into
+``System`` via inheritance; methods operate on ``self`` (calling the
 other mixins' methods) and ``self._s``.
 """
 
@@ -14,15 +15,11 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from pops.runtime._install_param_routing import route_block_params, route_program_params
-from pops.runtime.bricks import Spatial
+from pops.runtime._engine_descriptors import Spatial
 
-# The two sec.10 install-argument validators moved to ``_bind_validation`` (ADC-550), their natural
-# home beside the other bind-time gates, and are re-imported so the historical
-# ``from pops.runtime._system_unified_install import validate_install_arguments`` path (and the AMR
-# install seam / tests that use it) is unchanged.
-from pops.runtime._bind_validation import (  # noqa: F401
-    collect_missing_arguments,
-    validate_install_arguments,
+from pops.runtime._bind_validation import (
+    collect_missing_arguments as _collect_missing_arguments_impl,
+    validate_install_arguments as _validate_install_arguments_impl,
 )
 
 if TYPE_CHECKING:
@@ -52,11 +49,12 @@ class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, field_plans=None):
+                          solvers=None, field_plans=None, install_plan=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
         state/spatial + params + aux + field solvers in ONE call, then install the compiled time
-        Program. NOT the public entry point: author the run with ``pops.bind(compiled, state=,
-        params=, aux=, solvers=)``, which dispatches System / AmrSystem and calls this seam. This
+        Program. NOT the public entry point: author the run with ``pops.bind(artifact,
+        initial_state=..., params=..., aux=..., resources=..., initial_values=...)``. Binding
+        dispatches to the private System / AmrSystem engine and calls this seam. This
         method is undocumented on the public surface (it carries no ``install`` alias) and may change.
 
         It LOWERS to the existing lower-layer calls
@@ -73,19 +71,20 @@ class _SystemUnifiedInstall(_System):
             installed via install_program after every instance/solver/aux is wired. Pass ``None`` for a
             native per-block sim: no Program is installed; each instance must still supply its own
             InstallPlan ``CompiledModel`` and optional ``"time"`` policy.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,
-            "time": <pops.Explicit/IMEX>}}. The block is bound by the dict KEY @p name (Spec criterion
+        @param instances dict {name: {"initial": array, "spatial": <descriptor>,
+            "model": <CompiledModel>, "time": <private engine policy>}}. The block is bound by the
+            dict KEY @p name (Spec criterion
             23), not a "state" field. Each entry adds the named block (add_equation), sets its
             "initial" state (if given) and lowers the "spatial" brick to the add_equation spatial args.
-            The block model is always the per-instance ``"model"`` from InstallPlan. ``spatial`` is
-            an pops.FiniteVolume(...) / pops.Spatial(...) OR an
-            pops.numerics.spatial.FiniteVolume(...) descriptor.
+            The block model is always the per-instance ``"model"`` from InstallPlan. Public
+            ``spatial`` authoring uses ``pops.numerics.FiniteVolume(...)``; an already-lowered
+            private ``Spatial`` adapter is accepted only inside the install pipeline.
         @param params complete mapping from canonical, block-qualified ParamHandle values to their
             resolved runtime values. BindSchema has already applied defaults and derived values.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
             DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
             declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
-        @param solvers dict {field: <pops.solvers.GeometricMG(...)/pops.GeometricMG(...)>}: lowered to
+        @param solvers dict {field: <pops.solvers.GeometricMG(...)>}: lowered to
             set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
             any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
             through the shared system elliptic solver; a field name no model declares raises (typo).
@@ -143,8 +142,8 @@ class _SystemUnifiedInstall(_System):
             model = spec.get("model")
             if model is None:
                 raise ValueError(
-                    "install: instance %r has no CompiledModel from InstallPlan; rebuild the "
-                    "Case with pops.compile(...) before binding" % name)
+                    "install: instance %r has no CompiledModel from InstallPlan; resolve and "
+                    "compile the Case before binding" % name)
             model = self._resolve_instance_model(model)
             resolved_models[name] = model
             spatial = self._lower_spatial(spec.get("spatial"))
@@ -217,6 +216,13 @@ class _SystemUnifiedInstall(_System):
                     authored.temporal_manifest(),
                     time=self.time(), macro_step=self.macro_step())
 
+        # Shared NumericalFlux routes need both endpoint MultiFabs and the installed Program, but
+        # remain structural bind authorities. Materialize them here, after block construction and
+        # before the lifecycle snapshot/freeze; no post-bind mutation seam is introduced.
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import finalize_runtime_authorities
+            finalize_runtime_authorities(self, install_plan)
+
         # (8) FREEZE (ADC-592): the composition is fully lowered -- snapshot WHAT was bound, then
         # _finalize_bind marks the runtime 'bound' as the LAST act (nothing above ran frozen, so the
         # install sequence never trips its own guards).
@@ -241,45 +247,35 @@ class _SystemUnifiedInstall(_System):
                                     solvers: Any, *, field_plans: Any = None) -> Any:
         """Early bind-input validation (Spec 5 sec.10): reject a COMPILED install missing a REQUIRED
         argument the artifact declares, BEFORE any native mutation. Thin wrapper around the shared
-        module-level :func:`validate_install_arguments` (reused by ``AmrSystem._install_compiled``
-        for parity)."""
-        validate_install_arguments(
+        private ``_bind_validation.validate_install_arguments`` implementation."""
+        _validate_install_arguments_impl(
             self, compiled, instances, params, aux, solvers, field_plans=field_plans)
 
     # Host-testable alias of the pure core (mirrors _route_block_params: callable as
     # System._collect_missing_arguments without building a System).
-    _collect_missing_arguments = staticmethod(collect_missing_arguments)
+    _collect_missing_arguments = staticmethod(_collect_missing_arguments_impl)
 
     def _lower_spatial(self, spatial: Any) -> Any:
-        """Lower a spatial selection to an pops.Spatial consumed by add_equation. Accepts an
-        pops.Spatial / pops.FiniteVolume (returned as-is), an pops.numerics.spatial.FiniteVolume(...)
-        BrickDescriptor (read its riemann/reconstruction/positivity_floor options), or None (default
-        Spatial)."""
+        """Lower ``pops.numerics.FiniteVolume`` to the private ``Spatial`` engine adapter.
+
+        An already-lowered ``Spatial`` value and ``None`` are accepted only within this private
+        install pipeline.
+        """
         if spatial is None:
             return Spatial()
         if isinstance(spatial, Spatial):
             return spatial
         runtime_spatial = getattr(spatial, "runtime_spatial", None)
         if callable(runtime_spatial):
-            return runtime_spatial()
-        # A lib BrickDescriptor carries the scheme options as STRING tokens in .options. Lower them
-        # to the canonical Spatial tokens directly (Spatial._from_tokens bypasses the public typed-
-        # descriptor guard, which the runtime FiniteVolume now enforces -- Spec 5 sec.7).
-        opts = getattr(spatial, "options", None)
-        if isinstance(opts, Mapping):
-            limiter = opts.get("reconstruction", opts.get("limiter", "minmod"))
-            riemann = opts.get("riemann", opts.get("flux", "rusanov"))
-            variables = opts.get("variables", opts.get("recon", "conservative"))
-            return Spatial._from_tokens(
-                limiter, riemann, variables,
-                positivity_floor=opts.get("positivity_floor"),
-                wave_speed_cache=opts.get("wave_speed_cache", False),
-                waves_provider=opts.get("waves_provider"),
-                weno_epsilon=opts.get("weno_epsilon"),
-                external_flux_id=opts.get("external_flux_id"))
-        raise TypeError("install: spatial must be an pops.FiniteVolume / pops.Spatial or an "
-                        "pops.numerics.spatial.FiniteVolume(...) descriptor; got %r"
-                        % type(spatial).__name__)
+            first, second = runtime_spatial(), runtime_spatial()
+            if type(first) is not Spatial or type(second) is not Spatial:
+                raise TypeError("runtime_spatial() must return an exact private Spatial value")
+            if first != second:
+                raise ValueError("runtime_spatial() must be deterministic")
+            return first
+        raise TypeError(
+            "install: spatial must implement the pops.numerics finite-volume lowering protocol; "
+            "got %r" % type(spatial).__name__)
 
     def _resolve_instance_model(self, model: Any) -> Any:
         """Accept only a runtime-ready model emitted into ``InstallPlan``.
@@ -300,8 +296,8 @@ class _SystemUnifiedInstall(_System):
         """Section 24 capability check: reject the selected Riemann flux when a compiled model does
         not back it. Delegates to the SHARED gate pops.runtime.routes.check_riemann_capability
         (ADC-642) -- the SAME predicate System.add_equation / AmrSystem.add_equation call -- plus the
-        HLL wave-speed cross-checks; one source, three call sites, zero divergence. A composed native
-        pops.Model(...) skips (the C++ requires-gate validates at first use)."""
+        HLL wave-speed cross-checks; one source, three call sites, zero divergence. A private native
+        ``ModelSpec`` skips it because the C++ requires-gate validates at first use."""
         from pops.codegen.loader import CompiledModel  # late import (codegen <-> __init__ cycle)
         if not isinstance(model, CompiledModel):
             return
@@ -505,7 +501,7 @@ class _SystemUnifiedInstall(_System):
             if declared is None:
                 raise ValueError(
                     "install: CompiledModel for block %r lacks elliptic_field_names metadata; "
-                    "rebuild it with pops.compile(...)" % block_name
+                    "re-run pops.resolve(case) and pops.compile(plan)" % block_name
                 )
             names.update(declared)
         return names

@@ -24,7 +24,7 @@ pops = pytest.importorskip("pops")
 from pops.descriptors import (  # noqa: E402
     Availability, BrickDescriptor, Descriptor, DescriptorProtocol, reject_string_selector)
 from pops.numerics.riemann import HLL  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
+from pops.mesh import PolarMesh  # noqa: E402
 import pops.mesh._descriptor as mesh_descriptor  # noqa: E402
 from pops import moments  # noqa: E402
 
@@ -62,7 +62,7 @@ MOMENTS_HANDLES = (
 
 def test_descriptor_family_satisfies_protocol():
     # The Descriptor base (via a concrete mesh subclass) honours the full protocol surface.
-    mesh = CartesianMesh(n=8)
+    mesh = PolarMesh(0.1, 1.0, 8, 16)
     for member in PROTOCOL_MEMBERS:
         assert hasattr(mesh, member), "Descriptor family missing protocol member %r" % member
     assert isinstance(mesh, DescriptorProtocol)
@@ -124,7 +124,7 @@ def test_hyqmom15_closure_is_still_a_callable_closure():
 
 def test_available_returns_availability_not_bool():
     # On the Descriptor family, available() is an explainable Availability, never a bare bool.
-    status = CartesianMesh(n=8).available()
+    status = PolarMesh(0.1, 1.0, 8, 16).available()
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
     assert status.status in ("yes", "no", "partial")
@@ -133,7 +133,7 @@ def test_available_returns_availability_not_bool():
 
 def test_lower_is_inert_record_and_never_raises():
     # lower() returns a typed LoweredDescriptor for a valid descriptor and never raises (ADC-625).
-    for descriptor in (CartesianMesh(n=8), HLL()):
+    for descriptor in (PolarMesh(0.1, 1.0, 8, 16), HLL()):
         record = descriptor.lower().to_dict()
         assert isinstance(record, dict)
         assert record["name"] == descriptor.name
@@ -143,17 +143,18 @@ def test_lower_is_inert_record_and_never_raises():
 
 
 def test_brick_descriptor_native_id_carried_in_lowering():
-    # A native brick lowers with its real C++ symbol; a planned brick lowers with no symbol.
+    # A native brick lowers with its real C++ symbol; a test-only unavailable route carries none.
     assert HLL().lower().to_dict()["native_id"] == "pops::HLLFlux"
-    from pops.numerics.reconstruction.limiters import MC  # planned, no native type yet.
-    assert MC().lower().to_dict()["native_id"] in (None, "")
-    matrix = MC().capability_matrix()
+    planned = BrickDescriptor(
+        "mc", "native", category="limiter", native_id="", scheme="mc", available=False)
+    assert planned.lower().to_dict()["native_id"] in (None, "")
+    matrix = planned.capability_matrix()
     row = matrix.rows[0]
     assert row.status == "unavailable"
     assert "requested limiter:mc" in row.error_message
     try:
-        MC().validate()
-        raise AssertionError("MC() must reject before bind/compile")
+        planned.validate()
+        raise AssertionError("an unavailable descriptor must reject before bind/compile")
     except ValueError as exc:
         msg = str(exc)
         assert "unsupported route" in msg
@@ -204,7 +205,7 @@ def test_availability_is_unified_single_class():
     assert mesh_descriptor.Availability is Availability
     # MeshDescriptor is a subclass of the shared Descriptor base.
     assert issubclass(mesh_descriptor.MeshDescriptor, Descriptor)
-    assert isinstance(CartesianMesh(n=8), Descriptor)
+    assert isinstance(PolarMesh(0.1, 1.0, 8, 16), Descriptor)
 
 
 if __name__ == "__main__":

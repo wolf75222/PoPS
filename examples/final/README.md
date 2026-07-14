@@ -16,9 +16,14 @@ transport, an inspectable IMEX Program, scientific artifacts and exact restart c
 matching contract note is
 [`docs/design/hyqmom15-final-contract.md`](../../docs/design/hyqmom15-final-contract.md).
 
+[`EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py`](EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py)
+selects two state spaces of one model into two owner-qualified blocks, couples them through a typed
+elliptic field on the same periodic layout, and proves scientific outputs plus bit-identical restart
+continuation through the public lifecycle.
+
 ## Public contract
 
-- immutable typed rectangle, Cartesian frame, boundary handles and grid;
+- immutable typed rectangle, Cartesian frame, boundary handles, grid and periodic-axis partition;
 - frame-aware conservative state placement;
 - strict Handle/Expr separation for every runtime parameter read;
 - typed vector and axis-keyed physical flux `F`;
@@ -44,7 +49,9 @@ These are requirements of the final public protocols, not invitations to use pri
 4. `ConsumerGraph.from_consumers` lowers direct `ScientificOutput`, `Checkpoint`, and diagnostic
    descriptors to the exact layout-qualified runtime graph. Parallel I/O is derived from the format
    (`HDF5(parallel=True)`), so no second switch can disagree with it. `case.consumers(graph)` is the
-   only Case attachment.
+   only Case attachment. The shipped final provider is serial, so the normative scripts use
+   `HDF5(parallel=False)`; a collective descriptor requires a proved non-serial `ExecutionContext`
+   and is otherwise refused during planning.
 5. Named component handles select multi-component boundary, initial-data, AMR and
    diagnostic selection. A symbolic component expression cannot be used as a dictionary key because
    `Expr` is intentionally non-hashable; this scalar target safely addresses the whole

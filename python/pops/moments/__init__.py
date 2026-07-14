@@ -14,7 +14,7 @@ surface (:mod:`pops.moments.closures`).
 from .model_builder import moment_indices, moment_names, build_moment_model
 from .sources import (lorentz_sources, maxwellian_moments, bgk_source,
                       VlasovSources, MagneticMomentSource)
-from .closures import (gaussian_closure, closure, Closure, LocalClosure, MomentClosure,
+from .closures import (gaussian_closure, closure, Closure, LocalClosure,
                        apply_local_closure, HyQMOM15Closure)
 
 # --- Spec-4 facade API (thin wrappers over the generator) -------------------
@@ -23,12 +23,12 @@ from .ordering import MomentOrdering
 from .basis import MomentBasis, RawMomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
 from .speeds import ExactSpeeds
-from .projection import RealizabilityProjection, MomentProjection, RealizableSet
+from .projection import RealizabilityProjection, RealizableSet
 from .space import VelocitySpace, MomentState
 from .transport import MomentTransport
 
 __all__ = [
-    # generator surface (back-compat with the flat pops.moments)
+    # public generator surface
     "moment_indices",
     "moment_names",
     "gaussian_closure",
@@ -58,26 +58,5 @@ __all__ = [
     "MomentState",
     "MomentTransport",
     "RawMomentBasis",
-    "MomentClosure",
-    "MomentProjection",
     "RealizableSet",
-    # re-exported single-home canonical provider (lazy; see __getattr__)
-    "WaveSpeedProvider",
 ]
-
-
-def __getattr__(name):
-    """Lazily re-export the canonical ``WaveSpeedProvider`` (ADC-565 single home).
-
-    The typed wave-speed provider lives ONCE in :mod:`pops.numerics.riemann.waves`
-    (ADC-552); ``pops.moments`` exposes it so the issue vocabulary
-    ``from pops.moments import WaveSpeedProvider`` resolves, but a MODULE-SCOPE import
-    would add a ``moments -> numerics`` edge the import-graph fence forbids (moments may
-    only import ``ir``). Re-exporting it inside this ``__getattr__`` keeps the name
-    available with no static edge -- the import happens on first access, not at module
-    load. The moment wave-speed AXIS stays :class:`ExactSpeeds` (a different chooser).
-    """
-    if name == "WaveSpeedProvider":
-        from pops.numerics.riemann.waves import WaveSpeedProvider
-        return WaveSpeedProvider
-    raise AttributeError("module %r has no attribute %r" % (__name__, name))

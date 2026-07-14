@@ -1,268 +1,178 @@
-"""Versioned external-component contracts over ComponentManifest v2 facets.
+"""Generated, versioned native component interfaces.
 
-An interface is immutable protocol metadata. It names exact small-interface bindings and package
-entry points; builtins and external components therefore cross the same manifest trust boundary.
+The catalog closes the ABI vocabulary while component implementations remain open.  This module is
+data only: it contains no scientific dispatcher, Python FFI backend, or component-specific binding.
+Source conformers and fixed binaries export the same audited C table getter and are loaded by the
+native runtime once during installation.
 """
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
-from pathlib import Path
-import re
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Any
+
+from pops._generated_component_interfaces import (
+    NATIVE_COMPONENT_ABI_VERSION,
+    NATIVE_COMPONENT_CATALOG_SHA256,
+    NATIVE_COMPONENT_INTERFACES,
+)
 
 
-@runtime_checkable
-class NativeInterfaceBackend(Protocol):
-    """Narrow ABI provider consumed by the generic component toolchain."""
-
-    def resolve_target(self, component: Any) -> Mapping[str, Any]: ...
-
-    def wrapper_source(self, component: Any, symbols: Mapping[str, str]) -> str: ...
-
-    def bind_installed(self, component: Any) -> Any: ...
+_TABLE_ENTRY_POINT = "interface_table"
+_TABLE_SYMBOL = "pops_component_interface_v1"
 
 
 @dataclass(frozen=True, slots=True)
 class ComponentInterface:
+    """One exact generated C/POD table contract."""
+
+    name: str
+    abi_id: int
     uri: str
     version: int
-    bindings: tuple[tuple[str, str], ...]
-    entry_points: tuple[str, ...]
-    runtime_entry_points: tuple[str, ...]
-    native_backend: NativeInterfaceBackend | None = field(
-        default=None, repr=False, compare=False)
+    cpp_table: str
+    hot_path: bool
+    facets: tuple[str, ...]
+    operations: tuple[str, ...]
 
     def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("component interface name must be non-empty")
+        if isinstance(self.abi_id, bool) or not isinstance(self.abi_id, int) or self.abi_id < 0:
+            raise TypeError("component interface ABI id must be a non-negative integer")
         if not isinstance(self.uri, str) or not self.uri.startswith("pops://interfaces/"):
             raise ValueError("component interface URI must use pops://interfaces/")
         if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 1:
             raise ValueError("component interface version must be an integer >= 1")
-        bindings = tuple(self.bindings)
-        if not bindings or any(
-                not isinstance(row, tuple) or len(row) != 2
-                or any(not isinstance(value, str) or not value for value in row)
-                for row in bindings):
-            raise TypeError("component interface bindings must be (facet, entry_point) pairs")
-        if len({facet for facet, _ in bindings}) != len(bindings):
-            raise ValueError("component interface facets must be unique")
-        object.__setattr__(self, "bindings", bindings)
-        names = tuple(self.entry_points)
-        if not names or any(not isinstance(name, str) or not name for name in names):
-            raise TypeError("component interface entry points must be non-empty strings")
-        if len(names) != len(set(names)):
-            raise ValueError("component interface entry points must be unique")
-        bound_entries = {binding for _, binding in bindings}
-        if not bound_entries.issubset(names):
-            raise ValueError("component interface bindings must name declared entry points")
-        object.__setattr__(self, "entry_points", names)
-        runtime = tuple(self.runtime_entry_points)
-        if not runtime or not set(runtime).issubset(bound_entries):
-            raise ValueError(
-                "runtime entry points must be a non-empty subset of bound facet entry points")
-        object.__setattr__(self, "runtime_entry_points", runtime)
-        backend = self.native_backend
-        if backend is not None and not isinstance(backend, NativeInterfaceBackend):
-            raise TypeError(
-                "native interface backend must implement resolve_target(), wrapper_source(), "
-                "and bind_installed()")
+        if not isinstance(self.cpp_table, str) or not self.cpp_table:
+            raise TypeError("component interface C table must be non-empty")
+        if not isinstance(self.hot_path, bool):
+            raise TypeError("component interface hot_path must be boolean")
+        facets = tuple(self.facets)
+        operations = tuple(self.operations)
+        if not facets or len(facets) != len(set(facets)):
+            raise ValueError("component interface facets must be unique and non-empty")
+        if not operations or len(operations) != len(set(operations)):
+            raise ValueError("component interface operations must be unique and non-empty")
+        object.__setattr__(self, "facets", facets)
+        object.__setattr__(self, "operations", operations)
 
     @property
     def key(self) -> tuple[str, int]:
         return self.uri, self.version
 
     @property
-    def facets(self) -> tuple[str, ...]:
-        return tuple(facet for facet, _ in self.bindings)
+    def table_entry_point(self) -> str:
+        return _TABLE_ENTRY_POINT
+
+    @property
+    def table_symbol(self) -> str:
+        return _TABLE_SYMBOL
+
+    @property
+    def runtime_entry_points(self) -> tuple[str, ...]:
+        return (_TABLE_ENTRY_POINT,)
+
+    @property
+    def entry_points(self) -> tuple[str, ...]:
+        return self.runtime_entry_points
 
     def manifest_declarations(self) -> tuple[dict[str, str], ...]:
-        """Exact ComponentManifest v2 interface rows for this external contract."""
-        return tuple({"name": facet, "mode": "entry_point", "binding": binding}
-                     for facet, binding in self.bindings)
+        """Exact schema-v2 rows; every facet resolves through the one table getter."""
+        return tuple({"name": facet, "mode": "entry_point", "binding": _TABLE_ENTRY_POINT}
+                     for facet in self.facets)
 
-    def to_data(self) -> dict[str, Any]:
+    def signature_declaration(self) -> dict[str, Any]:
         return {
+            "id": self.abi_id,
+            "name": self.name,
             "uri": self.uri,
             "version": self.version,
-            "bindings": [
-                {"facet": facet, "entry_point": binding}
-                for facet, binding in self.bindings
-            ],
+            "catalog_sha256": NATIVE_COMPONENT_CATALOG_SHA256,
+            "protocol_abi": NATIVE_COMPONENT_ABI_VERSION,
+            "cpp_table": self.cpp_table,
+            "hot_path": self.hot_path,
+            "operations": tuple(self.operations),
         }
 
+    def to_data(self) -> dict[str, Any]:
+        return self.signature_declaration()
+
     def require_manifest(self, manifest: Any, *, source_package: bool = True) -> None:
+        del source_package  # Source and fixed packages implement the identical table contract.
         rows = tuple(manifest.interfaces)
         if any(not isinstance(row, Mapping) for row in rows):
             raise TypeError("ComponentManifest interfaces must use v2 binding rows")
-        actual = {
-            (row["name"], row["mode"], row["binding"])
-            for row in rows
-        }
-        expected = {
-            (facet, "entry_point", binding) for facet, binding in self.bindings
-        }
+        actual = {(row["name"], row["mode"], row["binding"]) for row in rows}
+        expected = {(facet, "entry_point", _TABLE_ENTRY_POINT) for facet in self.facets}
         if actual != expected or set(manifest.facets) != set(self.facets):
             raise ValueError(
                 "component %r does not implement exact interface %s@%d"
                 % (manifest.component_id, self.uri, self.version))
-        required = self.entry_points if source_package else self.runtime_entry_points
-        missing = [name for name in required if name not in manifest.entry_points]
-        if missing:
+        native = manifest.signature.get("native_interface")
+        expected_signature = self.signature_declaration()
+        if not isinstance(native, Mapping) or dict(native) != expected_signature:
             raise ValueError(
-                "component %r is missing %s interface entry point(s): %s"
-                % (manifest.component_id, self.uri, ", ".join(missing)))
+                "component %r does not carry the generated native interface identity %s@%d"
+                % (manifest.component_id, self.uri, self.version))
+        if set(manifest.entry_points) != {_TABLE_ENTRY_POINT}:
+            raise ValueError(
+                "component %r must expose only the authenticated native interface table getter"
+                % manifest.component_id)
+        if manifest.entry_points[_TABLE_ENTRY_POINT] != _TABLE_SYMBOL:
+            raise ValueError(
+                "component %r must export %s" % (manifest.component_id, _TABLE_SYMBOL))
 
     def resolve_native_target(self, component: Any) -> dict[str, Any]:
-        backend = self.native_backend
-        if backend is None:
-            raise NotImplementedError(
-                "interface %s@%d has no installed native ABI provider"
-                % (self.uri, self.version))
-        return dict(backend.resolve_target(component))
-
-    def emit_native_wrapper(self, component: Any, symbols: Mapping[str, str]) -> str:
-        backend = self.native_backend
-        if backend is None:
-            raise NotImplementedError(
-                "interface %s@%d has no native wrapper provider"
-                % (self.uri, self.version))
-        source = backend.wrapper_source(component, symbols)
-        if not isinstance(source, str) or not source.strip():
-            raise TypeError("native interface backend returned an empty wrapper source")
-        return source
-
-    def bind_installed(self, component: Any) -> Any:
-        backend = self.native_backend
-        if backend is None:
-            raise NotImplementedError(
-                "interface %s@%d has no installed binding provider"
-                % (self.uri, self.version))
-        return backend.bind_installed(component)
-
-
-_CPP_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$")
-_CPP_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-def _cpp_token(value: Any, *, where: str, qualified: bool = False) -> str:
-    from pops.external._package_data import ComponentPackageError
-
-    expression = _CPP_TYPE if qualified else _CPP_NAME
-    if not isinstance(value, str) or expression.fullmatch(value) is None:
-        raise ComponentPackageError("entry_point", where, "invalid C++ identifier")
-    return value
-
-
-class _NumericalFluxNativeBackend:
-    """CPU/double ABI provider for the NumericalFlux interface."""
-
-    __slots__ = ()
-
-    def resolve_target(self, component: Any) -> Mapping[str, Any]:
+        """Select the sole fixed v1 POD target; ambiguity is refused before compilation."""
         from pops.external._package_data import ComponentPackageError
 
         variants = tuple(component.component_manifest.target["variants"])
-        supported = [item for item in variants if (
-            item["dimension"] == 2
-            and item["scalar"] == "float64"
-            and item["device"] == "cpu"
-        )]
-        if not supported:
+        supported = [dict(row) for row in variants
+                     if row["scalar"] == "float64" and row["device"] == "cpu"]
+        if len(supported) != 1:
             raise ComponentPackageError(
                 "target", "component.target",
-                "NumericalFlux ABI proves only dimension=2, scalar=float64, device=cpu")
-        return dict(supported[0])
-
-    def wrapper_source(self, component: Any, symbols: Mapping[str, str]) -> str:
-        from pops.external._package_data import ComponentPackageError
-
-        manifest = component.component_manifest
-        if component.parameters:
-            raise ComponentPackageError(
-                "parameters", "parameters",
-                "NumericalFlux CPU ABI accepts no runtime component parameters")
-        if manifest.requirements:
-            raise ComponentPackageError(
-                "requirements", "requirements",
-                "NumericalFlux CPU ABI requires every provider to be resolved before AOT")
-        entries = manifest.entry_points
-        header = str(entries["header"])
-        if header.startswith("/") or ".." in Path(header).parts or "\\" in header:
-            raise ComponentPackageError(
-                "entry_point", "entry_points.header", "unsafe header path")
-        component_type = _cpp_token(
-            entries["component"], where="entry_points.component", qualified=True)
-        flux = _cpp_token(
-            entries["numerical_flux"], where="entry_points.numerical_flux")
-        stability = _cpp_token(
-            entries["stability_bound"], where="entry_points.stability_bound")
-        count = manifest.signature.get("state_components")
-        if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-            raise ComponentPackageError(
-                "signature", "signature.state_components",
-                "NumericalFlux CPU ABI requires an exact positive state_components")
-        return f'''#include <pops/runtime/program/component_package.hpp>
-#include "{header}"
-#include <cstddef>
-
-namespace generated {{
-using Scalar = double;
-inline constexpr std::size_t components = {count};
-using Trace = ::pops::component_package::Trace<Scalar, components>;
-using Face = ::pops::component_package::Face<Scalar, 2>;
-using Providers = ::pops::component_package::NumericalFluxProviders<Scalar, components>;
-using Component = {component_type};
-
-inline Trace trace(const double* values) {{
-  Trace result{{}};
-  for (std::size_t i = 0; i < components; ++i) result.values[i] = values[i];
-  return result;
-}}
-inline Face face(const double* normal) {{
-  Face result{{}};
-  result.normal[0] = normal[0]; result.normal[1] = normal[1];
-  return result;
-}}
-}}  // namespace generated
-
-extern "C" int {symbols['numerical_flux']}(
-    const double* left, const double* right, const double* normal, double* output) {{
-  if (!left || !right || !normal || !output) return 2;
-  try {{
-    const auto value = generated::Component{{}}.{flux}(
-        generated::trace(left), generated::trace(right), generated::face(normal),
-        generated::Providers{{}});
-    for (std::size_t i = 0; i < generated::components; ++i) output[i] = value[i];
-    return 0;
-  }} catch (...) {{ return 1; }}
-}}
-
-extern "C" int {symbols['stability_bound']}(
-    const double* left, const double* right, const double* normal, double* output) {{
-  if (!left || !right || !normal || !output) return 2;
-  try {{
-    *output = generated::Component{{}}.{stability}(
-        generated::trace(left), generated::trace(right), generated::face(normal),
-        generated::Providers{{}});
-    return 0;
-  }} catch (...) {{ return 1; }}
-}}
-'''
-
-    def bind_installed(self, component: Any) -> Any:
-        from pops.external.artifacts import NumericalFluxCpuBinding
-
-        return NumericalFluxCpuBinding(component)
+                "native component ABI v1 requires one exact float64 CPU target variant")
+        return supported[0]
 
 
-NumericalFlux = ComponentInterface(
-    "pops://interfaces/numerical-flux",
-    1,
-    (("lowering", "numerical_flux"), ("stability", "stability_bound")),
-    ("header", "component", "numerical_flux", "stability_bound"),
-    ("numerical_flux", "stability_bound"),
-    _NumericalFluxNativeBackend(),
-)
+def _interface(row: Mapping[str, Any]) -> ComponentInterface:
+    return ComponentInterface(
+        name=row["name"], abi_id=row["id"], uri=row["uri"], version=row["version"],
+        cpp_table=row["cpp_table"], hot_path=row["hot_path"], facets=tuple(row["facets"]),
+        operations=tuple(row["operations"]),
+    )
 
 
-__all__ = ["NativeInterfaceBackend", "ComponentInterface", "NumericalFlux"]
+_BY_NAME = MappingProxyType({row["name"]: _interface(row)
+                             for row in NATIVE_COMPONENT_INTERFACES})
+
+
+def resolve(name: str) -> ComponentInterface:
+    try:
+        return _BY_NAME[name]
+    except KeyError:
+        raise KeyError(
+            "unknown native component interface %r (valid: %s)"
+            % (name, ", ".join(_BY_NAME))) from None
+
+
+NumericalFlux = resolve("numerical_flux")
+GhostBoundary = resolve("ghost_boundary")
+FieldBoundaryClosure = resolve("field_boundary_closure")
+Tagger = resolve("tagger")
+Clustering = resolve("clustering")
+Transfer = resolve("transfer")
+Reflux = resolve("reflux")
+FieldSolver = resolve("field_solver")
+Writer = resolve("writer")
+FieldTopology = resolve("field_topology")
+
+
+__all__ = [
+    "ComponentInterface", "resolve", "NumericalFlux", "GhostBoundary",
+    "FieldBoundaryClosure", "Tagger", "Clustering", "Transfer", "Reflux",
+    "FieldSolver", "Writer", "FieldTopology",
+]

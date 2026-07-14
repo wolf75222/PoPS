@@ -10,9 +10,8 @@ Ground-truth edges asserted below were verified by reading the source:
 * ``python/pops/runtime/_bind_adapters.py`` is imported directly by the final typed bind gate;
 * ``python/pops/numerics/riemann/waves.py`` is imported by
   ``test_wave_speed_providers.py``;
-* the DSL cross-test helpers: ``test_dsl_block.py`` imports ``test_dsl_brick.py``
-  (bare sibling import), and ``test_dsl_brick.py`` is a shared helper of five tests;
-* the LAZY (function-scope) edge ``pops.codegen.orchestration`` ->
+* the codegen cross-test helper: ``test_dsl_cse.py`` imports sibling ``test_dsl_brick.py``;
+* the LAZY (function-scope) edge ``pops.codegen._phases`` ->
   ``pops.runtime._bind_adapters`` must be captured, so a ``_bind_adapters`` change
   reaches the orchestration-dependent tests.
 """
@@ -41,7 +40,7 @@ cic = _load("ci_import_closure")
 def test_module_graph_has_expected_shape():
     graph = cic.build_module_graph(REPO_ROOT)
     # Every pops sub-package we sampled is a node.
-    for name in ("pops", "pops.runtime._bound_sim", "pops.numerics.riemann.waves"):
+    for name in ("pops", "pops.runtime._runtime_instance", "pops.numerics.riemann.waves"):
         assert name in graph, f"{name} missing from the module graph"
     # The graph is non-trivial (hundreds of real edges over the package).
     assert sum(len(v) for v in graph.values()) > 500
@@ -74,7 +73,7 @@ def test_lazy_function_scope_edge_is_captured():
 # --------------------------------------------------------------------------- #
 def test_runtime_instance_change_selects_final_runtime_gate():
     sel = cic.impacted_tests(
-        ["python/pops/runtime/runtime_instance.py"], repo_root=REPO_ROOT)
+        ["python/pops/runtime/_runtime_instance.py"], repo_root=REPO_ROOT)
     assert "tests/python/unit/runtime/test_runtime_instance_gate.py" in sel
 
 
@@ -97,28 +96,23 @@ def test_bind_adapters_change_selects_bind_adapters_test():
 # Cross-test edge closure (both directions)                                    #
 # --------------------------------------------------------------------------- #
 def test_cross_test_forward_pulls_shared_brick_helper():
-    """Selecting ``test_dsl_block`` pulls the ``test_dsl_brick`` helper it imports."""
+    """Selecting the CSE test pulls the sibling brick helper it imports."""
     _, edges = cic.test_imports(REPO_ROOT)
-    assert edges.get("tests/python/unit/codegen/test_dsl_block.py") == {
-        "tests/python/unit/codegen/test_dsl_brick.py"
-    }
-    selected = {"tests/python/unit/codegen/test_dsl_block.py"}
+    importer = "tests/python/unit/codegen/test_dsl_cse.py"
+    helper = "tests/python/unit/codegen/test_dsl_brick.py"
+    assert edges.get(importer) == {helper}
+    selected = {importer}
     cic._close_cross_test(selected, edges)
-    assert "tests/python/unit/codegen/test_dsl_brick.py" in selected
+    assert helper in selected
 
 
 def test_cross_test_reverse_pulls_dependents_of_shared_helper():
-    """Selecting the shared ``test_dsl_brick`` helper pulls every test importing it."""
+    """Selecting the brick helper pulls its two remaining sibling dependents."""
     _, edges = cic.test_imports(REPO_ROOT)
     selected = {"tests/python/unit/codegen/test_dsl_brick.py"}
     cic._close_cross_test(selected, edges)
-    for dependent in (
-        "tests/python/unit/codegen/test_dsl_block.py",
-        "tests/python/unit/codegen/test_dsl_cse.py",
-        "tests/python/unit/codegen/test_dsl_dynamic.py",
-        "tests/python/unit/codegen/test_dsl_recon.py",
-    ):
-        assert dependent in selected
+    assert "tests/python/unit/codegen/test_dsl_cse.py" in selected
+    assert "tests/python/unit/codegen/test_dsl_dynamic.py" in selected
 
 
 # --------------------------------------------------------------------------- #
@@ -188,14 +182,15 @@ def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
 
 
 def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
-    """A direct edit of ``test_dsl_block`` pulls its cross-test family + smoke."""
+    """A direct edit of the CSE test pulls its sibling helper + smoke."""
+    importer = "tests/python/unit/codegen/test_dsl_cse.py"
     outputs, selected = _run_plan_python(
-        tmp_path, ["tests/python/unit/codegen/test_dsl_block.py"]
+        tmp_path, [importer]
     )
     assert outputs["python_mode"] == "subset"
     assert "direct-test" in outputs["python_why"]
-    assert "tests/python/unit/codegen/test_dsl_block.py" in selected
-    assert "tests/python/unit/codegen/test_dsl_brick.py" in selected  # helper it imports
+    assert importer in selected
+    assert "tests/python/unit/codegen/test_dsl_brick.py" in selected
 
 
 def test_plan_python_broad_file_runs_all(tmp_path):

@@ -9,8 +9,10 @@ import json
 from typing import Any
 
 from pops.descriptors_report import CapabilitySet, RequirementSet
-from pops.mesh._descriptor import Availability, MeshDescriptor
-from pops.mesh.amr import IgnoreAMRCriteria
+from pops.descriptors import Availability
+from pops.mesh._descriptor import MeshDescriptor
+from pops.mesh._layout_plan_contracts import NormalizedGeometry
+from pops.amr import IgnoreAMRCriteria
 
 
 _LAYOUT_REPORT_SCHEMA_VERSION = 1
@@ -72,6 +74,16 @@ def _layout_inspect_dict(layout: Any, *, native_features: Any, amr_report: Any =
     return info
 
 
+def _delegated_geometry(value: Any, *, where: str) -> NormalizedGeometry:
+    projection = getattr(value, "normalized_geometry", None)
+    if not callable(projection):
+        raise TypeError("%s must implement normalized_geometry()" % where)
+    result = projection()
+    if type(result) is not NormalizedGeometry:
+        raise TypeError("%s normalized_geometry() must return an exact NormalizedGeometry" % where)
+    return result
+
+
 class Uniform(MeshDescriptor):
     """A single-level layout; AMR criteria need an explicit ignore marker."""
 
@@ -82,7 +94,7 @@ class Uniform(MeshDescriptor):
         if ignore_amr is not None and not isinstance(ignore_amr, IgnoreAMRCriteria):
             raise TypeError(
                 "Uniform(ignore_amr=...) accepts only the typed "
-                "pops.mesh.amr.IgnoreAMRCriteria() marker, got %r; the escape must be "
+                "pops.amr.IgnoreAMRCriteria() marker, got %r; the escape must be "
                 "the explicit descriptor, never a truthy value" % (ignore_amr,))
         self.mesh = mesh
         self.embedded_boundary = embedded_boundary
@@ -106,6 +118,9 @@ class Uniform(MeshDescriptor):
             "refinement": self.refine,
             "ignore_amr": self.ignore_amr is not None,
         }
+
+    def normalized_geometry(self) -> NormalizedGeometry:
+        return _delegated_geometry(self.mesh, where="Uniform.mesh")
 
     def capabilities(self) -> CapabilitySet:
         return CapabilitySet({
@@ -346,7 +361,7 @@ class AMR(MeshDescriptor):
 
     def resolve_amr_authorities(self, context: Any) -> Any:
         """Resolve via the same open layout protocol available to extension descriptors."""
-        from pops.amr import resolve_amr_authorities
+        from pops.amr._resolution import resolve_amr_authorities
 
         return resolve_amr_authorities(
             hierarchy=self.hierarchy,
@@ -367,6 +382,9 @@ class AMR(MeshDescriptor):
             "regrid": self.regrid.to_data(),
             "execution": self.execution.to_data(),
         }
+
+    def normalized_geometry(self) -> NormalizedGeometry:
+        return _delegated_geometry(self.grid, where="AMR.grid")
 
     def inspect(self) -> dict[str, Any]:
         from pops._capabilities_inspect import _layout_amr_report

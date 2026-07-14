@@ -107,6 +107,9 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
     example = _example()
 
     class TwoLevelRuntime:
+        amr = SimpleNamespace(
+            explain_regrid=lambda: SimpleNamespace(regrid_count=0, topology_epoch=0),
+        )
         consumer_graph = SimpleNamespace(identity=SimpleNamespace(token="consumer:test"))
         consumer_cursors = SimpleNamespace(
             to_data=lambda: {"schema_version": 1, "rows": []},
@@ -174,7 +177,7 @@ def test_runtime_snapshot_compares_every_amr_level_by_exact_bits():
 def test_field_install_consumes_the_public_amr_layout_contract():
     example = _example()
     from pops.amr import ConflictPolicy, EqualityPolicy
-    from pops.mesh.amr import Above, AnyOf, Below, GradientAbove
+    from pops.mesh._amr import Above, AnyOf, Below, GradientAbove
 
     target = example.build_final_case()
     resolved = pops.resolve(
@@ -259,7 +262,7 @@ def test_transfer_registry_accepts_an_external_policy_protocol():
     example = _example()
     core = example.build_authoring()
     from pops.lib.amr import StateTransfer
-    from pops.mesh.amr import AMRTransfer
+    from pops.amr import AMRTransfer
 
     built_in = StateTransfer()
 
@@ -295,10 +298,10 @@ def test_boolean_tagging_composition_lowers_through_node_protocols():
     target = example.build_final_case()
     core, authored = target.authoring, target.layout
     from pops.amr import AMRTagging, Buffer, Coarsen, Tag
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.layouts import AMR
     from pops.math import grad, norm
-    from pops.mesh.amr import AnyOf
+    from pops.mesh._amr import AnyOf
 
     value = ValueExpr(core.tracer_state)
     predicate = (

@@ -5,13 +5,15 @@ import pytest
 
 pytest.importorskip("pops")
 
-from pops.codegen.compiled_artifact import CompiledSimulationArtifact  # noqa: E402
+from pops.codegen._compiled_artifact import CompiledSimulationArtifact  # noqa: E402
 
 from _typed_artifact_fixture import artifact_fixture  # noqa: E402
 
 
 def test_exact_artifact_names_the_complete_inspection_surface():
-    for method in ("inspect", "requirements", "manifest", "arguments", "capability_matrix"):
+    # Capabilities are part of ``inspect()``/``manifest()``; the artifact deliberately does not
+    # grow a second capability-inspection facade.
+    for method in ("inspect", "requirements", "manifest", "arguments"):
         assert callable(getattr(CompiledSimulationArtifact, method, None))
 
 
@@ -23,8 +25,8 @@ def test_compiled_phase_has_one_exact_result_type():
     artifact.verify()
 
 
-def test_top_level_reexports_only_the_exact_artifact_type():
+def test_compiled_artifact_stays_at_its_codegen_owner():
     import pops
 
-    assert pops.CompiledSimulationArtifact is CompiledSimulationArtifact
-    assert not hasattr(pops, "Compiled" + "Artifact")
+    assert CompiledSimulationArtifact.__module__ == "pops.codegen._compiled_artifact"
+    assert not hasattr(pops, "Compiled" + "SimulationArtifact")

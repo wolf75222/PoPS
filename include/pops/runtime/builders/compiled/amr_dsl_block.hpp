@@ -23,6 +23,7 @@
 
 #include <algorithm>  // std::find, std::sort (resolving the partial IMEX mask of a compiled block)
 #include <functional>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -347,6 +348,9 @@ struct SharedAmrLayout {
   std::function<bool(Real, Real)> wall;  // conducting-wall predicate (empty = none)
   int n = 128;                           // coarse cells per direction
   Periodicity base_per{true, true};      // periodicity of the base domain
+  /// Per-block prepared boundary authorities owned by AmrSystem::Impl. The map and plans outlive
+  /// every deferred block builder/closure.
+  const std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>>* boundary_plans = nullptr;
 
   int nlev() const { return static_cast<int>(ba.size()); }
 
@@ -446,6 +450,14 @@ AmrRuntimeBlock build_amr_block(
   const int nc = Model::n_vars;
   const int ng = Limiter::n_ghost;  // limiter stencil (scheme parity, like build_amr_compiled)
   const int nlev = S.nlev();
+  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan;
+  if (S.boundary_plans != nullptr) {
+    auto found = S.boundary_plans->find(name);
+    if (found != S.boundary_plans->end())
+      boundary_plan = found->second;
+  }
+  auto boundary_field_registry =
+      std::make_shared<GridContext::BoundaryFieldRegistryFactory>();
   auto levels = std::make_shared<std::vector<AmrLevelMP>>();
   levels->reserve(nlev);
   for (int k = 0; k < nlev; ++k) {
@@ -475,6 +487,8 @@ AmrRuntimeBlock build_amr_block(
   b.cons_vars =
       Model::conservative_vars();  // names + ROLES: role resolution -> component of coupled sources
   b.levels = levels;
+  b.boundary_plan = boundary_plan;
+  b.boundary_field_registry = boundary_field_registry;
 
   const bool rprim = recon_prim;
   // advance: ONE AMR transport sub-step of the block (conservative Berger-Oliger + reflux + average_down)
@@ -591,36 +605,124 @@ AmrRuntimeBlock build_amr_block(
       tbc.xlo = tbc.xhi = BCType::Foextrap;
     if (!S.base_per.y)
       tbc.ylo = tbc.yhi = BCType::Foextrap;
-    b.level_rhs = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+    b.level_rhs = [model, rprim, tbc, boundary_plan](MultiFab& U, const MultiFab& aux, const Geometry& geom,
                                       MultiFab& R) {
       GridContext gc;
       gc.dom = geom.domain;
       gc.bc = tbc;
       gc.geom = geom;
       gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
       detail::BlockRhsEval<Limiter, Flux, Model>{model, &gc, rprim, Real(0), nullptr}(U, R);
     };
-    b.level_neg_div_flux = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+    b.level_rhs_at_point = [model, rprim, tbc, boundary_plan, boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& aux, const Geometry& geom, MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      detail::BlockRhsEval<Limiter, Flux, Model>{model, &gc, rprim, Real(0), nullptr}(
+          point, U, R);
+    };
+    b.level_neg_div_flux = [model, rprim, tbc, boundary_plan](MultiFab& U, const MultiFab& aux, const Geometry& geom,
                                                MultiFab& R) {
       GridContext gc;
       gc.dom = geom.domain;
       gc.bc = tbc;
       gc.geom = geom;
       gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
       detail::BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>>{SourceFreeModel<Model>{model}, &gc,
                                                                   rprim, Real(0), nullptr}(U, R);
     };
+    b.level_neg_div_flux_at_point = [model, rprim, tbc, boundary_plan,
+                                     boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& aux, const Geometry& geom, MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      detail::BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>>{
+          SourceFreeModel<Model>{model}, &gc, rprim, Real(0), nullptr}(point, U, R);
+    };
+    b.level_rhs_core_at_point = [model, rprim, tbc, boundary_plan,
+                                 boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& aux, const Geometry& geom, MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      detail::RhsCoreInto<Limiter, Flux, Model>{
+          model, gc, rprim, Real(0), nullptr}(point, U, R);
+    };
+    b.level_neg_div_flux_core_at_point = [model, rprim, tbc, boundary_plan,
+                                          boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& aux, const Geometry& geom, MultiFab& R) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      detail::RhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+          SourceFreeModel<Model>{model}, gc, rprim, Real(0), nullptr}(point, U, R);
+    };
+    b.level_boundary_residual_at_point = [tbc, boundary_plan,
+                                          boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& aux, const Geometry& geom, MultiFab& C) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      add_grid_boundary_residual(U, C, gc, point);
+    };
+    b.level_boundary_jvp_at_point = [tbc, boundary_plan,
+                                     boundary_field_registry](
+        const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+        const MultiFab& V, const MultiFab& aux, const Geometry& geom, MultiFab& J) {
+      GridContext gc;
+      gc.dom = geom.domain;
+      gc.bc = tbc;
+      gc.geom = geom;
+      gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
+      gc.boundary_field_registry = *boundary_field_registry;
+      apply_grid_boundary_jvp(U, V, J, gc, point);
+    };
+    if (boundary_plan && boundary_plan->has_omitted_faces()) {
+      b.level_rhs_without_prepared_interfaces = b.level_rhs_at_point;
+      b.level_neg_div_flux_without_prepared_interfaces = b.level_neg_div_flux_at_point;
+    }
     // SOURCE-ONLY: R <- S(U, aux) only. Computed as the full residual minus the flux-only residual
     // (R_full - R_flux), reusing the two BlockRhsEval instances above -- no new source kernel (parity
     // with the System split, which evaluates m.source per cell; here R = (-div F + S) - (-div F) = S
     // is bit-identical and device-clean: it is two named-functor residuals + a saxpy).
-    b.level_source = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+    b.level_source = [model, rprim, tbc, boundary_plan](MultiFab& U, const MultiFab& aux, const Geometry& geom,
                                          MultiFab& R) {
       GridContext gc;
       gc.dom = geom.domain;
       gc.bc = tbc;
       gc.geom = geom;
       gc.aux = const_cast<MultiFab*>(&aux);
+      gc.boundary_plan = boundary_plan;
       detail::BlockRhsEval<Limiter, Flux, Model>{model, &gc, rprim, Real(0), nullptr}(U, R);
       MultiFab Rf(R.box_array(), R.dmap(), R.ncomp(), 0);
       detail::BlockRhsEval<Limiter, Flux, SourceFreeModel<Model>>{SourceFreeModel<Model>{model}, &gc,
@@ -637,17 +739,23 @@ AmrRuntimeBlock build_amr_block(
     // refresh is done by the caller (AmrRuntime::level_rhs_capture_into, like level_rhs_into). Fx/Fy are
     // sized by the caller (xface_box/yface_box, ncomp = Model::n_vars, 0 ghost). recon_prim + the level
     // metric match level_rhs. Read ONLY on the reflux path (nlev>1). Same <Limiter, Flux, Model> capture.
-    b.level_flux_capture = [model, rprim, tbc](MultiFab& U, const MultiFab& aux, const Geometry& geom,
+    b.level_flux_capture = [model, rprim, tbc, boundary_plan](MultiFab& U, const MultiFab& aux, const Geometry& geom,
                                                MultiFab& Fx, MultiFab& Fy, MultiFab& R) {
-      pops::fill_ghosts(U, geom.domain, tbc);  // same physical-BC ghost fill BlockRhsEval does
+      if (boundary_plan)
+        boundary_plan->fill_same_level_and_physical(U, geom.domain);
+      else
+        pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(model, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };
-    b.level_flux_capture_neg_div = [model, rprim, tbc](MultiFab& U, const MultiFab& aux,
+    b.level_flux_capture_neg_div = [model, rprim, tbc, boundary_plan](MultiFab& U, const MultiFab& aux,
                                                        const Geometry& geom, MultiFab& Fx, MultiFab& Fy,
                                                        MultiFab& R) {
       const SourceFreeModel<Model> sm{model};
-      pops::fill_ghosts(U, geom.domain, tbc);
+      if (boundary_plan)
+        boundary_plan->fill_same_level_and_physical(U, geom.domain);
+      else
+        pops::fill_ghosts(U, geom.domain, tbc);
       pops::compute_face_fluxes<Limiter, Flux>(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), rprim);
       pops::mf_eval_rhs(sm, U, aux, Fx, Fy, geom.dx(), geom.dy(), R);
     };

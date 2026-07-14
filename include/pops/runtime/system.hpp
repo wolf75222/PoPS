@@ -16,6 +16,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <array>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
@@ -44,23 +45,27 @@ class Profiler;       // per-node wall-clock profiler (ADC-459); full type in pr
 class CacheManager;   // scheduler value cache (ADC-458); full type in program/cache_manager.hpp
 }  // namespace runtime::program
 
+namespace runtime::multiblock {
+struct AxisAlignedInterface;
+struct PreparedInterfaceFluxSpec;
+}  // namespace runtime::multiblock
+
 /// Mesh and domain shared by all blocks (physical parameters are per block, in the ModelSpec).
 ///
-/// GEOMETRY ("polar grid" work, Phase 1): the CHOICE of geometry lives HERE, in the mesh config,
-/// NOT in the scheme (FiniteVolume stays reconstruction + Riemann + variables). Default
+/// Geometry reaches the native runtime only through this internal config. CartesianGrid authoring
+/// is validated and lowered before construction; the advanced pops.mesh.PolarMesh descriptor uses
+/// the private config-lowering protocol. Geometry is NOT a numerical-scheme choice. Default
 /// "cartesian": square domain [0,L]^2, behavior and numerics STRICTLY UNCHANGED (bit-identical).
 /// "polar" describes a global ring r in [r_min, r_max] x theta in [0, 2pi) (cf. PolarGeometry); it is
-/// carried by pops.PolarMesh on the Python side and is NOT yet wired into System::step (Phase 1 ships the
-/// geometry + the polar transport operator + its MMS validation; polar transport through
-/// System, which would also require the polar Poisson, is a later phase). Polar fields are
-/// ignored while geometry == "cartesian".
+/// wired through System transport and polar field routes. Polar-only config fields are ignored while
+/// geometry == "cartesian".
 struct SystemConfig {
   int n = 64;            ///< cells per direction (n x n domain) -- for polar: n_r = n_theta = n
   double L = 1.0;        ///< size of the square domain [0,L]^2 (cartesian)
   bool periodic = true;  ///< periodic domain, otherwise free outflow in transport (cartesian)
-  // --- opt-in geometry (Phase 1): "cartesian" (default, bit-identical) | "polar" (global ring) ---
-  std::string geometry =
-      "cartesian";     ///< geometry choice (carried by pops.CartesianMesh / pops.PolarMesh)
+  // --- internal geometry: "cartesian" (default, bit-identical) | "polar" (global ring) ---
+  std::string geometry = "cartesian";  ///< internal choice lowered from CartesianGrid or advanced
+                                       ///< pops.mesh.PolarMesh authoring
   int nr = 0;          ///< radial cells (polar; 0 => takes n)
   int ntheta = 0;      ///< azimuthal cells (polar; 0 => takes n)
   double r_min = 0.0;  ///< inner radius of the ring (polar)
@@ -69,7 +74,8 @@ struct SystemConfig {
   // Number of boxes of the ring, split in theta (each box covers the whole radius [0, nr-1] and one
   // azimuthal band). 1 (default) = mono-box STRICTLY bit-identical to history. theta_boxes > 1:
   // polar transport (assemble_rhs_polar + collective fill_ghosts) runs multi-box. CONSTRAINTS (cf.
-  // PolarMesh / check_geometry): 1 <= theta_boxes <= ntheta AND theta_boxes divides ntheta. INERT in
+  // pops.mesh.PolarMesh / check_geometry): 1 <= theta_boxes <= ntheta AND theta_boxes divides ntheta.
+  // INERT in
   // cartesian (the cartesian split goes through AmrSystem / the historical mono-box MPI multi-box).
   // SCOPE: multi-box transport OK; DIRECT polar Poisson mono-box only (clear UPSTREAM rejection if
   // theta_boxes > 1, cf. ensure_elliptic_polar); polar tensor Schur stage multi-box.
@@ -226,7 +232,51 @@ class System {
   /// "production" path, cf. emit_cpp_native_loader / add_native_block) inlines this template and must
   /// resolve these symbols from the already loaded _pops module. Compiled with -fvisibility=hidden (pybind11),
   /// the module would not export them without this annotation and the loader's dlopen would fail.
-  POPS_EXPORT GridContext grid_context();  ///< REAL mesh + BC + aux of the System (aux not owned)
+  POPS_EXPORT GridContext grid_context();  ///< Legacy unqualified context (no resolved block plan)
+  /// Block-qualified context used by generated packages.  It captures the exact prepared boundary
+  /// authority installed before block construction, so two blocks may use different physical data.
+  POPS_EXPORT GridContext grid_context(const std::string& name);
+  /// Install one executable built-in ghost plan. `face_types` is xlo,xhi,ylo,yhi using
+  /// periodic/foextrap/dirichlet; `face_values` is component-major (ncomp*4).
+  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
+                                         int required_depth,
+                                         const std::vector<std::string>& face_types,
+                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<int>& omitted_interface_faces = {},
+                                         const std::string& state_identity = {});
+  /// Register the exact state Handle owned by a materialized block.  This registry is independent
+  /// of boundary plans: a block with periodic-only or no physical boundary remains a legal N-ary
+  /// dependency of another block's boundary component.
+  POPS_EXPORT void install_block_state_route(const std::string& name,
+                                             const std::string& state_identity);
+  /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
+  POPS_EXPORT void install_boundary_field_route(const std::string& field_identity,
+                                                const std::string& provider_slot);
+  /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
+  POPS_EXPORT void discard_boundary_plans();
+  /// Attach one explicitly qualified native boundary operation to an already installed block plan.
+  /// The LoadedComponent was authenticated by the component loader; the plan rechecks its exact
+  /// component/manifest/interface identity before preparing the typed table.
+  POPS_EXPORT void install_ghost_boundary_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_field_boundary_residual_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_field_boundary_jvp_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  /// Install one exact two-sided NumericalFlux component after both endpoint blocks have been
+  /// materialized but before bind freezes the runtime.  The route is evaluated atomically by the
+  /// compiled Program's grouped RHS path; neither endpoint owns a one-sided callback.
+  POPS_EXPORT void install_interface_flux_component(
+      runtime::multiblock::AxisAlignedInterface route,
+      runtime::multiblock::PreparedInterfaceFluxSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  /// Roll back a failed all-interface post-block installation transaction.
+  POPS_EXPORT void discard_interface_flux_components();
+  POPS_EXPORT std::size_t interface_evaluation_count(
+      const std::string& identity, int level = 0) const;
   /// Installs a block from already-built closures (cf. add_compiled_model). The
   /// cons/prim descriptors carry the names AND the roles (M::conservative_vars()), used
   /// by inter-species couplings.
@@ -552,6 +602,11 @@ class System {
   /// it is identical to solve_fields(). POPS_EXPORT: resolved by a compiled program .so (ProgramContext)
   /// across the dlopen boundary. @throws std::out_of_range if @p block_idx is not a valid block.
   POPS_EXPORT SolveReport solve_fields_from_state(int block_idx, const MultiFab& U_stage);
+  /// Point-qualified stage solve used by generated implicit operators.  System has one mesh level,
+  /// but the exact point remains part of the cross-target contract and is never reconstructed.
+  POPS_EXPORT SolveReport solve_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& provider_slot, int block_idx, const MultiFab& U_stage);
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): SAME elliptic solve + aux
   /// derivation as solve_fields(), but the system Poisson RHS is assembled from the SIMULTANEOUS stage
   /// states of MULTIPLE blocks at once -- every coupled block reads its OWN stage state, not a single-
@@ -704,6 +759,10 @@ class System {
   /// @}
   /// R <- -div F(U) + S(U, aux) for block @p b (the block's frozen-Poisson residual closure).
   POPS_EXPORT void block_rhs_into(int b, MultiFab& U, MultiFab& R);
+  /// Point-qualified twin used by compiled Programs and native boundary components.
+  POPS_EXPORT void block_rhs_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& U, MultiFab& R);
   /// R <- -div F(U) for block @p b -- the SAME flux divergence as block_rhs_into but WITHOUT the
   /// model's default/composite source (Poisson frozen, ghosts filled identically). The block's
   /// flux-only closure is the rhs_into path on SourceFreeModel<Model> (the zero-source adapter the
@@ -717,6 +776,25 @@ class System {
   /// POPS_EXPORT: resolved by the generated problem.so across the
   /// dlopen boundary, like block_rhs_into.
   POPS_EXPORT void block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R);
+  POPS_EXPORT void block_neg_div_flux_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& U, MultiFab& R);
+  /// Evaluate one simultaneous set of block rates at one exact StagePoint.  Sparse groups are
+  /// allowed, but an installed shared interface must have either both sides present or neither.
+  POPS_EXPORT void block_rhs_group(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::vector<int>& blocks, const std::vector<MultiFab*>& states,
+      const std::vector<MultiFab*>& rhs, const std::vector<int>& flux_only);
+  POPS_EXPORT bool block_has_boundary_linearization(int b) const;
+  POPS_EXPORT void block_rhs_core_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& U, MultiFab& R, bool flux_only);
+  POPS_EXPORT void block_boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& U, MultiFab& C);
+  POPS_EXPORT void block_boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& U, const MultiFab& V, MultiFab& J);
   /// R <- S(U, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
   /// divergence (the exact MIRROR of block_neg_div_flux_into, which is flux without source). Together
   /// they split block_rhs_into = -div F + S into its two halves (ADC-430, sibling of ADC-425). The

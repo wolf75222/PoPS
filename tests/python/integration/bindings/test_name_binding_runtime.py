@@ -90,7 +90,7 @@ def _run():
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
         import pops.time as t
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
@@ -125,8 +125,8 @@ def _run():
                 cm = passive_model("nb_blk_" + blk).compile(backend="production")
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit(method="euler"))
+            sim.add_equation(blk, cm, spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                             time=engine.Explicit(method="euler"))
         for blk in add_order:
             sim.set_state(blk, ic[blk][None, :, :])
         return sim

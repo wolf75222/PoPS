@@ -13,7 +13,7 @@ import tempfile
 
 import numpy as np
 
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._model import HyperbolicModel
 
 GAMMA = 1.4

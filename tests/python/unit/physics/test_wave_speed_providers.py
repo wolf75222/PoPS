@@ -15,7 +15,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pytest.importorskip("pops")
 from pops.params import ConstParam
-import pops  # noqa: E402
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.reconstruction import FirstOrder  # noqa: E402
 from pops.numerics.riemann import HLL, Rusanov  # noqa: E402
@@ -203,14 +203,14 @@ def test_check_wave_speed_provider_actual_kind_arg():
 
 
 def test_spatial_records_waves_provider():
-    assert pops.Spatial(flux=HLL(waves=ExplicitPair())).waves_provider == "explicit_pair"
-    assert pops.Spatial(flux=HLL()).waves_provider is None
+    assert engine.Spatial(flux=HLL(waves=ExplicitPair())).waves_provider == "explicit_pair"
+    assert engine.Spatial(flux=HLL()).waves_provider is None
 
 
 # --- 5. no silent HLL -> Rusanov swap ------------------------------------------------------------
 def test_no_silent_flux_swap_on_missing_wave_speeds():
     # HLL on a model without wave speeds is REFUSED; the flux token is never swapped to rusanov.
-    spatial = pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL())
+    spatial = engine.Spatial(limiter=FirstOrder(), flux=HLL())
     assert spatial.flux == "hll"  # the descriptor stays HLL, no silent swap
     with pytest.raises(ValueError, match="wave_speeds"):
         System(n=8, L=1.0, periodic=True)._validate_riemann_capability(

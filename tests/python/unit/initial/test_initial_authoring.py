@@ -8,8 +8,8 @@ from pops.frames import Cartesian2D
 from pops.initial import InitialCondition, InitialConditionAuthorities
 from pops.lib.amr import StateTransfer
 from pops.lib.initial import Constant, Gaussian
-from pops.mesh import CartesianMesh, LayoutPlanBuilder
-from pops.mesh.amr import (
+from pops.mesh import LayoutPlanBuilder
+from pops.mesh._amr import (
     Above,
     AMRTransfer,
     CanonicalOptions,
@@ -29,7 +29,7 @@ from pops.mesh.amr import (
     TaggingGraph,
     resolve_hierarchy,
 )
-from tests.python.support.layout_plan import final_amr_layout
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 from pops.model import Handle
 from pops.params import Positive, RuntimeParam
 from pops.projection import ConservativeCellAverage
@@ -69,7 +69,7 @@ def _resolved_amr_authorities(case, state, threshold):
 
     builder = LayoutPlanBuilder(owner)
     layout = builder.layout(
-        "adaptive", final_amr_layout(CartesianMesh(n=8), max_levels=2, ratio=2))
+        "adaptive", final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2))
     builder.assign_state(state, layout)
     layout_plan = builder.resolve(states=(state,))
 

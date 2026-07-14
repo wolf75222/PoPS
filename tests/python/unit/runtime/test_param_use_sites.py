@@ -9,9 +9,9 @@ import pytest
 pops = pytest.importorskip("pops")
 
 from pops.codegen._backends import lower_backend  # noqa: E402
-from pops.math import Bool, Integer, Real  # noqa: E402
-from pops.mesh import CartesianMesh, PolarMesh  # noqa: E402
-from pops.mesh.amr import Refine, RegridEvery  # noqa: E402
+from pops.math import Integer, Real  # noqa: E402
+from pops.mesh import PolarMesh  # noqa: E402
+from pops.mesh._amr import Refine, RegridEvery  # noqa: E402
 from pops.mesh.geometry import Disc, DiscDomain, HalfPlane  # noqa: E402
 from pops.model import Handle, OwnerPath, ParamHandle  # noqa: E402
 from pops.numerics.reconstruction import (  # noqa: E402
@@ -65,9 +65,6 @@ def test_matrix_is_closed_and_runtime_is_rejected_by_every_structural_use():
 @pytest.mark.parametrize(
     ("build", "use"),
     [
-        (lambda p: CartesianMesh(n=p), ParamUse.SHAPE),
-        (lambda p: CartesianMesh(L=p), ParamUse.MESH_EXTENT),
-        (lambda p: CartesianMesh(periodic=p), ParamUse.MESH_TOPOLOGY),
         (lambda p: RegridEvery(p), ParamUse.REGRID_SCHEDULE),
         (lambda p: Every(AcceptedStep(Clock("macro")), p), ParamUse.SCHEDULE),
         (lambda p: validate_ghost_depth("weno5", available=p), ParamUse.GHOST_DEPTH),
@@ -106,14 +103,6 @@ def test_runtime_precision_choice_is_rejected_before_string_coercion():
 
 
 def test_const_params_are_explicitly_unwrapped_at_structural_sites():
-    mesh = CartesianMesh(
-        n=ConstParam("n", 32, dtype=Integer),
-        L=ConstParam("L", 2.5, dtype=Real),
-        periodic=ConstParam("periodic", False, dtype=Bool),
-        dim=ConstParam("dim", 2, dtype=Integer),
-    )
-    assert (mesh.n, mesh.L, mesh.periodic, mesh.dim) == (32, 2.5, False, 2)
-
     trigger = Every(
         AcceptedStep(Clock("macro")), ConstParam("cadence", 7, dtype=Integer))
     assert trigger.n == 7
@@ -164,12 +153,12 @@ def test_runtime_stencil_width_is_rejected_instead_of_becoming_unknown():
 def test_derived_phase_must_be_compile_for_structural_use():
     late = _ResolvedDerived("n", 64, "runtime")
     with pytest.raises(InvalidParamUseSite, match="requires phase=compile") as caught:
-        CartesianMesh(n=late)
+        PolarMesh(0.1, 1.0, late, 16)
     assert caught.value.param_kind == "derived"
     assert caught.value.phase == "runtime"
 
     early = _ResolvedDerived("n", 64, "compile")
-    assert CartesianMesh(n=early).n == 64
+    assert PolarMesh(0.1, 1.0, early, 16).nr == 64
 
 
 def test_canonical_compile_derived_is_resolved_for_structural_use():
@@ -187,7 +176,7 @@ def test_canonical_compile_derived_is_resolved_for_structural_use():
     module.param(cells)
 
     assert cells.resolved_value == 8
-    assert CartesianMesh(n=cells).n == 8
+    assert PolarMesh(0.1, 1.0, cells, 16).nr == 8
 
 
 def test_compile_derived_values_resolve_at_new_structural_boundaries():
@@ -218,7 +207,7 @@ def test_param_handle_never_falls_through_to_python_numeric_coercion(param_kind)
     handle = ParamHandle(
         "n", owner=OwnerPath.shared("param-use-sites"), param_kind=param_kind)
     with pytest.raises(InvalidParamUseSite) as caught:
-        CartesianMesh(n=handle)
+        PolarMesh(0.1, 1.0, handle, 16)
     assert caught.value.param_kind == param_kind
     assert caught.value.use is ParamUse.SHAPE
     if param_kind == "runtime":

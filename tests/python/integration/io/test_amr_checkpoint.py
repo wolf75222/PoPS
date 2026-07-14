@@ -41,7 +41,8 @@ import tempfile
 import numpy as np
 
 import pops
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -73,10 +74,10 @@ def _build(n=32, regrid_every=0, block="ne"):
     rho0 = _bump(n)
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     sim.block(block,
-                  pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
-                            pops.BackgroundDensity(alpha=1.0, n0=float(rho0.mean()))),
-                  spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit())
+                  engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
+                            engine.BackgroundDensity(alpha=1.0, n0=float(rho0.mean()))),
+                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+                  time=engine.Explicit())
     sim.set_refinement(threshold=1.5)  # rho > 1.5 -> patchs centraux (pic 2.0, plancher 1.0)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density(block, rho0)
@@ -192,10 +193,10 @@ def _build_multiblock(n=32, regrid_every=0):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     for nm, q in (("ions", +1.0), ("elec", -1.0)):
         sim.block(nm,
-                      pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
-                                pops.ChargeDensity(charge=q)),
-                      spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                      time=pops.Explicit())
+                      engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
+                                engine.ChargeDensity(charge=q)),
+                      spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+                      time=engine.Explicit())
     sim.set_refinement(threshold=1.5)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("ions", rho_i)

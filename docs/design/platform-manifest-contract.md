@@ -38,6 +38,7 @@ metadata, but the current backend rejects them with its proved 2D-only capabilit
 compares required and actual descriptors and refuses an unsupported dimension or a centering,
 scalar, extent, memory-space, or communicator mismatch before calling the kernel.
 
-The C++ contract is in `include/pops/runtime/config/platform_manifest.hpp`; the Python contract is
-exported by `pops.runtime.platform_manifest`. `runtime_backend_manifest()` is exposed by `_pops`
-from the same C++ source, so bind verifies the native payload and its identity before installation.
+The C++ contract is in `include/pops/runtime/config/platform_manifest.hpp`; the Python values live in
+the private planning contract `pops._platform_contracts` and are installed by the private runtime
+adapter. `runtime_backend_manifest()` is exposed by `_pops` from the same C++ source, so bind verifies
+the native payload and its identity before installation.

@@ -3,7 +3,7 @@
 A ``Program`` is a restricted, COMPILED numerical program describing one time step. Python
 only BUILDS a typed IR; it never executes a numerical stage. The C++ lowering lives in
 ``pops.codegen.program_codegen`` and is reached through ``Program.emit_cpp_program`` (a lazy
-delegator), so this package imports only ``pops.ir`` / ``pops.model`` -- never ``pops.codegen``,
+delegator), so this package imports only ``pops._ir`` / ``pops.model`` -- never ``pops.codegen``,
 ``_pops``, or ``pops.lib`` at module scope (Spec 4 acyclic graph: time -> {ir, model}).
 
 This package is the time LANGUAGE only: ``Program``, the ``ProgramValue`` /

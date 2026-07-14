@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.ir import _wrap, diff
-from pops.ir.ops import left, right
+from pops._ir import _wrap, diff
+from pops._ir.ops import left, right
 
 from ._scalars import exact_physics_scalar
 

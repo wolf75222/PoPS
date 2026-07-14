@@ -55,7 +55,7 @@ def test_disc_mode_thresholds_require_typed_mask():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
-from pops.runtime.bricks import (
+from pops.runtime._engine_descriptors import (
     ChargeDensity, FluidState, IsothermalFlux, Model, NoSource, Spatial,
 )
 from pops.runtime._system import System  # ADC-545 advanced runtime seam

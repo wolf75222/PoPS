@@ -59,7 +59,7 @@ class RequirementsReport(Report):
     on, the required descriptors and the layout / backend constraints. An inert record:
     :meth:`to_dict` is JSON-ready and :meth:`__str__` a short table. A piece genuinely unknowable
     from today's metadata is recorded in :attr:`unknown` (honestly, never fabricated). Adopts the
-    shared :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape.
+    shared internal report base; its ``to_dict`` keeps the established shape.
     """
 
     report_type = "requirements"
@@ -124,7 +124,7 @@ def build_requirements(compiled: Any) -> Any:
         width), recorded honestly rather than guessed.
     """
     from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 
     model_rows = (artifact_model_metadata(compiled)
                   if type(compiled) is CompiledSimulationArtifact
@@ -200,7 +200,7 @@ class BindReport(Report):
     artifact still REQUIRES, per group (instances / params / aux / solvers). :attr:`missing` is the
     actionable list ADC-463 :func:`collect_missing_arguments` produces (each line names exactly what
     to supply); :attr:`ready` is true when nothing required is missing. :meth:`__str__` is a short,
-    deterministic table. Adopts :class:`pops.Report` (ADC-564); its ``to_dict`` keeps the shape.
+    deterministic table. It uses the internal report base; ``to_dict`` keeps the shape.
     """
 
     report_type = "bind"
@@ -249,11 +249,11 @@ def build_bind_report(sim: Any, compiled: Any) -> Any:
 
     INERT: reads ``compiled.arguments()`` (the DECLARED bind inputs) and the sim's already-wired
     blocks (``sim.block_names()``) + named aux (``sim._aux_field_index``), then reuses ADC-463
-    :func:`pops.runtime._system_unified_install.collect_missing_arguments` to compute the
+    :func:`pops.runtime._bind_validation.collect_missing_arguments` to compute the
     provided-vs-missing split -- the SAME contract ``install`` enforces. It binds nothing and
     mutates nothing.
     """
-    from pops.runtime._system_unified_install import collect_missing_arguments  # lazy: runtime edge
+    from pops.runtime._bind_validation import collect_missing_arguments  # lazy: runtime edge
 
     args = compiled.arguments()
     required = {

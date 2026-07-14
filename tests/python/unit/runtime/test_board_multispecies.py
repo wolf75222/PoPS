@@ -29,7 +29,7 @@ import pytest
 adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
-from pops.ir.expr import Var  # noqa: E402
+from pops._ir.expr import Var  # noqa: E402
 from pops.problem import Case  # noqa: E402
 from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
 

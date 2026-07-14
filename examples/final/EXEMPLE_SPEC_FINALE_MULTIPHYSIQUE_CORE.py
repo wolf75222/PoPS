@@ -29,8 +29,7 @@ from pops.fields import (
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.ir import Const, ValueExpr, Var
-from pops.math import ddt, div, laplacian
+from pops.math import Const, ValueExpr, Var, ddt, div, laplacian
 from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.physics import Density, Momentum
 from pops.solvers.elliptic import GeometricMG
@@ -308,8 +307,7 @@ def build_authoring() -> MultiphysicsAuthoring:
     program.step_strategy(FixedDt(DEFAULT_DT))
     case.program(program)
 
-    from pops.output import Checkpoint, HDF5, ParaView, ScientificOutput
-    from pops.runtime import ConsumerGraph
+    from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
     from pops.time import every, on_end, on_start
 
     case.consumers(ConsumerGraph.from_consumers((
@@ -357,13 +355,18 @@ def build_final_case(*, cells: int = DEFAULT_CELLS) -> FinalMultiphysicsCase:
 
     if isinstance(cells, bool) or not isinstance(cells, int) or cells < 4:
         raise ValueError("cells must be an integer >= 4")
-    from pops.mesh import CartesianMesh, LayoutPlanBuilder
+    from pops.mesh import CartesianGrid, LayoutPlanBuilder, PeriodicAxes
     from pops.layouts import Uniform
 
     authoring = build_authoring()
     pops.validate(authoring.case)
     subjects = authoring.case.layout_subjects()
-    provider = Uniform(CartesianMesh(n=cells, L=1.0, periodic=True))
+    frame = authoring.model.frame
+    provider = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(cells, cells),
+        periodic=PeriodicAxes(frame.axes),
+    ))
     builder = LayoutPlanBuilder(authoring.case.owner_path.canonical())
     layout = builder.layout("uniform_two_fluid", provider)
     for block in subjects.blocks:
@@ -470,7 +473,8 @@ def _require_same_snapshot(left: RuntimeSnapshot, right: RuntimeSnapshot, *, whe
             expected_rows = expected[name] if category == "histories" else (expected[name],)
             actual_rows = actual[name] if category == "histories" else (actual[name],)
             if len(expected_rows) != len(actual_rows) or any(
-                    not np.array_equal(a, b) for a, b in zip(expected_rows, actual_rows)):
+                    not np.array_equal(a, b)
+                    for a, b in zip(expected_rows, actual_rows, strict=True)):
                 raise RuntimeError("%s changed %s %s across restart" % (where, category, name))
 
 
@@ -491,9 +495,13 @@ def run_and_restart(
         initial_state=build_initial_state(cells=cells),
         aux=build_initial_fields(cells=cells),
     )
-    if pops.run(
-            simulation,
-            t_end=DEFAULT_DT, max_steps=1, output_dir=root / "accepted") != 1:
+    run_report = pops.run(
+        simulation,
+        t_end=DEFAULT_DT,
+        max_steps=1,
+        output_dir=root / "accepted",
+    )
+    if run_report.accepted_steps != 1:
         raise RuntimeError("the accepted segment did not execute exactly one macro-step")
 
     hdf5_path = root / "accepted" / "two_fluid.h5"

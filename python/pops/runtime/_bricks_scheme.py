@@ -1,11 +1,10 @@
-"""Scheme bricks : inter-species couplings, spatial scheme, explicit time (Spec-4 PR-F).
+"""Values consumed only at the native-engine boundary.
 
-Inter-species couplings (Ionization / Collision / ThermalExchange), the spatial discretization
-(Spatial / FiniteVolume) and the plain ``Explicit`` time treatment. The implicit time
-policies (IMEX / SourceImplicit / IMEXRK / Implicit / Role)
-live in ``_bricks_time`` (split out for the 500-line cap). Global operator composition is authored
-with ``pops.Program`` and remains outside the native brick catalog. ``pops.runtime.bricks`` re-exports
-the model bricks in ``_bricks_model`` and the time policies in ``_bricks_time``.
+Inter-species couplings, the lowered ``Spatial`` value and the plain ``Explicit`` engine policy
+live here. Public spatial and temporal authoring lives in :mod:`pops.numerics` and
+:mod:`pops.lib.time`; this module deliberately provides no competing finite-volume constructor.
+Private native-engine adapters use :mod:`pops.runtime._engine_descriptors` as their cycle-safe
+aggregate.
 """
 from __future__ import annotations
 
@@ -18,7 +17,6 @@ from pops.runtime.routes import (
     RIEMANN_EULER_HLLC, RIEMANN_EULER_ROE,
     RIEMANN_HLL, RIEMANN_HLLC, RIEMANN_ROE, RIEMANN_RUSANOV,
     TIME_EULER, TIME_EXPLICIT, TIME_SSPRK3,
-    resolve as _resolve_route,
 )
 
 
@@ -161,7 +159,7 @@ class Spatial:
         if getattr(self, "_frozen", False) and name != "_frozen":
             raise RuntimeError(
                 "Spatial is frozen by AuthoringSnapshot: cannot change %r; author a new "
-                "FiniteVolume/Spatial value and recompile" % name
+                "pops.numerics.FiniteVolume descriptor and resolve/compile again" % name
             )
         object.__setattr__(self, name, value)
 
@@ -185,7 +183,7 @@ class Spatial:
         lowering boundary, so Decimal, Fraction and binary64 authoring values cannot collapse to
         the same accidental float identity.
         """
-        from pops.ir.literals import scalar_literal
+        from pops._ir.literals import scalar_literal
 
         return {
             "schema_version": 1,
@@ -216,8 +214,8 @@ class Spatial:
 
     def __init__(self, limiter: Any = None, flux: Any = None, recon: Any = None, *, none: bool = False,
                  minmod: bool = False, vanleer: bool = False, weno5: bool = False, primitive: bool = False,
-                 positivity_floor: Any = None, wave_speed_cache: bool = False, reconstruction: Any = None,
-                 _tokens: Any = None) -> None:
+                 positivity_floor: Any = None, wave_speed_cache: bool = False,
+                 reconstruction: Any = None) -> None:
         for label, flag in (("none", none), ("minmod", minmod), ("vanleer", vanleer),
                             ("weno5", weno5), ("primitive", primitive)):
             strict_bool(flag, where="Spatial.%s" % label)
@@ -227,28 +225,15 @@ class Spatial:
             if limiter is not None:
                 raise TypeError("Spatial: pass limiter= or reconstruction= (the alias), not both")
             limiter = reconstruction
-        # Private fast path: _tokens = (limiter, flux, recon) already-lowered canonical strings.
-        # Used by Spatial._from_tokens (the lib-descriptor lowering, whose options are strings).
-        # Each token is resolved to its TYPED route (ADC-584): an unknown token is refused here,
-        # before the C++ boundary, instead of drifting through as a free string.
-        if _tokens is not None:
-            lim_tok, flux_tok, recon_tok = _tokens
-            if lim_tok is not None:
-                lim_tok = _resolve_route("limiter", lim_tok, context="Spatial")
-            if flux_tok is not None and flux_tok != "user":
-                flux_tok = _resolve_route("riemann", flux_tok, context="Spatial")
-            if recon_tok is not None:
-                recon_tok = _resolve_route("recon", recon_tok, context="Spatial")
-        else:
-            lim_tok = _lower_selector(
-                limiter, param="limiter", schemes=_LIMITER_SCHEMES,
-                suggestion=_LIMITER_SUGGEST, categories=("reconstruction", "limiter"))
-            flux_tok = _lower_selector(
-                flux, param="flux", schemes=_FLUX_SCHEMES,
-                suggestion=_FLUX_SUGGEST, categories=("riemann",))
-            recon_tok = _lower_selector(
-                recon, param="recon", schemes=_RECON_SCHEMES,
-                suggestion=_RECON_SUGGEST, categories=("variables",))
+        lim_tok = _lower_selector(
+            limiter, param="limiter", schemes=_LIMITER_SCHEMES,
+            suggestion=_LIMITER_SUGGEST, categories=("reconstruction", "limiter"))
+        flux_tok = _lower_selector(
+            flux, param="flux", schemes=_FLUX_SCHEMES,
+            suggestion=_FLUX_SUGGEST, categories=("riemann",))
+        recon_tok = _lower_selector(
+            recon, param="recon", schemes=_RECON_SCHEMES,
+            suggestion=_RECON_SUGGEST, categories=("variables",))
         # Wave-speed provider ride-along (ADC-552): a flux descriptor built with
         # HLL(waves=<WaveSpeedProvider>) carries the provider kind in options["waves"]. Record it
         # on the Spatial so the install guard can cross-check the requested provider against the
@@ -256,7 +241,7 @@ class Spatial:
         # here, the lowered route token stays byte-identical). None when no provider was pinned.
         self.waves_provider = None
         self.external_flux_id = None
-        if _tokens is None and flux is not None and not isinstance(flux, str):
+        if flux is not None and not isinstance(flux, str):
             self.waves_provider = getattr(flux, "options", {}).get("waves")
             if getattr(flux, "scheme", None) == "user":
                 self.external_flux_id = getattr(flux, "name", None)
@@ -264,7 +249,7 @@ class Spatial:
         # WENO5(epsilon=...) carries the WENO-Z regulariser in options["epsilon"]. None (the default)
         # keeps the native kWenoEpsilon -> nothing forwarded, byte-identical.
         self.weno_epsilon = None
-        if _tokens is None and limiter is not None and not isinstance(limiter, str):
+        if limiter is not None and not isinstance(limiter, str):
             self.weno_epsilon = getattr(limiter, "options", {}).get("epsilon")
         # Boolean shortcuts (typed flags, not strings): override the limiter / recon slot. They
         # stay as convenience sugar -- only the bare-string selectors are forbidden (Spec 5 sec.7).
@@ -316,34 +301,6 @@ class Spatial:
         return {"limiter": _manifest(self.limiter), "riemann": _manifest(self.flux),
                 "recon": _manifest(self.recon)}
 
-    @classmethod
-    def _from_tokens(cls, limiter: Any, flux: Any, recon: Any, *, positivity_floor: Any = None,
-                     wave_speed_cache: bool = False, waves_provider: Any = None,
-                     weno_epsilon: Any = None, external_flux_id: Any = None) -> Any:
-        """Build a Spatial from ALREADY-canonical string tokens (internal lowering only).
-
-        The spatial brick-catalog descriptor (``pops.numerics.spatial.FiniteVolume``) carries its scheme
-        choice as string options; ``System._lower_spatial`` resolves those to the canonical tokens and calls
-        this to bypass the typed-descriptor guard. Not part of the public API -- public callers pass
-        typed descriptors to ``Spatial`` / ``FiniteVolume``.
-        """
-        result = cls(_tokens=(limiter, flux, recon),
-                     positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
-        if waves_provider is not None:
-            if not isinstance(waves_provider, str) or not waves_provider:
-                raise TypeError("Spatial._from_tokens waves_provider must be a non-empty string")
-            result.waves_provider = waves_provider
-        if external_flux_id is not None:
-            if str(result.flux) != "user":
-                raise ValueError("Spatial._from_tokens external_flux_id requires flux='user'")
-            if not isinstance(external_flux_id, str) or not external_flux_id:
-                raise TypeError("Spatial._from_tokens external_flux_id must be a non-empty string")
-            result.external_flux_id = external_flux_id
-        if weno_epsilon is not None:
-            result.weno_epsilon = exact_real(
-                weno_epsilon, where="Spatial.weno_epsilon", minimum=0, minimum_open=True)
-        return result
-
     def validate(self, ghost_depth: Any = None, block: Any = None) -> Any:
         """Reject a reconstruction whose ghost depth exceeds an EXPLICIT block halo (Spec 5 sec.7).
 
@@ -373,18 +330,6 @@ class Spatial:
 
         available = None if ghost_depth is None else int(ghost_depth)
         return validate_ghost_depth(self.limiter, available=available, block=block)
-
-
-def FiniteVolume(*args: Any, **kwargs: Any) -> Any:
-    """Re-export of the composite finite-volume surface homed in ``pops.numerics.spatial`` (ADC-533).
-
-    Spec 5 criterion 7 homes the ``FiniteVolume(riemann=HLL(...), reconstruction=MUSCL(...))``
-    composite in :mod:`pops.numerics.spatial`; this site re-exports it so every existing
-    ``pops.FiniteVolume`` / ``pops.runtime._bricks_scheme.FiniteVolume`` import path keeps working.
-    It returns a :class:`Spatial` (consumed as-is by add_block / add_equation). The lazy import
-    keeps ``pops.numerics`` free of a module-scope ``pops.runtime`` edge (acyclic layering)."""
-    from pops.numerics.spatial import FiniteVolume as _FiniteVolume
-    return _FiniteVolume(*args, **kwargs)
 
 
 class Explicit:

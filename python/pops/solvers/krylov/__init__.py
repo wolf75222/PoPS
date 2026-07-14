@@ -37,7 +37,7 @@ _KRYLOV_CAPABILITIES = capability_map(uniform=True, amr=True, mpi=True, gpu=True
 
 def _exact_control(value: Any, where: str) -> Any:
     # Lazy to keep the catalog-layer import graph (solvers -> no symbolic implementation module).
-    from pops.ir.literals import exact_numeric_scalar
+    from pops._ir.literals import exact_numeric_scalar
     return exact_numeric_scalar(value, where=where)
 
 

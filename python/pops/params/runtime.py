@@ -64,11 +64,11 @@ def _expression_data(expression: Any) -> Any:
             "DerivedParam expression must be a PoPS Expr, not a string or Python callable"
         )
     try:
-        from pops.ir.expr import Expr
+        from pops._ir.expr import Expr
     except ImportError:  # pragma: no cover - the normal package always provides it
         Expr = ()  # type: ignore[assignment]
     if isinstance(expression, Expr):
-        from pops.ir.visitors import _key
+        from pops._ir.visitors import _key
 
         payload = _key(expression)
         return {

@@ -20,7 +20,10 @@ from .ghost_plan import (
 from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerCondition,
     CornerConstraint, CornerMode, CornerPolicy, GhostCoverageManifest, GhostDepthCapability,
-    GhostDepthRequirement, GhostRegion, GhostStencilManifest, InterfaceSide, MultiBlockInterface)
+    GhostDepthRequirement, GhostRegion, GhostStencilManifest, InterfaceAffineMapping,
+    InterfacePermutation, InterfaceSide, MultiBlockInterface, TangentialOrientation)
+from .component_binding import BoundaryComponentBinding
+from .interface_authoring import BlockInterfaceSide, ConservativeInterface
 from .ports import (
     BoundaryDependencies, BoundaryPort, CharacteristicClosure, ClosureMode,
     ConstraintResidual, ExteriorTrace, GhostState, IncomingMultiplicity, NumericalFlux,
@@ -121,11 +124,13 @@ __all__ = [
     "SonicPolicy", "BoundaryProvider", "BoundaryProviderRegistry", "DirectionalTransport",
     "Dirichlet", "GhostFormula", "Inflow", "Mixed", "Neumann", "NoFlux", "Outflow",
     "ResolvedBoundaryBinding", "ResolvedBoundaryPlan",
-    "BoundaryLinearizationContribution", "BoundaryResidualContribution",
+    "BoundaryComponentBinding", "BoundaryLinearizationContribution",
+    "BoundaryResidualContribution",
+    "BlockInterfaceSide", "ConservativeInterface",
     "CoarseFineInterpolation", "CornerCondition", "CornerConstraint", "CornerMode",
     "CornerPolicy", "GhostCoverageManifest", "GhostDepthCapability", "GhostDepthRequirement",
     "GhostProducer", "GhostProducerPlan", "GhostProducerRegistry", "GhostProduction",
-    "GhostRegion", "GhostStencilManifest", "InterfaceGhost", "InterfaceSide",
-    "MultiBlockInterface", "NumericalClosure", "PeriodicGhost", "PhysicalGhost",
-    "SameLevelHaloMPI",
+    "GhostRegion", "GhostStencilManifest", "InterfaceAffineMapping", "InterfaceGhost",
+    "InterfacePermutation", "InterfaceSide", "MultiBlockInterface", "NumericalClosure",
+    "PeriodicGhost", "PhysicalGhost", "SameLevelHaloMPI", "TangentialOrientation",
 ]

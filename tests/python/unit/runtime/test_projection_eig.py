@@ -17,7 +17,7 @@ On verifie :
  (3) [compilateur] la brique GENEREE compile contre les en-tetes pops et son hook project(U, aux),
      execute sur un CHAMP de matrices construites des vars, reproduit la reference numpy CELLULE PAR
      CELLULE : projection jouet "si max_im > tol alors q <- cible" branchless == numpy (atol 1e-10) ;
- (4) [_pops] semantique POST-PAS de bout en bout (production + aot) : le hook tourne dans le System et
+ (4) [_pops] semantique POST-PAS de bout en bout (production) : le hook tourne dans le System et
      l'etat post-pas == transport-sans-hook puis projection numpy (mirroir projection_value) ;
  (5) le hook m.projection sans temoin VP (ADC-177) reste INCHANGE : aucun include dense_eig, aucun
      foncteur emis (extension strictement additive, test_projection_hook reste vert).
@@ -34,8 +34,8 @@ import numpy as np
 # dependent pas de l'extension compilee _pops. La partie System (4) est gardee par la dispo de _pops.
 from types import SimpleNamespace
 
-from pops.ir.expr import Const, Var
-from pops.ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
+from pops._ir.expr import Const, Var
+from pops._ir.ops import abs_, eig_lmax, eig_lmin, eig_max_im, sign
 from pops.physics._model import HyperbolicModel
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -209,11 +209,11 @@ def test_additive():
 def test_system_end_to_end():
     """(4) Bout en bout via _pops : le hook tourne dans le System, etat post-pas == projection numpy.
     Garde sur la disponibilite de l'extension compilee (import pops) ; sinon ignore."""
-    print("== (4) [_pops] semantique POST-PAS (production + aot) == reference numpy ==")
+    print("== (4) [_pops] semantique POST-PAS (production) == reference numpy ==")
     try:
         import pops
-        from pops.ir.expr import Const
-        from pops.ir.ops import eig_max_im, sign
+        from pops._ir.expr import Const
+        from pops._ir.ops import eig_max_im, sign
         from pops.physics._model import HyperbolicModel
     except Exception as ex:  # noqa: BLE001
         print("  skip  extension _pops absente (%s) -- (3) couvre deja la numerique compilee"
@@ -247,14 +247,10 @@ def test_system_end_to_end():
         q2 = np.zeros((n, n))
         return np.stack([q0, q1, q2])
 
-    def make_sys(so, adder):
+    def make_sys(so):
         s = System(n=N, L=L, periodic=True)
-        if adder == "native":
-            s._s.add_native_block("toy", so, limiter="minmod", riemann="rusanov",
-                                  recon="conservative", time="explicit", gamma=1.4, substeps=1)
-        else:
-            s._s.add_compiled_block("toy", so, limiter="minmod", riemann="rusanov",
-                                    recon="conservative", time="explicit", substeps=1)
+        s._s.add_native_block("toy", so, limiter="minmod", riemann="rusanov",
+                              recon="conservative", time="explicit", gamma=1.4, substeps=1)
         s.set_state("toy", init(N))
         return s
 
@@ -263,30 +259,30 @@ def test_system_end_to_end():
         m_eig = build_pkg("e")
         m_none = build_pkg("n")  # meme transport ; on neutralise sa projection pour la reference
         m_none._proj = None
-        for backend, adder in (("production", "native"), ("aot", "aot")):
-            so = m_eig.compile(os.path.join(tmp, "eig_%s.so" % backend), INCLUDE, backend=backend)
-            so_n = m_none.compile(os.path.join(tmp, "none_%s.so" % backend), INCLUDE, backend=backend)
-            # run AVEC hook
-            s = make_sys(so, adder)
-            run = []
-            for _ in range(NSTEPS):
-                s.step(DT)
-                run.append(np.array(s.get_state("toy")).reshape(3, N, N))
-            # reference : transport SANS hook un pas, puis projection numpy (mirroir projection_value)
-            sr = make_sys(so_n, adder)
-            cur, ref = init(N), []
-            for _ in range(NSTEPS):
-                sr.set_state("toy", cur)
-                sr.step(DT)
-                cur = m_eig.projection_value(np.array(sr.get_state("toy")).reshape(3, N, N))
-                ref.append(cur)
-            d = max(float(np.max(np.abs(a - b))) for a, b in zip(run, ref))
-            chk(all(np.allclose(a, b, rtol=0.0, atol=1e-10) for a, b in zip(run, ref)),
-                "%s : etat post-pas == transport puis projection(temoin VP) numpy (ecart %.2e)"
-                % (backend, d))
-            # le temoin VP est ACTIF : q2 est mis a la cible dans au moins une cellule.
-            chk(any(np.any(np.isclose(a[2], target)) for a in run),
-                "%s : la branche VP complexe corrige q2 (cible atteinte)" % backend)
+        so = m_eig.compile(os.path.join(tmp, "eig_production.so"), INCLUDE, backend="production")
+        so_n = m_none.compile(os.path.join(tmp, "none_production.so"), INCLUDE,
+                              backend="production")
+        # run AVEC hook
+        s = make_sys(so)
+        run = []
+        for _ in range(NSTEPS):
+            s.step(DT)
+            run.append(np.array(s.get_state("toy")).reshape(3, N, N))
+        # reference : transport SANS hook un pas, puis projection numpy (miroir projection_value)
+        sr = make_sys(so_n)
+        cur, ref = init(N), []
+        for _ in range(NSTEPS):
+            sr.set_state("toy", cur)
+            sr.step(DT)
+            cur = m_eig.projection_value(np.array(sr.get_state("toy")).reshape(3, N, N))
+            ref.append(cur)
+        d = max(float(np.max(np.abs(a - b))) for a, b in zip(run, ref))
+        chk(all(np.allclose(a, b, rtol=0.0, atol=1e-10) for a, b in zip(run, ref)),
+            "production : etat post-pas == transport puis projection(temoin VP) numpy "
+            "(ecart %.2e)" % d)
+        # Le temoin VP est ACTIF : q2 est mis a la cible dans au moins une cellule.
+        chk(any(np.any(np.isclose(a[2], target)) for a in run),
+            "production : la branche VP complexe corrige q2 (cible atteinte)")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

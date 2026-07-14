@@ -2,8 +2,8 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from pops.mesh import CartesianMesh, LayoutPlanBuilder
-from pops.mesh.amr import (
+from pops.mesh import LayoutPlanBuilder
+from pops.mesh._amr import (
     AnalyticReprojection,
     Above,
     BootstrapOrdering,
@@ -29,7 +29,7 @@ from pops.mesh.amr import (
     resolve_bootstrap,
     resolve_hierarchy,
 )
-from pops.mesh.amr.transfer import (
+from pops.mesh._amr.transfer import (
     AccuracyRequirement,
     AMRTransfer,
     AMRTransferBuilder,
@@ -58,6 +58,7 @@ from pops.mesh.amr.transfer import (
     TransferProvider,
     TransferProviderRoute,
 )
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 from pops.lib.amr import (
     ConservativeLinear,
     EllipticRecompute,
@@ -84,7 +85,7 @@ def _layout():
     state = Handle("U", kind="state", owner=OwnerPath.model("transport"))
     field = Handle("grad_u", kind="field", owner=OWNER)
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("adaptive", final_amr_layout(CartesianMesh(n=8)))
+    layout = builder.layout("adaptive", final_amr_layout(cartesian_grid(n=8)))
     builder.assign_state(state, layout)
     builder.assign_field(field, layout)
     plan = builder.resolve(states=(state,), fields=(field,))
@@ -108,9 +109,27 @@ def _provider(*keys, name="finite_volume_transfer", order=2, ghost=(2,), conserv
         dimensions=(2,),
         conservative=conservative,
     )
+    def native_route(key):
+        if key.operation == RESTRICTION:
+            return "volume_average"
+        if key.operation == COARSE_FINE_FILL:
+            return "conservative_coarse_fine"
+        if key.space == FACE_SPACE:
+            return "face_divergence_preserving"
+        if key.space == NODE_SPACE:
+            return "node_bilinear"
+        return "conservative_linear"
+
     return TransferProvider(
         _handle(name, "amr_transfer_provider"),
-        tuple(TransferProviderRoute(key, capabilities) for key in keys),
+        tuple(
+            TransferProviderRoute(
+                key,
+                capabilities,
+                CanonicalOptions({"native_route": native_route(key)}),
+            )
+            for key in keys
+        ),
     )
 
 
@@ -252,7 +271,7 @@ def test_public_transfer_object_derives_all_state_routes_and_hides_internal_buil
         "coarse_fine_fill": "conservative_coarse_fine",
         "temporal_interpolation": "linear_time_interpolation",
     }
-    import pops.mesh.amr.transfer as module
+    import pops.mesh._amr.transfer as module
     assert module.__all__ == ["AMRTransfer", "ResolvedAMRTransfer"]
     assert "AMRTransferBuilder" not in module.__all__
 
@@ -275,7 +294,7 @@ def test_public_provider_identity_is_stable_under_declaration_reordering():
         for name in ("a", "b")
     )
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("stable", final_amr_layout(CartesianMesh(n=8)))
+    layout = builder.layout("stable", final_amr_layout(cartesian_grid(n=8)))
     for state in states:
         builder.assign_state(state, layout)
     plan = builder.resolve(states=states)
@@ -307,7 +326,7 @@ def test_field_and_cache_materializer_identities_are_owner_qualified_not_local_n
         Handle("topology", kind="cache", owner=OwnerPath.model("right")),
     )
     builder = LayoutPlanBuilder(OWNER)
-    layout = builder.layout("qualified", final_amr_layout(CartesianMesh(n=8)))
+    layout = builder.layout("qualified", final_amr_layout(cartesian_grid(n=8)))
     builder.assign_state(state, layout)
     for field in fields:
         builder.assign_field(field, layout)
@@ -341,7 +360,7 @@ def test_cell_face_node_states_use_distinct_providers_and_exact_initial_sources(
     )
     layout_builder = LayoutPlanBuilder(OWNER)
     layout = layout_builder.layout(
-        "multi_space", final_amr_layout(CartesianMesh(n=8))
+        "multi_space", final_amr_layout(cartesian_grid(n=8))
     )
     for state in states:
         layout_builder.assign_state(state, layout)
@@ -531,7 +550,7 @@ def test_three_level_bootstrap_is_one_explicit_recursive_plan():
     state = Handle("U", kind="state", owner=OwnerPath.model("three-level"))
     layout_builder = LayoutPlanBuilder(OWNER)
     layout = layout_builder.layout(
-        "three_levels", final_amr_layout(CartesianMesh(n=8), max_levels=3)
+        "three_levels", final_amr_layout(cartesian_grid(n=8), max_levels=3)
     )
     layout_builder.assign_state(state, layout)
     layout_plan = layout_builder.resolve(states=(state,))

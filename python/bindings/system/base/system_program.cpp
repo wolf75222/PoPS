@@ -38,6 +38,126 @@ MultiFab& System::block_state(int b) {
 void System::block_rhs_into(int b, MultiFab& U, MultiFab& R) {
   p_->sp[static_cast<std::size_t>(b)].rhs_into(U, R);
 }
+void System::block_rhs_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    int b, MultiFab& U, MultiFab& R) {
+  block_rhs_group(point, {b}, {&U}, {&R}, {0});
+}
+void System::block_rhs_group(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    const std::vector<int>& requested_blocks, const std::vector<MultiFab*>& requested_states,
+    const std::vector<MultiFab*>& requested_rhs, const std::vector<int>& requested_flux_only) {
+  if (requested_blocks.empty() || requested_blocks.size() != requested_states.size() ||
+      requested_blocks.size() != requested_rhs.size() ||
+      requested_blocks.size() != requested_flux_only.size())
+    throw std::invalid_argument("System::block_rhs_group has inconsistent request vectors");
+  std::vector<MultiFab*> states(p_->sp.size(), nullptr);
+  std::vector<MultiFab*> rhs(p_->sp.size(), nullptr);
+  std::vector<int> flux_only(p_->sp.size(), 0);
+  for (std::size_t request = 0; request < requested_blocks.size(); ++request) {
+    const int block = requested_blocks[request];
+    if (block < 0 || block >= static_cast<int>(p_->sp.size()))
+      throw std::out_of_range("System::block_rhs_group block index is out of range");
+    const std::size_t index = static_cast<std::size_t>(block);
+    if (states[index] != nullptr || requested_states[request] == nullptr ||
+        requested_rhs[request] == nullptr ||
+        (requested_flux_only[request] != 0 && requested_flux_only[request] != 1))
+      throw std::invalid_argument(
+          "System::block_rhs_group requires unique blocks, non-null storage and boolean modes");
+    states[index] = requested_states[request];
+    rhs[index] = requested_rhs[request];
+    flux_only[index] = requested_flux_only[request];
+  }
+  struct StageStateScope {
+    std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
+    ~StageStateScope() {
+      if (slot != nullptr) slot->reset();
+    }
+  } stage_scope;
+  if (!p_->block_state_identities_.empty()) {
+    if (p_->boundary_stage_states_)
+      throw std::runtime_error("System boundary stage-state registry is already active");
+    std::map<std::string, MultiFab*> staged;
+    for (std::size_t index = 0; index < p_->sp.size(); ++index) {
+      const auto& identity = p_->sp[index].state_identity;
+      if (identity.empty())
+        throw std::runtime_error(
+            "System materialized block has no exact qualified state identity");
+      if (states[index] != nullptr && !staged.emplace(identity, states[index]).second)
+        throw std::runtime_error(
+            "System boundary stage-state registry has a duplicate qualified identity");
+    }
+    p_->boundary_stage_states_.emplace(
+        Impl::BoundaryStageStateView{point, std::move(staged)});
+    stage_scope.slot = &p_->boundary_stage_states_;
+  }
+  p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only);
+}
+
+bool System::block_has_boundary_linearization(int b) const {
+  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System boundary linearization block index is out of range");
+  const auto& block = p_->sp[static_cast<std::size_t>(b)];
+  const auto plan = p_->boundary_plans_.find(block.name);
+  return plan != p_->boundary_plans_.end() &&
+         plan->second->has_boundary_linearization();
+}
+
+void System::block_rhs_core_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    int b, MultiFab& U, MultiFab& R, bool flux_only) {
+  if (b < 0 || b >= static_cast<int>(p_->sp.size()))
+    throw std::out_of_range("System core RHS block index is out of range");
+  std::vector<MultiFab*> states(p_->sp.size(), nullptr);
+  std::vector<MultiFab*> rhs(p_->sp.size(), nullptr);
+  std::vector<int> modes(p_->sp.size(), 0);
+  const auto block = static_cast<std::size_t>(b);
+  states[block] = &U;
+  rhs[block] = &R;
+  modes[block] = flux_only ? 1 : 0;
+  struct StageStateScope {
+    std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
+    ~StageStateScope() {
+      if (slot != nullptr) slot->reset();
+    }
+  } stage_scope;
+  if (!p_->block_state_identities_.empty()) {
+    if (p_->boundary_stage_states_)
+      throw std::runtime_error("System boundary stage-state registry is already active");
+    const auto& identity = p_->sp[block].state_identity;
+    if (identity.empty())
+      throw std::runtime_error(
+          "System core RHS block has no exact qualified state identity");
+    p_->boundary_stage_states_.emplace(
+        Impl::BoundaryStageStateView{point, {{identity, &U}}});
+    stage_scope.slot = &p_->boundary_stage_states_;
+  }
+  p_->blocks_.evaluate_rhs_core_with_interfaces(point, states, rhs, modes);
+}
+
+void System::block_boundary_residual_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    int b, MultiFab& U, MultiFab& C) {
+  if (!block_has_boundary_linearization(b))
+    throw std::runtime_error(
+        "System block has no executable boundary residual/JVP pair");
+  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_residual_at_point;
+  if (!closure)
+    throw std::runtime_error("System block lacks its boundary residual closure");
+  closure(point, U, C);
+}
+
+void System::block_boundary_jvp_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    int b, MultiFab& U, const MultiFab& V, MultiFab& J) {
+  if (!block_has_boundary_linearization(b))
+    throw std::runtime_error(
+        "System block has no executable boundary residual/JVP pair");
+  auto& closure = p_->sp[static_cast<std::size_t>(b)].boundary_jvp_at_point;
+  if (!closure)
+    throw std::runtime_error("System block lacks its boundary JVP closure");
+  closure(point, U, V, J);
+}
 // FLUX-ONLY residual R <- -div F(U) (ADC-425): the block's SourceFreeModel<Model> rhs path (built in
 // build_block), bit-identical to rhs_into minus the default source. Fails loud on a block that did not
 // build it (the host .so prototype loader) instead of silently leaking the source.
@@ -50,6 +170,11 @@ void System::block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R) {
         "flux-only RHS (P.rhs(flux=True, sources without 'default')) needs a native block "
         "(add_block / production-backend compiled block)");
   s.rhs_flux_only(U, R);
+}
+void System::block_neg_div_flux_into_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& point,
+    int b, MultiFab& U, MultiFab& R) {
+  block_rhs_group(point, {b}, {&U}, {&R}, {1});
 }
 // SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the block's SourceInto<Model> path (built in
 // build_block), the exact mirror of block_neg_div_flux_into and bit-identical to the source half of

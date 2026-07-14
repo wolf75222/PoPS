@@ -44,7 +44,7 @@ def _reference_block(reference: Any, names: tuple[str, ...]) -> str:
 
 def _consumer_contracts(plan: Any) -> tuple[
         dict[str, tuple[str, ...]], dict[str, tuple[dict[str, Any], ...]]]:
-    from .consumer import ParallelMode
+    from pops.output._consumer_contracts import ParallelMode
 
     names = tuple(block.name for block in plan.artifact.blocks)
     resources: dict[str, set[str]] = {name: set() for name in names}

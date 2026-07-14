@@ -15,6 +15,7 @@ import pytest
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.riemann import EulerHLLC2D, EulerRoe2D, HLLC, Roe, riemann  # noqa: E402
 
@@ -34,7 +35,7 @@ def _compiled(*, n_vars, prim_names, hllc=False, roe=False):
 def _validate(model, flux_desc):
     """Run the unified-install riemann capability gate on a fake compiled model."""
     System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
-        model, pops.FiniteVolume(riemann=flux_desc))
+        model, engine.Spatial(flux=flux_desc))
 
 
 # --- 1. descriptor lowering ---------------------------------------------------------------------
@@ -48,11 +49,11 @@ def test_euler_descriptors_lower_to_explicit_routes():
 
 
 def test_euler_descriptors_lower_to_native_flux_entries():
-    hs = pops.Spatial(flux=EulerHLLC2D())
+    hs = engine.Spatial(flux=EulerHLLC2D())
     assert hs.flux.id == "riemann.euler_hllc"
     assert hs.flux.native_entry == "pops::EulerHLLCFlux2D"
     assert hs.flux == "euler_hllc"
-    rs = pops.Spatial(flux=EulerRoe2D())
+    rs = engine.Spatial(flux=EulerRoe2D())
     assert rs.flux.id == "riemann.euler_roe"
     assert rs.flux.native_entry == "pops::EulerRoeFlux2D"
 

@@ -4,7 +4,7 @@
 # `import pops` charge le paquet, qui importe l'extension _pops.
 #
 #   cmake -B build-py -DPOPS_BUILD_PYTHON=ON && cmake --build build-py --target _pops
-#   PYTHONPATH=build-py/python python3 -c "import pops; print(pops.System)"
+#   PYTHONPATH=build-py/python python3 -c "from pops.runtime.doctor import doctor; doctor()"
 
 # LTO du module _pops. OFF par defaut : le LTO (re)optimise au LINK et rallongerait fortement le build
 # -- le backend -O3 est deja le goulot (cf. docs/BUILD_PROFILING.md) -- pour un gain runtime marginal sur ce
@@ -33,6 +33,7 @@ endforeach()
 # come from POPS_GENERATED_SEAM_SOURCES.
 set(POPS_MODULE_SOURCES
     bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_identity.cpp
+    bindings/core/init/init_component_loader.cpp
     bindings/core/init/init_system.cpp
     bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_polar.cpp
     # ADC-632: system.cpp split by responsibility into sibling TUs sharing system_impl.hpp (install /
@@ -57,7 +58,7 @@ else()
   pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_SOURCES})
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
-target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : add_dynamic_block (dlopen) ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
+target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 
 # RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du module (system.cpp / bindings/amr/amr_system.cpp =

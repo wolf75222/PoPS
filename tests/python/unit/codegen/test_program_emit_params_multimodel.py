@@ -7,7 +7,7 @@ import pytest
 
 from pops.codegen.program_emit_params import emit_program_params, program_param_entries
 from pops.codegen.program_models import ProgramModelGraph
-from pops.ir.values import RuntimeParamRef
+from pops._ir.values import RuntimeParamRef
 from pops.model import OwnerPath
 from pops.model.handles import ParamHandle
 from pops.problem.handles import BlockHandle

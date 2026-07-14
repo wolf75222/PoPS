@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Any
 
-from pops.ir.literals import exact_numeric_scalar
+from pops._ir.literals import exact_numeric_scalar
 
 
 def _frozen_product(value: Any, *, where: str) -> Any:

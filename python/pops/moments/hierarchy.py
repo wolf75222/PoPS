@@ -196,7 +196,7 @@ class MomentModel:
         """Apply the recorded Poisson coupling to a built model: elliptic RHS = ``eps * M00``
         (the density), and declare the field-gradient aux ``grad_x`` / ``grad_y`` (deduping
         against aux the electric source already declared)."""
-        from pops.ir.expr import Var
+        from pops._ir.expr import Var
         _phi, eps = self._poisson
         density = Var(moment_names(self._order)[0], "cons")  # M00 is the first moment
         m.elliptic_rhs(eps * density)

@@ -11,6 +11,9 @@ class ScheduleTimeline(Enum):
     """Native timeline primitives understood by the current runtime."""
 
     ACCEPTED_STEP = "accepted_step"
+    STAGE = "stage"
+    CLOCK_TICK = "clock_tick"
+    AMR_LEVEL = "amr_level"
 
 
 class ScheduleDueKind(Enum):
@@ -45,11 +48,26 @@ class ScheduleDomainIR:
     """Strict native projection of a schedule domain."""
 
     timeline: ScheduleTimeline
+    clock_id: str
+    stage_identity: str | None = None
+    level: int | None = None
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
         if type(self.timeline) is not ScheduleTimeline:
             raise TypeError("ScheduleDomainIR timeline must be an exact ScheduleTimeline")
+        if not isinstance(self.clock_id, str) or not self.clock_id:
+            raise ValueError("ScheduleDomainIR clock_id must be non-empty qualified text")
+        if self.timeline is ScheduleTimeline.STAGE:
+            if not isinstance(self.stage_identity, str) or not self.stage_identity:
+                raise ValueError("a STAGE schedule domain requires an exact stage identity")
+        elif self.stage_identity is not None:
+            raise ValueError("only a STAGE schedule domain accepts stage_identity")
+        if self.timeline is ScheduleTimeline.AMR_LEVEL:
+            if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
+                raise ValueError("an AMR_LEVEL schedule domain requires a non-negative level")
+        elif self.level is not None:
+            raise ValueError("only an AMR_LEVEL schedule domain accepts level")
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,6 +5,7 @@
 #include <pops/diagnostics/runtime_diagnostics.hpp>
 #include <pops/mesh/layout/patch_box.hpp>  // PatchBox: index-space signature of a fine patch (patch_boxes())
 #include <pops/mesh/boundary/physical_bc.hpp>                // BCRec
+#include <pops/mesh/boundary/prepared_boundary_component.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonOptions (Newton options of the IMEX source)
 #include <pops/numerics/elliptic/interface/field_boundary_kernel.hpp>
 #include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperator / CouplingOperatorView (typed contract, ADC-595)
@@ -15,6 +16,7 @@
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <functional>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -62,6 +64,7 @@ struct AmrRuntimeBlock;
 // only INSTANTIATED with a concrete callable in the TUs that include the full definition (the native AMR
 // loader / python/bindings/amr/amr_system.cpp), per the PIMPL std::function recipe noted above.
 class MultiFab;
+class PreparedBoundaryPlan;
 class AmrRuntime;  // the multi-block engine (engine() exposes it to the AmrProgramContext driver, ADC-508)
 namespace detail {
 struct SharedAmrLayout;
@@ -70,6 +73,10 @@ namespace runtime {
 namespace program {
 class Profiler;  // forward-declared so engine()/profiler_handle() do not pull profiler.hpp into this header
 }  // namespace program
+namespace multiblock {
+struct AxisAlignedInterface;
+struct PreparedInterfaceFluxSpec;
+}  // namespace multiblock
 }  // namespace runtime
 
 /// AMR mesh and cadence (per-block physical parameters live in the ModelSpec).
@@ -396,6 +403,43 @@ class AmrSystem {
       const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0);
 
+  /// Install the same executable per-block ghost authority as System.  Presence of a resolved plan
+  /// selects the N-level AmrRuntime route, whose Program RHS composes same-level MPI, the authored
+  /// coarse/fine transfer authority, and these physical faces.
+  POPS_EXPORT void install_boundary_plan(const std::string& name, const std::string& identity,
+                                         int required_depth,
+                                         const std::vector<std::string>& face_types,
+                                         const std::vector<double>& face_values, int ncomp,
+                                         const std::vector<int>& omitted_interface_faces = {},
+                                         const std::string& state_identity = {});
+  /// Register the exact state Handle independently from physical-boundary ownership.
+  POPS_EXPORT void install_block_state_route(const std::string& name,
+                                             const std::string& state_identity);
+  /// Bind one exact solved-field Handle identity to its authenticated provider storage slot.
+  POPS_EXPORT void install_boundary_field_route(const std::string& field_identity,
+                                                const std::string& provider_slot);
+  /// Roll back a failed all-block pre-build boundary transaction.  Internal bind seam only.
+  POPS_EXPORT void discard_boundary_plans();
+  POPS_EXPORT void install_ghost_boundary_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_field_boundary_residual_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  POPS_EXPORT void install_field_boundary_jvp_component(
+      const std::string& name, PreparedBoundaryComponentSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  /// Materialize one exact shared NumericalFlux route on a frozen AMR level.  This seam is called
+  /// only after the lazy AmrRuntime has been built and before bind freezes composition.
+  POPS_EXPORT void install_interface_flux_component(
+      runtime::multiblock::AxisAlignedInterface route,
+      runtime::multiblock::PreparedInterfaceFluxSpec spec,
+      std::shared_ptr<component::LoadedComponent> component);
+  /// Roll back a failed all-interface post-block installation transaction.
+  POPS_EXPORT void discard_interface_flux_components();
+  POPS_EXPORT std::size_t interface_evaluation_count(
+      const std::string& identity, int level = 0) const;
+
   /// Internal installation seam for a compiled AMR production package. The .so inlines the header template
   /// add_compiled_model(AmrSystem&, ...), which materializes a concrete AmrCouplerMP<Model> at lazy
   /// build and installs its hooks via set_compiled_block -- NATIVE path, SAME AMR hierarchy as
@@ -463,6 +507,11 @@ class AmrSystem {
       const std::vector<int>& coarsen_ops, const std::vector<int>& coarsen_args,
       int min_cycles, const std::string& equality_policy,
       const std::string& conflict_policy, const std::string& provider_identity);
+  /// Install one exact parent/child temporal relation per AMR transition.  These ratios are an
+  /// independent execution authority and are never inferred from spatial refinement.
+  void set_temporal_relations(const std::vector<std::int64_t>& numerators,
+                              const std::vector<std::int64_t>& denominators,
+                              const std::vector<std::string>& remainder_policies);
 
   /// Adds to the regrid criterion the PHI tag on |grad phi| (D4 of the design
   /// docs/AMR_REGRID_UNION_TAGS_DESIGN.md): also refines the cells where the norm of the gradient of the
@@ -654,7 +703,7 @@ class AmrSystem {
   int checkpoint_regrid_count() const;
   std::uint64_t checkpoint_topology_epoch() const;
   void restore_checkpoint_counters(int regrid_count, std::uint64_t topology_epoch);
-  std::vector<int> checkpoint_temporal_ratios() const;
+  std::vector<std::vector<std::string>> checkpoint_temporal_relations() const;
   /// Canonical rows for every required bootstrap transfer route: subject, operation, route identity,
   /// provider, kernel, descriptor fields.  The sealed checkpoint compares these rows byte-for-byte.
   std::vector<std::vector<std::string>> checkpoint_transfer_routes() const;
@@ -771,6 +820,9 @@ class AmrSystem {
   POPS_EXPORT std::uint64_t program_accepted_state_revision() const;
   /// Human/audit-readable qualification rows decoded from the same accepted image persisted as bytes.
   POPS_EXPORT std::vector<std::vector<std::string>> program_accepted_state_manifest() const;
+  POPS_EXPORT std::vector<std::vector<std::string>> program_clock_manifest() const;
+  POPS_EXPORT std::vector<std::vector<std::string>> program_flux_ledger_manifest() const;
+  POPS_EXPORT std::vector<std::vector<std::string>> program_sync_manifest() const;
 
   /// @name Runtime freeze lifecycle (ADC-592, parity with System)
   /// Assembly mutable BEFORE bind, composition FROZEN once pops.bind completes. mark_bound() is

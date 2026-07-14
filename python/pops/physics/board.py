@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .. import math as _bm
-from ..ir import _wrap
+from .._ir import _wrap
 from .board_handles import (FieldHandle, FluxHandle,
                             Invariant, LocalLinearOperatorExpr, SourceHandle, StateHandle,
                             VectorHandle, _canon_role, _safe_name)
@@ -275,7 +275,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             # multiple blocks. The single-state backend rebinds these exact coordinates at its
             # target boundary, so the executable result remains identical without mutating this
             # immutable handle when a second species is declared.
-            from pops.ir.expr import Var
+            from pops._ir.expr import Var
             from pops.model.state_symbols import state_component_symbol
 
             qualified = tuple(

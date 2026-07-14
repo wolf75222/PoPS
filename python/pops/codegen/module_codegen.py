@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir.literals import scalar_cpp
+from pops._ir.literals import scalar_cpp
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -107,7 +107,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
     Style identical to emit_cpp_brick (inlined constants, cons -> locals, primitives -> locals;
     plus, aux -> locals); cse=True factors the common sub-expressions. Raises ValueError if
     set_source(...) has not been called."""
-    from pops.ir.expr import _wrap as _ir_wrap
+    from pops._ir.expr import _wrap as _ir_wrap
     if model._source is None:
         if model._source_terms:
             raise ValueError("model has multiple named sources; use pops.compile(...) "

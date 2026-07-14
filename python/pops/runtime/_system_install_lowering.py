@@ -41,19 +41,19 @@ def _lower_wall(wall: Any) -> Any:
 def _lower_bc(bc: Any) -> Any:
     """Lower a Poisson boundary condition to the native ``bc`` token (Spec 5 sec.14.2.6).
 
-    A typed native boundary brick from :mod:`pops.runtime.bricks`
-    lowers through its small ``.bc`` interface. Strings are rejected before route validation.
+    A typed native boundary descriptor lowers through its small ``.bc`` interface. Strings are
+    rejected before route validation.
     """
     if isinstance(bc, str):
         raise TypeError(
-            "set_poisson: bc must be a typed boundary descriptor "
-            "(pops.runtime.bricks.Dirichlet / Neumann / Periodic); string selectors are not accepted")
+            "set_poisson: bc must be a typed native boundary descriptor "
+            "(Dirichlet / Neumann / Periodic); string selectors are not accepted")
     token = getattr(bc, "bc", None)  # native _Boundary brick carries its token on .bc
     if isinstance(token, str):
         return token
     raise TypeError(
-        "set_poisson: bc must be a typed boundary descriptor "
-        "(pops.runtime.bricks.Dirichlet / Neumann / Periodic), got %s" % type(bc).__name__)
+        "set_poisson: bc must be a typed native boundary descriptor "
+        "(Dirichlet / Neumann / Periodic), got %s" % type(bc).__name__)
 
 
 __all__ = ["_lower_wall", "_lower_bc"]

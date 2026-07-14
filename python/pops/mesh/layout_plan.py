@@ -11,9 +11,15 @@ from ._layout_plan_contracts import (
     LayoutAssignment,
     LayoutHandle,
     LayoutLevel,
+    LayoutMappingOperation,
     LayoutMappingProvider,
+    LayoutMappingPort,
     LayoutMappingRequirement,
     LayoutPlan,
+    LayoutRepresentation,
+    LayoutSynchronization,
+    NormalizedGeometry,
+    NormalizedGeometryProvider,
     NormalizedLayout,
     ResolvedLayoutMapping,
     canonical,
@@ -21,8 +27,8 @@ from ._layout_plan_contracts import (
     freeze,
     handle_identity,
     json_data,
-    name,
     plan_payload,
+    reject_concurrent_overwrite_mappings,
     subject_kind,
 )
 
@@ -66,6 +72,22 @@ def _descriptor_snapshot(descriptor: Any, *, handle_resolver: Any = None) -> dic
     return snapshot
 
 
+def _descriptor_geometry(descriptor: Any) -> NormalizedGeometry:
+    """Authenticate the open geometry protocol and detach its deterministic value."""
+    projection = getattr(descriptor, "normalized_geometry", None)
+    if not callable(projection):
+        raise TypeError("layout descriptor must expose normalized_geometry()")
+    first = projection()
+    second = projection()
+    if type(first) is not NormalizedGeometry or type(second) is not NormalizedGeometry:
+        raise TypeError(
+            "layout descriptor normalized_geometry() must return an exact NormalizedGeometry")
+    first_data, second_data = first.to_data(), second.to_data()
+    if first_data != second_data:
+        raise ValueError("layout descriptor normalized_geometry() must be deterministic")
+    return NormalizedGeometry.from_data(first_data)
+
+
 def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: Any = None) \
         -> NormalizedLayout:
     """Project any layout-descriptor implementation onto one common hierarchy representation."""
@@ -80,6 +102,7 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
     options = _descriptor_map(descriptor, "options")
     requirements = _descriptor_map(descriptor, "requirements")
     snapshot = _descriptor_snapshot(descriptor, handle_resolver=handle_resolver)
+    geometry = _descriptor_geometry(descriptor)
     count = capabilities.get("max_levels", capabilities.get("levels", 1))
     adaptive = capabilities.get("supports_amr", False)
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
@@ -112,6 +135,7 @@ def normalize_layout(handle: LayoutHandle, descriptor: Any, *, handle_resolver: 
         descriptor_type="%s.%s" % (type(descriptor).__module__, type(descriptor).__qualname__),
         descriptor_name=str(descriptor_name), adaptive=adaptive,
         transition_ratios=ratios, levels=levels,
+        geometry=geometry,
         options=options, capabilities=capabilities, requirements=requirements,
         descriptor_snapshot=snapshot)
 
@@ -157,16 +181,38 @@ class LayoutPlanBuilder:
     def assign_block(self, block: Any, layout: LayoutHandle) -> None:
         self._assign(block, layout, "block")
 
-    def require_mapping(self, source: LayoutHandle, target: LayoutHandle, *, channel: str,
-                        reverse: bool = False) -> tuple[LayoutMappingRequirement, ...]:
-        for handle in (source, target):
+    def require_mapping(
+        self,
+        source_layout: LayoutHandle,
+        target_layout: LayoutHandle,
+        *,
+        source: Handle,
+        target: Handle,
+        operation: LayoutMappingOperation,
+        synchronization: LayoutSynchronization,
+        source_representation: LayoutRepresentation,
+        target_representation: LayoutRepresentation,
+    ) -> tuple[LayoutMappingRequirement, ...]:
+        """Require a qualified directional data transfer between two materialized layouts."""
+        for handle in (source_layout, target_layout):
             if not isinstance(handle, LayoutHandle) or handle.qualified_id not in self._layouts:
                 raise ValueError("mapping endpoints must be layouts declared by this builder")
-        forward = LayoutMappingRequirement(source, target, name(channel, where="mapping channel"))
+        if source_layout == target_layout:
+            raise ValueError("mapping endpoints must be distinct layouts")
+        source_port = LayoutMappingPort(source, source_representation)
+        target_port = LayoutMappingPort(target, target_representation)
+        assignments = {
+            (row.subject_kind, row.subject_id): row.layout for row in self._assignments.values()
+        }
+        if assignments.get((source.kind, source.qualified_id)) != source_layout:
+            raise ValueError("mapping source must be assigned to source_layout before mapping")
+        if assignments.get((target.kind, target.qualified_id)) != target_layout:
+            raise ValueError("mapping target must be assigned to target_layout before mapping")
+        forward = LayoutMappingRequirement(
+            source_layout, target_layout, source_port, target_port,
+            operation, synchronization,
+        )
         rows = [forward]
-        if reverse:
-            rows.append(LayoutMappingRequirement(target, source, forward.channel,
-                                                 forward.qualified_id))
         for row in rows:
             if row.qualified_id in self._requirements:
                 raise ValueError("double mapping requirement %s" % row.qualified_id)
@@ -189,6 +235,8 @@ class LayoutPlanBuilder:
             raise ValueError("unassigned layout subjects: %s" % missing)
         if extra:
             raise ValueError("layout assignments are not exact; unexpected subjects: %s" % extra)
+
+        reject_concurrent_overwrite_mappings(self._requirements.values())
 
         provider_rows = []
         provider_ids: set[str] = set()
@@ -217,9 +265,9 @@ class LayoutPlanBuilder:
             if not matches:
                 label = "missing reverse mapping provider" if requirement.reverse_of else \
                     "missing mapping provider"
-                raise ValueError("%s for %s -> %s channel %s" % (
-                    label, requirement.source.qualified_id, requirement.target.qualified_id,
-                    requirement.channel))
+                raise ValueError("%s for %s -> %s operation %s" % (
+                    label, requirement.source_layout.qualified_id,
+                    requirement.target_layout.qualified_id, requirement.operation.name))
             if len(matches) > 1:
                 raise ValueError("ambiguous mapping providers for %s: %s" % (
                     requirement.qualified_id,
@@ -255,7 +303,9 @@ def normalize_layout_plan(descriptor: Any, *, owner: Any, local_id: str = "defau
 
 
 __all__ = [
-    "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingProvider",
-    "LayoutMappingRequirement", "LayoutPlan", "LayoutPlanBuilder", "NormalizedLayout",
+    "LayoutAssignment", "LayoutHandle", "LayoutLevel", "LayoutMappingOperation",
+    "LayoutMappingProvider", "LayoutMappingPort", "LayoutMappingRequirement",
+    "LayoutRepresentation", "LayoutSynchronization", "LayoutPlan", "LayoutPlanBuilder",
+    "NormalizedGeometry", "NormalizedGeometryProvider", "NormalizedLayout",
     "ResolvedLayoutMapping", "normalize_layout", "normalize_layout_plan",
 ]

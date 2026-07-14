@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pops.ir.expr import Const, Expr
+from pops._ir.expr import Const, Expr
 from pops.model import Handle
 
 

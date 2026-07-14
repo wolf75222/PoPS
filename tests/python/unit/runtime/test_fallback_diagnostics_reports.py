@@ -3,7 +3,9 @@
 import pytest
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
-pops = pytest.importorskip("pops")
+pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine
+from pops.runtime.fallbacks import fallback_diagnostics_report, reset_fallback_diagnostics
 
 
 def _keys(report):
@@ -11,8 +13,8 @@ def _keys(report):
 
 
 def test_fallback_diagnostics_report_has_explicit_policies():
-    pops.reset_fallback_diagnostics()
-    report = pops.fallback_diagnostics_report()
+    reset_fallback_diagnostics()
+    report = fallback_diagnostics_report()
     rows = _keys(report)
 
     assert report["schema_version"] == 1
@@ -26,13 +28,13 @@ def test_fallback_diagnostics_report_has_explicit_policies():
 
 def test_runtime_inspect_includes_fallback_diagnostics_and_configured_opt_in():
     sim = System(n=8, L=1.0, periodic=True)
-    model = pops.Model(
-        pops.FluidState.isothermal(cs2=0.7),
-        pops.IsothermalFlux(),
-        pops.NoSource(),
-        pops.ChargeDensity(),
+    model = engine.Model(
+        engine.FluidState.isothermal(cs2=0.7),
+        engine.IsothermalFlux(),
+        engine.NoSource(),
+        engine.ChargeDensity(),
     )
-    sim.block("ion", model, spatial=pops.Spatial(positivity_floor=1e-12))
+    sim.block("ion", model, spatial=engine.Spatial(positivity_floor=1e-12))
 
     report = sim.inspect().to_dict()
     fallbacks = report["diagnostics"]["fallbacks"]

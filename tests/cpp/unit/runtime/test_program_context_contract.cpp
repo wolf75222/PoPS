@@ -139,6 +139,59 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "step did not change the state";
 }
 
+TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageState) {
+#if defined(POPS_HAS_KOKKOS)
+  static Kokkos::ScopeGuard guard;
+#endif
+  SystemConfig cfg;
+  cfg.n = 2;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  System sim(cfg);
+  const std::string a_state = "case::block::a::state::U";
+  const std::string b_state = "case::block::b::state::U";
+  sim.install_block_state_route("a", a_state);
+  sim.install_block_state_route("b", b_state);
+  const std::vector<std::string> faces(4, "periodic");
+  const std::vector<double> values(4, 0.0);
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state);
+  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+
+  GridContext a_context = sim.grid_context("a");
+  ASSERT_TRUE(static_cast<bool>(a_context.boundary_field_registry));
+  BlockClosures a_closures;
+  a_closures.rhs_at_point = [factory = a_context.boundary_field_registry, b_state](
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      MultiFab& U, MultiFab& R) {
+    const auto fields = factory(point, U, nullptr, nullptr);
+    const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
+    R.set_val(observed);
+  };
+  BlockClosures b_closures;
+  b_closures.rhs_at_point = [](
+      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab& R) {
+    R.set_val(Real(0));
+  };
+  sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0,
+                    std::move(a_closures), {}, {}, 1, true, 1);
+  sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0,
+                    std::move(b_closures), {}, {}, 1, true, 1);
+  sim.block_state(0).set_val(Real(1));
+  sim.block_state(1).set_val(Real(2));
+  MultiFab stage_a = sim.block_state(0);
+  MultiFab stage_b = sim.block_state(1);
+  stage_a.set_val(Real(5));
+  stage_b.set_val(Real(9));
+  MultiFab rhs_a(stage_a.box_array(), stage_a.dmap(), 1, 0);
+  MultiFab rhs_b(stage_b.box_array(), stage_b.dmap(), 1, 0);
+  const runtime::multiblock::BoundaryEvaluationPoint point{
+      "clock.stage", 3, 0, 0, 2, amr::Rational(1, 2), 0.1, 0.25};
+  sim.block_rhs_group(point, {0, 1}, {&stage_a, &stage_b}, {&rhs_a, &rhs_b}, {0, 0});
+
+  EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(9));
+  EXPECT_EQ(sim.block_state(1).fab(0).const_array()(0, 0, 0), Real(2));
+}
+
 // A 2-stage SSP-RK2 (Heun) Program through ProgramContext is bit-equal to a hand-written SSPRK2
 // reference built from the SAME primitives:
 //   U1        = U^n + dt R(U^n)

@@ -58,14 +58,14 @@ def _array_evidence(value: Any) -> dict[str, Any]:
 
 
 def _runtime_identities(owner: Any) -> tuple[Identity, Identity, Identity]:
-    snapshot = getattr(owner, "bound_snapshot", None)
-    if snapshot is None:
-        raise RuntimeError("checkpoint requires a completed pops.bind transaction")
-    values = (
-        (getattr(snapshot, "semantic_identity", None), "semantic"),
-        (getattr(snapshot, "artifact_identity", None), "artifact"),
-        (getattr(snapshot, "bind_identity", None), "bind"),
-    )
+    provider = getattr(owner, "_checkpoint_identities", None)
+    if not callable(provider):
+        raise TypeError(
+            "checkpoint owner must implement the private exact-identity provider protocol")
+    supplied = provider()
+    if type(supplied) is not tuple or len(supplied) != 3:
+        raise TypeError("checkpoint identity provider must return an exact three-value tuple")
+    values = tuple(zip(supplied, ("semantic", "artifact", "bind"), strict=True))
     checked = []
     for value, domain in values:
         if type(value) is not Identity or value.domain != domain:
@@ -153,7 +153,7 @@ def authenticate_checkpoint_payload(owner: Any, payload: Any, *, runtime_kind: s
     for name, evidence in manifest["arrays"].items():
         if evidence != _array_evidence(payload[name]):
             raise ValueError("checkpoint payload digest mismatch for %r" % name)
-    from pops.runtime.bricks import abi_key
+    from pops.runtime._engine_descriptors import abi_key
     if "abi_key" not in files or str(payload["abi_key"]) != str(abi_key()):
         raise ValueError("checkpoint ABI identity does not match the loaded runtime")
 

@@ -16,13 +16,13 @@
 ///   the old defaults of the flat parameters -> no behavior change.
 ///
 /// Invariants:
-/// - these PODs live ABOVE the ABI layer (compiled_block_abi.hpp / native_loader.hpp): they never
-///   cross the extern "C" boundary of a .so loader. The SEMANTIC extern "C" ABI (residual / advance,
+/// - these PODs live ABOVE the authenticated component ABI (`native_loader.hpp`): they never
+///   cross the extern "C" boundary of a component loader. The SEMANTIC extern "C" ABI (residual / advance,
 ///   structs crossing the loader) therefore stays UNCHANGED. On the other hand the abi_key() LITERAL
 ///   CHANGES: it embeds the token headers=POPS_HEADER_SIG (conservative sha256 of the path and content
 ///   of EVERY header under include/, cf. abi_key.hpp and python/CMakeLists.txt); merely ADDING this
 ///   header and EDITING system.hpp / amr_system.hpp shifts POPS_HEADER_SIG. This is EXPECTED and
-///   harmless: no semantic ABI changes, but add_native_block will reject the AOT .so generated before
+///   harmless: no semantic ABI changes, but add_native_block will reject the native component generated before
 ///   this change (divergent signature) -> a one-time regeneration of the stale .so.
 
 namespace pops {

@@ -24,7 +24,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.moments import build_moment_model, gaussian_closure
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -102,8 +102,8 @@ try:
 
     sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("mom", model=compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
-                     time=pops.Explicit())
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
+                     time=engine.Explicit())
     sim.set_state("mom", U0)
     for _ in range(10):
         sim.step(5e-4)
@@ -117,8 +117,8 @@ try:
         os.path.join(tmp, "g2noroe.so"), INCLUDE, backend="aot")
     s2 = System(n=16, L=1.0, periodic=True)
     msg = err_msg(lambda: s2.add_equation(
-        "mom", model=cm_no, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Roe()),
-        time=pops.Explicit()))
+        "mom", model=cm_no, spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
+        time=engine.Explicit()))
     chk(msg is not None, f"roe=False: riemann='roe' rejete ({(msg or '')[:48]}...)")
 finally:
     shutil.rmtree(tmp, ignore_errors=True)

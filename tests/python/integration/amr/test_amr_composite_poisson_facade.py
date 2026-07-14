@@ -18,17 +18,18 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402
 
 
 def _model():
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def _sim(n=32, composite=None, **fac):
     sim = AmrSystem(n=n, L=1.0, periodic=True)
-    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     # A REAL 2-level hierarchy: refine over the compact gaussian bump (one interior mono-box fine
     # patch after Berger-Rigoutsos clustering) -- the coupler's composite scope.
     sim.set_refinement(0.5)
@@ -65,8 +66,8 @@ def test_composite_on_changes_the_field_solve():
 def test_composite_out_of_scope_refuses_loud():
     """(3) multi-block refuses at build (the composite solve lives on the single-block coupler)."""
     sim = AmrSystem(n=16, L=1.0, periodic=True)
-    sim.block("a", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.block("b", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("a", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    sim.block("b", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(composite=True)
     sim.set_density("a", np.ones((16, 16)))
     with pytest.raises(RuntimeError, match="single-block"):
@@ -75,7 +76,7 @@ def test_composite_out_of_scope_refuses_loud():
 
 def test_composite_fac_knobs_refuse_out_of_domain():
     sim = AmrSystem(n=16, L=1.0, periodic=True)
-    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     with pytest.raises((RuntimeError, ValueError)):
         sim.set_poisson(composite=True, fac_tol=2.0)
     with pytest.raises((RuntimeError, ValueError)):

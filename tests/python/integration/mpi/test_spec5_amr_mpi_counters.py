@@ -1,6 +1,6 @@
 """Spec 5 (sec.12.5, ADC-479 criterion 43): the AMR / MPI profiling counters are REAL.
 
-The multi-block AMR runtime (``pops.AmrRuntime``, wired into ``AmrSystem`` when >= 2 blocks are
+The multi-block AMR runtime (the private engine view wired into ``AmrSystem`` when >= 2 blocks are
 added) times its non-numeric phases into the facade-owned ``pops::runtime::program::Profiler`` --
 ``regrid`` (rebuild the patch hierarchy), ``fill_boundary`` (the coarse aux / phi ghost halo
 exchange) and ``average_down`` (restrict fine onto coarse) -- plus integer counters (``regrid`` /
@@ -28,9 +28,10 @@ import pytest
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
-from pops.runtime.profile import PerformanceSummary, Profile  # noqa: E402
+from pops.runtime._profile import PerformanceSummary, Profile  # noqa: E402
 
 
 def _comp():
@@ -39,9 +40,9 @@ def _comp():
     alpha=0 -> Poisson RHS is zero (no periodic solvability constraint); the regrid tags on the
     conservative field. Native bricks only -- no DSL compiler required.
     """
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                      transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                      elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
+                      transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                      elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def _state(n, rho, energy, bump_comp, bump_val, lo, hi):
@@ -58,8 +59,8 @@ def _built_multiblock(n=64, regrid_every=1):
     corner and the refinement tags on energy (role) so the union regrid forms a real fine patch.
     """
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.block("gas0", _comp(), time=pops.Explicit())
-    sim.block("gas1", _comp(), time=pops.Explicit())
+    sim.block("gas0", _comp(), time=engine.Explicit())
+    sim.block("gas1", _comp(), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(6.0, role="energy")  # tag where E > 6 -> the bottom-left bump refines
     sim.set_conservative_state("gas0", _state(n, 1.0, 2.0, bump_comp=3, bump_val=12.0, lo=4, hi=20))
@@ -113,7 +114,9 @@ def test_amr_phase_scopes_emitted():
 def test_by_amr_mpi_now_available():
     """PerformanceSummary.by_amr_mpi() surfaces the phases (no longer the unavailable sentinel)."""
     sim = _built_multiblock()
-    with sim.profile(pops.Profile.Basic()) as prof:
+    from pops.runtime._profile import Profile
+
+    with sim.profile(Profile.Basic()) as prof:
         for _ in range(4):
             sim.step(1e-3)
     view = prof.summary().by_amr_mpi()

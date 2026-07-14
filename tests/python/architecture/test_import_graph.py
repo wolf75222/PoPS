@@ -2,27 +2,33 @@
 
 The sub-packages form a directed acyclic dependency stack:
 
-    ir        imports nothing else in pops
-    model     -> ir, params
-    physics   -> ir, model, params
-    time      -> ir, model, params
-    mesh      -> model, params                    (owner-qualified layout subjects + parameters)
-    numerics  -> model, params                    (typed subjects + parameter use sites)
+    _ir       imports nothing else in pops
+    identity  imports nothing else in pops
+    frames    -> identity
+    domain    -> frames, identity
+    model     -> _ir, identity, params
+    problem   -> _ir, identity, model
+    physics   -> _ir, model, problem
+    time      -> _ir, model, params
+    mesh      -> domain, frames, identity, model, params
+    amr       -> _ir, identity, mesh, model, time
+    layouts   -> amr, mesh
+    boundary  -> _ir, domain, identity, model, representations
+    numerics  -> identity, model, params
     linalg    -> (nothing)                       (Spec 5: abstract algebra descriptors)
-    solvers   -> (nothing)                       (typed solver descriptor sink)
-    moments   -> ir                              (Spec 5: moment-model toolkit)
+    solvers   -> identity                        (typed solver descriptor sink)
+    moments   -> _ir                             (Spec 5: moment-model toolkit)
     diagnostics -> linalg                        (Spec 5: Norm takes a typed norm kind)
     params    -> (nothing)                       (typed parameter dependency sink)
     output    -> model, time                     (qualified selections and schedules)
     external  -> model                           (authenticated component manifests)
-    lib       -> ir, model, time, physics, moments, numerics,
+    lib       -> _ir, model, time, physics, moments, numerics,
                  fields, params, solvers
-    codegen   -> ir, model, physics, time, lib, solvers, params,
+    codegen   -> _ir, model, physics, time, lib, solvers, params,
                  external, fields
-    runtime   -> authoring/lowering contracts, including resolved fields,
-                 and is the ONLY layer allowed to import _pops
+    runtime   -> authoring/lowering contracts, including resolved fields
 
-This test builds the cross-layer edges from module-scope imports (``ast``,
+This test builds the import-time cross-layer edges from module-scope imports (``ast``,
 ``col_offset == 0``) between sub-packages and asserts (a) the graph has no cycle and
 (b) every edge points to an allowed lower layer. The flat root files and
 ``pops/__init__.py`` (the exact public lifecycle facade) are not layered sub-packages and are
@@ -38,59 +44,44 @@ POPS = REPO_ROOT / "python" / "pops"
 
 # Allowed downstream targets for each layer (what it MAY import within pops).
 ALLOWED = {
-    "ir": set(),
-    # ADC-654: params is a dependency-free semantic sink.  Model owns ParamRegistry and the
-    # authoring consumers call the central ParamKind x ParamUse validator instead of growing local
-    # isinstance/int/float coercion branches.
-    "model": {"ir", "params"},
-    "physics": {"ir", "model", "params"},
-    "time": {"ir", "model", "params"},
-    # ADC-673: LayoutPlan assigns canonical model Handle subjects and therefore depends on the
-    # dependency-free identity/data-model portion of pops.model. Model still has no mesh edge.
-    "mesh": {"model", "params"},
-    # Central descriptor packages remain runtime-free. Their allowed semantic dependencies are
-    # explicit below rather than hidden through the root facade.
-    "numerics": {"model", "params"},
-    # Spec 5 sec.5.6: pops.linalg names the algebra (A x = b, operators, norms, reductions).
-    # It imports only the flat pops.descriptors module (not a tracked layer) -> no edges.
-    "linalg": set(),
-    # Solver descriptors are a dependency sink: exact scalar serialization is loaded lazily when
-    # an option is authored, so importing the catalog never reaches into IR, fields, codegen, lib,
-    # or runtime. Custom-solver registry hooks are attached onto its namespace by
-    # pops.codegen.solvers (codegen -> solvers, acyclic).
-    "solvers": set(),
-    # Resolved field contracts share the canonical symbolic/model/time values they authenticate.
-    # BoundaryTopology remains a lazy, in-function dependency so fields does not create a
-    # module-scope mesh edge and mesh stays independent of fields.
-    "fields": {"ir", "model", "time"},
-    "moments": {"ir"},
-    # Spec 5 sec.5.13: pops.diagnostics.measures.Norm takes a typed pops.linalg.norms kind
-    # (L1 / L2 / LInf), so diagnostics imports linalg (acyclic: linalg imports nothing).
-    "diagnostics": {"linalg"},
+    "_ir": set(),
+    "identity": set(),
+    "representations": set(),
+    "spaces": set(),
+    "projection": set(),
     "params": set(),
-    # Exact output selections authenticate canonical field Handles; writers remain runtime-free.
-    "output": {"model", "time"},
-    # External package manifests are semantic authoring inputs and consume the canonical
-    # ComponentManifest value; platform/runtime imports remain lazy phase-boundary operations.
-    "external": {"model"},
-    # lib is presets-only: its implementations compose ordinary public descriptors and Programs.
-    # Ready model/time presets therefore consume the central field-output, parameter, numerics,
-    # and solver catalogs; they never define competing copies of those types and must not reach up
-    # into codegen or runtime. Each allowed target is below lib and none imports lib, so preset
-    # composition cannot create a cycle.
-    "lib": {"ir", "model", "time", "physics", "moments", "numerics", "fields",
-            "params", "solvers"},
-    # codegen.solvers (the solver-gen DSL, criterion 19) imports pops.solvers at module scope to
-    # attach custom-solver registry hooks. solvers has no layered dependencies, so the edge remains
-    # acyclic.
-    "codegen": {"ir", "model", "physics", "time", "lib", "solvers", "params", "external",
-                "fields"},
-    # Runtime consumes the resolved field layout/consumer contracts. fields remains runtime-free,
-    # so this is a one-way execution-boundary dependency rather than a cycle.
-    "runtime": {"ir", "model", "physics", "time", "lib", "mesh", "codegen", "params",
-                "output", "fields"},
+    "linalg": set(),
+    "experimental": set(),
+    "frames": {"identity"},
+    "domain": {"frames", "identity"},
+    "model": {"_ir", "identity", "params"},
+    "problem": {"_ir", "identity", "model"},
+    "physics": {"_ir", "model", "problem"},
+    "time": {"_ir", "model", "params"},
+    "initial": {"model"},
+    "mesh": {"domain", "frames", "identity", "model", "params"},
+    "amr": {"_ir", "identity", "mesh", "model", "time"},
+    "layouts": {"amr", "mesh"},
+    "boundary": {"_ir", "domain", "identity", "model", "representations"},
+    "numerics": {"identity", "model", "params"},
+    "solvers": {"identity"},
+    "fields": {"_ir", "identity", "model", "time"},
+    "moments": {"_ir"},
+    "diagnostics": {"linalg"},
+    "output": {"identity", "model", "time"},
+    "external": {"identity", "model"},
+    "lib": {"fields", "frames", "moments", "params", "physics", "solvers", "time"},
+    "codegen": {"_ir", "fields", "identity", "model", "params", "solvers", "time"},
+    "runtime": {"_ir", "codegen", "fields", "identity", "mesh", "model", "output", "time"},
 }
 LAYERS = set(ALLOWED)
+
+NATIVE_IMPORT_ALLOWLIST = {
+    "pops._bootstrap",
+    "pops.codegen.toolchain",
+    "pops.external.artifacts",
+    "pops.runtime_environment",
+}
 
 
 def _layer_of(modname):
@@ -136,6 +127,47 @@ def _source_paths():
         module_parts = path.relative_to(POPS).with_suffix("").parts
         if all(part.isidentifier() for part in module_parts):
             yield path
+
+
+def test_layer_map_covers_every_top_level_package():
+    actual = {
+        path.name for path in POPS.iterdir()
+        if path.is_dir() and path.name != "__pycache__"
+    }
+    assert LAYERS == actual, "layer map drift: missing=%s extra=%s" % (
+        sorted(actual - LAYERS), sorted(LAYERS - actual))
+
+
+def _native_import_lines(tree):
+    """Yield every direct or importlib native-extension load at any lexical scope."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name in {"_pops", "pops._pops"} for alias in node.names):
+                yield node.lineno
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module in {"_pops", "pops._pops"} or any(
+                    alias.name == "_pops" and (module == "pops" or node.level)
+                    for alias in node.names):
+                yield node.lineno
+        elif isinstance(node, ast.Call) and node.args \
+                and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "import_module" \
+                and isinstance(node.args[0], ast.Constant) \
+                and node.args[0].value in {"_pops", "pops._pops"}:
+            yield node.lineno
+
+
+def test_native_extension_loads_have_explicit_phase_owners_at_every_scope():
+    violations = []
+    for path in _source_paths():
+        module = _module_name(path)
+        lines = tuple(_native_import_lines(ast.parse(path.read_text(), str(path))))
+        allowed = module == "pops.runtime" or module.startswith("pops.runtime.") \
+            or module in NATIVE_IMPORT_ALLOWLIST
+        if lines and not allowed:
+            violations.append("%s:%s" % (module, ",".join(map(str, lines))))
+    assert not violations, "unowned native-extension load(s): " + ", ".join(violations)
 
 
 def _build_edges():
@@ -208,17 +240,17 @@ def test_params_remains_a_dependency_sink():
         "module-scope dependencies; got %s" % dependencies)
 
 
-def test_ir_remains_a_dependency_sink():
+def test_internal_ir_remains_a_dependency_sink():
     """Exact symbolic values may be consumed everywhere; the IR must never depend back."""
-    dependencies = sorted(dst for dst, _ in _build_edges().get("ir", set()))
+    dependencies = sorted(dst for dst, _ in _build_edges().get("_ir", set()))
     assert not dependencies, (
-        "pops.ir is the foundational symbolic sink and must have no layered module-scope "
+        "pops._ir is the foundational symbolic sink and must have no layered module-scope "
         "dependencies; got %s" % dependencies)
 
 
 def test_solver_catalog_remains_a_dependency_sink():
-    """Preset/codegen consumers may depend on solvers; the descriptor catalog stays inert."""
-    dependencies = sorted(dst for dst, _ in _build_edges().get("solvers", set()))
-    assert not dependencies, (
-        "pops.solvers is a descriptor dependency sink and must have no layered module-scope "
-        "dependencies; got %s" % dependencies)
+    """The inert descriptor catalog may depend only on foundational exact identities."""
+    dependencies = {dst for dst, _ in _build_edges().get("solvers", set())}
+    assert dependencies <= {"identity"}, (
+        "pops.solvers may depend only on pops.identity; got %s"
+        % sorted(dependencies))

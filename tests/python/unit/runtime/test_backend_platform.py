@@ -1,11 +1,9 @@
-"""Final typed compiler/backend and execution-platform contracts.
+"""Final compiler selection and exact execution-platform evidence contracts.
 
-PoPS has one compiler route: :class:`Production`. Layout, platform and optimization remain
-orthogonal typed axes; an unsupported route is rejected before compilation and never falls back.
+PoPS has one compiler route: :class:`Production`. The selected platform is an exact
+:class:`PlatformManifest` derived from authenticated compiled components.
 """
 from __future__ import annotations
-
-import importlib
 
 import pytest
 
@@ -17,21 +15,8 @@ from pops.codegen._backends import (  # noqa: E402
     _Backend,
     lower_backend,
 )
-from pops.descriptors import Availability, Descriptor  # noqa: E402
-from pops.runtime.platforms import (  # noqa: E402
-    KokkosCuda,
-    KokkosHIP,
-    KokkosOpenMP,
-    KokkosSerial,
-    MPI,
-)
-
-
-def _native_module_or_skip():
-    try:
-        return importlib.import_module("pops._pops")
-    except ImportError:
-        pytest.skip("installed pops._pops is required for platform availability")
+from pops._platform_contracts import PlatformManifest, proven_serial_manifest  # noqa: E402
+from pops.descriptors import Descriptor  # noqa: E402
 
 
 def test_production_is_the_only_backend_descriptor() -> None:
@@ -41,8 +26,9 @@ def test_production_is_the_only_backend_descriptor() -> None:
     assert isinstance(descriptor, (Descriptor, _Backend))
     assert descriptor.category == "backend"
     assert BACKEND_DESCRIPTORS == {"production": Production}
-    assert descriptor.capabilities().to_dict()["mpi"] is True
-    assert descriptor.inspect()["platform"] is None
+    assert descriptor.capabilities().to_dict()["tier"] == "production"
+    assert descriptor.options() == {"backend": "production"}
+    assert "platform" not in descriptor.inspect()
 
 
 def test_lower_backend_accepts_only_authenticated_production() -> None:
@@ -86,61 +72,43 @@ def test_authoring_model_accepts_typed_production() -> None:
         model.compile(backend=Production(), target="__bogus__")
 
 
-def test_production_records_platform_and_refuses_string() -> None:
-    platform = KokkosOpenMP()
-    descriptor = Production(platform=platform)
-    assert descriptor.platform is platform
-    assert descriptor.options()["platform"] == "KokkosOpenMP"
-    assert descriptor.inspect()["platform"]["options"]["device"] == "openmp"
-    assert descriptor.lower() == "production"
-    with pytest.raises(TypeError, match="platform must be a typed"):
-        Production(platform="openmp")
+def test_production_rejects_platform_instead_of_ignoring_it() -> None:
+    platform = proven_serial_manifest(
+        backend="production", target="system", abi="pops-test-abi")
+
+    with pytest.raises(TypeError, match="platform"):
+        Production(platform=platform)
 
 
-def test_platform_descriptors_declare_capabilities() -> None:
-    assert KokkosSerial().capabilities().to_dict() == {
-        "host": True, "gpu": False, "mpi": False,
-    }
-    assert KokkosOpenMP().capabilities().to_dict()["host"] is True
-    assert KokkosCuda().capabilities().to_dict()["gpu"] is True
-    assert KokkosHIP().capabilities().to_dict()["gpu"] is True
-    assert MPI().capabilities().to_dict()["mpi"] is True
-    for cls in (KokkosSerial, KokkosOpenMP, KokkosCuda, KokkosHIP, MPI):
-        descriptor = cls()
-        assert isinstance(descriptor, Descriptor)
-        assert descriptor.category == "platform"
-        assert descriptor.options()["device"]
+def test_platform_manifest_is_private_artifact_evidence_not_a_resolve_authority() -> None:
+    from inspect import signature
+
+    import pops
+    from pops.codegen._phases import resolve
+
+    platform = proven_serial_manifest(
+        backend="production", target="system", abi="pops-test-abi")
+
+    assert "backend" in signature(resolve).parameters
+    assert "platform" not in signature(resolve).parameters
+    assert "backend" in signature(pops.resolve).parameters
+    assert "platform" not in signature(pops.resolve).parameters
+    assert type(platform) is PlatformManifest
+    assert platform.backend.require("platform.backend") == "production"
+    assert platform.precision.storage.require("platform.precision.storage") == "float64"
+    assert platform.device.require("platform.device") == "host"
+    assert platform.communicator.require("platform.communicator") == "serial"
 
 
-def test_platform_availability_is_explainable_without_fallback() -> None:
-    native = _native_module_or_skip()
-    assert KokkosSerial().available().ok
-    has_mpi = getattr(native, "__has_mpi__", None)
-    status = MPI().available()
-    if has_mpi is False:
-        assert status.status == "no"
-        assert status.missing and status.alternatives
-        routed = Production(platform=MPI()).available()
-        assert not routed.ok and "MPI" in routed.reason
-    for cls in (KokkosCuda, KokkosHIP):
-        status = cls().available()
-        if not status.ok:
-            assert status.missing or status.alternatives
-
-
-def test_layout_backend_platform_and_optimization_are_distinct_axes() -> None:
-    from pops.codegen.optimization import Optimization
+def test_layout_and_backend_are_distinct_axes() -> None:
     from pops.layouts import Uniform
-    from pops.mesh.cartesian import CartesianMesh
-    from tests.python.support.layout_plan import final_amr_layout
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
-    mesh = CartesianMesh(n=64)
+    mesh = cartesian_grid(n=64)
     uniform = Uniform(mesh)
     amr = final_amr_layout(mesh)
     assert uniform.category == amr.category == "layout"
     assert Production().category == "backend"
-    assert KokkosOpenMP().category == "platform"
-    assert Optimization().category == "optimization"
     assert uniform.capabilities().to_dict()["layout"] == "uniform"
     assert amr.capabilities().to_dict()["layout"] == "amr"
     for layout in (uniform, amr):

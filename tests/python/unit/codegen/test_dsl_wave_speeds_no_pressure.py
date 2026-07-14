@@ -37,7 +37,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -165,8 +165,8 @@ for label, riemann in (("(3) riemann='hll'", "hll"), ("(4) riemann='rusanov'", "
     print(f"== {label} : eval_rhs == reference numpy ==")
     sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("toy", model=compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=_RIEMANN[riemann]),
-                     time=pops.Explicit())
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=_RIEMANN[riemann]),
+                     time=engine.Explicit())
     U = toy_state(n)
     sim.set_state("toy", U)
     rhs = np.array(sim.eval_rhs("toy"))
@@ -186,8 +186,8 @@ c_eig = m_eig.compile(os.path.join(tmp, "eigonly.so"), INCLUDE, backend="product
 chk(not getattr(c_eig, "has_wave_speeds", True), "has_wave_speeds faux (eigenvalues sans 'p')")
 sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
-    "eig", model=c_eig, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-    time=pops.Explicit()))
+    "eig", model=c_eig, spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
+    time=engine.Explicit()))
 chk("wave_speeds" in msg,
     f"hll rejete par le gate C++ avec remede ({msg[:60]}...)")
 
@@ -207,8 +207,8 @@ c_p = m_p.compile(os.path.join(tmp, "withp.so"), INCLUDE, backend="production")
 chk(getattr(c_p, "has_wave_speeds", False), "has_wave_speeds vrai (chemin historique 'p' + eigenvalues)")
 sim = System(n=16, L=1.0, periodic=True)
 msg = err_msg(lambda: sim.add_equation(
-    "gasp", model=c_p, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-    time=pops.Explicit()))
+    "gasp", model=c_p, spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
+    time=engine.Explicit()))
 chk(msg == "", f"hll accepte sur le modele avec 'p' (historique, message='{msg[:40]}')")
 
 print("== (7) wave_speeds_value : formes mixtes (valeur propre constante + dependante de l'etat) ==")

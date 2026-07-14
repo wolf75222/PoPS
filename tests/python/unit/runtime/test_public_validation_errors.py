@@ -4,20 +4,21 @@ import pytest
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 
 def _make_system():
     sim = System(n=4, L=1.0, periodic=True)
     sim.block(
         "ne",
-        pops.Model(
-            state=pops.Scalar(),
-            transport=pops.ExB(B0=1.0),
-            source=pops.NoSource(),
-            elliptic=pops.BackgroundDensity(alpha=1.0, n0=1.0),
+        engine.Model(
+            state=engine.Scalar(),
+            transport=engine.ExB(B0=1.0),
+            source=engine.NoSource(),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=1.0),
         ),
-        spatial=pops.Spatial(none=True),
-        time=pops.Explicit(),
+        spatial=engine.Spatial(none=True),
+        time=engine.Explicit(),
     )
     return sim
 

@@ -9,18 +9,18 @@ import pops
 import pytest
 
 from pops.codegen._plans import BindInputs, InstallPlan
-from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 from pops.model import Handle, OwnerPath
 from pops.output import NPZ, NPZWriter, read_npz
-from pops.runtime.consumer import (
+from pops.output._consumer_contracts import (
     ConsumerGraph,
     ConsumerKind,
     ConsumerManifest,
     ConsumerQuantity,
     ParallelMode,
 )
-from pops.runtime.runtime_instance import RuntimeInstance
-from pops.runtime.restart_provider import RestartV3
+from pops.output._restart_provider import RestartV3
+from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AcceptedStep, AtEnd, Clock, Every, FixedDt, Schedule
 from tests.python.unit.runtime.test_runtime_planning import _install
@@ -30,6 +30,8 @@ class _Executor:
     def __init__(self, plan: InstallPlan) -> None:
         self._plan = plan
         self._s = self
+        geometry = plan.artifact.layout_plan.layouts[0].geometry
+        self._nx, self._ny = geometry.cells
         self._time = 0.0
         self._step = 0
         self._last_run_identity = None
@@ -75,6 +77,13 @@ class _Executor:
     def last_restart_identity(self):
         return self._last_restart_identity
 
+    def _checkpoint_identities(self):
+        return (
+            self.bound_snapshot.semantic_identity,
+            self.bound_snapshot.artifact_identity,
+            self.bound_snapshot.bind_identity,
+        )
+
 
     def time(self):
         return self._time
@@ -107,10 +116,10 @@ class _Executor:
         self._step_committed = False
 
     def nx(self):
-        return 2
+        return self._nx
 
     def ny(self):
-        return 2
+        return self._ny
 
     def block_names(self):
         return ["fluid"]
@@ -121,15 +130,15 @@ class _Executor:
 
     def state_global(self, block):
         assert block == "fluid"
-        return np.full(4, self._step + 1.0)
+        return np.full(self._nx * self._ny, self._step + 1.0)
 
     def local_boxes(self, block):
         assert block == "fluid"
-        return [(0, 0, 1, 1)]
+        return [(0, 0, self._nx - 1, self._ny - 1)]
 
     def local_state(self, block, index):
         assert block == "fluid" and index == 0
-        return self.state_global(block).reshape(1, 2, 2)
+        return self.state_global(block).reshape(1, self._ny, self._nx)
 
     def reduce_component(self, block, kind, component):
         assert (block, kind, component) == ("fluid", "sum", 0)
@@ -137,7 +146,7 @@ class _Executor:
 
     def checkpoint(self, path):
         from pops.runtime._checkpoint_manifest import seal_checkpoint_payload
-        from pops.runtime.bricks import abi_key
+        from pops.runtime._engine_descriptors import abi_key
 
         payload = {
             "t": self._time,
@@ -217,12 +226,12 @@ def test_runtime_instance_retains_complete_multilayout_plan_without_target_dispa
     plan = _install(("fluid", "solid"), heterogeneous=True)
     runtime = RuntimeInstance(plan, executor=object())
 
-    assert runtime.layout_plan is plan.artifact.layout_plan
-    assert runtime.runtime_plan.layout_plan_id == runtime.layout_plan.qualified_id
-    assert len(runtime.runtime_plan.calls) == 2
-    assert len(runtime.runtime_plan.communication.transfers) == 1
-    assert runtime.runtime_plan.communication.transfers[0].provider_id == \
-        runtime.layout_plan.mappings[0].provider_id
+    assert runtime._layout_plan is plan.artifact.layout_plan
+    assert runtime._runtime_plan.layout_plan_id == runtime._layout_plan.qualified_id
+    assert len(runtime._runtime_plan.calls) == 2
+    assert len(runtime._runtime_plan.communication.transfers) == 1
+    assert runtime._runtime_plan.communication.transfers[0].provider_id == \
+        runtime._layout_plan.mappings[0].provider_id
 
 
 def test_runtime_instance_inspection_exposes_install_and_consumer_evidence():
@@ -243,20 +252,40 @@ def test_runtime_instance_has_one_authored_execution_route():
     plan = _install()
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
+    declared_public = {
+        name for name in RuntimeInstance.__dict__ if not name.startswith("_")
+    }
+    assert {name for name in dir(runtime) if not name.startswith("_")} == declared_public
+    assert not hasattr(runtime, "__dict__")
+    with pytest.raises(AttributeError):
+        runtime.engine = object()
     assert not hasattr(runtime, "step")
     assert not hasattr(runtime, "step_cfl")
     assert not hasattr(runtime, "run")
-    with pytest.raises(TypeError, match="authenticated object returned by pops.bind"):
-        pops.run(runtime, t_end=1.0, max_steps=1)
+    assert not hasattr(runtime, "native_executor")
+    assert not hasattr(runtime, "executor_for_layout")
+    assert not hasattr(runtime, "executor_for_block")
+    assert not hasattr(runtime, "install_plan")
+    assert not hasattr(runtime, "runtime_plan")
+    assert not hasattr(runtime, "assembly")
+    assert not hasattr(runtime, "profile")
+    assert not hasattr(runtime, "an_arbitrary_native_method")
 
 
-def test_runtime_engine_rejects_public_strategy_controls():
-    pytest.importorskip("pops._pops")
+@pytest.mark.parametrize(
+    "controls",
+    [
+        {"strategy": FixedDt(1.0), "unknown_control": True},
+        {"cfl": 0.4, "unknown_control": True},
+        {"strategy": FixedDt(1.0), "cfl": 0.4, "unknown_control": True},
+    ],
+)
+def test_runtime_engine_rejects_public_strategy_controls(controls):
     plan = _install()
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
     with pytest.raises(TypeError, match="does not accept strategy= or cfl="):
-        runtime._run(t_end=1.0, max_steps=1, strategy=FixedDt(1.0))
+        runtime._run(t_end=1.0, max_steps=1, **controls)
 
 
 def test_consumer_moment_uses_the_accepted_qualified_child_clock_cursor(tmp_path):
@@ -317,7 +346,8 @@ def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp
     plan, graph, manifest = _with_graph(tmp_path)
     runtime = RuntimeInstance(plan, executor=_Executor(plan))
 
-    assert runtime._run(t_end=1.0, max_steps=1) == 1
+    report = runtime._run(t_end=1.0, max_steps=1)
+    assert report.accepted_steps == 1
 
     cursor = runtime.consumer_cursors.for_consumer(manifest.qualified_id)
     assert cursor.committed_samples == 1
@@ -327,7 +357,7 @@ def test_run_publishes_exact_npz_only_after_accepted_step_and_commits_cursor(tmp
     assert reopened.manifest["snapshot"]["clock"]["macro_step"] == 1
     assert reopened.manifest["snapshot"]["metadata"] == {
         "consumer_graph": graph.identity.token,
-        "runtime_plan": runtime.runtime_plan.identity.token,
+        "runtime_plan": runtime._runtime_plan.identity.token,
     }
 
 

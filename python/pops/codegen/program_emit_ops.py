@@ -14,11 +14,12 @@ from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
 
-from pops.ir.literals import scalar_cpp
+from pops._ir.literals import scalar_cpp
 from pops.time.references import block_name
 from pops.codegen.program_emit_kernels import (
     _PROFILE_SKIP_OPS,
     _coeff_cpp,
+    _coeff_metadata_cpp,
     _deref,
     _emit_cell_compare_kernel,
     _emit_where_kernel,
@@ -326,18 +327,17 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # the explicit list. An EMPTY list [] (or a list of only named sources) excludes it -> flux
         # only. None and [] are recorded distinctly in the IR, so this is unambiguous.
         want_default_source = requested is None or "default" in requested
-        if target == "amr_system":
-            if hasattr(v.point, "offset"):
-                stage_point = v.point
-            else:
-                try:
-                    stage_point = v.point.time
-                except ValueError:
-                    # A conservative flux belongs to the explicit partition of an ARK stage.  Its
-                    # implicit coordinate may differ and must never be silently substituted here.
-                    stage_point = v.point.time_for("explicit")
-            stage = Fraction(stage_point.offset.to_python())
-            lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        if hasattr(v.point, "offset"):
+            stage_point = v.point
+        else:
+            try:
+                stage_point = v.point.time
+            except ValueError:
+                # A conservative flux belongs to the explicit partition of an ARK stage.  Its
+                # implicit coordinate may differ and must never be silently substituted here.
+                stage_point = v.point.time_for("explicit")
+        stage = Fraction(stage_point.step) + Fraction(stage_point.offset.to_python())
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         if not want_flux:
             # SOURCE-ONLY (ADC-430): flux=False -- NO -div F base (the rhs_scratch starts at zero).
             # The default/composite source is added iff requested (the same want_default_source
@@ -461,7 +461,8 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
         # The lambda is itself captured by the step closure ([=]) and passed to pops::*_solve. An
         # rhs_jacvec apply (ADC-431) also captures persistent jac_uk / jac_r0 scratch the lambda
         # dereferences; the step body refreshes them from the live iterate / rhs(U^k) here (@p lines).
-        _emit_matrix_free_operator(program, v, var, prelude, lines)
+        _emit_matrix_free_operator(
+            program, v, var, prelude, lines, field_plans=field_plans)
     elif v.op in ("apply_in", "apply_out", "apply_laplacian_coeff"):
         # The lambda in/out placeholders and the coefficiented apply matvec only appear INSIDE a
         # matrix_free_operator apply sub-block (lowered by _emit_matrix_free_operator); they never
@@ -585,9 +586,13 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
                 if inp.id == base.id:
                     c_base = coeff
                 else:
-                    lines.append("ctx.axpy(%s, %s, %s);" % (acc, _coeff_cpp(coeff), var[inp.id]))
-            lines.append("ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), %s);"
-                         % (var[base.id], _coeff_cpp(c_base), var[base.id], acc))
+                    lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
+                                 % (acc, _coeff_cpp(coeff), var[inp.id],
+                                    _coeff_metadata_cpp(coeff)))
+            lines.append(
+                "ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), %s, dt, %s, {{0, 1, 1}});"
+                % (var[base.id], _coeff_cpp(c_base), var[base.id], acc,
+                   _coeff_metadata_cpp(c_base)))
             var[v.id] = var[base.id]  # the commit wrote the block state in place (no final copy)
         else:
             var[v.id] = "u%d" % v.id  # an intermediate stage state (scratch, zero-initialized)
@@ -597,7 +602,9 @@ def _emit_op(program: Any, v: Any, base: Any, committed_ids: Any, var: Any, mode
             template = var[terms[0][0].id] if v.vtype == "scalar_field" else var[base.id]
             lines.append("pops::MultiFab %s = ctx.scratch_state_like(%s);" % (var[v.id], template))
             for inp, coeff in terms:
-                lines.append("ctx.axpy(%s, %s, %s);" % (var[v.id], _coeff_cpp(coeff), var[inp.id]))
+                lines.append("ctx.axpy(%s, %s, %s, dt, %s);"
+                             % (var[v.id], _coeff_cpp(coeff), var[inp.id],
+                                _coeff_metadata_cpp(coeff)))
     # UNIFIED SCHEDULER (ADC-458, Spec 3 sections 17-18): if this op carries a non-always schedule,
     # wrap the statements it just emitted (lines[_profile_start:]) in the due-test guard + policy
     # branch. Done HERE, after the op lowered itself, so EVERY schedulable node (field solve, rhs,

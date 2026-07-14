@@ -162,7 +162,12 @@ class _ValueFamily:
         self._rows: list[Any] | tuple[Any, ...] = []
         self._frozen = False
 
-    def add(self, value: Any) -> None:
+    def preflight_add(self, value: Any) -> None:
+        """Validate one registration without mutating the family.
+
+        Multi-owner authoring protocols use this to prove that every destination can accept the
+        same immutable authority before committing any of them.
+        """
         if self._frozen:
             raise RuntimeError("DiscretizationPlan.%s is frozen" % self.family)
         if not _is_typed_authority(value):
@@ -173,6 +178,9 @@ class _ValueFamily:
         value_key = _authority_key(value)
         if any(_authority_key(existing) == value_key for existing in self._rows):
             raise ValueError("duplicate %s authority" % self.family)
+
+    def add(self, value: Any) -> None:
+        self.preflight_add(value)
         self._rows.append(value)
 
     def values(self) -> tuple[Any, ...]:
@@ -315,7 +323,7 @@ class ResolvedDiscretizationPlan:
 
     def amr_stencil_requirement(self, *, owner: Any, dimension: int) -> Any:
         """Project the exact spatial methods onto the open AMR nesting protocol."""
-        from pops.mesh.amr import NestingRequirementSource
+        from pops.mesh._amr import NestingRequirementSource
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR stencil dimension must be 1, 2, or 3")
@@ -340,7 +348,7 @@ class ResolvedDiscretizationPlan:
 
     def amr_reflux_requirement(self, *, owner: Any, dimension: int) -> Any:
         """Project conservative flux correction needs without inspecting a layout class."""
-        from pops.mesh.amr import NestingRequirementSource
+        from pops.mesh._amr import NestingRequirementSource
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR reflux dimension must be 1, 2, or 3")
@@ -457,9 +465,13 @@ class DiscretizationPlan(Descriptor):
             ))
 
         resolved_block = case.resolve(block)
+        # Runtime boundary identities belong to the concrete block instance, not merely to the
+        # Case root shared by every block.  Geometry boundaries remain frame-level labels; the
+        # resolved BoundaryHandles below are executable per-block endpoints and must stay distinct.
+        boundary_owner = resolved_block.instance_owner_path
         resolved_rates = tuple(sorted(rates, key=lambda row: row.rate.qualified_id))
         boundary_context = BoundaryResolutionContext(
-            owner=case.owner_path.canonical(),
+            owner=boundary_owner,
             block=resolved_block,
             frame=model.frame,
             rates=resolved_rates,
@@ -476,6 +488,20 @@ class DiscretizationPlan(Descriptor):
             resolved_boundary = resolve_boundary(boundary_context)
             _callable_projection(resolved_boundary, "resolved boundary authority")
             boundaries.append(resolved_boundary)
+        def resolve_interface(value: Any) -> Any:
+            protocol = getattr(value, "resolve_for_numerics", None)
+            if callable(protocol):
+                resolved = protocol(boundary_context)
+            else:
+                resolved = _resolve_value(
+                    value, resolve_handle, where="interfaces authority")
+            _callable_projection(resolved, "resolved interfaces authority")
+            return resolved
+
+        resolved_interfaces = tuple(sorted(
+            (resolve_interface(value) for value in self.interfaces.values()),
+            key=lambda value: _projection_sort_key(value, "resolved interfaces"),
+        ))
         return ResolvedDiscretizationPlan(
             resolved_block,
             resolved_rates,
@@ -485,7 +511,7 @@ class DiscretizationPlan(Descriptor):
                 key=lambda value: _projection_sort_key(value, "resolved boundaries"),
             )),
             resolve_pairs(self.sources.items(), "sources"),
-            resolve_values(self.interfaces.values(), "interfaces"),
+            resolved_interfaces,
         )
 
     def inspect(self) -> dict[str, Any]:

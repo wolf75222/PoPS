@@ -1,7 +1,11 @@
 # ConsumerGraph transaction contract
 
-ADC-685 adds consumer planning after `RuntimePlanBundle`, without placing diagnostics or output
-work in the scientific `OperatorGraph`. Diagnostics, scientific outputs, checkpoints, and monitors
+The sole public authoring import is `from pops.output import ConsumerGraph`. Runtime planning and
+publication keep their private records under `pops.runtime`; they do not form a second public graph
+namespace.
+
+Consumer planning follows `RuntimePlanBundle` without placing diagnostics or output work in the
+scientific `OperatorGraph`. Diagnostics, scientific outputs, checkpoints, and monitors
 are distinct `ConsumerManifest` nodes. Each node owns a canonical `Handle(kind="consumer")`, exact
 qualified dependencies, selected quantities, layouts and levels, field contexts and typed read
 policies, a typed schedule, a publication target and format, a parallel mode, and one failure action.
@@ -28,7 +32,14 @@ files, publish artifacts, or mutate cursors.
 
 ## Writer boundary and acceptance
 
-Format implementations subclass two nominal interfaces from `pops.runtime.consumer`:
+The author-facing extension seam stays under `pops.output`: a custom scientific format subclasses
+`pops.output.FormatInterface`, provides deterministic `consumer_data()`, and returns a writer from
+`writer()`. That writer's `prepare(snapshot, request, target, communicator=...)` must return a
+verified `pops.output.PreparedOutputFile`. No runtime package import is required or supported by a
+format provider.
+
+After resolution, private execution code adapts accepted effects to two runtime-owned nominal
+interfaces:
 
 ```python
 class ConsumerPublisher(ABC):
@@ -43,10 +54,11 @@ class PreparedPublication(ABC):
     def discard(self) -> None: ...
 ```
 
-`prepare()` creates only an incomplete temporary. `publish()` must make that one artifact visible
+These interfaces are implementation details, not extension base classes. `prepare()` creates only
+an incomplete temporary. `publish()` must make that one artifact visible
 atomically (normally commit/rename) and returns `PublicationReceipt` only after success. `discard()`
-is idempotent and removes all preparation residue. HDF5, NPZ, ParaView, and checkpoint writers are
-outside ADC-685 and live behind this boundary.
+is idempotent and removes all preparation residue. HDF5, NPZ, ParaView, external native writers and
+checkpoint providers all live behind this boundary.
 
 `ConsumerTransaction` prepares every effect while the step attempt is provisional. `reject()`
 discards all temporaries, publishes nothing, and returns the original cursor set. `accept()` is the

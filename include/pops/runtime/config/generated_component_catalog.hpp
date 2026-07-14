@@ -306,9 +306,9 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 1;
-inline constexpr const char* kComponentCatalogSha256 = "9d247899ba03bd6e893f2fb8071e6eb1407c4590269fb72ed3abe2c003743128";
-inline constexpr const char* kComponentCatalogSemanticSha256 = "58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661";
-inline constexpr const char* kRouteRegistrySignature = "v2:58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661";
+inline constexpr const char* kComponentCatalogSha256 = "6a9e3d473ce9fef2ec84c781a51628247017ca0aba8acd28076318058d211e97";
+inline constexpr const char* kComponentCatalogSemanticSha256 = "33356089a9695edf0ed050aa7446945c6de4fed18880b2c8df24ff2baef16ac3";
+inline constexpr const char* kRouteRegistrySignature = "v2:33356089a9695edf0ed050aa7446945c6de4fed18880b2c8df24ff2baef16ac3";
 inline constexpr const char* kComponentManifestSemanticFields[] = {
   "schema_version",
   "uri",

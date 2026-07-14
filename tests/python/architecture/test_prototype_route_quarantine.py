@@ -22,7 +22,7 @@ POPS = REPO_ROOT / "python" / "pops"
 # host/prototype route -- their only route is the production native loader.
 TARGET_SURFACE = (
     "problem/problem.py",
-    "codegen/orchestration.py",
+    "codegen/_phases.py",
     "runtime/_system_unified_install.py",
 )
 
@@ -106,7 +106,7 @@ def test_pops_root_does_not_import_experimental():
                     and not line.lstrip().startswith("#")]
     assert not import_lines, (
         "pops/__init__.py must not import pops.experimental (ADC-600 keeps the numpy-host prototyping "
-        "package off the root; PythonFlux is not pops.PythonFlux); found:\n  "
+        "package off the root; PythonFlux remains experimental-only); found:\n  "
         + "\n  ".join(import_lines))
 
 

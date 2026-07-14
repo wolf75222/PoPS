@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from pops.codegen._compile_emit import model_hash
-from pops.ir import ScalarLiteral, scalar_literal
+from pops._ir import ScalarLiteral, scalar_literal
 from pops.model.manifest import coupling_operator_manifest
 from pops.physics.coupling_presets import (
     ContractedCoupling,

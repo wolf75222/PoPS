@@ -2,9 +2,9 @@
 
 The native bricks are named by typed constructors. This test pins their lowering contract:
 
-* ``pops.FluidState.compressible(gamma)`` / ``pops.FluidState.isothermal(cs2, vacuum_floor)`` build
-  the SAME inert state as ``pops.FluidState(kind=...)`` and produce a bit-identical ``ModelSpec``
-  through ``pops.Model(...)``.
+* ``engine.FluidState.compressible(gamma)`` / ``engine.FluidState.isothermal(cs2, vacuum_floor)`` build
+  the SAME inert state as ``engine.FluidState(kind=...)`` and produce a bit-identical ``ModelSpec``
+  through ``engine.Model(...)``.
 * the native ``Dirichlet()`` / ``Neumann()`` / ``Periodic()`` boundary bricks lower
   to the ``bc=`` tokens ``"dirichlet"`` / ``"neumann"`` / ``"periodic"`` consumed by
   ``set_poisson`` ; they are DISTINCT objects from the ``pops.fields.bcs`` field-value descriptors.
@@ -18,8 +18,8 @@ import sys
 import pytest
 
 pytest.importorskip("pops")
-import pops  # noqa: E402
-from pops.runtime.bricks import Dirichlet, Neumann, Periodic
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._engine_descriptors import Dirichlet, Neumann, Periodic
 
 
 _SPEC_ATTRS = ("transport", "gamma", "cs2", "vacuum_floor", "source", "elliptic")
@@ -27,36 +27,36 @@ _SPEC_ATTRS = ("transport", "gamma", "cs2", "vacuum_floor", "source", "elliptic"
 
 def _spec_tuple(state, transport):
     """The ModelSpec fields a state/transport pair drives, as a comparable tuple."""
-    m = pops.Model(state=state, transport=transport, source=pops.NoSource(),
-                   elliptic=pops.ChargeDensity())
+    m = engine.Model(state=state, transport=transport, source=engine.NoSource(),
+                   elliptic=engine.ChargeDensity())
     return tuple(getattr(m, a, None) for a in _SPEC_ATTRS)
 
 
 def test_fluidstate_compressible_classmethod_matches_kind():
-    typed = pops.FluidState.compressible(gamma=1.7)
-    string = pops.FluidState(kind="compressible", gamma=1.7)
+    typed = engine.FluidState.compressible(gamma=1.7)
+    string = engine.FluidState(kind="compressible", gamma=1.7)
     assert typed.kind == "compressible" and typed.gamma == 1.7
     assert (typed.kind, typed.gamma) == (string.kind, string.gamma)
-    # Same ModelSpec round-trip through the existing kind= consumer (pops.Model).
-    assert _spec_tuple(typed, pops.CompressibleFlux()) == \
-        _spec_tuple(string, pops.CompressibleFlux())
+    # Same ModelSpec round-trip through the existing kind= consumer (engine.Model).
+    assert _spec_tuple(typed, engine.CompressibleFlux()) == \
+        _spec_tuple(string, engine.CompressibleFlux())
 
 
 def test_fluidstate_isothermal_classmethod_matches_kind():
-    typed = pops.FluidState.isothermal(cs2=0.7, vacuum_floor=1e-9)
-    string = pops.FluidState(kind="isothermal", cs2=0.7, vacuum_floor=1e-9)
+    typed = engine.FluidState.isothermal(cs2=0.7, vacuum_floor=1e-9)
+    string = engine.FluidState(kind="isothermal", cs2=0.7, vacuum_floor=1e-9)
     assert typed.kind == "isothermal" and typed.cs2 == 0.7 and typed.vacuum_floor == 1e-9
     assert (typed.kind, typed.cs2, typed.vacuum_floor) == \
         (string.kind, string.cs2, string.vacuum_floor)
-    assert _spec_tuple(typed, pops.IsothermalFlux()) == \
-        _spec_tuple(string, pops.IsothermalFlux())
+    assert _spec_tuple(typed, engine.IsothermalFlux()) == \
+        _spec_tuple(string, engine.IsothermalFlux())
 
 
 def test_fluidstate_isothermal_default_vacuum_floor_is_inactive():
-    typed = pops.FluidState.isothermal()
+    typed = engine.FluidState.isothermal()
     assert typed.vacuum_floor == 0.0  # default = inactive, bit-identical
-    assert _spec_tuple(typed, pops.IsothermalFlux()) == \
-        _spec_tuple(pops.FluidState(kind="isothermal"), pops.IsothermalFlux())
+    assert _spec_tuple(typed, engine.IsothermalFlux()) == \
+        _spec_tuple(engine.FluidState(kind="isothermal"), engine.IsothermalFlux())
 
 
 def test_native_boundary_bricks_lower_to_tokens():

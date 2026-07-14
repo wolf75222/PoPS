@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from pops.ir import _wrap
-from pops.ir.visitors import _expr_uses_cons_or_prim
+from pops._ir import _wrap
+from pops._ir.visitors import _expr_uses_cons_or_prim
 from pops.model import OperatorHandle
 
 from .aux import AUX_CANONICAL

@@ -19,7 +19,7 @@ Invariants verifies :
 """
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -45,14 +45,14 @@ def build_exchange(k):
 def density_block(n0=1.0):
     """Bloc scalaire (densite) transporte par la derive E x B ; densite uniforme + fond cale dessus
     -> transport exactement nul, seules les sources couplees agissent (meme montage que coupled_source)."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=n0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=n0))
 
 
 def make_system(n, na0, nb0):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("alpha", model=density_block(n0=na0), spatial=pops.Spatial(none=True))
-    sim.block("beta", model=density_block(n0=nb0), spatial=pops.Spatial(none=True))
+    sim.block("alpha", model=density_block(n0=na0), spatial=engine.Spatial(none=True))
+    sim.block("beta", model=density_block(n0=nb0), spatial=engine.Spatial(none=True))
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("alpha", np.full((n, n), na0))
     sim.set_density("beta", np.full((n, n), nb0))

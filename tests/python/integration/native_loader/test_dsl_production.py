@@ -21,7 +21,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
@@ -31,10 +31,10 @@ POPS_PROCESS_TIMEOUT = 900
 
 def _native_spec():
     """Le MEME modele euler_poisson, version NATIVE composee par briques (reference de parite)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                     transport=pops.CompressibleFlux(),
-                     source=pops.GravityForce(),
-                     elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                     transport=engine.CompressibleFlux(),
+                     source=engine.GravityForce(),
+                     elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
 
 def _initial_state(n):
@@ -69,9 +69,9 @@ def main():
             from pops.numerics.reconstruction import FirstOrder
             from pops.numerics.reconstruction.limiters import Minmod, VanLeer
             from pops.numerics.variables import Conservative, Primitive
-            return pops.FiniteVolume(
+            return engine.Spatial(
                 limiter={"none": FirstOrder(), "minmod": Minmod(), "vanleer": VanLeer()}[limiter],
-                riemann={"rusanov": Rusanov(), "hll": HLL(), "hllc": HLLC(), "roe": Roe()}[riemann],
+                flux={"rusanov": Rusanov(), "hll": HLL(), "hllc": HLLC(), "roe": Roe()}[riemann],
                 recon={"conservative": Conservative(), "primitive": Primitive()}[recon],
             )
 
@@ -79,7 +79,7 @@ def main():
             sys = System(n=n, L=L, periodic=True)
             sys.add_equation(
                 "gas", model=so, spatial=spatial(limiter, riemann, recon),
-                time=pops.Explicit(), evolve=evolve,
+                time=engine.Explicit(), evolve=evolve,
             )
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
@@ -89,7 +89,7 @@ def main():
             sys = System(n=n, L=L, periodic=True)
             sys.block("gas", spec,
                           spatial=spatial(limiter, riemann, recon),
-                          time=pops.Explicit(), evolve=evolve)
+                          time=engine.Explicit(), evolve=evolve)
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys

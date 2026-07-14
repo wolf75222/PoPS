@@ -1,11 +1,11 @@
 // Verrou de non-regression du bug "finding 8" : acces fab(0) SANS garde local_size dans les
-// fermetures rhs_into / advance / max_speed des blocs DSL hote (dynamique .so ET compile).
+// fermetures rhs_into / advance / max_speed des blocs natifs composes.
 //
 // System repartit UNE box unique en round-robin (DistributionMapping(1, n_ranks())), donc a np>1
 // un seul rang la possede ; les autres ont local_size()==0. Avant ce fix, les fermetures
-// rhs_into / advance / max_speed des chemins dynamique (push_dynamic) et compile (add_compiled_block)
-// appelaient copy_state(U, ...) / write_state(U, ...) sans tester local_size() -> fab(0) hors-bornes
-// -> crash UB silencieux ou segfault sur les rangs vides.
+// rhs_into / advance / max_speed du chemin add_compiled_model appelaient copy_state(U, ...) /
+// write_state(U, ...) sans tester local_size() -> fab(0) hors-bornes -> crash UB silencieux ou
+// segfault sur les rangs vides.
 //
 // Ce test exerce System::add_compiled_model (chemin compile, fermetures type-erased) sous mpirun
 // -np {1,2,4} et exige :
@@ -83,8 +83,8 @@ static int pops_run_test_mpi_system_gather_scatter(int argc, char** argv) {
   cfg.periodic = true;
 
   System sys(cfg);
-  // add_compiled_model branche le chemin COMPILE (fermetures rhs_into / advance / max_speed
-  // de add_compiled_block dans native_loader.hpp) : ce sont exactement les sites du finding 8.
+  // add_compiled_model branche les fermetures natives rhs_into / advance / max_speed : ce sont
+  // exactement les sites du finding 8.
   add_compiled_model(sys, "u", ScalarModel{}, "none", "rusanov", "conservative", "explicit");
   sys.set_poisson("composite", "geometric_mg");
 

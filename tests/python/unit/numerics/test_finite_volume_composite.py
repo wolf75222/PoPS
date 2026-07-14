@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""ADC-533: the composite FiniteVolume home + pre-runtime Riemann-flux refusals.
+"""Pre-runtime capability checks for typed Riemann and reconstruction descriptors.
 
-Spec 5 criterion 7 homes the ``FiniteVolume(riemann=HLL(...), reconstruction=MUSCL(...))``
-composite in :mod:`pops.numerics.spatial`; ``pops.FiniteVolume`` / ``pops.runtime._bricks_scheme``
-re-export it so every existing import path keeps working. The model-aware refusals (HLL without
-signed wave speeds, HLLC without the star-state hook, Roe without a declared dissipation, an
-explicit Euler route on a non-Euler layout, a WENO5 stencil past a too-thin explicit halo) surface
-through the descriptor ``available(context)`` / ``validate(context)`` protocol, DELEGATING to the
-exact install-time predicates in ``pops.runtime.routes`` (single source), so they are testable
-before any compile.
-
-Pure Python: it imports the inert authoring packages and a metadata-only ``CompiledModel`` (never
-built into a ``.so``, never run). Skips when the ``pops`` package cannot be imported.
+The model-aware refusals (HLL without signed wave speeds, HLLC without the star-state hook,
+Roe without declared dissipation, an Euler-specific route on another layout, and WENO5 with an
+insufficient explicit halo) use the same descriptor protocol as native installation.  These tests
+therefore exercise the final typed public surface without retaining historical root re-exports or
+string-catalog compatibility paths.
 """
 
 import pytest
 
-pops = pytest.importorskip("pops")
+pytest.importorskip("pops")
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
-from pops.numerics.reconstruction import MUSCL, WENO5, validate_ghost_depth  # noqa: E402
+from pops.numerics.reconstruction import WENO5, validate_ghost_depth  # noqa: E402
 from pops.numerics.riemann import (  # noqa: E402
-    HLL, HLLC, Roe, Rusanov, EulerHLLC2D, available, validate)
-from pops.numerics.riemann.waves import ExplicitPair  # noqa: E402
+    EulerHLLC2D,
+    HLL,
+    HLLC,
+    Roe,
+    Rusanov,
+    available,
+    validate,
+)
 
 
 def _model(*, hllc=False, roe=False, wave_speeds=True, n_vars=3,
@@ -35,45 +35,6 @@ def _model(*, hllc=False, roe=False, wave_speeds=True, n_vars=3,
         prim_names=list(prim_names), n_vars=n_vars, gamma=None, n_aux=3, params={},
         caps={}, abi_key="", model_hash="", cxx="c++", std="23",
         hllc=hllc, roe=roe, wave_speeds=wave_speeds)
-
-
-# --- the homed composite is reachable from every historical path ------------------------------
-def test_composite_home_and_reexports_agree():
-    from pops.numerics.spatial import FiniteVolume as home_fv
-    from pops.runtime._bricks_scheme import FiniteVolume as scheme_fv
-
-    # pops.FiniteVolume, the runtime re-export, and the numerics home are the SAME surface.
-    for factory in (pops.FiniteVolume, scheme_fv, home_fv):
-        s = factory(riemann=HLL(), reconstruction=MUSCL())
-        assert isinstance(s, pops.Spatial)
-        assert (s.limiter, s.flux) == ("minmod", "hll")
-
-
-def test_composite_inspectable():
-    s = pops.FiniteVolume(riemann=HLLC(), reconstruction=WENO5())
-    # The composite lowers to a Spatial whose typed routes are inspectable (ADC-584 manifest).
-    routes = s.routes()
-    assert routes["riemann"]["token"] == "hllc"
-    assert routes["limiter"]["token"] == "weno5"
-    assert "flux=hllc" in str(s)
-
-
-def test_catalog_descriptor_still_string_based():
-    # pops.numerics.spatial.FiniteVolume (the NAMESPACE attr) stays the brick-catalog descriptor,
-    # which stores its scheme choice as STRING options (lowered later by _lower_spatial). Distinct
-    # from the module-level composite above, which requires TYPED descriptors.
-    cat = pops.numerics.spatial.FiniteVolume(riemann="hllc", reconstruction="weno5")
-    assert cat.options["riemann"] == "hllc"
-    assert cat.category == "spatial"
-
-
-# --- NEGATIVE: string riemann is rejected pointing at the typed descriptor ---------------------
-def test_string_riemann_rejected_points_at_typed():
-    with pytest.raises(TypeError) as exc:
-        pops.FiniteVolume(riemann="hll")
-    msg = str(exc.value)
-    assert "riemann='hll'" in msg
-    assert "pops.numerics.riemann" in msg
 
 
 # --- NEGATIVE: HLL refuses a model without signed wave speeds (via context) --------------------
@@ -145,11 +106,6 @@ def test_weno5_refuses_explicit_shallow_halo():
     assert "ghost_depth >= 3" in str(exc.value)
     assert validate_ghost_depth(WENO5(), available=3) is True
     assert validate_ghost_depth(WENO5(), available=None) is True
-    # The composite's own validate mirrors it (an explicit shallow halo is refused).
-    s = pops.FiniteVolume(reconstruction=WENO5())
-    with pytest.raises(ValueError):
-        s.validate(ghost_depth=2)
-    assert s.validate(ghost_depth=None) is True
 
 
 # --- POSITIVE: Rusanov has no model requirement, always available ------------------------------

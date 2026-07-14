@@ -17,7 +17,7 @@ try:
     from pops import time as adctime
     from pops.codegen.program_emit_schedule import _lower_schedule_ir
     from pops.numerics.terms import DefaultSource, Flux
-    from pops.runtime._consumer_contracts import ConsumerMoment
+    from pops.output._consumer_contracts import ConsumerMoment
     from pops.runtime._consumer_planning import _is_due, _schedule_coordinate
     from pops.time.points import TimePoint
     from pops.time.schedule import (
@@ -131,6 +131,8 @@ def _node(schedule):
         id=37,
         name="third_party_rhs",
         op="rhs",
+        clock=schedule.clock,
+        point=schedule.domain.at,
         attrs={"schedule": schedule},
     )
 
@@ -176,7 +178,7 @@ def test_third_party_schedule_lowers_without_codegen_registration():
     compiled = _scratch_program(make_schedule)
     compiled._check_schedules_lowerable()
     cpp = compiled.emit_cpp_program(model=None)
-    assert "ctx.cache_should_update(" in cpp and ", 3)" in cpp
+    assert "ctx.schedule_is_due(" in cpp and ", 3," in cpp
     assert "ctx.cache_store_scratch(" in cpp
     assert "ctx.cache_restore_scratch(" in cpp
 

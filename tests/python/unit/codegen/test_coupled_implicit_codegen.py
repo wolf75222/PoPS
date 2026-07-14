@@ -7,7 +7,7 @@ from typed_program_support import typed_state
 
 time = pytest.importorskip("pops.time")
 from pops import model  # noqa: E402
-from pops.ir.expr import Const  # noqa: E402
+from pops._ir.expr import Const  # noqa: E402
 from pops.solvers.nonlinear import LocalNewton  # noqa: E402
 
 

@@ -16,7 +16,7 @@ import sys
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -58,10 +58,10 @@ def main():
     # --- MONO-BLOC : AmrCouplerMP ---
     mono = AmrSystem(n=n, L=L, regrid_every=10, periodic=True)
     mono.block("ne",
-                   model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                                   source=pops.NoSource(),
-                                   elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(ne0.mean()))),
-                   spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                   model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                                   source=engine.NoSource(),
+                                   elliptic=engine.BackgroundDensity(alpha=1.0, n0=float(ne0.mean()))),
+                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     mono.set_refinement(threshold=0.05)
     mono.set_poisson(rhs="charge_density", solver="geometric_mg")
     mono.set_density("ne", ne0)
@@ -81,10 +81,10 @@ def main():
     multi = AmrSystem(n=n, L=L, regrid_every=0, periodic=True)
     for nm, arr in (("a", ne1), ("b", ne2)):
         multi.block(nm,
-                        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                                        source=pops.NoSource(),
-                                        elliptic=pops.BackgroundDensity(alpha=1.0, n0=float(arr.mean()))),
-                        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                                        source=engine.NoSource(),
+                                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=float(arr.mean()))),
+                        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     multi.set_refinement(threshold=0.05)
     multi.set_poisson(rhs="charge_density", solver="geometric_mg")
     multi.set_density("a", ne1)

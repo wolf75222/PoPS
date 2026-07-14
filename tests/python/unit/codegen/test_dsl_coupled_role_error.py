@@ -20,9 +20,7 @@ Deux points de rejet sont confirmes (lus dans python/pops/dsl.py et python/syste
       -> throw "le bloc '...' n'expose pas le role '...'"). Les couplages NOMMES (add_collision /
       add_pair) conservent volontairement leur repli canonique via role_index et ne sont PAS touches.
 """
-import pytest
-
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -85,14 +83,14 @@ def _make_cartesian_system():
     sim = System(n=4, L=1.0, periodic=True)
     sim.block(
         "ne",
-        model=pops.Model(
-            state=pops.Scalar(),
-            transport=pops.ExB(B0=1.0),
-            source=pops.NoSource(),
-            elliptic=pops.ChargeDensity(charge=1.0),
+        model=engine.Model(
+            state=engine.Scalar(),
+            transport=engine.ExB(B0=1.0),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
         ),
-        spatial=pops.Spatial(none=True),
-        time=pops.Explicit(),
+        spatial=engine.Spatial(none=True),
+        time=engine.Explicit(),
     )
     sim.set_poisson(rhs="charge_density", solver="geometric_mg")
     sim.set_density("ne", [1.0] * (4 * 4))
@@ -200,7 +198,7 @@ def test_collision_preset_rejects_missing_block():
     sim = _make_cartesian_system()  # 'ne' seul ; 'b' n'existe pas
     raised = False
     try:
-        sim.add_coupling(pops.Collision("ne", "b", 0.5))
+        sim.add_coupling(engine.Collision("ne", "b", 0.5))
     except Exception as e:  # RuntimeError du C++ (bloc absent)
         raised = "b" in str(e) or "block" in str(e).lower()
     assert raised, "Collision(ne, b) avec 'b' absent aurait du lever a l'enregistrement"

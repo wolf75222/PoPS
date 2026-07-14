@@ -12,7 +12,7 @@ from types import SimpleNamespace
 try:
     from pops import model
     from pops.codegen.program_codegen import emit_cpp_program
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.physics._facade import Model
     from pops import time as adctime
     from pops.params import RuntimeParam

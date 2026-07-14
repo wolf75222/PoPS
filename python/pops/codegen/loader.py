@@ -21,8 +21,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
     produced by the low-level ``pops.codegen.compile_problem(...)`` driver and,
     for the public path, wrapped by ``pops.compile(...)``; wire a runnable
     simulation from it with ``pops.bind(compiled, ...)`` (ADC-523). The concrete
-    class stays off the top-level surface -- annotate against the inspectable
-    ``pops.CompiledSimulationArtifact`` instead. The bound Program drives
+    class stays off the top-level surface; callers consume the authenticated object returned by
+    ``pops.compile`` through its inspection protocol. The bound Program drives
     ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
@@ -365,7 +365,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
         AMR-patch / halo / MPI-buffer byte budgets, computed as a FORMULA over the mesh shape and
         the artifact's static cost (``Program.estimate``) + component counts. It NEVER allocates a
         ``MultiFab``; every assumption is in :attr:`MemoryEstimate.assumptions` and the estimate is
-        CONSERVATIVE. @p mesh an ``pops.mesh.CartesianMesh`` (or an int / 2-tuple of extents); @p
+        CONSERVATIVE. @p mesh an exact ``pops.mesh.CartesianGrid`` over a framed Rectangle; @p
         platform an optional hint (``"mpi"`` adds the halo-exchange buffer); @p layout an optional
         ``pops.layouts.AMR`` / ``Uniform`` for an AMR hierarchy estimate (conservative;
         full-refinement worst case)."""

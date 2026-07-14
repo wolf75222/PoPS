@@ -8,7 +8,7 @@ from pops.codegen import CompilerLowerable, CompilerLowering
 from pops.codegen._compiler_lowering import require_compiler_lowering
 from pops.codegen._phases import _resolve_problem_model
 from pops.codegen.module_lowering import lower_and_validate
-from pops.ir.expr import Const
+from pops._ir.expr import Const
 from pops.model import Module, Rate
 from pops.physics._facade import Model
 

@@ -5,7 +5,7 @@ builders populated from metadata already carried by :class:`pops.codegen.loader.
 (its lowered ``pops.time.Program`` and physical model), plus the compile artifacts on disk.
 
   - :class:`Arguments` (sec.12.2, #44-45) lists the RUNTIME inputs expected by
-    :meth:`pops.System.install`, without binding or reading a runtime array.
+    :func:`pops.bind`, without binding or reading a runtime array.
   - :class:`MemoryEstimate` (sec.12.3, #46) turns the Program's GRID-RELATIVE static cost
     (``Program.estimate``: field-sized passes) into an ABSOLUTE byte estimate over a mesh shape,
     as a FORMULA -- it allocates nothing (no ``MultiFab``). Every assumption is inspectable.
@@ -124,7 +124,7 @@ class Arguments(Report):
 
     It is built by :func:`build_arguments` from the carried Program + model; it neither compiles,
     binds nor reads any runtime array. ``str(args)`` is a readable table; :meth:`to_dict` /
-    :meth:`to_json` serialise it. Adopts the shared :class:`pops.Report` base (ADC-564); its
+    :meth:`to_json` serialise it. It uses the shared internal report base; its
     ``to_dict`` keeps the historical shape (no ``report_type`` stamp) so a consumer is unchanged.
     """
 
@@ -216,17 +216,90 @@ def build_arguments(compiled: Any) -> Arguments:
       - aux: the model's named aux inputs (``model.aux_extra_names``), each required;
       - solvers: the elliptic / Krylov solves in the Program IR (:func:`_solver_arguments`);
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
-      - layout_runtime: the target layout (System, single level -- the only ``target`` a compiled
-        Program supports today), MPI optionality and the model ghost depth.
+      - layout_runtime: every exact compiled layout partition, its target, MPI optionality and
+        per-block ghost depth. A multi-layout artifact is reported as an aggregate of qualified
+        partitions, never through a representative layout.
     """
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 
     if type(compiled) is not CompiledSimulationArtifact:
         raise TypeError("build_arguments requires a CompiledSimulationArtifact")
-    program_component = compiled.program
-    program = getattr(program_component, "program", None)
     model_rows = _artifact_model_metadata(compiled)
-    return _build_arguments(compiled, program, model_rows)
+    if len(compiled.layout_programs) == 1:
+        row = compiled.layout_programs[0]
+        return _build_arguments(
+            compiled, getattr(row.program, "program", None), model_rows,
+            program_name=getattr(row.program, "program_name", None))
+    if not compiled.layout_programs:
+        return _build_arguments(compiled, None, model_rows)
+
+    partitions = tuple(
+        (row.layout_id, build_layout_arguments(compiled, row.layout_id))
+        for row in compiled.layout_programs
+    )
+    instances = {}
+    aux = {}
+    solvers = {}
+    outputs = {}
+    ghost_depth_by_block = {}
+    layout_rows = {}
+    for layout_id, arguments in partitions:
+        overlap = set(instances) & set(arguments.instances)
+        if overlap:
+            raise ValueError("layout Program partitions share block(s) %s" % sorted(overlap))
+        instances.update(arguments.instances)
+        for target, source in (
+                (aux, arguments.aux), (solvers, arguments.solvers),
+                (outputs, arguments.outputs)):
+            target.update({"%s::%s" % (layout_id, name): value
+                           for name, value in source.items()})
+        depths = dict(arguments.layout_runtime.get("ghost_depth_by_block") or {})
+        ghost_depth_by_block.update(depths)
+        layout_rows[layout_id] = {
+            "blocks": sorted(arguments.instances),
+            "target": compiled.program_for_layout(layout_id).target,
+            "ghost_depth_by_block": depths,
+        }
+    from ._inspect_params import build_parameter_arguments
+
+    params = build_parameter_arguments(compiled, _merge_parameter_metadata(model_rows))
+    return Arguments(
+        instances=instances,
+        params=params,
+        aux=aux,
+        solvers=solvers,
+        outputs=outputs,
+        layout_runtime={
+            "layout": "multi",
+            "requires_mpi": False,
+            "requires_gpu": False,
+            "ghost_depth": None,
+            "ghost_depth_by_block": ghost_depth_by_block,
+            "layouts": layout_rows,
+        },
+        program_name={layout_id: arguments.program_name
+                      for layout_id, arguments in partitions},
+    )
+
+
+def build_layout_arguments(compiled: Any, layout_id: str) -> Arguments:
+    """Project one exact layout partition without using an aggregate representative."""
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    if type(compiled) is not CompiledSimulationArtifact:
+        raise TypeError("build_layout_arguments requires a CompiledSimulationArtifact")
+    layout_program = compiled.program_for_layout(layout_id)
+    names = frozenset(layout_program.block_names)
+    model_rows = tuple(
+        row for row in _artifact_model_metadata(compiled) if row.block_name in names)
+    if {row.block_name for row in model_rows} != names:
+        raise ValueError("layout Program has no exact compiled-model partition")
+    return _build_arguments(
+        compiled,
+        getattr(layout_program.program, "program", None),
+        model_rows,
+        program_name=getattr(layout_program.program, "program_name", None),
+    )
 
 
 def build_component_arguments(compiled: Any) -> Arguments:
@@ -240,9 +313,29 @@ def build_component_arguments(compiled: Any) -> Arguments:
     return _build_arguments(compiled, program, component_model_metadata(compiled))
 
 
-def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
-    primary = model_rows[0] if model_rows else None
-    params = primary.params if primary is not None else {}
+def _merge_parameter_metadata(model_rows: Any) -> dict[str, Any]:
+    """Merge local parameter declarations only after proving homonyms identical."""
+    params = {}
+    owners = {}
+    for row in model_rows:
+        for name, value in row.params.items():
+            if name in params and params[name] != value:
+                raise ValueError(
+                    "compiled blocks %r and %r declare conflicting parameter metadata for %r"
+                    % (owners[name], row.block_name, name))
+            params[name] = value
+            owners.setdefault(name, row.block_name)
+    return params
+
+
+def _build_arguments(
+    compiled: Any,
+    program: Any,
+    model_rows: Any,
+    *,
+    program_name: Any = None,
+) -> Arguments:
+    params = _merge_parameter_metadata(model_rows)
 
     # Instances: the blocks the Program commits. A read-only block (never committed) is still a
     # bind input, but the Program only references blocks it commits or reads; the commit set is the
@@ -296,12 +389,10 @@ def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
             elif value.op == "record" or value.op == "record_scalar":
                 outputs[value.name or "diagnostic"] = {"kind": "diagnostic"}
 
-    ghost_depth = _ghost_depth(compiled)
-    # Per-block ghost depth (ADC-536 / CONTRACTS6 decision 4): the bind stream validates each block's
-    # initial-state ghosts against the MANIFEST value keyed by block. Every instance shares the model's
-    # stencil width today (one physics model per Program); a heterogeneous per-block stencil would
-    # populate distinct values here without changing the shape the bind validator reads.
-    ghost_depth_by_block = {name: ghost_depth for name in instances}
+    ghost_depth_by_block = _ghost_depth_by_block(compiled, tuple(instances))
+    # The scalar remains an exact conservative aggregate for legacy/native consumers; each block's
+    # authoritative value is retained separately and may differ.
+    ghost_depth = max(ghost_depth_by_block.values())
     # The runtime LAYOUT the artifact targets: "amr" for an AMR-route CompiledModel (target=
     # 'amr_system', ADC-515) so ``arguments()`` reports the native per-block AMR loader; a whole-system
     # Program handle stays "system" (its only target today).
@@ -319,17 +410,63 @@ def _build_arguments(compiled: Any, program: Any, model_rows: Any) -> Arguments:
 
     return Arguments(instances=instances, params=param_args, aux=aux_args,
                      solvers=solver_args, outputs=outputs, layout_runtime=layout_runtime,
-                     program_name=getattr(compiled, "program_name", None))
+                     program_name=(getattr(compiled, "program_name", None)
+                                   if program_name is None else program_name))
 
 
 def _ghost_depth(compiled: Any) -> int:
-    """Conservative ghost (halo) depth of the model: 2 for a finite-volume MUSCL stencil.
+    """Return the exact maximum halo depth derived from every resolved block plan."""
+    plan = getattr(compiled, "plan", None)
+    blocks = getattr(plan, "blocks", None)
+    if not isinstance(blocks, tuple) or not blocks:
+        raise ValueError(
+            "compiled artifact has no resolved block plan from which to derive ghost depth")
+    return max(_ghost_depth_by_block(compiled, tuple(block.name for block in blocks)).values())
 
-    The artifact does not record its reconstruction stencil width in today's metadata, so we report
-    the conservative default the runtime uses for second-order MUSCL (a 2-cell halo). A richer
-    manifest (a follow-up) would carry the per-block ghost depth; until then this is a documented
-    upper-bound assumption, surfaced in the estimate's ``assumptions``."""
-    return 2
+
+def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
+    """Derive per-block halo depths; never substitute a reconstruction default."""
+    plan = getattr(compiled, "plan", None)
+    blocks = getattr(plan, "blocks", None)
+    if not isinstance(blocks, tuple):
+        raise ValueError(
+            "compiled artifact has no resolved block plan from which to derive ghost depth")
+    by_name = {block.name: block for block in blocks}
+    names = tuple(block_names)
+    if not names:
+        raise ValueError("ghost depth derivation requires at least one compiled block")
+    if len(names) != len(set(names)) or set(names) - set(by_name):
+        raise ValueError("ghost depth derivation received non-exact compiled block names")
+    result = {}
+    for name in names:
+        block = by_name[name]
+        candidates = []
+        numerics = getattr(block, "numerics", None)
+        if numerics is not None:
+            rates = getattr(numerics, "rates", None)
+            if not isinstance(rates, tuple) or not rates:
+                raise ValueError(
+                    "compiled block %r numerics carries no rate stencil ghost depth" % name)
+            candidates.append(max(row.method.ghost_depth for row in rates))
+        spatial = getattr(block, "spatial", None)
+        if spatial is not None:
+            value = spatial.get("ghost_depth") if isinstance(spatial, Mapping) \
+                else getattr(spatial, "ghost_depth", None)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            raise ValueError(
+                "compiled block %r has no exact ghost depth in its resolved numerics/spatial plan"
+                % name)
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
+               for value in candidates):
+            raise TypeError("compiled block %r ghost depth must be an integer >= 1" % name)
+        if any(value != candidates[0] for value in candidates[1:]):
+            raise ValueError(
+                "compiled block %r carries conflicting resolved ghost depths %s"
+                % (name, candidates))
+        result[name] = candidates[0]
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +483,7 @@ class MemoryEstimate(Report):
     :attr:`assumptions` list records what the estimate takes for granted (it is CONSERVATIVE: it
     over-counts scratch as if no codegen reuse happened beyond the static reuse report, and ignores
     in-solver V-cycle traffic). :meth:`by_block` / :meth:`by_solver` / :meth:`by_scratch` slice it.
-    Adopts :class:`pops.Report` (ADC-564); its ``to_dict`` keeps the historical shape.
+    It uses the internal report base; ``to_dict`` keeps the established shape.
     """
 
     report_type = "memory_estimate"
@@ -446,7 +583,13 @@ def _positive_int(value: Any, *, field: str) -> int:
 
 
 def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
-    """Read extents from the public CartesianGrid/CartesianMesh capability-and-data protocol."""
+    """Read extents from the sole public Cartesian-grid capability-and-data protocol."""
+    from pops.mesh.grid import CartesianGrid
+
+    if type(mesh) is not CartesianGrid:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires an exact pops.mesh.CartesianGrid over a framed Rectangle "
+            "(got %r)" % type(mesh).__name__, field="mesh", actual=type(mesh).__name__)
     capabilities = _capability_data(mesh, where="mesh")
     if capabilities.get("geometry") != "cartesian":
         raise MemoryEstimateCapabilityError(
@@ -459,17 +602,13 @@ def _mesh_shape(mesh: Any, context: _MemoryRuntimeContext) -> tuple:
             "estimate_memory mesh dimension=%r disagrees with native dimension=%r"
             % (dimension, context.dimension), field="mesh.dimension", actual=dimension)
 
-    cells = getattr(mesh, "cells", None)
-    if cells is not None:
-        if not isinstance(cells, (tuple, list)) or len(cells) != dimension:
-            raise MemoryEstimateCapabilityError(
-                "estimate_memory requires mesh.cells with exactly %d extents (got %r)"
-                % (dimension, cells), field="mesh.cells", actual=cells)
-        shape = tuple(_positive_int(value, field="mesh.cells[%d]" % index)
-                      for index, value in enumerate(cells))
-    else:
-        n = _positive_int(getattr(mesh, "n", None), field="mesh.n")
-        shape = (n,) * dimension
+    cells = mesh.cells
+    if not isinstance(cells, tuple) or len(cells) != dimension:
+        raise MemoryEstimateCapabilityError(
+            "estimate_memory requires mesh.cells with exactly %d extents (got %r)"
+            % (dimension, cells), field="mesh.cells", actual=cells)
+    shape = tuple(_positive_int(value, field="mesh.cells[%d]" % index)
+                  for index, value in enumerate(cells))
     if dimension != 2:
         raise MemoryEstimateCapabilityError(
             "estimate_memory currently implements a 2D perimeter/hierarchy formula; mesh dimension=%d "
@@ -676,4 +815,5 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
 
 __all__ = [
     "Arguments", "MemoryEstimate", "build_arguments", "build_component_arguments",
+    "build_layout_arguments",
     "build_memory_estimate"]

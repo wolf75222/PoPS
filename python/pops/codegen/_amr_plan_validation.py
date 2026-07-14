@@ -4,6 +4,28 @@ from __future__ import annotations
 from typing import Any
 
 
+def _validated_native_materialization(entry: Any) -> Any:
+    """Return the closed native IR of an open AMR action, never its Python class."""
+
+    from pops.mesh._amr.transfer import NativeAMRMaterializationDescriptor
+
+    native = getattr(entry, "native_materialization", None)
+    if type(native) is not NativeAMRMaterializationDescriptor:
+        raise TypeError(
+            "resolved AMR transfer entry must carry an exact prepared native descriptor"
+        )
+    if native.transfer_key_identity != entry.key.identity \
+            or native.operation != entry.key.operation:
+        raise ValueError("prepared native AMR descriptor authenticates another transfer key")
+    if {row.materialization for row in entry.requirements} != {
+        native.materialization.value
+    }:
+        raise ValueError(
+            "prepared native AMR descriptor disagrees with requirement materialization"
+        )
+    return native
+
+
 def validate_amr_authorities(plan: Any) -> None:
     authorities = (
         plan.resolved_hierarchy,
@@ -19,13 +41,13 @@ def validate_amr_authorities(plan: Any) -> None:
             "AMR hierarchy, transfer, initial-condition, bootstrap, and execution authorities "
             "must be supplied together on an AMR target"
         )
-    from pops.mesh.amr import (
+    from pops.mesh._amr import (
         AnalyticReprojection,
         BootstrapPlan,
         InitialConditionPlan,
         ResolvedHierarchy,
     )
-    from pops.mesh.amr.transfer import ResolvedAMRTransfer
+    from pops.mesh._amr.transfer import ResolvedAMRTransfer
 
     from pops.amr import AMRExecution
     expected = (
@@ -49,6 +71,16 @@ def validate_amr_authorities(plan: Any) -> None:
         raise ValueError("ResolvedSimulationPlan initial conditions authenticate another transfer")
     hierarchy = plan.resolved_hierarchy
     transitions = hierarchy.plan.transitions
+    execution = plan.amr_execution
+    if execution.mode == "subcycled":
+        expected_children = tuple(range(1, len(transitions) + 1))
+        actual_children = tuple(sorted(row.child_level for row in execution.relations))
+        if actual_children != expected_children:
+            raise ValueError(
+                "subcycled AMRExecution requires one explicit temporal relation for every "
+                "coarse/fine transition; temporal ratios are never inferred from spatial ratios")
+    elif execution.relations:
+        raise ValueError("synchronous AMRExecution must not carry temporal relations")
     if hierarchy.provider.options.to_data().get("native_route") != "shared_n_level":
         raise NotImplementedError(
             "native AMR hierarchy requires native_route='shared_n_level'"
@@ -92,8 +124,7 @@ def validate_amr_authorities(plan: Any) -> None:
             "native AMR currently exposes one conservative state space per block; "
             "multiple state Handles are refused before artifact creation"
         )
-    from pops.mesh.amr.transfer import (
-        ApplyTransferProvider,
+    from pops.mesh._amr.transfer import (
         CACHE,
         CELL_CENTERED,
         CELL_SPACE,
@@ -111,8 +142,7 @@ def validate_amr_authorities(plan: Any) -> None:
         FACE_Y_CENTERED,
         NODE_SPACE,
         NODE_CENTERED,
-        Recompute,
-        InvalidateThenRebuild,
+        NativeAMRMaterializationKind,
     )
 
     tagging_provider = getattr(plan.bootstrap_plan.tagging, "runtime_tagging_data", None)
@@ -155,7 +185,12 @@ def validate_amr_authorities(plan: Any) -> None:
                 "native AMR initial source requires native_route='bound_level_zero'"
             )
     for entry in plan.amr_transfer.entries:
+        native = _validated_native_materialization(entry)
         for requirement in entry.requirements:
+            if requirement.materialization != native.materialization.value:
+                raise ValueError(
+                    "native AMR action descriptor disagrees with requirement materialization"
+                )
             if requirement.materialization == PHYSICAL:
                 key = requirement.key.to_data()
                 axis = (key["space"]["qualified_id"], key["centering"]["qualified_id"])
@@ -219,14 +254,18 @@ def validate_amr_authorities(plan: Any) -> None:
                     route_contract = ("linear_time_interpolation", 2, (0,))
                 else:
                     route_contract = prolong_contract
-                if type(entry.action) is not ApplyTransferProvider:
+                if native.materialization is not NativeAMRMaterializationKind.PHYSICAL:
                     raise NotImplementedError(
-                        "native AMR physical requirements need an exact transfer provider"
+                        "native AMR physical requirements need a physical transfer descriptor"
                     )
-                capabilities = entry.action.capabilities
+                capabilities = native.capabilities.transfer
+                if capabilities is None:
+                    raise NotImplementedError(
+                        "native AMR physical descriptor omitted transfer capabilities"
+                    )
                 if route_contract is None \
                         or (
-                            entry.action.route.options.to_data().get("native_route"),
+                            native.native_route,
                             capabilities.order,
                             capabilities.ghost_depth,
                         ) != route_contract:
@@ -235,17 +274,15 @@ def validate_amr_authorities(plan: Any) -> None:
                         "cell/face/node kernel contract"
                     )
             elif requirement.materialization == DERIVED_FIELD:
-                if type(entry.action) is not Recompute \
-                        or entry.action.provider.options.to_data().get("native_route") \
-                        != "elliptic_solve":
+                if native.materialization is not NativeAMRMaterializationKind.DERIVED_FIELD \
+                        or native.native_route != "elliptic_solve":
                     raise NotImplementedError(
                         "native AMR bootstrap requires an owner-qualified field and exact "
                         "elliptic_solve materializer"
                     )
             elif requirement.materialization == CACHE:
-                if type(entry.action) is not InvalidateThenRebuild \
-                        or entry.action.provider.options.to_data().get("native_route") \
-                        != "patch_topology":
+                if native.materialization is not NativeAMRMaterializationKind.CACHE \
+                        or native.native_route != "patch_topology":
                     raise NotImplementedError(
                         "native AMR cache bootstrap requires the patch_topology materializer"
                     )

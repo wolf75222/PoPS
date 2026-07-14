@@ -12,7 +12,7 @@ import weakref
 try:
     from pops import model
     from pops.codegen.loader import CompiledProblem
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.physics._facade import Model
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
     from typed_program_support import fresh_field_refs

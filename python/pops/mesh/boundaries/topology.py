@@ -29,8 +29,9 @@ def _canonical_owner(value: Any, *, where: str) -> OwnerPath:
     owner = OwnerPath.coerce(value)
     if owner.is_authoring:
         raise TypeError("%s is post-resolution and refuses authoring ownership" % where)
-    if owner.kind is not OwnerKind.CASE:
-        raise TypeError("%s must be owned by a canonical Case" % where)
+    if owner.kind is not OwnerKind.CASE and not owner.contains(OwnerKind.BLOCK):
+        raise TypeError(
+            "%s must be owned by a canonical Case or block-instance path" % where)
     return owner
 
 

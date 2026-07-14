@@ -54,7 +54,7 @@ class _SystemDiagnostics(_System):
             if not np.all(np.isfinite(P)):
                 failures.append("primitive state not finite (to_primitive)")
             else:
-                for i, (r, nm) in enumerate(zip(prim_roles, prim_names)):
+                for i, (r, nm) in enumerate(zip(prim_roles, prim_names, strict=True)):
                     if (r == "pressure" or nm == "p") and not bool(np.all(P[i] > 0)):
                         failures.append("primitive '%s' (pressure) not strictly positive" % nm)
                 # round-trip cons -> prim -> cons: state saved then restored (no net mutation).

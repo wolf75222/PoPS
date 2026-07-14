@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
-from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 from pops.identity import make_identity
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
@@ -48,10 +48,26 @@ class CompiledComponent:
     def capability_matrix(self):
         return {"cpu": True, "amr": self.target == "amr_system"}
 
+    def __pops_artifact_model_metadata__(self):
+        return {
+            "schema_version": 1,
+            "state_spaces": ("U",),
+            "cons_names": ("u",),
+            "n_vars": 1,
+            "params": {},
+            "aux_names": (),
+            "n_aux": 0,
+            "capabilities": {"mpi": False},
+        }
 
-def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=None):
+
+def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=None,
+                     amr_program=False):
     source_models = tuple(CanonicalValue("source-" + name) for name in block_names)
-    spatial = tuple({"mesh": {"block": name}} for name in block_names)
+    spatial = tuple(
+        {"mesh": {"block": name}, "ghost_depth": 2}
+        for name in block_names
+    )
     schema = BindSchema() if bind_schema is None else bind_schema
     layout_value = {"kind": "amr" if target == "amr_system" else "uniform"}
     layout_plan, layout_coverage = resolved_layout_contract(
@@ -62,9 +78,14 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         backend="production",
         layout=layout_value,
         layout_plan=layout_plan,
-        time=None if target == "amr_system" else CanonicalValue("rk2"),
+        layout_targets={
+            row.handle.qualified_id: target for row in layout_plan.layouts
+        },
+        time=None if target == "amr_system" and not amr_program else CanonicalValue("rk2"),
         blocks=tuple(
-            ResolvedBlock(name, model, block_spatial, "production", ("U",))
+            ResolvedBlock(
+                name, model, block_spatial, "production", ("U",),
+                ("test::%s::state::U" % name,))
             for name, model, block_spatial in zip(
                 block_names, source_models, spatial, strict=True)
         ),
@@ -81,5 +102,8 @@ def artifact_fixture(*, target="system", block_names=("fluid",), bind_schema=Non
         CompiledBlockArtifact(name, component, resolved.spatial, resolved.state_spaces)
         for name, component, resolved in zip(block_names, components, plan.blocks, strict=True)
     )
-    program = None if target == "amr_system" else CompiledComponent("program", target=target)
+    program = None if target == "amr_system" and not amr_program \
+        else CompiledComponent("program", target=target)
+    if program is not None:
+        program.program_block_routes = tuple(enumerate(block_names))
     return CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)

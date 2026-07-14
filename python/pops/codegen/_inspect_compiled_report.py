@@ -37,7 +37,7 @@ class CompiledReport(Report):
     computes nothing of its own. :meth:`to_dict` is a JSON-ready view; :meth:`__str__` is the
     deterministic, array-free, multi-line report shaped like the Spec 5 sec.12.1 example. It never
     prints the ``.so`` contents, a field array, or a ``<...object at 0x...>`` repr. Adopts the shared
-    :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape (the compile
+    internal report base; its ``to_dict`` keeps the established compile-report shape (the compile
     stream may ADD fields, which the base leaves untouched).
     """
 
@@ -217,7 +217,7 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     req_aux = [name for name, spec in sorted(getattr(args, "aux", {}).items())
                if spec.get("required")]
 
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
     from pops.codegen.loader import CompiledProblem
 
     if type(compiled) is CompiledSimulationArtifact:
@@ -282,7 +282,7 @@ def _compiled_options(compiled: Any) -> dict:
 
     defaults = numerical_defaults_report()
     from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 
     if type(compiled) is CompiledSimulationArtifact:
         model_rows = artifact_model_metadata(compiled)

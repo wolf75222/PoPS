@@ -39,7 +39,7 @@ Architecture (layers, dispatch seam, library/application boundary):
 - [20. Distributed mesh: global BoxArray, halos, load balancing](#20-distributed-mesh-global-boxarray-halos-load-balancing)
 - [21. Extensible aux channel](#21-extensible-aux-channel)
 - [22. Runtime composition and multi-species system](#22-runtime-composition-and-multi-species-system)
-- [23. Symbolic DSL: codegen, JIT, AOT](#23-symbolic-dsl-codegen-jit-aot)
+- [23. Symbolic DSL and authenticated native components](#23-symbolic-dsl-and-authenticated-native-components)
 - [24. The dispatch seam (Kokkos: Serial / OpenMP / Cuda / MPI)](#24-the-dispatch-seam-kokkos-serial--openmp--cuda--mpi)
 - [25. Capabilities to qualify (present but limited, or off master)](#25-capabilities-to-qualify-present-but-limited-or-off-master)
 - [Which scheme or solver when](#which-scheme-or-solver-when)
@@ -126,8 +126,8 @@ function assemble_rhs(model, U, aux, geom, R, recon_prim):   # R = -div Fhat + S
 **Code.** [`include/pops/numerics/spatial_operator.hpp`](../include/pops/numerics/spatial_operator.hpp):
 `assemble_rhs<Limiter, NumericalFlux>` computes directly $R = -\mathrm{div}\,\hat F + S$, going through
 the named device functor `detail::AssembleRhsKernel<Limiter, NumericalFlux, Model>` (functor
-rather than extended lambda: reliable device emission under nvcc from an external TU, AOT path
-`add_compiled_model`). `compute_face_fluxes<Limiter, NumericalFlux>` writes the face fluxes `Fx, Fy`
+rather than extended lambda: reliable device emission under nvcc from a generated native TU,
+installed through the private block-loader seam). `compute_face_fluxes<Limiter, NumericalFlux>` writes the face fluxes `Fx, Fy`
 (via `detail::FaceFluxXKernel` / `FaceFluxYKernel`) before the divergence: this is what the AMR reflux
 needs. Same `reconstruct` and same numerical flux as `assemble_rhs`, so
 $R = S - (\texttt{Fx}(i{+}1)-\texttt{Fx}(i))/\Delta x - (\texttt{Fy}(j{+}1)-\texttt{Fy}(j))/\Delta y$
@@ -1154,38 +1154,65 @@ The condensed operator is in general full-tensor (hence the Krylov solver, secti
 
 ```python
 from pops.linalg import LinearProblem
-from pops.solvers import CompositeTensorFAC, GMRES, Hierarchy
+from pops.solvers import CompositeTensorFAC, Hierarchy
 from pops.time import FailRun
 
 T = pops.Program("condensed_source")
 q = T.state(block[state])
 scope = Hierarchy()
+coefficients = T.condensed_coeffs(
+    "condensed_coefficients",
+    state=q.n,
+    linear_operator=implicit_rotation,
+    subset=(mx_component, my_component),
+    c=theta * theta * alpha * T.dt * T.dt,
+    th_dt=theta * T.dt,
+    c_rho=rho_component,
+)
+phi_n = T.history("phi", lag=1, ncomp=1, block=block)
+rhs_storage = T.scalar_field("condensed_rhs")
+condensed_rhs = T.condensed_rhs(
+    rhs_storage,
+    phi_n,
+    q.n,
+    linear_operator=implicit_rotation,
+    subset=(mx_component, my_component),
+    th_dt=theta * T.dt,
+    g=theta * alpha * T.dt,
+)
 operator = T.matrix_free_operator(
     "condensed_tensor",
-    domain="state",
-    range_="state",
-    ncomp=len(state.components),
     scope=scope,
-    provider=CompositeTensorFAC(),
 )
+
+def apply_condensed_tensor(builder, _out, value):
+    laplacian = builder.scalar_field("condensed_laplacian")
+    return -1 * builder.apply_laplacian_coeff(laplacian, value, coefficients)
+
 T.set_apply(operator, apply_condensed_tensor)
-# Application-specific Program IR: assemble the derived RHS from q.n, rho and B^{-1}.
-condensed_rhs = assemble_condensed_rhs(T, q.n, rho, inverse_rotation)
-q_theta = T.solve(
-    LinearProblem(operator=operator, rhs=condensed_rhs, scope=scope),
-    solver=GMRES(max_iter=400, rel_tol=1e-10),
+phi_theta = T.solve(
+    LinearProblem(
+        operator=operator,
+        rhs=condensed_rhs,
+        initial_guess=phi_n,
+        scope=scope,
+    ),
+    solver=CompositeTensorFAC(max_iter=400, rel_tol=1e-10),
     name="condensed_stage",
 ).consume(action=FailRun())
+# Reconstruction, theta extrapolation, energy update and commit remain explicit Program IR.
 ```
 
 The method is authored as ordinary Program IR: tensor-coefficient assembly, metric-aware right-hand
-side, one typed matrix-free solve, reconstruction, optional theta extrapolation and optional energy
-update. `LinearProblem` carries the algebra and hierarchy scope; the executable Krylov descriptor
-owns tolerance and iteration budget; `CompositeTensorFAC` names the native hierarchy provider.
-The generated C++ always calls `ctx.solve_linear_matfree`; `ProgramContext` selects the uniform
-Cartesian or polar provider, while `AmrProgramContext` selects the flat or composite hierarchy
-provider. The authored operator supplies $B^{-1}$; no physics-specific time preset, source-stage
-stepper or System setter exists.
+side, one typed scalar solve, reconstruction, optional theta extrapolation and optional energy
+update. `LinearProblem` carries the algebra and hierarchy scope; `CompositeTensorFAC` owns the
+complete flat/refined solver identity, tolerance and iteration budget. On a flat hierarchy the
+generated C++ executes the authored apply through `ctx.solve_linear_matfree`. On a refined hierarchy,
+every level first assembles and gathers its coefficients, right-hand side and initial guess; exactly
+one `ctx.solve_composite_tensor_fac` then solves the complete hierarchy; only a successful complete
+solution is published to every level. The accepted synchronization subsequently applies reflux and
+then average-down. The authored operator supplies $B^{-1}$; no physics-specific time preset,
+source-stage stepper or System setter exists.
 
 **Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the
@@ -1198,6 +1225,18 @@ and [`include/pops/runtime/amr/amr_tensor_elliptic.hpp`](../include/pops/runtime
 
 Validation belongs to the generic Program solve contract, matrix-free provider tests and the polar
 tensor MPI suite; there is no named condensed time-preset test surface.
+
+The former acceptance target "generated route throughput >= 98% of the native condensed stepper"
+is not a reproducible final-architecture comparison: that stepper and its descriptors are retired,
+so retaining it as an oracle would preserve a second production implementation, while compiling the
+generic route twice measures the same code against itself. A fixed wall-clock ratio would also be a
+flaky CI assertion across toolchains and hosts. The final deterministic performance invariants are
+therefore structural and executable: condensed cell kernels are emitted inline with no physics-name
+runtime dispatch; a refined stage gathers all levels and performs one hierarchy solve, not one solve
+per level; the FAC object and level storage are reused while the authenticated hierarchy tiling is
+unchanged and rebuilt on regrid; and the native tensor/FAC
+and polar multi-box/MPI suites exercise the actual kernels. Comparative throughput belongs in an
+external same-machine benchmark against a pinned released binary, never in the conformance gate.
 
 
 ---
@@ -1445,7 +1484,7 @@ $m=0$ alone) or homogeneous Neumann (Foextrap, $\phi_{-1} = \phi_0$ -> $b_0 \mat
 the gauge by pinning $\hat\phi(0,0) = 0$ (row 0 replaced by the identity in Thomas).
 
 **Code.** [`include/pops/mesh/geometry/geometry.hpp`](../include/pops/mesh/geometry/geometry.hpp)`::PolarGeometry` (ring,
-opt-in via `pops.PolarMesh`; `cfg.geometry == "polar"` on the
+opt-in via the advanced `pops.mesh.PolarMesh`; `cfg.geometry == "polar"` on the
 [`python/bindings/system/base/system.cpp`](../python/bindings/system/base/system.cpp) side). Transport:
 [`include/pops/numerics/spatial/operators/polar_operator.hpp`](../include/pops/numerics/spatial/operators/polar_operator.hpp)`::assemble_rhs_polar<Limiter, NumericalFlux>`
 (`recon_prim`, `wall_radial`), via the named functors `detail::PolarFaceFluxRKernel` (radial flux
@@ -1874,36 +1913,34 @@ $$\mathrm{naux}(M) =
 evaluated at compile time by `aux_comps<M>()`. A magnetized brick sets `n_aux = 4`: `B_z` occupies
 component 3, a pure function of position sampled per level; `T_e` (component 4) is
 derived from a fluid block. A `CompositeModel<Hyp, Src, Ell>` propagates the maximal aux width of its
-three bricks to the system, which allocates and marshals the right number of components.
+three bricks to the system. Resolution records every required provider with its qualified field
+identity; binding authenticates the target artifact before the runtime allocates the required width.
 
 ```
 function aux_comps<M>():                       # physical_model.hpp, constexpr
     if requires { M::n_aux }: return M::n_aux   # ex. 4 si une brique lit B_z
     else: return kAuxBaseComps                  # 3 : phi, grad_x, grad_y
 
-# cote bloc compile / runtime : on elargit le canal avant de capturer son adresse
+# installation interne du bloc natif authentifie : elargir avant de capturer l'adresse
 function add_compiled_model(sys, name, model, ...):  # dsl_block.hpp
     sys.ensure_aux_width( aux_comps<Model>() )       # MultiFab aux >= naux comp (no-op si 3)
     ctx = sys.grid_context()                         # ctx.aux pointe l'aux reel, large
     install_block(...)                               # assemble_rhs lit load_aux<naux>
-
-# cote ABI plate (marshaling) : le tableau aux_in porte exactement naux composantes
-function make_grid(n, dx, dy, periodic, aux_in, naux):  # compiled_block_abi.hpp
-    aux = MultiFab(ba, dm, naux, 1) ; aux.set_val(0)
-    for c in 0..naux-1, j, i: aux(i,j,c) = aux_in[c*n*n + j*n + i]
-    fill ghosts (memes CL que le System) -> load_aux<naux> lit B_z / T_e
 ```
 
 **Code.** [`core/physical_model.hpp`](../include/pops/core/model/physical_model.hpp):
 `aux_comps<M>()` (detects `M::n_aux` via `requires`, falls back to `kAuxBaseComps = 3`), lives in the
 contract header so that `CompositeModel` propagates `n_aux` without pulling in the numerics; the concept
-`PhysicalModel` enforces `M::Aux == pops::Aux`. On the virtual dispatch side,
-[`runtime/dynamic_model.hpp`](../include/pops/runtime/dynamic/dynamic_model.hpp):
-`IModel<NV>::n_aux()` (default `kAuxBaseComps`), `ModelAdapter<M>::n_aux()` returns `aux_comps<M>()`.
-The widening is anchored in `System::ensure_aux_width` (called by
-[`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/dsl_block.hpp) before `grid_context()`), and the
-flat marshaling in [`runtime/compiled_block_abi.hpp`](../include/pops/runtime/builders/compiled/compiled_block_abi.hpp)
-(`make_grid(..., naux)`, symbol `pops_compiled_naux()` = `aux_comps<MODEL>()`).
+`PhysicalModel` enforces `M::Aux == pops::Aux`. The widening is anchored in
+`System::ensure_aux_width`, called by
+[`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/dsl_block.hpp) before
+`grid_context()`. The generated artifact is reached only through the private native installer:
+[`runtime/native_loader.hpp`](../include/pops/runtime/builders/compiled/native_loader.hpp) verifies
+its ABI key, generated route manifest and exact runtime-parameter cardinality before invoking its
+installer. External providers use the independently versioned request tables from
+[`runtime/component_loader.hpp`](../include/pops/runtime/dynamic/component_loader.hpp); their
+declared execution context and views are prepared once rather than reinterpreted as an untyped aux
+array.
 
 **Constraints / remarks.** The widening must precede the capture of the aux address (otherwise the
 closure would read a too-short aux). `B_z` being a function of position, it is sampled
@@ -1913,7 +1950,7 @@ falls back to 3 -> allocation and results bit-identical to the history. **Valida
 the aux width of its bricks), `test_aux_coupler_bz` / `test_aux_system_bz` / `test_amr_aux_bz` /
 `test_amr_system_bz_pop` / `test_amr_system_bz_multibox` (B_z read and populated along the
 coupler, system, AMR, multi-box paths), `test_aux_te` (T_e derived from `p/rho`), `test_aux_single_source`
-(a single source generates `load_aux` + marshaling, all fields covered). Validated bit-identical on
+(a single source generates all required `load_aux` accesses). Validated bit-identical on
 GH200 (B_z device single + multi-box, cf. GPU_RUNTIME_PORT.md).
 
 ## 22. Runtime composition and multi-species system
@@ -1953,6 +1990,8 @@ pops.run(bound_instance, t_end=..., max_steps=...): # sole execution transition
     authenticate the instance produced by pops.bind
     execute the compiled Program transaction
     publish states, fields and consumers only after accepted attempts
+    return immutable RunReport(accepted/rejected attempts, final clock, stop reason, identities)
+    # max_steps exhaustion or any terminal failure raises; no successful report is fabricated
 ```
 
 **Code.** [`runtime/system.hpp`](../include/pops/runtime/system.hpp) and
@@ -1990,82 +2029,76 @@ and `set_conservative_state` is mono-block only. Without an explicit IMEX mask
 (the assembler assembles, the driver advances), `test_amr_system_coupler`, `test_system_hardening`,
 `test_variable_role` (addressing a component by its physical role rather than by index).
 
-## 23. Symbolic DSL: codegen, JIT, AOT
+## 23. Symbolic DSL and authenticated native components
 
-**Intuition.** A mini-DSL on the Python side describes a model in formulas and emits it as a C++ brick: flux,
-source, elliptic right-hand side, with common subexpression elimination (CSE). Three implementation
-paths, from the most dynamic to the most native, with a growing dispatch / performance / GPU
-trade-off.
+**Intuition.** The Python DSL describes physics and Programs as immutable symbolic data. Resolution
+selects small component interfaces and an exact target; compilation specializes that resolved plan
+into a native artifact. There is one production extension contract: the artifact must authenticate
+its manifest, binary, target and generated interface tables before any runtime state is mutated.
+Host-callback and flat-array model ABIs are not alternate execution modes.
 
-**Formula / discretization.** The DSL emits a `CompositeModel<Hyp, Src, Ell>` (the same type as the native
-composition). The three wirings differ by WHERE the boundary lives and WHAT transits:
-
-- JIT type-erased: the `.so` exposes `IModel<NV>*` (virtual dispatch per cell). Host path,
-  Rusanov order 1, to prototype without recompiling the core. `ModelAdapter<M>` wraps the static
-  model and forwards `source` / `elliptic_rhs` / conversions when `M` exposes them (default otherwise).
-- AOT marshaled: `extern "C"` ABI (`compiled_block_abi.hpp`). The `.so` runs the production path
-  (`assemble_rhs<Limiter, Flux>`, SSPRK2/IMEX) on the `CompositeModel` known at ITS
-  compilation; only flat component-major arrays `c*n*n + j*n + i` cross the `dlopen`
-  (no shared C++ symbol). No AMR nor MPI. The runtime params arrive through the symbols
-  suffixed `_p` (`pvals`, `npar`), seeded by the declaration defaults.
-- AOT native: `add_compiled_model` wires the `CompositeModel` known at compile time as a native
-  block of the `System`, on the real grid context (`grid_context`), without marshaling: the residual
-  does `fill_boundary` (MPI halos) + `assemble_rhs` (Kokkos) on the real MultiFab. To stay
-  device-clean, the transport and the mesh go through named functors (no extended
-  lambdas, which nvcc does not emit reliably cross-TU).
+**Formula / discretization.** Code generation still emits the same local formulas and CSE as the
+builtin path. Authentication does not change the numerical operator: a selected numerical flux is
+called on two qualified `FaceTrace` values, the spatial operator applies face measures and divergence,
+and a Program orders the resulting rates. What crosses the extension boundary is a versioned POD
+request/table protocol, not a C++ object hierarchy or an algorithm name.
 
 ```
-function add_compiled_model(sys, name, model, lim, riem, recon, time, gamma, substeps, ...):  # dsl_block.hpp
-    imex = (time == "imex") ; recon_prim = (recon == "primitive")
-    method = "ssprk3" if time=="ssprk3" else "ssprk2"     # ignore en imex
-    sys.ensure_aux_width( aux_comps<Model>() )            # canal aux assez large (B_z...)
-    ctx = sys.grid_context()                              # vrais dom/CL/aux (zero-copie)
-    clo = make_block(model, lim, riem, ctx, imex, recon_prim, method)   # foncteurs nommes
-    ms  = make_max_speed(model, ctx)
-    pr  = make_poisson_rhs(model)
-    sys.install_block(name, Model::n_vars, conservative_vars, primitive_vars, gamma, clo, ms, pr,
-                      substeps, evolve, stride)
-    sys.set_block_conversion(name, to_primitive, to_conservative)   # cons<->prim du modele
-    sys.set_block_ghosts(name, block_n_ghost(lim))         # weno5 -> 3 ghosts (sinon lecture hors bornes)
+validated = pops.validate(case)
+resolved = pops.resolve(validated, layout=target.layout)
+compiled = pops.compile(resolved)             # exact platform + component identities
+instance = pops.bind(compiled, params=...)    # atomic installation into RuntimeInstance
+report = pops.run(instance, t_end=..., max_steps=...)
 
-# AOT marshale : un .so genere se reduit a
-#   using Model = pops::CompositeModel<...>;  POPS_DEFINE_COMPILED_BLOCK(Model)
-# qui emet pops_compiled_residual/_advance/_max_speed/_poisson_rhs (+ variantes _p params runtime)
-function residual<Model>(U, R, aux_in, n, dx, dy, periodic, lim, riem, recon_prim):  # compiled_block_abi.hpp
-    lg = make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>())
-    Umf = MultiFab(ncomp=n_vars, ghosts=block_n_ghost(lim)) ; fill_interior(Umf, U)
-    clo = make_block(model, lim, riem, ctx, imex=false, recon_prim)
-    clo.rhs_into(Umf, Rmf) ; extract(Rmf, R)               # device_fence() avant la lecture hote
+function load_component(binary, expected, execution):
+    verify binary identity and complete ComponentManifest identity
+    api = resolve("pops_component_interface_v1")
+    verify catalog digest, interface ids, versions and complete table sizes
+    prepared = api.prepare(parameters, exact_target, execution)
+    require prepared.status == CONTINUE
+    return owned handle + prepared resources         # binary remains loaded while callable
 ```
 
-**Code.**
-- JIT: [`runtime/dynamic_model.hpp`](../include/pops/runtime/dynamic/dynamic_model.hpp) (`IModel<NV>`
-  virtual, `ModelAdapter<M>`, `make_dynamic`); `System.add_dynamic_block` wires a virtual-dispatch
-  model (host path, Rusanov, prototyping).
-- AOT marshaled: [`runtime/compiled_block_abi.hpp`](../include/pops/runtime/builders/compiled/compiled_block_abi.hpp)
-  (`make_grid`, `fill_interior` / `extract`, `residual` / `advance` / `max_speed` / `poisson_rhs`,
-  macro `POPS_DEFINE_COMPILED_BLOCK`, runtime params via `make_model_with_params` and the symbols
-  `_p`); `System.add_compiled_block` (`extern "C"` ABI, without AMR nor MPI).
-- AOT native: [`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/dsl_block.hpp) (`add_compiled_model`,
-  wires a `CompositeModel` known at compile time as a native block, `ensure_aux_width` +
-  `grid_context` + `make_block` + `install_block` + `set_block_ghosts`). The
-  device-clean machinery is `runtime/block_builder.hpp` (named functors `BlockRhsEval`, `AdvanceExplicit`,
-  `AdvanceImex`, `MaxSpeed`; see the seam section 24).
+Each hot-path interface is resolved and prepared once. Calls then use its typed bulk request and an
+explicit execution context (dimension, scalar and precision, memory space, backend/device, stream and
+communicator identities). An unsupported target or a `retry` / `reject` / `failed` outcome propagates
+as a declared transaction action; it is never converted to a neutral numerical value.
 
-**Constraints / remarks.** The type-erased JIT costs an indirect jump per cell (out of the
-high-performance hot path); the AOT marshaled recopies the arrays at each call but stays mono-rank; the AOT
-native is the only zero-copy / GPU / MPI / AMR path. The native path loads a `.so` via a loader
-([`runtime/native_loader.hpp`](../include/pops/runtime/builders/compiled/native_loader.hpp)) which compares an ABI key
-(`abi_key`: header signature, compiler, C++ standard) between the model's `.so` and the module
-already loaded; a divergence is refused cleanly (no loading of an incompatible `.so`). The
-parity is locked at each level.
-**Validation.** On the C++ side: `test_dynamic_model` (type-erased model == static Euler),
-`test_block_builder` (block closures instantiable outside System), `test_compiled_model_parity`
-(AOT native == native block on CPU/Serial), `test_amr_compiled_model` (AOT native on an AMR hierarchy).
-On the Python side: the `test_dsl*` suite (flux/source/elliptic codegen, CSE, JIT `.so`, type-erased
-dispatch, recon, roles, aux). On GH200, the named-functor path is validated bit-identical
-(GPU_RUNTIME_PORT.md, phase 9); `add_compiled_model` with extended lambdas still hits an nvcc
-limit (phase 8).
+**Code.** The public package lifecycle is documented in
+[`design/external-component-packages.md`](design/external-component-packages.md). The generated C/POD
+tables live in
+[`runtime/generated_component_abi.hpp`](../include/pops/runtime/config/generated_component_abi.hpp),
+and [`runtime/component_loader.hpp`](../include/pops/runtime/dynamic/component_loader.hpp) authenticates
+the expected component/catalog identities, exact interfaces and execution context before preparing
+resources. Interface consumers are independent; adding a writer, boundary, tagging, transfer, reflux,
+field-solve or numerical-flux implementation does not add a central scientific switch.
+
+A generated whole-block artifact still reaches `System` or `AmrSystem` through the private binding
+seam named `_install_native_block`. It is owned by `pops.bind` and the resulting `RuntimeInstance`, not
+by public authoring. [`runtime/native_loader.hpp`](../include/pops/runtime/builders/compiled/native_loader.hpp)
+checks the ABI key, route manifest, parameter count and required installer symbol before generated
+code calls [`runtime/dsl_block.hpp`](../include/pops/runtime/builders/compiled/dsl_block.hpp) on the real
+grid context. This is an internal specialization of the same resolved plan, not a second user-facing
+registration API.
+
+[`runtime/flat_grid.hpp`](../include/pops/runtime/builders/compiled/flat_grid.hpp) remains only as the
+explicit local 2D flat-array adapter used by
+[`runtime/external_riemann_brick.hpp`](../include/pops/runtime/program/external_riemann_brick.hpp).
+It is neither the component ABI nor a Uniform/AMR/MPI fallback, and it confers no capability beyond
+that adapter's declared target.
+
+**Constraints / remarks.** A shared-object path alone proves nothing. Installation refuses a missing
+or unexpected symbol, digest, catalog version, interface, table prefix, platform identity or execution
+context before publishing the component. Prepared resources retain their owning handle and are tied
+to one exact execution identity. The runtime freezes registrations after bind, and output/effect
+components publish only for an accepted transaction.
+
+**Validation.** `test_amr_native_loader` covers authenticated interface discovery, preparation,
+table truncation and forged/missing declarations. `test_external_component_package` covers package,
+binary and symbol authentication; `test_external_interface_backend` locks generated interface-table
+selection. `test_multi_layout_runtime` and `test_shared_interface_runtime` exercise installed
+components through the runtime layouts rather than an alternate engine. The existing
+device/MPI suites validate the named-functor kernels used by generated native blocks.
 
 ## 24. The dispatch seam (Kokkos: Serial / OpenMP / Cuda / MPI)
 

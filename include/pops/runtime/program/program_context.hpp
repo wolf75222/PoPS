@@ -70,12 +70,52 @@ class ProgramContext {
     sys_->install_program_step(std::move(step));
   }
 
+  /// Start one generated Program body.  The native stepper supplies the accepted local dt; every
+  /// boundary evaluation in the body derives its physical time from this exact value and the
+  /// authored rational stage fraction.
+  void begin_step(double dt) const {
+    if (!std::isfinite(dt) || dt <= 0.0)
+      throw std::invalid_argument("Program boundary clock requires a finite positive dt");
+    current_dt_ = dt;
+    stage_time_ = amr::Rational(0, 1);
+  }
+
   /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
   /// interpolation to update, but the shared generated body must retain and validate the same temporal
   /// contract as its AMR entry point. This is therefore a validated semantic no-op, not a fallback.
   void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
     if (denominator <= 0 || numerator < 0 || numerator > denominator)
       throw std::runtime_error("Program stage time is outside [0,1]");
+    stage_time_ = amr::Rational(numerator, denominator);
+  }
+
+  void configure_primary_clock(const std::string& clock) const {
+    clock_schedule_.configure_primary_clock(clock);
+    primary_clock_ = clock;
+  }
+  void declare_clock_relation(
+      const std::string& parent, const std::string& child, int count) const {
+    clock_schedule_.declare_relation(parent, child, count);
+  }
+  bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
+                              const std::string& stage_identity, int level) const {
+    return clock_schedule_.coordinate(
+        kind, clock, stage_identity, level, -1, macro_step()).has_value();
+  }
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind,
+                       const std::string& clock, const std::string& stage_identity,
+                       int level) const {
+    if (node_id < 0 || every_n <= 0)
+      throw std::runtime_error("Program schedule requires a valid node and positive period");
+    const auto coordinate = clock_schedule_.coordinate(
+        kind, clock, stage_identity, level, -1, macro_step());
+    return coordinate && coordinate->value % every_n == 0;
+  }
+  bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
+                         const std::string& stage_identity, int level) const {
+    const auto coordinate = clock_schedule_.coordinate(
+        kind, clock, stage_identity, level, -1, macro_step());
+    return coordinate && coordinate->value == 0;
   }
 
   ClockScheduleState::SubcycleScope subcycle_scope(
@@ -127,6 +167,13 @@ class ProgramContext {
   SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     count_kernel();
     return sys_->solve_fields_from_state(sys_block(b), u_stage);
+  }
+  SolveReport solve_fields_from_state_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      const std::string& provider_slot, int b, MultiFab& u_stage) const {
+    count_kernel();
+    return sys_->solve_fields_from_state_at(
+        point, provider_slot, sys_block(b), u_stage);
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -233,9 +280,67 @@ class ProgramContext {
   }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
   void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
-    (void)rate_id;
     count_kernel();
-    sys_->block_rhs_into(sys_block(b), u, r);
+    sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
+  }
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(
+      int stage_id) const {
+    return boundary_point_(stage_id);
+  }
+  bool has_boundary_linearization(int b) const {
+    return sys_->block_has_boundary_linearization(sys_block(b));
+  }
+  void rhs_core_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& u, MultiFab& r, bool flux_only) const {
+    count_kernel();
+    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
+  }
+  void boundary_residual_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& u, MultiFab& c) const {
+    count_kernel();
+    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
+  }
+  void boundary_jvp_into_at(
+      const runtime::multiblock::BoundaryEvaluationPoint& point,
+      int b, MultiFab& u, const MultiFab& v, MultiFab& j) const {
+    count_kernel();
+    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
+  }
+
+  struct RhsGroupRequest {
+    int block = -1;
+    MultiFab* state = nullptr;
+    MultiFab* rhs = nullptr;
+    int rate_id = -1;
+    int flux_only = 0;
+  };
+
+  /// Simultaneous multi-block rate evaluation.  The generated Program emits one group only for RHS
+  /// nodes authenticated at the same exact StagePoint; System then executes each installed interface
+  /// once before any group result can be consumed.
+  void rhs_group(std::initializer_list<RhsGroupRequest> requests) const {
+    if (requests.size() == 0)
+      throw std::invalid_argument("Program RHS group cannot be empty");
+    std::vector<int> blocks;
+    std::vector<MultiFab*> states;
+    std::vector<MultiFab*> rhs;
+    std::vector<int> flux_only;
+    blocks.reserve(requests.size());
+    states.reserve(requests.size());
+    rhs.reserve(requests.size());
+    flux_only.reserve(requests.size());
+    int stage = -1;
+    for (const auto& request : requests) {
+      count_kernel();
+      if (stage < 0) stage = request.rate_id;
+      blocks.push_back(sys_block(request.block));
+      states.push_back(request.state);
+      rhs.push_back(request.rhs);
+      flux_only.push_back(request.flux_only);
+    }
+    sys_->block_rhs_group(boundary_point_(stage), blocks, states, rhs, flux_only);
   }
 
   /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
@@ -246,9 +351,8 @@ class ProgramContext {
   /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
   /// like @ref rhs_into.
   void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
-    (void)rate_id;
     count_kernel();
-    sys_->block_neg_div_flux_into(sys_block(b), u, r);
+    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
 
   /// r <- S(u, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
@@ -503,6 +607,10 @@ class ProgramContext {
     count_kernel();
     pops::saxpy(u, a, r);
   }
+  void axpy(MultiFab& u, Real a, const MultiFab& r, Real /*dt*/,
+            std::initializer_list<ExactCoefficientTerm> /*exact*/) const {
+    axpy(u, a, r);
+  }
 
   /// z <- a x + b y over the valid cells (assignment, not accumulation; z may alias x or y).
   /// Forwards to pops::lincomb. The codegen uses it for the committed stage: the block state becomes
@@ -510,6 +618,11 @@ class ProgramContext {
   void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
     count_kernel();
     pops::lincomb(z, a, x, b, y);
+  }
+  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real /*dt*/,
+               std::initializer_list<ExactCoefficientTerm> /*exact_a*/,
+               std::initializer_list<ExactCoefficientTerm> /*exact_b*/) const {
+    lincomb(z, a, x, b, y);
   }
 
   /// Publish a complete multi-state commit group only after every target/source pair validates.
@@ -783,11 +896,22 @@ class ProgramContext {
   /// @}
 
  private:
+  runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+    if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
+    return {primary_clock_, static_cast<std::int64_t>(macro_step()), 0, 0, stage,
+            stage_time_, current_dt_,
+            static_cast<double>(physical_time()) + stage_time_.value() * current_dt_};
+  }
+
   static std::runtime_error block_map_error_(std::string message) {
     return std::runtime_error(std::move(message));
   }
 
   mutable ClockScheduleState clock_schedule_;
+  mutable std::string primary_clock_;
+  mutable amr::Rational stage_time_{0, 1};
+  mutable double current_dt_ = 0.0;
   mutable std::array<MultiFab*, 4> polar_coeffs_{{nullptr, nullptr, nullptr, nullptr}};
   mutable std::shared_ptr<PolarTensorKrylovSolver> polar_tensor_;
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;

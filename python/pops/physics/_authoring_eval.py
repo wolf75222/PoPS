@@ -3,7 +3,7 @@
 Host-side evaluators (``flux`` / ``max_wave_speed`` / ``wave_speeds_value`` /
 ``source_value`` / ``projection_value``-adjacent helpers) plus ``check`` /
 ``check_model``. Methods only; all touched attributes are created by
-``HyperbolicModel.__init__``. Imports numpy, :mod:`pops.ir` and the aux/role
+``HyperbolicModel.__init__``. Imports numpy, :mod:`pops._ir` and the aux/role
 helpers; codegen-free and ``_pops``-free.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from pops.ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
+from pops._ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
 
 from .aux import roles_for
 

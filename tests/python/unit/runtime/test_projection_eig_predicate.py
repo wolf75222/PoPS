@@ -48,9 +48,9 @@ import numpy as np
 # dependent pas de l'extension compilee _pops.
 from types import SimpleNamespace
 
-from pops.ir.expr import Const, Var
-from pops.ir.ops import abs_, eig_all_real
-from pops.ir.visitors import _key
+from pops._ir.expr import Const, Var
+from pops._ir.ops import abs_, eig_all_real
+from pops._ir.visitors import _key
 from pops.physics._model import HyperbolicModel
 
 dsl = SimpleNamespace(Const=Const, Var=Var, abs_=abs_, eig_all_real=eig_all_real, _key=_key,

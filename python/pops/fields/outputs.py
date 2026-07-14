@@ -6,7 +6,7 @@ from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
-from pops.ir.expr import Expr
+from pops._ir.expr import Expr
 from pops.model import Handle
 
 from ._identity import strict_field_data

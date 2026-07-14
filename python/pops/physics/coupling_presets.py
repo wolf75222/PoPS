@@ -20,7 +20,7 @@ evaluating ``S`` (frozen-register additive split), whereas the helper folded ``d
 ``(dt * k) * ...`` by at most one ULP per step. The presets are therefore NEAR-EXACT to the old helpers
 (~1e-16 per step), not bit-exact -- documented in the CHANGELOG, same precedent as ``strang.py``.
 
-Import-graph rule (Spec 4): pure ``pops.ir`` / ``pops.physics.multispecies`` + stdlib. No codegen /
+Import-graph rule (Spec 4): pure ``pops._ir`` / ``pops.physics.multispecies`` + stdlib. No codegen /
 ``_pops`` import; the preset only BUILDS a CoupledSource, the install layer compiles and registers it.
 """
 from __future__ import annotations
@@ -189,9 +189,9 @@ def coupling_operator_args(compiled: Any, conserved: Any = (), created: Any = ()
 def lower_named_coupling(coupling: Any, gamma_of: Any) -> Any:
     """Lower a named coupling object to its :class:`ContractedCoupling` preset, or ``None`` (ADC-595).
 
-    Dispatches ``pops.Ionization`` / ``Collision`` / ``ThermalExchange`` (duck-typed by their fields, to
-    avoid importing the ``pops.runtime.bricks`` scheme classes here and creating a cycle) to the matching
-    preset builder. ``ThermalExchange`` reads each block's adiabatic index via the @p gamma_of callback
+    Dispatches the private native-engine ``Ionization`` / ``Collision`` / ``ThermalExchange``
+    values (duck-typed by their fields to avoid a runtime import cycle) to the matching preset
+    builder. ``ThermalExchange`` reads each block's adiabatic index via the @p gamma_of callback
     (``lambda name: sim.block_gamma(name)``), inlined as a per-block ``.param()``, exactly like the
     deleted ``System::add_thermal_exchange`` read ``P->sp[ia].gamma``. Returns ``None`` for any object
     that is not a named coupling (the caller then handles the generic CompiledCoupledSource path)."""

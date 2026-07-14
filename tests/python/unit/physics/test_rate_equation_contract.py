@@ -5,8 +5,7 @@ from fractions import Fraction
 
 import pytest
 
-from pops.ir import Divergence, Equation, RateExpr, TimeDerivative
-from pops.math import ddt, div
+from pops.math import Divergence, Equation, RateExpr, TimeDerivative, ddt, div
 from pops.model import OperatorHandle, OwnerKind
 from pops.physics import Density, Model
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS

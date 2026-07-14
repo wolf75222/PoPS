@@ -35,12 +35,12 @@ from pops.fields import (
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition
-from pops.ir import ValueExpr
+from pops.math import ValueExpr
 from pops.layouts import AMR, Uniform
 from pops.lib.amr import EllipticRecompute, StateTransfer
 from pops.lib.initial import Constant
 from pops.math import ddt, div, laplacian
-from pops.mesh import CartesianGrid, CartesianMesh
+from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
@@ -192,7 +192,12 @@ def resolve_periodic_field_program(
     case.program(program)
 
     if target == "system":
-        layout = Uniform(CartesianMesh(n=n, periodic=True))
+        grid_frame = _frame("%s-uniform-grid" % name)
+        layout = Uniform(CartesianGrid(
+            frame=grid_frame,
+            cells=(n, n),
+            periodic=PeriodicAxes(grid_frame.axes),
+        ))
     else:
         case.initials.add(
             InitialCondition(

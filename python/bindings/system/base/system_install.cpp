@@ -7,6 +7,7 @@
 
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
+#include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 
 namespace pops {
 
@@ -163,7 +164,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
     // out of bounds. No-op for a base (n_aux=3) model -> bit-identical.
     P->ensure_aux_width(bb.aux_width);
   } else {
-    const GridContext ctx = P->grid_ctx();
+    const GridContext ctx = P->grid_ctx(name);
     // Newton options of the IMEX implicit source (defaults = historical constants, bit-identical).
     // The report lives in diagnostics_.newton_reports in a shared_ptr -> STABLE address captured by
     // the closures even when the map reallocates at a later add_block. It is allocated for explicit
@@ -298,6 +299,207 @@ POPS_EXPORT GridContext System::grid_context() {
   return p_->grid_ctx();
 }
 
+POPS_EXPORT GridContext System::grid_context(const std::string& name) {
+  return p_->grid_ctx(name);
+}
+
+namespace {
+BCType prepared_bc_type(const std::string& token) {
+  if (token == "periodic")
+    return BCType::Periodic;
+  if (token == "foextrap")
+    return BCType::Foextrap;
+  if (token == "dirichlet")
+    return BCType::Dirichlet;
+  if (token == "external")
+    return BCType::External;
+  throw std::runtime_error("System::install_boundary_plan: unsupported face producer '" + token +
+                           "'");
+}
+
+void set_prepared_face(BCRec& bc, int face, BCType type, Real value) {
+  switch (face) {
+    case 0:
+      bc.xlo = type;
+      bc.xlo_val = value;
+      return;
+    case 1:
+      bc.xhi = type;
+      bc.xhi_val = value;
+      return;
+    case 2:
+      bc.ylo = type;
+      bc.ylo_val = value;
+      return;
+    case 3:
+      bc.yhi = type;
+      bc.yhi_val = value;
+      return;
+    default:
+      throw std::runtime_error("System::install_boundary_plan: invalid face ordinal");
+  }
+}
+}  // namespace
+
+POPS_EXPORT void System::install_block_state_route(
+    const std::string& name, const std::string& state_identity) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_block_state_route");
+  if (!P->sp.empty())
+    throw std::runtime_error(
+        "System::install_block_state_route must precede block materialization");
+  if (name.empty() || state_identity.empty() || P->block_state_identities_.count(name) != 0)
+    throw std::runtime_error(
+        "System block state route requires unique non-empty block/state identities");
+  for (const auto& [_, installed_identity] : P->block_state_identities_)
+    if (installed_identity == state_identity)
+      throw std::runtime_error(
+          "System block state route has a duplicate qualified state identity");
+  P->block_state_identities_.emplace(name, state_identity);
+}
+
+POPS_EXPORT void System::install_boundary_plan(const std::string& name,
+                                               const std::string& identity,
+                                               int required_depth,
+                                               const std::vector<std::string>& face_types,
+                                               const std::vector<double>& face_values, int ncomp,
+                                               const std::vector<int>& omitted_interface_faces,
+                                               const std::string& state_identity) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_boundary_plan");
+  if (name.empty() || state_identity.empty())
+    throw std::runtime_error(
+        "System::install_boundary_plan requires block and state-qualified identities");
+  const auto state_route = P->block_state_identities_.find(name);
+  if (state_route == P->block_state_identities_.end() ||
+      state_route->second != state_identity)
+    throw std::runtime_error(
+        "System::install_boundary_plan state differs from the exact block state route");
+  if (P->boundary_plans_.count(name) != 0)
+    throw std::runtime_error("System::install_boundary_plan duplicate block '" + name + "'");
+  if (ncomp < 1 || face_types.size() != 4 ||
+      face_values.size() != static_cast<std::size_t>(4 * ncomp))
+    throw std::runtime_error(
+        "System::install_boundary_plan requires four face types and ncomp*4 values");
+  std::vector<BCRec> components(static_cast<std::size_t>(ncomp));
+  for (int comp = 0; comp < ncomp; ++comp) {
+    for (int face = 0; face < 4; ++face) {
+      set_prepared_face(components[static_cast<std::size_t>(comp)], face,
+                        prepared_bc_type(face_types[static_cast<std::size_t>(face)]),
+                        static_cast<Real>(
+                            face_values[static_cast<std::size_t>(4 * comp + face)]));
+    }
+  }
+  auto plan = std::make_shared<PreparedBoundaryPlan>(identity, required_depth,
+                                                     std::move(components),
+                                                     omitted_interface_faces,
+                                                     state_identity);
+  for (const auto& [_, installed] : P->boundary_plans_)
+    if (installed->state_identity() == state_identity)
+      throw std::runtime_error(
+          "System::install_boundary_plan duplicate qualified state identity");
+  P->boundary_plans_.emplace(name, std::move(plan));
+}
+
+POPS_EXPORT void System::install_boundary_field_route(
+    const std::string& field_identity, const std::string& provider_slot) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_boundary_field_route");
+  if (field_identity.empty() || provider_slot.empty() ||
+      !P->boundary_field_routes_.emplace(field_identity, provider_slot).second)
+    throw std::runtime_error(
+        "System boundary field route requires unique non-empty qualified identities");
+}
+
+POPS_EXPORT void System::discard_boundary_plans() {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "discard_boundary_plans");
+  if (!P->sp.empty())
+    throw std::runtime_error(
+        "System::discard_boundary_plans is restricted to a failed pre-block transaction");
+  P->boundary_plans_.clear();
+  P->block_state_identities_.clear();
+  P->boundary_field_routes_.clear();
+}
+
+POPS_EXPORT void System::install_ghost_boundary_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_ghost_boundary_component");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "System::install_ghost_boundary_component requires an installed block boundary plan");
+  found->second->install_ghost_component(std::move(spec), std::move(component));
+}
+
+POPS_EXPORT void System::install_field_boundary_residual_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_field_boundary_residual_component");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "System field boundary residual requires an installed block boundary plan");
+  found->second->install_residual_component(std::move(spec), std::move(component));
+}
+
+POPS_EXPORT void System::install_field_boundary_jvp_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_field_boundary_jvp_component");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "System field boundary JVP requires an installed block boundary plan");
+  found->second->install_jvp_component(std::move(spec), std::move(component));
+}
+
+POPS_EXPORT void System::install_interface_flux_component(
+    runtime::multiblock::AxisAlignedInterface route,
+    runtime::multiblock::PreparedInterfaceFluxSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "install_interface_flux_component");
+  if (route.identity.empty() || spec.interface_identity != route.identity)
+    throw std::invalid_argument(
+        "System shared-interface route/spec identity mismatch");
+  if (!spec.execution)
+    throw std::invalid_argument(
+        "System shared-interface component lacks exact ExecutionContext");
+  spec.normal_axis = route.left_axis == runtime::multiblock::InterfaceAxis::X ? 0 : 1;
+  spec.outward_sign = route.left_side == runtime::multiblock::InterfaceSide::Low ? -1 : 1;
+  spec.face_measure = spec.normal_axis == 0 ? static_cast<double>(P->geom.dy())
+                                            : static_cast<double>(P->geom.dx());
+  const PopsExecutionContextV1 execution = spec.execution->view();
+  P->blocks_.install_interface_flux(
+      std::move(route), P->geom, P->geom, execution,
+      [spec = std::move(spec), component = std::move(component)]() mutable {
+        auto prepared =
+            std::make_shared<runtime::multiblock::PreparedInterfaceFluxComponent>(
+                std::move(spec), std::move(component));
+        return runtime::multiblock::InterfaceFluxEvaluator(
+            [prepared](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                       const runtime::multiblock::InterfaceFluxBatch& batch) {
+              prepared->evaluate(point, batch);
+            });
+      });
+}
+
+POPS_EXPORT std::size_t System::interface_evaluation_count(
+    const std::string& identity, int level) const {
+  return p_->blocks_.interface_evaluation_count(identity, level);
+}
+
+POPS_EXPORT void System::discard_interface_flux_components() {
+  Impl* P = p_.get();
+  require_assembling(P->lifecycle_, "discard_interface_flux_components");
+  P->blocks_.discard_interface_fluxes();
+}
+
 // Installs a block from already-built closures (by dispatch_model on the add_block side, or by
 // block_builder on the add_compiled_model side). Centralizes the creation of the species (U, names, scheme).
 POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
@@ -313,6 +515,15 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
                                 stride, gamma, std::move(closures.advance),
                                 std::move(closures.rhs_into), std::move(max_speed),
                                 std::move(poisson_rhs)});
+  if (!P->block_state_identities_.empty()) {
+    const auto state_route = P->block_state_identities_.find(name);
+    if (state_route == P->block_state_identities_.end()) {
+      P->sp.pop_back();
+      throw std::runtime_error(
+          "System materialized block has no exact qualified state route");
+    }
+    P->sp.back().state_identity = state_route->second;
+  }
   P->sp.back().U.set_val(Real(0));
   P->sp.back().cons_vars = cons_vars;
   P->sp.back().prim_vars = prim_vars;
@@ -333,6 +544,18 @@ POPS_EXPORT void System::install_block(const std::string& name, int ncomp,
   // SourceInto<Model>); empty only for an incomplete internal closure provider ->
   // block_source_into fails loud rather than silently leaking the flux.
   P->sp.back().source_only = std::move(closures.source_only);
+  P->sp.back().rhs_at_point = std::move(closures.rhs_at_point);
+  P->sp.back().rhs_flux_only_at_point = std::move(closures.rhs_flux_only_at_point);
+  P->sp.back().rhs_without_prepared_interfaces =
+      std::move(closures.rhs_without_prepared_interfaces);
+  P->sp.back().rhs_flux_only_without_prepared_interfaces =
+      std::move(closures.rhs_flux_only_without_prepared_interfaces);
+  P->sp.back().rhs_core_at_point = std::move(closures.rhs_core_at_point);
+  P->sp.back().rhs_flux_only_core_at_point =
+      std::move(closures.rhs_flux_only_core_at_point);
+  P->sp.back().boundary_residual_at_point =
+      std::move(closures.boundary_residual_at_point);
+  P->sp.back().boundary_jvp_at_point = std::move(closures.boundary_jvp_at_point);
   EffectiveBlockOptions& opt = P->diagnostics_.block_options[name];
   opt.name = name;
   if (opt.route.empty())
@@ -404,9 +627,8 @@ System::SourceNewtonReport System::newton_report(const std::string& name) const 
   if (rp == nullptr)
     throw std::runtime_error(
         "System::newton_report : Newton diagnostics not enabled for block '" + name +
-        "' ; add the block with newton_diagnostics=true "
-        "(pops.IMEX(newton_diagnostics=True) / pops.SourceImplicit(newton_diagnostics=True)) "
-        "or newton_fail_policy='warn'/'throw'");
+        "' ; enable diagnostics on the installed private implicit-solve policy or set "
+        "newton_fail_policy='warn'/'throw'");
   const NewtonReport& r = *rp;
   return SourceNewtonReport{r.enabled,
                             r.converged,

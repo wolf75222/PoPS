@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """ADC-529: a board Equation refuses bool() / if equation:.
 
-``lhs == rhs`` on a board node builds an inspectable :class:`pops.ir.expr.Equation`, NOT a truth
+``lhs == rhs`` on a board node builds an inspectable :class:`pops._ir.expr.Equation`, NOT a truth
 value. Using it as a Python condition (``if ddt(U) == R:`` / ``bool(ddt(U) == R)``) is almost always
 a mistaken comparison, so both the Equation and the bare board node refuse ``__bool__`` with a
 sourced symbolic-truth diagnostic. ``==`` itself still builds an Equation.
 
-Pure Python (pops.ir only, no numerics / no _pops); skips if pops is not importable.
+Pure Python (pops._ir only, no numerics / no _pops); skips if pops is not importable.
 """
 import sys
 
 try:
     from pops import math as bm
-    from pops.ir.expr import Equation
+    from pops.math import Equation
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_equation_not_bool (pops unavailable: %s)" % exc)
     sys.exit(0)

@@ -19,7 +19,7 @@ import pytest
 
 pops = pytest.importorskip("pops")
 from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan  # noqa: E402
-from pops.codegen.compiled_artifact import (  # noqa: E402
+from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledBlockArtifact,
     CompiledSimulationArtifact,
 )
@@ -61,14 +61,18 @@ def test_ghost_depth_by_block_is_serializable_plain_values():
 
 # --- 3: build_arguments populates the per-block map keyed by committed block --------------------
 
-def _compiled(blocks):
+def _compiled(blocks, *, ghost_depth=2):
     """Build the exact compiled artifact around a real typed Program, without a shared object."""
     module = Module("ghost-depth-model")
     state = module.state_space("U", ("rho", "mx", "my"))
     declarations = tuple((name, state) for name in blocks)
     program, _, problem, endpoints = typed_program_states(
         "gas_program", module, declarations)
-    program.commit_many({endpoint.next: endpoint.n for endpoint in endpoints.values()})
+    program.commit_many({
+        endpoint.next: program.value(
+            "%s_next" % name, endpoint.n, at=endpoint.next.point)
+        for name, endpoint in endpoints.items()
+    })
 
     model = CompiledModel(
         so_path="/nonexistent/ghost-depth.so", backend="production",
@@ -89,10 +93,15 @@ def _compiled(blocks):
         backend="production",
         layout=None,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "system" for row in layout_plan.layouts
+        },
         time={"program": "gas_program"},
         blocks=tuple(
             ResolvedBlock(
-                name, {"model": "ghost-depth-model"}, None, "production", ("U",))
+                name, {"model": "ghost-depth-model"},
+                None if ghost_depth is None else {"ghost_depth": ghost_depth},
+                "production", ("U",), ("test::%s::state::U" % name,))
             for name in blocks
         ),
         bind_schema=schema,
@@ -112,6 +121,8 @@ def _compiled(blocks):
         cxx = "c++"
         std = "c++23"
         program_name = "gas_program"
+        program_block_routes = tuple(enumerate(blocks))
+        program_param_routes = ()
 
         def commits(self):
             return program.commits()
@@ -138,7 +149,9 @@ def _compiled(blocks):
         plan=plan,
         program=compiled_program,
         blocks=tuple(
-            CompiledBlockArtifact(name, model, None, ("U",)) for name in blocks),
+            CompiledBlockArtifact(
+                resolved.name, model, resolved.spatial, resolved.state_spaces)
+            for resolved in plan.blocks),
     )
     compiled_program.artifact = artifact
     return artifact
@@ -153,6 +166,16 @@ def test_build_arguments_keys_ghost_depth_by_block():
     scalar = lr["ghost_depth"]
     assert all(d == scalar for d in lr["ghost_depth_by_block"].values()), \
         "per-block depth agrees with the scalar"
+
+
+def test_build_arguments_derives_weno_depth_and_refuses_missing_plan_depth():
+    from pops.codegen.inspect_compiled import build_arguments
+
+    args = build_arguments(_compiled(("ions",), ghost_depth=3))
+    assert args.layout_runtime["ghost_depth"] == 3
+    assert args.layout_runtime["ghost_depth_by_block"] == {"ions": 3}
+    with pytest.raises(ValueError, match="no exact ghost depth"):
+        build_arguments(_compiled(("ions",), ghost_depth=None))
 
 
 # --- 4: build_compiled_manifest threads the per-block map ---------------------------------------

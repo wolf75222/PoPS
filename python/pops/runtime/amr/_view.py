@@ -111,9 +111,11 @@ class AmrRuntimeView:
             coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
 
     def explain_regrid(self) -> Any:
-        """Return a :class:`RegridReport` of the regrid cadence + union-tag criteria."""
+        """Return the regrid policy plus live completed-regrid/topology counters."""
         regrid_every = int(self._sim._regrid_every)
         frozen = regrid_every == 0
+        regrid_count = int(self._sim._s.checkpoint_regrid_count())
+        topology_epoch = int(self._sim._s.checkpoint_topology_epoch())
         # The union-of-tags criteria shape, as the multi-block route documents it (the exact
         # threshold lives on the native model; we name the criteria, not a fabricated number).
         # Refinement is declared by the structured AMR layout's tagging authority.
@@ -129,7 +131,14 @@ class AmrRuntimeView:
                          "(bit-identical, no dynamic regrid).")
         else:
             notes.append("a cell is tagged when ANY criterion fires (cell-by-cell OR).")
-        return RegridReport(regrid_every=regrid_every, frozen=frozen, criteria=criteria, notes=notes)
+        return RegridReport(
+            regrid_every=regrid_every,
+            frozen=frozen,
+            regrid_count=regrid_count,
+            topology_epoch=topology_epoch,
+            criteria=criteria,
+            notes=notes,
+        )
 
     def explain_ghosts(self) -> Any:
         """Return a :class:`GhostReport`; the per-level ghost depth is honestly unavailable."""
@@ -195,11 +204,11 @@ class AmrRuntimeView:
         :class:`HierarchySnapshot` (config envelope + live patches), the live
         :class:`PatchReport` again as its own key, the :class:`RegridReport` (cadence + union-tag
         criteria), and the capability ``limitations`` (the non-available native-route rows from
-        :func:`pops.native_capability_report`, the same source :mod:`pops.problem`'s route matrix
+        the native capability report, from the same source as :mod:`pops.problem`'s route matrix,
         reads). This REPLACES the pre-ADC-589 shape (bare ``HierarchySnapshot``); the snapshot
         itself is unchanged and still reachable directly via :meth:`hierarchy_snapshot`.
         """
-        from pops import native_capability_report
+        from pops._capabilities import native_capability_report
 
         limitations = [row.to_dict() for row in native_capability_report().routes
                        if row.status != "available"]

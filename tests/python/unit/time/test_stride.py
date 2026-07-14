@@ -22,9 +22,8 @@ Semantique verifiee = HOLD-THEN-CATCH-UP (rattrapage en FIN de fenetre) :
 
 import sys
 import numpy as np
-import pops
-from pops.runtime.bricks import Dirichlet
-from pops.codegen.loader import CompiledModel
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -55,9 +54,9 @@ def meshx(n):
 def diocotron_model(n0=1.0):
     """Modele scalaire ExB avec fond neutralisant (alpha=1, n0). Domaine NON periodique
     (Dirichlet) : le second membre peut avoir une integrale non nulle."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=n0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=n0))
 
 
 dt = 0.001
@@ -69,12 +68,12 @@ xs = meshx(n)
 rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * xs)[None, :] * np.ones((n, 1))
 
 s_ref = System(n=n, periodic=False)
-s_ref.block("ne", diocotron_model(), time=pops.Explicit(substeps=1))
+s_ref.block("ne", diocotron_model(), time=engine.Explicit(substeps=1))
 s_ref.set_poisson(bc=Dirichlet())
 s_ref.set_density("ne", rho0)
 
 s_s1 = System(n=n, periodic=False)
-s_s1.block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
+s_s1.block("ne", diocotron_model(), time=engine.Explicit(substeps=1, stride=1))
 s_s1.set_poisson(bc=Dirichlet())
 s_s1.set_density("ne", rho0)
 
@@ -97,7 +96,7 @@ n = 32
 rho0 = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim = System(n=n, periodic=False)
-sim.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
+sim.block("ne", diocotron_model(), time=engine.Explicit(stride=M))
 sim.set_poisson(bc=Dirichlet())
 sim.set_density("ne", rho0)
 
@@ -146,14 +145,14 @@ n = 32
 rho_init = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_slow = System(n=n, periodic=False)
-sim_slow.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
+sim_slow.block("ne", diocotron_model(), time=engine.Explicit(stride=M))
 sim_slow.set_poisson(bc=Dirichlet())
 sim_slow.set_density("ne", rho_init.copy())
 for _ in range(M):
     sim_slow.step(dt)  # 5 pas : le bloc rattrape UNE fois (macro_step 4) avec dt_eff=5*dt
 
 sim_direct = System(n=n, periodic=False)
-sim_direct.block("ne", diocotron_model(), time=pops.Explicit(stride=1))
+sim_direct.block("ne", diocotron_model(), time=engine.Explicit(stride=1))
 sim_direct.set_poisson(bc=Dirichlet())
 sim_direct.set_density("ne", rho_init.copy())
 sim_direct.step(M * dt)  # un seul pas de M*dt
@@ -172,13 +171,13 @@ cfl = 0.4
 M = 4
 
 sim_cfl1 = System(n=n, periodic=False)
-sim_cfl1.block("ne", diocotron_model(), time=pops.Explicit(stride=1))
+sim_cfl1.block("ne", diocotron_model(), time=engine.Explicit(stride=1))
 sim_cfl1.set_poisson(bc=Dirichlet())
 sim_cfl1.set_density("ne", rho_cfl.copy())
 dt1 = sim_cfl1.step_cfl(cfl)
 
 sim_cflM = System(n=n, periodic=False)
-sim_cflM.block("ne", diocotron_model(), time=pops.Explicit(stride=M))
+sim_cflM.block("ne", diocotron_model(), time=engine.Explicit(stride=M))
 sim_cflM.set_poisson(bc=Dirichlet())
 sim_cflM.set_density("ne", rho_cfl.copy())
 dtM = sim_cflM.step_cfl(cfl)
@@ -192,18 +191,18 @@ chk(abs(ratio - 1.0 / M) < 1e-9,
 # ---- 5. evolve=False : bloc gele, toujours dans le Poisson ---------------------
 print("== evolve=False : bloc gele, second membre Poisson preserve ==")
 n = 32
-ne_model = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(),
-                     elliptic=pops.ChargeDensity(charge=-1.0))
-ni_model = pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(),
-                     elliptic=pops.ChargeDensity(charge=1.0))
+ne_model = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(),
+                     elliptic=engine.ChargeDensity(charge=-1.0))
+ni_model = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(),
+                     elliptic=engine.ChargeDensity(charge=1.0))
 rho_e_ev = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 rho_bg_ev = 0.5 * np.ones((n, n))
 
 sim_ev = System(n=n, periodic=True)
-sim_ev.block("ne", ne_model, time=pops.Explicit(), evolve=True)
-sim_ev.block("ni", ni_model, time=pops.Explicit(), evolve=False)
+sim_ev.block("ne", ne_model, time=engine.Explicit(), evolve=True)
+sim_ev.block("ni", ni_model, time=engine.Explicit(), evolve=False)
 sim_ev.set_poisson()
 sim_ev.set_density("ne", rho_e_ev)
 sim_ev.set_density("ni", rho_bg_ev)
@@ -211,7 +210,7 @@ sim_ev.solve_fields()
 phi_with_ni = sim_ev.potential().copy()
 
 sim_no_ni = System(n=n, periodic=True)
-sim_no_ni.block("ne", ne_model, time=pops.Explicit(), evolve=True)
+sim_no_ni.block("ne", ne_model, time=engine.Explicit(), evolve=True)
 sim_no_ni.set_poisson()
 sim_no_ni.set_density("ne", rho_e_ev)
 sim_no_ni.solve_fields()
@@ -234,8 +233,8 @@ rho_a = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 rho_b = 1.0 + 0.01 * np.sin(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_mb = System(n=n, periodic=False)
-sim_mb.block("a", diocotron_model(), time=pops.Explicit(stride=1))
-sim_mb.block("b", diocotron_model(), time=pops.Explicit(stride=3))
+sim_mb.block("a", diocotron_model(), time=engine.Explicit(stride=1))
+sim_mb.block("b", diocotron_model(), time=engine.Explicit(stride=3))
 sim_mb.set_poisson(bc=Dirichlet())
 sim_mb.set_density("a", rho_a)
 sim_mb.set_density("b", rho_b)
@@ -268,14 +267,14 @@ a4, b4 = sim_mb.density("a").copy(), sim_mb.density("b").copy()
 chk(changed(a3_, a4), "multi-blocs, pas 3 : bloc a (stride=1) avance")
 chk(frozen(b3_, b4),  "multi-blocs, pas 3 : bloc b (stride=3) est TENU")
 
-# ---- 7. pops.IMEX avec stride (hold-then-catch-up) ------------------------------
+# ---- 7. engine.IMEX avec stride (hold-then-catch-up) ------------------------------
 # Cadence M=2 : rattrapage quand (macro_step+1)%2==0 -> macro_step 1, 3, ...
 print("== IMEX avec stride (hold-then-catch-up) ==")
 n = 32
 rho_e = 1.0 + 0.02 * np.cos(2 * np.pi * meshx(n))[None, :] * np.ones((n, 1))
 
 sim_imex = System(n=n, periodic=False)
-sim_imex.block("ne", diocotron_model(), time=pops.IMEX(substeps=2, stride=2))
+sim_imex.block("ne", diocotron_model(), time=engine.IMEX(substeps=2, stride=2))
 sim_imex.set_poisson(bc=Dirichlet())
 sim_imex.set_density("ne", rho_e)
 
@@ -294,13 +293,13 @@ chk(changed(state_before_1, state_after_1),
 # ---- 9. Validation des entrees ------------------------------------------------
 print("== validation des entrees ==")
 try:
-    pops.Explicit(stride=0)
+    engine.Explicit(stride=0)
     chk(False, "Explicit(stride=0) doit lever ValueError")
 except ValueError:
     chk(True, "Explicit(stride=0) leve ValueError")
 
 try:
-    pops.IMEX(stride=-1)
+    engine.IMEX(stride=-1)
     chk(False, "IMEX(stride=-1) doit lever ValueError")
 except ValueError:
     chk(True, "IMEX(stride=-1) leve ValueError")
@@ -320,14 +319,14 @@ h_cfl = 1.0 / n_cfl  # domaine [0,1]^2 : h = dx = dy = 1/n
 
 # substeps=1 (referent) : dt_ref = cfl*h/w
 sim_sub1 = System(n=n_cfl, periodic=False)
-sim_sub1.block("ne", diocotron_model(), time=pops.Explicit(substeps=1, stride=1))
+sim_sub1.block("ne", diocotron_model(), time=engine.Explicit(substeps=1, stride=1))
 sim_sub1.set_poisson(bc=Dirichlet())
 sim_sub1.set_density("ne", rho_sub.copy())
 dt_sub1 = sim_sub1.step_cfl(cfl_sub)  # avance le systeme d'un pas -> macro_step=1 apres
 
 # substeps=S (test) : systeme identique en etat initial, aussi a macro_step=0 au debut
 sim_subS = System(n=n_cfl, periodic=False)
-sim_subS.block("ne", diocotron_model(), time=pops.Explicit(substeps=S_cfl, stride=1))
+sim_subS.block("ne", diocotron_model(), time=engine.Explicit(substeps=S_cfl, stride=1))
 sim_subS.set_poisson(bc=Dirichlet())
 sim_subS.set_density("ne", rho_sub.copy())
 dt_subS = sim_subS.step_cfl(cfl_sub)

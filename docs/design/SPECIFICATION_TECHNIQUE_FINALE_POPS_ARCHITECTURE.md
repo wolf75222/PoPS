@@ -15,6 +15,8 @@ La surface racine est volontairement petite :
 pops.Model
 pops.Program
 pops.Case
+pops.RunReport
+pops.RunStopReason
 pops.validate
 pops.inspect
 pops.explain
@@ -40,7 +42,8 @@ PoPS doit permettre de :
 - refuser une capacité absente avant la première mutation native ;
 - inspecter les décisions, identités, capacités et erreurs de chaque phase ;
 - ajouter des composants scientifiques par de petites interfaces, sans branche centrale par classe ;
-- exécuter les kernels de production en C++20/Kokkos, avec MPI quand la plateforme l'annonce.
+- exécuter les kernels de production en C++20/Kokkos dans l'`ExecutionContext` exact que le
+  provider installé sait transporter, sans communicator ou device global implicite.
 
 ### 1.2 Non-objectifs
 
@@ -302,6 +305,13 @@ consomment le protocole sans dispatch sur la classe concrète du plan.
 Un solve périodique singulier exige un contrat de nullspace et, lorsqu'une valeur unique est consommée,
 une gauge. Le runtime ne corrige jamais silencieusement un second membre incompatible.
 
+La topologie d'un champ n'est pas déduite d'un booléen `connected`. Un provider `FieldTopology`
+matérialise un masque, un label entier par degré de liberté, un vocabulaire de composantes connexes,
+leur provenance et un digest canonique. Nullspace, compatibilité du second membre, gauge et solver
+consomment exactement ce même quintuplet ; une permutation de labels, un masque divergent ou un digest
+étranger est refusé avant le kernel. Il existe donc une base et une contrainte de gauge par composante
+connexe, sans branche Poisson ni hypothèse d'un domaine globalement connexe.
+
 ## 6. Domaine, maillage et layouts
 
 Les layouts publics vivent uniquement dans `pops.layouts` :
@@ -310,12 +320,18 @@ Les layouts publics vivent uniquement dans `pops.layouts` :
 from pops.layouts import AMR, Uniform
 ```
 
-Il n'existe pas de surface `pops.mesh.layouts`. `pops.mesh` conserve les grilles, géométries, politiques
-AMR et builders de `LayoutPlan`, mais ne réexporte ni `AMR` ni `Uniform`.
+Il n'existe pas de surface `pops.mesh.layouts`. `pops.mesh` expose les grilles, géométries et builders
+de `LayoutPlan`, mais ne réexporte ni `AMR`, ni `Uniform`. Son implémentation privée vit dans
+`pops.mesh._amr` ; l'ancien chemin `pops.mesh.amr` n'existe pas. L'authoring adaptatif public vit
+exclusivement dans `pops.amr`.
 
 ### 6.1 Domaine et frame
 
 ```python
+from pops.domain import Rectangle, RectangleBoundaryNames
+from pops.frames import Cartesian2D
+from pops.mesh import CartesianGrid, PeriodicAxes
+
 domain = Rectangle(
     "unit_square",
     lower=(0.0, 0.0),
@@ -327,16 +343,74 @@ domain = Rectangle(
 ).tag("fluid")
 frame = domain.frame(Cartesian2D())
 grid = CartesianGrid(frame=frame, cells=(128, 128))
+
+# Pour identifier les deux paires de faces opposées :
+periodic_grid = CartesianGrid(
+    frame=frame,
+    cells=(128, 128),
+    periodic=PeriodicAxes(frame.axes),
+)
 ```
 
 Les frontières sont des handles topologiques issus du frame (`frame.boundaries.x_min`, etc.). Les
 noms personnalisés sont des labels ; orientation, côté, périodicité et connexions restent typés.
+`PeriodicAxes` accepte uniquement des axes du frame, sans booléen, string ou indice. La topologie
+canonique dérive alors les paires périodiques et les axes physiques complémentaires. Omettre
+`periodic` est le défaut conventionnel borné ; ce défaut est visible dans l'identité et l'inspection.
+
+`CartesianGrid` est l'unique descripteur cartésien public : il n'existe ni descripteur carré
+concurrent, ni raccourci entier/tuple dans les APIs qui demandent une grille. Le domaine, le frame,
+les cellules et la topologie restent donc visibles et authentifiables. `pops.mesh.PolarMesh` demeure
+un descripteur avancé supporté pour l'anneau natif ; il ne constitue pas une seconde route
+cartésienne et n'est pas réexporté à la racine `pops`.
+
+Le `SystemConfig` uniforme livré ne possède encore qu'un scalaire `n`, un scalaire `L` et aucune
+origine. Son lowering accepte donc un `CartesianGrid` seulement si `lower == (0, 0)`, si les deux
+longueurs sont égales et si les deux nombres de cellules sont égaux. Toute grille rectangulaire,
+anisotrope ou translatée est refusée avant construction du moteur ; elle n'est jamais aplatie vers
+un carré représentatif. Son unique booléen natif de périodicité représente exactement deux cas :
+aucun axe périodique ou tous les axes périodiques. Une topologie partielle reste valide dans la DSL,
+mais ce backend la refuse avant bind tant qu'il ne sait pas conserver cette partition par axe.
 
 Un `Case` ne possède pas son layout. Après validation, `case.layout_subjects()` expose l'ensemble
 immuable des blocs, états et champs à assigner. Un `LayoutPlan` associe explicitement ces sujets aux
-layouts et porte les mappings/synchronisations nécessaires. Le plan sait représenter plusieurs
-affectations, mais le provider d'exécution livré matérialise exactement un layout par artefact : un
-`LayoutPlan` hétérogène est refusé avant la création de l'artefact, sans choix d'un représentant.
+layouts et porte les mappings/synchronisations nécessaires. Aucun artefact, report, writer ou
+executor ne choisit le premier layout comme représentant.
+
+Le provider livré exécute plusieurs layouts `Uniform` distincts lorsque :
+
+- chaque bloc et chaque donnée échangée possède une affectation exacte ;
+- le `Program` est séparable en un graphe compilé et authentifié par layout ;
+- chaque transfert directionnel nomme explicitement ses ports, sa représentation, son point de
+  synchronisation et une opération de l'interface native `Transfer` ;
+- le composant C++ qui implémente cette opération fait partie des composants authentifiés de
+  l'artefact puis du bind.
+
+L'opération livrée `CONSERVATIVE_CELL_AVERAGE_V1` relie des résolutions différentes d'un même domaine
+cartésien : origine, étendue et partition périodique/physique doivent coïncider exactement, et le ratio
+de cellules doit être entier dans chaque axe. Son ABI ne porte aucun mapping de coordonnées ; elle
+refuse donc deux géométries ou topologies distinctes. Un tel transfert est une nouvelle opération de
+l'interface ouverte `Transfer`, avec son propre provider et son mapping authentifié, pas un mode caché
+de la moyenne conservative.
+
+Une moyenne conservative fine vers grossier n'invente jamais son inverse grossier vers fin. Un
+second sens est une seconde exigence avec sa propre opération et son propre provider ; il n'existe
+ni `reverse=True`, ni opération de mapping par défaut lorsque le sens numérique n'est pas déductible
+de façon unique.
+
+La synchronisation native `before-step@1` possède une sémantique de snapshot : toutes les sources de
+tous les transferts sont capturées avant la première écriture. Un graphe `A -> B -> C` ou un cycle
+explicite lit donc partout le même état pré-transfert. L'opération
+`CONSERVATIVE_CELL_AVERAGE_V1` remplace sa cible : deux transferts vers le même sujet au même point de
+synchronisation sont refusés tant qu'une opération et un provider de merge explicites n'existent pas.
+
+Le provider refuse avant création d'un moteur : un mélange `Uniform`/AMR, plusieurs hiérarchies AMR,
+un kernel co-localisé traversant deux layouts sans lowering dédié, un `FieldOperator` multi-layout,
+un mapping manquant ou un `Program` non séparable. La route native multi-`Uniform` exige en outre une
+stratégie temporelle exacte `FixedDt`; elle refuse les stockages `aux` sans affectation/transfert
+explicite, les plans de frontières sans autorité d'installation par layout et toute demande de CFL
+globale dépourvue d'une réduction qualifiée inter-layout. Ces refus sont des limites de capacité
+exactes, pas une normalisation vers un layout représentatif.
 
 ### 6.2 Autorité AMR
 
@@ -355,7 +429,10 @@ layout = AMR(
     tagging=tagging,
     regrid=AMRRegrid(schedule=every(5, clock=T.clock)),
     transfer=transfer,
-    execution=AMRExecution.subcycled(),
+    execution=AMRExecution.subcycled((
+        AMRClockRelation(0, 1, temporal_ratio=2),
+        AMRClockRelation(1, 2, temporal_ratio=2),
+    )),
 )
 ```
 
@@ -365,6 +442,12 @@ valeur. Une expression telle que `norm(grad(ValueExpr(block[U]))) > case.value(t
 résolue dans un contexte discret explicite ; elle n'invente pas un gradient continu exécutable.
 
 Le plan normalisé conserve chaque ratio de transition et le raffinement cumulé de chaque niveau.
+La relation temporelle de chaque paire parent/enfant est une autorité distincte du ratio spatial.
+`AMRClockRelation` porte un ratio rationnel exact et une `AMRRemainderPolicy`. La route intégrale
+n'invente jamais `time_ratio = space_ratio`; une relation non intégrale exige explicitement
+`EXPLICIT_FINAL_SUBSTEP`, sinon elle est refusée. Le nombre de relations et leurs niveaux adjacents
+doivent couvrir exactement la hiérarchie.
+
 Le provider natif livré matérialise le coeur maillage/stockage en 2D et ses kernels de transfert,
 reflux et sous-cyclage AMR exigent un ratio de transition égal à 2. Une autre dimension ou un autre
 ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
@@ -380,6 +463,60 @@ Une BC de transport est enregistrée une fois dans `DiscretizationPlan.boundarie
 appartient à son `FieldDiscretization`. Une interface multibloc et une frontière coarse/fine sont des
 ports distincts. Le graphe de producteurs de ghosts prouve la couverture, la profondeur, le temps et
 les dépendances de chaque région avant exécution.
+
+Le lowering produit un plan natif immuable exécuté dans l'ordre de dépendance : halo same-level/MPI,
+identifications périodiques, interpolation coarse/fine, faces physiques, résolution des coins, puis
+closures numériques. Les valeurs de stage, temps, niveau, rate et itération non linéaire accompagnent
+chaque appel dépendant de l'état. Une interface multibloc possède une seule évaluation de flux partagé ;
+le runtime disperse ce résultat avec orientations opposées vers les deux résidus. Une closure implicite
+installe obligatoirement le couple résidu/JVP et leurs tables exactes d'états, directions, champs et
+paramètres. Une interface, orientation, projection, corner policy ou closure sans composant natif
+qualifié est refusée à `compile` : un callback Python ou un handle sans implémentation n'est jamais une
+route d'exécution.
+
+Pour un `rhs_jacvec`, le `BoundaryEvaluationPoint` exact du RHS de base est capturé dans le corps du
+pas puis transporté jusque dans l'`ApplyFn`; la copie de contexte créée avant `begin_step` ne
+reconstruit jamais le temps. Le volume sans contribution additive de frontière est différencié, puis
+le JVP natif exact de la closure est ajouté une seule fois. Ainsi la contribution de frontière n'est
+ni oubliée ni comptée deux fois. Les scratchs sont persistants, réutilisés et alloués seulement si le
+bloc possède réellement un couple résidu/JVP.
+
+La route livrée accepte une linéarisation de frontière d'état avec une direction qualifiée égale à
+l'état propriétaire et une sortie. Si le résidu de frontière lit un champ résolu et que
+`rhs_jacvec(field_coupled=True)` demande la dérivée totale, la résolution refuse : aucun solveur de
+tangente `dField/dState` n'est encore disponible, et un champ primal gelé ne peut pas être présenté
+comme sa tangente.
+
+Une interface conservatrice entre deux blocs est déclarée avant validation avec les états déjà
+qualifiés par leur bloc et les frontières géométriques du frame :
+
+```python
+from pops.mesh.boundaries import BlockInterfaceSide, ConservativeInterface
+
+interface = ConservativeInterface(
+    "fluid_to_solid",
+    left=BlockInterfaceSide(fluid[U], frame.boundaries.x_max),
+    right=BlockInterfaceSide(solid[V], frame.boundaries.x_min),
+    numerical_flux=compiled_numerical_flux,
+    permutation=(0,),
+    right_normal_translation=1.0,
+)
+interface.attach(fluid_numerics, solid_numerics)
+```
+
+`attach()` inscrit la même autorité immuable dans exactement deux `DiscretizationPlan`; ce n'est
+pas une double autorité. La résolution la consomme une seule fois, remplace exactement une région
+physique de chaque plan par les deux endpoints du même `MultiBlockInterface`, puis retire toute
+métadonnée d'authoring. Les deux `BoundaryHandle` ont des owners d'instance de bloc distincts tandis
+que l'identité de l'interface et son `NumericalFlux` sont uniques. Toute inscription absente,
+dupliquée, concurrente ou ne correspondant pas exactement à une face de chaque bloc est refusée.
+
+La route native livrée exige actuellement deux blocs co-localisés sur le même `LayoutHandle`, des
+évaluations de RHS explicites, simultanées et contiguës dans le même point de `Program`, et un
+composant `NumericalFlux` authentifié. Elle refuse une interface cross-layout sans
+`Mapping`/`Transfer`, le JVP implicite partagé, et une hiérarchie AMR raffinée ou regriddée ; sur AMR,
+seul un niveau unique avec hiérarchie figée est exécutable tant que le ledger reflux d'interface
+n'est pas fourni.
 
 Une condition initiale associe : handle d'état qualifié, donnée, projection et éventuellement preuve
 de reprojection AMR. Pour un bootstrap AMR, la projection analytique, prolongation et restriction sont
@@ -505,6 +642,13 @@ qu'à un point accepté et entièrement synchronisé. Une clock attendue mais ab
 restart et les consommateurs ; elle n'est jamais reconstruite depuis `macro_step`. Les anciens schemas
 sont des entrées de migration offline, pas des branches du runtime.
 
+Le ledger de flux est l'unique autorité numérique du reflux. Chaque contribution est qualifiée par
+owner, bloc, rate/flux conservatif, niveau, face et orientation, puis porte mesure de face, durée du
+sous-pas et poids RK/ARK exact. Savepoints, rollback, checkpoint et report conservent ces mêmes
+contributions ; aucun registre shadow ni « flux du dernier stage » ne peut piloter la correction. Le
+reflux consomme le ledger accepté, puis l'average-down a lieu dans la même phase de synchronisation
+rapportée.
+
 ### 7.4 Algèbre et extension des schedules
 
 Un schedule est le produit typé `Schedule(trigger, off=...)` de quatre petites interfaces ouvertes :
@@ -576,7 +720,6 @@ resolved = pops.resolve(
     layout=layout_plan,
     layout_providers=providers,
     backend=Production(),
-    platform=platform_manifest,
     compile_options={"debug": False},
 )
 artifact = pops.compile(resolved)
@@ -589,7 +732,14 @@ simulation = pops.bind(
     initial_values=initial_values,
 )
 report = pops.run(simulation, t_end=1.0, max_steps=100_000, output_dir=output_dir)
+if report.accepted_steps == 0:
+    raise RuntimeError("aucun macro-pas accepté")
 ```
+
+La plateforme n'est pas une autorité déclarative fabriquée par l'utilisateur. Son manifeste exact
+est dérivé des composants compilés authentifiés et participe à l'identité de l'artefact. Les
+ressources d'exécution concrètes (communicateur, device ou handles externes) sont fournies
+explicitement à `pops.bind(..., resources=...)` et validées contre ce manifeste avant installation.
 
 Contrat des phases :
 
@@ -601,12 +751,26 @@ Contrat des phases :
 | `bind` | artefact + cinq familles de valeurs | instance runtime | changement de structure/algorithme |
 | `run` | instance bindée + contrôles numériques | rapport d'exécution | authoring ou sélection de stratégie |
 
+`pops.run` retourne un `pops.RunReport` immuable et observé, jamais un entier nu. Ses compteurs
+`accepted_steps` et `rejected_steps` sont locaux à cet appel ; le second compte exactement les
+tentatives natives rejetées puis retentées avant acceptation. `final_time` et `final_macro_step`
+rapportent l'horloge cumulative réellement publiée. `stop_reason` est un `pops.RunStopReason` ; le
+seul arrêt réussi actuellement implémenté est `TARGET_TIME_REACHED`. Un épuisement de `max_steps`,
+une garde terminale ou un effet non publiable lève une exception et ne fabrique pas de rapport de
+succès. Le rapport transporte les identités authentifiées `run_identity`, `bind_identity`,
+`execution_identity` et `artifact_identity`, sans recalcul ni valeur par défaut.
+Le rapport n'a pas de vérité booléenne implicite : le code utilisateur choisit explicitement le
+champ observé (`accepted_steps`, `stop_reason`, etc.).
+
 Les seules options de compilation sont celles acceptées par `pops.resolve(..., compile_options=...)` :
 `so_path`, `force`, `cxx`, `include`, `std` et `debug`. Le backend est une autorité séparée. Il n'existe
 pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldManifest`.
 
 `pops.bind` accepte exactement cinq familles : `initial_state`, `params`, `aux`, `resources` et
 `initial_values`. L'enregistrement interne qui les authentifie n'est pas importé par l'utilisateur.
+Dans cette release, `resources` est vide ou contient uniquement `execution_context`, valeur typée qui
+porte toute l'autorité de lancement. Les clés libres `communicator`, `device`, `stream` ou `allocator`
+sont refusées ; elles ne constituent pas un second chemin de configuration.
 
 ### 8.3 Quatre catégories d'implicite
 
@@ -630,9 +794,16 @@ et les chemins `pops.runtime.system`, `pops.runtime.amr_system` et `pops.runtime
 Une application ne construit donc ni moteur, ni config native, ni plan d'installation pour contourner
 `validate -> resolve -> compile -> bind -> run`.
 
+`RuntimeInstance` ne publie ni moteur natif, ni sélecteur de moteur par layout/bloc, ni `InstallPlan` ou
+`RuntimePlan`, et n'effectue aucune délégation générique d'attribut. Sa surface explicite se limite aux
+identités et rapports, aux lectures d'état, clock, layout, champs et histories, à la vue de rapports AMR,
+au rapport du programme, ainsi qu'à `checkpoint` et `restart`. Elle ne retourne jamais le `System` ou
+l'`AmrSystem` privé et n'expose aucune route `step`, `profile` ou d'assemblage.
+
 ## 9. Consommateurs, sorties et restart
 
-`ConsumerGraph` est l'unique autorité des effets acceptés : `ScientificOutput`, `Checkpoint` et
+`pops.output.ConsumerGraph` est l'unique autorité publique des effets acceptés :
+`ScientificOutput`, `Checkpoint` et
 diagnostics planifiés. Chaque consommateur déclare schedule, handles qualifiés, sélection de niveaux,
 format, cible déterministe et comportement d'échec.
 
@@ -644,6 +815,24 @@ Les formats livrés sont des descripteurs (`HDF5`, `NPZ`, `ParaView`) abaissés 
 La gate finale rouvre indépendamment chaque HDF5 et ParaView émis et vérifie leur contenu structurel ;
 l'existence du fichier seule n'est pas une preuve. La route NPZ est exercée par l'exemple IMEX-AMR et
 ses tests de format, sans être présentée comme une réouverture supplémentaire de la gate groupée.
+
+Un writer externe se sélectionne sur le consommateur, jamais par unicité globale :
+
+```python
+ScientificOutput(
+    format=ExternalWriter(component=my_writer, extension=".pops"),
+    schedule=...,
+    fields=(block[U],),
+    target="fields/tracer",
+)
+```
+
+Le format authentifie `component_id`, identité du manifest et interface `Writer`; le même composant
+doit traverser `resolve -> compile -> bind` puis être chargé dans le `RuntimeInstance`. Le snapshot POD
+remis au writer contient toutes les géométries, champs, niveaux, pièces, noms de composantes,
+diagnostics et métadonnées sélectionnés. Une capacité v1 ne peut donc ni prendre le premier champ ou
+niveau, ni ignorer une pièce. Deux writers peuvent coexister parce que chaque sortie nomme le sien ;
+une cible publiée en collision reste interdite.
 
 Un checkpoint strict conserve au minimum : identités du plan/programme/composants/consumer graph,
 états, champs matériels requis, histories, clocks/schedules, contrôleur, hiérarchie AMR, cursors des
@@ -677,6 +866,14 @@ ou d'ABI est une extension du coeur et exige une évolution versionnée du contr
 IDs/routes Python et C++ ; `--check` interdit leur dérive. `ComponentManifest` couvre signature, ports,
 paramètres, interfaces, requirements, capabilities, effets, layouts, clocks, déterminisme, précision,
 restart et points d'entrée.
+
+Le même catalogue génère les IDs et tables C/POD versionnées des interfaces natives (flux numérique,
+ghost boundary, closure de champ, tagging, clustering, transfert, reflux, solveur de champ, writer et
+topologie de champ). Chaque famille possède sa propre version d'interface, indépendante de la version
+du protocole enveloppe. Le loader authentifie identité sémantique, manifest, digest du catalogue,
+taille/header de table et opérations requises avant de conserver le handle de bibliothèque. Les tables
+sont résolues une fois à l'installation ; aucun `dlsym`, nom de classe ou dispatch Python n'entre dans
+une boucle de cellules.
 
 Les champs sémantiques inconnus, capacités sans preuve, collisions d'identité et entry points manquants
 sont refusés. Un vieux manifest n'est pas « réparé » silencieusement.
@@ -728,13 +925,21 @@ La release est conforme uniquement pour les lignes prouvées par la matrice nati
 - programmes explicites, solves locaux, IMEX et solve global matrix-free par `LinearProblem` avec
   `GMRES`/`BiCGStab`, plus `CompositeTensorFAC` pour la portée hiérarchique ;
 - HDF5, NPZ, ParaView et checkpoint/restart transactionnels ;
-- Kokkos comme backend on-node, MPI lorsque compilé et authentifié ;
+- C++20/Kokkos sur la route host/`float64`/communicator série explicitement authentifiée ;
 - packages C++ externes conformes au manifest et à l'ABI courants.
 
 Les dimensions, ratios, nombres de niveaux, géométries, solveurs et combinaisons device réellement
-exécutables sont lus dans les manifests/capability reports. Le provider livré matérialise un seul
-layout, un seul `StateSpace` par bloc, le coeur de stockage 2D et les transitions AMR de ratio 2 ; toute
-demande hors de cette enveloppe est un refus pré-run, pas une normalisation du plan.
+exécutables sont lus dans les manifests/capability reports. Le provider livré matérialise soit une
+hiérarchie AMR unique, soit un ou plusieurs layouts `Uniform` reliés par les mappings natifs prouvés.
+Il exécute un seul `StateSpace` par bloc, le coeur de stockage 2D et les transitions AMR de ratio 2 ;
+toute demande hors de cette enveloppe est un refus avant construction du moteur, pas une
+normalisation du plan.
+
+L'ABI et les manifests savent décrire un communicator, un datatype, un stream et un device explicites.
+La route finale installée dans cette release ne transporte toutefois que host/`float64`/série. Un
+processus MPI actif, un communicator non série, un backend Kokkos GPU ou un device handle est refusé
+avant le constructeur de `System`/`AmrSystem`. Être compilé avec MPI ou Kokkos ne constitue pas à lui
+seul une autorisation d'exécution.
 
 Les maillages non structurés, mobiles/déformables ou changeant de topologie, de nouvelles familles de
 stockage, la 3D sur ces routes et une algèbre d'unités ne font pas partie de la release. Ils sont refusés,
@@ -755,13 +960,16 @@ Quatre scripts sont des tests d'acceptation, pas des esquisses :
    `AMRExecution.subcycled()`, regrid/reflux, HDF5/NPZ/ParaView, restart strict et continuation
    bit-identique ;
 4. `examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py` : état 15 moments, layout Uniform,
-   `pops.lib.time.IMEX`, champ de Poisson, HDF5/ParaView et continuation bit-identique, sans branche de
-   scénario dans le compilateur.
+   `Program` IMEX explicite avec garde de réalisabilité dans sa transaction, champ de Poisson,
+   HDF5/ParaView et continuation bit-identique, sans branche de scénario dans le compilateur. Le
+   preset `pops.lib.time.IMEX` reste un constructeur d'un `Program` ordinaire ; il ne remplace pas
+   cette écriture explicite lorsqu'une garde scientifique spécifique doit être composée.
 
 `scripts/final_release_contract.py` fixe cet ensemble exact : aucun cinquième script `.py` n'est admis
 dans `examples/final/`. Chaque script doit :
 
 - utiliser exclusivement le cycle de vie public ;
+- construire ses expressions avec `pops.math` et ne jamais importer l'IR interne `pops._ir` ;
 - sortir avec un code nul depuis le package installé ;
 - accepter `--output-dir` et rester directement exécutable ;
 - produire des artefacts réels ensuite rouverts par la gate ;

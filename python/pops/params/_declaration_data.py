@@ -177,7 +177,7 @@ def value_data(value: Any, *, dtype: Any, unit: str | None, where: str) -> dict[
         raise TypeError("%s requires an int value (bool is not an Integer)" % where)
     if isinstance(value, bool):
         raise TypeError("%s requires a numeric value, not bool" % where)
-    from pops.ir.literals import scalar_literal
+    from pops._ir.literals import scalar_literal
 
     try:
         return scalar_literal(value, unit=unit, target=target).to_data()

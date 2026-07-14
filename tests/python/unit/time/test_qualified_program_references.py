@@ -5,7 +5,7 @@ import pytest
 
 from pops.descriptors import Descriptor
 from pops.fields import FieldDiscretization, FieldOperator
-from pops.ir import ValueExpr
+from pops.math import ValueExpr
 from pops.math import laplacian
 from pops.model import (
     DeclarationIndex,

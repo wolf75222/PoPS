@@ -85,7 +85,7 @@ TEST(test_cluster, l_shape_fully_covered_within_domain) {
     EXPECT_TRUE(dom.contains(b)) << "L_in_domain";
 }
 
-// ADC-616: the full ClusterParams set the pops.mesh.amr.PatchClustering descriptor forwards is
+// ADC-616: the full ClusterParams set the pops.amr.PatchClustering descriptor forwards is
 // honored -- default {0.7, 1, 32} clusters a solid block into one box, and a lower min_efficiency
 // still covers every tag while a smaller max_box_size chops as above. Pins the params end to end.
 TEST(test_cluster, custom_params_are_honored) {

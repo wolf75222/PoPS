@@ -314,12 +314,17 @@ class _ProgramTimeHandles:
         idmap: Any,
         representative: Any,
         reference_of: Any = None,
+        state_keep: Any = None,
     ) -> None:
         """Recreate temporal handles and remap their values after a pass/detachment."""
         if reference_of is None:
             def _identity(value: Any) -> Any:
                 return value
             reference_of = _identity
+        if state_keep is None:
+            def _keep_state(_state: Any) -> bool:
+                return True
+            state_keep = _keep_state
         clock_map = {self.clock: out.clock}
 
         def _reowned_clock(clock: Clock) -> Clock:
@@ -339,6 +344,8 @@ class _ProgramTimeHandles:
 
         state_map = {}
         for old_state in self._time_states.values():
+            if not state_keep(old_state.state):
+                continue
             new_state = out._time_state(
                 reference_of(old_state.block), reference_of(old_state.state), old_state.space,
                 _reowned_clock(old_state.clock))
@@ -350,6 +357,8 @@ class _ProgramTimeHandles:
                     out._time_current_values[new_state] = mapped
 
         for (old_state, key), old_handle in self._time_stage_handles.items():
+            if old_state not in state_map:
+                continue
             new_handle = out._stage_handle(
                 state_map[old_state], key, _reowned_stage_point(old_handle.point))
             old_value = self._time_stage_values.get(old_handle)
@@ -359,6 +368,8 @@ class _ProgramTimeHandles:
                     out._time_stage_values[new_handle] = mapped
 
         for (old_state, lag), old_handle in self._time_history_handles.items():
+            if old_state not in state_map:
+                continue
             new_handle = out._history_handle(state_map[old_state], lag)
             old_value = self._time_history_values.get(old_handle)
             if old_value is not None:
@@ -367,6 +378,8 @@ class _ProgramTimeHandles:
                     out._time_history_values[new_handle] = mapped
 
         for old_state, (depth, _cold_start, _policy) in self._time_history_configs.items():
+            if old_state not in state_map:
+                continue
             new_state = state_map[old_state]
             name = "%s.%s" % (
                 block_name(new_state.block), state_name(new_state.state))
@@ -380,7 +393,8 @@ class _ProgramTimeHandles:
                     out._time_history_stores[new_state] = mapped
 
         for old_state in self._time_endpoint_handles:
-            out._endpoint_handle(state_map[old_state])
+            if old_state in state_map:
+                out._endpoint_handle(state_map[old_state])
 
 
 __all__ = ["_ProgramTimeHandles"]

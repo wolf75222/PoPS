@@ -128,7 +128,7 @@ def test_compiled_records_do_not_store_live_authoring_references():
         "_problem", "problem", "authoring", "authoring_problem", "source_problem",
         "source_program", "builder", "dsl", "operator_registry", "declaration_index",
     }
-    files = (POPS / "codegen/_plans.py", POPS / "codegen/compiled_artifact.py")
+    files = (POPS / "codegen/_plans.py", POPS / "codegen/_compiled_artifact.py")
     record_names = {
         "ResolvedSimulationPlan", "CompiledBlockArtifact", "CompiledSimulationArtifact",
         "BindInputs", "InstallPlan",

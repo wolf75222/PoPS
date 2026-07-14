@@ -28,8 +28,8 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.ops import sqrt
+import pops.runtime._engine_descriptors as engine
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -57,9 +57,9 @@ def err_msg(fn):
 
 
 def gas():  # Euler compressible 4-var : a pressure() + wave_speeds()
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                     transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                     elliptic=pops.ChargeDensity(charge=0.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
+                     transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                     elliptic=engine.ChargeDensity(charge=0.0))
 
 
 def smooth_rho(n):
@@ -69,8 +69,8 @@ def smooth_rho(n):
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
     s = System(n=n, L=1.0, periodic=True)
-    s.block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=riemann),
-                time=pops.Explicit())
+    s.block("gas", model=gas(), spatial=engine.Spatial(weno5=True, flux=riemann),
+                time=engine.Explicit())
     s.set_poisson()
     s.set_density("gas", smooth_rho(n))
     for _ in range(nsteps):
@@ -124,9 +124,9 @@ try:
 
     def build(cm, riem):
         s = System(n=40, L=1.0, periodic=True)
-        s.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem,
-                                                              variables=Conservative()),
-                       time=pops.Explicit(method="ssprk2"))
+        s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=WENO5(), flux=riem,
+                                                              recon=Conservative()),
+                       time=engine.Explicit(method="ssprk2"))
         s.set_poisson()
         z = np.zeros((40, 40)); r = 1.0 + 0.2 * smooth_rho(40) / smooth_rho(40).max()
         s.set_primitive_state("f", rho=r, u=z, v=z)

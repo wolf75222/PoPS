@@ -10,7 +10,7 @@ import sys
 from types import SimpleNamespace
 
 try:
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.numerics.terms import DefaultSource, Flux
     from pops.physics._facade import Model
     from pops import time as adctime

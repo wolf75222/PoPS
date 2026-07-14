@@ -458,9 +458,15 @@ def build_runtime_plans(install_plan: Any, component_manifests: Any) -> RuntimeP
         LayoutTransfer(
             row.requirement.qualified_id,
             row.provider_id,
-            row.requirement.source.qualified_id,
-            row.requirement.target.qualified_id,
-            row.requirement.channel,
+            row.provider_identity["component_id"],
+            row.requirement.source_layout.qualified_id,
+            row.requirement.target_layout.qualified_id,
+            row.requirement.source_port.subject.qualified_id,
+            row.requirement.target_port.subject.qualified_id,
+            row.requirement.source_port.representation.value,
+            row.requirement.target_port.representation.value,
+            int(row.requirement.operation),
+            row.requirement.synchronization.value,
         )
         for row in layout_plan.mappings
     )

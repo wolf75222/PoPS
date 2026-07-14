@@ -23,8 +23,8 @@ def resolve(
     layout: Any,
     layout_providers: Mapping[Any, Any] | None = None,
     backend: Any = None,
-    platform: Any = None,
     time: Any = None,
+    components: Any = (),
     compile_options: Mapping[str, Any] | None = None,
 ) -> Any:
     """Resolve a frozen Case into the only value accepted by :func:`compile`."""
@@ -32,6 +32,13 @@ def resolve(
 
     if type(problem) is not Case or not problem.frozen:
         raise TypeError("pops.resolve requires the frozen Case returned by pops.validate")
+    if isinstance(components, (str, bytes, Mapping)):
+        raise TypeError("pops.resolve components must be a finite iterable of typed components")
+    try:
+        components = tuple(components)
+    except TypeError as exc:
+        raise TypeError(
+            "pops.resolve components must be a finite iterable of typed components") from exc
     from pops.codegen._backends import Production, _Backend, lower_backend
 
     selected_backend = Production() if backend is None else backend
@@ -39,11 +46,26 @@ def resolve(
         raise TypeError("pops.resolve backend must be a typed pops.codegen backend descriptor")
     backend_token = lower_backend(selected_backend)
     from pops.codegen._layout_resolution import (
-        layout_lowering_coverage, resolve_layout, validate_program_layout_reads)
+        _refuse_runtime, layout_lowering_coverage, resolve_layout,
+        validate_layout_mapping_components, validate_program_layout_reads)
 
     layout_authority = resolve_layout(problem, layout, providers=layout_providers)
     layout_plan = layout_authority.plan
-    target = "amr_system" if layout_plan.layouts[0].adaptive else "system"
+    adaptive_families = {row.adaptive for row in layout_plan.layouts}
+    if len(adaptive_families) != 1:
+        _refuse_runtime(
+            layout_plan,
+            gate="mixed_uniform_amr_runtime_unavailable",
+            message="one RuntimeInstance cannot mix Uniform and AMR layout families",
+        )
+    adaptive = next(iter(adaptive_families))
+    if adaptive and len(layout_plan.layouts) != 1:
+        _refuse_runtime(
+            layout_plan,
+            gate="heterogeneous_amr_runtime_unavailable",
+            message="heterogeneous AMR layouts have no proved common regrid/transfer runtime",
+        )
+    target = "amr_system" if adaptive else "system"
     if time is not None and problem._time is not None and time is not problem._time:
         raise ValueError("pops.resolve received two competing time-program authorities")
     resolved_time = time if time is not None else problem._time
@@ -55,7 +77,33 @@ def resolve(
     if resolved_time is not None and backend_token != "production":
         raise ValueError("a resolved whole-system Program requires backend=Production()")
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
-    resolved_layout = layout_authority.require_runtime()
+    if len(layout_plan.layouts) > 1:
+        co_layout_ops = {
+            "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
+            "field_solve_from_blocks",
+        }
+        present = sorted({
+            value.op for value in getattr(resolved_time, "_values", ())
+            if getattr(value, "op", None) in co_layout_ops
+        })
+        if present:
+            _refuse_runtime(
+                layout_plan,
+                gate="multi_layout_colocated_kernel_unavailable",
+                message=("Program operation(s) %s require one co-located grid and have no "
+                         "qualified mapping lowering" % present),
+            )
+    resolved_layouts = layout_authority.require_runtime()
+    validate_layout_mapping_components(layout_plan, components)
+    if len(layout_plan.layouts) > 1 and tuple(problem.layout_subjects().fields):
+        _refuse_runtime(
+            layout_plan,
+            gate="multi_layout_field_operator_unavailable",
+            message=("FieldOperator storage/solve has no per-layout compiled partition yet; "
+                     "refusing before artifact creation"),
+        )
+    resolved_layout = resolved_layouts.single() if len(resolved_layouts.rows) == 1 \
+        else resolved_layouts
 
     options = dict(compile_options or {})
     allowed_options = {"so_path", "force", "cxx", "include", "std", "debug"}
@@ -100,6 +148,7 @@ def resolve(
             # closures are built. A RuntimeParam never selects a second host-marshalled backend.
             backend=backend_token,
             state_spaces=state_spaces,
+            state_identities=tuple(state.qualified_id for state in spec["states"]),
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)
@@ -109,13 +158,14 @@ def resolve(
     bootstrap_plan = None
     amr_execution = None
     if target == "amr_system":
-        from pops.amr import (
+        from pops.amr._resolution import (
             AMRLayoutResolver,
             AMRResolutionContext,
             ResolvedAMRAuthorities,
         )
 
-        if not isinstance(detached_layout, AMRLayoutResolver):
+        adaptive_layout = resolved_layouts.single()
+        if not isinstance(adaptive_layout, AMRLayoutResolver):
             raise TypeError(
                 "adaptive layout providers must implement "
                 "resolve_amr_authorities(AMRResolutionContext)"
@@ -137,7 +187,7 @@ def resolve(
             program=resolved_time,
             resolve=resolve_amr_handle,
         )
-        resolved_amr = detached_layout.resolve_amr_authorities(context)
+        resolved_amr = adaptive_layout.resolve_amr_authorities(context)
         if type(resolved_amr) is not ResolvedAMRAuthorities:
             raise TypeError(
                 "layout resolve_amr_authorities() must return exact ResolvedAMRAuthorities"
@@ -147,6 +197,35 @@ def resolve(
         initial_condition_plan = resolved_amr.initial_conditions
         bootstrap_plan = resolved_amr.bootstrap
         amr_execution = resolved_amr.execution
+    # Boundary producers depend on the resolved layout and, for adaptive states, on the exact AMR
+    # transfer authority.  Compose them only after both authorities exist, then carry the single
+    # executable GhostProducerPlan through compile/install.
+    from dataclasses import replace
+    from pops.mesh.boundaries.composition import compose_boundary_plans
+
+    blocks = tuple(
+        block if block.numerics is None else replace(
+            block,
+            numerics=compose_boundary_plans(
+                block.numerics,
+                layout_plan=layout_plan,
+                amr_transfer=amr_transfer,
+            ),
+        )
+        for block in blocks
+    )
+    from pops.mesh.boundaries.composition import compose_shared_interfaces
+    blocks = compose_shared_interfaces(blocks, layout_plan=layout_plan)
+    from pops.codegen._interface_validation import (
+        validate_prepared_boundary_jacvec,
+        validate_shared_interface_program,
+    )
+
+    validate_prepared_boundary_jacvec(blocks, resolved_time)
+    validate_shared_interface_program(
+        blocks, layout_plan, resolved_time, target=target,
+        resolved_hierarchy=resolved_hierarchy,
+    )
     field_plans = capture_field_plans(
         problem, detached_frozen, target=target, layout=detached_layout)
     from pops.codegen.program_emit_field_routes import validate_program_field_routes
@@ -155,19 +234,9 @@ def resolve(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
 
-    module_abi_key = None
-    platform_evidence = None
-    if platform is not None:
-        from pops._platform_contracts import PlatformManifest
-
-        if type(platform) is not PlatformManifest:
-            raise TypeError("pops.resolve platform must be an exact PlatformManifest")
-        module_abi_key = platform.abi.require("resolve.platform.abi")
-        platform_evidence = platform.to_data()
-
     evidence = resolve_capability_evidence(
         problem, layout=layout_plan, libraries=(), time=resolved_time,
-        module_abi_key=module_abi_key)
+        module_abi_key=None)
     amr_requirements = None
     amr_capabilities = None
     if bootstrap_plan is not None:
@@ -186,6 +255,10 @@ def resolve(
     return ResolvedSimulationPlan(
         snapshot=snapshot, target=target, backend=backend_token, layout=detached_layout,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: ("amr_system" if row.adaptive else "system")
+            for row in layout_plan.layouts
+        },
         time=resolved_time, blocks=blocks, bind_schema=bind_schema,
         compile_values=compile_values, field_plans=field_plans, consumer_graph=consumer_graph,
         libraries=(),
@@ -194,9 +267,9 @@ def resolve(
                       "amr_resources": amr_requirements},
         capabilities={"resolution": evidence,
                       "layout_plan": layout_plan.capability_evidence(),
-                      "amr_bootstrap": amr_capabilities,
-                      "requested_platform": platform_evidence},
+                      "amr_bootstrap": amr_capabilities},
         lowering_coverage=layout_lowering_coverage(layout_plan), compile_options=options,
+        component_inputs=tuple(components),
         resolved_hierarchy=resolved_hierarchy, amr_transfer=amr_transfer,
         initial_condition_plan=initial_condition_plan, bootstrap_plan=bootstrap_plan,
         amr_execution=amr_execution)
@@ -216,30 +289,86 @@ def compile(plan: Any) -> Any:
 
     models = compile_install_models(plan, plan.compile_options)
     program = None
+    layout_programs = ()
     if plan.time is not None:
         from pops.codegen._compile_drivers import compile_problem
+        from pops.codegen._compiled_artifact import CompiledLayoutProgram
+        from pops.codegen.program_models import ProgramModelGraph
 
         options = dict(plan.compile_options)
         options["libraries"] = plan.libraries
-        model_graph = build_program_model_graph(plan)
-        program = compile_problem(
-            time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
-            problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
-        program._discard_authoring()
-    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+        if len(plan.layout_plan.layouts) == 1:
+            model_graph = build_program_model_graph(plan)
+            program = compile_problem(
+                time=plan.time, model_graph=model_graph, backend=plan.backend, target=plan.target,
+                problem_snapshot=plan.snapshot, field_plans=plan.field_plans, **options)
+            program._discard_authoring()
+            row = plan.layout_plan.layouts[0]
+            layout_programs = (CompiledLayoutProgram(
+                row.handle.qualified_id, plan.layout_targets[row.handle.qualified_id],
+                tuple(block.name for block in plan.blocks), program),)
+        else:
+            from pathlib import Path
+            from pops.codegen.program_slicing import slice_program
+
+            block_layouts = {
+                assignment.subject.local_id: assignment.layout.qualified_id
+                for assignment in plan.layout_plan.assignments
+                if assignment.subject_kind == "block"
+            }
+            compiled_rows = []
+            for row in plan.layout_plan.layouts:
+                layout_id = row.handle.qualified_id
+                selected = tuple(
+                    block for block in plan.blocks if block_layouts[block.name] == layout_id)
+                selected_names = tuple(block.name for block in selected)
+                sliced = slice_program(plan.time, selected_names)
+                slice_options = dict(options)
+                if slice_options.get("so_path") is not None:
+                    path = Path(slice_options["so_path"])
+                    slice_options["so_path"] = str(
+                        path.with_name("%s.%s%s" % (
+                            path.stem, row.handle.local_id, path.suffix or ".so")))
+                compiled_program = compile_problem(
+                    time=sliced,
+                    model_graph=ProgramModelGraph.from_resolved_blocks(selected),
+                    backend=plan.backend,
+                    target=plan.layout_targets[layout_id],
+                    problem_snapshot=plan.snapshot,
+                    field_plans={},
+                    **slice_options,
+                )
+                compiled_program._discard_authoring()
+                compiled_rows.append(CompiledLayoutProgram(
+                    layout_id, plan.layout_targets[layout_id], selected_names,
+                    compiled_program))
+            layout_programs = tuple(compiled_rows)
+    from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 
     blocks = tuple(
         CompiledBlockArtifact(
             block.name, models[block.name], block.spatial, block.state_spaces)
         for block in plan.blocks)
-    artifact = CompiledSimulationArtifact(plan=plan, program=program, blocks=blocks)
+    from pops.external import CompiledComponentArtifact, ExternalComponent, compile_component
+
+    component_artifacts = tuple(
+        compile_component(item, cxx=plan.compile_options.get("cxx"),
+                          include=plan.compile_options.get("include"))
+        if type(item) is ExternalComponent else item
+        for item in plan.component_inputs
+    )
+    if any(type(item) is not CompiledComponentArtifact for item in component_artifacts):
+        raise TypeError("component compilation did not produce exact CompiledComponentArtifact values")
+    artifact = CompiledSimulationArtifact(
+        plan=plan, program=program, blocks=blocks, layout_programs=layout_programs,
+        component_artifacts=component_artifacts)
     artifact.verify()
     return artifact
 
 
 def bind(artifact: Any, inputs: Any) -> Any:
     """Authenticate concrete BindInputs, create one InstallPlan, and install it."""
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
     from pops.codegen._plans import BindInputs, InstallPlan
 
     if type(artifact) is not CompiledSimulationArtifact:
@@ -261,7 +390,7 @@ def bind(artifact: Any, inputs: Any) -> Any:
             row.subject.qualified_id: row.subject
             for row in plan.initial_condition_plan.bindings
         }
-        from pops.mesh.amr import AnalyticReprojection
+        from pops.mesh._amr import AnalyticReprojection
         analytic = {
             row.subject.qualified_id
             for row in plan.bootstrap_plan.selections
@@ -290,15 +419,23 @@ def bind(artifact: Any, inputs: Any) -> Any:
         if block.name in inputs.initial_state:
             entry["initial"] = inputs.initial_state[block.name]
         instances[block.name] = entry
+    components = {}
+    if artifact.component_artifacts:
+        from pops.codegen.cache import component_store_dir
+
+        install_root = component_store_dir()
+        for component in artifact.component_artifacts:
+            installed = component.install(install_root).load()
+            components[installed.component_id] = installed
     install_plan = InstallPlan(
         artifact=artifact, bind_inputs=inputs, instances=instances, params=params,
-        aux=inputs.aux, resources=inputs.resources,
+        aux=inputs.aux, resources=inputs.resources, components=components,
         execution_context=_execution_context(artifact, inputs.resources))
     return install(install_plan)
 
 
 def _execution_context(artifact: Any, resources: Any) -> Any:
-    from pops.runtime.platform_manifest import execution_context_for_bind
+    from pops.runtime._platform_manifest import execution_context_for_bind
     return execution_context_for_bind(artifact.platform_manifest, resources)
 
 

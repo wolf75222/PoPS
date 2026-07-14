@@ -1,107 +1,90 @@
-// Parite du chemin AOT "compile" (add_compiled_model, modele connu a la COMPILATION) avec le bloc
-// NATIF (add_block, dispatch d'une ModelSpec). Pour le MEME modele euler_poisson et le MEME schema,
-// le bloc compile doit tourner EXACTEMENT le chemin de production (fill_boundary + assemble_rhs sur
-// les vrais MultiFab du System, sans marshaling) : on exige un residu eval_rhs ET un potentiel
-// BIT-IDENTIQUES au bloc natif. C'est ce qui donne au modele genere par le DSL la parite Kokkos + MPI
-// du bloc natif (les deux passent par le meme make_block / install_block / fill_boundary).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
-#include <pops/runtime/builders/compiled/dsl_block.hpp>
-#include <pops/runtime/config/model_spec.hpp>
-#include <pops/runtime/system.hpp>
+#include <pops/runtime/dynamic/component_consumers.hpp>
 
-#include <cmath>
-#include <cstdio>
-#include <vector>
+#include "component_abi_test_helpers.hpp"
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+#include <array>
+#include <cstddef>
+#include <cstdint>
 
-using namespace pops;
+namespace {
 
-static int pops_run_test_compiled_model_parity(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
-  // Sous Kokkos, l'allocateur unifie (kokkos_malloc<SharedSpace>) exige Kokkos initialise AVANT la
-  // 1ere allocation (le ctor de System alloue l'aux) : ScopeGuard (RAII) avant toute construction.
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  const int n = 48;
-  const double L = 1.0;
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.3 * std::exp(-(x * x + y * y) / 0.02);
-    }
+namespace abi = pops::component::test_support;
 
-  SystemConfig cfg;
-  cfg.n = n;
-  cfg.L = L;
-  cfg.periodic = true;
-
-  // (A) bloc COMPILE AOT : modele connu a la compilation, branche sur la grille reelle du System.
-  System A(cfg);
-  using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
-  add_compiled_model(A, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
-  A.set_poisson("charge_density", "geometric_mg");
-  A.set_density("gas", rho);
-  A.solve_fields();
-  const std::vector<double> Ra = A.eval_rhs("gas");
-  const std::vector<double> pa = A.potential();
-
-  // (B) bloc NATIF : meme modele euler_poisson via dispatch d'une ModelSpec, meme schema.
-  System B(cfg);
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "gravity";
-  spec.elliptic = "gravity";
-  spec.gamma = 1.4;
-  spec.sign = -1.0;
-  spec.four_pi_G = 1.0;
-  spec.rho0 = 1.0;
-  B.add_block("gas", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
-  B.set_poisson("charge_density", "geometric_mg");
-  B.set_density("gas", rho);
-  B.solve_fields();
-  const std::vector<double> Rb = B.eval_rhs("gas");
-  const std::vector<double> pb = B.potential();
-
-  double dres = 0, dphi = 0, nrm = 0;
-  for (std::size_t k = 0; k < Ra.size(); ++k) {
-    dres = std::fmax(dres, std::fabs(Ra[k] - Rb[k]));
-    nrm = std::fmax(nrm, std::fabs(Rb[k]));
-  }
-  for (std::size_t k = 0; k < pa.size(); ++k)
-    dphi = std::fmax(dphi, std::fabs(pa[k] - pb[k]));
-
-  int fails = 0;
-  if (!(nrm > 1e-6)) {
-    std::printf("FAIL residu natif trivial\n");
-    ++fails;
-  }
-  if (!(dres < 1e-12)) {
-    std::printf("FAIL eval_rhs AOT != natif (ecart %.3e)\n", dres);
-    ++fails;
-  }
-  if (!(dphi < 1e-12)) {
-    std::printf("FAIL potentiel AOT != natif (ecart %.3e)\n", dphi);
-    ++fails;
-  }
-  if (fails == 0)
-    std::printf(
-        "OK test_compiled_model_parity (add_compiled_model == add_block ; dres=%.1e dphi=%.1e)\n",
-        dres, dphi);
-  return fails ? 1 : 0;
+PopsComponentTableHeaderV1 header(std::size_t size) {
+  return {static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1,
+          POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, nullptr, nullptr};
 }
 
-TEST(test_compiled_model_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_compiled_model_parity, "test_compiled_model_parity"), 0);
+double reference_flux(double left, double right) {
+  constexpr double speed = 1.5;
+  return 0.5 * (left + right) - 0.5 * speed * (right - left);
 }
+
+TEST(test_compiled_model_parity, ExactFluxTableMatchesCoreReferenceForWholeBatch) {
+  constexpr std::size_t faces = 4;
+  constexpr std::size_t components = 2;
+  const std::array<double, faces * components> left{
+      1.0, 2.0, 1.5, -1.0, 0.25, 3.0, 4.0, 0.5};
+  const std::array<double, faces * components> right{
+      0.5, 4.0, 2.0, -2.0, 1.25, 2.5, 3.0, 1.5};
+  const std::array<double, faces * 2> normals{1.0, 0.0, 0.0, 1.0,
+                                               -1.0, 0.0, 0.0, -1.0};
+  std::array<double, faces * components> output{};
+  std::array<double, faces> stability{};
+  std::array<PopsComponentActionV1, faces> actions{};
+
+  const PopsNumericalFluxApiV1 api{
+      header(sizeof(PopsNumericalFluxApiV1)),
+      +[](void*, const PopsNumericalFluxRequestV1* request,
+          PopsNumericalFluxResultV1* result) {
+        const auto* left_values = static_cast<const double*>(request->left.data);
+        const auto* right_values = static_cast<const double*>(request->right.data);
+        auto* output_values = static_cast<double*>(result->normal_flux.data);
+        for (std::size_t point = 0; point < faces; ++point) {
+          for (std::size_t component = 0; component < request->left.component_count; ++component) {
+            const auto index = point * static_cast<std::size_t>(request->left.axis_strides[1]) +
+                               component *
+                                   static_cast<std::size_t>(request->left.component_stride);
+            output_values[index] = reference_flux(left_values[index], right_values[index]);
+          }
+          result->stability_bounds[point] = 1.5;
+          result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+        }
+        result->status = {sizeof(PopsComponentStatusV1), 0,
+                          POPS_COMPONENT_CONTINUE_V1, nullptr};
+        return 0;
+      }};
+
+  const PopsNumericalFluxRequestV1 request{
+      sizeof(PopsNumericalFluxRequestV1),
+      abi::const_field_view(left.data(), 1, faces, components),
+      abi::const_field_view(right.data(), 1, faces, components),
+      abi::const_field_view(normals.data(), 1, faces, 2),
+      nullptr,
+      abi::logical_time(), abi::host_execution_context()};
+  PopsNumericalFluxResultV1 result{
+      sizeof(PopsNumericalFluxResultV1),
+      abi::field_view(output.data(), 1, faces, components),
+      stability.data(), actions.data(), {}};
+
+  ASSERT_EQ(pops::component::evaluate_faces(api, nullptr, request, result), 0);
+  for (std::size_t index = 0; index < output.size(); ++index)
+    EXPECT_DOUBLE_EQ(output[index], reference_flux(left[index], right[index]));
+  for (std::size_t point = 0; point < faces; ++point) {
+    EXPECT_DOUBLE_EQ(stability[point], 1.5);
+    EXPECT_EQ(actions[point], POPS_COMPONENT_CONTINUE_V1);
+  }
+  EXPECT_EQ(result.status.action, POPS_COMPONENT_CONTINUE_V1);
+}
+
+TEST(test_compiled_model_parity, MissingHotOperationIsRejectedBeforeExecution) {
+  const PopsNumericalFluxApiV1 api{header(sizeof(PopsNumericalFluxApiV1)), nullptr};
+  PopsNumericalFluxRequestV1 request{};
+  PopsNumericalFluxResultV1 result{};
+  EXPECT_THROW(pops::component::evaluate_faces(api, nullptr, request, result),
+               std::runtime_error);
+}
+
+}  // namespace

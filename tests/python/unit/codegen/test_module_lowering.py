@@ -27,7 +27,7 @@ from typed_program_support import typed_state
 pytest.importorskip("pops")
 from pops import model as model_pkg  # noqa: E402
 from pops import time as adctime  # noqa: E402
-from pops.ir.expr import Const  # noqa: E402
+from pops._ir.expr import Const  # noqa: E402
 from pops.physics._facade import Model  # noqa: E402
 from pops.codegen.module_lowering import (  # noqa: E402
     _module_to_model, lower_and_validate, remap_lowering_error)

@@ -120,20 +120,32 @@ class LayoutTransfer(_DataContract):
     _domain: ClassVar[str] = "runtime-layout-transfer"
     mapping_id: str
     provider_id: str
+    component_id: str
     source_layout_id: str
     target_layout_id: str
-    channel: str
+    source_subject_id: str
+    target_subject_id: str
+    source_representation_uri: str
+    target_representation_uri: str
+    operation_abi: int
+    synchronization_uri: str
     identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
         for name in (
             "mapping_id",
             "provider_id",
+            "component_id",
             "source_layout_id",
             "target_layout_id",
-            "channel",
+            "source_subject_id",
+            "target_subject_id",
+            "source_representation_uri",
+            "target_representation_uri",
+            "synchronization_uri",
         ):
             _text(getattr(self, name), "LayoutTransfer.%s" % name)
+        _positive(self.operation_abi, "LayoutTransfer.operation_abi")
         if self.source_layout_id == self.target_layout_id:
             raise ValueError("LayoutTransfer must cross distinct layouts")
         self._seal(self._payload())
@@ -144,11 +156,16 @@ class LayoutTransfer(_DataContract):
             for name in (
                 "mapping_id",
                 "provider_id",
+                "component_id",
                 "source_layout_id",
                 "target_layout_id",
-                "channel",
+                "source_subject_id",
+                "target_subject_id",
+                "source_representation_uri",
+                "target_representation_uri",
+                "synchronization_uri",
             )
-        }
+        } | {"operation_abi": self.operation_abi}
 
 
 @dataclass(frozen=True, slots=True)

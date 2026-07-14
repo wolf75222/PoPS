@@ -74,7 +74,7 @@ class ParamRegistry:
             self._validate_derived_dependencies(declaration)
         declaration.validate()
         if isinstance(declaration, DerivedParam) and declaration.phase is ParamPhase.Compile:
-            from pops.ir.param_values import (
+            from pops._ir.param_values import (
                 _evaluate_compile_derived,
                 _validate_derived_result,
             )

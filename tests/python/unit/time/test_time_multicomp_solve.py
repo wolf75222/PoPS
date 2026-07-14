@@ -268,6 +268,8 @@ def _run_one(t, pops, np, ncomp, init):
     """Compile + install + step the (I - alpha*Lap) solve on an ncomp-component block, compare to the
     offline numpy CG on the SAME discrete operator. @p init is (ncomp, n, n) the initial state. Returns
     (out, phi_ref, iters) or None if the toolchain is unavailable."""
+    import pops.runtime._engine_descriptors as engine
+
     n = init.shape[1]
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
@@ -290,8 +292,8 @@ def _run_one(t, pops, np, ncomp, init):
         return None
 
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_state("blk", init)
     sim.install_program(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free

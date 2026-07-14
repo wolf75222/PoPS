@@ -36,10 +36,12 @@ gauge and multigrid solver remain separate `FieldDiscretization` choices on the 
 ## Native and runtime proof
 
 The final spatial plan uses conservative variables, MUSCL with Van Leer limiting and HLL with the
-model's explicit signed wave pair. `pops.lib.time.IMEX(...)` constructs an ordinary inspectable
-`Program`; the preset contains no alternate runtime route. Its local solve is specialized from the
-resolved state manifest and therefore emits exact 15 by 15 storage and `mat_inverse<15>`, without an
-eight-component fallback or family dispatch.
+model's explicit signed wave pair. The example authors the ordinary inspectable IMEX `Program`
+explicitly so its realizability guard is visibly inside the commit transaction. The
+`pops.lib.time.IMEX(...)` preset remains an ordinary `Program` constructor with no alternate runtime
+route, but it does not hide this model-specific scientific guard. The local solve is specialized from
+the resolved state manifest and therefore emits exact 15 by 15 storage and `mat_inverse<15>`, without
+an eight-component fallback or family dispatch.
 
 The example executes only:
 

@@ -23,8 +23,8 @@ import sys
 try:
     import numpy as np
 
-    import pops
-    from pops.ir.ops import sqrt
+    import pops.runtime._engine_descriptors as engine
+    from pops.math import sqrt
     from pops.physics._facade import Model
     from pops.params import RuntimeParam
     from pops.numerics.reconstruction import FirstOrder
@@ -95,8 +95,8 @@ def _amr_run(cs2_override, u0, nsteps=NSTEPS, dt=DT):
         return None, "runtime_param_names expected ['cs2'], got %r" % block_cm.runtime_param_names
     try:
         amr.add_equation("gas", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_density("gas", u0)  # momentum=0, coarse seed (same for both runs -> identical start)
         value = 1.0 if cs2_override is None else cs2_override
         amr.set_block_params("gas", [value])
@@ -146,11 +146,11 @@ def test_amr_set_block_params_rejects_a_paramless_block():
         return
     # A native ModelSpec block (composed bricks) carries no runtime param.
     try:
-        spec = pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
-                          pops.ChargeDensity(charge=1.0))
+        spec = engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
+                          engine.ChargeDensity(charge=1.0))
         amr.add_equation("ne", spec,
-                         spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=pops.Explicit())
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit())
     except Exception as exc:  # noqa: BLE001 -- brick/ModelSpec API drift; skip rather than fail
         print("skip (could not build/add a native ModelSpec block: %s)" % str(exc)[:120])
         return

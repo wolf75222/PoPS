@@ -2,7 +2,7 @@
 """ADC-515 (Spec 6 sec.20): the explicit-family time schemes run end-to-end on a native AmrSystem.
 
 The AMR column of the sec.20 matrix for the explicit family: a REAL ``AmrSystem`` built from native
-``pops.Model(...)`` bricks (no Kokkos ``.so`` compile) steps under each of Explicit / SSPRK3 / IMEX,
+``engine.Model(...)`` bricks (no Kokkos ``.so`` compile) steps under each of Explicit / SSPRK3 / IMEX,
 mono- AND multi-block, and the verdict is the one the dedicated AMR suites use -- finite state after
 stepping, a live fine patch (refinement is not inert) and per-block mass conserved to ~machine
 (reflux + average_down). This is the green half the refusal cells (``test_amr_refusals``) sit next
@@ -18,14 +18,15 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
 def _scalar_charge(q, B0=1.0):
     """A single-scalar E x B transport block with a charge-density Poisson coupling (charge q)."""
-    return pops.Model(pops.Scalar(), pops.ExB(B0=B0), pops.NoSource(), pops.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _bump(n, amp):
@@ -39,9 +40,9 @@ def _bump(n, amp):
 def _run_amr_explicit_family(time_brick, *, multi, n=32):
     """Build + step a native AmrSystem of scalar-charge block(s) under an explicit-family @p time_brick."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.block("ions", _scalar_charge(+1.0), spatial=pops.Spatial(minmod=True), time=time_brick)
+    sim.block("ions", _scalar_charge(+1.0), spatial=engine.Spatial(minmod=True), time=time_brick)
     if multi:
-        sim.block("electrons", _scalar_charge(-1.0), spatial=pops.Spatial(minmod=True),
+        sim.block("electrons", _scalar_charge(-1.0), spatial=engine.Spatial(minmod=True),
                       time=time_brick)
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # low threshold -> the bump tags + refines (live fine patches)
@@ -67,7 +68,7 @@ def _assert_finite_and_conserved(sim, m0, label):
 @pytest.mark.parametrize("multi", [False, True], ids=["mono", "multi"])
 def test_amr_explicit_runs_finite_and_conserved(multi):
     """AMR x Explicit x {mono, multi}: native run, finite, live patch, per-block mass conserved."""
-    sim, m0 = _run_amr_explicit_family(pops.Explicit(), multi=multi)
+    sim, m0 = _run_amr_explicit_family(engine.Explicit(), multi=multi)
     _assert_finite_and_conserved(sim, m0, "AMR/Explicit/%s" % ("multi" if multi else "mono"))
 
 
@@ -78,7 +79,7 @@ def test_amr_ssprk3_runs_finite_and_conserved(multi):
     The dedicated ``test_amr_ssprk3`` proves the SSPRK3-vs-IMEX exclusivity; this cell pins it as
     part of the sec.20 explicit-family column so the matrix has the SSPRK3 x block-count entries.
     """
-    sim, m0 = _run_amr_explicit_family(pops.Explicit(ssprk3=True), multi=multi)
+    sim, m0 = _run_amr_explicit_family(engine.Explicit(ssprk3=True), multi=multi)
     _assert_finite_and_conserved(sim, m0, "AMR/SSPRK3/%s" % ("multi" if multi else "mono"))
 
 
@@ -89,7 +90,7 @@ def test_amr_imex_mono_runs_finite_and_conserved():
     transport. The mono cell pins the IMEX time brick is accepted and steps to a finite, conserved
     state; a coupled multi-block IMEX source is exercised by the dedicated C++ AMR suites.
     """
-    sim, m0 = _run_amr_explicit_family(pops.IMEX(), multi=False)
+    sim, m0 = _run_amr_explicit_family(engine.IMEX(), multi=False)
     _assert_finite_and_conserved(sim, m0, "AMR/IMEX/mono")
 
 

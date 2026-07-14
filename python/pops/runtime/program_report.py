@@ -42,12 +42,13 @@ class ProgramRuntimeReport:
     sections); a bound program fills the sections from the C++ Program subsystem accessors.
     """
 
-    schema_version = 2
+    schema_version = 3
     report_type = "program_runtime"
 
     def __init__(self, *, installed: Any, program_hash: Any, step_transaction: Any, block_map: Any,
                  params: Any, diagnostics: Any, histories: Any, cache: Any,
-                 profiler: Any) -> None:
+                 profiler: Any, clocks: Any, level_relations: Any,
+                 flux_ledger: Any, synchronization: Any, temporal: Any) -> None:
         self.installed = bool(installed)
         self.program_hash = program_hash or ""
         self.step_transaction = dict(step_transaction)
@@ -57,6 +58,11 @@ class ProgramRuntimeReport:
         self.histories = [dict(row) for row in histories]
         self.cache = [dict(row) for row in cache]
         self.profiler = dict(profiler)
+        self.clocks = [dict(row) for row in clocks]
+        self.level_relations = [dict(row) for row in level_relations]
+        self.flux_ledger = [dict(row) for row in flux_ledger]
+        self.synchronization = [dict(row) for row in synchronization]
+        self.temporal = dict(temporal)
 
     def to_dict(self) -> Any:
         return {
@@ -71,6 +77,11 @@ class ProgramRuntimeReport:
             "histories": [dict(row) for row in self.histories],
             "cache": [dict(row) for row in self.cache],
             "profiler": dict(self.profiler),
+            "clocks": [dict(row) for row in self.clocks],
+            "level_relations": [dict(row) for row in self.level_relations],
+            "flux_ledger": [dict(row) for row in self.flux_ledger],
+            "synchronization": [dict(row) for row in self.synchronization],
+            "temporal": dict(self.temporal),
         }
 
     def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
@@ -98,6 +109,9 @@ class ProgramRuntimeReport:
         lines.append("  histories   : %d ring(s)" % len(self.histories))
         lines.append("  cache       : %d slot(s)" % len(self.cache))
         lines.append("  profiler    : enabled=%s" % self.profiler.get("enabled"))
+        lines.append("  clocks      : %d cursor(s)" % len(self.clocks))
+        lines.append("  flux ledger : %d accepted contribution(s)" % len(self.flux_ledger))
+        lines.append("  sync        : %d phase event(s)" % len(self.synchronization))
         return "\n".join(lines)
 
 
@@ -142,6 +156,52 @@ def _cache(sim: Any) -> Any:
     return rows
 
 
+def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any]:
+    clocks = []
+    for row in _call(sim, "program_clock_manifest", []) or []:
+        if row[0] == "level" and len(row) == 6:
+            clocks.append({
+                "kind": "level", "level": int(row[1]), "macro_step": int(row[2]),
+                "phase": {"numerator": int(row[3]), "denominator": int(row[4])},
+                "physical_time": float(row[5]),
+            })
+        elif row[0] == "logical" and len(row) == 3:
+            clocks.append({"kind": "logical", "clock": row[1], "tick": int(row[2])})
+        else:
+            raise ValueError("native AMR Program clock report has an invalid row")
+    relations = []
+    for row in _call(sim, "checkpoint_temporal_relations", []) or []:
+        if len(row) != 5:
+            raise ValueError("native AMR temporal relation report has an invalid row")
+        relations.append({
+            "parent_level": int(row[0]), "child_level": int(row[1]),
+            "temporal_ratio": {"numerator": int(row[2]), "denominator": int(row[3])},
+            "remainder_policy": row[4],
+        })
+    ledger = []
+    for row in _call(sim, "program_flux_ledger_manifest", []) or []:
+        if len(row) != 13:
+            raise ValueError("native AMR Program flux-ledger report has an invalid row")
+        ledger.append({
+            "owner": row[0], "state": row[1], "rate": row[2], "flux": row[3],
+            "level": int(row[4]), "macro_step": int(row[5]),
+            "phase": {"numerator": int(row[6]), "denominator": int(row[7])},
+            "stage_weight": {"numerator": int(row[8]), "denominator": int(row[9])},
+            "orientation": row[10], "face_measure": float(row[11]),
+            "substep_duration": float(row[12]),
+        })
+    synchronization = []
+    for row in _call(sim, "program_sync_manifest", []) or []:
+        if len(row) != 7:
+            raise ValueError("native AMR Program synchronization report has an invalid row")
+        synchronization.append({
+            "parent_level": int(row[0]), "child_level": int(row[1]),
+            "block": int(row[2]), "phase": row[3], "macro_step": int(row[4]),
+            "clock_phase": {"numerator": int(row[5]), "denominator": int(row[6])},
+        })
+    return clocks, relations, ledger, synchronization
+
+
 def build_program_report(sim: Any) -> Any:
     """Aggregate the bound Program-subsystem accessors of @p sim into a :class:`ProgramRuntimeReport`.
 
@@ -150,6 +210,9 @@ def build_program_report(sim: Any) -> Any:
     missing an accessor yields ``None`` for that field.
     """
     program_hash = _call(sim, "installed_program_hash", "") or ""
+    clocks, relations, ledger, synchronization = _amr_temporal_report(sim)
+    temporal_state = getattr(sim, "_temporal_restart_state", None)
+    temporal = temporal_state.to_data() if temporal_state is not None else {}
     return ProgramRuntimeReport(
         installed=bool(program_hash),
         program_hash=program_hash,
@@ -163,4 +226,9 @@ def build_program_report(sim: Any) -> Any:
         histories=_histories(sim),
         cache=_cache(sim),
         profiler={"enabled": _call(sim, "is_profiling", None)},
+        clocks=clocks,
+        level_relations=relations,
+        flux_ledger=ledger,
+        synchronization=synchronization,
+        temporal=temporal,
     )

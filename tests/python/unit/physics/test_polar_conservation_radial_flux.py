@@ -48,8 +48,9 @@ import math
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 # Parametres geometriques
@@ -129,17 +130,17 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
     Voir docstring du module pour la motivation et la strategie.
     """
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     sim.block(
         "ne",
-        model=pops.Model(
-            state=pops.Scalar(),
-            transport=pops.ExB(B0=1.0),
-            source=pops.NoSource(),
-            elliptic=pops.ChargeDensity(charge=1.0),
+        model=engine.Model(
+            state=engine.Scalar(),
+            transport=engine.ExB(B0=1.0),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
         ),
-        spatial=pops.Spatial(minmod=True),
-        time=pops.Explicit(),
+        spatial=engine.Spatial(minmod=True),
+        time=engine.Explicit(),
     )
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
@@ -204,7 +205,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
 if __name__ == "__main__":
     import pops as _pops_mod
 
-    _sim = _pops_mod.System(mesh=_pops_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    _sim = _pops_mod.System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
     _sim.block(
         "ne",
         model=_pops_mod.Model(

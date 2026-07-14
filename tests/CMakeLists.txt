@@ -296,6 +296,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_fab2d
   test_box_array
   test_multifab
+  test_multiblock_interface_scheduler
   test_sync_residence
   test_reduce
   test_reduce_abs_sum
@@ -307,6 +308,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_fill_boundary_cache
   test_copy_schedule_cache
   test_physical_bc
+  test_prepared_boundary_plan
   test_geometry
   test_refinement
   test_ref_ratio
@@ -430,6 +432,7 @@ set(POPS_CPP_STANDARD_TESTS
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
+pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 # The Cartesian-vs-polar radial-diffusion comparison runs two full advections and sits close to the
 # 600 s default cap on slow CI runners (timed out on identical binaries across consecutive master
@@ -459,13 +462,13 @@ pops_native_loader_definitions(_native_defs)
 pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_compiled_model_parity)
-pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}")
 
 pops_test_source(_src test_weno5_compiled_model)
 pops_add_gtest_suite(NAME test_weno5_compiled_model SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 pops_test_source(_src test_amr_compiled_model)
-pops_add_gtest_suite(NAME test_amr_compiled_model SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_compiled_model SOURCES "${_src}")
 
 pops_test_source(_src test_amr_seed_no_refine)
 pops_add_gtest_suite(NAME test_amr_seed_no_refine SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -481,7 +484,7 @@ pops_add_gtest_suite(NAME test_amr_distribute_coarse_serial SOURCES "${_src}" EX
 
 pops_test_source(_src test_amr_native_loader)
 pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_external_riemann_dispatch)
 pops_native_loader_definitions(_native_defs)
@@ -495,8 +498,7 @@ endif()
 pops_add_gtest_suite(NAME test_external_riemann_dispatch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_external_riemann_defs})
 
 pops_test_source(_src test_amr_weno5_native)
-pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_weno5_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_weno5_native SOURCES "${_src}")
 
 pops_test_source(_src test_amr_riemann_native)
 pops_native_loader_definitions(_native_defs)

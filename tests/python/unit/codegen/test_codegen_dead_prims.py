@@ -28,7 +28,7 @@ import tempfile
 import numpy as np
 
 import pops.moments as M
-from pops.ir.expr import Const
+from pops._ir.expr import Const
 
 from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()

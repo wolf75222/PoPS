@@ -42,6 +42,15 @@ struct FluxMeasure {
   double substep_duration = 0.0;
 };
 
+/// Numerical scale used when the accepted ledger feeds the finite-volume reflux correction.  The
+/// payload is a physical face flux, while route_reflux_integrated applies the face/cell measure ratio
+/// through 1/dx or 1/dy.  Multiplying face_measure here would therefore count geometry twice.  The
+/// measure remains in the ledger as auditable geometry, but weight*duration is the unique numerical
+/// conversion from an accepted entry to its dt-integrated interface flux.
+inline double numerical_reflux_scale(const FluxMeasure& measure) {
+  return measure.stage_weight.value() * measure.substep_duration;
+}
+
 template <class Payload>
 struct FluxLedgerEntry {
   FluxLedgerKey key;
@@ -58,7 +67,7 @@ class TransactionalFluxLedger {
  public:
   using Entry = FluxLedgerEntry<Payload>;
 
-  void begin() { savepoints_.push_back(entries_); }
+  void begin() { savepoints_.push_back(entries_.size()); }
 
   void commit() {
     if (savepoints_.empty())
@@ -69,7 +78,7 @@ class TransactionalFluxLedger {
   void rollback() {
     if (savepoints_.empty())
       throw std::runtime_error("AMR flux ledger rollback without active transaction");
-    entries_ = std::move(savepoints_.back());
+    entries_.resize(savepoints_.back());
     savepoints_.pop_back();
   }
 
@@ -101,16 +110,14 @@ class TransactionalFluxLedger {
   std::map<FluxLedgerKey, Payload> aggregate(Axpy&& axpy) const {
     std::map<FluxLedgerKey, Payload> result;
     for (const Entry& entry : entries_) {
-      const double scale = entry.measure.stage_weight.value() * entry.measure.face_measure *
-                           entry.measure.substep_duration;
-      axpy(result[entry.key], scale, entry.payload);
+      axpy(result[entry.key], numerical_reflux_scale(entry.measure), entry.payload);
     }
     return result;
   }
 
  private:
   std::vector<Entry> entries_;
-  std::vector<std::vector<Entry>> savepoints_;
+  std::vector<std::size_t> savepoints_;
 };
 
 }  // namespace pops::amr

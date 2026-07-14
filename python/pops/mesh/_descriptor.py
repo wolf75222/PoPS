@@ -9,14 +9,13 @@ runtime will materialise after validation; nothing here computes a cell, a face 
 Spec 5 Phase D unifies the two descriptor families: :class:`MeshDescriptor` now subclasses the
 shared :class:`pops.descriptors.Descriptor` (so the mesh objects honour the same documented
 ``DescriptorProtocol`` as the native :class:`pops.descriptors.BrickDescriptor`), and
-:class:`Availability` is RE-EXPORTED from :mod:`pops.descriptors` -- it is the same class, no
-longer a parallel duplicate. ``pops.mesh._descriptor.Availability`` and ``MeshDescriptor`` stay
-importable for back-compat. The ``mesh -> descriptors`` import is on a flat root module
+:class:`Availability` is consumed from its unique owner :mod:`pops.descriptors`; it is not
+re-exported by :mod:`pops.mesh`. The ``mesh -> descriptors`` import is on a flat root module
 (``pops.descriptors`` is not a tracked layer), so it does not add a cross-layer edge.
 """
 from __future__ import annotations
 
-from pops.descriptors import Availability, Descriptor
+from pops.descriptors import Descriptor
 
 
 class MeshDescriptor(Descriptor):
@@ -33,4 +32,4 @@ class MeshDescriptor(Descriptor):
     category = "mesh"
 
 
-__all__ = ["Availability", "MeshDescriptor"]
+__all__ = ["MeshDescriptor"]

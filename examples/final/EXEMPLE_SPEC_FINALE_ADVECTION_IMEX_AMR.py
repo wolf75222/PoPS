@@ -26,8 +26,7 @@ from pops.fields import (
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Dirichlet
 from pops.frames import Cartesian2D
-from pops.ir import ValueExpr, ddt, div
-from pops.math import laplacian
+from pops.math import ValueExpr, ddt, div, laplacian
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -112,9 +111,19 @@ class IMEXRuntimeSnapshot:
     states: dict[str, tuple[np.ndarray, ...]]
     fields: dict[str, tuple[np.ndarray, ...]]
     patch_boxes: tuple[tuple[int, ...], ...]
+    regrid_count: int
+    topology_epoch: int
     program_hash: str
     consumer_graph_identity: str
     consumer_cursors: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class IMEXAMRProgramEvidence:
+    """Accepted native Program evidence for conservative multi-level coupling."""
+
+    flux_ledger_levels: tuple[int, ...]
+    synchronization_phases: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +137,7 @@ class IMEXExecutionEvidence:
     paraview_identity: str
     artifact_identity: str
     level_count: int
+    program_evidence: IMEXAMRProgramEvidence
     accepted: IMEXRuntimeSnapshot
     restored: IMEXRuntimeSnapshot
     continuous: IMEXRuntimeSnapshot
@@ -406,6 +416,7 @@ def build_initial(
 
 def build_layout(core: IMEXAMRAuthoring) -> Any:
     from pops.amr import (
+        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -444,16 +455,18 @@ def build_layout(core: IMEXAMRAuthoring) -> Any:
         grid=core.grid,
         hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
         tagging=tagging,
-        regrid=AMRRegrid(schedule=every(4, clock=core.program.clock)),
+        # The acceptance proof spans the first step plus one continuation. Cadence one makes a
+        # regrid due in that window; the counter/epoch delta below proves that it actually completed.
+        regrid=AMRRegrid(schedule=every(1, clock=core.program.clock)),
         transfer=transfer,
-        execution=AMRExecution.subcycled(),
+        # Temporal subcycling is declared independently from spatial refinement.
+        execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 2),)),
     )
 
 
 def build_consumers(core: IMEXAMRAuthoring) -> Any:
     from pops.diagnostics import Integral
-    from pops.output import Checkpoint, HDF5, NPZ, ParaView, ScientificOutput
-    from pops.runtime import ConsumerGraph
+    from pops.output import ConsumerGraph, Checkpoint, HDF5, NPZ, ParaView, ScientificOutput
     from pops.time import every
 
     fields = (core.tracer_state, core.diagnostic_field)
@@ -529,6 +542,7 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
     }
     if any(count <= 0 for count in field_level_counts.values()):
         raise RuntimeError("IMEX acceptance installed an empty diagnostic-field hierarchy")
+    regrid = simulation.amr.explain_regrid()
     return IMEXRuntimeSnapshot(
         time=float(simulation.time()),
         macro_step=int(simulation.macro_step()),
@@ -554,9 +568,70 @@ def _snapshot(simulation: Any) -> IMEXRuntimeSnapshot:
             tuple(int(value) for value in row)
             for row in simulation.patch_boxes()
         ),
+        regrid_count=int(regrid.regrid_count),
+        topology_epoch=int(regrid.topology_epoch),
         program_hash=str(simulation.installed_program_hash()),
         consumer_graph_identity=simulation.consumer_graph.identity.token,
         consumer_cursors=simulation.consumer_cursors.to_data(),
+    )
+
+
+def _require_regrid_progress(
+    before: IMEXRuntimeSnapshot,
+    after: IMEXRuntimeSnapshot,
+    *,
+    where: str,
+) -> None:
+    """Require an actually completed regrid, not only a due schedule."""
+
+    if after.regrid_count <= before.regrid_count:
+        raise RuntimeError(
+            "%s did not increase the completed AMR regrid count (%d -> %d)"
+            % (where, before.regrid_count, after.regrid_count)
+        )
+    if after.topology_epoch <= before.topology_epoch:
+        raise RuntimeError(
+            "%s did not install a new AMR topology epoch (%d -> %d)"
+            % (where, before.topology_epoch, after.topology_epoch)
+        )
+
+
+def _require_multilevel_program_evidence(report: Any) -> IMEXAMRProgramEvidence:
+    """Authenticate one accepted AMR ledger/synchronization from program_report()."""
+
+    if not report.installed:
+        raise RuntimeError("IMEX acceptance has no installed native Program report")
+    levels = tuple(sorted({int(row["level"]) for row in report.flux_ledger}))
+    if levels != (0, 1):
+        raise RuntimeError(
+            "IMEX acceptance requires flux-ledger contributions on levels 0 and 1, got %r"
+            % (levels,)
+        )
+
+    phase_groups: dict[tuple[int, ...], list[str]] = {}
+    for row in report.synchronization:
+        clock_phase = row["clock_phase"]
+        key = (
+            int(row["parent_level"]),
+            int(row["child_level"]),
+            int(row["block"]),
+            int(row["macro_step"]),
+            int(clock_phase["numerator"]),
+            int(clock_phase["denominator"]),
+        )
+        phase_groups.setdefault(key, []).append(str(row["phase"]))
+    expected_phases = ("reflux", "average_down")
+    if not phase_groups:
+        raise RuntimeError("IMEX acceptance published no AMR synchronization phases")
+    for key, phases in phase_groups.items():
+        if tuple(phases) != expected_phases:
+            raise RuntimeError(
+                "IMEX AMR synchronization %r must be reflux then average_down, got %r"
+                % (key, tuple(phases))
+            )
+    return IMEXAMRProgramEvidence(
+        flux_ledger_levels=levels,
+        synchronization_phases=expected_phases,
     )
 
 
@@ -575,6 +650,8 @@ def _require_same_snapshot(
     exact = {
         "macro_step": (left.macro_step, right.macro_step),
         "patch_boxes": (left.patch_boxes, right.patch_boxes),
+        "regrid_count": (left.regrid_count, right.regrid_count),
+        "topology_epoch": (left.topology_epoch, right.topology_epoch),
         "program_hash": (left.program_hash, right.program_hash),
         "consumer_graph_identity": (
             left.consumer_graph_identity,
@@ -668,7 +745,7 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
     simulation = pops.bind(artifact, params=params)
     controls = dict(target.authoring.run_controls)
     controls["output_dir"] = accepted_root
-    if pops.run(simulation, **controls) <= 0:
+    if pops.run(simulation, **controls).accepted_steps <= 0:
         raise RuntimeError("the manual IMEX Program executed no accepted macro-step")
 
     hdf5_path, paraview_path, hdf5_identity, paraview_identity = \
@@ -694,14 +771,27 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
     }
     if pops.run(
         simulation, output_dir=root / "continuous", **continuation,
-    ) <= 0:
+    ).accepted_steps <= 0:
         raise RuntimeError("the uninterrupted IMEX continuation executed no macro-step")
     if pops.run(
         resumed, output_dir=root / "restarted", **continuation,
-    ) <= 0:
+    ).accepted_steps <= 0:
         raise RuntimeError("the restarted IMEX continuation executed no macro-step")
     continuous, restarted = _snapshot(simulation), _snapshot(resumed)
     _require_same_snapshot(continuous, restarted, where="bit-identical continuation")
+    _require_regrid_progress(accepted, continuous, where="uninterrupted continuation")
+    _require_regrid_progress(restored, restarted, where="restarted continuation")
+    continuous_report = simulation.program_report()
+    restarted_report = resumed.program_report()
+    continuous_program = _require_multilevel_program_evidence(continuous_report)
+    restarted_program = _require_multilevel_program_evidence(restarted_report)
+    if continuous_program != restarted_program:
+        raise RuntimeError("restart changed the accepted AMR Program ledger/synchronization report")
+    if (
+        continuous_report.flux_ledger != restarted_report.flux_ledger
+        or continuous_report.synchronization != restarted_report.synchronization
+    ):
+        raise RuntimeError("restart changed AMR Program ledger/synchronization entries")
     return IMEXExecutionEvidence(
         hdf5_path=hdf5_path,
         paraview_path=paraview_path,
@@ -710,6 +800,7 @@ def run_manual_and_restart(output_dir: Any) -> IMEXExecutionEvidence:
         paraview_identity=paraview_identity,
         artifact_identity=artifact.artifact_identity.token,
         level_count=resolved.resolved_hierarchy.plan.level_count,
+        program_evidence=continuous_program,
         accepted=accepted,
         restored=restored,
         continuous=continuous,
@@ -747,7 +838,7 @@ def run_preset_parity(
         t_end=expected.time,
         max_steps=int(preset.authoring.run_controls["max_steps"]),
         output_dir=Path(output_dir),
-    ) <= 0:
+    ).accepted_steps <= 0:
         raise RuntimeError("the preset IMEX Program executed no accepted macro-step")
     actual = _snapshot(simulation)
     _require_same_snapshot(expected, actual, where="manual/pops.lib.time.IMEX parity")
@@ -789,18 +880,33 @@ def main(argv: list[str] | None = None) -> None:
     print("bit-identical restart: %s" % restart_equal)
     print("bit-identical continuation: %s" % continuation_equal)
     print("manual/pops.lib.time.IMEX parity: %s" % preset_equal)
+    print(
+        "regrid count: %d -> %d (topology epoch %d -> %d)"
+        % (
+            evidence.accepted.regrid_count,
+            evidence.restarted.regrid_count,
+            evidence.accepted.topology_epoch,
+            evidence.restarted.topology_epoch,
+        )
+    )
     print("report: " + json.dumps({
         "artifact": evidence.artifact_identity,
         "checkpoint_restart_bit_identical": restart_equal,
         "continuation_bit_identical": continuation_equal,
         "finite": finite,
+        "flux_ledger_levels": list(evidence.program_evidence.flux_ledger_levels),
         "levels": evidence.level_count,
         "manual_preset_bit_identical": preset_equal,
         "program_hash": preset.program_hash,
+        "regrid_count": evidence.accepted.regrid_count,
+        "regrid_count_after_continuation": evidence.restarted.regrid_count,
         "runtime_steps": evidence.accepted.macro_step,
         "runtime_time": evidence.accepted.time,
         "runtime_steps_after_continuation": evidence.restarted.macro_step,
         "runtime_time_after_continuation": evidence.restarted.time,
+        "synchronization_phases": list(evidence.program_evidence.synchronization_phases),
+        "topology_epoch": evidence.accepted.topology_epoch,
+        "topology_epoch_after_continuation": evidence.restarted.topology_epoch,
     }, sort_keys=True))
 
 

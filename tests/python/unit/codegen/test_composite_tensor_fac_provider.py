@@ -6,7 +6,7 @@ from fractions import Fraction
 
 import pytest
 
-from pops.ir.literals import scalar_data
+from pops._ir.literals import scalar_data
 from pops.linalg import LinearProblem
 from pops.solvers import CG, CompositeTensorFAC, Hierarchy, solvers
 from pops.time import Program

@@ -1,120 +1,126 @@
-// Parite du chemin COMPILE add_compiled_model(AmrSystem, ...) avec le chemin NATIF add_block (dispatch
-// d'une ModelSpec) cote AmrSystem. Pour le MEME modele euler_poisson (CompressibleFlux = Euler + force
-// de gravite + couplage GravityCoupling) et le MEME schema (minmod x rusanov, conservatif, explicite),
-// le bloc compile doit tourner EXACTEMENT le chemin de production de l'AMR (AmrCouplerMP<Model> + reflux
-// conservatif + regrid) : memes masse, nombre de patchs et densite grossiere BIT-IDENTIQUES apres
-// plusieurs pas. C'est ce qui donne au modele genere par le DSL la machinerie AMR du bloc natif.
-//
-// dispatch_model construit CompositeModel<CompressibleFlux, GravityForce, GravityCoupling> ; on passe
-// au chemin compile le MEME type (CompressibleFlux == Euler, cf. hyperbolic.hpp) -> parite exacte.
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>   // Euler (= CompressibleFlux)
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/runtime/dynamic/component_consumers.hpp>
 
-#include <cmath>
-#include <cstdio>
-#include <vector>
+#include "component_abi_test_helpers.hpp"
 
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>
-#endif
+#include <array>
+#include <cstddef>
+#include <cstdint>
 
-using namespace pops;
+namespace {
 
-static std::vector<double> bubble(int n) {  // bulle de densite lisse, periodique
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
-    }
-  return rho;
+namespace abi = pops::component::test_support;
+
+PopsComponentTableHeaderV1 header(std::size_t size, PopsNativeInterfaceIdV1 id) {
+  return {static_cast<std::uint32_t>(size), POPS_COMPONENT_PROTOCOL_ABI_V1, id, 1,
+          nullptr, nullptr};
 }
 
-static int pops_run_test_amr_compiled_model(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  const int n = 64;
-  const std::vector<double> rho = bubble(n);
-
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodic = true;
-  cfg.regrid_every = 4;
-
-  // (A) bloc COMPILE : modele connu a la compilation, branche par add_compiled_model.
-  AmrSystem A(cfg);
-  using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
-  add_compiled_model(A, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
-                     "minmod", "rusanov", "conservative", "explicit", /*gamma=*/1.4);
-  A.set_poisson("charge_density", "geometric_mg");
-  A.set_refinement(1.2);  // raffine la bulle
-  A.set_density("gas", rho);
-
-  // (B) bloc NATIF : meme modele via dispatch d'une ModelSpec, meme schema.
-  AmrSystem B(cfg);
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "gravity";
-  spec.elliptic = "gravity";
-  spec.gamma = 1.4;
-  spec.sign = -1.0;
-  spec.four_pi_G = 1.0;
-  spec.rho0 = 1.0;
-  B.add_block("gas", spec, "minmod", "rusanov", "conservative", "explicit", 1);
-  B.set_poisson("charge_density", "geometric_mg");
-  B.set_refinement(1.2);
-  B.set_density("gas", rho);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // memes patchs au depart (meme critere, meme champ) : le build compile produit la meme hierarchie.
-  chk(A.n_patches() == B.n_patches(), "n_patches initial AOT == natif");
-  const double m0 = A.mass();
-  chk(std::fabs(m0 - B.mass()) < 1e-12 * (std::fabs(m0) + 1.0), "masse initiale AOT == natif");
-
-  // quelques pas (regrid inclus) puis parite stricte de la densite grossiere et de la masse.
-  const double dt = 1e-3;
-  for (int s = 0; s < 12; ++s) {
-    A.step(dt);
-    B.step(dt);
-  }
-  const std::vector<double> da = A.density(), db = B.density();
-  chk(da.size() == db.size() && !da.empty(), "densite non vide, memes tailles");
-  double dmax = 0, nrm = 0;
-  for (std::size_t k = 0; k < da.size() && k < db.size(); ++k) {
-    dmax = std::fmax(dmax, std::fabs(da[k] - db[k]));
-    nrm = std::fmax(nrm, std::fabs(db[k]));
-  }
-  chk(nrm > 1e-6, "densite natif non triviale");
-  chk(dmax < 1e-12, "densite grossiere AOT == natif (bit-identique)");
-
-  const double mA = A.mass(), mB = B.mass();
-  chk(std::fabs(mA - mB) < 1e-12 * (std::fabs(mB) + 1.0), "masse finale AOT == natif");
-  chk(A.n_patches() == B.n_patches(), "n_patches final AOT == natif (regrid identique)");
-
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_compiled_model (add_compiled_model == add_block sur AMR ; dmax=%.1e)\n", dmax);
-  return fails ? 1 : 0;
+PopsComponentStatusV1 ok() {
+  return {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
 }
 
-TEST(test_amr_compiled_model, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_compiled_model, "test_amr_compiled_model"), 0);
+TEST(test_amr_compiled_model, ExactTransferAndRefluxTablesPreserveConservativeDataflow) {
+  const std::array<double, 8> fine{1.0, 1.0, 2.0, 2.0, 4.0, 4.0, 8.0, 8.0};
+  std::array<double, 4> coarse{};
+  const std::array<std::int32_t, 2> ratio{1, 2};
+  const PopsTransferApiV1 transfer{
+      header(sizeof(PopsTransferApiV1), POPS_NATIVE_INTERFACE_TRANSFER_V1),
+      +[](void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* status) {
+        const auto* source = static_cast<const double*>(request->source.data);
+        auto* destination = static_cast<double*>(request->destination.data);
+        for (std::size_t point = 0; point < 4; ++point)
+          destination[point] = 0.5 * (source[2 * point] + source[2 * point + 1]);
+        *status = ok();
+        return 0;
+      }};
+  const PopsTransferRequestV1 transfer_request{
+      sizeof(PopsTransferRequestV1),
+      abi::const_field_view(fine.data(), 1, 8),
+      abi::field_view(coarse.data(), 1, 4),
+      ratio.data(), 2, POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1,
+      abi::host_execution_context()};
+  PopsComponentStatusV1 status{};
+  ASSERT_EQ(pops::component::apply_transfer(transfer, nullptr, transfer_request, status), 0);
+  EXPECT_EQ(coarse, (std::array<double, 4>{1.0, 2.0, 4.0, 8.0}));
+
+  const std::array<double, 4> fine_integrated{1.25, 1.75, 4.5, 7.5};
+  std::array<double, 4> flux_register{};
+  const PopsRefluxApiV1 reflux{
+      header(sizeof(PopsRefluxApiV1), POPS_NATIVE_INTERFACE_REFLUX_V1),
+      +[](void*, const PopsRefluxRequestV1* request, PopsComponentStatusV1* result_status) {
+        auto* output = static_cast<double*>(request->flux_register.data);
+        const auto* fine_values = static_cast<const double*>(request->fine_integrated.data);
+        const auto* coarse_values = static_cast<const double*>(request->coarse_integrated.data);
+        for (std::size_t point = 0; point < 4; ++point)
+          output[point] += fine_values[point] - coarse_values[point];
+        *result_status = ok();
+        return 0;
+      }};
+  const PopsRefluxRequestV1 reflux_request{
+      sizeof(PopsRefluxRequestV1),
+      abi::const_field_view(coarse.data(), 1, 4),
+      abi::const_field_view(fine_integrated.data(), 1, 4),
+      abi::field_view(flux_register.data(), 1, 4), abi::host_execution_context()};
+  ASSERT_EQ(pops::component::deposit_reflux(reflux, nullptr, reflux_request, status), 0);
+  EXPECT_EQ(flux_register, (std::array<double, 4>{0.25, -0.25, 0.5, -0.5}));
+  EXPECT_DOUBLE_EQ(flux_register[0] + flux_register[1] + flux_register[2] +
+                       flux_register[3],
+                   0.0);
 }
+
+TEST(test_amr_compiled_model, TaggingAndClusteringUsePreparedMutableOutputs) {
+  const std::array<double, 6> indicator{0.0, 2.0, 3.0, 0.5, 4.0, 0.0};
+  std::array<std::uint8_t, 6> tags{};
+  const PopsTaggerApiV1 tagger{
+      header(sizeof(PopsTaggerApiV1), POPS_NATIVE_INTERFACE_TAGGER_V1),
+      +[](void*, const PopsTaggerRequestV1* request, PopsComponentStatusV1* status) {
+        const auto* state = static_cast<const double*>(request->state.data);
+        for (std::size_t point = 0; point < request->tags.size; ++point)
+          request->tags.data[point] = state[point] > 1.0 ? 1 : 0;
+        *status = ok();
+        return 0;
+      }};
+  const PopsTaggerRequestV1 tag_request{
+      sizeof(PopsTaggerRequestV1),
+      abi::const_field_view(indicator.data(), 2, 3),
+      {sizeof(PopsByteViewV1), tags.data(), tags.size()}, abi::logical_time(),
+      abi::host_execution_context()};
+  PopsComponentStatusV1 status{};
+  ASSERT_EQ(pops::component::tag_batch(tagger, nullptr, tag_request, status), 0);
+  EXPECT_EQ(tags, (std::array<std::uint8_t, 6>{0, 1, 1, 0, 1, 0}));
+
+  std::array<std::int64_t, 4> boxes{};
+  std::size_t box_count = 0;
+  const std::array<std::int64_t, 1> extents{6};
+  const PopsClusteringApiV1 clustering{
+      header(sizeof(PopsClusteringApiV1), POPS_NATIVE_INTERFACE_CLUSTERING_V1),
+      +[](void*, const PopsClusteringRequestV1* request, PopsComponentStatusV1* result_status) {
+        std::size_t first = request->tags.size;
+        std::size_t last = 0;
+        for (std::size_t point = 0; point < request->tags.size; ++point) {
+          if (request->tags.data[point] == 0) continue;
+          if (first == request->tags.size) first = point;
+          last = point + 1;
+        }
+        *request->box_count = first == request->tags.size ? 0 : 1;
+        if (*request->box_count != 0) {
+          request->boxes[0] = static_cast<std::int64_t>(first);
+          request->boxes[1] = static_cast<std::int64_t>(last);
+        }
+        *result_status = ok();
+        return 0;
+      }};
+  const PopsClusteringRequestV1 cluster_request{
+      sizeof(PopsClusteringRequestV1),
+      {sizeof(PopsConstByteViewV1), tags.data(), tags.size()}, extents.data(), 1,
+      boxes.data(), 2, &box_count, abi::host_execution_context()};
+  ASSERT_EQ(pops::component::cluster_tags(
+                clustering, nullptr, cluster_request, status), 0);
+  ASSERT_EQ(box_count, 1u);
+  EXPECT_EQ(boxes[0], 1);
+  EXPECT_EQ(boxes[1], 5);
+}
+
+}  // namespace

@@ -22,7 +22,7 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_REL_TOL,
     PHYSICAL_DEFAULT_GAMMA,
 )
-from pops.runtime.bricks import (
+from pops.runtime._engine_descriptors import (
     Spatial, Explicit, DivEpsGrad, CompositeRhs, ChargeDensitySource,
 )
 from pops.runtime.routes import (
@@ -49,26 +49,26 @@ class _SystemInstall(_System):
         """Installs an evolved block composed of NATIVE BRICKS on the shared system Poisson.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
+        ``pops.Case(...).block(...)`` assembly passed through ``pops.resolve`` / ``pops.compile``
+        and wired by ``pops.bind`` (which calls this method internally); ``add_block`` stays for that seam,
         the native/AMR runtime, and the tests.
 
-        Installs a model composed in Python from native bricks (pops.Model(...)). For a
-        compiled DSL model (.so) or an automatic dispatch on the model type,
-        use add_equation. The arguments are marshaled to the C++ facade
+        Installs a private ``ModelSpec`` composed from native bricks. Public ``pops.Model``
+        authoring enters through ``pops.Case`` and the lifecycle. For a compiled production model
+        or automatic dispatch on the engine value type, use add_equation. Arguments reach the C++ facade
         (System::add_block), which validates the block (names / roles / implicit mask) against the model.
 
         @param name unique block name; indexes set_density(name) / mass(name) / density(name).
-        @param model an pops.Model(...) (ModelSpec: state + transport + source + elliptic brick).
-        @param spatial spatial discretization, an pops.Spatial(...) / pops.FiniteVolume(...) (default
-            minmod + rusanov + conservative). Carries the limiter (none / minmod / vanleer / weno5 --
+        @param model private ``ModelSpec`` engine value.
+        @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
+            (default minmod + rusanov + conservative). Carries the limiter (none / minmod /
+            vanleer / weno5 --
             weno5 is exposed ONLY by this native path), the Riemann flux (rusanov / hll / hllc /
             roe) and the reconstructed variables (conservative / primitive). positivity_floor is read
             here (Zhang-Shu positivity limiter).
-        @param time temporal treatment, an pops.Explicit (default) / pops.IMEX / pops.SourceImplicit.
-            Carries substeps (sub-steps per macro-step), stride (multirate hold-then-catch-up cadence),
-            the implicit mask (implicit_vars / implicit_roles) and the Newton options (IMEX). All
-            these parameters are forwarded as-is to the C++.
+        @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
+            ``pops.lib.time`` factory. The lowered policy carries cadence, any implicit mask and
+            local Newton options; these values are forwarded as-is to C++.
         @param evolve True (default) = block advances; False = frozen field (background) which still
             contributes to the right-hand side of the system Poisson.
         """
@@ -95,15 +95,16 @@ class _SystemInstall(_System):
         """Install a native model or one compiled production package.
 
         Low-level runtime seam. The documented PUBLIC path is the typed
-        ``pops.Case(...).block(...)`` assembly lowered by ``pops.compile`` and wired by
-        ``pops.bind``; ``add_equation`` stays for that seam, the native/AMR runtime, and the tests.
+        ``pops.Case(...).block(...)`` assembly passed through ``pops.resolve`` / ``pops.compile``
+        and wired by ``pops.bind``; ``add_equation`` stays private to the native/AMR runtime.
 
         A ``ModelSpec`` uses the direct native brick path. A ``CompiledModel`` must be a
         production package; its complete resolved BindSchema vector is provided privately by
         :meth:`_install_compiled` and becomes immutable when native closures are created.
 
-        @p spatial : pops.FiniteVolume(...) / pops.Spatial(...) (default minmod+rusanov+conservative).
-        @p time : pops.Explicit / IMEX (default Explicit). @p substeps : overrides time.substeps.
+        @p spatial: private adapter lowered from ``pops.numerics.FiniteVolume(...)``.
+        @p time: private engine policy lowered from an explicit ``pops.Program`` or
+        ``pops.lib.time`` factory. @p substeps: overrides time.substeps.
         @p stride : overrides time.stride (1 = each macro-step, default bit-identical).
         @p names is accepted only by the direct ``ModelSpec`` path. @p evolve controls whether the
         installed block advances. ``_bind_params`` is an internal complete vector, never a public
@@ -141,7 +142,7 @@ class _SystemInstall(_System):
         if getattr(time, "implicit_vars", []) or getattr(time, "implicit_roles", []):
             raise ValueError(
                 "add_equation: implicit_vars / implicit_roles (per-block IMEX mask) are carried "
-                "only by a composed native model (pops.Model(...)), available on the internal native "
+                "only by a private native ModelSpec, available on the internal native "
                 "engine API (not part of the pops.bind surface). The compiled model (.so) does not "
                 "carry the mask.")
         # Same rules for the Newton options/diagnostics (IMEX): not carried by the .so ABI.
@@ -162,12 +163,13 @@ class _SystemInstall(_System):
             raise ValueError(
                 "add_equation: the Newton options (newton_max_iters/rel_tol/abs_tol/fd_eps/"
                 "diagnostics/damping/fail_policy) are carried only by a composed native model "
-                "(pops.Model(...)), available on the internal native engine API (not part of the "
+                "(ModelSpec), available on the internal native engine API (not part of the "
                 "pops.bind surface). The compiled model (.so) ABI does not carry them.")
 
         if not isinstance(model, CompiledModel):
-            raise TypeError("add_equation: model must be an pops.Model(...) (ModelSpec) or a "
-                            "CompiledModel (m.compile(...)); got %r" % type(model).__name__)
+            raise TypeError(
+                "add_equation: model must be a private ModelSpec or detached CompiledModel; got %r"
+                % type(model).__name__)
 
         compiled = model
         # Names guard: length checked early (the C++ also raises, but we diagnose here).
@@ -263,18 +265,10 @@ class _SystemInstall(_System):
                     coarse_threshold: Any = None) -> Any:
         """Configure the shared Poisson solve with typed boundary and wall selectors.
 
-        ``bc`` accepts the typed selectors from :mod:`pops.runtime.bricks`; omission
-        keeps automatic boundary selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
+        ``bc`` accepts a typed native boundary descriptor; omission keeps automatic boundary
+        selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
         :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Strings and a separate
-        ``wall_radius`` are deliberately absent: every public selector owns its complete data.
-
-        Example::
-
-            from pops.runtime.bricks import Dirichlet
-            from pops.mesh.geometry import Disc, NoWall
-
-            sim.set_poisson(bc=Dirichlet(), wall=Disc(radius=0.4))
-            sim.set_poisson(bc=Dirichlet(), wall=NoWall())
+        ``wall_radius`` are deliberately absent: every descriptor owns its complete data.
         """
         bc_token = "auto" if bc is None else _lower_bc(bc)
         wall_token, wall_radius = ("none", 0.0) if wall is None else _lower_wall(wall)
@@ -335,10 +329,10 @@ class _SystemInstall(_System):
     def add_coupling(self, coupling: Any) -> Any:
         """Add an inter-species coupling (operator-split, applied after transport):
 
-        - NAMED object pops.Ionization / Collision / ThermalExchange -> a PRESET lowering to the generic
+        - private Ionization / Collision / ThermalExchange descriptor -> preset lowering to a generic
           coupled source (ADC-595): the fixed formula is emitted as a CoupledSource with a DECLARED
           conservation contract, compiled to bytecode, and registered as a typed coupling operator;
-        - CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...)) -> GENERIC bytecode source
+        - private ``CompiledCoupledSource`` -> generic bytecode source
           interpreted on the C++ side (no per-cell Python callback, MPI-safe).
 
         Both paths register through System.add_coupling_operator, so the coupling is inspectable as a
@@ -356,8 +350,9 @@ class _SystemInstall(_System):
             return
         preset = lower_named_coupling(coupling, self._s.block_gamma)
         if preset is None:
-            raise TypeError("add_coupling expects pops.Ionization / Collision / ThermalExchange or a "
-                            "CompiledCoupledSource (pops.dsl.CoupledSource(...).compile(...))")
+            raise TypeError(
+                "add_coupling expects a private named-coupling engine descriptor or "
+                "CompiledCoupledSource")
         # Validate the DECLARED contract symbolically (Python); the C++ revalidates at registration. A
         # created role (ionization) may net-source, so compile without verify_conservation.
         preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)

@@ -360,7 +360,7 @@ class Schedule:
                 "%s clock %r does not match evaluation clock %r"
                 % (where, self.clock.name, clock.name)
             )
-        if self.domain.at is not None and point is not None and self.domain.at != point:
+        if self.domain.at is not None and self.domain.at != point:
             raise ValueError("%s point does not match its typed domain point" % where)
 
     def map_values(self, mapper: Callable[[Any], Any]) -> Schedule:

@@ -8,7 +8,7 @@ from pops.codegen.lowering_coverage import LoweringCoverageReport, LoweringCover
 from pops.identity import Identity, make_identity
 from pops.time.schedule_protocol import UnresolvedScheduleCondition
 
-from ._consumer_contracts import (
+from pops.output._consumer_contracts import (
     ConsumerCursorSet,
     ConsumerGraph,
     ConsumerKind,
@@ -87,6 +87,15 @@ def _resource_bindings(
     runtime: RuntimePlanBundle,
     manifest: ConsumerManifest,
 ) -> tuple[ConsumerResourceBinding, ...]:
+    if (manifest.parallel_mode is ParallelMode.COLLECTIVE
+            and runtime.communication.communicator_id == "serial"):
+        refuse(
+            "collective_consumer_requires_distributed_context",
+            "consumer[%s].parallel_mode" % manifest.qualified_id,
+            "a collective consumer requires an explicit non-serial ExecutionContext; "
+            "the runtime must not defer this mismatch until publication",
+            evidence={"communicator": runtime.communication.communicator_id},
+        )
     result = []
     for quantity in manifest.quantities:
         accesses = [

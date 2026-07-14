@@ -25,7 +25,7 @@ from typed_program_support import typed_state
 
 adctime = pytest.importorskip("pops.time")
 from pops import model  # noqa: E402
-from pops.ir.expr import Var  # noqa: E402
+from pops._ir.expr import Var  # noqa: E402
 
 
 def _two_fluid_module(electron_expr=None):

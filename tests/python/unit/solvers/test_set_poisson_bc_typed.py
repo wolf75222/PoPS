@@ -4,7 +4,7 @@ import sys
 import pytest
 
 import pops
-from pops.runtime.bricks import Dirichlet, Neumann, Periodic
+from pops.runtime._engine_descriptors import Dirichlet, Neumann, Periodic
 from pops.runtime._system_install import _lower_bc
 
 try:

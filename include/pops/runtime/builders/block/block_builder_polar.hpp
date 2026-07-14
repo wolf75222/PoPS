@@ -237,7 +237,7 @@ struct PolarPoissonRhs {
 /// nonexistent azimuthal ghost. Pure HOST loop (phi host-resident after solve()). Does NOT fill the ghosts of
 /// the aux: the caller does it AFTER (fill_ghosts: theta periodic, r physical) for the transport.
 /// PRECONDITION nr >= 3 (the one-sided second-order stencil reads p(i+2)/p(i-2) at the walls): IMPOSED
-/// upstream by check_geometry (python/system.cpp) and pops.PolarMesh (nr >= 3), not merely assumed.
+/// upstream by check_geometry (python/system.cpp) and pops.mesh.PolarMesh (nr >= 3), not merely assumed.
 inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeometry& g) {
   const Real dr = g.dr(), dth = g.dtheta();
   for (int li = 0; li < aux.local_size(); ++li) {

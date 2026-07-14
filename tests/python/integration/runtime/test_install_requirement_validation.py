@@ -15,7 +15,7 @@ import sys
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.domain import Rectangle
@@ -80,8 +80,8 @@ def lie_program(model, name="adc446_prog"):
 def make_sim(block_model, with_bz):
     sim = System(n=N, L=1.0, periodic=True)
     sim.add_equation("plasma", compile_block_model(block_model, target="system"),
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     if with_bz:
         sim.set_magnetic_field(3.0 * np.ones(N * N))

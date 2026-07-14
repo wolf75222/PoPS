@@ -11,6 +11,7 @@ resolve and scan a coupled_rate node.  The op dispatcher ``_emit_op`` lives in
 from __future__ import annotations
 
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any
 
 import json
@@ -28,7 +29,7 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
     ``T.state(block, U)``). Raises a clear NotImplementedError naming ADC-457 when a coupled_rate
     cannot lower in this MVP: no bound registry, no operator body, a block whose component count
     does not match its StateSpace, or a formula referencing a non-cons (prim / aux) Var."""
-    from pops.ir.expr import Var
+    from pops._ir.expr import Var
     op_name = v.attrs["operator"]
     from pops.time.operator_resolution import resolve_operator_handle
     operator_handle = v.attrs.get("operator_handle")
@@ -127,12 +128,61 @@ def _coupled_rate_components(program: Any, v: Any, authority: Any = None) -> dic
 
 def _walk_expr(e: Any) -> Any:
     """Yield every node of a dsl Expr tree (used to scan a coupled_rate formula for non-cons Vars)."""
-    from pops.ir.visitors import _children
+    from pops._ir.visitors import _children
     stack = [e]
     while stack:
         node = stack.pop()
         yield node
         stack.extend(_children(node))
+
+
+def _groupable_default_rhs(value: Any) -> bool:
+    """Whether one RHS can enter the native simultaneous-interface batch.
+
+    Named flux kernels and named source additions remain independent SSA work.  The default full or
+    flux-only finite-volume residual is the exact route for which the runtime owns an interface-
+    omitting closure and a shared NumericalFlux insertion.
+    """
+    if value.op != "rhs" or not value.attrs.get("flux", True):
+        return False
+    fluxes = value.attrs.get("fluxes")
+    if fluxes and tuple(fluxes) != ("default",):
+        return False
+    requested = value.attrs.get("sources")
+    return not any(source != "default" for source in (requested or ()))
+
+
+def _stage_fraction(value: Any) -> Fraction:
+    point = value.point
+    if not hasattr(point, "offset"):
+        try:
+            point = point.time
+        except ValueError:
+            point = point.time_for("explicit")
+    return Fraction(point.step) + Fraction(point.offset.to_python())
+
+
+def _emit_contiguous_rhs_group(
+        values: list[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
+        lines: list[str]) -> None:
+    """Emit one complete same-StagePoint residual group before any result is consumable."""
+    from pops.codegen.program_emit_ops import _required_block_index
+
+    stage = _stage_fraction(values[0])
+    lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+    requests = []
+    for value in values:
+        state = value.inputs[0]
+        var[value.id] = "r%d" % value.id
+        lines.append("pops::MultiFab %s = ctx.rhs_scratch_like(%s);"
+                     % (var[value.id], var[state.id]))
+        index = _required_block_index(
+            block_idx, value.block, "emit simultaneous rhs %r" % value.name)
+        requested = value.attrs.get("sources")
+        default_source = requested is None or "default" in requested
+        requests.append("{%d, &%s, &%s, %d, %d}" % (
+            index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1))
+    lines.append("ctx.rhs_group({%s});" % ", ".join(requests))
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None) -> tuple:
@@ -179,6 +229,12 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
     # carries the logical state and field-space identities used by clock-qualified history slots.
     histories_ncomp = getattr(program, "_histories_ncomp", {})
     temporal = program.temporal_manifest()
+    prelude.append("ctx.configure_primary_clock(%s);" % json.dumps(temporal["primary_clock"]))
+    for relation in temporal["subcycles"]:
+        prelude.append(
+            "ctx.declare_clock_relation(%s, %s, %d);"
+            % (json.dumps(relation["parent_clock"]), json.dumps(relation["child_clock"]),
+               int(relation["count"])))
     history_manifest = {row["name"]: row for row in temporal["histories"]}
     for name, lag in sorted(program._histories.items()):
         ncomp = histories_ncomp.get(name)
@@ -201,10 +257,25 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                         -1 if owner_index is None else int(owner_index),
                         json.dumps(state_identity), json.dumps(space_identity),
                         json.dumps(row["clock"]), json.dumps(interpolation)))
-    for v in program._values:
+    values = list(program._values)
+    index = 0
+    while index < len(values):
+        v = values[index]
+        if _groupable_default_rhs(v):
+            end = index + 1
+            while end < len(values) and _groupable_default_rhs(values[end]) \
+                    and values[end].point == v.point:
+                end += 1
+            group = values[index:end]
+            if len(group) > 1 and len({row.block for row in group}) == len(group) \
+                    and all(row.inputs[0].id in var for row in group):
+                _emit_contiguous_rhs_group(group, block_idx, var, lines)
+                index = end
+                continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)
         _emit_op(program, v, base, committed_ids, var, model, lines, prelude, block_idx,
                  target=target, field_plans=field_plans)
+        index += 1
     # Each committed block: a scratch commit (solve_local_linear / solve_linear / a non-base
     # linear_combine wrote a scratch) is copied into the block state; a linear_combine commit already
     # wrote ctx.state(idx) in place (var == base), so its copy is a no-op (skipped).

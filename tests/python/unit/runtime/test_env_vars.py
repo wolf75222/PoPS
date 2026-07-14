@@ -15,8 +15,8 @@ import warnings
 
 import pytest
 
-from pops.runtime import threading as th
-from pops.runtime.profile import Profile
+from pops.runtime import _threading as th
+from pops.runtime._profile import Profile
 
 
 # ---- POPS_THREADS resolver (lenient parsing) --------------------------------------------------

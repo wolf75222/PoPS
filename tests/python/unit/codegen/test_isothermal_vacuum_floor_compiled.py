@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ADC-644 -- vacuum_floor on the COMPILED (CompositeModel) isothermal transport brick.
 
-The native pops.Model path already threads FluidState(vacuum_floor=) through spec.vacuum_floor into
-pops::IsothermalFlux (ADC-77). The compiled/hybrid pops.CompositeModel path did NOT: the AOT struct
+The private native engine.Model path already threads FluidState(vacuum_floor=) through
+spec.vacuum_floor into pops::IsothermalFlux (ADC-77). The compiled-model path did NOT: the AOT struct
 baked only cs2. This test pins the fix at the emit layer (source-only, no compile / no _pops runtime):
 
   * a default IsothermalFlux() (vacuum_floor 0) bakes ONLY cs2, so the generated struct source is

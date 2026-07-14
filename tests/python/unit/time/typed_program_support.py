@@ -53,6 +53,10 @@ class _StateModel:
 class _Context:
     def __init__(self, program: Program) -> None:
         self.program = program
+        # Capture only an owner that existed before this fixture starts registering models.
+        # Re-reading ``program._operator_registries`` later would mistake the first fixture model
+        # for an externally bound owner and give every subsequent model the same identity.
+        self.bound_owner = _bound_owner(program)
         self.case = Case(name="typed-time-unit-case")
         self.models: dict[Any, _StateModel] = {}
         self.blocks: dict[tuple[str, str, Any], tuple[Any, Handle]] = {}
@@ -137,7 +141,7 @@ def state_refs(
         model_key: Any = ("explicit", id(selected_model))
         context.models.setdefault(model_key, selected_model)
     else:
-        owner = _bound_owner(program)
+        owner = context.bound_owner
         bound_registry = None
         if owner is not None:
             bound_registry = program._operator_registries[owner]
@@ -223,7 +227,7 @@ def fresh_field_refs(
 
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Module, Signature
 
@@ -279,7 +283,7 @@ def typed_field(program: Program, name: str, *, provider: Any = None) -> Any:
         return existing
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Module, Signature
 

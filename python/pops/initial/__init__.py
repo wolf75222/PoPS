@@ -71,7 +71,7 @@ class InitialCondition:
         """Lower a resolved declaration to the existing exact AMR source contract."""
         if not self.state.is_resolved:
             raise TypeError("InitialCondition.source requires a resolved qualified state")
-        from pops.mesh.amr import CanonicalOptions, InitialConditionSource
+        from pops.mesh._amr import CanonicalOptions, InitialConditionSource
 
         source_options = dict(self.value.initial_source_options())
         projection_options = dict(self.projection.initial_projection_options())
@@ -91,11 +91,11 @@ class InitialCondition:
 
     def bootstrap_method(self) -> Any:
         if getattr(self.value, "reprojectable", None) is True:
-            from pops.mesh.amr import AnalyticReprojection
+            from pops.mesh._amr import AnalyticReprojection
 
             return AnalyticReprojection()
         if getattr(self.value, "reprojectable", None) is False:
-            from pops.mesh.amr import ProlongFromParent
+            from pops.mesh._amr import ProlongFromParent
 
             return ProlongFromParent()
         raise TypeError("initial value protocol must declare exact bool reprojectable")
@@ -123,7 +123,7 @@ class InitialConditionAuthorities:
     bootstrap_plan: Any
 
     def __post_init__(self) -> None:
-        from pops.mesh.amr import BootstrapPlan, InitialConditionPlan
+        from pops.mesh._amr import BootstrapPlan, InitialConditionPlan
 
         if type(self.initial_condition_plan) is not InitialConditionPlan:
             raise TypeError("initial_condition_plan must be an exact InitialConditionPlan")

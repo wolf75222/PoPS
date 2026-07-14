@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
+from fractions import Fraction
 from typing import Any, ClassVar
 
-from pops.ir import Expr
-from pops.ir.visitors import _key
-from pops.mesh.amr.tagging_graph import ConflictPolicy, Hysteresis
+from pops._ir import Expr
+from pops._ir.visitors import _key
+from pops.mesh._amr.tagging_graph import ConflictPolicy, Hysteresis
 from pops.time import Schedule
 
 
@@ -99,28 +101,100 @@ class AMRRegrid:
     inspect = to_data
 
 
+class AMRRemainderPolicy(Enum):
+    """Exact policy for closing a non-integral parent/child level-clock window."""
+
+    INTEGRAL_ONLY = "integral_only"
+    EXPLICIT_FINAL_SUBSTEP = "explicit_final_substep"
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AMRClockRelation:
+    """One level-clock relation, independent from spatial refinement."""
+
+    parent_level: int
+    child_level: int
+    temporal_ratio: Fraction
+    remainder_policy: AMRRemainderPolicy
+    __pops_ir_immutable__ = True
+
+    def __init__(
+        self, parent_level: int, child_level: int, temporal_ratio: int | Fraction,
+        remainder_policy: AMRRemainderPolicy = AMRRemainderPolicy.INTEGRAL_ONLY,
+    ) -> None:
+        if (isinstance(parent_level, bool) or not isinstance(parent_level, int)
+                or parent_level < 0 or child_level != parent_level + 1):
+            raise ValueError("AMRClockRelation requires adjacent non-negative levels")
+        if isinstance(temporal_ratio, bool) or type(temporal_ratio) not in {int, Fraction}:
+            raise TypeError("AMRClockRelation temporal_ratio must be an int or Fraction")
+        ratio = Fraction(temporal_ratio)
+        if ratio < 1:
+            raise ValueError("AMRClockRelation temporal_ratio must be >= 1")
+        native_limit = (1 << 63) - 1
+        if ratio.numerator > native_limit or ratio.denominator > native_limit:
+            raise OverflowError(
+                "AMRClockRelation temporal_ratio exceeds the native exact-clock range")
+        if type(remainder_policy) is not AMRRemainderPolicy:
+            raise TypeError("AMRClockRelation remainder_policy must be AMRRemainderPolicy")
+        if ratio.denominator != 1 and remainder_policy is AMRRemainderPolicy.INTEGRAL_ONLY:
+            raise ValueError(
+                "a non-integral AMR temporal relation requires EXPLICIT_FINAL_SUBSTEP")
+        object.__setattr__(self, "parent_level", parent_level)
+        object.__setattr__(self, "child_level", child_level)
+        object.__setattr__(self, "temporal_ratio", ratio)
+        object.__setattr__(self, "remainder_policy", remainder_policy)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "parent_level": self.parent_level,
+            "child_level": self.child_level,
+            "temporal_ratio": {
+                "numerator": self.temporal_ratio.numerator,
+                "denominator": self.temporal_ratio.denominator,
+            },
+            "remainder_policy": self.remainder_policy.value,
+        }
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class AMRExecution:
     """How levels advance in time, independently of the temporal Program graph."""
 
     mode: str
+    relations: tuple[AMRClockRelation, ...]
     __pops_ir_immutable__ = True
 
-    def __init__(self, mode: str) -> None:
+    def __init__(self, mode: str, relations: tuple[AMRClockRelation, ...] = ()) -> None:
         if mode not in {"subcycled", "synchronous"}:
             raise ValueError("AMRExecution mode must be subcycled or synchronous")
+        rows = tuple(relations)
+        if any(type(row) is not AMRClockRelation for row in rows):
+            raise TypeError("AMRExecution relations must be exact AMRClockRelation values")
+        if mode == "synchronous" and rows:
+            raise ValueError("synchronous AMRExecution derives ratio-one clocks and accepts no relations")
+        children = [row.child_level for row in rows]
+        if len(children) != len(set(children)):
+            raise ValueError("AMRExecution declares one clock relation per child level")
         object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "relations", rows)
 
     @classmethod
-    def subcycled(cls) -> AMRExecution:
-        return cls("subcycled")
+    def subcycled(
+        cls, relations: tuple[AMRClockRelation, ...] = (),
+    ) -> AMRExecution:
+        return cls("subcycled", relations)
 
     @classmethod
     def synchronous(cls) -> AMRExecution:
         return cls("synchronous")
 
     def to_data(self) -> dict[str, Any]:
-        return {"schema_version": 1, "authority_type": "amr_execution", "mode": self.mode}
+        return {
+            "schema_version": 2,
+            "authority_type": "amr_execution",
+            "mode": self.mode,
+            "relations": [row.to_data() for row in self.relations],
+        }
 
     inspect = to_data
     runtime_execution_data = to_data
@@ -225,40 +299,19 @@ class AMRTagging:
         }
 
     def resolve(self, context: Any) -> Any:
-        from .resolution import resolve_tagging
+        from ._resolution import resolve_tagging
 
         return resolve_tagging(self, context)
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedAMRAuthorities:
-    hierarchy: Any
-    transfer: Any
-    tagging: Any
-    initial_conditions: Any
-    bootstrap: Any
-    execution: Any
-
-    def canonical_identity(self) -> dict[str, Any]:
-        return {
-            "schema_version": 1,
-            "authority_type": "resolved_amr_authorities",
-            "hierarchy": self.hierarchy.canonical_identity(),
-            "transfer": self.transfer.canonical_identity(),
-            "tagging": self.tagging.canonical_identity(),
-            "initial_conditions": self.initial_conditions.canonical_identity(),
-            "bootstrap": self.bootstrap.canonical_identity(),
-            "execution": self.execution.to_data(),
-        }
-
-
 __all__ = [
+    "AMRClockRelation",
     "AMRExecution",
     "AMRHierarchy",
     "AMRRegrid",
     "AMRTagging",
+    "AMRRemainderPolicy",
     "Buffer",
     "Coarsen",
-    "ResolvedAMRAuthorities",
     "Tag",
 ]

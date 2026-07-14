@@ -40,9 +40,9 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
@@ -112,8 +112,8 @@ def compiled_single(cm, pf, state):
     s = AmrSystem(n=N, L=1.0, periodic=True)
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
-                   spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
-                   time=pops.Explicit())
+                   spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
+                   time=engine.Explicit())
     s.set_conservative_state("gas", state)
     for _ in range(38):
         s.step(DT)
@@ -166,9 +166,9 @@ def main():
         band[:, N // 3:2 * N // 3] = 1.0
         sm = AmrSystem(n=N, L=1.0, periodic=True)
         sm.set_refinement(1e30)
-        sm.add_equation("a", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
-        sm.add_equation("b", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm.add_equation("b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
         sm.set_density("a", band.ravel().copy())
         sm.set_density("b", band.ravel().copy())

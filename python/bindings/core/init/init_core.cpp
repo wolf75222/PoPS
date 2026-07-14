@@ -361,7 +361,7 @@ void init_core(py::module_& m) {
       .def_readwrite("L", &SystemConfig::L)
       .def_readwrite("periodic", &SystemConfig::periodic)
       // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
-      // "polar" = global ring carried by pops.PolarMesh. Polar fields ignored if geometry=="cartesian".
+      // "polar" = global ring carried by pops.mesh.PolarMesh. Polar fields ignored for cartesian.
       .def_readwrite("geometry", &SystemConfig::geometry)
       .def_readwrite("nr", &SystemConfig::nr)
       .def_readwrite("ntheta", &SystemConfig::ntheta)
@@ -370,7 +370,7 @@ void init_core(py::module_& m) {
       .def_readwrite("theta_boxes", &SystemConfig::theta_boxes);
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
-  // No named scenario; the pops.Model(...) sugar on the Python side fills these fields.
+  // No named scenario; the private Python ModelSpec composer fills these engine fields.
   auto model_spec = py::class_<ModelSpec>(m, "ModelSpec");
   model_spec.def(py::init<>())
       .def("freeze", &ModelSpec::freeze,

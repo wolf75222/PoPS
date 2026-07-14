@@ -20,9 +20,7 @@ from pops.identity import Identity, canonical_bytes, make_identity
 
 
 _TARGETS = frozenset({"system", "amr_system"})
-_BIND_RESOURCE_KEYS = frozenset({
-    "execution_context", "communicator", "device", "allocator", "stream",
-})
+_BIND_RESOURCE_KEYS = frozenset({"execution_context"})
 _SEMANTIC_OVERRIDE_KEYS = frozenset({
     "solver", "solvers", "cadence", "layout", "target", "backend", "spatial",
     "outputs", "diagnostics", "program", "algorithm",
@@ -167,6 +165,7 @@ class ResolvedBlock:
     spatial: Any
     backend: str
     state_spaces: tuple[str, ...]
+    state_identities: tuple[str, ...] = ()
     numerics: Any = None
 
     def __post_init__(self) -> None:
@@ -181,6 +180,14 @@ class ResolvedBlock:
         if len(set(state_spaces)) != len(state_spaces):
             raise ValueError("ResolvedBlock state_spaces contains a duplicate")
         object.__setattr__(self, "state_spaces", state_spaces)
+        state_identities = tuple(self.state_identities)
+        if (len(state_identities) != len(state_spaces)
+                or any(not isinstance(identity, str) or not identity
+                       for identity in state_identities)
+                or len(set(state_identities)) != len(state_identities)):
+            raise TypeError(
+                "ResolvedBlock state_identities must uniquely qualify every state space")
+        object.__setattr__(self, "state_identities", state_identities)
         _evidence(self.model, where="ResolvedBlock.model")
         object.__setattr__(self, "spatial", _deep_freeze(self.spatial))
         _evidence(self.spatial, where="ResolvedBlock.spatial")
@@ -197,6 +204,7 @@ class ResolvedSimulationPlan:
     backend: str
     layout: Any
     layout_plan: Any
+    layout_targets: Mapping[str, str]
     time: Any
     blocks: tuple[ResolvedBlock, ...]
     bind_schema: Any
@@ -207,6 +215,7 @@ class ResolvedSimulationPlan:
     capabilities: Mapping[str, Any]
     lowering_coverage: Any
     consumer_graph: Any = None
+    component_inputs: tuple[Any, ...] = ()
     compile_options: Mapping[str, Any] = field(default_factory=dict)
     resolved_hierarchy: Any = None
     amr_transfer: Any = None
@@ -229,6 +238,15 @@ class ResolvedSimulationPlan:
             raise TypeError("ResolvedSimulationPlan backend must be a resolved non-empty string")
         if type(self.layout_plan) is not LayoutPlan:
             raise TypeError("ResolvedSimulationPlan.layout_plan must be an exact LayoutPlan")
+        targets = _string_mapping(
+            self.layout_targets, where="ResolvedSimulationPlan.layout_targets")
+        expected_targets = tuple(row.handle.qualified_id for row in self.layout_plan.layouts)
+        if tuple(targets) != expected_targets:
+            raise ValueError(
+                "ResolvedSimulationPlan.layout_targets must match normalized layout order exactly")
+        if any(value not in _TARGETS for value in targets.values()):
+            raise ValueError("ResolvedSimulationPlan.layout_targets contains an unsupported target")
+        object.__setattr__(self, "layout_targets", targets)
         if type(self.lowering_coverage) is not LoweringCoverageReport:
             raise TypeError(
                 "ResolvedSimulationPlan.lowering_coverage must be a LoweringCoverageReport")
@@ -267,8 +285,41 @@ class ResolvedSimulationPlan:
             raise ValueError(
                 "ResolvedSimulationPlan libraries are retired; use authenticated external "
                 "component packages through compile_component")
+        from pops.external import CompiledComponentArtifact, ExternalComponent
+        component_inputs = tuple(self.component_inputs)
+        if any(type(item) not in (ExternalComponent, CompiledComponentArtifact)
+               for item in component_inputs):
+            raise TypeError(
+                "ResolvedSimulationPlan.component_inputs must contain exact external component "
+                "authoring values or compiled component artifacts")
+        component_ids = [
+            item.component_id if type(item) is CompiledComponentArtifact
+            else item.component_manifest.component_id
+            for item in component_inputs
+        ]
+        if len(component_ids) != len(set(component_ids)):
+            raise ValueError("ResolvedSimulationPlan.component_inputs contains a duplicate component")
+        for item in component_inputs:
+            if type(item) is CompiledComponentArtifact:
+                item.verify()
+            else:
+                item.component_type.interface.require_manifest(item.component_manifest)
+        object.__setattr__(self, "component_inputs", component_inputs)
+        for block in self.blocks:
+            if block.numerics is None:
+                continue
+            for boundary in block.numerics.boundaries:
+                bindings = tuple(getattr(boundary, "component_bindings", ()))
+                if not bindings:
+                    continue
+                require = getattr(boundary, "require_component_inputs", None)
+                if not callable(require):
+                    raise TypeError(
+                        "boundary component bindings require require_component_inputs(components)"
+                    )
+                require(component_inputs)
         if self.consumer_graph is not None:
-            from pops.runtime.consumer import ConsumerGraph
+            from pops.output import ConsumerGraph
 
             if type(self.consumer_graph) is not ConsumerGraph:
                 raise TypeError(
@@ -300,19 +351,24 @@ class ResolvedSimulationPlan:
             "compile_values": _evidence(self.compile_values, where="plan.compile_values"),
             "layout": _evidence(self.layout, where="plan.layout"),
             "layout_plan": _evidence(self.layout_plan, where="plan.layout_plan"),
+            "layout_targets": dict(self.layout_targets),
             "time": _evidence(self.time, where="plan.time") if self.time is not None else None,
             "blocks": [{
                 "name": block.name,
                 "backend": block.backend,
                 "state_spaces": block.state_spaces,
+                "state_identities": block.state_identities,
                 "model": _evidence(block.model, where="plan.block.model"),
                 "spatial": _evidence(block.spatial, where="plan.block.spatial"),
+                "numerics": _evidence(block.numerics, where="plan.block.numerics"),
             } for block in self.blocks],
             "field_plans": _evidence(self.field_plans, where="plan.field_plans"),
             "consumer_graph": (
                 None if self.consumer_graph is None else self.consumer_graph.to_data()
             ),
             "libraries": _evidence(self.libraries, where="plan.libraries"),
+            "component_inputs": _evidence(
+                self.component_inputs, where="plan.component_inputs"),
             "requirements": _evidence(self.requirements, where="plan.requirements"),
             "capabilities": _evidence(self.capabilities, where="plan.capabilities"),
             "lowering_coverage": _evidence(
@@ -408,11 +464,12 @@ class InstallPlan:
     params: Any
     aux: Mapping[str, Any]
     resources: Mapping[str, Any] = field(default_factory=dict)
+    components: Mapping[str, Any] = field(default_factory=dict)
     execution_context: Any = None
     bind_identity: Identity = field(init=False)
 
     def __post_init__(self) -> None:
-        from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+        from pops.codegen._compiled_artifact import CompiledSimulationArtifact
         from pops.model.resolved_bindings import ResolvedBindings
 
         if type(self.artifact) is not CompiledSimulationArtifact:
@@ -428,6 +485,23 @@ class InstallPlan:
         object.__setattr__(self, "aux", _string_mapping(self.aux, where="InstallPlan.aux"))
         object.__setattr__(self, "resources", _string_mapping(
             self.resources, where="InstallPlan.resources"))
+        object.__setattr__(self, "components", _string_mapping(
+            self.components, where="InstallPlan.components"))
+        from pops.external import InstalledComponent
+        expected_components = tuple(
+            item.component_id for item in self.artifact.component_artifacts)
+        if tuple(self.components) != expected_components:
+            raise ValueError(
+                "InstallPlan components must match compiled component artifact order exactly")
+        for artifact in self.artifact.component_artifacts:
+            installed = self.components[artifact.component_id]
+            if type(installed) is not InstalledComponent:
+                raise TypeError("InstallPlan components must contain exact InstalledComponent values")
+            if installed.artifact_identity != artifact.artifact_identity:
+                raise ValueError("InstallPlan component changed the compiled artifact identity")
+            if installed.native_handle is None:
+                raise ValueError("InstallPlan components must be loaded before runtime installation")
+            installed.verify()
         from pops._platform_contracts import ExecutionContext, serial_execution_context, validate_launch
         context = self.execution_context
         if context is None:
@@ -525,6 +599,7 @@ class InstallPlan:
             "params": _evidence(self.params, where="install.params"),
             "aux": _evidence(self.aux, where="install.aux"),
             "resources": _evidence(self.resources, where="install.resources"),
+            "components": _evidence(self.components, where="install.components"),
             "initial_values": _evidence(
                 self.initial_values, where="install.initial_values"
             ),

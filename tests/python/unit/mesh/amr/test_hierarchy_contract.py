@@ -5,7 +5,7 @@ import inspect
 
 import pytest
 
-from pops.mesh.amr import (
+from pops.mesh._amr import (
     CanonicalOptions,
     ClusteringPolicy,
     DerivedNestingRequirements,

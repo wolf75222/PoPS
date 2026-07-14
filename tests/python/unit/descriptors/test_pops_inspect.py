@@ -13,12 +13,12 @@ def test_inspect_is_the_single_public_structured_view() -> None:
 
 
 def test_inspect_dispatches_to_a_descriptor() -> None:
-    from pops.mesh.cartesian import CartesianMesh
+    from tests.python.support.layout_plan import cartesian_grid
 
-    mesh = CartesianMesh(n=8)
+    mesh = cartesian_grid(n=8)
     record = pops.inspect(mesh)
     assert record == mesh.inspect()
-    assert record["name"] == "CartesianMesh"
+    assert record["name"] == "CartesianGrid"
 
 
 def test_inspect_case_is_json_ready_and_does_not_compile() -> None:

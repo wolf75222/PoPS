@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul
-from pops.ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
-from pops.ir.visitors import _key, _children
-from pops.ir.expr import _wrap
+from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul
+from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
+from pops._ir.visitors import _key, _children
+from pops._ir.expr import _wrap
 
 
 def _cpp_expand(e: Any, cse_map: Any) -> str:

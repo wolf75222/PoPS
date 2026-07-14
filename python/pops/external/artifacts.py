@@ -1,14 +1,14 @@
 """Authenticated component artifacts and the sole atomic installation boundary."""
 from __future__ import annotations
 
-import ctypes
 import os
+import json
 import platform
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -28,11 +28,37 @@ def _freeze(value: Any) -> Any:
     return value
 
 
+def _canonical_runtime_json(value: Any) -> str:
+    if isinstance(value, Mapping):
+        value = {key: _canonical_runtime_json_value(item) for key, item in value.items()}
+    else:
+        value = _canonical_runtime_json_value(value)
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _canonical_runtime_json_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _canonical_runtime_json_value(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_canonical_runtime_json_value(item) for item in value]
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class ComponentRuntimeContract:
-    """Normalized facts an installed runtime consumes without reopening authoring packages."""
+    """Complete normalized facts consumed after authoring packages have disappeared."""
 
     component_id: str
+    component_type: str
+    version: str
     facets: tuple[str, ...]
     signature: Mapping[str, Any]
     reads: tuple[Any, ...]
@@ -43,16 +69,56 @@ class ComponentRuntimeContract:
     clocks: tuple[Any, ...]
     determinism: Mapping[str, Any]
     precision: Mapping[str, Any]
+    parameters: tuple[Any, ...]
+    capabilities: tuple[Any, ...]
+    target: Mapping[str, Any]
+    restart: Mapping[str, Any]
+    conservation: tuple[Any, ...]
+    native_interface: Mapping[str, Any]
     entry_points: Mapping[str, str]
+    manifest_data: Mapping[str, Any]
 
     @classmethod
     def from_manifest(cls, manifest: Any) -> ComponentRuntimeContract:
+        native = manifest.signature.get("native_interface")
+        if not isinstance(native, Mapping):
+            raise TypeError("component manifest has no exact native_interface signature")
         return cls(
-            manifest.component_id, tuple(manifest.facets), _freeze(manifest.signature),
-            _freeze(manifest.reads), _freeze(manifest.writes), _freeze(manifest.requirements),
-            _freeze(manifest.effects), _freeze(manifest.layouts), _freeze(manifest.clocks),
+            manifest.component_id, manifest.component_type, str(manifest.version),
+            tuple(manifest.facets), _freeze(manifest.signature), _freeze(manifest.reads),
+            _freeze(manifest.writes), _freeze(manifest.requirements), _freeze(manifest.effects),
+            _freeze(manifest.layouts), _freeze(manifest.clocks),
             _freeze(manifest.determinism), _freeze(manifest.precision),
-            _freeze(manifest.entry_points))
+            _freeze(manifest.parameters), _freeze(manifest.capabilities),
+            _freeze(manifest.target), _freeze(manifest.restart),
+            _freeze(manifest.conservation), _freeze(native), _freeze(manifest.entry_points),
+            _freeze(manifest.to_data()),
+        )
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "component_id": self.component_id,
+            "component_type": self.component_type,
+            "version": self.version,
+            "facets": list(self.facets),
+            "signature": _thaw(self.signature),
+            "reads": _thaw(self.reads),
+            "writes": _thaw(self.writes),
+            "requirements": _thaw(self.requirements),
+            "effects": _thaw(self.effects),
+            "layouts": _thaw(self.layouts),
+            "clocks": _thaw(self.clocks),
+            "determinism": _thaw(self.determinism),
+            "precision": _thaw(self.precision),
+            "parameters": _thaw(self.parameters),
+            "capabilities": _thaw(self.capabilities),
+            "target": _thaw(self.target),
+            "restart": _thaw(self.restart),
+            "conservation": _thaw(self.conservation),
+            "native_interface": _thaw(self.native_interface),
+            "entry_points": _thaw(self.entry_points),
+            "manifest": _thaw(self.manifest_data),
+        }
 
 
 def inspect_exported_symbols(path: Any) -> frozenset[str]:
@@ -76,12 +142,9 @@ def inspect_exported_symbols(path: Any) -> frozenset[str]:
     symbols = set()
     for line in result.stdout.splitlines():
         fields = line.split()
-        if not fields:
-            continue
-        name = fields[-1]
-        if system == "Darwin" and name.startswith("_"):
-            name = name[1:]
-        symbols.add(name)
+        if fields:
+            name = fields[-1]
+            symbols.add(name[1:] if system == "Darwin" and name.startswith("_") else name)
     return frozenset(symbols)
 
 
@@ -99,6 +162,7 @@ def _artifact_payload(value: Any) -> dict[str, Any]:
         "source_package": value.source_package.token if value.source_package else None,
         "platform": value.platform_manifest.identity.token,
         "interface": value.interface.to_data(),
+        "runtime_contract": value.runtime_contract.to_data(),
         "entry_symbols": dict(value.entry_symbols),
         "binary": value.binary_identity.token,
         "fixed_signature": value.fixed_signature,
@@ -107,7 +171,7 @@ def _artifact_payload(value: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class CompiledComponentArtifact:
-    """Final audited binary bytes.  This is neither authoring source nor an installed instance."""
+    """Final audited binary bytes, detached from source-package paths."""
 
     component_id: str
     component_manifest: Identity
@@ -133,7 +197,9 @@ class CompiledComponentArtifact:
             raise TypeError("runtime_contract must match the compiled component")
         if type(self.interface) is not ComponentInterface:
             raise TypeError("compiled interface must be an exact ComponentInterface")
-        from pops.runtime.platform_manifest import PlatformManifest
+        if _thaw(self.runtime_contract.native_interface) != _thaw(self.interface.to_data()):
+            raise ValueError("runtime contract native interface differs from compiled interface")
+        from pops.runtime._platform_manifest import PlatformManifest
         if type(self.platform_manifest) is not PlatformManifest:
             raise TypeError("compiled platform_manifest must be an exact PlatformManifest")
         entries = dict(sorted(self.entry_symbols.items()))
@@ -146,8 +212,7 @@ class CompiledComponentArtifact:
         object.__setattr__(self, "entry_symbols", MappingProxyType(entries))
         if not isinstance(self.binary, bytes) or not self.binary:
             raise TypeError("compiled binary must be non-empty exact bytes")
-        expected_binary = _binary_identity(self.binary)
-        if self.binary_identity != expected_binary:
+        if self.binary_identity != _binary_identity(self.binary):
             raise ComponentPackageError(
                 "binary_digest", "binary", "compiled bytes do not match binary identity")
         if self.source_package is not None and (
@@ -170,15 +235,28 @@ class CompiledComponentArtifact:
     def verify(self) -> None:
         if _binary_identity(self.binary) != self.binary_identity:
             raise ComponentPackageError("binary_digest", "binary", "artifact bytes changed")
-        found = inspect_symbol_bytes(self.binary, suffix=self.suffix)
-        missing = sorted(set(self.symbols) - found)
+        missing = sorted(set(self.symbols) - inspect_symbol_bytes(self.binary, suffix=self.suffix))
         if missing:
             raise ComponentPackageError(
                 "symbols", "binary", "artifact does not export %s" % missing)
-        expected = make_identity("component-artifact", _artifact_payload(self))
-        if self.artifact_identity != expected:
+        if self.artifact_identity != make_identity("component-artifact", _artifact_payload(self)):
             raise ComponentPackageError(
                 "artifact_digest", "artifact", "artifact metadata identity changed")
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "component_id": self.component_id,
+            "component_manifest": self.component_manifest.to_data(),
+            "runtime_contract": self.runtime_contract.to_data(),
+            "interface": self.interface.to_data(),
+            "platform_manifest": self.platform_manifest.to_data(),
+            "entry_symbols": dict(self.entry_symbols),
+            "binary_identity": self.binary_identity.to_data(),
+            "artifact_identity": self.artifact_identity.to_data(),
+            "source_package": None if self.source_package is None else self.source_package.to_data(),
+            "fixed_signature": self.fixed_signature,
+            "suffix": self.suffix,
+        }
 
     @classmethod
     def from_fixed(cls, package: FixedBinaryPackage, alias: str,
@@ -201,7 +279,7 @@ class CompiledComponentArtifact:
         return artifact
 
     def install(self, directory: Any) -> InstalledComponent:
-        """Publish verified bytes atomically without clobbering, then return the loadable type."""
+        """Publish verified bytes atomically without clobbering."""
         self.verify()
         root = Path(directory).resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -209,10 +287,11 @@ class CompiledComponentArtifact:
         if destination.exists():
             if _binary_identity(destination.read_bytes()) != self.binary_identity:
                 raise ComponentPackageError(
-                    "install_collision", str(destination), "content-addressed path has other bytes")
+                    "install_collision", str(destination),
+                    "content-addressed path has other bytes")
         else:
-            fd, temporary = tempfile.mkstemp(prefix=".pops-component-", suffix=self.suffix,
-                                             dir=str(root))
+            fd, temporary = tempfile.mkstemp(
+                prefix=".pops-component-", suffix=self.suffix, dir=str(root))
             try:
                 with os.fdopen(fd, "wb") as stream:
                     stream.write(self.binary)
@@ -227,8 +306,6 @@ class CompiledComponentArtifact:
                     raise ComponentPackageError(
                         "symbols", temporary, "staged binary does not export %s" % missing)
                 try:
-                    # Same-filesystem link publication is atomic and, unlike os.replace(), cannot
-                    # overwrite a competing process's content-addressed destination.
                     os.link(temporary, destination)
                 except FileExistsError:
                     if _binary_identity(destination.read_bytes()) != self.binary_identity:
@@ -240,15 +317,16 @@ class CompiledComponentArtifact:
                     os.unlink(temporary)
         installed = InstalledComponent(
             self.component_id, self.component_manifest, self.runtime_contract,
-            self.interface, self.platform_manifest,
-            self.entry_symbols, self.binary_identity, self.artifact_identity, destination)
+            self.interface, self.platform_manifest, self.entry_symbols,
+            self.binary_identity, self.artifact_identity, destination,
+            "fixed" if self.fixed_signature else "source")
         installed.verify()
         return installed
 
 
 @dataclass(frozen=True, slots=True)
 class InstalledComponent:
-    """Authenticated installed instance. Raw package paths can never masquerade as this value."""
+    """Authenticated installed instance; raw library paths cannot enter runtime plans."""
 
     component_id: str
     component_manifest: Identity
@@ -259,6 +337,8 @@ class InstalledComponent:
     binary_identity: Identity
     artifact_identity: Identity
     path: Path
+    origin: str
+    native_handle: Any = field(default=None, repr=False, compare=False)
 
     def verify(self) -> None:
         if not self.path.is_file() or _binary_identity(self.path.read_bytes()) != self.binary_identity:
@@ -268,54 +348,65 @@ class InstalledComponent:
         if missing:
             raise ComponentPackageError(
                 "symbols", str(self.path), "installed binary does not export %s" % missing)
+        if self.native_handle is not None:
+            report = self.native_handle.report()
+            expected = {
+                "component_id": self.component_id,
+                "semantic_identity": self.runtime_contract.manifest_data["digests"]["semantic"],
+                "manifest_identity": self.component_manifest.token,
+                "catalog_sha256": self.interface.to_data()["catalog_sha256"],
+            }
+            for name, value in expected.items():
+                if report[name] != value:
+                    raise ComponentPackageError(
+                        "loaded_identity", str(self.path),
+                        "native table %s does not match installed metadata" % name)
 
-    def bind(self, interface: ComponentInterface) -> Any:
+    def load(self) -> InstalledComponent:
+        """Resolve and authenticate the table once through the native loader."""
         self.verify()
-        if interface != self.interface:
-            raise TypeError("installed component interface mismatch")
-        return interface.bind_installed(self)
+        if self.native_handle is not None:
+            return self
+        try:
+            from pops import _pops
+            loader = _pops._load_component
+        except (ImportError, AttributeError) as exc:
+            raise RuntimeError(
+                "installed component loading requires the matching PoPS native module") from exc
+        handle = loader(
+            str(self.path), self.component_id,
+            self.runtime_contract.manifest_data["digests"]["semantic"],
+            self.component_manifest.token, self.interface.to_data()["catalog_sha256"],
+            [(self.interface.abi_id, self.interface.version, self.interface.cpp_table)],
+            _canonical_runtime_json(self.runtime_contract.manifest_data["parameters"]),
+            _canonical_runtime_json(self.runtime_contract.manifest_data["target"]),
+        )
+        loaded = replace(self, native_handle=handle)
+        loaded.verify()
+        return loaded
 
-
-class NumericalFluxCpuBinding:
-    """One interface binding shared by every NumericalFlux component; no component dispatch."""
-
-    __slots__ = ("_artifact", "_flux", "_stability", "_handle")
-
-    def __init__(self, artifact: InstalledComponent) -> None:
-        artifact.verify()
-        handle = ctypes.CDLL(str(artifact.path))
-        flux = getattr(handle, artifact.entry_symbols["numerical_flux"])
-        stability = getattr(handle, artifact.entry_symbols["stability_bound"])
-        args = [ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
-                ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
-        flux.argtypes, flux.restype = args, ctypes.c_int
-        stability.argtypes, stability.restype = args, ctypes.c_int
-        self._artifact, self._handle = artifact, handle
-        self._flux, self._stability = flux, stability
-
-    def evaluate(self, left: tuple[float, ...], right: tuple[float, ...],
-                 normal: tuple[float, float]) -> tuple[tuple[float, ...], float]:
-        if not left or len(left) != len(right) or len(normal) != 2:
-            raise ValueError("CPU NumericalFlux binding requires equal non-empty states and a 2D normal")
-        n = len(left)
-        expected = self._artifact.runtime_contract.signature.get("state_components")
-        if n != expected:
-            raise ValueError("CPU NumericalFlux binding expected %s state components" % expected)
-        array = ctypes.c_double * n
-        face = (ctypes.c_double * 2)(*normal)
-        output = array()
-        status = self._flux(array(*left), array(*right), face, output)
-        if status != 0:
-            raise RuntimeError("external numerical_flux returned status %d" % status)
-        speed = ctypes.c_double()
-        status = self._stability(array(*left), array(*right), face, ctypes.byref(speed))
-        if status != 0:
-            raise RuntimeError("external stability_bound returned status %d" % status)
-        return tuple(output), speed.value
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "component_id": self.component_id,
+            "component_manifest": self.component_manifest.to_data(),
+            "runtime_contract": self.runtime_contract.to_data(),
+            "interface": self.interface.to_data(),
+            "platform_manifest": self.platform_manifest.to_data(),
+            "entry_symbols": dict(self.entry_symbols),
+            "binary_identity": self.binary_identity.to_data(),
+            "artifact_identity": self.artifact_identity.to_data(),
+            "path": str(self.path),
+            "loaded": self.native_handle is not None,
+            "provenance": {
+                "origin": self.origin,
+                "source_uri": self.runtime_contract.manifest_data["uri"],
+                "semantic_identity": self.runtime_contract.manifest_data["digests"]["semantic"],
+                "manifest_identity": self.runtime_contract.manifest_data["digests"]["manifest"],
+            },
+        }
 
 
 __all__ = [
     "ComponentRuntimeContract", "CompiledComponentArtifact", "InstalledComponent",
-    "NumericalFluxCpuBinding",
     "inspect_exported_symbols", "inspect_symbol_bytes",
 ]

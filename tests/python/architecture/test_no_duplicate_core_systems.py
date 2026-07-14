@@ -33,7 +33,6 @@ TARGET_SURFACE_ROOTS = (
     "diagnostics",
     "external",
     "fields",
-    "ir",
     "linalg",
     "mesh",
     "model",
@@ -286,7 +285,7 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     """
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Module, Signature
     from pops.problem import Case
@@ -381,10 +380,9 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
     manifest), while sim.amr.inspect() is a {hierarchy, patches, regrid, limitations} VIEW with NO
     configuration mutator (no set_/configure_/add_ method that changes levels/ratio).
     """
-    from pops.mesh import CartesianMesh
-    from tests.python.support.layout_plan import final_amr_layout
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
-    layout = final_amr_layout(CartesianMesh(n=16, L=1.0))
+    layout = final_amr_layout(cartesian_grid(n=16, L=1.0))
     manifest = layout.inspect()
     assert manifest["capabilities"]["layout"] == "amr", (
         "AMR(...) must be the typed AMR configuration surface")

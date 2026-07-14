@@ -37,9 +37,10 @@ import tempfile
 import numpy as np
 
 import pops
+import pops.runtime._engine_descriptors as engine
 from tests.python.support.initial_states import euler_bubble_state
 from pops.codegen.cache import _backend_distinct_so_path, _process_so_backend, _record_so_backend
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._facade import Model
 from tests.python.support.requirements import repo_include
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -209,8 +210,8 @@ def _native_load_probe():
         cm = build_euler("euler_loadprobe").compile(os.path.join(d, "lp.so"), INCLUDE,
                                                     backend="production")
         s = System(n=8, periodic=True)
-        s.add_equation("g", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                         variables=Primitive()))
+        s.add_equation("g", cm, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                         recon=Primitive()))
         shutil.rmtree(d, ignore_errors=True)
         return True
     except Exception:  # noqa: BLE001
@@ -232,15 +233,15 @@ def native_load_checks():
     # charger l'artefact AOT au chemin so (peuple le cache de handles dlopen pour ce chemin)
     cm_aot = build_euler().compile(so, INCLUDE, backend="aot")
     s_aot = System(n=n, periodic=True)
-    s_aot.add_equation("gas", cm_aot, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                              variables=Primitive()))
+    s_aot.add_equation("gas", cm_aot, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                              recon=Primitive()))
 
     # recompiler PRODUCTION au MEME chemin, puis brancher via add_native_block : doit reussir
     cm_prod = build_euler().compile(so, INCLUDE, backend="production")
     try:
         s_prod = System(n=n, periodic=True)
-        s_prod.add_equation("gas", cm_prod, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                                    variables=Primitive()))
+        s_prod.add_equation("gas", cm_prod, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                                    recon=Primitive()))
         s_prod.set_poisson(rhs="charge_density", solver="geometric_mg")
         s_prod.set_state("gas", initial_state(n))
         steps = s_prod.run(

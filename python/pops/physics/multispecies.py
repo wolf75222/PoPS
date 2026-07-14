@@ -6,15 +6,15 @@ It reads fields ``(block, role)`` as INPUT and WRITES source terms given by
 symbolic expressions; ``compile(backend)`` lowers each expr to postfix BYTECODE
 (stack machine) that C++ evaluates per cell -- NO ``.so`` nor Python callback.
 
-Import-graph rule (Spec 4): pure :mod:`pops.ir` + stdlib. The compile path is a
+Import-graph rule (Spec 4): pure :mod:`pops._ir` + stdlib. The compile path is a
 pure-Python bytecode emitter, so no codegen / ``_pops`` import is needed at all.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from pops.ir import Var, _wrap, Expr, Const, Add, Sub, Mul, Div, Pow, Neg, Sqrt, sqrt  # noqa: F401
-from pops.ir.visitors import _children, _key  # noqa: F401
+from pops._ir import Var, _wrap, Expr, Const, Add, Sub, Mul, Div, Pow, Neg, Sqrt, sqrt  # noqa: F401
+from pops._ir.visitors import _children, _key  # noqa: F401
 
 from ._coupled_abi import (
     CS_ADD as _CS_ADD,

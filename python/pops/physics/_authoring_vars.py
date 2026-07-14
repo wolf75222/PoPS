@@ -6,14 +6,14 @@ instance attributes they touch (``cons_names`` / ``prim_defs`` / ``aux_names``
 / ``aux_extra_names`` / ``prim_state`` / ``cons_from`` / ``prim_roles``) are
 created by ``HyperbolicModel.__init__`` (see :mod:`pops.physics._model`).
 
-Imports only :mod:`pops.ir` and the package-level aux constants: this layer is
+Imports only :mod:`pops._ir` and the package-level aux constants: this layer is
 codegen-free and ``_pops``-free (Spec-4 import-graph rule).
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.ir import Var, _wrap
+from pops._ir import Var, _wrap
 
 from .aux import AUX_CANONICAL, AUX_NAMED_MAX, aux_total_n_aux
 

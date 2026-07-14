@@ -15,7 +15,7 @@ surface (``profile`` / ``step_cfl`` / ``amr.patch_table``):
   * LIVE runtime on a real ``AmrSystem``: a typed ``profile(Profile.Basic())`` context wraps two
     ``step_cfl`` runtime-CFL steps (the engine picks a CFL-bounded dt and advances the clock), the
     closing ``PerformanceSummary.by_amr_mpi()`` answers, and ``amr.patch_table()`` reads the built
-    hierarchy. ``profile`` is the SAME seam ``bind``'s ``BoundSimulation`` whitelists.
+    hierarchy. ``profile`` is exercised on the internal AMR engine seam.
 
 Runtime: ``importorskip('pops')`` skips on a bare box; the live cells step a real Kokkos-Serial
 engine on the CI runner. ``__main__`` runs pytest.
@@ -26,25 +26,27 @@ import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
-from pops.runtime.bricks import Periodic  # noqa: E402
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.codegen._plans import (  # noqa: E402
     BindInputs, InstallPlan, ResolvedBlock, ResolvedSimulationPlan,
 )
-from pops.codegen.compiled_artifact import (  # noqa: E402
+from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledBlockArtifact, CompiledSimulationArtifact,
 )
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.codegen._compiled_model_identity import compiled_model_identity  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
 from pops.layouts import Uniform  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.params import RuntimeParam  # noqa: E402
 from pops.problem import Case  # noqa: E402
 from pops.runtime._system import AmrSystem  # noqa: E402  (ADC-545 advanced runtime seam)
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
-from tests.python.support.layout_plan import final_amr_layout, resolved_layout_contract  # noqa: E402
+from tests.python.support.layout_plan import (  # noqa: E402
+    cartesian_grid, final_amr_layout, resolved_layout_contract,
+)
 
 
 def _amr_route_handle():
@@ -64,7 +66,7 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
         caps={"cpu": True, "amr": True, "mpi": True}, abi_key="k", model_hash="h", cxx="c++",
         std="c++23", target="amr_system", aux_extra_names=["B_z"])
     handle.definition_identity = compiled_model_identity(model_hash="h")
-    layout = final_amr_layout(CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
+    layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
     snapshot = AuthoringSnapshot({"kind": "amr-introspection-stub"})
     module = Module("amr-introspection-model")
     module.param(alpha)
@@ -79,8 +81,12 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
         backend="production",
         layout=layout,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
+        },
         time=None,
-        blocks=(ResolvedBlock("ne", module, None, "production", ("U",)),),
+        blocks=(ResolvedBlock(
+            "ne", module, None, "production", ("U",), ("test::ne::state::U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -121,7 +127,7 @@ def test_arguments_on_the_amr_route_handle():
 
 def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
     handle = _amr_route_handle()
-    mesh = CartesianMesh(n=64, L=1.0, periodic=True)
+    mesh = cartesian_grid(n=64, L=1.0, periodic=True)
     amr_est = handle.estimate_memory(mesh)                       # auto AMR from InstallPlan
     uni_est = handle.estimate_memory(mesh, layout=Uniform(mesh))
     assert amr_est.layout == "amr" and uni_est.layout == "uniform"
@@ -144,9 +150,9 @@ def test_generic_inspection_surfaces_the_carried_refine_regrid_tags():
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
-    sim.block("ne", pops.Model(pops.Scalar(), pops.ExB(B0=1.0), pops.NoSource(),
-                                   pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
+                                   engine.ChargeDensity(charge=1.0)),
+                  spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(threshold=1.05)
     xs = (np.arange(n) + 0.5) / n
@@ -159,13 +165,15 @@ def _built_amr(n=32):
 def test_profile_context_and_step_cfl_on_a_built_amr_system():
     """A typed ``profile()`` context wraps two runtime-CFL steps; the AMR/MPI summary answers.
 
-    ``profile`` is the seam ``bind``'s ``BoundSimulation`` whitelists, exercised here on the engine
+    ``profile`` is an internal engine seam, exercised here on the engine
     it delegates to. ``step_cfl`` advances by a CFL-bounded dt; ``by_amr_mpi()`` must answer (counters
     may be zero on a host build, but the surface never raises).
     """
     n = 32
     sim = _built_amr(n)
-    with sim.profile(pops.Profile.Basic()) as prof:
+    from pops.runtime._profile import Profile
+
+    with sim.profile(Profile.Basic()) as prof:
         sim.step_cfl(0.4)
         sim.step_cfl(0.4)
     assert sim.time() > 0.0 and np.isfinite(sim.time()), "step_cfl did not advance the clock"

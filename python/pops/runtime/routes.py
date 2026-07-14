@@ -25,11 +25,13 @@ from ._generated_component_routes import (
     COMPONENT_MANIFEST_SCHEMA_VERSION,
     ROUTE_COMPONENT_DEFAULTS as _GENERATED_COMPONENT_DEFAULTS,
     ROUTE_FAMILY_INTERFACES as _GENERATED_FAMILY_INTERFACES,
+    ROUTE_FAMILY_NATIVE_INTERFACES as _GENERATED_FAMILY_NATIVE_INTERFACES,
     ROUTE_METADATA as _GENERATED_ROUTE_METADATA,
     ROUTE_REGISTRY_SIGNATURE,
     ROUTE_REGISTRY_VERSION,
     ROUTE_TABLES as _GENERATED_ROUTE_TABLES,
 )
+from pops._generated_component_interfaces import NATIVE_COMPONENT_INTERFACE_BY_NAME
 
 
 def _freeze_catalog_value(value: Any) -> Any:
@@ -116,13 +118,24 @@ class Route(str):
         summary = metadata.pop("summary", "")
         parameters = list(defaults["parameters"])
         parameters.extend(metadata.pop("parameters", ()))
+        signature = dict(defaults["signature"])
+        native_name = _FAMILY_NATIVE_INTERFACES[self.family]
+        if native_name is not None:
+            native = NATIVE_COMPONENT_INTERFACE_BY_NAME[native_name]
+            signature["native_interface"] = {
+                "id": native["id"], "name": native["name"], "uri": native["uri"],
+                "version": native["version"],
+                "catalog_sha256": COMPONENT_CATALOG_SHA256,
+                "protocol_abi": 1, "cpp_table": native["cpp_table"],
+                "hot_path": native["hot_path"], "operations": list(native["operations"]),
+            }
         return {
             "schema_version": COMPONENT_MANIFEST_SCHEMA_VERSION,
             "uri": "pops://builtin/routes/%s/%s" % (self.family, self.token),
             "component_type": "route.%s" % self.family,
             "version": dict(defaults["version"]),
             "facets": list(defaults["facets"]) + [row["name"] for row in interfaces],
-            "signature": dict(defaults["signature"]),
+            "signature": signature,
             "reads": list(defaults["reads"]),
             "writes": list(defaults["writes"]),
             "parameters": parameters,
@@ -169,6 +182,7 @@ class Route(str):
 _TABLES = _freeze_catalog_value(_GENERATED_ROUTE_TABLES)
 _COMPONENT_DEFAULTS = _freeze_catalog_value(_GENERATED_COMPONENT_DEFAULTS)
 _FAMILY_INTERFACES = _freeze_catalog_value(_GENERATED_FAMILY_INTERFACES)
+_FAMILY_NATIVE_INTERFACES = _freeze_catalog_value(_GENERATED_FAMILY_NATIVE_INTERFACES)
 
 
 _REGISTRY = {

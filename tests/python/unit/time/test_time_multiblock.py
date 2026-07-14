@@ -232,7 +232,7 @@ def section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001 -- numpy or _pops unavailable
         print("-- (B) skipped: pops/numpy unavailable (%s) --" % exc)
         return
@@ -278,8 +278,8 @@ def section_b(t):
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
             sim.add_equation(blk, cm,
-                             spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit(method="euler"))
+                             spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                             time=engine.Explicit(method="euler"))
         return sim
 
     # Reference: two INDEPENDENT single-block systems.

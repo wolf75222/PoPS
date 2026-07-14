@@ -213,7 +213,7 @@ def section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return
@@ -263,8 +263,8 @@ def section_b(t):
     except RuntimeError as exc:
         _skip("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     # A KNOWN positive field with spatial variation (each cell solves its own scalar Newton).
     x = (np.arange(n) + 0.5) / n

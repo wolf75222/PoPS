@@ -5,7 +5,7 @@ import pytest
 
 pytest.importorskip("pops")
 
-from pops.codegen.compiled_artifact import CompiledSimulationArtifact  # noqa: E402
+from pops.codegen._compiled_artifact import CompiledSimulationArtifact  # noqa: E402
 
 from _typed_artifact_fixture import artifact_fixture  # noqa: E402
 

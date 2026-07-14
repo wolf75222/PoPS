@@ -70,6 +70,22 @@ def test_final_release_source_contract_requires_executable_restart_output_proof(
     assert any("lacks final proof markers" in error for error in errors)
 
 
+@pytest.mark.parametrize("module", ("pops.ir", "pops._ir"))
+def test_final_release_source_contract_refuses_internal_or_transitional_imports(
+    tmp_path, module
+):
+    _write_final_source_tree(tmp_path)
+    path = tmp_path / contract.FINAL_EXAMPLES[0]
+    path.write_text(
+        path.read_text(encoding="utf-8") + f"\nfrom {module} import ValueExpr\n",
+        encoding="utf-8",
+    )
+
+    errors = contract.source_contract_errors(tmp_path)
+
+    assert any("transitional/internal authoring names" in error for error in errors)
+
+
 def test_required_junit_lane_rejects_skips_xfails_failures_and_empty_reports(tmp_path):
     report = tmp_path / "report.xml"
     report.write_text(

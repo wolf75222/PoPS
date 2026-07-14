@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.amr import AMRTaggingResolutionContext
-from pops.ir import ValueExpr
+from pops.amr._resolution import AMRTaggingResolutionContext
+from pops.math import ValueExpr
 from pops.model import OwnerPath
 
 

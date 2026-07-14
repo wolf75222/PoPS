@@ -2,7 +2,7 @@
 """SSPRK3 expose sur le chemin de PRODUCTION (loader natif .so), pas seulement add_block.
 
 Avant ce chantier, le schema RK explicite n'etait selectionnable que sur le chemin natif
-add_block (modele compose pops.Model) : le chemin compile/production (add_native_block ->
+add_block (modele compose engine.Model) : le chemin compile/production (add_native_block ->
 pops_install_native -> add_compiled_model<ProdModel>) ne marshalait que "explicit"|"imex" et
 RETOMBAIT SILENCIEUSEMENT sur SSPRK2 -- add_native_block rejetait meme "ssprk3". Le cas hoffart
 (arXiv:2510.11808), qui compile en backend="production", restait donc bloque en SSPRK2.
@@ -31,7 +31,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 from tests.python.support.requirements import (
     missing_compiler_requirement,
@@ -63,10 +63,10 @@ def err_msg(fn):
 
 def _native_spec():
     """Le MEME modele euler_poisson, version NATIVE composee par briques (reference de parite)."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                     transport=pops.CompressibleFlux(),
-                     source=pops.GravityForce(),
-                     elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                     transport=engine.CompressibleFlux(),
+                     source=engine.GravityForce(),
+                     elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
 
 def _initial_state(n):
@@ -118,8 +118,8 @@ try:
 
     def build_ref_ssprk3():
         s = System(n=n, L=L, periodic=True)
-        s.block("gas", spec, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-                    time=pops.Explicit(method="ssprk3"))
+        s.block("gas", spec, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+                    time=engine.Explicit(method="ssprk3"))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", Uflat)
         return s

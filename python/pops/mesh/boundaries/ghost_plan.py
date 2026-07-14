@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any
 
+from .component_binding import BoundaryComponentBinding
 from .ghost_plan_types import (
     BoundaryLinearizationContribution, BoundaryResidualContribution, CornerPolicy,
     GhostCoverageManifest, GhostRegion, MultiBlockInterface)
@@ -235,13 +236,17 @@ def _authenticate_cases(
             interface.handle, interface.left.layout, interface.left.discretization,
             interface.left.projection, interface.right.layout, interface.right.discretization,
             interface.right.projection, interface.shared_conservative_flux,
-            interface.permutation, interface.mapping,
+            interface.permutation.handle, interface.mapping.handle,
         )
         for handle in handles:
             _require_topology_case(handle, topology, where="MultiBlockInterface")
-        if not topology.contains(interface.left.boundary) or not topology.contains(
-                interface.right.boundary):
-            raise ValueError("MultiBlockInterface boundaries are absent from topology")
+        local_endpoints = sum((
+            topology.contains(interface.left.boundary),
+            topology.contains(interface.right.boundary),
+        ))
+        if local_endpoints != 1:
+            raise ValueError(
+                "each block GhostProducerPlan must own exactly one MultiBlockInterface endpoint")
     for policy in corner_policies:
         if policy.resolver is not None:
             _require_topology_case(policy.resolver, topology, where="CornerPolicy.resolver")
@@ -268,6 +273,8 @@ class GhostProducerPlan:
     interfaces: tuple[MultiBlockInterface, ...] = ()
     residual_contributions: tuple[BoundaryResidualContribution, ...] = ()
     linearization_contributions: tuple[BoundaryLinearizationContribution, ...] = ()
+    execution_authority: Any = None
+    component_bindings: tuple[BoundaryComponentBinding, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.topology, BoundaryTopology):
@@ -285,6 +292,24 @@ class GhostProducerPlan:
             if not isinstance(rows, tuple) or any(not isinstance(row, expected) for row in rows):
                 raise TypeError("GhostProducerPlan.%s must contain %s rows" %
                                 (name, expected.__name__))
+        bindings = tuple(self.component_bindings)
+        if any(type(row) is not BoundaryComponentBinding for row in bindings):
+            raise TypeError(
+                "GhostProducerPlan.component_bindings must contain exact "
+                "BoundaryComponentBinding rows"
+            )
+        binding_targets = [row.target for row in bindings]
+        if len(binding_targets) != len(set(binding_targets)):
+            raise ValueError("GhostProducerPlan has multiple native components for one Handle")
+        referenced_targets = set(self._component_targets())
+        extra_bindings = set(binding_targets) - referenced_targets
+        if extra_bindings:
+            raise ValueError(
+                "GhostProducerPlan component binding targets unused Handle(s) %s"
+                % sorted(row.qualified_id for row in extra_bindings)
+            )
+        object.__setattr__(self, "component_bindings", tuple(sorted(
+            bindings, key=lambda row: row.target.qualified_id)))
         coverage = [row.overlap_key for row in self.regions]
         if len(coverage) != len(set(coverage)):
             raise ValueError("overlapping ghost regions are forbidden")
@@ -364,6 +389,34 @@ class GhostProducerPlan:
         )
         for name, key in sorting:
             object.__setattr__(self, name, tuple(sorted(getattr(self, name), key=key)))
+        if self.execution_authority is not None:
+            for protocol in ("canonical_identity", "compile_boundary_data",
+                             "runtime_boundary_data"):
+                if not callable(getattr(self.execution_authority, protocol, None)):
+                    raise TypeError(
+                        "GhostProducerPlan execution authority must implement %s()" % protocol
+                    )
+        producer_handles = {row.producer.handle for row in self.productions}
+        for production in self.productions:
+            ordering_dependencies = {
+                dependency for dependency in production.producer.dependencies
+                if dependency.kind == "ghost_producer"
+            }
+            missing_dependencies = ordering_dependencies - producer_handles
+            if missing_dependencies:
+                raise ValueError(
+                    "GhostProducerPlan producer %s depends on absent ghost producer(s) %s"
+                    % (production.producer.qualified_id, sorted(
+                        row.qualified_id for row in missing_dependencies))
+                )
+            if production.producer.handle in ordering_dependencies:
+                raise ValueError(
+                    "GhostProducerPlan producer %s depends on itself"
+                    % production.producer.qualified_id
+                )
+        # Resolve-time construction must reject dependency cycles.  Data dependencies (states,
+        # fields, parameters) deliberately remain outside this producer-order graph.
+        self.execution_order()
 
     def canonical_identity(self) -> dict[str, Any]:
         return {"schema_version": _SCHEMA_VERSION, "plan_type": "ghost_producers",
@@ -376,7 +429,12 @@ class GhostProducerPlan:
                 "residual_contributions": [
                     row.canonical_identity() for row in self.residual_contributions],
                 "linearization_contributions": [
-                    row.canonical_identity() for row in self.linearization_contributions]}
+                    row.canonical_identity() for row in self.linearization_contributions],
+                "component_bindings": [
+                    row.canonical_identity() for row in self.component_bindings],
+                "execution_authority": (
+                    None if self.execution_authority is None else
+                    self.execution_authority.canonical_identity())}
 
     @property
     def canonical_id(self) -> str:
@@ -385,6 +443,422 @@ class GhostProducerPlan:
     def inspect(self) -> dict[str, Any]:
         return {"report_type": "ghost_producer_plan", "canonical_id": self.canonical_id,
                 **self.canonical_identity()}
+
+    def resolve_for_numerics(self, context: Any) -> GhostProducerPlan:
+        """A fully canonical plan is already resolved; authenticate its Case root only."""
+        owner = getattr(context, "owner", None)
+        if owner != self.topology.owner:
+            raise ValueError("GhostProducerPlan belongs to a different Case owner")
+        return self
+
+    def ghost_plan_composer_capability(self) -> dict[str, Any]:
+        return {"schema_version": 1, "scope": "self"}
+
+    def compose_ghost_plan(self, context: Any) -> GhostProducerPlan:
+        from .composition import GhostPlanCompositionContext
+
+        if not isinstance(context, GhostPlanCompositionContext):
+            raise TypeError("GhostProducerPlan composition requires GhostPlanCompositionContext")
+        if context.authorities != (self,):
+            raise ValueError(
+                "a canonical GhostProducerPlan composes only itself; multiple authorities require "
+                "an explicit scope='all' composer"
+            )
+        return self
+
+    def compile_boundary_data(self) -> dict[str, Any]:
+        """Prove that every authored producer has an executable lowering before compilation."""
+        if self.execution_authority is None:
+            raise NotImplementedError(
+                "GhostProducerPlan is complete structurally but has no executable lowering "
+                "authority; compose it from a numerical boundary provider"
+            )
+        data = self.execution_authority.compile_boundary_data()
+        if type(data) is not dict:
+            raise TypeError("boundary compile authority must return a dict")
+        periodic = [row for production in self.productions
+                    for row in production.producer.periodic]
+        for identification in periodic:
+            orientation = identification.orientation
+            dimension = len(orientation.permutation)
+            if orientation.permutation != tuple(range(dimension)) or any(
+                    sign != 1 for sign in orientation.signs):
+                raise NotImplementedError(
+                    "the installed native provider does not execute signed/permuted periodic "
+                    "identifications; select an oriented-periodic provider before compile"
+                )
+        if self.interfaces:
+            depth = data.get("required_depth")
+            if isinstance(depth, bool) or not isinstance(depth, int) or depth != 1:
+                raise NotImplementedError(
+                    "shared-interface NumericalFlux requires a prepared trace provider for "
+                    "reconstruction order > 1; the current scheduler authenticates cell-average "
+                    "traces only (required_depth=1). Physical GhostBoundary providers remain "
+                    "available at higher order."
+                )
+            ncomp = data.get("ncomp")
+            if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
+                raise TypeError(
+                    "shared-interface lowering requires an authenticated positive state ncomp"
+                )
+            incompatible = [
+                row.qualified_id for row in self.interfaces
+                if len(row.permutation.right_component_for_left) != ncomp
+            ]
+            if incompatible:
+                raise ValueError(
+                    "shared-interface component permutation must exactly cover all %d state "
+                    "components: %s" % (ncomp, sorted(incompatible))
+                )
+            missing = [
+                row.shared_conservative_flux for row in self.interfaces
+                if row.shared_conservative_flux not in self._binding_map()
+            ]
+            if missing:
+                raise NotImplementedError(
+                    "shared-interface conservative flux Handle(s) require qualified "
+                    "NumericalFlux components: %s"
+                    % sorted(row.qualified_id for row in missing)
+                )
+        if self.corner_policies:
+            missing = [
+                row.resolver for row in self.corner_policies
+                if row.resolver is not None and row.resolver not in self._binding_map()
+            ]
+            if missing:
+                raise NotImplementedError(
+                    "explicit corner resolver Handle(s) require qualified GhostBoundary "
+                    "components: %s" % sorted(row.qualified_id for row in missing)
+                )
+        closures = [
+            operator for production in self.productions
+            for operator in production.producer.operators
+            if operator.kind == "numerical_closure"
+        ]
+        if closures:
+            missing = [row for row in closures if row not in self._binding_map()]
+            if missing:
+                raise NotImplementedError(
+                    "numerical boundary closure Handle(s) require qualified GhostBoundary "
+                    "components: %s" % sorted(row.qualified_id for row in missing)
+                )
+        if self.residual_contributions or self.linearization_contributions:
+            residual_producers = {row.producer for row in self.residual_contributions}
+            linear_producers = {row.producer for row in self.linearization_contributions}
+            if residual_producers != linear_producers:
+                raise ValueError(
+                    "implicit boundary producers must contribute both residual and linearization"
+                )
+            bindings = self._binding_map()
+            missing = [
+                handle for handle in (
+                    *(row.residual for row in self.residual_contributions),
+                    *(row.linearization for row in self.linearization_contributions),
+                ) if handle not in bindings
+            ]
+            if missing:
+                raise NotImplementedError(
+                    "implicit boundary Handle(s) require qualified FieldBoundaryClosure "
+                    "components: %s" % sorted(row.qualified_id for row in missing)
+                )
+            residual_by_key = {
+                (row.region.canonical_id, row.producer): bindings[row.residual]
+                for row in self.residual_contributions
+            }
+            linear_by_key = {
+                (row.region.canonical_id, row.producer): bindings[row.linearization]
+                for row in self.linearization_contributions
+            }
+            for key in sorted(residual_by_key, key=lambda row: (row[0], row[1].qualified_id)):
+                residual = residual_by_key[key]
+                linear = linear_by_key[key]
+                if (residual.component_id, residual.component_manifest_identity) != (
+                        linear.component_id, linear.component_manifest_identity):
+                    raise ValueError(
+                        "one implicit boundary residual/JVP pair must use the same exact "
+                        "FieldBoundaryClosure component"
+                    )
+        owned_boundaries = {
+            production.region.boundary for production in self.productions
+            if production.region.boundary is not None
+        }
+        omitted_interface_faces = sorted({
+            2 * side.boundary.orientation.axis + (
+                0 if side.boundary.orientation.side.value == "lower" else 1)
+            for interface in self.interfaces
+            for side in (interface.left, interface.right)
+            if side.boundary in owned_boundaries
+        })
+        return {
+            **data,
+            "ghost_plan_identity": self.canonical_id,
+            "producer_order": [
+                row.producer.qualified_id for row in self.execution_order()],
+            "corner_policies": [
+                row.canonical_identity() for row in self.corner_policies],
+            "interfaces": [row.canonical_identity() for row in self.interfaces],
+            "interface_endpoints": [
+                {
+                    "interface": row.qualified_id,
+                    "owned_sides": [
+                        name for name, side in (("left", row.left), ("right", row.right))
+                        if side.boundary in owned_boundaries
+                    ],
+                }
+                for row in self.interfaces
+            ],
+            "omitted_interface_faces": omitted_interface_faces,
+            "interface_component_bindings": [
+                {
+                    "interface": row.canonical_identity(),
+                    "component": self._binding_map()[
+                        row.shared_conservative_flux].canonical_identity(),
+                }
+                for row in self.interfaces
+            ],
+            "residual_contributions": [
+                row.canonical_identity() for row in self.residual_contributions],
+            "linearization_contributions": [
+                row.canonical_identity() for row in self.linearization_contributions],
+            "component_bindings": [
+                row.canonical_identity() for row in self.component_bindings],
+            "component_region_templates": self._component_region_rows(None),
+        }
+
+    def runtime_boundary_data(self, params: Any) -> dict[str, Any]:
+        compiled = self.compile_boundary_data()
+        data = self.execution_authority.runtime_boundary_data(params)
+        if type(data) is not dict:
+            raise TypeError("boundary runtime authority must return a dict")
+        result = dict(data)
+        result["ghost_plan_identity"] = self.canonical_id
+        producer_order = [
+            row.producer.qualified_id for row in self.execution_order()
+        ]
+        result["producer_order"] = producer_order
+        result["component_regions"] = self._component_region_rows(params)
+        # Shared-interface installation happens after the native blocks exist, whereas physical
+        # ghost producers are prepared before their closures are built.  Retain the exact same
+        # canonical declarations and qualified component bindings in the runtime payload so the
+        # post-block installer never has to recover topology from an authoring object or select a
+        # NumericalFlux component by interface uniqueness.
+        result["interfaces"] = compiled["interfaces"]
+        result["interface_endpoints"] = compiled["interface_endpoints"]
+        result["interface_component_bindings"] = compiled[
+            "interface_component_bindings"]
+        result["identity"] = _canonical_id({
+            "schema_version": _SCHEMA_VERSION,
+            "prepared_authority": data.get("identity"),
+            "ghost_plan_identity": self.canonical_id,
+            "producer_order": producer_order,
+        })
+        return result
+
+    def _component_targets(self) -> tuple[Handle, ...]:
+        rows = []
+        for production in self.productions:
+            rows.extend(provider.handle for provider in production.producer.boundary_providers)
+            rows.extend(
+                operator for operator in production.producer.operators
+                if operator.kind == "numerical_closure"
+            )
+        rows.extend(
+            policy.resolver for policy in self.corner_policies if policy.resolver is not None)
+        rows.extend(row.shared_conservative_flux for row in self.interfaces)
+        rows.extend(row.residual for row in self.residual_contributions)
+        rows.extend(row.linearization for row in self.linearization_contributions)
+        return tuple(sorted(set(rows), key=lambda row: row.qualified_id))
+
+    def _binding_map(self) -> dict[Handle, BoundaryComponentBinding]:
+        return {row.target: row for row in self.component_bindings}
+
+    def require_component_inputs(self, components: tuple[Any, ...]) -> None:
+        """Authenticate every bound component against the explicit resolve input tuple."""
+        by_id = {}
+        for component in components:
+            component_id = getattr(component, "component_id", None)
+            if component_id is None:
+                component_id = component.component_manifest.component_id
+            by_id[component_id] = component
+        for binding in self.component_bindings:
+            try:
+                component = by_id[binding.component_id]
+            except KeyError:
+                raise ValueError(
+                    "boundary Handle %s requires exact component %r in resolve(components=)"
+                    % (binding.target.qualified_id, binding.component_id)
+                ) from None
+            binding.require_component(component)
+
+    def _component_region_rows(self, params: Any | None) -> list[dict[str, Any]]:
+        """Return bind-time exact component invocations, including empty dependency tables."""
+        from collections.abc import Mapping
+
+        if params is not None and not isinstance(params, Mapping):
+            raise TypeError("boundary component lowering requires resolved BindSchema values")
+        bindings = self._binding_map()
+        rows = []
+
+        def scalar_rows(handles: tuple[Handle, ...]) -> list[dict[str, Any]]:
+            result = []
+            for handle in handles:
+                if params is None:
+                    result.append({
+                        "qualified_id": handle.qualified_id,
+                        "handle": handle.canonical_identity(),
+                    })
+                    continue
+                if handle not in params:
+                    raise ValueError(
+                        "boundary component parameter %s is absent from resolved BindSchema values"
+                        % handle.qualified_id
+                    )
+                value = params[handle]
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise TypeError(
+                        "boundary component parameter %s must bind to a real scalar"
+                        % handle.qualified_id
+                    )
+                result.append({"qualified_id": handle.qualified_id, "value": float(value)})
+            return result
+
+        def region_data(region: GhostRegion, *, kind: str | None = None,
+                        boundaries: tuple[Any, ...] = ()) -> dict[str, Any]:
+            selected = boundaries
+            if region.boundary is not None:
+                selected = (region.boundary,)
+            axes = tuple(row.orientation.axis for row in selected)
+            sides = tuple(row.orientation.outward_sign for row in selected)
+            codimension = len(axes)
+            if codimension == 0:
+                raise ValueError(
+                    "component boundary region %s has no exact oriented boundary axes"
+                    % region.selector.qualified_id
+                )
+            region_kind = kind or ("face" if codimension == 1 else "corner")
+            return {
+                "kind": region_kind,
+                "dimension": len(self.topology.boundaries) // 2,
+                "codimension": codimension,
+                "axes": list(axes),
+                "sides": list(sides),
+                "region_identity": region.selector.qualified_id,
+                "layout_identity": region.layout.qualified_id,
+            }
+
+        for production in self.productions:
+            region = production.region
+            for provider in production.producer.boundary_providers:
+                binding = bindings.get(provider.handle)
+                if binding is None:
+                    continue
+                dependencies = provider.dependencies
+                rows.append({
+                    **binding.canonical_identity(),
+                    "producer_identity": production.producer.qualified_id,
+                    "state_identity": region.subject.qualified_id,
+                    "ghost_identity": region.selector.qualified_id,
+                    "region": region_data(region),
+                    "states": [row.qualified_id for row in dependencies.states],
+                    "directions": [],
+                    "fields": [row.qualified_id for row in dependencies.fields],
+                    "parameters": scalar_rows(dependencies.runtime_params),
+                    "outputs": [row.subject.qualified_id for row in provider.outputs],
+                    "rate": None,
+                    "nonlinear_iterate": None,
+                })
+            for operator in production.producer.operators:
+                binding = bindings.get(operator)
+                if binding is None:
+                    continue
+                rows.append({
+                    **binding.canonical_identity(),
+                    "producer_identity": production.producer.qualified_id,
+                    "state_identity": region.subject.qualified_id,
+                    "ghost_identity": region.selector.qualified_id,
+                    "region": region_data(region),
+                    "states": [], "directions": [], "fields": [], "parameters": [],
+                    "outputs": [region.subject.qualified_id],
+                    "rate": None, "nonlinear_iterate": None,
+                })
+        for policy in self.corner_policies:
+            if policy.resolver is None or policy.resolver not in bindings:
+                continue
+            dependencies = tuple(
+                handle for constraint in policy.constraints
+                for handle in (
+                    constraint.source.dependencies.states +
+                    constraint.source.dependencies.fields
+                )
+            )
+            runtime_params = tuple(sorted({
+                handle for constraint in policy.constraints
+                for handle in constraint.source.dependencies.runtime_params
+            }, key=lambda row: row.qualified_id))
+            boundaries = tuple(
+                output.boundary for constraint in policy.constraints
+                for output in constraint.source.outputs
+            )
+            binding = bindings[policy.resolver]
+            rows.append({
+                **binding.canonical_identity(),
+                "producer_identity": policy.resolver.qualified_id,
+                "state_identity": policy.corner.subject.qualified_id,
+                "ghost_identity": policy.corner.selector.qualified_id,
+                "region": region_data(policy.corner, kind="corner", boundaries=boundaries),
+                "states": sorted({
+                    row.qualified_id for row in dependencies if row.kind == "state"}),
+                "directions": [],
+                "fields": sorted({
+                    row.qualified_id for row in dependencies if row.kind == "field"}),
+                "parameters": scalar_rows(runtime_params),
+                "outputs": [policy.corner.subject.qualified_id],
+                "rate": None, "nonlinear_iterate": None,
+            })
+        for contribution, target_name in (
+                *((row, "residual") for row in self.residual_contributions),
+                *((row, "linearization") for row in self.linearization_contributions)):
+            target = getattr(contribution, target_name)
+            binding = bindings.get(target)
+            if binding is None:
+                continue
+            rows.append({
+                **binding.canonical_identity(),
+                "producer_identity": contribution.producer.qualified_id,
+                "state_identity": contribution.region.subject.qualified_id,
+                "ghost_identity": contribution.region.selector.qualified_id,
+                "region": region_data(contribution.region),
+                "states": [contribution.region.subject.qualified_id],
+                "directions": ([contribution.region.subject.qualified_id]
+                               if target_name == "linearization" else []),
+                "fields": [], "parameters": [],
+                "outputs": [contribution.handle.qualified_id],
+                "rate": None,
+                "nonlinear_iterate": contribution.region.subject.qualified_id,
+            })
+        rows.sort(key=lambda row: (row["target"]["qualified_id"],
+                                   row["region"]["region_identity"]))
+        return rows
+
+    def execution_order(self) -> tuple[GhostProduction, ...]:
+        """Stable topological producer order; dependency cycles and foreign edges fail closed."""
+        by_handle = {row.producer.handle: row for row in self.productions}
+        pending = set(by_handle)
+        ordered = []
+        while pending:
+            ready = sorted(
+                (handle for handle in pending
+                 if all(dependency not in pending for dependency in
+                        by_handle[handle].producer.dependencies
+                        if dependency.kind == "ghost_producer")),
+                key=lambda handle: handle.qualified_id,
+            )
+            if not ready:
+                raise ValueError("GhostProducerPlan producer dependency graph contains a cycle")
+            for handle in ready:
+                ordered.append(by_handle[handle])
+                pending.remove(handle)
+        return tuple(ordered)
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -411,6 +885,8 @@ class GhostProducerRegistry:
         interfaces: tuple[MultiBlockInterface, ...] = (),
         residual_contributions: tuple[BoundaryResidualContribution, ...] = (),
         linearization_contributions: tuple[BoundaryLinearizationContribution, ...] = (),
+        execution_authority: Any = None,
+        component_bindings: tuple[BoundaryComponentBinding, ...] = (),
     ) -> GhostProducerPlan:
         if not isinstance(productions, tuple):
             raise TypeError("GhostProducerRegistry productions must be a tuple")
@@ -423,7 +899,8 @@ class GhostProducerRegistry:
                 row.qualified_id for row in registered - used))
         return GhostProducerPlan(
             topology, coverage, regions, productions, corner_policies, interfaces,
-            residual_contributions, linearization_contributions)
+            residual_contributions, linearization_contributions, execution_authority,
+            component_bindings)
 
 
 __all__ = [

@@ -18,7 +18,7 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_facade_lowering_parity (pops unavailable: %s)" % exc)

@@ -32,6 +32,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.codegen.program_codegen import emit_cpp_program
@@ -200,8 +201,8 @@ def test_amr_install_program_end_to_end_kokkos():
     xx, yy = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * xx) * np.cos(2 * np.pi * yy)
     try:
-        amr.add_equation("plasma", block_cm, spatial=pops.FiniteVolume(),
-                         time=pops.Explicit(method="ssprk2"))
+        amr.add_equation("plasma", block_cm, spatial=engine.Spatial(),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_density("plasma", rho)
         amr.install_program(compiled.so_path)
         amr.step(1e-3)  # the per-level macro-step runs over the hierarchy (AmrProgramContext)
@@ -246,8 +247,8 @@ def test_multi_block_amr_program_install_fails_loud():
     try:
         # Add BOTH blocks so the name-binding loop passes and the guard (not the name bind) is what fires.
         for blk in ("plasma", "plasma2"):
-            amr.add_equation(blk, block_cm, spatial=pops.FiniteVolume(),
-                             time=pops.Explicit(method="ssprk2"))
+            amr.add_equation(blk, block_cm, spatial=engine.Spatial(),
+                             time=engine.Explicit(method="ssprk2"))
             amr.set_density(blk, rho)
     except RuntimeError as exc:
         print("skip (could not add the two AMR blocks: %s)" % str(exc)[:120])

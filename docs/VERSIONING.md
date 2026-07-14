@@ -28,6 +28,13 @@ What a version bump is allowed to break is exactly this surface:
   vocabulary, canonical identity domains, external package contract, and generated builtin
   component catalog. New optional component capabilities are additive; changing the meaning or
   required shape of an existing semantic field is breaking.
+- Native component tables have two independent axes: the envelope protocol ABI and each interface
+  version. Adding a new table or a new version is additive; changing a published table layout,
+  operation semantics or required POD field without a new interface version is breaking. Loaders
+  match exact `(interface_id, interface_version, table_size)` tuples and never infer compatibility
+  from package SemVer. Shared request/value structs have their own generated common-ABI version;
+  that version participates in the catalog digest, so a binary built against another common layout
+  is rejected before any table is prepared or invoked.
 - Consumable generic C++ concepts and component interfaces documented for external implementations.
   Concrete runtime engines (`System`, `AmrSystem`, AMR couplers), their builders, and their stepping
   or block-registration methods are internal seams behind the Python lifecycle and carry no SemVer

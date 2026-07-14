@@ -8,7 +8,7 @@ Python, locally testable); the C++ coupled-rate kernel codegen is the deferred r
 import pytest
 
 from pops import model
-from pops.ir.expr import Var
+from pops._ir.expr import Var
 from pops.problem import Case
 from tests.python.unit.runtime._typed_program import add_typed_block
 

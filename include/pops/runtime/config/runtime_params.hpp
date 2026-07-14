@@ -15,9 +15,10 @@
 /// instead of a literal constant. Each generated block (hyperbolic / source / elliptic) that READS at
 /// least one runtime parameter then carries a member `pops::RuntimeParams params{}` initialized to the
 /// DECLARATION value (so, without a runtime set call, the block behaves EXACTLY as with a const param:
-/// the declaration value is baked into the member default). At run time, the ABI of the AOT .so
-/// (compiled_block_abi.hpp) transports a flat block of doubles; each call rebuilds the model then
-/// OVERWRITES `params.values[k]` with the supplied value -> the behavior changes without recompilation.
+/// the declaration value is baked into the member default). At bind time, the authenticated native
+/// component receives one complete flat vector; `compiled_model::bind_runtime_params` validates its
+/// exact cardinality and injects it before any native closure is constructed. The behavior therefore
+/// changes without recompilation and no hot-loop lookup or legacy marshaling ABI is involved.
 ///
 /// DEVICE-CLEAN. RuntimeParams is a trivially copyable aggregate (array of Real by value, no allocation,
 /// no std::), so copyable on device and readable in a kernel: get() is POPS_HD. The size is FIXED

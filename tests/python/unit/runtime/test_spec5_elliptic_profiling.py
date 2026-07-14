@@ -34,8 +34,8 @@ def _skip(msg):
 try:
     import numpy as np
 
-    import pops
-    from pops.runtime.bricks import Periodic
+    import pops.runtime._engine_descriptors as engine
+    from pops.runtime._engine_descriptors import Periodic
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -43,8 +43,8 @@ except Exception as exc:  # noqa: BLE001
 def _charge_model(q=1.0, b0=1.0):
     """A native diocotron-style scalar charge block: ExB transport reads grad phi, the elliptic brick
     contributes q*n to the Poisson RHS (ChargeDensity). No DSL -- pure native bricks."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=b0),
-                      source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=q))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=b0),
+                      source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=q))
 
 
 def _zero_mean_bump(n, amp):
@@ -58,7 +58,7 @@ def _zero_mean_bump(n, amp):
 
 def _build(n=32):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("ne", model=_charge_model(q=1.0), spatial=pops.Spatial(minmod=True))
+    sim.block("ne", model=_charge_model(q=1.0), spatial=engine.Spatial(minmod=True))
     sim.set_poisson(bc=Periodic())  # default solver = geometric_mg -> multigrid V-cycles
     sim.set_density("ne", _zero_mean_bump(n, 0.40))
     return sim
@@ -116,9 +116,9 @@ def main():
         "krylov_iters == 0 on the default Poisson (multigrid, not a Krylov elliptic solver)")
     chk("elliptic_bottom" in report, "elliptic_bottom timing scope present (coarsest-grid self-time)")
 
-    # Typed Python view (pops.runtime.profile.PerformanceSummary.by_elliptic).
+    # Typed internal Python view (pops.runtime._profile.PerformanceSummary.by_elliptic).
     try:
-        from pops.runtime.profile import PerformanceSummary, Profile
+        from pops.runtime._profile import PerformanceSummary, Profile
     except Exception as exc:  # noqa: BLE001
         chk(False, "import PerformanceSummary/Profile: %s" % exc)
     else:

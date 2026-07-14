@@ -19,7 +19,7 @@ import sys
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as lt
     from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
@@ -97,8 +97,8 @@ def _build(regrid_every, refine_thr, u0, tag):
         return None, "compile: %s" % str(exc)[:180]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         if refine_thr is not None:
             amr.set_refinement(refine_thr)  # 2-level hierarchy tagging density > thr
         amr.set_density("blk", u0)

@@ -6,9 +6,9 @@ from fractions import Fraction
 
 import pytest
 
-from pops.ir import Const, Divergence, EigWitness, RateExpr, RuntimeParamRef, ScalarLiteral, Var
-from pops.ir.lowering import diff
-from pops.ir.values import set_runtime_param_indices
+from pops._ir import Const, Divergence, EigWitness, RateExpr, RuntimeParamRef, ScalarLiteral, Var
+from pops._ir.lowering import diff
+from pops._ir.values import set_runtime_param_indices
 from pops.model import Handle, OwnerPath
 
 

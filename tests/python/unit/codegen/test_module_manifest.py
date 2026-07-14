@@ -18,7 +18,7 @@ pytest.importorskip("pops")
 
 import pops
 from pops import model
-from pops.ir.expr import Var
+from pops._ir.expr import Var
 from pops.math import Real
 from pops.params import ConstParam, RuntimeParam
 

@@ -139,7 +139,7 @@ def _passive_model(name):
 def _run_section_b(t):
     try:
         import numpy as np
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:
         print("-- compiled parity skipped: %s --" % exc)
         return
@@ -174,8 +174,8 @@ def _run_section_b(t):
         compiled_model = _passive_model("rk_block").compile(backend="production")
         sim.add_equation(
             "plasma", compiled_model,
-            spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-            time=pops.Explicit(method="euler"),
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+            time=engine.Explicit(method="euler"),
         )
         sim.set_state("plasma", np.stack([initial]))
         sim.install_program(handle.so_path)

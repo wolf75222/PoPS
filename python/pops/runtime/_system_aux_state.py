@@ -55,7 +55,7 @@ class _SystemAuxState(_System):
         from one step to the next (solve_fields never rewrites named components). For B_z / T_e,
         use their dedicated paths (set_magnetic_field / set_electron_temperature_from).
 
-        @p halo (ADC-369): an optional pops.AuxHalo declaring this field's own ghost boundary policy
+        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's own ghost policy
         (foextrap / dirichlet), applied to the non-periodic faces after the shared aux fill. Default
         None inherits the shared aux BC (bit-identical)."""
         import numpy as np

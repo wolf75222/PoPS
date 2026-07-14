@@ -216,7 +216,7 @@ def coupling_operator_manifest(
     created: Any = (),
     frequency: Any = None,
 ) -> Any:
-    from pops.ir.literals import scalar_data
+    from pops._ir.literals import scalar_data
 
     conserved, created = list(conserved), list(created)
     freq = getattr(compiled, "frequency", 0.0) if frequency is None else frequency

@@ -96,7 +96,7 @@ PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("python/pops/runtime/amr/",), ("amr", "runtime")),
     (("python/pops/runtime/",), ("runtime",)),
     (("python/pops/solvers/", "python/pops/linalg/"), ("elliptic",)),
-    (("python/pops/codegen/", "python/pops/ir/", "python/pops/lib/"), ("codegen",)),
+    (("python/pops/codegen/", "python/pops/_ir/", "python/pops/lib/"), ("codegen",)),
     (("python/pops/model/",), ("runtime", "physics")),
     (("python/pops/physics/", "python/pops/moments/"), ("physics", "numerics")),
     (("python/pops/numerics/",), ("numerics",)),

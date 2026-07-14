@@ -3,7 +3,7 @@
 A ``Program`` BUILDS a typed SSA IR for one time step; Python never executes a numerical stage.
 The C++ lowering (``emit_cpp_program``) is a thin delegator to
 ``pops.codegen.program_codegen`` (lazy import), so this package keeps a strictly acyclic
-graph (it imports only ``pops.ir`` / ``pops.model`` and never ``pops.codegen`` / ``_pops`` at
+graph (it imports only ``pops._ir`` / ``pops.model`` and never ``pops.codegen`` / ``_pops`` at
 module scope). The class is composed from focused authoring mixins.
 
 cf. docs/sphinx/reference/time-program.md (Phase 8) and the ADC-399 epic.

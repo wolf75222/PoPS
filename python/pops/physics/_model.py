@@ -11,7 +11,7 @@ variables, flux, sources, Riemann, the operator-first view, the numpy evaluators
 the runtime parameters, and the codegen wrappers. The stable user facade
 :class:`pops.physics._facade.Model` COMPOSES a private ``HyperbolicModel``.
 
-Import-graph rule (Spec 4): this module imports only :mod:`pops.ir`; any
+Import-graph rule (Spec 4): this module imports only :mod:`pops._ir`; any
 :mod:`pops.codegen` / ``_pops`` use is LAZY, inside method bodies (the codegen
 wrappers in ``_authoring_codegen``).
 """

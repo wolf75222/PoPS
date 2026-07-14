@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pops.ir.literals import scalar_cpp
+from pathlib import Path
+
+from pops._ir.literals import scalar_cpp
 from pops.linalg import LinearProblem
 from pops.params import ConstParam
 from pops.solvers import CompositeTensorFAC, Hierarchy
@@ -12,7 +14,7 @@ from typed_program_support import state_refs
 
 
 def _coupled_model(name):
-    from pops.ir.ops import sqrt
+    from pops.math import sqrt
     from pops.lib.models import author_electrostatic_lorentz
     from pops.physics._facade import Model
 
@@ -186,3 +188,28 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
     assert "ctx.solve_composite_tensor_fac(1, 1, static_cast<pops::Real>(%s), 13);" % (
         scalar_cpp(4.0e-8)
     ) in source
+
+
+def test_refined_solution_publishes_atomically_before_reflux_then_average_down():
+    """Lock the complete refined-stage ordering without a wall-clock or legacy oracle."""
+    _, source = _build(CompositeTensorFAC(max_iter=13, rel_tol=4.0e-8))
+    gather = source.index("Gather every level before the unique hierarchy-scoped solve")
+    solve = source.index("ctx.solve_composite_tensor_fac(", gather)
+    publish = source.index("The composite solution is complete", solve)
+    synchronize = source.index("ctx.advance_synchronized_hierarchy", publish)
+    assert gather < solve < publish < synchronize
+    assert source[gather:publish].count("ctx.solve_composite_tensor_fac(") == 1
+
+    root = Path(__file__).resolve().parents[4]
+    provider = (root / "include" / "pops" / "runtime" / "amr"
+                / "amr_tensor_elliptic.hpp").read_text(encoding="utf-8")
+    solved = provider.index("if (!report.solved_value_available())")
+    publication = provider.index("copy0(levels_[", solved)
+    assert solved < publication, "a failed hierarchy solve must not publish a partial iterate"
+
+    context = (root / "include" / "pops" / "runtime" / "program"
+               / "amr_program_context.hpp").read_text(encoding="utf-8")
+    coupling = context.index("void couple_levels() const")
+    reflux = context.index("route_reflux_program", coupling)
+    average_down = context.index("average_down_level", reflux)
+    assert reflux < average_down, "accepted synchronization is reflux then average-down"

@@ -1,4 +1,4 @@
-"""Operator-first type system (Spec 2, phase S2-1).
+"""Public operator-first model SDK.
 
 This package defines the abstract spaces and typed operators that a model-free
 ``pops.time.Program`` composes:
@@ -10,12 +10,10 @@ This package defines the abstract spaces and typed operators that a model-free
 * ``Signature`` -- a typed ``(inputs) -> output`` contract;
 * ``Operator`` and ``OperatorRegistry`` -- a named, typed, integer-id'd registry.
 
-These types are a TYPED VIEW: they carry no numerics and no array data. In phase
-S2-1 the registry is DERIVED from an existing :class:`pops.dsl` model -- the PDE
-shortcuts ``source_term`` / ``linear_source`` / ``elliptic_field`` / ``flux`` lower
-into typed operators without changing the public PDE API. The public
-``pops.model.Module`` front-end (S2-3), the typed ``P.call`` (S2-2) and the C++
-codegen consumption (S2-6) build on these primitives in later phases.
+These types carry declarations, signatures and identities, never numerical arrays. ``Module`` is
+the canonical compiler-facing model authority; the public physics ``Model`` facade builds the same
+typed spaces and operators. ``Program`` refers to them through qualified handles and its single
+``solve``/operator-call contracts.
 
 The package imports only the standard library so it can be exercised without the
 compiled ``_pops`` extension.
@@ -107,6 +105,12 @@ from .spaces import (
 )
 
 __all__ = [
+    "Module", "RateBundle",
+    "Space", "StateSpace", "FieldSpace", "AuxSpace", "RateSpace", "Rate",
+    "Signature", "SignatureContract", "Operator", "LocalLinearOperator",
+    "MatrixFreeOperator", "OperatorRegistry", "DeclarationIndex", "ParamRegistry",
+    "OPERATOR_FAMILIES", "OPERATOR_KINDS", "OPERATOR_REQUIREMENT_KEYS",
+    "OPERATOR_SIGNATURE_CONTRACTS", "operator_family", "validate_operator_signature",
     "Handle", "StateHandle", "ParamHandle", "OperatorHandle", "OwnerPath", "OwnerKind",
     "OwnerSegment",
     "OwnershipError", "MissingOwnershipError", "DoubleOwnershipError",

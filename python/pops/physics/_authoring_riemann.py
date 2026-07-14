@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.ir import Expr, _wrap  # noqa: F401  -- _wrap in roe_dissipation, Expr in hook checks
+from pops._ir import Expr, _wrap  # noqa: F401  -- _wrap in roe_dissipation, Expr in hook checks
 
 if TYPE_CHECKING:
     from ._model_contract import _HyperbolicModel

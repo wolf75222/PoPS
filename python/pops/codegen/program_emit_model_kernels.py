@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.ir.literals import scalar_cpp
+from pops._ir.literals import scalar_cpp
 from pops.model.state_symbols import state_component_symbol
 
 from pops.codegen.program_emit_kernels import (
@@ -359,7 +359,7 @@ def _residual_term_exprs(impl: Any, w: Any) -> list:
 
     The iterate / guess State placeholders and ``linear_combine`` are handled by the affine walk in
     `_emit_residual_eval`, not here (they are not standalone-evaluable Exprs)."""
-    from pops.ir.expr import Const, Var
+    from pops._ir.expr import Const, Var
     if w.op == "source":
         name = w.attrs["source"]
         if name not in impl._source_terms:

@@ -8,7 +8,7 @@ from enum import Enum
 from types import FunctionType
 from typing import Any
 
-from pops.ir.literals import scalar_data
+from pops._ir.literals import scalar_data
 from pops.model.handles import Handle
 from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids

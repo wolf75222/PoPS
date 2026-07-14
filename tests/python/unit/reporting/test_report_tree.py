@@ -21,11 +21,6 @@ except ImportError:
 from pops._report import DiagnosticError, ReportPhase, ReportSeverity, ReportTree
 from pops._inspect import explain, inspect as inspect_dict
 
-pops.ReportTree = ReportTree
-pops.explain = explain
-pops.inspect = inspect_dict
-
-
 def _leaf(**overrides):
     values = {
         "phase": "validation",
@@ -161,14 +156,14 @@ def test_owner_identity_is_projected_without_retaining_live_owner():
 
 def test_pops_inspect_is_dict_bridge_and_explain_remains_typed():
     tree = _leaf()
-    assert pops.inspect(tree) == tree.to_dict()
-    assert pops.explain(tree) is tree
+    assert inspect_dict(tree) == tree.to_dict()
+    assert explain(tree) is tree
 
     class Explained:
         def explain(self):
             return tree
 
-    assert pops.explain(Explained()) is tree
+    assert explain(Explained()) is tree
 
     class Inspected:
         name = "demo"
@@ -176,7 +171,7 @@ def test_pops_inspect_is_dict_bridge_and_explain_remains_typed():
         def inspect(self):
             return {"value": 3}
 
-    generic = pops.explain(Inspected())
+    generic = explain(Inspected())
     assert isinstance(generic, ReportTree)
     assert generic.phase is ReportPhase.INSPECTION
     assert generic.evidence["inspection"]["value"] == 3

@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 
-_SCHEMA = 1
+_SCHEMA = 2
 _GUARANTEE = "bit_identical_accepted_state"
 
 
@@ -14,22 +14,32 @@ def _rows(values):
 
 def contract_for(sim):
     """Return the audit-readable part of the native accepted-state image."""
-    ratios = [int(value) for value in sim.checkpoint_temporal_ratios()]
+    relation_rows = [list(map(str, row)) for row in sim.checkpoint_temporal_relations()]
+    relations = []
+    for row in relation_rows:
+        if len(row) != 5:
+            raise ValueError("native AMR temporal relation report has an invalid row")
+        parent, child, numerator, denominator, remainder = row
+        relations.append({
+            "parent": int(parent), "child": int(child),
+            "temporal_ratio": {
+                "numerator": int(numerator), "denominator": int(denominator),
+            },
+            "remainder_policy": remainder,
+        })
+    flux_ledger = _rows(sim.program_flux_ledger_manifest())
     return {
         "schema_version": _SCHEMA,
         "guarantee": _GUARANTEE,
         "program_state": "compiled" if sim.installed_program_hash() else "native_none",
-        "ledger": {"accepted_entries": 0, "transaction_depth": 0},
+        "ledger": {
+            "accepted_entries": len(flux_ledger), "transaction_depth": 0,
+            "entries": flux_ledger,
+        },
+        "clocks": _rows(sim.program_clock_manifest()),
+        "synchronization": _rows(sim.program_sync_manifest()),
         "history_qualifications": _rows(sim.program_accepted_state_manifest()),
-        "level_relations": [
-            {
-                "parent": parent,
-                "child": parent + 1,
-                "temporal_ratio": ratio,
-                "remainder_policy": "integral_only",
-            }
-            for parent, ratio in enumerate(ratios)
-        ],
+        "level_relations": relations,
         "transfer_routes": _rows(sim.checkpoint_transfer_routes()),
     }
 

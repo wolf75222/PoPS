@@ -18,7 +18,7 @@ def canonical_hash_data(value: Any, *, where: str = "module hash") -> Any:
         return canonical_hash_data(hook(), where=where)
 
     if _is_expr(value):
-        from pops.ir.visitors import _key
+        from pops._ir.visitors import _key
 
         return {
             "protocol": "pops.expr.key.v1",
@@ -41,7 +41,7 @@ def canonical_hash_data(value: Any, *, where: str = "module hash") -> Any:
                 item, sort_keys=True, separators=(",", ":"), allow_nan=False),
         )
     if isinstance(value, (Fraction, Decimal)):
-        from pops.ir.literals import scalar_literal
+        from pops._ir.literals import scalar_literal
 
         return {"protocol": "pops.scalar.v1", "value": scalar_literal(value).to_data()}
     if isinstance(value, float):
@@ -107,7 +107,7 @@ def _body_identity(body: Any, active: frozenset[int]) -> Any:
 
 def _is_expr(value: Any) -> bool:
     try:
-        from pops.ir.expr import Expr
+        from pops._ir.expr import Expr
     except ImportError:
         return False
     return isinstance(value, Expr)

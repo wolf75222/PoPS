@@ -30,10 +30,10 @@ try:
     from pops.codegen._compile_drivers import compile_problem
     from pops.codegen.inspect_compiled import Arguments, MemoryEstimate
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.mesh.cartesian import CartesianMesh
     from pops.layouts import Uniform
     from pops.params import ConstParam, RuntimeParam
     from pops import time as adctime
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_compiled_introspection (pops unavailable: %s)" % exc)
     sys.exit(0)
@@ -45,7 +45,7 @@ def _program_authoring(name="intro_demo", *, krylov=False, n_vars=3, with_fields
     With ``krylov=True`` it also records a matrix-free ``solve_linear`` (Krylov) node, so the IR
     carries the Krylov memory category."""
     components = ("rho", "mx", "my", "E")[:n_vars]
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.model import Module, Rate
     from tests.python.support.typed_program import program_states
 
@@ -208,7 +208,7 @@ def test_estimate_memory_is_a_positive_formula():
     """estimate_memory(mesh=) returns a MemoryEstimate with positive byte categories."""
     print("== estimate_memory() is a positive formula ==")
     cp = _compiled(n_vars=4, n_aux=2)
-    est = cp.estimate_memory(mesh=CartesianMesh(n=128))
+    est = cp.estimate_memory(mesh=cartesian_grid(n=128))
     chk(isinstance(est, MemoryEstimate), "estimate_memory returns a MemoryEstimate")
     chk(est.cells == 128 * 128, "cells = nx * ny (2D core)")
     chk(est.total_bytes > 0, "total bytes is positive")
@@ -216,7 +216,7 @@ def test_estimate_memory_is_a_positive_formula():
     chk(est.categories["state"] == 4 * (128 * 128) * 8, "state = n_cons * cells * 8 (formula)")
     chk(est.categories["aux"] == 2 * (128 * 128) * 8, "aux = n_aux * cells * 8 (formula)")
     # The estimate scales as a FORMULA: doubling the linear extent quadruples the cell count.
-    est2 = cp.estimate_memory(mesh=CartesianMesh(n=256))
+    est2 = cp.estimate_memory(mesh=cartesian_grid(n=256))
     chk(est2.categories["state"] == 4 * est.categories["state"],
         "state scales as cells (4x for 2x linear extent) -- a formula, not a measurement")
     chk(est.conservative is True, "the estimate declares itself conservative")
@@ -228,7 +228,7 @@ def test_estimate_memory_does_not_allocate():
     print("== estimate_memory() allocates nothing (huge mesh is instant) ==")
     cp = _compiled()
     # 1e9 cells * 8 bytes * n_cons would be tens of GB if a MultiFab were built; the formula is O(1).
-    est = cp.estimate_memory(mesh=100000)  # 1e5 x 1e5 = 1e10 cells
+    est = cp.estimate_memory(mesh=cartesian_grid(n=100000))  # 1e5 x 1e5 = 1e10 cells
     chk(est.cells == 10 ** 10, "a 1e10-cell mesh is described, not allocated")
     chk(est.total_bytes > 0, "the formula yields a (large) positive figure without allocating")
 
@@ -237,7 +237,7 @@ def test_estimate_memory_slices_and_serialisation():
     """by_block / by_solver / by_scratch slice the estimate; to_dict / to_json serialise it."""
     print("== estimate_memory() slices + serialisation ==")
     cp = _compiled(krylov=True, n_vars=3, n_aux=1)
-    est = cp.estimate_memory(mesh=CartesianMesh(n=64))
+    est = cp.estimate_memory(mesh=cartesian_grid(n=64))
     chk("state" in est.by_block(), "by_block carries the state category")
     chk("scalar_field" in est.by_solver() or "krylov" in est.by_solver(),
         "by_solver carries the field-solve categories")
@@ -258,8 +258,8 @@ def test_estimate_memory_mpi_platform():
     """platform='mpi' includes a halo-exchange buffer; the default platform does not."""
     print("== estimate_memory(platform='mpi') adds the halo buffer ==")
     cp = _compiled()
-    base = cp.estimate_memory(mesh=CartesianMesh(n=64))
-    mpi = cp.estimate_memory(mesh=CartesianMesh(n=64), platform="mpi")
+    base = cp.estimate_memory(mesh=cartesian_grid(n=64))
+    mpi = cp.estimate_memory(mesh=cartesian_grid(n=64), platform="mpi")
     chk(base.categories["mpi_buffer"] == 0, "no MPI buffer without platform='mpi'")
     chk(mpi.categories["mpi_buffer"] > 0, "platform='mpi' adds an MPI halo buffer")
     chk(mpi.total_bytes > base.total_bytes, "the MPI estimate is larger")
@@ -269,11 +269,10 @@ def test_estimate_memory_amr_layout():
     """A structured AMR layout produces a conservative per-level patch budget; Uniform adds none."""
     print("== estimate_memory(structured AMR layout) is a conservative hierarchy estimate ==")
     cp = _compiled()
-    base = CartesianMesh(n=64)
+    base = cartesian_grid(n=64)
     uniform = cp.estimate_memory(mesh=base, layout=Uniform(base))
     chk("amr_patch" not in uniform.categories, "a Uniform layout adds no AMR patch budget")
     chk(uniform.layout == "uniform", "the layout kind is reported as uniform")
-    from tests.python.support.layout_plan import final_amr_layout
     amr = cp.estimate_memory(mesh=base, layout=final_amr_layout(base, max_levels=3, ratio=2))
     chk(amr.categories.get("amr_patch", 0) > 0, "an AMR layout adds a positive patch budget")
     chk(amr.total_bytes > uniform.total_bytes, "the AMR hierarchy estimate is larger")
@@ -284,16 +283,16 @@ def test_estimate_memory_amr_layout():
         "the AMR refine factor (20) is inspectable")
 
 
-def test_estimate_memory_rejects_bad_mesh():
-    """A non-2D / non-positive mesh is rejected (fail-loud, not a silent zero)."""
-    print("== estimate_memory() rejects a bad mesh shape ==")
+def test_estimate_memory_rejects_non_grid_shorthands():
+    """Implicit integer/tuple mesh shorthands are rejected in favor of CartesianGrid."""
+    print("== estimate_memory() rejects non-grid shorthands ==")
     cp = _compiled()
     for bad in [(1, 2, 3), 0, -4, (0, 8)]:
         try:
             cp.estimate_memory(mesh=bad)
-            chk(False, "estimate_memory should reject mesh=%r" % (bad,))
+            chk(False, "estimate_memory should reject non-grid mesh=%r" % (bad,))
         except ValueError:
-            chk(True, "estimate_memory rejects mesh=%r" % (bad,))
+            chk(True, "estimate_memory rejects non-grid mesh=%r" % (bad,))
 
 
 # ---------------------------------------------------------------------------

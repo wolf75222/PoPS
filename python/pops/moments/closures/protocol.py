@@ -27,11 +27,6 @@ class Closure(typing.Protocol):
         ...
 
 
-#: The issue vocabulary spells the closure protocol ``MomentClosure``; it is the SAME
-#: ``runtime_checkable`` Protocol (an identity alias, so ``isinstance`` checks are unchanged).
-MomentClosure = Closure
-
-
 def _closure_keys(order: int) -> frozenset[str]:
     return frozenset("S%d%d" % (p, order + 1 - p) for p in range(order + 2))
 
@@ -104,4 +99,4 @@ def apply_local_closure(closure: Any, order: int, standardized: Any) -> dict[str
 # native (the common case) or fails at build; it can never reach the hot loop.
 
 
-__all__ = ["Closure", "MomentClosure", "LocalClosure", "apply_local_closure"]
+__all__ = ["Closure", "LocalClosure", "apply_local_closure"]

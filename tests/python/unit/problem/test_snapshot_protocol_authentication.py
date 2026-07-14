@@ -5,7 +5,7 @@ import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
-from pops.ir.literals import ScalarLiteral as PopsScalarLiteral  # noqa: E402
+from pops._ir.literals import ScalarLiteral as PopsScalarLiteral  # noqa: E402
 from pops.model import DeclarationIndex, OwnerKind  # noqa: E402
 from pops.model.handles import Handle, OwnerPath  # noqa: E402
 from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402

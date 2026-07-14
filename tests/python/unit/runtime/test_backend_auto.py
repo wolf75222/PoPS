@@ -19,9 +19,9 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import resolve_auto_backend
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -72,8 +72,8 @@ try:
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson()
-    sim.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
-                     time=pops.Explicit())
+    sim.add_equation("f", model=cm, spatial=engine.Spatial(limiter=Minmod()),
+                     time=engine.Explicit())
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="xy")
     z = np.zeros((n, n))

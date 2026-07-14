@@ -16,11 +16,11 @@ from pops.output import (
     ParaViewWriter, composite_integrals, deterministic_target, read_hdf5,
     read_npz, read_paraview,
 )
-from pops.runtime.consumer import (
-    AcceptedSideEffect, ConsumerPayload, FailRun, ParallelMode, PreparedPublication,
-    PublicationReceipt, PublicationTarget, ScheduleCursor,
+from pops.output._consumer_contracts import FailRun, ParallelMode, ScheduleCursor
+from pops.runtime._consumer import (
+    AcceptedSideEffect, ConsumerPayload, PreparedPublication, PublicationReceipt, PublicationTarget,
 )
-from pops.runtime.output_publisher import ConsumerOutputPublisher, OutputPreparation
+from pops.runtime._output_publisher import ConsumerOutputPublisher, OutputPreparation
 
 
 def _identity(domain, name):
@@ -63,7 +63,7 @@ def _snapshot(*, fine_value=2.0):
     balance = BalanceTerms(11.0, 2.0, 5.0, 3.0, 1.0)
     diagnostic_key = DiagnosticKey(
         Handle("mass_balance", kind="diagnostic", owner=OwnerPath.consumer("balances")),
-        manifest, layout, "accepted", "composite_metric_balance")
+        manifest, layout, 0, "accepted", "composite_metric_balance")
     diagnostic = DiagnosticPayload(
         diagnostic_key, balance.residual, "kg", {
             "storage_change": balance.storage_change,

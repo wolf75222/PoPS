@@ -207,6 +207,80 @@ class BoundSnapshot:
         raise AttributeError("BoundSnapshot is immutable")
 
 
+class MultiLayoutBoundSnapshot:
+    """Immutable bind authority for a partitioned set of native Systems."""
+
+    __slots__ = (
+        "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
+        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence",
+        "bind_schema_identity", "execution_context", "bind_identity",
+    )
+
+    def __init__(self, install_plan: Any, child_snapshots: Any) -> None:
+        snapshots = tuple(child_snapshots)
+        if not snapshots:
+            raise ValueError("MultiLayoutBoundSnapshot requires native child snapshots")
+        artifact = install_plan.artifact
+        object.__setattr__(self, "schema_version", SCHEMA_VERSION)
+        object.__setattr__(self, "semantic_identity", artifact.semantic_identity)
+        object.__setattr__(self, "artifact_identity", artifact.artifact_identity)
+        object.__setattr__(self, "layout", _freeze(
+            _data(artifact.layout_plan.inspect(), where="layout"), where="layout"))
+        by_name = {
+            row["name"]: row
+            for snapshot in snapshots for row in snapshot.to_dict()["blocks"]
+        }
+        ordered = tuple(by_name[block.name] for block in artifact.blocks)
+        object.__setattr__(self, "blocks", _freeze(ordered, where="blocks"))
+        object.__setattr__(self, "solvers", _freeze({}, where="solvers"))
+        transactions = tuple(snapshot.to_dict()["step_transaction"] for snapshot in snapshots)
+        if any(value != transactions[0] for value in transactions[1:]):
+            raise ValueError("per-layout Program transaction contracts are not identical")
+        object.__setattr__(
+            self, "step_transaction", _freeze(transactions[0], where="step_transaction"))
+        object.__setattr__(self, "params", _freeze(
+            _data(install_plan.params.rows(), where="params"), where="params"))
+        object.__setattr__(self, "aux_evidence", _freeze(
+            _input_evidence(install_plan.aux, where="aux"), where="aux_evidence"))
+        object.__setattr__(self, "initial_evidence", _freeze(
+            _input_evidence(install_plan.bind_inputs.initial_state, where="initial_state"),
+            where="initial_evidence"))
+        object.__setattr__(
+            self, "bind_schema_identity", make_identity(
+                "bind-schema", artifact.bind_schema.to_dict()))
+        object.__setattr__(self, "execution_context", _freeze(
+            _data(install_plan.execution_context, where="execution_context"),
+            where="execution_context"))
+        object.__setattr__(self, "bind_identity", install_plan.bind_identity)
+
+    def to_dict(self) -> dict[str, Any]:
+        result = {
+            "schema_version": self.schema_version,
+            "semantic_identity": self.semantic_identity.to_data(),
+            "artifact_identity": self.artifact_identity.to_data(),
+            "layout": _thaw(self.layout),
+            "blocks": _thaw(self.blocks),
+            "solvers": _thaw(self.solvers),
+            "step_transaction": _thaw(self.step_transaction),
+            "params": _thaw(self.params),
+            "aux_evidence": _thaw(self.aux_evidence),
+            "initial_evidence": _thaw(self.initial_evidence),
+            "bind_schema_identity": self.bind_schema_identity.to_data(),
+            "execution_context": _thaw(self.execution_context),
+            "bind_identity": self.bind_identity.to_data(),
+        }
+        return result
+
+    def block_names(self) -> list[str]:
+        return [row["name"] for row in self.blocks]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("MultiLayoutBoundSnapshot is immutable")
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("MultiLayoutBoundSnapshot is immutable")
+
+
 def _require_compiled_identities(compiled: Any) -> tuple[Identity, Identity]:
     if compiled is None:
         raise TypeError("pops.bind requires a compiled artifact carrying canonical identities")
@@ -231,16 +305,9 @@ def _block_rows(engine: Any, instances: Any) -> list[dict[str, Any]]:
     for name, spec in (instances or {}).items():
         model = spec["model"]
         lower = getattr(engine, "_lower_spatial", None)
-        if callable(lower):
-            spatial = lower(spec.get("spatial"))
-        else:
-            # AMR.add_equation consumes Spatial directly and resolves its sole default explicitly.
-            from pops.runtime.bricks import Spatial
-            supplied = spec.get("spatial")
-            spatial = supplied if supplied is not None else Spatial()
-            if not isinstance(spatial, Spatial):
-                raise TypeError(
-                    "bound block %r spatial selection did not lower to runtime Spatial" % name)
+        if not callable(lower):
+            raise TypeError("bound engine does not implement the private spatial-lowering protocol")
+        spatial = lower(spec.get("spatial"))
         model_identity = getattr(model, "definition_identity", None)
         if model_identity is None:
             raise TypeError("bound block %r model carries no definition_identity" % name)
@@ -297,4 +364,7 @@ def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
     return _build_snapshot(engine, compiled, instances, solvers, aux, params, layout="amr")
 
 
-__all__ = ["BoundSnapshot", "SCHEMA_VERSION", "build_uniform_snapshot", "build_amr_snapshot"]
+__all__ = [
+    "BoundSnapshot", "MultiLayoutBoundSnapshot", "SCHEMA_VERSION",
+    "build_uniform_snapshot", "build_amr_snapshot",
+]

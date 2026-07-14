@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import json
 from typing import Any, ClassVar
 
 from pops.model.ownership import OwnerPath
@@ -102,7 +103,7 @@ class AcceptedStep(Domain):
 
     def native_schedule_domain(self, *, where: str) -> ScheduleDomainIR:
         del where
-        return ScheduleDomainIR(ScheduleTimeline.ACCEPTED_STEP)
+        return ScheduleDomainIR(ScheduleTimeline.ACCEPTED_STEP, self.clock.qualified_id)
 
     def consumer_coordinate(self, moment: Any) -> int | None:
         return moment.accepted_step
@@ -133,6 +134,15 @@ class Stage(Domain):
     def consumer_coordinate(self, moment: Any) -> int | None:
         return moment.accepted_step if moment.stage == self.at else None
 
+    def native_schedule_domain(self, *, where: str) -> ScheduleDomainIR:
+        del where
+        return ScheduleDomainIR(
+            ScheduleTimeline.STAGE,
+            self.clock.qualified_id,
+            stage_identity=json.dumps(
+                self.at.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False),
+        )
+
     def consumer_occurrence_evidence(self, moment: Any) -> dict[str, Any]:
         return {"stage": moment.stage.to_data() if moment.stage else None}
 
@@ -145,6 +155,10 @@ class ClockTick(Domain):
 
     def consumer_coordinate(self, moment: Any) -> int | None:
         return moment.clock_tick
+
+    def native_schedule_domain(self, *, where: str) -> ScheduleDomainIR:
+        del where
+        return ScheduleDomainIR(ScheduleTimeline.CLOCK_TICK, self.clock.qualified_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +175,11 @@ class AMRLevel(Domain):
 
     def consumer_coordinate(self, moment: Any) -> int | None:
         return moment.accepted_step if moment.level == self.level else None
+
+    def native_schedule_domain(self, *, where: str) -> ScheduleDomainIR:
+        del where
+        return ScheduleDomainIR(
+            ScheduleTimeline.AMR_LEVEL, self.clock.qualified_id, level=self.level)
 
     def consumer_occurrence_evidence(self, moment: Any) -> dict[str, Any]:
         return {"level": moment.level}

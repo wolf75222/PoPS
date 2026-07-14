@@ -6,8 +6,8 @@ import pytest
 import pops
 from pops.codegen import _phases
 from pops.codegen._plans import BindInputs
-from pops.mesh import CartesianMesh
 from pops.layouts import Uniform
+from tests.python.support.layout_plan import cartesian_grid
 
 
 def test_every_public_phase_rejects_wrong_phase_inputs():
@@ -16,7 +16,7 @@ def test_every_public_phase_rejects_wrong_phase_inputs():
 
     unfrozen = pops.Case("wrong-phase")
     with pytest.raises(TypeError, match="frozen Case"):
-        _phases.resolve(unfrozen, layout=Uniform(CartesianMesh(n=8)))
+        _phases.resolve(unfrozen, layout=Uniform(cartesian_grid(n=8)))
 
     with pytest.raises(TypeError, match="ResolvedSimulationPlan"):
         _phases.compile(object())

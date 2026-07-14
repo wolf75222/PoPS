@@ -322,11 +322,13 @@ def _amr_policy_rows(layout):
 
 def _native_amr_context():
     """Return the immutable native facts shared by layout-owned AMR reports."""
-    from pops.mesh.amr import NATIVE_RATIOS
+    from pops.mesh._amr import NATIVE_RATIOS
 
     native_depth = "resource_policy"
     native_note = (
-        "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s"
+        "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s; "
+        "transitions are 2D isotropic and share one isotropic buffer/lookahead; policy routes are "
+        "shared_n_level / berger_rigoutsos / box_array / round_robin"
         % ", ".join(map(str, NATIVE_RATIOS))
     )
     return native_depth, tuple(NATIVE_RATIOS), native_note

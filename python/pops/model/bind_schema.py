@@ -44,7 +44,7 @@ def _resolved_bind_data(declaration: Any, resolver: Any) -> dict[str, Any]:
     if not callable(resolve_references):
         raise TypeError("DerivedParam expression must expose resolve_references(resolver)")
     resolved = resolve_references(resolver)
-    from pops.ir.visitors import _key
+    from pops._ir.visitors import _key
     from pops.params._declaration_data import freeze_json, thaw_json
 
     row["expression"] = {

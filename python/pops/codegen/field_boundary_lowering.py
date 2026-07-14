@@ -116,10 +116,16 @@ def _mesh_periodic(mesh: Any) -> bool:
     if isinstance(periodic, bool):
         return periodic
     topology = getattr(mesh, "topology", None)
-    to_dict = getattr(topology, "to_dict", None)
-    data = to_dict() if callable(to_dict) else None
-    if isinstance(data, dict) and data.get("topology_type") == "bounded_cartesian":
-        return False
+    periodic_axes = getattr(topology, "periodic_axes", None)
+    axis_pairs = getattr(topology, "axis_pairs", None)
+    if isinstance(periodic_axes, tuple) and isinstance(axis_pairs, tuple) and axis_pairs:
+        if not periodic_axes:
+            return False
+        if len(periodic_axes) == len(axis_pairs):
+            return True
+        raise TypeError(
+            "field topology cannot lower an all-boundaries condition onto a partially periodic "
+            "CartesianGrid; select typed per-axis field boundaries")
     raise TypeError("field topology requires an exact mesh periodicity contract")
 
 
@@ -136,7 +142,7 @@ def _native_scalar(value: Any, *, name: str, source: str,
     import math
     if isinstance(value, bool) or not isinstance(value, (int, float)) \
             or not math.isfinite(float(value)):
-        from pops.ir.expr import Expr
+        from pops._ir.expr import Expr
         from pops.model import Handle
         if not isinstance(value, (Expr, Handle)):
             _reject(rows, source, "field.boundary.expression_not_lowerable",
@@ -151,9 +157,9 @@ def _native_scalar(value: Any, *, name: str, source: str,
                     "%s references unsupported boundary dependencies %s"
                     % (name, [reference.qualified_id for reference in unsupported]))
 
-        from pops.ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
-        from pops.ir.handle_expr import ValueExpr
-        from pops.ir.values import RuntimeParamRef
+        from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow
+        from pops._ir.handle_expr import ValueExpr
+        from pops._ir.values import RuntimeParamRef
         from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
 
         def validate_expression(node: Any) -> None:
@@ -342,8 +348,8 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
 def boundary_dependency_pack(plan: FieldDiscretization, unknown: Any) -> dict[str, Any]:
     """Canonical direct-buffer pack required by all dynamic physical-face laws."""
     from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
-    from pops.ir.expr import Expr
-    from pops.ir.visitors import _children
+    from pops._ir.expr import Expr
+    from pops._ir.visitors import _children
 
     states: dict[tuple[str, int], dict[str, Any]] = {}
     fields: dict[tuple[str, int], dict[str, Any]] = {}

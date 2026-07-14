@@ -38,6 +38,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.physics._facade import Model
@@ -123,14 +124,14 @@ def _build(program, regrid_every):
         return None, "compile: %s" % str(exc)[:180]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         # The FROZEN background block: >= 2 blocks keeps the historical 2-level seed (a single-block
         # Program builds a coarse-only hierarchy where regrid() is a structural no-op). The Program
         # never commits "bg", so it stays frozen at its flat sub-threshold density (never tagged).
         amr.add_equation("bg", bg_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_refinement(1.2)  # tags the blk blob only -> real 2-level layouts at the cadence
         amr.set_density("blk", _blob())
         amr.set_density("bg", np.full((N, N), 0.5))  # flat, below threshold: tags nothing, ever

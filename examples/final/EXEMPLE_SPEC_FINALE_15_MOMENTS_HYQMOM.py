@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import pops
+from pops.domain import Rectangle
 from pops.fields import (
     CellCenteredSecondOrder,
     ConstantNullspace,
@@ -25,17 +26,17 @@ from pops.fields import (
     MeanValueGauge,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.lib.models.moments import HyQMOM15
 from pops.math import laplacian
-from pops.mesh import CartesianMesh
+from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.moments import RealizabilityProjection
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
-from pops.output import Checkpoint, HDF5, ParaView, ScientificOutput
+from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
 from pops.params import ConstParam
-from pops.runtime import ConsumerGraph
 from pops.solvers import DenseLU
 from pops.solvers.elliptic import GeometricMG
 from pops.time import (
@@ -177,10 +178,14 @@ def build_authoring(*, inject_nonrealizable: bool = False) -> HyQMOM15Authoring:
     if type(inject_nonrealizable) is not bool:
         raise TypeError("inject_nonrealizable must be a bool")
     realizability = RealizabilityProjection()
+    frame = Rectangle(
+        "unit_square", lower=(0.0, 0.0), upper=(1.0, 1.0),
+    ).frame(Cartesian2D())
     model = HyQMOM15.vlasov_lorentz(
         q_over_m=ConstParam("q_over_m", -1.0),
         omega_c=ConstParam("omega_c", 0.5),
         projection=realizability,
+        frame=frame,
     )
     state = model.states["U"]
 
@@ -295,9 +300,15 @@ def compile_final_case(
         raise ValueError("cells must be an integer >= 4")
     target = build_authoring(inject_nonrealizable=inject_nonrealizable)
     validated = pops.validate(target.case)
+    frame = target.model.frame
+    grid = CartesianGrid(
+        frame=frame,
+        cells=(cells, cells),
+        periodic=PeriodicAxes(frame.axes),
+    )
     resolved = pops.resolve(
         validated,
-        layout=Uniform(CartesianMesh(n=cells, L=1.0, periodic=True)),
+        layout=Uniform(grid),
     )
     return target, resolved, pops.compile(resolved)
 
@@ -411,9 +422,10 @@ def run_and_restart(
     initial = build_initial_state(cells=cells)
     simulation = pops.bind(artifact, initial_state=initial)
     accepted_root = root / "accepted"
-    if pops.run(
+    run_report = pops.run(
         simulation, t_end=DEFAULT_T_END, max_steps=1, output_dir=accepted_root,
-    ) != 1:
+    )
+    if run_report.accepted_steps != 1:
         raise RuntimeError("the accepted segment did not execute exactly one macro-step")
 
     hdf5_path = _one_artifact(accepted_root, ".h5")

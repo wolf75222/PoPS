@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.runtime import threading as _threading
-from pops.runtime.threading import has_kokkos
+from pops.runtime import _threading
+from pops.runtime._threading import has_kokkos
 
 # Canonical token orders for the matrix the doctor prints. The token SET is derived from the
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
@@ -397,7 +397,7 @@ def capabilities() -> Any:
                 "halo_radius": 1,
                 "persistent": True,
                 # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
-                # pops.AuxHalo(kind, value), applied to the NON-PERIODIC faces (periodic faces -- periodic
+                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces -- periodic
                 # domain, polar theta -- keep their wrap). Uniform over the 4 faces; per-face asymmetric
                 # BC is a follow-up. Default (no halo) inherits the shared aux BC, bit-identical.
                 "halo_policy": {

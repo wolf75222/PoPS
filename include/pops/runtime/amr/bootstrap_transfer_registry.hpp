@@ -53,6 +53,8 @@ struct TemporalTransferContext {
   TransferTimePoint old_point;
   TransferTimePoint new_point;
   TransferTimePoint target_point;
+  std::int64_t exact_alpha_numerator = 0;
+  std::int64_t exact_alpha_denominator = 0;
 
   double alpha() const {
     if (old_point.step >= new_point.step ||
@@ -61,6 +63,13 @@ struct TemporalTransferContext {
         target_point.physical_time < old_point.physical_time ||
         target_point.physical_time > new_point.physical_time)
       throw std::runtime_error("invalid native AMR temporal interpolation window");
+    if (exact_alpha_denominator != 0) {
+      if (exact_alpha_denominator < 0 || exact_alpha_numerator < 0 ||
+          exact_alpha_numerator > exact_alpha_denominator)
+        throw std::runtime_error("invalid exact native AMR temporal interpolation coordinate");
+      return static_cast<double>(exact_alpha_numerator) /
+             static_cast<double>(exact_alpha_denominator);
+    }
     return (target_point.physical_time - old_point.physical_time) /
            (new_point.physical_time - old_point.physical_time);
   }

@@ -8,8 +8,8 @@ import pytest
 pytest.importorskip("pops")
 
 from pops import model
-from pops.ir.expr import Const, Var
-from pops.ir.values import RuntimeParamRef
+from pops._ir.expr import Const, Var
+from pops._ir.values import RuntimeParamRef
 from pops.math import Bool, Integer, Real
 from pops.params import (
     MISSING,

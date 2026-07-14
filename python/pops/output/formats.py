@@ -25,6 +25,66 @@ class FormatInterface(Descriptor):
         raise AttributeError("scientific output providers are immutable")
 
 
+class _InstalledWriterOnly:
+    """Structural marker: the native writer is resolved by RuntimeInstance."""
+
+    def prepare(self, *args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        raise RuntimeError(
+            "an ExternalWriter can publish only through its authenticated RuntimeInstance")
+
+
+class ExternalWriter(FormatInterface):
+    """Select one qualified native Writer component for this scientific output.
+
+    The format carries the component id *and* its immutable manifest identity.  It never
+    searches a process-global registry or selects the only installed writer implicitly.
+    """
+
+    format_name = "external-writer"
+
+    def __init__(self, component: Any, *, extension: str) -> None:
+        from pops.external import CompiledComponentArtifact, ExternalComponent
+        from pops import interfaces
+
+        if type(component) is ExternalComponent:
+            component_id = component.component_manifest.component_id
+            manifest_identity = component.component_manifest.manifest_digest
+            interface = component.component_type.interface
+        elif type(component) is CompiledComponentArtifact:
+            component_id = component.component_id
+            manifest_identity = component.component_manifest
+            interface = component.interface
+        else:
+            raise TypeError(
+                "ExternalWriter component must be an exact ExternalComponent or "
+                "CompiledComponentArtifact")
+        if interface != interfaces.Writer:
+            raise TypeError("ExternalWriter component must implement the exact Writer interface")
+        if not isinstance(extension, str) or not extension.startswith(".") \
+                or extension.strip() != extension or "/" in extension or "\\" in extension:
+            raise TypeError("ExternalWriter extension must be a canonical file suffix")
+        object.__setattr__(self, "component_id", component_id)
+        object.__setattr__(self, "component_manifest_identity", manifest_identity)
+        object.__setattr__(self, "native_interface", interface)
+        object.__setattr__(self, "extension", extension)
+
+    def writer(self) -> Any:
+        return _InstalledWriterOnly()
+
+    def consumer_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "provider_id": "pops.output.external-writer.v1",
+            "extension": self.extension,
+            "parallel_mode": "serial",
+            "options": {},
+            "component_id": self.component_id,
+            "component_manifest_identity": self.component_manifest_identity.token,
+            "native_interface": self.native_interface.to_data(),
+        }
+
+
 class HDF5(FormatInterface):
     """HDF5 output. ``parallel=True`` requests the parallel-HDF5 path (build-dependent)."""
 
@@ -97,4 +157,4 @@ class ParaView(FormatInterface):
         }
 
 
-__all__ = ["FormatInterface", "HDF5", "NPZ", "ParaView"]
+__all__ = ["FormatInterface", "ExternalWriter", "HDF5", "NPZ", "ParaView"]

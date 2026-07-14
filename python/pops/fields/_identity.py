@@ -8,8 +8,8 @@ from typing import Any
 
 from pops.descriptors import Descriptor
 from pops.identity import Identity, make_identity
-from pops.ir.elliptic import CoeffGradient, DivCoeffGrad, EllipticSum, Reaction
-from pops.ir.expr import Expr, Gradient, Laplacian, Partial
+from pops._ir.elliptic import CoeffGradient, DivCoeffGrad, EllipticSum, Reaction
+from pops._ir.expr import Expr, Gradient, Laplacian, Partial
 from pops.math import Equation
 from pops.model import Handle
 from pops.model.hash_data import canonical_hash_data

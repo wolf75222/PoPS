@@ -16,7 +16,7 @@ import sys
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as lt
     from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
@@ -102,8 +102,8 @@ def _system_run(u0):
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:160]
     sim.add_equation("blk", block_cm,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="ssprk2"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="ssprk2"))
     sim.set_state("blk", np.stack([u0]))
     sim.install_program(compiled.so_path)
     for _ in range(NSTEPS):
@@ -130,8 +130,8 @@ def _amr_run(u0):
         return None, "compile (AMR): %s" % str(exc)[:160]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_density("blk", u0)
         amr.install_program(compiled.so_path)
     except RuntimeError as exc:

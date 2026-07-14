@@ -13,6 +13,8 @@ _PUBLIC = (
     "Model",
     "Program",
     "Case",
+    "RunReport",
+    "RunStopReason",
     "validate",
     "inspect",
     "explain",
@@ -124,6 +126,20 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
     from pops import codegen, external
 
     assert codegen.__all__ == ["Production", "CompilerLowerable", "CompilerLowering"]
+    assert "compile_component" not in codegen.__all__
+    assert not hasattr(codegen, "compile_component")
+    assert "compile_component" in external.__all__
+    assert callable(external.compile_component)
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.codegen.component_packages")
+    for retired_module in (
+        "pops.codegen.math_options",
+        "pops.codegen.optimization",
+        "pops.codegen.orchestration",
+        "pops.codegen.compiled_artifact",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(retired_module)
 
     for retired in (
         "BindInputs", "InstallPlan", "ResolvedSimulationPlan", "CompiledSimulationArtifact",
@@ -141,18 +157,92 @@ def test_public_bind_accepts_value_families_without_an_internal_inputs_record() 
 
 def test_public_run_accepts_only_the_bound_runtime_instance() -> None:
     assert tuple(signature(pops.run).parameters) == ("instance", "controls")
-    with pytest.raises(TypeError, match="authenticated object returned by pops.bind"):
+    with pytest.raises(TypeError, match="exact RuntimeInstance returned by pops.bind"):
         pops.run(object(), t_end=1.0)
-    from pops.runtime.runtime_instance import RuntimeInstance
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("pops.runtime.runtime_instance")
+
+    from pops.runtime._runtime_instance import RuntimeInstance
 
     assert not hasattr(RuntimeInstance, "run")
+    assert "__getattr__" not in RuntimeInstance.__dict__
+
+
+def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> None:
+    from pops.runtime._runtime_instance import RuntimeInstance
+
+    public = {
+        name
+        for name in RuntimeInstance.__dict__
+        if not name.startswith("_")
+    }
+    assert public == {
+        "amr",
+        "bind_identity",
+        "block_level_state",
+        "block_level_state_global",
+        "block_names",
+        "checkpoint",
+        "consumer_cursors",
+        "consumer_graph",
+        "field_potential_global",
+        "field_potential_level_global",
+        "field_provider_levels",
+        "field_provider_slots",
+        "get_state",
+        "history_depth",
+        "history_global",
+        "history_names",
+        "history_ncomp",
+        "inspect",
+        "installed_program_hash",
+        "last_restart_identity",
+        "last_run_identity",
+        "layout_identity",
+        "macro_step",
+        "n_levels",
+        "nx",
+        "ny",
+        "patch_boxes",
+        "patch_rectangles",
+        "program_report",
+        "restart",
+        "state_global",
+        "time",
+    }
+    assert public.isdisjoint({
+        "assembly",
+        "executor_for_block",
+        "executor_for_layout",
+        "install_plan",
+        "native_executor",
+        "profile",
+        "run",
+        "runtime_plan",
+        "step",
+        "step_cfl",
+    })
 
 
 def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
-    from pops import output
+    from pops import output, runtime
 
     assert hasattr(output, "ScientificOutput")
     assert hasattr(output, "Checkpoint")
+    assert hasattr(output, "ConsumerGraph")
+    assert "ConsumerGraph" in output.__all__
+    assert output.ConsumerGraph.__module__ == "pops.output._consumer_contracts"
+    assert "ConsumerGraph" not in runtime.__all__
+    assert not hasattr(runtime, "ConsumerGraph")
+    for retired_module in (
+        "pops.runtime.consumer",
+        "pops.runtime.output_publisher",
+        "pops.runtime._consumer_contracts",
+        "pops.runtime._consumer_authoring",
+        "pops.runtime.restart_provider",
+    ):
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module(retired_module)
     for removed in (*_retired_names()[1:4], "Plotfile"):
         assert not hasattr(output, removed)
 
@@ -160,6 +250,8 @@ def test_output_surface_has_direct_consumers_not_policy_bundles() -> None:
 def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
     from pops import runtime
 
+    assert runtime.__all__ == []
+    assert dir(runtime) == []
     for removed in _retired_names()[4:7]:
         assert removed not in runtime.__all__
         assert not hasattr(runtime, removed)
@@ -167,6 +259,9 @@ def test_runtime_package_does_not_reexport_retired_authoring_engines() -> None:
         "pops.runtime.mesh",
         "pops.runtime.system",
         "pops.runtime.amr_system",
+        "pops.runtime.profile",
+        "pops.runtime.threading",
+        "pops.runtime.platform_manifest",
     ):
         with pytest.raises(ModuleNotFoundError):
             importlib.import_module(retired_module)

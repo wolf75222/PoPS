@@ -133,6 +133,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
         *,
         reference_of: Any = None,
         retain_operator_registries: bool = True,
+        state_keep: Any = None,
+        registry_keep: Any = None,
         canonical_owner: bool = False,
         transformation: str = "normalize",
     ) -> Any:
@@ -150,6 +152,8 @@ class _ProgramPasses(_ProgramSerialization, _ProgramConstants, _ProgramBase):
             space_of,
             reference_of=reference_of,
             retain_operator_registries=retain_operator_registries,
+            state_keep=state_keep,
+            registry_keep=registry_keep,
             canonical_owner=canonical_owner,
             transformation=transformation,
         )

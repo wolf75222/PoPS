@@ -64,6 +64,13 @@ class OutputClock:
     time_hex: str
     macro_step: int
     stage: str
+    tick: int | None = None
+    level: int = 0
+    substep: int = 0
+    stage_index: int = 0
+    fraction_numerator: int = 1
+    fraction_denominator: int = 1
+    dt_hex: str = "0x0.0p+0"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "clock_id", _text(self.clock_id, "clock_id"))
@@ -79,18 +86,48 @@ class OutputClock:
         if isinstance(self.macro_step, bool) or not isinstance(self.macro_step, int) \
                 or self.macro_step < 0:
             raise ValueError("clock macro_step must be an integer >= 0")
+        if self.tick is None:
+            object.__setattr__(self, "tick", self.macro_step)
+        for name in ("tick", "level", "substep", "stage_index"):
+            item = getattr(self, name)
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                raise ValueError("clock %s must be an integer >= 0" % name)
+        numerator, denominator = self.fraction_numerator, self.fraction_denominator
+        if isinstance(numerator, bool) or not isinstance(numerator, int) or numerator < 0 \
+                or isinstance(denominator, bool) or not isinstance(denominator, int) \
+                or denominator <= 0 or numerator > denominator:
+            raise ValueError("clock stage fraction must be canonical within [0,1]")
+        import math
+        if math.gcd(numerator, denominator) != 1:
+            raise ValueError("clock stage fraction must be reduced")
+        if not isinstance(self.dt_hex, str):
+            raise TypeError("clock dt must be a float.hex() string")
+        try:
+            dt = float.fromhex(self.dt_hex)
+        except ValueError:
+            raise ValueError("clock dt is not a float.hex() string") from None
+        if not math.isfinite(dt) or dt < 0.0:
+            raise ValueError("clock dt must be finite and non-negative")
 
     @classmethod
-    def at(cls, clock_id: Any, time: Any, macro_step: Any, *, stage: Any) -> OutputClock:
+    def at(cls, clock_id: Any, time: Any, macro_step: Any, *, stage: Any,
+           tick: Any = None, level: Any = 0, substep: Any = 0,
+           stage_index: Any = 0, fraction: tuple[int, int] = (1, 1),
+           dt: Any = 0.0) -> OutputClock:
         value = float(time)
         if value != value or value in (float("inf"), float("-inf")):
             raise ValueError("clock time must be finite")
-        return cls(clock_id, value.hex(), macro_step, stage)
+        return cls(clock_id, value.hex(), macro_step, stage, tick, level, substep,
+                   stage_index, fraction[0], fraction[1], float(dt).hex())
 
     def to_data(self) -> dict[str, Any]:
         return {
             "clock_id": self.clock_id, "time": self.time_hex,
-            "macro_step": self.macro_step, "stage": self.stage,
+            "macro_step": self.macro_step, "stage": self.stage, "tick": self.tick,
+            "level": self.level, "substep": self.substep,
+            "stage_index": self.stage_index,
+            "fraction": [self.fraction_numerator, self.fraction_denominator],
+            "dt": self.dt_hex,
         }
 
 
@@ -126,6 +163,9 @@ class LevelGeometry:
     boxes: tuple[tuple[int, int, int, int], ...]
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
+    coordinate_system: str = "pops://coordinates/cartesian-2d@1"
+    cell_measure: str = "pops://cell-measures/cartesian-area@1"
+    axis_names: tuple[str, str] = ("x", "y")
     valid_cells: Any = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -135,6 +175,16 @@ class LevelGeometry:
             self.layout_identity, "layout_identity"))
         if self.layout_kind not in {"uniform", "amr"}:
             raise ValueError("layout_kind must be exactly 'uniform' or 'amr'")
+        for name in ("coordinate_system", "cell_measure"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.startswith("pops://") or "@" not in value:
+                raise ValueError("geometry %s must be a versioned pops:// URI" % name)
+        axis_names = tuple(self.axis_names)
+        if len(axis_names) != 2 or any(
+                not isinstance(item, str) or not item for item in axis_names) \
+                or len(set(axis_names)) != 2:
+            raise ValueError("geometry axis_names must contain two distinct non-empty names")
+        object.__setattr__(self, "axis_names", axis_names)
         if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
             raise ValueError("geometry level must be an integer >= 0")
         for name in ("origin", "spacing"):
@@ -185,6 +235,9 @@ class LevelGeometry:
         return {
             "layout_identity": self.layout_identity.token,
             "layout_kind": self.layout_kind,
+            "coordinate_system": self.coordinate_system,
+            "cell_measure": self.cell_measure,
+            "axis_names": list(self.axis_names),
             "level": self.level,
             "origin": [item.hex() for item in self.origin],
             "spacing": [item.hex() for item in self.spacing],
@@ -354,6 +407,7 @@ class DiagnosticKey:
     reference: Handle
     component_manifest_identity: Identity
     layout_identity: Identity
+    level: int
     state_id: str
     reduction: str
 
@@ -365,6 +419,8 @@ class DiagnosticKey:
             self.component_manifest_identity, "diagnostic component_manifest_identity"))
         object.__setattr__(self, "layout_identity", _identity(
             self.layout_identity, "diagnostic layout_identity"))
+        if isinstance(self.level, bool) or not isinstance(self.level, int) or self.level < 0:
+            raise ValueError("diagnostic level must be an integer >= 0")
         object.__setattr__(self, "state_id", _text(self.state_id, "diagnostic state_id"))
         object.__setattr__(self, "reduction", _text(self.reduction, "diagnostic reduction"))
 
@@ -377,7 +433,7 @@ class DiagnosticKey:
             "reference": self.reference.canonical_identity(),
             "component_manifest_identity": self.component_manifest_identity.token,
             "layout_identity": self.layout_identity.token,
-            "state_id": self.state_id, "reduction": self.reduction,
+            "level": self.level, "state_id": self.state_id, "reduction": self.reduction,
         }
 
 

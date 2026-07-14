@@ -24,8 +24,9 @@ test_runtime_inspection_reports.py.
 import pytest
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._system import System  # noqa: E402 - advanced runtime seam
-from pops.runtime.bricks import Periodic  # noqa: E402
+from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 from pops.numerics.riemann import HLL  # noqa: E402
 from pops.runtime import routes  # noqa: E402
 from pops.runtime._bricks_scheme import _FLUX_SCHEMES  # noqa: E402
@@ -67,7 +68,7 @@ def test_route_component_contract_is_immutable_and_classifies_metadata():
 
 def test_spatial_defaults_lower_to_typed_routes():
     # Group 2: the Spatial defaults are typed Routes whose str value stays the historical token.
-    spatial = pops.Spatial()
+    spatial = engine.Spatial()
     assert isinstance(spatial.limiter, routes.Route)
     assert spatial.limiter.id == "limiter.minmod"
     assert spatial.flux.id == "riemann.rusanov"
@@ -80,16 +81,16 @@ def test_spatial_defaults_lower_to_typed_routes():
 
 def test_typed_descriptor_lowers_to_route():
     # Group 3: a typed pops.numerics descriptor lowers to its native route + entry point.
-    spatial = pops.Spatial(flux=HLL())
+    spatial = engine.Spatial(flux=HLL())
     assert spatial.flux.id == "riemann.hll"
     assert spatial.flux.native_entry == "pops::HLLFlux"
 
 
 def test_time_treatments_expose_typed_route():
     # Group 4: the explicit / IMEX time treatments carry a typed time route on .kind.
-    assert pops.Explicit().kind.id == "time.explicit"
-    assert pops.Explicit(ssprk3=True).kind.id == "time.ssprk3"
-    assert pops.IMEX().kind.id == "time.imex"
+    assert engine.Explicit().kind.id == "time.explicit"
+    assert engine.Explicit(ssprk3=True).kind.id == "time.ssprk3"
+    assert engine.IMEX().kind.id == "time.imex"
 
 
 def test_unknown_route_is_refused_never_defaulted():
@@ -123,11 +124,11 @@ def test_historical_route_aliases_are_rejected():
 
 def test_routes_inspection_surface():
     # Group 7: the routes() inspection surface reports the chosen routes and their limitations.
-    scheme = pops.Spatial(weno5=True).routes()
+    scheme = engine.Spatial(weno5=True).routes()
     assert set(scheme) == {"limiter", "riemann", "recon"}
     assert scheme["limiter"]["id"] == "limiter.weno5"
     assert scheme["limiter"]["limitations"], "weno5 declares a native limitation"
-    assert pops.Explicit().routes()["time"]["id"] == "time.explicit"
+    assert engine.Explicit().routes()["time"]["id"] == "time.explicit"
 
 
 def test_set_poisson_refuses_unknown_routes_and_untyped_selectors_before_bind():

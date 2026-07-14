@@ -33,7 +33,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -220,8 +220,8 @@ def expected_rhs_hll(U, n):
 print("== (5) riemann='hll' via System : vitesses exactes par cellule ==")
 sim = System(n=n, L=1.0, periodic=True)
 sim.add_equation("burg", model=c_burg,
-                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-                 time=pops.Explicit())
+                 spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
+                 time=engine.Explicit())
 U = toy_state(n)
 sim.set_state("burg", U)
 rhs = np.array(sim.eval_rhs("burg"))
@@ -233,8 +233,8 @@ print("== (6) eig='fd' == eig='numeric' ==")
 c_fd = burgers_toy(eig="fd").compile(os.path.join(tmp, "jacburg_fd.so"), INCLUDE, backend="aot")
 sim_fd = System(n=n, L=1.0, periodic=True)
 sim_fd.add_equation("burg", model=c_fd,
-                    spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-                    time=pops.Explicit())
+                    spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
+                    time=engine.Explicit())
 sim_fd.set_state("burg", U)
 rhs_fd = np.array(sim_fd.eval_rhs("burg"))
 rel = float(np.max(np.abs(rhs_fd - rhs)) / max(1.0, np.max(np.abs(rhs))))

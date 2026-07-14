@@ -19,9 +19,9 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Periodic
-from pops.ir.ops import sqrt
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -83,11 +83,11 @@ print("== System.check_model : bloc natif ==")
 n = 16
 sim = System(n=n, L=1.0, periodic=True)
 sim.block("ions",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                        transport=pops.IsothermalFlux(),
-                        source=pops.PotentialForce(charge=1.0),
-                        elliptic=pops.ChargeDensity(charge=1.0)),
-              spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
+              engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                        transport=engine.IsothermalFlux(),
+                        source=engine.PotentialForce(charge=1.0),
+                        elliptic=engine.ChargeDensity(charge=1.0)),
+              spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="xy")

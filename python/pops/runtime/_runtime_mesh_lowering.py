@@ -10,15 +10,41 @@ from typing import Any
 from pops.runtime._amr_bind_lowering import amr_config_from_layout
 
 
+def _uniform_system_values(mesh: Any) -> tuple[int, float, bool]:
+    """Project exactly the uniform mesh shapes representable by native ``SystemConfig``."""
+    from pops.mesh.grid import CartesianGrid
+
+    if type(mesh) is not CartesianGrid:
+        raise NotImplementedError(
+            "native uniform System lowering requires an exact pops.mesh.CartesianGrid; "
+            "construct it from a framed pops.domain.Rectangle")
+    if mesh.cells[0] != mesh.cells[1]:
+        raise NotImplementedError(
+            "native SystemConfig has one n and cannot represent a rectangular CartesianGrid")
+    if mesh.frame.lower != (0.0, 0.0):
+        raise NotImplementedError(
+            "native SystemConfig has no origin and requires CartesianGrid lower=(0, 0)")
+    lengths = mesh.frame.lengths
+    if lengths[0] != lengths[1]:
+        raise NotImplementedError(
+            "native SystemConfig has one L and cannot represent anisotropic CartesianGrid extents")
+    periodic_axes = mesh.topology.periodic_axes
+    if periodic_axes and len(periodic_axes) != len(mesh.axes):
+        raise NotImplementedError(
+            "native SystemConfig has one global periodic flag and cannot represent a partially "
+            "periodic CartesianGrid topology")
+    return int(mesh.cells[0]), float(lengths[0]), bool(periodic_axes)
+
+
 def system_config_from_layout(layout: Any) -> Any:
     """Build the native uniform config from an authenticated layout descriptor."""
     from pops._bootstrap import SystemConfig
 
-    mesh = layout.mesh
+    n, extent, periodic = _uniform_system_values(layout.mesh)
     cfg = SystemConfig()
-    cfg.n = int(mesh.n)
-    cfg.L = float(mesh.L)
-    cfg.periodic = bool(mesh.periodic)
+    cfg.n = n
+    cfg.L = extent
+    cfg.periodic = periodic
     return cfg
 
 
@@ -154,7 +180,7 @@ def _apply_refine_criterion(
     params: Any = None,
 ) -> None:
     """Lower one authenticated refinement criterion to native AMR seams."""
-    from pops.mesh.amr import Refine, TagUnion
+    from pops.mesh._amr import Refine, TagUnion
 
     if isinstance(criterion, TagUnion):
         for child in criterion.criteria:
@@ -168,7 +194,7 @@ def _apply_refine_criterion(
         return
     if not isinstance(criterion, Refine):
         raise TypeError(
-            "pops.bind: AMR refine criterion must be a pops.mesh.amr.Refine / TagUnion "
+            "pops.bind: AMR refine criterion must be an internal Refine / TagUnion "
             "(got %r)" % type(criterion).__name__
         )
     if not getattr(criterion, "references_authenticated", False):
@@ -219,7 +245,7 @@ def _apply_refine_criterion(
 
 def _refine_threshold_value(threshold: Any, schema: Any, params: Any) -> Any:
     """Resolve one canonical parameter threshold from the effective bind mapping."""
-    from pops.ir import ValueExpr
+    from pops._ir import ValueExpr
     from pops.model import ParamHandle
 
     handle = threshold.handle if isinstance(threshold, ValueExpr) else threshold

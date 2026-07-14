@@ -197,7 +197,7 @@ def emit_cpp_program(
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
-    _check_lowerable(program, authority, field_plans or {})
+    _check_lowerable(program, authority, field_plans or {}, target=target)
     prelude, body = _emit_body(
         program, authority, target=target, field_plans=field_plans or {})
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
@@ -271,7 +271,9 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
 
 
 
-def _check_lowerable(program: Any, model: Any = None, field_plans: Any = None) -> None:
+def _check_lowerable(
+    program: Any, model: Any = None, field_plans: Any = None, *, target: str | None = None,
+) -> None:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
@@ -290,7 +292,7 @@ def _check_lowerable(program: Any, model: Any = None, field_plans: Any = None) -
                 "commit of unknown block %r: no T.state(block[U]) declares it "
                 "(declared blocks: %s)"
                 % (block_name(block), sorted(block_name(item) for item in blocks)))
-    _check_schedules_lowerable(program)
+    _check_schedules_lowerable(program, target=target)
     for v in program._values:
         _check_op_lowerable(program, v, model, field_plans or {})
     # Dense local and coupled solves are specialized to the complete manifest-sized system.  The

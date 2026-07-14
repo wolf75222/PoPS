@@ -12,7 +12,7 @@ import sys
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 n = 32
@@ -20,14 +20,14 @@ n = 32
 
 def diocotron():
     # modele de base : ExB lit grad phi, PAS B_z (n_aux = 3).
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def make():
     s = System(n=n, L=1.0, periodic=True)
-    s.block("ne", model=diocotron(), spatial=pops.Spatial(minmod=True))
+    s.block("ne", model=diocotron(), spatial=engine.Spatial(minmod=True))
     s.set_poisson()
     rho = 1.0 + 0.05 * np.cos(2 * np.pi * np.arange(n) / n)[None, :] * np.ones((n, 1))
     s.set_density("ne", rho)

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime.run_report import RunReport
+
 
 def validate(case: Any) -> Any:
     """Validate and freeze a :class:`pops.Case` without importing native code."""
@@ -11,11 +13,28 @@ def validate(case: Any) -> Any:
     return phase(case)
 
 
-def resolve(case: Any, **authorities: Any) -> Any:
+def resolve(
+    case: Any,
+    *,
+    layout: Any,
+    layout_providers: Any = None,
+    backend: Any = None,
+    time: Any = None,
+    components: Any = (),
+    compile_options: Any = None,
+) -> Any:
     """Resolve all typed authoring authorities into one immutable plan, still in pure Python."""
     from pops.codegen._phases import resolve as phase
 
-    return phase(case, **authorities)
+    return phase(
+        case,
+        layout=layout,
+        layout_providers=layout_providers,
+        backend=backend,
+        time=time,
+        components=components,
+        compile_options=compile_options,
+    )
 
 
 def compile(plan: Any) -> Any:
@@ -55,20 +74,24 @@ def bind(
     return phase(artifact, inputs)
 
 
-def run(instance: Any, **controls: Any) -> Any:
+def run(instance: Any, **controls: Any) -> RunReport:
     """Execute a bound runtime instance with explicit run controls.
 
     ``run`` is the final lifecycle transition, not an authoring shortcut. It accepts only the
     concrete object returned by :func:`bind`; all numerical values remain call-site controls and
-    are recorded by the runtime's run identity.
+    are recorded by the runtime's run identity. Success returns an immutable :class:`RunReport`;
+    terminal failures raise and never manufacture a success report.
     """
     if "strategy" in controls or "cfl" in controls:
         raise TypeError(
             "pops.run does not accept strategy= or cfl=; declare the controller with "
             "Program.step_strategy(...)")
-    from pops.runtime._bound_sim import _run_bound
+    from pops.runtime._runtime_instance import RuntimeInstance
 
-    return _run_bound(instance, controls)
+    if type(instance) is not RuntimeInstance:
+        raise TypeError("pops.run expects the exact RuntimeInstance returned by pops.bind")
+    instance._install_plan.verify()
+    return instance._run(**dict(controls))
 
 
 __all__ = ["bind", "compile", "resolve", "run", "validate"]

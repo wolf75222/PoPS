@@ -18,7 +18,7 @@ def inspect(obj: Any) -> Any:
     """Return a stable, serialisable ``dict`` view of @p obj (descriptor / Problem / report).
 
     The ONE explicit dict bridge (ADC-564): it dispatches to ``obj.inspect()`` and, when that returns
-    a typed :class:`pops.Report` (``Problem.inspect()`` / ``Program.inspect()`` / a compiled or
+    a typed report (``Case.inspect()`` / ``Program.inspect()`` / a compiled or
     runtime report), returns its ``to_dict()`` -- so a caller wanting JSON gets a plain dict while
     structure-wanting callers read ``obj.inspect().<attr>``. A per-descriptor ``inspect()`` that
     already returns a dict passes through unchanged. Falls back to the protocol members / a

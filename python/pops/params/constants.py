@@ -1,4 +1,4 @@
-"""Dimensioned constants use the canonical :class:`ConstParam` declaration."""
+"""Constants use the canonical :class:`ConstParam` declaration."""
 
 from pops.params.runtime import ConstParam
 

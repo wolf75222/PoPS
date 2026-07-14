@@ -1,8 +1,8 @@
 """Model bricks : state / transport / source / elliptic value objects (Spec-4 PR-F).
 
-The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec) and the elliptic physical
-model (EPM) bricks/helpers. ``pops.runtime.bricks`` re-exports everything here together with the
-scheme/time policies in ``_bricks_scheme``. ``ModelSpec`` comes from the loaded extension via
+The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec) and the
+elliptic physical model (EPM) bricks/helpers. Private native-engine adapters import these values
+through ``pops.runtime._engine_descriptors``. ``ModelSpec`` comes from the loaded extension via
 ``pops._bootstrap``.
 """
 
@@ -60,10 +60,10 @@ class FluidState:
     def compressible(cls, gamma: Any = PHYSICAL_DEFAULT_GAMMA) -> Any:
         """Typed constructor for the COMPRESSIBLE fluid state (Spec 5 sec.14.2.5).
 
-        ``pops.FluidState.compressible(gamma=1.4)`` is the typed equivalent of
-        ``pops.FluidState(kind="compressible", gamma=1.4)``: it builds the SAME inert state object
-        (kind="compressible", carrying gamma -> spec.gamma via Model) instead of selecting the kind
-        with a magic string. Pairs with CompressibleFlux (4 variables [rho, rho_u, rho_v, E]).
+        This private constructor builds the same inert engine value as
+        ``FluidState(kind="compressible", gamma=1.4)`` without a magic kind string. Public models
+        declare typed state through ``pops.Model.state``. The engine value pairs with
+        ``CompressibleFlux`` (4 variables [rho, rho_u, rho_v, E]).
         """
         return cls(kind="compressible", gamma=gamma)
 
@@ -73,11 +73,10 @@ class FluidState:
                    vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> Any:
         """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
 
-        ``pops.FluidState.isothermal(cs2=0.5, vacuum_floor=0.0)`` is the typed equivalent of
-        ``pops.FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)``: it builds the SAME inert
-        state object (kind="isothermal", carrying cs2 -> spec.cs2 and vacuum_floor ->
-        spec.vacuum_floor via Model). Pairs with IsothermalFlux (3 variables [rho, rho_u, rho_v]).
-        See the class docstring for the vacuum_floor (ADC-77) semantics.
+        This private constructor builds the same inert engine value as
+        ``FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)``. Public models declare typed
+        state through ``pops.Model.state``. The engine value pairs with ``IsothermalFlux``
+        (3 variables [rho, rho_u, rho_v]). See the class docstring for vacuum-floor semantics.
         """
         return cls(kind="isothermal", cs2=cs2, vacuum_floor=vacuum_floor)
 
@@ -189,8 +188,8 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     The returned ``ModelSpec`` is the BOUNDED LEGACY BRIDGE for the native ``add_block`` path (a
     flat C++ POD of brick tags + parameters); it is NOT the target representation. The target
     representation of a model is the operator-first ``pops.model.Module`` (compiled to a Problem)
-    and its self-describing ``ModuleManifest`` (ADC-585). ADC-585 also moved this POD off the pops
-    root: it lives at ``pops.runtime.ModelSpec``, not ``pops.ModelSpec``.
+    and its self-describing ``ModuleManifest`` (ADC-585). The POD remains an explicitly private
+    native-engine value reached through ``pops.runtime._bricks_model``, never a public descriptor.
     """
     spec: Any = ModelSpec()
 
@@ -211,10 +210,11 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
         else:
             raise ValueError("FluidState.kind: 'compressible' | 'isothermal'")
     else:
-        raise ValueError("state: pops.Scalar() | pops.FluidState(...)")
+        raise ValueError("state must be a private Scalar or FluidState engine descriptor")
 
     if isinstance(transport, ExB):
-        spec.transport = "exb"; spec.B0 = native_real(transport.B0, where="Model.B0")
+        spec.transport = "exb"
+        spec.B0 = native_real(transport.B0, where="Model.B0")
     elif isinstance(transport, CompressibleFlux):
         spec.transport = "compressible"
     elif isinstance(transport, IsothermalFlux):
@@ -225,19 +225,23 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     if isinstance(source, NoSource):
         spec.source = "none"
     elif isinstance(source, PotentialForce):
-        spec.source = "potential"; spec.qom = native_real(source.charge, where="Model.qom")
+        spec.source = "potential"
+        spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, GravityForce):
         spec.source = "gravity"
     elif isinstance(source, MagneticLorentzForce):
-        spec.source = "magnetic"; spec.qom = native_real(source.charge, where="Model.qom")
+        spec.source = "magnetic"
+        spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, PotentialMagneticForce):
-        spec.source = "potential_magnetic"; spec.qom = native_real(source.charge, where="Model.qom")
+        spec.source = "potential_magnetic"
+        spec.qom = native_real(source.charge, where="Model.qom")
     else:
         raise ValueError("source: NoSource | PotentialForce | GravityForce | MagneticLorentzForce "
                          "| PotentialMagneticForce")
 
     if isinstance(elliptic, ChargeDensity):
-        spec.elliptic = "charge"; spec.q = native_real(elliptic.charge, where="Model.q")
+        spec.elliptic = "charge"
+        spec.q = native_real(elliptic.charge, where="Model.q")
     elif isinstance(elliptic, BackgroundDensity):
         spec.elliptic = "background"
         spec.alpha = native_real(elliptic.alpha, where="Model.alpha")

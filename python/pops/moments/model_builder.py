@@ -3,7 +3,7 @@
 Symbols are re-exported via python/pops/lib/moments/__init__.py.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
-:mod:`pops.ir` at module scope (the IR is lightweight and lib may import it).
+:mod:`pops._ir` at module scope (the IR is lightweight and lib may import it).
 The PDE-model facade (``physics.PdeModel``) is imported
 LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
 compile machinery transitively, and ``lib`` must stay importable without it.
@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from math import comb
 from typing import Any
 
-from pops.ir.expr import Const as _Const
-from pops.ir.ops import sqrt as _sqrt, abs_ as _abs_
+from pops._ir.expr import Const as _Const
+from pops._ir.ops import sqrt as _sqrt, abs_ as _abs_
 
 
 def moment_indices(order: Any) -> list:

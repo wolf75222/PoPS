@@ -19,7 +19,7 @@ from pops.domain import (
     RectangleFrame,
 )
 from pops.frames import Cartesian2D, CartesianAxis, CartesianDirection
-from pops.mesh.grid import CartesianGrid
+from pops.mesh.grid import CartesianGrid, PeriodicAxes
 
 
 def _framed_domain() -> RectangleFrame:
@@ -141,10 +141,32 @@ def test_cartesian_grid_derives_order_extent_topology_and_widths() -> None:
         frame.boundaries.x_min, frame.boundaries.y_min)
     assert grid.options()["axis_order"] == ["x", "y"]
     assert grid.capabilities().to_dict() == {
-        "geometry": "cartesian", "dim": 2, "bounded_axes": 2,
+        "geometry": "cartesian", "dim": 2, "bounded_axes": 2, "periodic_axes": 0,
     }
     assert grid.requirements().to_dict() == {}
     assert grid.validate() is True
+
+
+def test_cartesian_grid_periodicity_is_a_typed_axis_partition() -> None:
+    frame = _framed_domain()
+    periodic = PeriodicAxes(frame.axes)
+    grid = CartesianGrid(frame=frame, cells=(8, 8), periodic=periodic)
+
+    assert grid.topology.periodic_axes == frame.axes
+    assert grid.topology.physical_axes == ()
+    assert all(grid.topology.is_periodic(axis) for axis in frame.axes)
+    assert grid.capabilities().to_dict() == {
+        "geometry": "cartesian", "dim": 2, "bounded_axes": 0, "periodic_axes": 2,
+    }
+    assert CartesianGrid.from_dict(grid.to_dict()) == grid
+    assert PeriodicAxes.from_dict(periodic.to_dict()) == periodic
+
+    with pytest.raises(TypeError, match="never bool"):
+        CartesianGrid(frame=frame, cells=(8, 8), periodic=True)
+    with pytest.raises(ValueError, match="more than once"):
+        PeriodicAxes((frame.x, frame.x))
+    with pytest.raises(ValueError, match="canonical frame-axis order"):
+        PeriodicAxes((frame.y, frame.x))
 
 
 def test_cartesian_grid_is_immutable_json_serializable_and_fail_closed() -> None:

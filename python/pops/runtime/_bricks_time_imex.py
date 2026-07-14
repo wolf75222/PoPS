@@ -3,8 +3,10 @@
 Split out of :mod:`pops.runtime._bricks_time` for the 500-line cap (ADC-550): the mask
 normalization helpers ``_role_to_stable`` / ``_norm_implicit`` and the implicit-source time
 policies ``IMEX`` / ``SourceImplicit`` / ``SourceImplicitBE`` / ``IMEXRK``. ``_bricks_time``
-re-imports every name and ``pops.runtime.bricks`` re-exports them, so no public import path
-changes. Global solves and operator splitting are explicit ``Program`` graphs.
+re-imports every name; private native-engine adapters consume them through
+``pops.runtime._engine_descriptors``. Global solves and operator splitting are explicit ``Program``
+graphs; reusable public factories live under ``pops.lib.time``. These records are lowering values,
+not alternate public presets.
 """
 from __future__ import annotations
 
@@ -87,7 +89,8 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
         try:
             out = [str(v) for v in x]
         except TypeError:
-            raise ValueError("%s: %s must be a list of strings (received %r)" % (label, what, x))
+            raise ValueError(
+                "%s: %s must be a list of strings (received %r)" % (label, what, x)) from None
         return out
     names = as_list(implicit_vars, "implicit_vars")
     roles = [_role_to_stable(r) for r in as_list(implicit_roles, "implicit_roles")]
@@ -112,10 +115,10 @@ class IMEX:
       NOT by the model -> the SAME model is reused with different implicit treatments.
       Default [] (+ implicit_roles []) = model default (Model::is_implicit, or all implicit by
       default), BIT-IDENTICAL. Resolved on the C++ side against the block names (an absent name raises an error).
-      E.g. pops.IMEX(implicit_vars=["rho_u", "rho_v"]).
+      E.g. the private engine record ``IMEX(implicit_vars=["rho_u", "rho_v"])``.
     - ``implicit_roles``: same mask but by physical ROLE ("density", "momentum_x", "energy", ...)
       instead of the name (cf. System.variable_roles). Union with implicit_vars. E.g.
-      pops.IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"]).
+      ``IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"])``.
     - ``newton_max_iters``: iteration budget of the local Newton (default 2 = historical constant).
     - ``newton_rel_tol`` / ``newton_abs_tol``: per-cell stopping criterion
       ||F||_inf <= abs_tol + rel_tol*||F0||_inf (0/0 = disabled, bit-identical historical loop).
@@ -157,8 +160,8 @@ class SourceImplicit:
 
     IMPORTANT -- this is NOT a global implicit PDE solver. A global implicit solver
     (flux + source + Poisson all implicit, Newton-Krylov or global Schur) is a distinct
-    future effort. SourceImplicit = source-only IMEX (strictly equivalent to IMEX/pops.Implicit,
-    bit-identical numerics).
+    future effort. ``SourceImplicit`` and the private ``IMEX`` record select the same source-only
+    engine route with bit-identical numerics.
 
     WHEN TO USE IT (local source solve vs global ``Program.solve``) -- both mechanisms can treat a
     stiff contribution implicitly, but at different scales:
@@ -209,28 +212,31 @@ class IMEXRK:
 
     Ascher-Ruuth-Spiteri scheme (1997): the hyperbolic transport L = -div F is treated by the
     EXPLICIT tableau, the stiff source S by the IMPLICIT tableau (LOCAL per-cell backward-Euler,
-    Newton, like pops.IMEX) -- but with coupled stages that raise the GLOBAL ORDER TO 2 (transport
-    AND source), whereas pops.IMEX stays a ForwardEuler(transport) + backward-Euler(source) of order 1.
+    Newton, like the private ``IMEX`` policy) -- but with coupled stages that raise the GLOBAL ORDER
+    TO 2 (transport and source), whereas that policy stays ForwardEuler(transport) plus
+    backward-Euler(source), order 1.
 
     Coefficients: gamma = 1 - 1/sqrt(2), delta = 1 - 1/(2 gamma). Tableaus (stiffly accurate):
     explicit A_E = [[0,0,0],[gamma,0,0],[delta,1-delta,0]], b_E = [delta,1-delta,0];
     implicit A_I = [[0,0,0],[0,gamma,0],[0,1-gamma,gamma]], b_I = [0,1-gamma,gamma].
 
-    DISTINCT FAMILY from pops.IMEX (kind="imexrk_ars222" != "imex"): the pops.IMEX default (local
-    backward-Euler, order 1) is UNCHANGED / bit-identical. SCOPE: CARTESIAN System only -- AMR, the
+    DISTINCT FAMILY from the private ``IMEX`` policy (kind="imexrk_ars222" != "imex"): its local
+    backward-Euler default remains unchanged and bit-identical. SCOPE: CARTESIAN System only -- AMR, the
     polar grid, compiled models (.so: prototype/aot/production) and the Strang/Schur splittings
-    REJECT it explicitly (use pops.IMEX / pops.Explicit on those paths).
+    REJECT it explicitly. Public authoring uses an explicit ``pops.Program`` or ``pops.lib.time``
+    factory instead of selecting these engine policies.
 
     - ``scheme``: "ars222" (only wired scheme; another name raises an explicit error).
-    - ``substeps=N``: substeps per macro-step (cf. pops.Explicit). Default 1.
-    - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. pops.Explicit). Default 1.
-    - ``newton_*``: SAME options as pops.IMEX (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
+    - ``substeps=N``: substeps per macro-step (cf. the private explicit engine policy). Default 1.
+    - ``stride=M``: block cadence, hold-then-catch-up semantics. Default 1.
+    - ``newton_*``: same options as the private ``IMEX`` policy
+      (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
       diagnostics) -- they parametrize BOTH implicit stage solves of the scheme. Defaults =
       historical constants (max_iters=2, fd_eps=1e-7), without extra cost.
 
-    FULLY IMPLICIT SOURCE: unlike pops.IMEX, IMEXRK does NOT expose implicit_vars /
+    FULLY IMPLICIT SOURCE: unlike the private ``IMEX`` policy, ``IMEXRK`` does not expose implicit_vars /
     implicit_roles (the ARS(2,2,2) stage-consistency relation assumes a homogeneous solve). A partial
-    mask is rejected on the C++ side; for a partial per-component IMEX, use pops.IMEX.
+    mask is rejected on the C++ side; the partial engine route uses the private ``IMEX`` record.
     """
 
     kind = TIME_IMEXRK_ARS222  # typed time route (ADC-584)

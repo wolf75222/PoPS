@@ -1,48 +1,52 @@
 """Public object-level adaptive-mesh authoring.
 
 ``pops.amr`` contains declarations used to build an adaptive layout.  Pre-implemented transfer
-kernels remain in ``pops.lib.amr``; resolved provider contracts remain internal to
-``pops.mesh.amr``.
+kernels remain in ``pops.lib.amr``. Resolved plans remain internal to ``pops.mesh._amr``; the small
+immutable native materialization IR is public so external providers can implement its protocol.
 """
 from .authoring import (
+    AMRClockRelation,
     AMRExecution,
     AMRHierarchy,
     AMRRegrid,
     AMRTagging,
+    AMRRemainderPolicy,
     Buffer,
     Coarsen,
-    ResolvedAMRAuthorities,
     Tag,
 )
-from .resolution import (
-    AMRLayoutResolver,
-    AMRResolutionContext,
-    AMRTaggingResolutionContext,
-    ResolvedTaggingAuthority,
-    resolve_amr_authorities,
-    resolve_tagging,
+from pops.mesh._amr.transfer import AMRTransfer
+from pops.mesh._amr import IgnoreAMRCriteria
+from pops.mesh._amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
+from .materialization import (
+    CanonicalOptions,
+    NativeAMRActionKind,
+    NativeAMRMaterializationCapabilities,
+    NativeAMRMaterializationDescriptor,
+    NativeAMRMaterializationKind,
+    TransferCapabilities,
 )
-from pops.mesh.amr.transfer import AMRTransfer
-from pops.mesh.amr.tagging_graph import ConflictPolicy, EqualityPolicy, Hysteresis
 
 
 __all__ = [
+    "AMRClockRelation",
     "AMRExecution",
     "AMRHierarchy",
-    "AMRLayoutResolver",
     "AMRRegrid",
-    "AMRResolutionContext",
     "AMRTagging",
-    "AMRTaggingResolutionContext",
+    "AMRRemainderPolicy",
     "AMRTransfer",
     "Buffer",
+    "CanonicalOptions",
     "Coarsen",
     "ConflictPolicy",
     "EqualityPolicy",
     "Hysteresis",
-    "ResolvedAMRAuthorities",
-    "ResolvedTaggingAuthority",
+    "IgnoreAMRCriteria",
+    "NativeAMRActionKind",
+    "NativeAMRMaterializationCapabilities",
+    "NativeAMRMaterializationDescriptor",
+    "NativeAMRMaterializationKind",
     "Tag",
-    "resolve_amr_authorities",
-    "resolve_tagging",
+    "TransferCapabilities",
 ]

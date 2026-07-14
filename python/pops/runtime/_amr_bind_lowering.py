@@ -38,7 +38,7 @@ def _regrid_every(data: dict[str, Any]) -> int:
 def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
-    from pops.mesh.amr import ResolvedHierarchy
+    from pops.mesh._amr import ResolvedHierarchy
 
     data = _runtime_data(layout)
     grid = data["grid"]

@@ -17,7 +17,7 @@ import sys
 
 try:
     from pops import model
-    from pops.ir.expr import Const
+    from pops._ir.expr import Const
     from pops.physics._facade import Model
     from pops import time as adctime
     from pops.solvers import DenseLU

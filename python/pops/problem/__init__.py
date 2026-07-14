@@ -4,8 +4,8 @@
 fields, params, aux, outputs and a time scheme, split into typed internal registries
 (:mod:`pops.problem.registries`) behind a compact facade. The package owns no runtime data, no
 codegen and no ``_pops`` import; ``validate -> resolve -> compile -> bind`` performs the phase
-transitions. The stable authoring handles (:mod:`pops.problem.handles`) and the immutable
-:class:`pops.ReportTree` validation explanation complete the surface.
+transitions. Stable authoring handles and immutable validation explanations complete the surface;
+their concrete storage classes remain package-internal.
 """
 from pops._report import DiagnosticError, ReportTree
 from pops.problem.handles import (

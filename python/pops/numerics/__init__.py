@@ -16,20 +16,10 @@ home of the catalogs formerly parked under ``pops.lib``.
 """
 from __future__ import annotations
 
-from . import riemann, reconstruction, variables, projections, terms
+from . import riemann, reconstruction, variables, projections, spatial, terms
 from .reconstruction import limiters
-# The finite-volume spatial brick catalog (criterion 7: moved out of pops.lib.spatial). Bind the
-# SimpleNamespace as ``pops.numerics.spatial`` (shadowing the submodule) so ``spatial.FiniteVolume()``
-# resolves, mirroring the former ``pops.lib.spatial.FiniteVolume()``.
-from .spatial import FiniteVolume, spatial
-from .plan import (
-    BoundaryResolutionContext,
-    DiscretizationPlan,
-    ResolvedDiscretizationPlan,
-    ResolvedNumericalBinding,
-    ResolvedRateMethod,
-)
+from .spatial import FiniteVolume
+from .plan import DiscretizationPlan
 
 __all__ = ["riemann", "reconstruction", "limiters", "variables", "projections", "terms",
-           "spatial", "FiniteVolume", "DiscretizationPlan", "ResolvedDiscretizationPlan",
-           "ResolvedNumericalBinding", "ResolvedRateMethod", "BoundaryResolutionContext"]
+           "spatial", "FiniteVolume", "DiscretizationPlan"]

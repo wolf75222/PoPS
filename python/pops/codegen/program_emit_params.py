@@ -77,8 +77,8 @@ def _op_model_exprs(impl: Any, v: Any) -> list:
 
 def _runtime_param_refs_in(exprs: Any) -> tuple[Any, ...]:
     """Runtime parameter references in deterministic qualified-identity order."""
-    from pops.ir.values import RuntimeParamRef
-    from pops.ir.visitors import _children
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
     refs = {}
     stack = list(exprs)
     while stack:

@@ -34,7 +34,7 @@ import sys
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
@@ -52,8 +52,8 @@ def chk(cond, label):
 
 def iso_spec():
     """Native isothermal block (3 var, Density role at component 0). No compiler required."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=CS2), transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=CS2), transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def spike_state():
@@ -83,8 +83,8 @@ def build(pf, regrid_every=0, refine=1e30):
     s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
     s.set_refinement(refine)
     s.block("gas", iso_spec(),
-                spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
-                time=pops.Explicit())
+                spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
+                time=engine.Explicit())
     return s
 
 
@@ -147,9 +147,9 @@ band[:, n // 3:2 * n // 3] = 1.0  # contrast-1e6 band (Density role, component 0
 sm = AmrSystem(n=n, L=1.0, periodic=True)
 sm.set_refinement(1e30)
 sm.block("a", iso_spec(),
-             spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8))
+             spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8))
 sm.block("b", iso_spec(),
-             spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8))
+             spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=1e-8))
 sm.set_density("a", band.ravel().copy())
 sm.set_density("b", band.ravel().copy())
 step_n(sm, 5)

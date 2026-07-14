@@ -3,11 +3,11 @@ from __future__ import annotations
 from pops.identity import Identity, canonical_sha256
 from pops.identity.semantic import semantic_identity, semantic_identity_of
 from pops.descriptors import Descriptor
-from pops.mesh import CartesianMesh
 from pops.layouts import Uniform
 from pops.model import Module
 from pops.problem import Case
 from pops.problem._snapshot import AuthoringSnapshot, build_authoring_snapshot
+from tests.python.support.layout_plan import cartesian_grid
 
 
 def _snapshot(*, representation="conservative", centering="cell", units=None,
@@ -20,7 +20,7 @@ def _snapshot(*, representation="conservative", centering="cell", units=None,
     )
     problem = Case(name="case")
     problem.block("fluid", module)
-    selected_layout = layout or Uniform(CartesianMesh(n=16, L=1.0))
+    selected_layout = layout or Uniform(cartesian_grid(n=16, L=1.0))
     return build_authoring_snapshot(problem, layout=selected_layout, time=None)
 
 
@@ -72,9 +72,9 @@ def test_mapping_insertion_order_is_not_semantic():
 
 
 def test_third_party_layout_uses_the_descriptor_semantic_protocol() -> None:
-    baseline = _snapshot(layout=_ForeignLayout(CartesianMesh(n=8, L=1.0)))
-    equivalent = _snapshot(layout=_ForeignLayout(CartesianMesh(n=8, L=1.0)))
-    changed = _snapshot(layout=_ForeignLayout(CartesianMesh(n=16, L=1.0)))
+    baseline = _snapshot(layout=_ForeignLayout(cartesian_grid(n=8, L=1.0)))
+    equivalent = _snapshot(layout=_ForeignLayout(cartesian_grid(n=8, L=1.0)))
+    changed = _snapshot(layout=_ForeignLayout(cartesian_grid(n=16, L=1.0)))
 
     assert baseline.semantic_identity == equivalent.semantic_identity
     assert baseline.semantic_identity != changed.semantic_identity

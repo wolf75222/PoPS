@@ -104,7 +104,7 @@ def test_user_riemann_is_external():
     # riemann.User(id) surface an external_cpp descriptor.
     import json
     # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
-    from pops.runtime.bricks import abi_key
+    from pops.runtime._engine_descriptors import abi_key
     lib._register_manifest(json.dumps(
         {"schema_version": _desc.BRICK_MANIFEST_SCHEMA_VERSION, "abi_key": abi_key(),
          "annotations": {},

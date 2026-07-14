@@ -19,6 +19,7 @@ from pops.time.schedule import (
     ScheduleComment,
     ScheduleDueKind,
     ScheduleLoweringIR,
+    ScheduleTimeline,
 )
 
 
@@ -30,12 +31,24 @@ def _lower_schedule_ir(v: Any, sched: Any) -> ScheduleLoweringIR:
             % (v.name, type(sched).__name__)
         )
     where = "node %r (op '%s')" % (v.name, v.op)
+    if not hasattr(v, "clock") or not hasattr(v, "point"):
+        raise TypeError("%s lacks its exact clock/point schedule site" % where)
+    sched.validate_site(clock=v.clock, point=v.point, where="schedule on %s" % where)
     lowered = sched.native_schedule_ir(where=where)
     if type(lowered) is not ScheduleLoweringIR:
         raise TypeError(
             "Schedule.native_schedule_ir() for %s must return an exact ScheduleLoweringIR, got %s"
             % (where, type(lowered).__name__)
         )
+    if lowered.domain.timeline is ScheduleTimeline.STAGE:
+        from pops.time.points import StagePoint
+        if type(v.point) is not StagePoint:
+            raise ValueError("stage schedule on %s is not attached to an exact StagePoint" % where)
+        site_identity = json.dumps(
+            v.point.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if lowered.domain.stage_identity != site_identity:
+            raise ValueError(
+                "stage schedule on %s does not authenticate the node's exact StagePoint" % where)
     if lowered.due.kind is ScheduleDueKind.AT_END:
         raise NotImplementedError(
             "schedule AtEnd on %s is not lowerable: a compiled sim.step(dt) loop never sees an "
@@ -53,15 +66,36 @@ def _lower_schedule_ir(v: Any, sched: Any) -> ScheduleLoweringIR:
     return lowered
 
 
-def _schedule_due_expression(v: Any, due: Any, var: Any = None) -> str:
+def _schedule_domain_args(domain: Any) -> str:
+    kinds = {
+        ScheduleTimeline.ACCEPTED_STEP: "AcceptedStep",
+        ScheduleTimeline.STAGE: "Stage",
+        ScheduleTimeline.CLOCK_TICK: "ClockTick",
+        ScheduleTimeline.AMR_LEVEL: "AmrLevel",
+    }
+    try:
+        kind = kinds[domain.timeline]
+    except KeyError:
+        raise NotImplementedError(
+            "native schedule timeline %s is not supported" % domain.timeline.value) from None
+    return "%s, %s, %s, %d" % (
+        "pops::runtime::program::ScheduleDomainKind::k" + kind,
+        json.dumps(domain.clock_id),
+        json.dumps(domain.stage_identity or ""),
+        -1 if domain.level is None else domain.level,
+    )
+
+
+def _schedule_due_expression(v: Any, lowering: Any, var: Any = None) -> str:
     """Render one validated due-test IR without inspecting its concrete Trigger class."""
+    due = lowering.due
+    domain = _schedule_domain_args(lowering.domain)
     if due.kind is ScheduleDueKind.ALWAYS:
-        return "true"
+        return "ctx.schedule_domain_occurs(%s)" % domain
     if due.kind is ScheduleDueKind.CACHE_PERIOD:
-        # Cadence: due cold-start, then every N macro-steps (CacheManager::is_due via macro_step()).
-        return "ctx.cache_should_update(%d, %d)" % (v.id, due.period)
+        return "ctx.schedule_is_due(%d, %d, %s)" % (v.id, due.period, domain)
     if due.kind is ScheduleDueKind.MACRO_STEP_ZERO:
-        return "(ctx.macro_step() == 0)"
+        return "ctx.schedule_at_start(%s)" % domain
     if due.kind is ScheduleDueKind.PROGRAM_PREDICATE:
         # A runtime predicate: a Program Bool value already lowered to a parenthesized C++ expr token
         # (a compare over reductions). A bare Python callable cannot lower (it is not a Program value).
@@ -73,7 +107,7 @@ def _schedule_due_expression(v: Any, due: Any, var: Any = None) -> str:
                 "when(cond) on node %r references a Bool value not emitted before it; build the "
                 "predicate earlier in the Program (ADC-458)" % v.name
             )
-        return tokens[key]
+        return "(ctx.schedule_domain_occurs(%s) && (%s))" % (domain, tokens[key])
     raise NotImplementedError(
         "native schedule due primitive %s on node %r is not supported" % (due.kind.value, v.name)
     )
@@ -82,7 +116,7 @@ def _schedule_due_expression(v: Any, due: Any, var: Any = None) -> str:
 def _schedule_due_test(program: Any, v: Any, sched: Any, var: Any = None) -> str:
     """The C++ boolean 'is this node due this step' for a native schedule."""
     del program
-    return _schedule_due_expression(v, _lower_schedule_ir(v, sched).due, var)
+    return _schedule_due_expression(v, _lower_schedule_ir(v, sched), var)
 
 
 def _schedule_action_line(action: ScheduleAction, *, v: Any, out: Any, is_aux: bool) -> str:
@@ -126,11 +160,12 @@ def _emit_schedule_wrap(program: Any, v: Any, var: Any, lines: Any, start: Any) 
     if sched is None:
         return
     lowering = _lower_schedule_ir(v, sched)
-    if lowering.due.kind is ScheduleDueKind.ALWAYS:
+    if (lowering.due.kind is ScheduleDueKind.ALWAYS
+            and lowering.domain.timeline is ScheduleTimeline.ACCEPTED_STEP):
         return
     body = lines[start:]
     del lines[start:]
-    due = _schedule_due_expression(v, lowering.due, var)
+    due = _schedule_due_expression(v, lowering, var)
     policy = lowering.off
     is_aux = v.op in _AUX_OUTPUT_OPS
     # The scratch node's output token (the MultiFab the policy holds / zeroes). A field solve writes

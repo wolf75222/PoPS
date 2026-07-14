@@ -146,6 +146,15 @@ SolveReport System::solve_fields_from_state(int block_idx, const MultiFab& U_sta
   return p_->solve_fields_from_state(block_idx, U_stage);
 }
 
+SolveReport System::solve_fields_from_state_at(
+    const runtime::multiblock::BoundaryEvaluationPoint& /*point*/,
+    const std::string& provider_slot, int block_idx, const MultiFab& U_stage) {
+  if (provider_slot.empty())
+    throw std::invalid_argument(
+        "System::solve_fields_from_state_at requires an exact provider slot");
+  return p_->solve_named_field_from_state(provider_slot, block_idx, U_stage);
+}
+
 // Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): forwards to the field solver, which
 // assembles the system Poisson RHS as Sum_s elliptic_rhs_s(U_s) reading EVERY block's stage state at
 // once (U_stages indexed by block index; nullptr -> the block's live state), then re-fills the shared

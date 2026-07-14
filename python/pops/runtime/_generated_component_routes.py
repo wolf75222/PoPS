@@ -9,11 +9,11 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 1
 
-COMPONENT_CATALOG_SHA256 = '9d247899ba03bd6e893f2fb8071e6eb1407c4590269fb72ed3abe2c003743128'
+COMPONENT_CATALOG_SHA256 = '6a9e3d473ce9fef2ec84c781a51628247017ca0aba8acd28076318058d211e97'
 
-COMPONENT_CATALOG_SEMANTIC_SHA256 = '58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661'
+COMPONENT_CATALOG_SEMANTIC_SHA256 = '33356089a9695edf0ed050aa7446945c6de4fed18880b2c8df24ff2baef16ac3'
 
-ROUTE_REGISTRY_SIGNATURE = 'v2:58b1a6717dce3a181fa2d85b12fa88e6193185f13fb0dca61ceb7accd5c88661'
+ROUTE_REGISTRY_SIGNATURE = 'v2:33356089a9695edf0ed050aa7446945c6de4fed18880b2c8df24ff2baef16ac3'
 
 ROUTE_TABLES = {'riemann': (('rusanov',
               'pops::RusanovFlux',
@@ -309,6 +309,19 @@ COMPONENT_INTERFACE_SPECS = ({'name': 'requirement', 'method': 'requirements', '
  {'name': 'report', 'method': 'report', 'required_args': 0},
  {'name': 'fallible_evaluation', 'method': 'evaluate', 'required_args': 1},
  {'name': 'format', 'method': 'format', 'required_args': 1})
+
+ROUTE_FAMILY_NATIVE_INTERFACES = {'riemann': 'numerical_flux',
+ 'limiter': None,
+ 'recon': None,
+ 'time': None,
+ 'field_solver': 'field_solver',
+ 'poisson_bc': 'field_boundary_closure',
+ 'layout': None,
+ 'transport': None,
+ 'source': None,
+ 'elliptic': 'field_solver',
+ 'poisson_rhs': None,
+ 'wall': 'ghost_boundary'}
 
 BRICK_CATALOG_ROWS = ({'category': 'transport',
   'id': 'exb',

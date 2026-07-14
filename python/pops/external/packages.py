@@ -237,7 +237,7 @@ class FixedBinaryPackage:
         for manifest in manifests:
             _require_fixed_signature(manifest)
         try:
-            from pops.runtime.platform_manifest import PlatformManifest
+            from pops.runtime._platform_manifest import PlatformManifest
             platform = PlatformManifest.from_data(row["platform"])
         except (TypeError, ValueError) as exc:
             raise ComponentPackageError("target", "platform", str(exc)) from exc
@@ -327,7 +327,7 @@ def build_fixed_binary_manifest(
     *, components: Mapping[str, ComponentManifest], platform: Any,
     binary_path: str, binary: bytes, symbols: tuple[str, ...],
 ) -> dict[str, Any]:
-    from pops.runtime.platform_manifest import PlatformManifest
+    from pops.runtime._platform_manifest import PlatformManifest
     if type(platform) is not PlatformManifest:
         raise TypeError("platform must be an exact PlatformManifest")
     manifests = tuple(components.values())

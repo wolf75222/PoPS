@@ -42,7 +42,7 @@ class ArtifactModelMetadata:
 
 def artifact_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
     """Return every exact compiled block in declaration order; no historical fallback."""
-    from pops.codegen.compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
 
     if type(compiled) is not CompiledSimulationArtifact:
         raise TypeError("artifact_model_metadata requires a CompiledSimulationArtifact")
@@ -83,9 +83,9 @@ def component_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]
 
 
 def primary_artifact_model(compiled: Any) -> Any:
-    """Return the first install-plan model, or ``None`` for a model-free artifact."""
+    """Return the sole model, never a representative of an aggregate artifact."""
     metadata = artifact_model_metadata(compiled)
-    return metadata[0].model if metadata else None
+    return metadata[0].model if len(metadata) == 1 else None
 
 
 def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
@@ -94,15 +94,25 @@ def aggregate_model_metadata(compiled: Any) -> tuple[Any, ...]:
     if not rows:
         return [], 0, {}, [], 0, "U"
     cons_names = [name for row in rows for name in row.cons_names]
-    params = {name: value for row in rows for name, value in row.params.items()}
+    params = {}
+    owners = {}
+    for row in rows:
+        for name, value in row.params.items():
+            if name in params and params[name] != value:
+                raise ValueError(
+                    "compiled blocks %r and %r declare conflicting parameter metadata for %r"
+                    % (owners[name], row.block_name, name))
+            params[name] = value
+            owners.setdefault(name, row.block_name)
     aux_names = list(dict.fromkeys(name for row in rows for name in row.aux_names))
+    state_spaces = {row.state_space for row in rows}
     return (
         cons_names,
         sum(row.n_vars for row in rows),
         params,
         aux_names,
         sum(row.n_aux for row in rows),
-        rows[0].state_space,
+        next(iter(state_spaces)) if len(state_spaces) == 1 else None,
     )
 
 

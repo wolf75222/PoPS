@@ -8,16 +8,17 @@ import pytest
 from pops.runtime._system import AmrSystem
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 
 def _model():
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def _built(**cfg):
     sim = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16, **cfg)
-    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((32, 32))
     ne[10:22, 10:22] = 5.0
@@ -47,7 +48,7 @@ def test_clustering_override_visible_in_report():
 
 
 def test_clustering_descriptor_refuses_out_of_domain():
-    from pops.mesh.amr import PatchClustering
+    from pops.mesh._amr import PatchClustering
     with pytest.raises(ValueError):
         PatchClustering(min_efficiency=0.0)
     with pytest.raises(ValueError):

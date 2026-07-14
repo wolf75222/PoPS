@@ -9,7 +9,7 @@ from typing import Any
 from pops.codegen.lowering_coverage import LoweringCoverageReport
 from pops.identity import Identity, make_identity
 
-from ._consumer_contracts import (
+from pops.output._consumer_contracts import (
     ConsumerFailureAction,
     FailRun,
     ParallelMode,

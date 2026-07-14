@@ -330,7 +330,7 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
         print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
         return None
@@ -356,8 +356,8 @@ def _run_section_b(t):
         print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
         return None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     # A KNOWN field with distinct min / max / sum: rho(i,j) = 1 + (linear ramp in [0, 1]).
     x = (np.arange(n) + 0.5) / n
@@ -417,7 +417,7 @@ def _run_section_b2(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001
         print("-- (B.2) skipped: pops/numpy unavailable: %s --" % exc)
         return None
@@ -440,9 +440,9 @@ def _run_section_b2(t):
         return None
     # A positivity floor makes the block carry a real projection closure (else project is a no-op).
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov(),
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov(),
                                               positivity_floor=1e-12),
-                     time=pops.Explicit(method="euler"))
+                     time=engine.Explicit(method="euler"))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)

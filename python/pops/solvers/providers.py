@@ -96,9 +96,9 @@ class CompositeTensorFAC:
             )
 
     def canonical_identity(self) -> dict[str, Any]:
-        # Lazy by design: pops.solvers remains an import-graph sink and does not import pops.ir at
+        # Lazy by design: pops.solvers remains an import-graph sink and does not import pops._ir at
         # module scope merely because the solver catalog is imported.
-        from pops.ir.literals import scalar_data
+        from pops._ir.literals import scalar_data
 
         return {
             "schema_version": _HIERARCHY_SOLVER_SCHEMA_VERSION,

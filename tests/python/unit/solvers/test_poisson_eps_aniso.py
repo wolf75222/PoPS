@@ -8,8 +8,8 @@ coherence (l'anisotropie modifie REELLEMENT phi vs l'isotrope), et le refus avec
 """
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
@@ -18,8 +18,8 @@ PI = np.pi
 def _charge_scalar():
     """Bloc scalaire (1 var) de densite de charge unite : f = q n = n. set_density n'ecrit que la
     densite (comp 0), ce qui isole le second membre du Poisson pour une solution manufacturee."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
 
 
 def anisotropic_epsilon_tests():
@@ -42,7 +42,7 @@ def anisotropic_epsilon_tests():
 
     def solve(eps_xy, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
-        s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+        s.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if eps_xy is not None:
@@ -60,7 +60,7 @@ def anisotropic_epsilon_tests():
     # eps = eps_x (set_epsilon_field) : meme rhs f, mais les faces y voient eps_x au lieu de eps_y,
     # donc phi doit differer franchement (eps_x et eps_y sont distincts).
     s_iso = System(n=n, L=1.0, periodic=False)
-    s_iso.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+    s_iso.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     s_iso.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Dirichlet())
     s_iso.set_density("q", f)
     s_iso.set_epsilon_field(eps_x)
@@ -78,7 +78,7 @@ def anisotropic_epsilon_tests():
 
     # eps anisotrope + solveur 'fft' (coefficient constant) : refus explicite au solve.
     sp = System(n=n, L=1.0, periodic=True)
-    sp.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+    sp.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)
     sp.set_epsilon_anisotropic_field(eps_x, eps_y)

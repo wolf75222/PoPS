@@ -6,8 +6,8 @@ import pytest
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
-from pops.mesh import CartesianMesh  # noqa: E402
 from pops.layouts import Uniform  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():
@@ -57,7 +57,7 @@ def test_amr_system_inspect_composes_amr_snapshot():
 
 
 def test_layout_inspect_reports_native_routes_and_limitations():
-    uniform = Uniform(CartesianMesh(n=8))
+    uniform = Uniform(cartesian_grid(n=8))
     uniform_info = uniform.inspect()
     assert uniform_info["schema_version"] == 1
     assert uniform_info["report_type"] == "layout_inspection"
@@ -70,7 +70,7 @@ def test_layout_inspect_reports_native_routes_and_limitations():
                for row in uniform_info["native_capabilities"]["routes"])
 
     from tests.python.support.layout_plan import final_amr_layout
-    amr = final_amr_layout(CartesianMesh(n=8), max_levels=2, ratio=2)
+    amr = final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2)
     amr_info = amr.inspect()
     assert amr_info["capabilities"]["layout"] == "amr"
     routes = {row["route_id"]: row for row in amr_info["native_capabilities"]["routes"]}

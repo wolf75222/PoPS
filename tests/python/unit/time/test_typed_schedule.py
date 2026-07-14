@@ -1,6 +1,8 @@
 """ADC-663 typed schedule algebra and honest native lowering boundary."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from typed_program_support import typed_state
@@ -88,9 +90,27 @@ def test_typed_schedule_serialization_and_rebuild_are_exact():
         program._serialize(include_provenance=False)
 
 
+def test_native_clock_stage_and_level_domains_keep_exact_coordinates():
+    clock = Clock("macro")
+    stage_point = StagePoint("s1", {"main": TimePoint(clock, 0.5)})
+
+    stage = Stage(clock, stage_point).native_schedule_domain(where="test")
+    tick = ClockTick(clock).native_schedule_domain(where="test")
+    level = AMRLevel(clock, level=2).native_schedule_domain(where="test")
+
+    assert stage.timeline.value == "stage"
+    assert stage.clock_id == clock.qualified_id
+    assert stage.stage_identity == json.dumps(
+        stage_point.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    assert tick.timeline.value == "clock_tick"
+    assert tick.clock_id == clock.qualified_id
+    assert level.timeline.value == "amr_level"
+    assert level.clock_id == clock.qualified_id
+    assert level.level == 2
+
+
 @pytest.mark.parametrize("domain_factory, domain_name", [
-    (Attempt, "Attempt"), (ClockTick, "ClockTick"),
-    (lambda clock: AMRLevel(clock, level=0), "AMRLevel"),
+    (Attempt, "Attempt"),
     (lambda clock: Event(
         clock, event=EventHandle(Program("event_owner").owner_path, "event")), "Event"),
     (WallOutput, "WallOutput"),

@@ -22,14 +22,14 @@ from pops.fields.bcs import (
     Neumann,
 )
 from pops.math import laplacian
-from pops.mesh import CartesianMesh
 from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG
+from tests.python.support.layout_plan import cartesian_grid
 
 
-_LAYOUT = Uniform(CartesianMesh(n=16, periodic=False))
+_LAYOUT = Uniform(cartesian_grid(n=16, periodic=False))
 
 
 class ExternalFieldPlan(Descriptor):
@@ -215,7 +215,7 @@ def test_dynamic_boundary_lowers_to_generated_parameter_launcher() -> None:
 
 
 def test_iterate_dependent_boundary_requires_newton_and_emits_exact_jvp() -> None:
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.solvers.nonlinear import Newton
 
     model = Model("nonlinear-boundary-model")
@@ -285,7 +285,7 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
 
 
 def test_boundary_state_value_requires_explicit_component_contract() -> None:
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
 
     model = Model("ambiguous-boundary-model")
     state = model.state("U", components=["rho", "momentum"])

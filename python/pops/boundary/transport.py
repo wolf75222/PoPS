@@ -8,9 +8,9 @@ import json
 from typing import Any, ClassVar
 
 from pops.domain import DomainBoundary
-from pops.ir import Expr
-from pops.ir.expr import Const
-from pops.ir.visitors import _key
+from pops._ir import Expr
+from pops._ir.expr import Const
+from pops._ir.visitors import _key
 from pops.identity import make_identity
 from pops.identity.semantic import semantic_value
 from pops.model import Handle, OwnerPath, ParamHandle
@@ -437,9 +437,183 @@ class ResolvedTransportBoundarySet:
 
     inspect = canonical_identity
 
+    def ghost_plan_composer_capability(self) -> dict[str, Any]:
+        """Advertise the narrow open composer protocol; this authority composes only itself."""
+        return {"schema_version": 1, "scope": "self"}
+
+    def compose_ghost_plan(self, context: Any) -> Any:
+        from pops.mesh.boundaries.composition import (
+            GhostPlanCompositionContext,
+            compose_transport_boundary,
+        )
+
+        if not isinstance(context, GhostPlanCompositionContext):
+            raise TypeError("transport boundary composition requires GhostPlanCompositionContext")
+        if context.authorities != (self,):
+            raise ValueError(
+                "TransportBoundarySet composes only itself; use an explicit scope='all' composer "
+                "for multiple authorities"
+            )
+        return compose_transport_boundary(self, context=context)
+
+    def _native_contract(self) -> tuple[Handle, int, tuple[ResolvedTransportCondition, ...], int]:
+        """Validate the complete compile-time shape of the built-in native provider."""
+        states = {row.state for row in self.conditions}
+        if len(states) != 1:
+            raise NotImplementedError(
+                "the installed native block provider requires one state per boundary plan"
+            )
+        state = next(iter(states))
+        components = tuple(getattr(state.space, "components", ()))
+        if not components:
+            raise TypeError("resolved transport boundary state has no component manifest")
+        ncomp = len(components)
+        face_rows: list[ResolvedTransportCondition | None] = [None, None, None, None]
+        depth = 0
+        for condition in self.conditions:
+            geometry = condition.geometry
+            if geometry.axis.index not in (0, 1):
+                raise NotImplementedError(
+                    "the installed native transport boundary provider is two-dimensional"
+                )
+            face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
+            if face_rows[face] is not None:
+                raise ValueError("native transport boundary contains overlapping face producers")
+            face_rows[face] = condition
+            depth = max(depth, condition.requirement.ghost_depth)
+            dependencies = condition.provider.dependencies
+            flow = dependencies.representation
+            if flow.converter is not None or flow.source != flow.target:
+                raise NotImplementedError(
+                    "native transport boundary lowering requires an authored compiled "
+                    "representation converter"
+                )
+            if condition.condition_type == "inflow":
+                if dependencies.states or dependencies.fields or dependencies.time:
+                    raise NotImplementedError(
+                        "state/field/time-dependent inflow requires a compiled boundary kernel; "
+                        "the built-in native provider accepts only constants and RuntimeParams"
+                    )
+                if len(condition.values) != ncomp:
+                    raise ValueError(
+                        "native inflow must prescribe exactly %d state components" % ncomp
+                    )
+                for expression in condition.values:
+                    if _expression_data(expression).get("protocol") != "pops.expr.key.v1":
+                        raise NotImplementedError("unsupported boundary expression protocol")
+        if any(row is None for row in face_rows):
+            raise ValueError("native transport boundary has incomplete physical-face coverage")
+        return state, ncomp, tuple(row for row in face_rows if row is not None), depth
+
+    def compile_boundary_data(self) -> dict[str, Any]:
+        """Return deterministic evidence that the authority has a total native lowering.
+
+        RuntimeParam values intentionally remain unbound here.  Their expression protocol and
+        dependency set are authenticated now; numeric evaluation happens exactly once at bind.
+        """
+        state, ncomp, conditions, depth = self._native_contract()
+        return {
+            "schema_version": 1,
+            "authority_type": "prepared_boundary_plan_compile",
+            "source_plan": self.plan.canonical_id,
+            "state": state.canonical_identity(),
+            "ncomp": ncomp,
+            "required_depth": depth,
+            "faces": [
+                {
+                    "ordinal": 2 * row.geometry.axis.index + (
+                        0 if row.geometry.side.value == "lower" else 1),
+                    "condition_type": row.condition_type,
+                    "producer": row.provider.qualified_id,
+                    "geometry": row.geometry.canonical_identity(),
+                    "type": ("foextrap" if row.condition_type == "outflow"
+                             else "dirichlet"),
+                    "values": (
+                        [] if row.condition_type == "outflow" else
+                        [_expression_data(expression)["value"]
+                         for expression in row.values]
+                    ),
+                }
+                for row in conditions
+            ],
+        }
+
+    def runtime_boundary_data(self, params: Any) -> dict[str, Any]:
+        """Lower this resolved authority to the executable native v1 transport contract.
+
+        The built-in provider intentionally supports only data that can be executed without a
+        Python callback: outflow and scalar expressions closed over BindSchema parameters.  A
+        state/field/time-dependent inflow needs a compiled boundary kernel and therefore fails here
+        instead of being retained as ignored metadata.
+        """
+        from pops.model._bind_expression import eval_expression_key
+
+        if not isinstance(params, Mapping):
+            raise TypeError("runtime boundary lowering requires resolved BindSchema values")
+        env: dict[str, Any] = {}
+        local_counts: dict[str, int] = {}
+        for handle, value in params.items():
+            if not isinstance(handle, ParamHandle) or not handle.is_resolved:
+                raise TypeError("runtime boundary parameters must use canonical ParamHandle keys")
+            env[handle.qualified_id] = value
+            local_counts[handle.local_id] = local_counts.get(handle.local_id, 0) + 1
+        for handle, value in params.items():
+            if local_counts[handle.local_id] == 1:
+                env[handle.local_id] = value
+
+        state, ncomp, conditions, depth = self._native_contract()
+        face_rows: list[dict[str, Any] | None] = [None, None, None, None]
+        for condition in conditions:
+            geometry = condition.geometry
+            face = 2 * geometry.axis.index + (0 if geometry.side.value == "lower" else 1)
+            if condition.condition_type == "outflow":
+                values = [0.0] * ncomp
+                face_type = "foextrap"
+            else:
+                values = []
+                for index, expression in enumerate(condition.values):
+                    data = _expression_data(expression)
+                    value = eval_expression_key(
+                        data["value"], env,
+                        where="transport boundary %s component %d" % (geometry.name, index),
+                    )
+                    if isinstance(value, bool) or not isinstance(value, (int, float)):
+                        raise TypeError(
+                            "transport boundary values must lower to real scalars, got %r" % value
+                        )
+                    values.append(float(value))
+                face_type = "dirichlet"
+            face_rows[face] = {
+                "ordinal": face,
+                "geometry": geometry.canonical_identity(),
+                "producer": condition.provider.qualified_id,
+                "type": face_type,
+                "values": values,
+            }
+        rows = tuple(row for row in face_rows if row is not None)
+        evidence = {
+            "schema_version": 1,
+            "authority_type": "prepared_boundary_plan",
+            "source_plan": self.plan.canonical_id,
+            "state": state.canonical_identity(),
+            "required_depth": depth,
+            "faces": list(rows),
+            # Dimension-split FV reconstruction never reads diagonal corner ghosts.  A future
+            # multidimensional stencil must set this from its stencil manifest and supply a resolver.
+            "corner_required": False,
+            "residual_contributions": [],
+            "linearization_contributions": [],
+            "interfaces": [],
+        }
+        evidence["identity"] = make_identity(
+            "prepared-boundary-plan", semantic_value(
+                evidence, where="prepared transport boundary plan")
+        ).token
+        return evidence
+
     def amr_boundary_requirement(self, *, owner: Any, dimension: int) -> Any:
         """Project exact ghost-fill needs through the AMR nesting extension protocol."""
-        from pops.mesh.amr import NestingRequirementSource
+        from pops.mesh._amr import NestingRequirementSource
 
         if isinstance(dimension, bool) or dimension not in (1, 2, 3):
             raise ValueError("AMR boundary dimension must be 1, 2, or 3")

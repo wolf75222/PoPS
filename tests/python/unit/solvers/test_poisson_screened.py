@@ -7,8 +7,8 @@ non-regression (kappa=0 == Poisson), le refus de kappa < 0 et le refus avec le s
 """
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 PI = np.pi
@@ -17,8 +17,8 @@ KAPPA = 50.0  # 1/lambda_D^2 (ecrantage modere)
 
 def _charge_scalar():
     """Bloc scalaire de densite de charge unite (f = q n = n) : isole le second membre du Poisson."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                     source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
 
     def solve(kappa_field, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
-        s.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+        s.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if kappa_field is not None:
@@ -70,7 +70,7 @@ def main():
 
     # (E) kappa + solveur 'fft' (Poisson pur) : refus explicite.
     sp = System(n=n, L=1.0, periodic=True)
-    sp.block("q", model=_charge_scalar(), spatial=pops.Spatial(none=True))
+    sp.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)
     sp.set_reaction_field(KAPPA * np.ones((n, n)))

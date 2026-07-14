@@ -38,9 +38,9 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.ir.ops import sqrt
+from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 
@@ -132,16 +132,16 @@ def main():
         assert isinstance(cm_t, CompiledModel)
         assert cm_t.backend == "production" and cm_t.target == "amr_system"
         assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
-        spec_t = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                           transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                           elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+        spec_t = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                           transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                           elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
         A = _amr(n, L, lambda s: s._s.add_native_block(
             "gas", so_t, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
         B = _amr(n, L, lambda s: s.block(
-            "gas", spec_t, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()))
+            "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()))
         assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
         dt = 2e-4
         for _ in range(12):
@@ -162,9 +162,9 @@ def main():
         cm_p = ep.compile(os.path.join(tmp, "euler_poisson_amr.so"), INCLUDE,
                           backend="production", target="amr_system")
         so_p = cm_p.so_path
-        spec_p = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                           transport=pops.CompressibleFlux(), source=pops.GravityForce(),
-                           elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+        spec_p = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                           transport=engine.CompressibleFlux(), source=engine.GravityForce(),
+                           elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
         def poisson(s):
             s.set_poisson("charge_density", "geometric_mg")
@@ -173,8 +173,8 @@ def main():
             "gas", so_p, limiter="minmod", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1), poisson(s)))
         D = _amr(n, L, lambda s: (s.block(
-            "gas", spec_p, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()), poisson(s)))
+            "gas", spec_p, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()), poisson(s)))
         assert C.n_patches() == D.n_patches()
         m0c, m0d = C.mass(), D.mass()
         assert abs(m0c - m0d) < 1e-12 * (abs(m0d) + 1.0), "masse initiale production != add_block"
@@ -198,11 +198,11 @@ def main():
             """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
             R = _amr(n, L, lambda s: s.add_equation(
                 "gas", cm_t,
-                spatial=pops.FiniteVolume(limiter=Minmod(), riemann=riem, variables=recon)))
+                spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
             S = _amr(n, L, lambda s: s.block(
                 "gas", spec_t,
-                spatial=pops.Spatial(minmod=True, flux=riem, recon=recon),
-                time=pops.Explicit()))
+                spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
+                time=engine.Explicit()))
             for _ in range(12):
                 R.step(dt)
                 S.step(dt)
@@ -241,7 +241,7 @@ def main():
         try:
             s_nop = AmrSystem(n=n, L=L, periodic=True)
             s_nop.add_equation("gas", cm_iso,
-                               spatial=pops.Spatial(minmod=True, flux=HLLC()))
+                               spatial=engine.Spatial(minmod=True, flux=HLLC()))
         except ValueError as ex:
             raised = True
             assert "hllc" in str(ex).lower()
@@ -255,8 +255,8 @@ def main():
             "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
             time="explicit", gamma=GAMMA, substeps=1))
         Bw = _amr(n, L, lambda s: s.block(
-            "gas", spec_t, spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()))
+            "gas", spec_t, spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()))
         assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
         for _ in range(12):
             Aw.step(dt)
@@ -274,7 +274,7 @@ def main():
         # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
         Gw = AmrSystem(n=n, L=L, periodic=True)
         Gw.add_equation("gas", cm_t,
-                        spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
+                        spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
         Gw.set_refinement(1.2)
         Gw.set_density("gas", _bubble(n))
         for _ in range(4):
@@ -287,7 +287,7 @@ def main():
         E = AmrSystem(n=n, L=L, periodic=True)
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
-                       spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
+                       spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         E.set_refinement(1.2)
         E.set_density("gas", _bubble(n))
         for _ in range(4):
@@ -310,7 +310,7 @@ def main():
         raised = False
         try:
             s.add_equation("gas", sys_cm,
-                           spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
+                           spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         except ValueError as ex:
             raised = True
             assert "target='system'" in str(ex) or "amr_system" in str(ex)

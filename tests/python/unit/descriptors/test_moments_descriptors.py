@@ -139,11 +139,8 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
 # ---------------------------------------------------------------------------------------------
 # ADC-543: the generic construction vocabulary is additive and the four issue contracts hold.
 # ---------------------------------------------------------------------------------------------
-def test_moment_projection_alias_and_realizable_set_descriptor():
-    # MomentProjection is the SAME descriptor as RealizabilityProjection (an identity alias);
-    # the existing asserts on RealizabilityProjection therefore cover it unchanged.
-    assert moments.MomentProjection is moments.RealizabilityProjection
-    # RealizableSet is a NEW inert descriptor describing the realizable cone at an order.
+def test_realizability_projection_and_realizable_set_have_unique_names():
+    assert not hasattr(moments, "MomentProjection")
     cone = moments.RealizableSet(4)
     assert isinstance(cone, (Descriptor, DescriptorProtocol))
     assert cone.name == "RealizableSet"
@@ -151,8 +148,7 @@ def test_moment_projection_alias_and_realizable_set_descriptor():
     assert cone.options() == {"order": 4}
     caps = cone.capabilities()
     assert caps.to_dict()["constraints"] == "m00_positive,cov_psd,schur"
-    # Both the alias and the new descriptor answer available() with an Availability, not a bool.
-    for descriptor in (moments.MomentProjection(), cone):
+    for descriptor in (moments.RealizabilityProjection(), cone):
         status = descriptor.available()
         assert isinstance(status, Availability) and not isinstance(status, bool)
         assert status.ok is True
@@ -178,19 +174,17 @@ def test_realizable_set_descriptor_protocol_round_trip():
         cone.order = 2
 
 
-def test_wave_speed_capability_and_single_home():
+def test_wave_speed_capability_has_one_canonical_home():
     # ExactSpeeds is the MOMENT wave-speed axis (how exact speeds are computed): a typed
     # CapabilitySet, kept as the moments chooser.
     exact = moments.ExactSpeeds()
     assert isinstance(exact.capabilities().to_dict(), dict)
     assert exact.capabilities().to_dict()["exact_speeds"] is True
-    # The canonical WaveSpeedProvider (which SOURCE HLL binds) is re-exported from pops.moments
-    # but stays a SINGLE class -- identical to pops.numerics.riemann.waves.WaveSpeedProvider.
-    from pops.numerics.riemann.waves import WaveSpeedProvider as canonical
-    assert moments.WaveSpeedProvider is canonical
-    provider = moments.WaveSpeedProvider("jacobian")
+    from pops.numerics.riemann.waves import WaveSpeedProvider
+    assert not hasattr(moments, "WaveSpeedProvider")
+    provider = WaveSpeedProvider("jacobian")
     assert provider.capabilities().supports("signed_pair") is True
-    assert moments.WaveSpeedProvider("max_wave_speed").capabilities().supports("signed_pair") is False
+    assert WaveSpeedProvider("max_wave_speed").capabilities().supports("signed_pair") is False
 
 
 def test_hyqmom15_model_is_inspectable_and_runtime_free():

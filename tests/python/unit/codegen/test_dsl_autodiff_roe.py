@@ -26,10 +26,10 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.expr import Expr, Var
-from pops.ir.lowering import diff
-from pops.ir.ops import left, right, sqrt
+import pops.runtime._engine_descriptors as engine
+from pops._ir.expr import Expr, Var
+from pops._ir.lowering import diff
+from pops._ir.ops import left, right, sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
@@ -318,15 +318,15 @@ try:
     s_hand = System(n=n, L=1.0, periodic=True)
     s_hand.set_poisson()
     s_hand.add_equation("f", model=cm_hand,
-                        spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                        time=pops.Explicit())
+                        spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                        time=engine.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
     s_ref = System(n=n, L=1.0, periodic=True)
     s_ref.set_poisson()
     s_ref.add_equation("f", model=cm_ref,
-                       spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                       time=pops.Explicit())
+                       spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                       time=engine.Explicit())
     s_ref.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
     for _ in range(8):

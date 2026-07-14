@@ -5,7 +5,7 @@ from typed_program_support import commits_by_block, typed_state
 
 import pytest
 
-from pops.ir import ValueExpr
+from pops.math import ValueExpr
 from pops.linalg import LinearProblem
 from pops.solvers import CG
 from pops.time import FailRun, Program, ProgramValue

@@ -1,7 +1,7 @@
 """SSPRK3 (Shu-Osher, ordre 3) sur AMR avec REFLUX PAR ETAGE (ADC-64).
 
 L'AMR sous-cycle (Berger-Oliger) avec reflux conservatif aux interfaces grossier-fin. SSPRK3 y est
-cable comme METHODE TEMPORELLE optionnelle (pops.Explicit(ssprk3=True) -> time.kind == "ssprk3"),
+cable comme METHODE TEMPORELLE optionnelle (engine.Explicit(ssprk3=True) -> time.kind == "ssprk3"),
 mono-bloc (coupleur AmrCouplerMP) ET multi-blocs (moteur AmrRuntime). Le reflux enregistre le FLUX
 EFFECTIF du pas SSP, Feff = 1/6 F(U0) + 1/6 F(U1) + 2/3 F(U2) : la correction grossier-fin reste
 exactement conservative pour le pas d'ordre 3 (cf. subcycle_level_mp / ssprk3_advance_level).
@@ -25,8 +25,8 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -39,15 +39,15 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return pops.Model(pops.Scalar(), pops.ExB(B0=B0), pops.NoSource(), pops.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
 def _check_mono(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim.block("ne", _scalar_charge(+1.0),
-                  spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
+                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+                  time=engine.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # seuil bas -> le bump tague et raffine (patchs fins actifs)
     sim.set_density("ne", _bump(n, 0.40))
@@ -66,11 +66,11 @@ def _check_mono(n=32):
 def _check_multi(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
     sim.block("ions", _scalar_charge(+1.0),
-                  spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
     sim.block("electrons", _scalar_charge(-1.0),
-                  spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
+                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+                  time=engine.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc=Periodic())
     sim.set_refinement(1.05)  # union des tags -> patchs fins actifs
     sim.set_density("ions", _bump(n, 0.40))
@@ -95,7 +95,7 @@ def _check_default_bit_identical(n=32):
     def run_euler():
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
         s.block("ne", _scalar_charge(+1.0),
-                    spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
+                    spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.002, 10)
@@ -114,8 +114,8 @@ def _build_advect(n, kind):
     temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
     s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     s.block("ne", _scalar_charge(+1.0),
-                spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
-                time=pops.Explicit(ssprk3=True) if kind == "ssprk3" else pops.Explicit())
+                spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
+                time=engine.Explicit(ssprk3=True) if kind == "ssprk3" else engine.Explicit())
     s.set_poisson(bc=Periodic())
     s.set_density("ne", _bump(n, 0.40))
     return s

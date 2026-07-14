@@ -3,11 +3,12 @@ from __future__ import annotations
 import pytest
 
 import pops
-from pops.boundary import ResolvedTransportBoundarySet, TransportBoundarySet
+from pops.boundary import TransportBoundarySet
+from pops.boundary.transport import ResolvedTransportBoundarySet
 from pops.boundary.transport import Inflow, Outflow
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.ir import ddt, div
+from pops.math import ddt, div
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume

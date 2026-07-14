@@ -49,7 +49,7 @@ class BootstrapExecution:
 
 def execute_bootstrap(plan: Any, consumer: Any) -> BootstrapExecution:
     """Execute every action in order; missing, wrong, or duplicate receipts fail immediately."""
-    from pops.mesh.amr import BootstrapPlan
+    from pops.mesh._amr import BootstrapPlan
 
     if type(plan) is not BootstrapPlan:
         raise TypeError("execute_bootstrap requires an exact BootstrapPlan")

@@ -89,6 +89,7 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.runtime._system import System  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
@@ -96,9 +97,9 @@ def _sim(**poisson):
     sim = System(n=16, L=1.0, periodic=True)
     sim.block(
         "ion",
-        pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(), pops.NoSource(),
-                   pops.ChargeDensity(charge=-1.0)),
-        spatial=pops.Spatial(),
+        engine.Model(engine.FluidState.isothermal(cs2=0.7), engine.IsothermalFlux(), engine.NoSource(),
+                   engine.ChargeDensity(charge=-1.0)),
+        spatial=engine.Spatial(),
     )
     if poisson:
         sim.set_poisson(**poisson)

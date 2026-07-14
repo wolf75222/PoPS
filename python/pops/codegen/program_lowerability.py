@@ -86,7 +86,95 @@ def check_model_owner_dispatch(program: Any, model: Any) -> None:
             )
 
 
-def check_schedules_lowerable(program: Any) -> None:
+def _check_amr_flux_weights(program: Any) -> None:
+    """Prove every conservative contribution reaches a commit as exact ``weight * dt * flux``."""
+    from pops.codegen.program_emit_kernels import _coeff_metadata_terms
+
+    values = list(all_ops(program))
+    stored_histories: dict[str, list[Any]] = {}
+    for value in values:
+        if value.op == "store_history":
+            stored_histories.setdefault(value.attrs["history"], []).append(value.inputs[0])
+
+    unknown = object()
+    powers: dict[int, object | frozenset[int]] = {}
+    alias_first_input = frozenset({
+        "synchronize", "solve_fields", "solve_fields_from_blocks", "store_history",
+        "fill_boundary", "project", "solve_outcome", "acceptance_guard",
+    })
+
+    def shifted(source: object | frozenset[int], coefficient: Any) -> object | frozenset[int]:
+        terms = _coeff_metadata_terms(coefficient)
+        if not terms:
+            return frozenset()
+        if source is unknown:
+            return unknown
+        assert isinstance(source, frozenset)
+        return frozenset(left + right for left in source for right, _, _ in terms)
+
+    def merged(items: list[object | frozenset[int]]) -> object | frozenset[int]:
+        if any(item is unknown for item in items):
+            return unknown
+        result: set[int] = set()
+        for item in items:
+            assert isinstance(item, frozenset)
+            result.update(item)
+        return frozenset(result)
+
+    # Histories create cross-step edges, so solve the finite power-set equations to a fixed point.
+    for _ in range(len(values) + 1):
+        changed = False
+        for value in values:
+            prior = powers.get(value.id, frozenset())
+            if value.op == "rhs":
+                current: object | frozenset[int] = (
+                    frozenset({0}) if value.attrs.get("flux", True) else frozenset())
+            elif value.op == "history":
+                current = merged([
+                    powers.get(source.id, frozenset())
+                    for source in stored_histories.get(value.attrs["history"], ())
+                ])
+            elif value.op == "linear_combine":
+                current = merged([
+                    shifted(powers.get(source.id, frozenset()), coefficient)
+                    for source, coefficient in zip(
+                        value.inputs, value.attrs["coeffs"], strict=True)
+                ])
+            elif value.op in alias_first_input and value.inputs:
+                current = powers.get(value.inputs[0].id, frozenset())
+            else:
+                dependencies = list(value.inputs)
+                for key in ("true_result", "false_result", "body", "residual", "apply_result"):
+                    dependency = value.attrs.get(key)
+                    if isinstance(dependency, ProgramValue):
+                        dependencies.append(dependency)
+                inherited = merged([
+                    powers.get(source.id, frozenset()) for source in dependencies
+                ])
+                current = unknown if inherited is unknown or inherited else frozenset()
+            if current != prior:
+                powers[value.id] = current
+                changed = True
+        if not changed:
+            break
+    else:
+        raise ValueError("AMR conservative flux-weight proof did not converge")
+
+    for endpoint, source in program._commits.items():
+        proof = powers.get(source.id, frozenset())
+        if proof is unknown:
+            raise ValueError(
+                "AMR conservative commit %r crosses an operation without exact flux-weight "
+                "propagation; refusing artifact creation" % endpoint)
+        assert isinstance(proof, frozenset)
+        if proof and proof != frozenset({1}):
+            raise ValueError(
+                "AMR conservative commit %r has dt powers %s; every physical flux must reach "
+                "the accepted ledger as an exactly proved weight * dt * flux"
+                % (endpoint, sorted(proof)))
+
+
+def check_schedules_lowerable(program: Any, *, target: str | None = None) -> None:
     """Reject schedule policies without a semantically valid native lowering."""
     from pops.codegen.program_emit_schedule import _lower_schedule_ir
     from pops.time.schedule import Schedule
@@ -125,6 +213,8 @@ def check_schedules_lowerable(program: Any) -> None:
             raise ValueError(
                 "scheduled value %r is committed to %r but has no explicit OffPolicy"
                 % (scheduled_source.name, endpoint))
+    if target == "amr_system":
+        _check_amr_flux_weights(program)
     temporal_clocks = {row["id"] for row in program.temporal_manifest()["clocks"]}
     for value in all_ops(program):
         if value.clock.qualified_id not in temporal_clocks:
@@ -138,14 +228,18 @@ def check_schedules_lowerable(program: Any) -> None:
             raise ValueError(
                 "schedule on node %r belongs to clock %r, not the node clock %r"
                 % (value.name, schedule.clock.name, value.clock.name))
-        if schedule.clock != program.clock:
-            raise NotImplementedError(
-                "schedule on child-clock node %r requires a clock-tick scheduler provider; "
-                "the native cache cadence is macro-clock only"
-                % value.name)
         schedule.validate_site(clock=value.clock, point=value.point,
                                where="schedule on node %r" % value.name)
-        _lower_schedule_ir(value, schedule)
+        lowering = _lower_schedule_ir(value, schedule)
+        from pops.time.schedule import ScheduleTimeline
+        if target == "system" and lowering.domain.timeline is ScheduleTimeline.AMR_LEVEL:
+            raise NotImplementedError(
+                "AMRLevel schedule on node %r requires target='amr_system'" % value.name)
+        if target == "amr_system" and schedule.needs_cache():
+            raise NotImplementedError(
+                "scheduled AMR node %r requires a persistent hierarchy value cache; Hold and "
+                "AccumulateDt remain refused before artifact creation, while Skip/Zero/Error and "
+                "domain-only schedules execute on the AMR clock provider" % value.name)
 
 
 __all__ = ["all_ops", "check_model_owner_dispatch", "check_schedules_lowerable"]

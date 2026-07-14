@@ -8,8 +8,8 @@ removed without notice.
 Currently:
 
 * :class:`~pops.experimental.python_flux.PythonFlux` -- a host (numpy) Rusanov residual backend
-  for iterating on a novel flux without recompiling. For production (GPU/MPI), compose a COMPILED
-  flux brick (``pops.CompressibleFlux`` / ``pops.ExB`` ...) instead.
+  for iterating on a novel flux without recompiling. For production (GPU/MPI), declare a physical
+  flux on :class:`pops.Model` and discretize it with :class:`pops.numerics.FiniteVolume` instead.
 """
 from __future__ import annotations
 

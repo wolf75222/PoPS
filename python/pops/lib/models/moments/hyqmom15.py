@@ -58,6 +58,7 @@ class HyQMOM15:
         projection: Any = None,
         q_over_m: Any = None,
         omega_c: Any = None,
+        frame: Any = None,
         exact_speeds: bool = True,
         roe: bool = False,
     ) -> Model:
@@ -77,8 +78,12 @@ class HyQMOM15:
         q_decl = _parameter(q_over_m, name="q_over_m", default=-1.0)
         omega_decl = _parameter(omega_c, name="omega_c", default=1.0)
 
-        frame = Cartesian2D()
-        model = Model(name, frame=frame)
+        selected_frame = Cartesian2D() if frame is None else frame
+        axes = getattr(selected_frame, "axes", None)
+        if not isinstance(axes, tuple) or len(axes) != 2:
+            raise TypeError("HyQMOM15.vlasov_lorentz frame must expose exactly two typed axes")
+        x_axis, y_axis = axes
+        model = Model(name, frame=selected_frame)
         names = tuple(moment_names(_HYQMOM15_ORDER))
         state = model.state(
             "U", components=names, roles={"M00": Density()})
@@ -102,9 +107,9 @@ class HyQMOM15:
             )
         flux = model.flux(
             "transport",
-            frame=frame,
+            frame=selected_frame,
             state=state,
-            components={frame.x: expressions.x, frame.y: expressions.y},
+            components={x_axis: expressions.x, y_axis: expressions.y},
         )
         if exact_speeds:
             model.wave_speeds_from_jacobian()

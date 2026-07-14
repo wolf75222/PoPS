@@ -1,6 +1,6 @@
 """Typed, inert inspection report for a :class:`pops.Case`.
 
-``Case.inspect()`` returns a :class:`CaseReport`: a typed :class:`pops.Report` carrying the
+``Case.inspect()`` returns a :class:`CaseReport`: a typed immutable report carrying the
 assembly's name / blocks / fields / params / consumers / requirements /
 capabilities as ATTRIBUTES, with :meth:`to_dict` the JSON bridge. It is inert -- built from the
 registries' metadata, it triggers no validation and no compilation. This is distinct from the

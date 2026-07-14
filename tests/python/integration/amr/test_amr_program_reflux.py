@@ -30,7 +30,7 @@ POPS_PROCESS_TIMEOUT = 1200
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
@@ -135,8 +135,8 @@ def _run(program_fn, tag, refine_thr=1.2, regrid_every=2, u0=None, nsteps=NSTEPS
         return None, "compile: %s" % str(exc)[:180], None
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_refinement(refine_thr)  # 2-level hierarchy: tags density > thr (the blob)
         amr.set_density("blk", u0)
         amr.install_program(compiled.so_path)

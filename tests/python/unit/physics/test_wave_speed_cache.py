@@ -34,7 +34,7 @@ import sys
 
 import numpy as np
 
-from pops.runtime.bricks import (
+from pops.runtime._engine_descriptors import (
     BackgroundDensity, Explicit, FluidState, IMEX, IsothermalFlux, Model, NoSource, Spatial,
 )
 from pops.runtime._system import System  # ADC-545 advanced runtime seam

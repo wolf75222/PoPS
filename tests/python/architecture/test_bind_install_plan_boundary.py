@@ -7,11 +7,11 @@ import textwrap
 
 import pytest
 
-orchestration = pytest.importorskip("pops.codegen.orchestration")
+phases = pytest.importorskip("pops.codegen._phases")
 plans = pytest.importorskip("pops.codegen._plans")
 adapters = pytest.importorskip("pops.runtime._bind_adapters")
 runtime_executor = pytest.importorskip("pops.runtime._runtime_executor")
-runtime_instance = pytest.importorskip("pops.runtime.runtime_instance")
+runtime_instance = pytest.importorskip("pops.runtime._runtime_instance")
 mesh_lowering = pytest.importorskip("pops.runtime._runtime_mesh_lowering")
 bind_validation = pytest.importorskip("pops.runtime._bind_validation")
 install_params = pytest.importorskip("pops.runtime._install_param_routing")
@@ -89,7 +89,7 @@ def _assert_no_authoring_reconstruction(label, value):
 
 
 def test_bind_reads_the_install_plan_and_no_retired_authoring_mirror():
-    source = textwrap.dedent(inspect.getsource(orchestration.bind))
+    source = textwrap.dedent(inspect.getsource(phases.bind))
     tree = ast.parse(source)
     calls = {
         node.func.id
@@ -118,12 +118,12 @@ def test_bind_reads_the_install_plan_and_no_retired_authoring_mirror():
 def test_complete_bind_install_path_has_no_live_authoring_fallback():
     """Every public bind/install hop is plan/data-only, including helpers below bind()."""
     path = {
-        "bind": orchestration.bind,
-        "install": orchestration.install,
+        "bind": phases.bind,
+        "install": phases.install,
         "require_install_plan": plans.require_install_plan,
         "runtime install_plan": adapters.install_plan,
         "RuntimeInstance.__init__": runtime_instance.RuntimeInstance.__init__,
-        "RuntimeInstance.run": runtime_instance.RuntimeInstance.run,
+        "RuntimeInstance._run": runtime_instance.RuntimeInstance._run,
         "install_runtime_executor": runtime_executor.install_runtime_executor,
         "Uniform provider install": runtime_executor._UniformNativeProvider.install,
         "Adaptive provider install": runtime_executor._AdaptiveNativeProvider.install,
@@ -138,7 +138,6 @@ def test_complete_bind_install_path_has_no_live_authoring_fallback():
             system_install._SystemUnifiedInstall._resolve_instance_model),
         "System._declared_elliptic_fields": (
             system_install._SystemUnifiedInstall._declared_elliptic_fields),
-        "System._install_params": system_install._SystemUnifiedInstall._install_params,
         "System._install_program_params": (
             system_install._SystemUnifiedInstall._install_program_params),
         "AmrSystem._install_compiled": amr_install._AmrSystemInstall._install_compiled,

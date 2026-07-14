@@ -28,7 +28,7 @@ class Case:
         case.program(time_program)
         case.consumers(consumer_graph)
         validated = pops.validate(case)
-        resolved = pops.resolve(validated, layout=Uniform(CartesianMesh()))
+        resolved = pops.resolve(validated, layout=Uniform(grid))
         compiled = pops.compile(resolved)
 
     Declaration methods return stable owner-qualified handles; singleton assembly authorities such
@@ -219,13 +219,13 @@ class Case:
 
     def value(self, parameter: Any) -> Any:
         """Return an owner-qualified symbolic read of a case parameter."""
-        from pops.ir import ValueExpr
+        from pops._ir import ValueExpr
 
         return ValueExpr(self._param_registry.handle(parameter))
 
     def consumers(self, graph: Any) -> Any:
         """Attach the sole transactional :class:`ConsumerGraph` authority."""
-        from pops.runtime.consumer import ConsumerGraph
+        from pops.output import ConsumerGraph
 
         self._guard_mutable("attach the consumer graph")
         if type(graph) is not ConsumerGraph:
@@ -361,7 +361,7 @@ class Case:
         """Validate and atomically freeze the complete authoring graph.
 
         Runs each authoring family's own ``validate``, folds them into ONE
-        :class:`~pops.ReportTree`, and raises (via ``raise_if_error``)
+        immutable validation report, and raises (via ``raise_if_error``)
         when any error accumulated.  Success seals the Case before returning, making this the
         sole transition from mutable authoring into the validated phase; resolution refuses an
         unfrozen Case and never repairs or mutates it.

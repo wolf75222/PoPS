@@ -75,7 +75,7 @@ manifest generator.
 
 4. Give every parameterized test a stable readable parameter name.
    Parameter suffixes must be deterministic and CTest-safe. Use names such as
-   `Rusanov`, `HLLC`, `Weno5`, `Dirichlet`, `Neumann`, `KokkosSerial`, not raw
+   `Rusanov`, `HLLC`, `Weno5`, `Dirichlet`, `Neumann`, `HostSerial`, not raw
    tuple indices.
 
 5. Use GoogleTest matchers and `testing::AssertionResult` for numerical checks.

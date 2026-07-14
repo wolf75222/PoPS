@@ -23,7 +23,8 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
 from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
 from pops.physics._facade import Model
 from pops.physics._model import HyperbolicModel
@@ -162,8 +163,8 @@ def test_end_to_end():
         sim = System(n=n, L=L, periodic=True)
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.add_equation("decay", model=compiled,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit())
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit())
         sim.set_density("decay", np.ones((n, n)))
 
         # (d) lecture AVANT ecriture : le champ nomme vaut 0 partout (canal initialise a zero).
@@ -235,10 +236,10 @@ def test_polar_named_aux():
         m = build_decay_model()
         compiled = m.compile(os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend="aot")
         nr, nth = 16, 16
-        sim = System(mesh=pops.PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
+        sim = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
         sim.add_equation("decay", model=compiled,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit())
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit())
         sim.set_density("decay", np.ones((nth, nr)))
 
         # lecture avant ecriture : 0 partout (le canal s'est bien elargi : pas de rejet, pas d'OOB).
@@ -287,12 +288,12 @@ def test_amr_named_aux_single_block_regrid():
     tmp = tempfile.mkdtemp()
     try:
         n = 24
-        sp = pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
+        sp = engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
         lo, hi = n // 3, 2 * n // 3  # central bump [8, 16)^2
 
         # (a) reference : SANS set_aux_field -> kappa=0 -> masse inchangee (meme avec raffinement).
         ref = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        ref.add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=pops.Explicit())
+        ref.add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=engine.Explicit())
         ref.set_poisson(rhs="charge_density", solver="geometric_mg")
         ref.set_refinement(2.0)  # refine where density (comp 0) > 2 -> tags the bump
         ref.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
@@ -303,7 +304,7 @@ def test_amr_named_aux_single_block_regrid():
 
         # (b) AVEC kappa uniforme + raffinement + regrid : decroissance persistante ET uniforme.
         sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=pops.Explicit())
+        sim.add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=engine.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)
         rho0 = _bump_density(n, lo, hi, 1.0, 5.0)
@@ -353,15 +354,15 @@ def test_amr_named_aux_multiblock_regrid():
     tmp = tempfile.mkdtemp()
     try:
         n = 24
-        sp = pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov())
+        sp = engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
         lo, hi = n // 3, 2 * n // 3
         decay_so = _compile_amr_decay(tmp, "amrdecay.so")
         c0 = 1.0
         plain_so = build_const_decay_model("plaindecay", c0).compile(
             os.path.join(tmp, "amrplain.so"), include=INCLUDE, backend="production", target="amr_system")
         sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=decay_so, spatial=sp, time=pops.Explicit())
-        sim.add_equation("plain", model=plain_so, spatial=sp, time=pops.Explicit())
+        sim.add_equation("decay", model=decay_so, spatial=sp, time=engine.Explicit())
+        sim.add_equation("plain", model=plain_so, spatial=sp, time=engine.Explicit())
         sim.set_poisson(rhs="charge_density", solver="geometric_mg")
         sim.set_refinement(2.0)  # refine on the 'decay' bump -> a real fine level + regrid
         sim.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))

@@ -18,7 +18,7 @@ import numpy as np
 import pops
 from pops.domain import Rectangle, RectangleBoundaryNames
 from pops.frames import Cartesian2D
-from pops.ir import ValueExpr, ddt, div
+from pops.math import ValueExpr, ddt, div
 from pops.mesh import CartesianGrid
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.reconstruction import limiters
@@ -303,6 +303,7 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
     """Build one AMR layout that owns hierarchy, tagging, transfer and execution semantics."""
 
     from pops.amr import (
+        AMRClockRelation,
         AMRExecution,
         AMRHierarchy,
         AMRRegrid,
@@ -344,7 +345,11 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         tagging=tagging,
         regrid=AMRRegrid(schedule=every(5, clock=core.program.clock)),
         transfer=transfer,
-        execution=AMRExecution.subcycled(),
+        # Temporal subcycling is an independent authority; it is never inferred from spatial ratios.
+        execution=AMRExecution.subcycled((
+            AMRClockRelation(0, 1, 2),
+            AMRClockRelation(1, 2, 2),
+        )),
     )
 
 
@@ -373,8 +378,7 @@ def build_consumer_graph(core: ScalarAdvectionAuthoring) -> Any:
     """Build the sole accepted-side-effect graph for diagnostics, output and checkpointing."""
 
     from pops.diagnostics import Integral
-    from pops.output import Checkpoint, HDF5, ParaView, ScientificOutput
-    from pops.runtime import ConsumerGraph
+    from pops.output import ConsumerGraph, Checkpoint, HDF5, ParaView, ScientificOutput
     from pops.time import every
 
     tracer_mass = Integral(block=core.tracer, cadence=every(10, clock=core.program.clock))
@@ -387,7 +391,11 @@ def build_consumer_graph(core: ScalarAdvectionAuthoring) -> Any:
             target="solution/tracer",
         ),
         ScientificOutput(
-            format=HDF5(parallel=True),
+            # The normative default run binds the proved serial ExecutionContext.  Collective
+            # HDF5 is exercised by the dedicated MPI conformance matrix, where a communicator is
+            # an explicit runtime resource; selecting it here would make the default example
+            # invalid before its first publication.
+            format=HDF5(parallel=False),
             schedule=every(50, clock=core.program.clock),
             fields=(core.tracer_state,),
             target="state/tracer",
@@ -535,7 +543,8 @@ def run_manual_and_restart(output_dir: Any) -> ScalarExecutionEvidence:
     params = build_bind_params(target.authoring)
     simulation = pops.bind(artifact, params=params)
     controls = dict(target.authoring.run_controls)
-    if pops.run(simulation, **controls) <= 0:
+    run_report = pops.run(simulation, **controls)
+    if run_report.accepted_steps <= 0:
         raise RuntimeError("the explicit scalar Program executed no accepted macro-step")
 
     hdf5_path, paraview_path, hdf5_identity, paraview_identity = \

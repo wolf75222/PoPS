@@ -18,14 +18,13 @@ from pops.codegen._plans import (  # noqa: E402
     ResolvedBlock,
     ResolvedSimulationPlan,
 )
-from pops.codegen.compiled_artifact import (  # noqa: E402
+from pops.codegen._compiled_artifact import (  # noqa: E402
     CompiledBlockArtifact,
     CompiledSimulationArtifact,
 )
 from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
-from tests.python.support.layout_plan import final_amr_layout  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 from pops.model import Module  # noqa: E402
 from pops.model.bind_schema import BindSchema  # noqa: E402
 from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
@@ -55,7 +54,7 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         model_hash="h", cxx="c++", std="c++23", target="amr_system",
         aux_extra_names=aux, definition_identity=model_compile_identity(source),
     )
-    layout = final_amr_layout(CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
+    layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
     schema_problem = Case(name="amr-introspection-case")
     schema_problem.block("block", source)
     schema = BindSchema.from_problem(schema_problem)
@@ -67,8 +66,13 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
         backend="production",
         layout=layout,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
+        },
         time=None,
-        blocks=(ResolvedBlock("block", source, None, "production", ("U",)),),
+        blocks=(ResolvedBlock(
+            "block", source, {"ghost_depth": 1}, "production", ("U",),
+            ("test::block::state::U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -80,7 +84,11 @@ def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
     artifact = CompiledSimulationArtifact(
         plan=plan,
         program=None,
-        blocks=(CompiledBlockArtifact("block", component, None, ("U",)),),
+        blocks=(
+            CompiledBlockArtifact(
+                "block", component, {"ghost_depth": 1}, ("U",)
+            ),
+        ),
     )
     return artifact
 

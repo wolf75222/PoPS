@@ -34,7 +34,7 @@ def _skip(msg):
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
@@ -156,10 +156,10 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cade
 def transport_model():
     # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
     # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 N = 24
@@ -169,8 +169,8 @@ CFL = 0.4
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
     sim.block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")

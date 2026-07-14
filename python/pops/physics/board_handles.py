@@ -27,7 +27,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .. import math as _bm
-from ..ir import Expr
+from .._ir import Expr
 from ..model.handles import Handle, OperatorHandle
 from ._board_contract import (normalize_components, normalize_roles, normalize_sequence,
                               normalize_string_mapping, require_bool, require_name)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import json
 
 import pytest
@@ -31,7 +31,9 @@ from pops.mesh.boundaries import (
     GhostRegion,
     GhostStencilManifest,
     IncomingMultiplicity,
+    InterfaceAffineMapping,
     InterfaceGhost,
+    InterfacePermutation,
     InterfaceSide,
     MultiBlockInterface,
     NumericalClosure,
@@ -49,6 +51,22 @@ from pops.model import Handle, OwnerKind, OwnerPath
 
 SHARED = OwnerPath.shared("ghost.fixtures")
 CASE = OwnerPath.case("main")
+
+
+class _ExecutableBoundaryAuthority:
+    def canonical_identity(self):
+        return {"authority_type": "test_boundary_execution"}
+
+    def compile_boundary_data(self):
+        return {"schema_version": 1, "authority_type": "prepared_boundary_plan_compile"}
+
+    def runtime_boundary_data(self, params):
+        del params
+        return {
+            "schema_version": 1,
+            "authority_type": "prepared_boundary_plan",
+            "identity": "test-plan",
+        }
 
 
 def _h(name, kind, owner=SHARED):
@@ -164,6 +182,40 @@ def test_mpi_halo_and_oriented_periodic_are_canonical_plan_data():
         linearization_contributions=plan.linearization_contributions)
     assert reversed_plan.canonical_id == plan.canonical_id
 
+    executable = replace(plan, execution_authority=_ExecutableBoundaryAuthority())
+    with pytest.raises(NotImplementedError, match="signed/permuted periodic"):
+        executable.compile_boundary_data()
+
+
+def test_producer_dependencies_are_a_total_acyclic_graph():
+    topology = _topology()
+    first_region = _region("dependency_first")
+    second_region = _region("dependency_second")
+    first_handle = _producer_handle("dependency_first")
+    second_handle = _producer_handle("dependency_second")
+    first = SameLevelHaloMPI(
+        handle=first_handle, protocol=_protocol("dependency_first"),
+        mpi_capability=_h("mpi_first", "capability"), dependencies=(second_handle,))
+    second = SameLevelHaloMPI(
+        handle=second_handle, protocol=_protocol("dependency_second"),
+        mpi_capability=_h("mpi_second", "capability"), dependencies=(first_handle,))
+    with pytest.raises(ValueError, match="dependency graph contains a cycle"):
+        GhostProducerRegistry(first, second).resolve(
+            topology, _coverage(first_region, second_region),
+            (first_region, second_region),
+            (GhostProduction(first_region, first), GhostProduction(second_region, second)),
+        )
+
+    missing_handle = _producer_handle("dependency_missing")
+    missing = SameLevelHaloMPI(
+        handle=first_handle, protocol=_protocol("dependency_missing"),
+        mpi_capability=_h("mpi_missing", "capability"), dependencies=(missing_handle,))
+    with pytest.raises(ValueError, match="depends on absent ghost producer"):
+        GhostProducerRegistry(missing).resolve(
+            topology, _coverage(first_region), (first_region,),
+            (GhostProduction(first_region, missing),),
+        )
+
 
 def test_coverage_manifest_is_the_authority_for_empty_missing_and_extra_regions():
     topology = _topology()
@@ -245,8 +297,8 @@ def _interface(topology):
     return MultiBlockInterface(
         _h("coupling", "multiblock_interface", CASE), left, right,
         _h("shared_flux", "conservative_flux", CASE),
-        _h("axis_permutation", "interface_permutation"),
-        _h("geometry_map", "interface_mapping"))
+        InterfacePermutation(_h("axis_permutation", "interface_permutation"), (0,)),
+        InterfaceAffineMapping(_h("geometry_map", "interface_mapping")))
 
 
 def test_all_explicit_producer_protocols_and_shared_interface_flux():
@@ -293,8 +345,8 @@ def test_all_explicit_producer_protocols_and_shared_interface_flux():
         MultiBlockInterface(
             _h("bad", "multiblock_interface", CASE), interface.left, same_direction,
             _h("bad_flux", "conservative_flux", CASE),
-            _h("bad_permutation", "interface_permutation"),
-            _h("bad_mapping", "interface_mapping"))
+            InterfacePermutation(_h("bad_permutation", "interface_permutation"), (0,)),
+            InterfaceAffineMapping(_h("bad_mapping", "interface_mapping")))
 
     wrong_region = _region("wrong_wall", boundary=topology.physical[1])
     with pytest.raises(ValueError, match="physical ghost provider does not cover"):

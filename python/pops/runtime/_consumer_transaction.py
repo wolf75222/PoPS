@@ -8,7 +8,7 @@ from typing import Any
 
 from pops.identity import Identity, make_identity
 
-from ._consumer_contracts import (
+from pops.output._consumer_contracts import (
     ConsumerCursorSet,
     Retry,
     SkipSampleReported,
@@ -305,7 +305,7 @@ class ConsumerTransaction:
                     self._reason(error),
                 ))
                 continue
-            raise self._failed(effect, error, cursors=self._initial_cursors)
+            raise self._failed(effect, error, cursors=self._initial_cursors) from error
 
     def reject(self) -> ConsumerTransactionReport:
         if self._state != "staged":
@@ -339,7 +339,8 @@ class ConsumerTransaction:
                 if receipt.effect_identity != effect.identity \
                         or receipt.payload_identity != effect.payload.identity:
                     raise ValueError("PublicationReceipt does not authenticate its exact effect payload")
-            except Exception as error:
+            except Exception as exc:
+                error = exc
                 cleanup = self._rollback(prepared)
                 rolled_back = (effect.identity.token,) if cleanup is None else ()
                 if cleanup is None and type(effect.failure_action) is Retry \
@@ -361,7 +362,7 @@ class ConsumerTransaction:
                             effect, error, cursors=self._initial_cursors,
                             diagnostics=(cleanup,) + accepted_cleanup,
                             rolled_back=accepted_rollback,
-                        )
+                        ) from error
                     continue
                 self._prepared.extend(pending)
                 accepted_rollback, accepted_cleanup = self._rollback_accepted()
@@ -370,7 +371,7 @@ class ConsumerTransaction:
                     effect, error, cursors=self._initial_cursors,
                     diagnostics=diagnostics,
                     rolled_back=rolled_back + accepted_rollback,
-                )
+                ) from error
             published.append(receipt)
             self._accepted.append((effect, prepared, receipt))
             cursors = cursors.replace(effect.cursor_after)

@@ -21,8 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "schemas" / "component_catalog.v2.json"
 PY_SCHEMA = ROOT / "python" / "pops" / "model" / "_generated_component_schema.py"
 PY_ROUTES = ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
+PY_INTERFACES = ROOT / "python" / "pops" / "_generated_component_interfaces.py"
 CPP_CATALOG = ROOT / "include" / "pops" / "runtime" / "config" / "generated_component_catalog.hpp"
 CPP_ACCESSORS = ROOT / "include" / "pops" / "runtime" / "config" / "generated_route_accessors.inc"
+CPP_COMPONENT_ABI = ROOT / "include" / "pops" / "runtime" / "config" / "generated_component_abi.hpp"
+CPP_PYBIND_INVOKERS = (ROOT / "python" / "bindings" / "core" / "init" /
+                       "generated_component_invokers.inc")
 
 MANIFEST_SEMANTIC_FIELDS = (
     "schema_version", "uri", "component_type", "version", "facets", "signature", "reads",
@@ -84,8 +88,10 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
     _exact(data, {
         "catalog_schema_version", "component_manifest_schema_version",
         "route_registry_version", "capability_vocabulary_version", "manifest_schema",
-        "interface_vocabulary", "route_family_interfaces", "route_component_defaults",
-        "route_families",
+        "interface_vocabulary", "native_interface_abi_version", "native_common_abi_version",
+        "native_interface_abis", "boundary_handle_native_routes",
+        "route_family_native_interfaces", "route_family_interfaces",
+        "route_component_defaults", "route_families",
     }, "component catalog")
     if data["catalog_schema_version"] != 1:
         raise CatalogError("unsupported component catalog schema_version")
@@ -133,6 +139,87 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
                 or required_args < 0:
             raise CatalogError(
                 f"interface_vocabulary[{index}].required_args must be an integer >= 0")
+
+    for name, label in (
+        ("native_interface_abi_version", "interface"),
+        ("native_common_abi_version", "common"),
+    ):
+        if isinstance(data[name], bool) or not isinstance(data[name], int) or data[name] != 1:
+            raise CatalogError(
+                f"unsupported native component {label} ABI version")
+    native_abis = data["native_interface_abis"]
+    if not isinstance(native_abis, list) or not native_abis:
+        raise CatalogError("native_interface_abis must be a non-empty list")
+    native_names: set[str] = set()
+    native_uris: set[str] = set()
+    native_tables: set[str] = set()
+    for index, native in enumerate(native_abis):
+        native = _exact(native, {
+            "name", "uri", "version", "cpp_table", "hot_path", "facets", "operations",
+        }, f"native_interface_abis[{index}]")
+        name = native["name"]
+        if not isinstance(name, str) or re.fullmatch(r"[a-z][a-z0-9_]*", name) is None:
+            raise CatalogError(f"native_interface_abis[{index}].name is not canonical")
+        if name in native_names:
+            raise CatalogError(f"duplicate native component interface {name!r}")
+        native_names.add(name)
+        uri = native["uri"]
+        if not isinstance(uri, str) or not uri.startswith("pops://interfaces/"):
+            raise CatalogError(f"native_interface_abis[{index}].uri is not a PoPS interface URI")
+        if uri in native_uris:
+            raise CatalogError(f"duplicate native component interface URI {uri!r}")
+        native_uris.add(uri)
+        if isinstance(native["version"], bool) or not isinstance(native["version"], int) \
+                or native["version"] < 1:
+            raise CatalogError(f"native_interface_abis[{index}].version must be >= 1")
+        table = _identifier(native["cpp_table"], f"native_interface_abis[{index}].cpp_table")
+        if table in native_tables:
+            raise CatalogError(f"duplicate native component interface table {table!r}")
+        native_tables.add(table)
+        if not isinstance(native["hot_path"], bool):
+            raise CatalogError(f"native_interface_abis[{index}].hot_path must be boolean")
+        facets = _strings(native["facets"], f"native_interface_abis[{index}].facets")
+        unknown_facets = sorted(set(facets) - interface_names)
+        if unknown_facets:
+            raise CatalogError(
+                f"native_interface_abis[{index}].facets are unknown: {unknown_facets}")
+        operations = _strings(
+            native["operations"], f"native_interface_abis[{index}].operations")
+        if not operations or any(re.fullmatch(r"[a-z][a-z0-9_]*", op) is None
+                                 for op in operations):
+            raise CatalogError(
+                f"native_interface_abis[{index}].operations must be canonical identifiers")
+
+    boundary_routes = data["boundary_handle_native_routes"]
+    if not isinstance(boundary_routes, dict) or not boundary_routes:
+        raise CatalogError("boundary_handle_native_routes must be a non-empty object")
+    native_operations = {
+        row["name"]: frozenset(row["operations"]) for row in native_abis
+    }
+    for kind, route in boundary_routes.items():
+        if not isinstance(kind, str) or re.fullmatch(r"[a-z][a-z0-9_]*", kind) is None:
+            raise CatalogError(
+                f"boundary_handle_native_routes key {kind!r} is not canonical")
+        route = _exact(
+            route, {"interface", "operation"},
+            f"boundary_handle_native_routes.{kind}")
+        interface = route["interface"]
+        operation = route["operation"]
+        if interface not in native_operations:
+            raise CatalogError(
+                f"boundary_handle_native_routes.{kind} names unknown interface {interface!r}")
+        if operation not in native_operations[interface]:
+            raise CatalogError(
+                f"boundary_handle_native_routes.{kind} operation {operation!r} is not "
+                f"exported by {interface!r}")
+
+    family_native_interfaces = data["route_family_native_interfaces"]
+    if not isinstance(family_native_interfaces, dict):
+        raise CatalogError("route_family_native_interfaces must be an object")
+    for family, name in family_native_interfaces.items():
+        if name is not None and name not in native_names:
+            raise CatalogError(
+                f"route_family_native_interfaces.{family} names unknown interface {name!r}")
 
     family_interfaces = data["route_family_interfaces"]
     if not isinstance(family_interfaces, dict):
@@ -308,6 +395,12 @@ def _load_catalog() -> tuple[dict[str, Any], str, str]:
             "route_family_interfaces must cover every route family exactly: missing=%s, unknown=%s"
             % (sorted(seen_families - set(family_interfaces)),
                sorted(set(family_interfaces) - seen_families)))
+    if set(family_native_interfaces) != seen_families:
+        raise CatalogError(
+            "route_family_native_interfaces must cover every route family exactly: "
+            "missing=%s, unknown=%s"
+            % (sorted(seen_families - set(family_native_interfaces)),
+               sorted(set(family_native_interfaces) - seen_families)))
 
     full_digest, semantic_digest = _catalog_digests(data)
     return data, full_digest, semantic_digest
@@ -390,6 +483,7 @@ def _render_routes(catalog: dict[str, Any], digest: str,
         "ROUTE_COMPONENT_DEFAULTS": catalog["route_component_defaults"],
         "ROUTE_FAMILY_INTERFACES": catalog["route_family_interfaces"],
         "COMPONENT_INTERFACE_SPECS": tuple(catalog["interface_vocabulary"]),
+        "ROUTE_FAMILY_NATIVE_INTERFACES": catalog["route_family_native_interfaces"],
         "BRICK_CATALOG_ROWS": tuple(brick_rows),
     }
     lines = [
@@ -403,6 +497,1059 @@ def _render_routes(catalog: dict[str, Any], digest: str,
     lines.append("__all__ = [name for name in globals() if name.startswith(('ROUTE_', 'COMPONENT_', 'CAPABILITY_', 'BRICK_'))]")
     lines.append("")
     return "\n".join(lines)
+
+
+def _render_native_interfaces(catalog: dict[str, Any], digest: str,
+                              semantic_digest: str) -> str:
+    rows = tuple({
+        "id": index,
+        "name": row["name"],
+        "uri": row["uri"],
+        "version": row["version"],
+        "cpp_table": row["cpp_table"],
+        "hot_path": row["hot_path"],
+        "facets": tuple(row["facets"]),
+        "operations": tuple(row["operations"]),
+    } for index, row in enumerate(catalog["native_interface_abis"]))
+    boundary_routes = {
+        kind: (row["interface"], row["operation"])
+        for kind, row in catalog["boundary_handle_native_routes"].items()
+    }
+    return "\n".join((
+        '\"\"\"Generated by scripts/generate_component_catalog.py; DO NOT EDIT.\"\"\"',
+        "from __future__ import annotations",
+        "",
+        f"NATIVE_COMPONENT_ABI_VERSION = {catalog['native_interface_abi_version']}",
+        f"NATIVE_COMPONENT_COMMON_ABI_VERSION = {catalog['native_common_abi_version']}",
+        f"NATIVE_COMPONENT_CATALOG_SHA256 = {digest!r}",
+        f"NATIVE_COMPONENT_CATALOG_SEMANTIC_SHA256 = {semantic_digest!r}",
+        f"NATIVE_COMPONENT_INTERFACES = {_py_literal(rows)}",
+        "NATIVE_COMPONENT_INTERFACE_BY_NAME = {row['name']: row for row in NATIVE_COMPONENT_INTERFACES}",
+        "NATIVE_COMPONENT_INTERFACE_BY_URI = {row['uri']: row for row in NATIVE_COMPONENT_INTERFACES}",
+        f"NATIVE_COMPONENT_BOUNDARY_HANDLE_ROUTES = {_py_literal(boundary_routes)}",
+        "",
+        "__all__ = [name for name in globals() if name.startswith('NATIVE_COMPONENT_')]",
+        "",
+    ))
+
+
+def _render_component_abi(catalog: dict[str, Any], digest: str) -> str:
+    """Render the closed C/POD execution ABI shared by builtin and package conformers."""
+    enum_rows = "\n".join(
+        "  POPS_NATIVE_INTERFACE_%s_V1 = %d," % (row["name"].upper(), index)
+        for index, row in enumerate(catalog["native_interface_abis"])
+    )
+    table_size_rows = "\n".join(
+        "    case POPS_NATIVE_INTERFACE_%s_V1: return sizeof(%s);"
+        % (row["name"].upper(), row["cpp_table"])
+        for row in catalog["native_interface_abis"]
+    )
+    table_name_rows = "\n".join(
+        "    case POPS_NATIVE_INTERFACE_%s_V1: return \"%s\";"
+        % (row["name"].upper(), row["cpp_table"])
+        for row in catalog["native_interface_abis"]
+    )
+    return f'''#pragma once
+
+// Generated by scripts/generate_component_catalog.py; DO NOT EDIT.
+// The ABI crosses no C++ standard-library or backend-owned type. Hot interfaces are batch calls;
+// discovery and symbol resolution happen once during installation, never inside a scientific loop.
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {{
+#endif
+
+#define POPS_COMPONENT_API_SYMBOL_V1 "pops_component_interface_v1"
+#define POPS_COMPONENT_CATALOG_SHA256_V1 "{digest}"
+#define POPS_COMPONENT_PROTOCOL_ABI_V1 {catalog['native_interface_abi_version']}u
+#define POPS_COMPONENT_COMMON_ABI_V1 {catalog['native_common_abi_version']}u
+
+typedef enum PopsNativeInterfaceIdV1 {{
+{enum_rows}
+}} PopsNativeInterfaceIdV1;
+
+typedef enum PopsComponentActionV1 {{
+  POPS_COMPONENT_CONTINUE_V1 = 0,
+  POPS_COMPONENT_RETRY_STEP_V1 = 1,
+  POPS_COMPONENT_REJECT_STEP_V1 = 2,
+  POPS_COMPONENT_ABORT_RUN_V1 = 3
+}} PopsComponentActionV1;
+
+typedef struct PopsComponentStatusV1 {{
+  uint32_t struct_size;
+  int32_t code;
+  PopsComponentActionV1 action;
+  const char* reason;
+}} PopsComponentStatusV1;
+
+typedef enum PopsMemorySpaceV1 {{
+  POPS_MEMORY_SPACE_HOST_V1 = 1,
+  POPS_MEMORY_SPACE_DEVICE_V1 = 2,
+  POPS_MEMORY_SPACE_MANAGED_V1 = 3
+}} PopsMemorySpaceV1;
+typedef enum PopsScalarTypeV1 {{
+  POPS_SCALAR_FLOAT32_V1 = 1,
+  POPS_SCALAR_FLOAT64_V1 = 2
+}} PopsScalarTypeV1;
+typedef enum PopsFieldCenteringV1 {{
+  POPS_FIELD_CENTERING_CELL_V1 = 1,
+  POPS_FIELD_CENTERING_FACE_V1 = 2,
+  POPS_FIELD_CENTERING_NODE_V1 = 3,
+  POPS_FIELD_CENTERING_EDGE_V1 = 4
+}} PopsFieldCenteringV1;
+typedef enum PopsFieldOwnershipV1 {{
+  POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1 = 1,
+  POPS_FIELD_OWNERSHIP_COMPONENT_BORROWED_V1 = 2,
+  POPS_FIELD_OWNERSHIP_COMPONENT_OWNED_V1 = 3
+}} PopsFieldOwnershipV1;
+
+typedef struct PopsConstFieldViewV1 {{
+  uint32_t struct_size;
+  const void* data;
+  int32_t dimension;
+  size_t extents[3];
+  ptrdiff_t axis_strides[3];
+  size_t component_count;
+  ptrdiff_t component_stride;
+  PopsFieldCenteringV1 centering;
+  uint32_t centering_axes;
+  size_t ghost_lower[3];
+  size_t ghost_upper[3];
+  PopsScalarTypeV1 scalar_type;
+  PopsMemorySpaceV1 memory_space;
+  const char* layout_identity;
+  const char* patch_identity;
+  PopsFieldOwnershipV1 ownership;
+}} PopsConstFieldViewV1;
+
+typedef struct PopsFieldViewV1 {{
+  uint32_t struct_size;
+  void* data;
+  int32_t dimension;
+  size_t extents[3];
+  ptrdiff_t axis_strides[3];
+  size_t component_count;
+  ptrdiff_t component_stride;
+  PopsFieldCenteringV1 centering;
+  uint32_t centering_axes;
+  size_t ghost_lower[3];
+  size_t ghost_upper[3];
+  PopsScalarTypeV1 scalar_type;
+  PopsMemorySpaceV1 memory_space;
+  const char* layout_identity;
+  const char* patch_identity;
+  PopsFieldOwnershipV1 ownership;
+}} PopsFieldViewV1;
+
+typedef struct PopsConstByteViewV1 {{
+  uint32_t struct_size;
+  const uint8_t* data;
+  size_t size;
+}} PopsConstByteViewV1;
+
+typedef struct PopsByteViewV1 {{
+  uint32_t struct_size;
+  uint8_t* data;
+  size_t size;
+}} PopsByteViewV1;
+
+typedef struct PopsInt32ViewV1 {{
+  uint32_t struct_size;
+  int32_t* data;
+  size_t size;
+}} PopsInt32ViewV1;
+
+typedef struct PopsConstInt32ViewV1 {{
+  uint32_t struct_size;
+  const int32_t* data;
+  size_t size;
+}} PopsConstInt32ViewV1;
+
+typedef struct PopsLogicalTimeV1 {{
+  uint32_t struct_size;
+  const char* clock_identity;
+  int64_t tick;
+  int32_t level;
+  int32_t substep;
+  int32_t stage;
+  int64_t fraction_numerator;
+  int64_t fraction_denominator;
+  double dt;
+  double physical_time;
+}} PopsLogicalTimeV1;
+
+typedef enum PopsPrecisionV1 {{
+  POPS_PRECISION_FLOAT16_V1 = 1,
+  POPS_PRECISION_BFLOAT16_V1 = 2,
+  POPS_PRECISION_FLOAT32_V1 = 3,
+  POPS_PRECISION_FLOAT64_V1 = 4
+}} PopsPrecisionV1;
+typedef struct PopsExecutionContextV1 {{
+  uint32_t struct_size;
+  uint32_t context_version;
+  const char* execution_identity;
+  PopsMemorySpaceV1 memory_space;
+  const char* backend_identity;
+  const char* device_identity;
+  PopsScalarTypeV1 scalar_type;
+  PopsPrecisionV1 storage_precision;
+  PopsPrecisionV1 compute_precision;
+  PopsPrecisionV1 accumulation_precision;
+  PopsPrecisionV1 reduction_precision;
+  uint64_t stream_handle;
+  const char* stream_identity;
+  int64_t communicator_f_handle;
+  int64_t communicator_datatype_f_handle;
+  const char* communicator_identity;
+  const char* communicator_datatype_identity;
+}} PopsExecutionContextV1;
+
+typedef struct PopsComponentPrepareRequestV1 {{
+  uint32_t struct_size;
+  const char* parameters_json;
+  const char* target_json;
+  PopsExecutionContextV1 execution;
+}} PopsComponentPrepareRequestV1;
+
+typedef int32_t (*PopsComponentPrepareFnV1)(
+    const PopsComponentPrepareRequestV1*, void**, PopsComponentStatusV1*);
+typedef void (*PopsComponentDestroyFnV1)(void*);
+
+typedef struct PopsComponentTableHeaderV1 {{
+  uint32_t struct_size;
+  uint32_t abi_version;
+  PopsNativeInterfaceIdV1 interface_id;
+  uint32_t interface_version;
+  PopsComponentPrepareFnV1 prepare;
+  PopsComponentDestroyFnV1 destroy;
+}} PopsComponentTableHeaderV1;
+
+typedef struct PopsNumericalFluxRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 left;
+  PopsConstFieldViewV1 right;
+  PopsConstFieldViewV1 normals;
+  const double* face_measures;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsNumericalFluxRequestV1;
+typedef struct PopsNumericalFluxResultV1 {{
+  uint32_t struct_size;
+  PopsFieldViewV1 normal_flux;
+  double* stability_bounds;
+  PopsComponentActionV1* actions;
+  PopsComponentStatusV1 status;
+}} PopsNumericalFluxResultV1;
+typedef int32_t (*PopsEvaluateFacesFnV1)(
+    void*, const PopsNumericalFluxRequestV1*, PopsNumericalFluxResultV1*);
+typedef struct PopsNumericalFluxApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsEvaluateFacesFnV1 evaluate_faces;
+}} PopsNumericalFluxApiV1;
+
+typedef enum PopsBoundaryRegionKindV1 {{
+  POPS_BOUNDARY_FACE_V1 = 1,
+  POPS_BOUNDARY_EDGE_V1 = 2,
+  POPS_BOUNDARY_CORNER_V1 = 3
+}} PopsBoundaryRegionKindV1;
+typedef struct PopsBoundaryRegionV1 {{
+  uint32_t struct_size;
+  PopsBoundaryRegionKindV1 kind;
+  int32_t dimension;
+  int32_t codimension;
+  size_t axis_count;
+  const int32_t* axes;
+  const int32_t* sides;
+  const char* region_identity;
+}} PopsBoundaryRegionV1;
+typedef struct PopsQualifiedConstFieldV1 {{
+  uint32_t struct_size;
+  uint32_t present;
+  const char* qualified_id;
+  PopsConstFieldViewV1 values;
+}} PopsQualifiedConstFieldV1;
+typedef struct PopsQualifiedFieldV1 {{
+  uint32_t struct_size;
+  const char* qualified_id;
+  PopsFieldViewV1 values;
+}} PopsQualifiedFieldV1;
+typedef struct PopsQualifiedScalarV1 {{
+  uint32_t struct_size;
+  const char* qualified_id;
+  double value;
+}} PopsQualifiedScalarV1;
+typedef struct PopsGhostBoundaryRequestV1 {{
+  uint32_t struct_size;
+  const char* producer_identity;
+  const char* state_identity;
+  const char* ghost_identity;
+  PopsConstFieldViewV1 interior;
+  PopsFieldViewV1 ghosts;
+  PopsConstFieldViewV1 coordinates;
+  PopsBoundaryRegionV1 region;
+  size_t dependency_count;
+  const PopsQualifiedConstFieldV1* dependencies;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsGhostBoundaryRequestV1;
+typedef int32_t (*PopsApplyRegionBatchFnV1)(
+    void*, const PopsGhostBoundaryRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsGhostBoundaryApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsApplyRegionBatchFnV1 apply_region_batch;
+}} PopsGhostBoundaryApiV1;
+
+typedef struct PopsFieldBoundaryRequestV1 {{
+  uint32_t struct_size;
+  const char* closure_identity;
+  PopsBoundaryRegionV1 region;
+  PopsConstFieldViewV1 coordinates;
+  size_t state_count;
+  const PopsQualifiedConstFieldV1* states;
+  size_t direction_count;
+  const PopsQualifiedConstFieldV1* directions;
+  size_t field_count;
+  const PopsQualifiedConstFieldV1* fields;
+  size_t parameter_count;
+  const PopsQualifiedScalarV1* parameters;
+  size_t output_count;
+  PopsQualifiedFieldV1* outputs;
+  PopsQualifiedConstFieldV1 rate;
+  PopsQualifiedConstFieldV1 nonlinear_iterate;
+  int32_t level;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsFieldBoundaryRequestV1;
+typedef int32_t (*PopsFieldBoundaryEvalFnV1)(
+    void*, const PopsFieldBoundaryRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsFieldBoundaryClosureApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsFieldBoundaryEvalFnV1 residual;
+  PopsFieldBoundaryEvalFnV1 jvp;
+}} PopsFieldBoundaryClosureApiV1;
+
+typedef struct PopsTaggerRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 state;
+  PopsByteViewV1 tags;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsTaggerRequestV1;
+typedef int32_t (*PopsTagBatchFnV1)(void*, const PopsTaggerRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsTaggerApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsTagBatchFnV1 tag_batch;
+}} PopsTaggerApiV1;
+
+typedef struct PopsClusteringRequestV1 {{
+  uint32_t struct_size;
+  PopsConstByteViewV1 tags;
+  const int64_t* extents;
+  int32_t dimension;
+  int64_t* boxes;
+  size_t box_capacity;
+  size_t* box_count;
+  PopsExecutionContextV1 execution;
+}} PopsClusteringRequestV1;
+typedef int32_t (*PopsClusterFnV1)(void*, const PopsClusteringRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsClusteringApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsClusterFnV1 cluster;
+}} PopsClusteringApiV1;
+
+typedef enum PopsTransferOperationV1 {{
+  POPS_TRANSFER_OPERATION_CONSERVATIVE_CELL_AVERAGE_V1 = 1
+}} PopsTransferOperationV1;
+typedef struct PopsTransferRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 source;
+  PopsFieldViewV1 destination;
+  const int32_t* refinement_ratio;
+  int32_t dimension;
+  PopsTransferOperationV1 operation;
+  PopsExecutionContextV1 execution;
+}} PopsTransferRequestV1;
+typedef int32_t (*PopsTransferApplyFnV1)(void*, const PopsTransferRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsTransferApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsTransferApplyFnV1 apply;
+}} PopsTransferApiV1;
+
+typedef struct PopsRefluxRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 coarse_integrated;
+  PopsConstFieldViewV1 fine_integrated;
+  PopsFieldViewV1 flux_register;
+  PopsExecutionContextV1 execution;
+}} PopsRefluxRequestV1;
+typedef int32_t (*PopsDepositIntegratedFnV1)(
+    void*, const PopsRefluxRequestV1*, PopsComponentStatusV1*);
+typedef struct PopsRefluxApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsDepositIntegratedFnV1 deposit_integrated;
+}} PopsRefluxApiV1;
+
+typedef struct PopsFieldSolverRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 rhs;
+  PopsFieldViewV1 solution;
+  PopsConstFieldViewV1 coefficients;
+  PopsConstByteViewV1 material_mask;
+  PopsConstInt32ViewV1 component_labels;
+  const char* topology_digest;
+  const char* boundary_contract_json;
+  double relative_tolerance;
+  double absolute_tolerance;
+  int32_t max_iterations;
+  PopsExecutionContextV1 execution;
+}} PopsFieldSolverRequestV1;
+typedef struct PopsSolveReportV1 {{
+  uint32_t struct_size;
+  int32_t converged;
+  int32_t iterations;
+  double initial_residual;
+  double final_residual;
+  PopsComponentStatusV1 status;
+}} PopsSolveReportV1;
+typedef int32_t (*PopsFieldSolveFnV1)(
+    void*, const PopsFieldSolverRequestV1*, PopsSolveReportV1*);
+typedef struct PopsFieldSolverApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsFieldSolveFnV1 solve;
+}} PopsFieldSolverApiV1;
+
+typedef struct PopsWriterBoxV1 {{
+  uint32_t struct_size;
+  int32_t dimension;
+  const int64_t* lower;
+  const int64_t* upper;
+}} PopsWriterBoxV1;
+typedef struct PopsWriterGeometryV1 {{
+  uint32_t struct_size;
+  const char* layout_identity;
+  const char* layout_kind;
+  int32_t level;
+  int32_t dimension;
+  const double* origin;
+  const double* spacing;
+  const size_t* cell_shape;
+  size_t box_count;
+  const PopsWriterBoxV1* boxes;
+  PopsConstByteViewV1 valid_cells;
+  PopsConstByteViewV1 coverage;
+  PopsConstFieldViewV1 cell_volumes;
+}} PopsWriterGeometryV1;
+typedef struct PopsWriterPieceV1 {{
+  uint32_t struct_size;
+  int32_t dimension;
+  const int64_t* lower;
+  const int64_t* upper;
+  PopsConstFieldViewV1 values;
+}} PopsWriterPieceV1;
+typedef struct PopsWriterFieldV1 {{
+  uint32_t struct_size;
+  const char* field_identity;
+  const char* reference_id;
+  const char* component_manifest_identity;
+  const char* layout_identity;
+  int32_t level;
+  const char* state_id;
+  const char* centering;
+  const char* units;
+  size_t component_name_count;
+  const char* const* component_names;
+  int32_t dimension;
+  const size_t* global_shape;
+  size_t piece_count;
+  const PopsWriterPieceV1* pieces;
+}} PopsWriterFieldV1;
+typedef struct PopsWriterDiagnosticV1 {{
+  uint32_t struct_size;
+  const char* diagnostic_identity;
+  const char* reference_id;
+  const char* component_manifest_identity;
+  const char* layout_identity;
+  int32_t level;
+  const char* state_id;
+  const char* reduction;
+  double value;
+  const char* units;
+  const char* terms_json;
+}} PopsWriterDiagnosticV1;
+typedef struct PopsWriterRequestV1 {{
+  uint32_t struct_size;
+  size_t geometry_count;
+  const PopsWriterGeometryV1* geometries;
+  size_t field_count;
+  const PopsWriterFieldV1* fields;
+  size_t diagnostic_count;
+  const PopsWriterDiagnosticV1* diagnostics;
+  const char* metadata_json;
+  const char* selection_identity;
+  const char* temporary_path;
+  const char* published_path;
+  const char* snapshot_identity;
+  PopsLogicalTimeV1 logical_time;
+  PopsExecutionContextV1 execution;
+}} PopsWriterRequestV1;
+typedef struct PopsWriterReceiptV1 {{
+  uint32_t struct_size;
+  uint64_t bytes_written;
+  const char* content_digest;
+  PopsComponentStatusV1 status;
+}} PopsWriterReceiptV1;
+typedef int32_t (*PopsWriterVerifyFnV1)(void*, const PopsWriterRequestV1*, PopsWriterReceiptV1*);
+typedef int32_t (*PopsWriterPublishFnV1)(void*, const PopsWriterRequestV1*, PopsWriterReceiptV1*);
+typedef void (*PopsWriterCleanupFnV1)(void*, const PopsWriterRequestV1*);
+typedef struct PopsWriterApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsWriterVerifyFnV1 verify;
+  PopsWriterPublishFnV1 publish;
+  PopsWriterCleanupFnV1 discard;
+  PopsWriterCleanupFnV1 rollback;
+}} PopsWriterApiV1;
+
+typedef struct PopsFieldTopologyRequestV1 {{
+  uint32_t struct_size;
+  PopsConstFieldViewV1 geometry;
+  PopsByteViewV1 material_mask;
+  PopsInt32ViewV1 component_labels;
+  PopsExecutionContextV1 execution;
+}} PopsFieldTopologyRequestV1;
+typedef struct PopsTopologyLabelV1 {{
+  int32_t id;
+  const char* label;
+  const char* provenance;
+}} PopsTopologyLabelV1;
+typedef struct PopsFieldTopologyResultV1 {{
+  uint32_t struct_size;
+  size_t label_count;
+  const PopsTopologyLabelV1* labels;
+  const char* provenance;
+  const char* topology_digest;
+  PopsComponentStatusV1 status;
+}} PopsFieldTopologyResultV1;
+typedef int32_t (*PopsPrepareTopologyFnV1)(
+    void*, const PopsFieldTopologyRequestV1*, PopsFieldTopologyResultV1*);
+typedef struct PopsFieldTopologyApiV1 {{
+  PopsComponentTableHeaderV1 header;
+  PopsPrepareTopologyFnV1 prepare_topology;
+}} PopsFieldTopologyApiV1;
+
+typedef struct PopsComponentInterfaceEntryV1 {{
+  PopsNativeInterfaceIdV1 interface_id;
+  uint32_t interface_version;
+  uint32_t table_size;
+  const void* table;
+}} PopsComponentInterfaceEntryV1;
+
+typedef struct PopsComponentApiV1 {{
+  uint32_t struct_size;
+  uint32_t protocol_abi;
+  const char* catalog_sha256;
+  const char* component_id;
+  const char* semantic_identity;
+  const char* manifest_identity;
+  size_t interface_count;
+  const PopsComponentInterfaceEntryV1* interfaces;
+}} PopsComponentApiV1;
+
+typedef const PopsComponentApiV1* (*PopsComponentApiGetterV1)(void);
+
+#ifdef __cplusplus
+}}  // extern "C"
+
+namespace pops::component {{
+inline constexpr size_t generated_native_interface_table_size(
+    PopsNativeInterfaceIdV1 id) noexcept {{
+  switch (id) {{
+{table_size_rows}
+  }}
+  return 0;
+}}
+inline constexpr const char* generated_native_interface_table_name(
+    PopsNativeInterfaceIdV1 id) noexcept {{
+  switch (id) {{
+{table_name_rows}
+  }}
+  return nullptr;
+}}
+}}  // namespace pops::component
+#endif
+'''
+
+
+def _render_pybind_invokers(catalog: dict[str, Any], digest: str) -> str:
+    """Render the sole Python/native request marshaller from the ABI declaration."""
+    interfaces = {row["name"]: row for row in catalog["native_interface_abis"]}
+    writer = interfaces["writer"]
+    transfer = interfaces["transfer"]
+    writer_rows = "\n".join(
+        "    if (operation == %s) return invoke_writer(api.%s, loaded, request, %s);"
+        % (_cpp_string(operation), operation, _cpp_string(operation))
+        for operation in writer["operations"]
+    )
+    source = r'''// Generated by scripts/generate_component_catalog.py from catalog @DIGEST@; DO NOT EDIT.
+// This file is the sole Python/native request marshaller. init_component_loader.cpp only registers it.
+
+#include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/dynamic/component_loader.hpp>
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+namespace pops::component::generated_pybind {
+namespace py = pybind11;
+
+using DoubleArray = py::array_t<double, py::array::c_style>;
+using ByteArray = py::array_t<std::uint8_t, py::array::c_style>;
+
+template <class Array>
+Array required_array(const py::handle value, const char* where) {
+  auto result = Array::ensure(value);
+  if (!result)
+    throw py::type_error(std::string(where) +
+                         " must be a C-contiguous array of the exact dtype");
+  return result;
+}
+
+inline PopsConstFieldViewV1 writer_field_view(
+    const DoubleArray& values, const std::string& layout_identity,
+    const std::string& patch_identity, const char* where) {
+  if (values.ndim() != 2 && values.ndim() != 3)
+    throw py::value_error(std::string(where) +
+                          " must have shape (ny,nx) or (components,ny,nx)");
+  const auto components = values.ndim() == 3
+                              ? static_cast<std::size_t>(values.shape(0))
+                              : 1u;
+  const auto ny = static_cast<std::size_t>(values.shape(values.ndim() - 2));
+  const auto nx = static_cast<std::size_t>(values.shape(values.ndim() - 1));
+  if (components == 0 || ny == 0 || nx == 0)
+    throw py::value_error(std::string(where) + " must be non-empty");
+  const auto item = static_cast<py::ssize_t>(sizeof(double));
+  return {sizeof(PopsConstFieldViewV1), values.data(), 2, {ny, nx, 1},
+          {values.strides(values.ndim() - 2) / item,
+           values.strides(values.ndim() - 1) / item, 0},
+          components, values.ndim() == 3 ? values.strides(0) / item : 1,
+          POPS_FIELD_CENTERING_CELL_V1, 0, {0, 0, 0}, {0, 0, 0},
+          POPS_SCALAR_FLOAT64_V1, POPS_MEMORY_SPACE_HOST_V1,
+          layout_identity.c_str(), patch_identity.c_str(),
+          POPS_FIELD_OWNERSHIP_RUNTIME_BORROWED_V1};
+}
+
+struct ExecutionStorage {
+  std::string execution_identity;
+  std::string backend_identity;
+  std::string device_identity;
+  std::string stream_identity;
+  std::string communicator_identity;
+  std::string communicator_datatype_identity;
+  PopsExecutionContextV1 value{};
+
+  explicit ExecutionStorage(const py::dict& row)
+      : execution_identity(py::cast<std::string>(row["execution_identity"])),
+        backend_identity(py::cast<std::string>(row["backend_identity"])),
+        device_identity(py::cast<std::string>(row["device_identity"])),
+        stream_identity(py::cast<std::string>(row["stream_identity"])),
+        communicator_identity(py::cast<std::string>(row["communicator_identity"])),
+        communicator_datatype_identity(
+            py::cast<std::string>(row["communicator_datatype_identity"])) {
+    value = {
+        sizeof(PopsExecutionContextV1), py::cast<std::uint32_t>(row["context_version"]),
+        execution_identity.c_str(),
+        static_cast<PopsMemorySpaceV1>(py::cast<std::int32_t>(row["memory_space"])),
+        backend_identity.c_str(), device_identity.c_str(),
+        static_cast<PopsScalarTypeV1>(py::cast<std::int32_t>(row["scalar_type"])),
+        static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["storage_precision"])),
+        static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["compute_precision"])),
+        static_cast<PopsPrecisionV1>(
+            py::cast<std::int32_t>(row["accumulation_precision"])),
+        static_cast<PopsPrecisionV1>(py::cast<std::int32_t>(row["reduction_precision"])),
+        py::cast<std::uint64_t>(row["stream_handle"]), stream_identity.c_str(),
+        py::cast<std::int64_t>(row["communicator_f_handle"]),
+        py::cast<std::int64_t>(row["communicator_datatype_f_handle"]),
+        communicator_identity.c_str(), communicator_datatype_identity.c_str()};
+    validate_execution_context(value);
+  }
+};
+
+struct LogicalTimeStorage {
+  std::string clock_identity;
+  PopsLogicalTimeV1 value{};
+
+  explicit LogicalTimeStorage(const py::dict& row)
+      : clock_identity(py::cast<std::string>(row["clock_identity"])) {
+    value = {sizeof(PopsLogicalTimeV1), clock_identity.c_str(),
+             py::cast<std::int64_t>(row["tick"]),
+             py::cast<std::int32_t>(row["level"]),
+             py::cast<std::int32_t>(row["substep"]),
+             py::cast<std::int32_t>(row["stage"]),
+             py::cast<std::int64_t>(row["fraction_numerator"]),
+             py::cast<std::int64_t>(row["fraction_denominator"]),
+             py::cast<double>(row["dt"]), py::cast<double>(row["physical_time"])};
+    validate_logical_time(value);
+  }
+};
+
+struct WriterGeometryStorage {
+  std::string layout_identity;
+  std::string layout_kind;
+  std::string patch_identity;
+  std::vector<double> origin;
+  std::vector<double> spacing;
+  std::vector<std::size_t> cell_shape;
+  std::vector<std::vector<std::int64_t>> lower;
+  std::vector<std::vector<std::int64_t>> upper;
+  std::vector<PopsWriterBoxV1> boxes;
+  ByteArray valid_cells;
+  ByteArray coverage;
+  DoubleArray cell_volumes;
+  PopsWriterGeometryV1 value{};
+
+  explicit WriterGeometryStorage(const py::dict& row)
+      : layout_identity(py::cast<std::string>(row["layout_identity"])),
+        layout_kind(py::cast<std::string>(row["layout_kind"])),
+        patch_identity(py::cast<std::string>(row["patch_identity"])),
+        origin(py::cast<std::vector<double>>(row["origin"])),
+        spacing(py::cast<std::vector<double>>(row["spacing"])),
+        cell_shape(py::cast<std::vector<std::size_t>>(row["cell_shape"])),
+        valid_cells(required_array<ByteArray>(row["valid_cells"], "Writer valid_cells")),
+        coverage(required_array<ByteArray>(row["coverage"], "Writer coverage")),
+        cell_volumes(required_array<DoubleArray>(row["cell_volumes"],
+                                                 "Writer cell_volumes")) {
+    const auto dimension = py::cast<std::int32_t>(row["dimension"]);
+    if (dimension < 1 || dimension > 3 || origin.size() != dimension ||
+        spacing.size() != dimension || cell_shape.size() != dimension)
+      throw py::value_error("Writer geometry has inconsistent dimensioned axes");
+    const auto raw_boxes = py::cast<py::list>(row["boxes"]);
+    lower.reserve(raw_boxes.size());
+    upper.reserve(raw_boxes.size());
+    boxes.reserve(raw_boxes.size());
+    for (const auto raw : raw_boxes) {
+      const auto box = py::cast<py::dict>(raw);
+      lower.push_back(py::cast<std::vector<std::int64_t>>(box["lower"]));
+      upper.push_back(py::cast<std::vector<std::int64_t>>(box["upper"]));
+      if (lower.back().size() != dimension || upper.back().size() != dimension)
+        throw py::value_error("Writer box dimension differs from geometry");
+      boxes.push_back({sizeof(PopsWriterBoxV1), dimension, lower.back().data(),
+                       upper.back().data()});
+    }
+    value = {sizeof(PopsWriterGeometryV1), layout_identity.c_str(),
+             layout_kind.c_str(), py::cast<std::int32_t>(row["level"]), dimension,
+             origin.data(), spacing.data(), cell_shape.data(), boxes.size(), boxes.data(),
+             {sizeof(PopsConstByteViewV1), valid_cells.data(),
+              static_cast<std::size_t>(valid_cells.size())},
+             {sizeof(PopsConstByteViewV1), coverage.data(),
+              static_cast<std::size_t>(coverage.size())},
+             writer_field_view(cell_volumes, layout_identity, patch_identity,
+                               "Writer cell_volumes")};
+  }
+};
+
+struct WriterPieceStorage {
+  std::string patch_identity;
+  std::vector<std::int64_t> lower;
+  std::vector<std::int64_t> upper;
+  DoubleArray values;
+  PopsWriterPieceV1 value{};
+
+  WriterPieceStorage(const py::dict& row, const std::string& layout_identity,
+                     std::int32_t dimension)
+      : patch_identity(py::cast<std::string>(row["patch_identity"])),
+        lower(py::cast<std::vector<std::int64_t>>(row["lower"])),
+        upper(py::cast<std::vector<std::int64_t>>(row["upper"])),
+        values(required_array<DoubleArray>(row["values"], "Writer field piece")) {
+    if (lower.size() != dimension || upper.size() != dimension)
+      throw py::value_error("Writer field piece dimension differs from field");
+    value = {sizeof(PopsWriterPieceV1), dimension, lower.data(), upper.data(),
+             writer_field_view(values, layout_identity, patch_identity,
+                               "Writer field piece")};
+  }
+};
+
+struct WriterFieldStorage {
+  std::string field_identity;
+  std::string reference_id;
+  std::string component_manifest_identity;
+  std::string layout_identity;
+  std::string state_id;
+  std::string centering;
+  std::string units;
+  std::vector<std::string> component_names;
+  std::vector<const char*> component_name_pointers;
+  std::vector<std::size_t> global_shape;
+  std::vector<WriterPieceStorage> piece_storage;
+  std::vector<PopsWriterPieceV1> pieces;
+  PopsWriterFieldV1 value{};
+
+  explicit WriterFieldStorage(const py::dict& row)
+      : field_identity(py::cast<std::string>(row["field_identity"])),
+        reference_id(py::cast<std::string>(row["reference_id"])),
+        component_manifest_identity(
+            py::cast<std::string>(row["component_manifest_identity"])),
+        layout_identity(py::cast<std::string>(row["layout_identity"])),
+        state_id(py::cast<std::string>(row["state_id"])),
+        centering(py::cast<std::string>(row["centering"])),
+        units(py::cast<std::string>(row["units"])),
+        component_names(py::cast<std::vector<std::string>>(row["component_names"])),
+        global_shape(py::cast<std::vector<std::size_t>>(row["global_shape"])) {
+    const auto dimension = py::cast<std::int32_t>(row["dimension"]);
+    if (dimension < 1 || dimension > 3 || global_shape.size() != dimension)
+      throw py::value_error("Writer field has inconsistent dimensioned shape");
+    const auto raw_pieces = py::cast<py::list>(row["pieces"]);
+    piece_storage.reserve(raw_pieces.size());
+    pieces.reserve(raw_pieces.size());
+    for (const auto raw : raw_pieces)
+      piece_storage.emplace_back(py::cast<py::dict>(raw), layout_identity, dimension);
+    for (const auto& piece : piece_storage) pieces.push_back(piece.value);
+    component_name_pointers.reserve(component_names.size());
+    for (const auto& name : component_names) component_name_pointers.push_back(name.c_str());
+    value = {sizeof(PopsWriterFieldV1), field_identity.c_str(), reference_id.c_str(),
+             component_manifest_identity.c_str(), layout_identity.c_str(),
+             py::cast<std::int32_t>(row["level"]), state_id.c_str(), centering.c_str(),
+             units.c_str(), component_name_pointers.size(), component_name_pointers.data(),
+             dimension, global_shape.data(), pieces.size(), pieces.data()};
+  }
+};
+
+struct WriterDiagnosticStorage {
+  std::string diagnostic_identity;
+  std::string reference_id;
+  std::string component_manifest_identity;
+  std::string layout_identity;
+  std::string state_id;
+  std::string reduction;
+  std::string units;
+  std::string terms_json;
+  PopsWriterDiagnosticV1 value{};
+
+  explicit WriterDiagnosticStorage(const py::dict& row)
+      : diagnostic_identity(py::cast<std::string>(row["diagnostic_identity"])),
+        reference_id(py::cast<std::string>(row["reference_id"])),
+        component_manifest_identity(
+            py::cast<std::string>(row["component_manifest_identity"])),
+        layout_identity(py::cast<std::string>(row["layout_identity"])),
+        state_id(py::cast<std::string>(row["state_id"])),
+        reduction(py::cast<std::string>(row["reduction"])),
+        units(py::cast<std::string>(row["units"])),
+        terms_json(py::cast<std::string>(row["terms_json"])) {
+    value = {sizeof(PopsWriterDiagnosticV1), diagnostic_identity.c_str(),
+             reference_id.c_str(), component_manifest_identity.c_str(),
+             layout_identity.c_str(), py::cast<std::int32_t>(row["level"]),
+             state_id.c_str(), reduction.c_str(),
+             py::cast<double>(row["value"]), units.c_str(), terms_json.c_str()};
+  }
+};
+
+struct WriterRequestStorage {
+  std::vector<WriterGeometryStorage> geometry_storage;
+  std::vector<PopsWriterGeometryV1> geometries;
+  std::vector<WriterFieldStorage> field_storage;
+  std::vector<PopsWriterFieldV1> fields;
+  std::vector<WriterDiagnosticStorage> diagnostic_storage;
+  std::vector<PopsWriterDiagnosticV1> diagnostics;
+  std::string metadata_json;
+  std::string selection_identity;
+  std::string temporary_path;
+  std::string published_path;
+  std::string snapshot_identity;
+  ExecutionStorage execution;
+  LogicalTimeStorage logical_time;
+  PopsWriterRequestV1 value{};
+
+  explicit WriterRequestStorage(const py::dict& request)
+      : metadata_json(py::cast<std::string>(py::dict(request["snapshot"])["metadata_json"])),
+        selection_identity(
+            py::cast<std::string>(py::dict(request["snapshot"])["selection_identity"])),
+        temporary_path(py::cast<std::string>(request["temporary_path"])),
+        published_path(py::cast<std::string>(request["published_path"])),
+        snapshot_identity(py::cast<std::string>(request["snapshot_identity"])),
+        execution(py::cast<py::dict>(request["execution"])),
+        logical_time(py::cast<py::dict>(request["logical_time"])) {
+    const auto snapshot = py::cast<py::dict>(request["snapshot"]);
+    for (const auto raw : py::cast<py::list>(snapshot["geometries"]))
+      geometry_storage.emplace_back(py::cast<py::dict>(raw));
+    for (const auto& row : geometry_storage) geometries.push_back(row.value);
+    for (const auto raw : py::cast<py::list>(snapshot["fields"]))
+      field_storage.emplace_back(py::cast<py::dict>(raw));
+    for (const auto& row : field_storage) fields.push_back(row.value);
+    for (const auto raw : py::cast<py::list>(snapshot["diagnostics"]))
+      diagnostic_storage.emplace_back(py::cast<py::dict>(raw));
+    for (const auto& row : diagnostic_storage) diagnostics.push_back(row.value);
+    value = {sizeof(PopsWriterRequestV1), geometries.size(), geometries.data(),
+             fields.size(), fields.data(), diagnostics.size(), diagnostics.data(),
+             metadata_json.c_str(), selection_identity.c_str(), temporary_path.c_str(),
+             published_path.c_str(), snapshot_identity.c_str(), logical_time.value,
+             execution.value};
+    validate_writer_request(value);
+  }
+};
+
+inline py::dict writer_receipt(PopsWriterReceiptV1 receipt, int code,
+                               const char* operation) {
+  const auto reason = receipt.status.reason == nullptr ? "" : receipt.status.reason;
+  if (code != 0 || receipt.status.code != 0 ||
+      receipt.status.action != POPS_COMPONENT_CONTINUE_V1)
+    throw std::runtime_error(std::string("native Writer ") + operation +
+                             " failed: " + reason);
+  py::dict result;
+  result["bytes_written"] = receipt.bytes_written;
+  result["content_digest"] =
+      receipt.content_digest == nullptr ? "" : receipt.content_digest;
+  result["action"] = static_cast<int>(receipt.status.action);
+  return result;
+}
+
+template <class Operation>
+py::object invoke_writer(Operation operation, LoadedComponent& loaded,
+                         const py::dict& request_data, const char* operation_name) {
+  require_operation(operation != nullptr, operation_name);
+  WriterRequestStorage request(request_data);
+  void* state = loaded.prepared_state(
+      POPS_NATIVE_INTERFACE_WRITER_V1, @WRITER_VERSION@, request.execution.value);
+  if constexpr (std::is_same_v<Operation, PopsWriterCleanupFnV1>) {
+    operation(state, &request.value);
+    return py::none();
+  } else {
+    PopsWriterReceiptV1 receipt{
+        sizeof(PopsWriterReceiptV1), 0, nullptr,
+        {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr}};
+    const int code = operation(state, &request.value, &receipt);
+    return writer_receipt(receipt, code, operation_name);
+  }
+}
+
+inline py::object invoke_component_operation(
+    LoadedComponent& loaded, const std::string& interface_uri,
+    std::uint32_t interface_version, const std::string& operation,
+    const py::dict& request) {
+  if (interface_uri == @WRITER_URI@ && interface_version == @WRITER_VERSION@) {
+    const auto& api = loaded.table<PopsWriterApiV1>(POPS_NATIVE_INTERFACE_WRITER_V1,
+                                                    interface_version);
+@WRITER_ROWS@
+    throw py::value_error("Writer operation is not declared by the component catalog");
+  }
+  throw py::value_error("native component interface has no generated Python invoker");
+}
+
+struct TransferFieldStorage {
+  std::string layout_identity;
+  std::string patch_identity;
+  DoubleArray values;
+  PopsConstFieldViewV1 const_value{};
+  PopsFieldViewV1 mutable_value{};
+
+  TransferFieldStorage(const py::dict& row, bool writable)
+      : layout_identity(py::cast<std::string>(row["layout_identity"])),
+        patch_identity(py::cast<std::string>(row["patch_identity"])),
+        values(required_array<DoubleArray>(row["values"], "Transfer field values")) {
+    const auto dimension = py::cast<std::int32_t>(row["dimension"]);
+    const auto extents = py::cast<std::array<std::size_t, 3>>(row["extents"]);
+    const auto ghost_lower = py::cast<std::array<std::size_t, 3>>(row["ghost_lower"]);
+    const auto ghost_upper = py::cast<std::array<std::size_t, 3>>(row["ghost_upper"]);
+    if (dimension < 1 || dimension > 3 || values.ndim() != dimension + 1 ||
+        values.shape(0) <= 0)
+      throw py::value_error("Transfer array rank differs from its field dimension");
+    std::array<std::ptrdiff_t, 3> strides{0, 0, 0};
+    const auto item = static_cast<py::ssize_t>(sizeof(double));
+    for (std::int32_t axis = 0; axis < 3; ++axis) {
+      if (axis < dimension) {
+        if (extents[axis] != static_cast<std::size_t>(values.shape(axis + 1)))
+          throw py::value_error("Transfer array shape differs from declared extents");
+        strides[axis] = values.strides(axis + 1) / item;
+      } else if (extents[axis] != 1 || ghost_lower[axis] != 0 || ghost_upper[axis] != 0) {
+        throw py::value_error("Transfer descriptor carries inactive-axis metadata");
+      }
+    }
+    const_value = {
+        sizeof(PopsConstFieldViewV1), values.data(), dimension,
+        {extents[0], extents[1], extents[2]}, {strides[0], strides[1], strides[2]},
+        static_cast<std::size_t>(values.shape(0)), values.strides(0) / item,
+        static_cast<PopsFieldCenteringV1>(py::cast<std::int32_t>(row["centering"])),
+        py::cast<std::uint32_t>(row["centering_axes"]),
+        {ghost_lower[0], ghost_lower[1], ghost_lower[2]},
+        {ghost_upper[0], ghost_upper[1], ghost_upper[2]},
+        static_cast<PopsScalarTypeV1>(py::cast<std::int32_t>(row["scalar_type"])),
+        static_cast<PopsMemorySpaceV1>(py::cast<std::int32_t>(row["memory_space"])),
+        layout_identity.c_str(), patch_identity.c_str(),
+        static_cast<PopsFieldOwnershipV1>(py::cast<std::int32_t>(row["ownership"]))};
+    mutable_value = {sizeof(PopsFieldViewV1), writable ? values.mutable_data() : nullptr,
+                     const_value.dimension,
+                     {extents[0], extents[1], extents[2]},
+                     {strides[0], strides[1], strides[2]}, const_value.component_count,
+                     const_value.component_stride, const_value.centering,
+                     const_value.centering_axes,
+                     {ghost_lower[0], ghost_lower[1], ghost_lower[2]},
+                     {ghost_upper[0], ghost_upper[1], ghost_upper[2]},
+                     const_value.scalar_type, const_value.memory_space,
+                     layout_identity.c_str(), patch_identity.c_str(), const_value.ownership};
+  }
+};
+
+inline py::dict transfer_apply(
+    LoadedComponent& loaded, const py::dict& source_data,
+    const py::dict& destination_data, const std::vector<std::int32_t>& ratio,
+    std::int32_t raw_operation, const py::dict& execution_data) {
+  TransferFieldStorage source(source_data, false);
+  TransferFieldStorage destination(destination_data, true);
+  ExecutionStorage execution(execution_data);
+  if (ratio.size() != static_cast<std::size_t>(source.const_value.dimension))
+    throw py::value_error("Transfer ratio length differs from field dimension");
+  const auto operation = static_cast<PopsTransferOperationV1>(raw_operation);
+  PopsTransferRequestV1 request{
+      sizeof(PopsTransferRequestV1), source.const_value, destination.mutable_value,
+      ratio.data(), source.const_value.dimension, operation, execution.value};
+  PopsComponentStatusV1 status{
+      sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+  const auto& api = loaded.table<PopsTransferApiV1>(POPS_NATIVE_INTERFACE_TRANSFER_V1,
+                                                    @TRANSFER_VERSION@);
+  void* state = loaded.prepared_state(
+      POPS_NATIVE_INTERFACE_TRANSFER_V1, @TRANSFER_VERSION@, execution.value);
+  const int code = apply_transfer(api, state, request, status);
+  if (code != 0 || status.code != 0 || status.action != POPS_COMPONENT_CONTINUE_V1)
+    throw std::runtime_error(status.reason == nullptr ? "native Transfer failed"
+                                                      : status.reason);
+  py::dict receipt;
+  receipt["provider_component_id"] = loaded.api().component_id;
+  receipt["provider_manifest_identity"] = loaded.api().manifest_identity;
+  receipt["operation"] = static_cast<std::int32_t>(operation);
+  receipt["source_element_count"] =
+      field_point_count(source.const_value) * source.const_value.component_count;
+  receipt["destination_element_count"] =
+      field_point_count(destination.mutable_value) * destination.mutable_value.component_count;
+  receipt["applied"] = true;
+  return receipt;
+}
+
+template <class HandleClass>
+void register_component_invokers(HandleClass& handle) {
+  handle.def("_invoke_component_operation", &invoke_component_operation,
+             py::arg("interface_uri"), py::arg("interface_version"),
+             py::arg("operation"), py::arg("request"));
+  handle.def("_transfer_apply", &transfer_apply, py::arg("source"),
+             py::arg("destination"), py::arg("ratio"), py::arg("operation"),
+             py::arg("execution_context"));
+}
+
+}  // namespace pops::component::generated_pybind
+'''
+    return (source.replace("@DIGEST@", digest)
+            .replace("@WRITER_URI@", _cpp_string(writer["uri"]))
+            .replace("@WRITER_VERSION@", str(writer["version"]) + "u")
+            .replace("@WRITER_ROWS@", writer_rows)
+            .replace("@TRANSFER_VERSION@", str(transfer["version"]) + "u"))
 
 
 def _cpp_string(value: str) -> str:
@@ -644,8 +1791,11 @@ def main() -> int:
     products = {
         PY_SCHEMA: _render_schema(catalog, digest, semantic_digest),
         PY_ROUTES: _render_routes(catalog, digest, semantic_digest),
+        PY_INTERFACES: _render_native_interfaces(catalog, digest, semantic_digest),
         CPP_CATALOG: _render_cpp(catalog, digest, semantic_digest),
         CPP_ACCESSORS: _render_accessors(catalog, digest),
+        CPP_COMPONENT_ABI: _render_component_abi(catalog, digest),
+        CPP_PYBIND_INVOKERS: _render_pybind_invokers(catalog, digest),
     }
     changed = any([
         _update(path, content, check=args.check) for path, content in products.items()

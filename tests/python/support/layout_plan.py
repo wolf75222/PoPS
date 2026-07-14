@@ -6,24 +6,38 @@ from typing import Any
 
 from pops.codegen._layout_resolution import layout_lowering_coverage
 from pops.amr import (
+    AMRClockRelation,
     AMRExecution,
     AMRHierarchy,
     AMRRegrid,
     AMRTagging,
+    AMRTransfer,
     Buffer,
     ConflictPolicy,
     EqualityPolicy,
     Hysteresis,
     Tag,
 )
-from pops.ir.expr import Const
+from pops._ir.expr import Const
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh import CartesianGrid, CartesianMesh, normalize_layout_plan
+from pops.mesh import CartesianGrid, PeriodicAxes, normalize_layout_plan
 from pops.layouts import AMR, Uniform
-from pops.mesh.amr.transfer import AMRTransfer
 from pops.model import Handle, OwnerPath
 from pops.time import Clock, always
+
+
+def cartesian_grid(
+    n: int = 64,
+    L: float = 1.0,
+    periodic: bool = True,
+    *,
+    name: str = "test-square",
+) -> CartesianGrid:
+    """Build the canonical public square-grid authoring value used by tests."""
+    frame = Rectangle(name, (0.0, 0.0), (L, L)).frame(Cartesian2D())
+    topology = PeriodicAxes(frame.axes) if periodic else None
+    return CartesianGrid(frame=frame, cells=(n, n), periodic=topology)
 
 
 def final_amr_layout(
@@ -33,13 +47,8 @@ def final_amr_layout(
     ratio: int = 2,
 ) -> AMR:
     """Small complete final AMR authority for tests needing only layout structure."""
-    if type(grid) is CartesianMesh:
-        grid = CartesianGrid(
-            frame=Rectangle(
-                "test-amr-grid", (0.0, 0.0), (grid.L, grid.L)
-            ).frame(Cartesian2D()),
-            cells=(grid.n, grid.n),
-        )
+    if type(grid) is not CartesianGrid:
+        raise TypeError("final_amr_layout requires an exact public CartesianGrid")
     return AMR(
         grid=grid,
         hierarchy=AMRHierarchy(max_levels=max_levels, ratios=(ratio,) * (max_levels - 1)),
@@ -50,7 +59,10 @@ def final_amr_layout(
         ),
         regrid=AMRRegrid(always(clock=Clock("macro"))),
         transfer=AMRTransfer(),
-        execution=AMRExecution.subcycled(),
+        execution=AMRExecution.subcycled(tuple(
+            AMRClockRelation(level, level + 1, ratio)
+            for level in range(max_levels - 1)
+        )),
     )
 
 
@@ -65,11 +77,11 @@ def resolved_layout_contract(
     descriptor = layout
     required = ("validate", "options", "requirements", "capabilities")
     if not all(callable(getattr(descriptor, name, None)) for name in required):
-        mesh = CartesianMesh(n=8)
-        descriptor = final_amr_layout(mesh, max_levels=2, ratio=2) \
-            if target == "amr_system" else Uniform(mesh)
+        grid = cartesian_grid(n=8)
+        descriptor = final_amr_layout(grid, max_levels=2, ratio=2) \
+            if target == "amr_system" else Uniform(grid)
     plan = normalize_layout_plan(descriptor, owner=owner, blocks=blocks)
     return plan, layout_lowering_coverage(plan)
 
 
-__all__ = ["final_amr_layout", "resolved_layout_contract"]
+__all__ = ["cartesian_grid", "final_amr_layout", "resolved_layout_contract"]

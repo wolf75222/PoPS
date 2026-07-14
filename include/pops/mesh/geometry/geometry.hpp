@@ -41,7 +41,7 @@ struct Geometry {
 };
 
 // PolarGeometry: SIBLING of Geometry for a GLOBAL ANNULAR domain (r, theta).
-// "Annular polar grid" effort, Phase 1 (TRANSPORT only, opt-in via pops.PolarMesh).
+// Global annular geometry used by the advanced pops.mesh.PolarMesh route.
 // The Phase-0 proto (test_polar_ring_advection) quantified that the Cartesian grid diffuses
 // the RADIAL gradient of a ring in azimuthal rotation (~18%/5 turns) where the polar grid
 // preserves it (ratio 73): carrying the radial direction onto a grid AXIS lifts this lock.

@@ -15,8 +15,8 @@ Couvre :
 """
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
@@ -26,9 +26,9 @@ def build(n=64, abs_tol=None):
     sim = System(n=n, periodic=False)
     sim.block(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     if abs_tol is None:
         sim.set_poisson(bc=Dirichlet())
     else:

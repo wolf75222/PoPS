@@ -17,6 +17,7 @@ from pops._native_facts import (  # noqa: F401  (re-export)
     NATIVE_AMR_REFINEMENT_RATIO,
     NATIVE_COMMUNICATOR,
     NATIVE_DIMENSION,
+    NATIVE_MAX_RUNTIME_PARAMS,
     NATIVE_PRECISION,
     NATIVE_REAL_BYTES,
 )
@@ -47,6 +48,7 @@ def _static_report() -> dict:
         "amr_refinement_ratio": NATIVE_AMR_REFINEMENT_RATIO,
         "precision": NATIVE_PRECISION,
         "real_bytes": NATIVE_REAL_BYTES,
+        "max_runtime_params": NATIVE_MAX_RUNTIME_PARAMS,
         "supports_single_precision": False,
         "supports_mixed_precision": False,
         "has_kokkos": None,

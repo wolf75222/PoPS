@@ -395,12 +395,9 @@ def _short(value):
 from pops.external._artifact_manifest_ops import (  # noqa: E402
     apply_native_manifest,
     build_compiled_manifest,
-    build_compiled_manifest_from_so,
     check_layout_supported,
-    load_native_manifest,
 )
 
 
 __all__ = ["CompiledArtifactManifest", "build_compiled_manifest", "check_layout_supported",
-           "apply_native_manifest", "load_native_manifest", "build_compiled_manifest_from_so",
-           "ARTIFACT_MANIFEST_SCHEMA_VERSION"]
+           "apply_native_manifest", "ARTIFACT_MANIFEST_SCHEMA_VERSION"]

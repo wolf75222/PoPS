@@ -25,8 +25,8 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
@@ -38,7 +38,7 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return pops.Model(pops.Scalar(), pops.ExB(B0=B0), pops.NoSource(), pops.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _build_stride(n=32):
@@ -46,10 +46,10 @@ def _build_stride(n=32):
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     sim.block("ions", _scalar_charge(+1.0),
-                  spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
     sim.block("slow", _scalar_charge(-1.0),
-                  spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()),
-                  time=pops.Explicit(stride=2))  # bloc lent : cadence stride=2
+                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
+                  time=engine.Explicit(stride=2))  # bloc lent : cadence stride=2
     sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("slow", _bump(n, 0.20))

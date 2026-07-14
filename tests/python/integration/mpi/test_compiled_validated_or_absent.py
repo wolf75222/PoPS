@@ -25,6 +25,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     from pops.codegen._compile_drivers import compile_problem
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
@@ -82,8 +83,8 @@ if not hasattr(sim, "install_program"):
 else:
     sim.add_equation(
         "ions", compile_block_model(model, target="system"),
-        spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-        time=pops.Explicit(method="euler"),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
     )
     sim.set_poisson("charge_density", "geometric_mg")
     n = 24

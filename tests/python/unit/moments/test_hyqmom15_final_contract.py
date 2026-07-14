@@ -10,6 +10,7 @@ import pytest
 
 from pops.lib.models.moments import HyQMOM15
 from pops.moments import LocalClosure, RealizabilityProjection, closure, moment_names
+from pops.domain import RectangleFrame
 from pops.frames import Cartesian2D
 from pops.physics import Model
 from pops.time import ProjectAndRecheck, RejectAttempt
@@ -105,6 +106,7 @@ def test_final_authoring_derives_field_storage_and_complete_generic_program() ->
     target = _load_example().build_authoring()
 
     assert type(target.model) is Model
+    assert isinstance(target.model.frame, RectangleFrame)
     assert target.components == tuple(moment_names(4))
     assert target.model.field_spaces()[target.field.local_id].components == (
         "phi", "grad_x", "grad_y")

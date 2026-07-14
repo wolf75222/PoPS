@@ -1,17 +1,13 @@
-"""Facade de compilation par INTENTION : HyperbolicModel.compile(backend=...) aiguille vers les
-moteurs (compile_so JIT / compile_aot AOT / compile_native NATIF) SANS changer la numerique, et
-preserve de bout en bout noms, VariableRole, gamma, n_aux et B_z (les metadonnees ABI #75). Le
-backend "production" est desormais le chemin NATIF (loader .so -> add_native_block), distinct de l'AOT
-host-marshale ; la parite numerique stricte est couverte par test_dsl_production.
+"""Facade de compilation par intention pour le package natif ``production``.
+
+``HyperbolicModel.compile(backend="production")`` produit le package charge par ``add_native_block``
+et preserve de bout en bout noms, ``VariableRole``, gamma, n_aux et B_z.
 
 Deux niveaux :
-(1) GARDE-FOUS pur-Python (aucun compilateur requis) : backend inconnu, mapping backend -> adder,
-    et erreurs EXPLICITES quand require_metadata est demande sur un modele sans roles/gamma ou sur le
-    backend prototype (JIT, dispatch virtuel hote, non device-clean).
-(2) BOUT EN BOUT (saute si aucun compilateur C++ / en-tetes pops) : compile(backend=...) produit une
-    .so qui, branchee sur l'adder correspondant, expose les BONS noms/roles/gamma (pas le fallback) et
-    lit bien le canal aux etendu (B_z). On prouve aussi que compile() == compile_or_jit() pour le
-    backend equivalent (la facade ne fait qu'aiguiller, elle ne regresse pas la numerique).
+(1) GARDE-FOUS pur-Python (aucun compilateur requis) : backend inconnu, mapping production -> adder,
+    et erreur EXPLICITE quand ``require_metadata`` est demande sur un modele sans roles/gamma.
+(2) BOUT EN BOUT (saute si aucun compilateur C++ / en-tetes pops) : le package branche via
+    ``add_equation`` expose les BONS noms/roles/gamma et lit le canal aux etendu B_z.
 
 Lance avec python3, meme PYTHONPATH que les autres tests DSL.
 """
@@ -21,8 +17,12 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.ops import sqrt
+import pops.runtime._engine_descriptors as engine
+from pops.math import sqrt
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.riemann import HLLC, Rusanov
+from pops.numerics.variables import Conservative, Primitive
 from pops.physics.aux import roles_for
 from pops.physics._model import HyperbolicModel
 
@@ -106,20 +106,8 @@ def test_guardrails():
     print("OK  backend inconnu rejete (compile + adder_for)")
 
     # mapping backend -> adder System (couplage compilation/execution)
-    assert HyperbolicModel.adder_for("prototype") == "add_dynamic_block"
-    assert HyperbolicModel.adder_for("aot") == "add_compiled_block"
     assert HyperbolicModel.adder_for("production") == "add_native_block"
-    print("OK  adder_for : prototype->add_dynamic_block, aot->add_compiled_block, "
-          "production->add_native_block")
-
-    # require_metadata sur prototype (JIT, dispatch virtuel hote) : incoherent -> erreur claire
-    try:
-        e.compile("x.so", INCLUDE, backend="prototype", require_metadata=True)
-    except ValueError as ex:
-        assert "prototype" in str(ex)
-    else:
-        raise AssertionError("prototype + require_metadata aurait du lever")
-    print("OK  backend prototype + require_metadata=True rejete (non device-clean)")
+    print("OK  adder_for : production->add_native_block")
 
     # require_metadata sur un modele PAUVRE (pas de roles, pas de gamma) : erreur listant le manque
     try:
@@ -151,65 +139,41 @@ def test_end_to_end():
     n, L = 16, 1.0
     tmp = tempfile.mkdtemp()
     try:
-        # --- aot (compile_aot, add_compiled_block) ET production (compile_native, add_native_block) :
-        # require_metadata=True passe (roles+gamma). Les noms/roles propagent dans les deux cas (AOT :
-        # lus de l'ABI du .so ; natif : portes par ProdModel::conservative_vars()). Le GAMMA differe de
-        # SOURCE : l'AOT le lit du symbole pops_compiled_gamma du .so ; le natif le recoit en ARGUMENT
-        # d'add_native_block (comme add_block / add_compiled_model). On le passe donc pour le natif. ---
-        for backend in ("aot", "production"):
-            so = e.compile(os.path.join(tmp, "facade_%s.so" % backend), INCLUDE,
-                           backend=backend, require_metadata=True)
-            s = System(n=n, L=L, periodic=True)
-            adder = getattr(s, HyperbolicModel.adder_for(backend))
-            kw = dict(gamma=GAMMA) if backend == "production" else {}
-            adder("gas", so, limiter="minmod", riemann="hllc", recon="primitive", **kw)
-            # noms/roles DU MODELE (pas le fallback u0.. / custom)
-            assert s.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
-                "%s : noms != metadonnees : %r" % (backend, s.variable_names("gas"))
-            assert s.variable_roles("gas") == ["density", "momentum_x", "momentum_y", "energy"], \
-                "%s : roles != metadonnees : %r" % (backend, s.variable_roles("gas"))
-            assert s.variable_roles("gas", "primitive") == \
-                ["density", "velocity_x", "velocity_y", "pressure"], \
-                "%s : roles primitifs != metadonnees : %r" % (backend, s.variable_roles("gas", "primitive"))
-            assert abs(s.block_gamma("gas") - GAMMA) < 1e-12, \
-                "%s : gamma != metadonnees : %r" % (backend, s.block_gamma("gas"))
-            print("OK  backend=%s : noms/roles/gamma propages (gamma=%.4f) via %s"
-                  % (backend, s.block_gamma("gas"), HyperbolicModel.adder_for(backend)))
-
-        # --- la facade ne regresse pas la numerique : compile(aot) octets-identiques a
-        #     compile_or_jit(mode="compile") (meme source generee, meme toolchain) ---
-        a = e.compile(os.path.join(tmp, "via_facade.so"), INCLUDE, backend="aot")
-        b = e.compile_or_jit(os.path.join(tmp, "via_legacy.so"), INCLUDE, mode="compile")
-        # la SOURCE generee est identique (le binaire peut differer par des chemins temporaires)
-        assert e.emit_cpp_aot_source() == e.emit_cpp_aot_source(), "source non deterministe"
-        s1 = System(n=n, L=L, periodic=True)
-        s1.add_compiled_block("g", a, limiter="minmod", riemann="hllc", recon="primitive")
-        s2 = System(n=n, L=L, periodic=True)
-        s2.add_compiled_block("g", b, limiter="minmod", riemann="hllc", recon="primitive")
-        assert s1.variable_names("g") == s2.variable_names("g")
-        assert s1.variable_roles("g") == s2.variable_roles("g")
-        assert abs(s1.block_gamma("g") - s2.block_gamma("g")) < 1e-15
-        print("OK  compile(backend='aot') == compile_or_jit(mode='compile') (memes metadonnees)")
-
-        # --- prototype : JIT (add_dynamic_block), roles/gamma transportes aussi (sans require_metadata) ---
-        sop = e.compile(os.path.join(tmp, "facade_proto.so"), INCLUDE, backend="prototype")
-        sp = System(n=n, L=L, periodic=True)
-        getattr(sp, HyperbolicModel.adder_for("prototype"))("gas", sop, recon="minmod")
-        assert sp.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"], \
-            "prototype : noms != metadonnees : %r" % sp.variable_names("gas")
-        assert sp.variable_roles("gas") == ["density", "momentum_x", "momentum_y", "energy"], \
-            "prototype : roles != metadonnees : %r" % sp.variable_roles("gas")
-        assert abs(sp.block_gamma("gas") - GAMMA) < 1e-12, \
-            "prototype : gamma != metadonnees : %r" % sp.block_gamma("gas")
-        print("OK  backend=prototype (JIT) : noms/roles/gamma propages via add_dynamic_block")
+        compiled = e.compile(
+            os.path.join(tmp, "facade_production.so"),
+            INCLUDE,
+            backend="production",
+            require_metadata=True,
+        )
+        assert compiled.adder == "add_native_block"
+        s = System(n=n, L=L, periodic=True)
+        s.add_equation(
+            "gas",
+            compiled,
+            spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(), recon=Primitive()),
+            time=engine.Explicit(),
+        )
+        # noms/roles DU MODELE (pas le fallback u0.. / custom)
+        assert s.variable_names("gas") == ["rho", "rho_u", "rho_v", "E"]
+        assert s.variable_roles("gas") == ["density", "momentum_x", "momentum_y", "energy"]
+        assert s.variable_roles("gas", "primitive") == \
+            ["density", "velocity_x", "velocity_y", "pressure"]
+        assert abs(s.block_gamma("gas") - GAMMA) < 1e-12
+        print("OK  production : noms/roles/gamma propages via add_equation -> add_native_block")
 
         # --- n_aux / B_z preserves a travers la facade (canal aux etendu) ---
         m = build_bz_scalar()
         c = 0.7
-        so_bz = m.compile(os.path.join(tmp, "facade_bz.so"), INCLUDE, backend="aot")
+        so_bz = m.compile(os.path.join(tmp, "facade_bz.so"), INCLUDE, backend="production")
         sb = System(n=n, L=L, periodic=True)
-        sb.add_compiled_block("bz", so_bz, limiter="none", riemann="rusanov",
-                              recon="conservative", names=["n"])
+        sb.add_equation(
+            "bz",
+            so_bz,
+            spatial=engine.Spatial(
+                limiter=FirstOrder(), flux=Rusanov(), recon=Conservative()
+            ),
+            time=engine.Explicit(),
+        )
         sb.set_poisson(rhs="charge_density", solver="geometric_mg")
         sb.set_density("bz", np.ones((n, n)))
         sb.set_magnetic_field(c * np.ones((n, n)))  # peuple le canal B_z partage (n_aux=4)
@@ -217,7 +181,7 @@ def test_end_to_end():
         R = np.array(sb.eval_rhs("bz"))
         err = float(np.max(np.abs(R - c)))  # flux nul -> R = S = B_z n = c
         assert err < 1e-12, "B_z non lu a travers la facade (ecart %.2e)" % err
-        print("OK  backend=aot : n_aux/B_z preserves (max|R - B_z| = %.2e)" % err)
+        print("OK  production : n_aux/B_z preserves (max|R - B_z| = %.2e)" % err)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

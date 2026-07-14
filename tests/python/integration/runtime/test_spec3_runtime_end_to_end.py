@@ -46,6 +46,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     from pops import time as adctime
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
@@ -65,10 +66,10 @@ def chk(cond, label):
 # PotentialForce. The force reads the field solve's phi/grad, so holding the field solve between
 # refreshes is observable in the trajectory (a held phi forces a stale E into the momentum source).
 def plasma_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=1.0),
-                     elliptic=pops.ChargeDensity(charge=1.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.PotentialForce(charge=1.0),
+                     elliptic=engine.ChargeDensity(charge=1.0))
 
 
 N = 24
@@ -78,8 +79,8 @@ EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
     sim.block("ions", plasma_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -192,8 +193,8 @@ chk(len(py_calls) == 0,
 orphan = System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
 orphan.block("ions", _m,
-                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                 time=pops.Explicit(method="euler"))
+                 spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                 time=engine.Explicit(method="euler"))
 orphan.set_poisson("charge_density", "geometric_mg")
 _x = (np.arange(N) + 0.5) / N
 _X, _Y = np.meshgrid(_x, _x, indexing="ij")

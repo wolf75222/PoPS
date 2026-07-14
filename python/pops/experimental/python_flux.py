@@ -15,9 +15,9 @@ class PythonFlux:
     volumes (Rusanov, order 1, periodic domain) over the whole array at once.
 
     OUT of the GPU/MPI hot path: this is a pure HOST path (numpy), it NEVER goes through a Kokkos
-    kernel. For production (GPU/MPI), compose a COMPILED flux (pops.CompressibleFlux brick,
-    pops.ExB...). PythonFlux formalizes the pattern of the custom_scheme case: iterate quickly on a
-    novel flux without recompiling (the advanced System seam serving as Poisson oracle if needed).
+    kernel. For production (GPU/MPI), declare the physical flux on ``pops.Model`` and select its
+    typed numerical realization through ``pops.numerics.FiniteVolume``. PythonFlux formalizes the
+    test-only pattern for iterating on a novel flux without recompiling.
 
     NON-PRODUCTION / TESTS-ONLY: reachable as ``pops.experimental.PythonFlux`` for residual
     prototyping in tests; it is intentionally absent from the public ``pops`` surface.

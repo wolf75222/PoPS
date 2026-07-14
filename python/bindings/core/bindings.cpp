@@ -18,6 +18,7 @@ PYBIND11_MODULE(_pops, m) {
   py::exception<pops::runtime::program::StepAttemptRejected>(m, "StepAttemptRejected", PyExc_RuntimeError);
   init_core(m);
   init_identity(m);
+  init_component_loader(m);
   init_system(m);
   init_amr(m);
 }

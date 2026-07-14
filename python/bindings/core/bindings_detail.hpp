@@ -30,6 +30,7 @@
 namespace py = pybind11;
 using namespace pops;
 
+
 // field (ny*nx row-major, j slow / i fast) -> numpy array (ny, nx) (copy). We size the buffer
 // with BOTH real extents of the index domain (rows = ny, cols = nx): square n x n in Cartesian
 // (UNCHANGED), but nr x ntheta in polar where nr != ntheta. A square reshape (n, n) would allocate nx^2
@@ -436,5 +437,6 @@ inline py::dict effective_options_report_to_dict(const EffectiveOptionsReport& r
 // (used by System / AmrSystem signatures) before init_system / init_amr run.
 void init_core(py::module_& m);
 void init_identity(py::module_& m);
+void init_component_loader(py::module_& m);
 void init_system(py::module_& m);
 void init_amr(py::module_& m);

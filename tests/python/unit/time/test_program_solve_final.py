@@ -6,7 +6,7 @@ import inspect
 import pytest
 
 import pops
-from pops.ir.literals import scalar_data
+from pops._ir.literals import scalar_data
 from pops.linalg import LinearProblem
 from pops.solvers import DenseLU, GMRES
 from pops.solvers import preconditioners

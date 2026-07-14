@@ -43,7 +43,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 def _pops_mods():
     try:
-        from pops.ir.ops import sqrt
+        from pops.math import sqrt
         from pops.physics._facade import Model
         from pops import time as adctime
     except Exception as exc:  # pops not importable here -> skip, never fake
@@ -199,25 +199,6 @@ chk("pops::AmrSystem*" in amr_loader,
     "the AMR named-field registration targets the AmrSystem facade")
 
 
-# The flat-ABI backends (aot: POPS_DEFINE_COMPILED_BLOCK; jit: extern "C" factory) emit the named RHS
-# brick via the shared _emit_bricks but have NO hook to register the field on the System. Reject them
-# loud at the EMIT boundary, not silently (a dropped field would only fail at runtime: "System: unknown
-# named elliptic field"). Mirrors the target='amr_system' guard.
-def _aot_named():
-    named_model("me_aot")._m.emit_cpp_aot_source()
-
-
-chk(raises(NotImplementedError, _aot_named),
-    "a named elliptic field on backend='aot' raises NotImplementedError at emit (deferred)")
-
-
-def _jit_named():
-    named_model("me_jit")._m.emit_cpp_so_source()
-
-
-chk(raises(NotImplementedError, _jit_named),
-    "a named elliptic field on backend='jit' raises NotImplementedError at emit (deferred)")
-
 # NO REGRESSION: a default-only model lowers IDENTICALLY whether or not the named feature exists. We
 # assert the default program never emits the named (3-arg) ctx call (above) AND that adding a named
 # field to a SECOND model leaves the default model's lowering untouched.
@@ -240,7 +221,7 @@ def _skipB(msg):
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
 except Exception as exc:  # noqa: BLE001
     _skipB("numpy/_pops unavailable: %s" % exc)
 
@@ -267,8 +248,8 @@ def make_sim(model):
     except RuntimeError as exc:
         _skipB("model compile could not build the .so: %s" % str(exc)[:160])
     sim.add_equation("plasma", compiled,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_poisson("composite", "geometric_mg")  # f = sum of the per-block elliptic bricks
     sim.set_state("plasma", _ic())
     return sim

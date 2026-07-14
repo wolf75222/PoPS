@@ -3,7 +3,7 @@
 A DERIVED, typed view of the model as spaces + a registry of typed operators
 (:mod:`pops.model`). It carries NO numerics and does NOT touch the model hash or
 the codegen. Methods only; the touched attributes are created by
-``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops.ir`
+``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops._ir`
 (no codegen, no ``_pops``).
 """
 from __future__ import annotations

@@ -25,7 +25,8 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 # The _bootstrap of a mismatched-interpreter extension raises ImportError (a subclass), so gate on it.
 pops = pytest.importorskip("pops", exc_type=ImportError)
-from pops.runtime.bricks import Periodic
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._engine_descriptors import Periodic  # noqa: E402
 
 
 N = 8
@@ -67,27 +68,27 @@ def _uni(value):
 
 
 def _compressible(gamma):
-    return pops.Model(state=pops.FluidState("compressible", gamma=gamma),
-                      transport=pops.CompressibleFlux(),
-                      source=pops.PotentialForce(charge=0.0),
-                      elliptic=pops.ChargeDensity(charge=0.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=gamma),
+                      transport=engine.CompressibleFlux(),
+                      source=engine.PotentialForce(charge=0.0),
+                      elliptic=engine.ChargeDensity(charge=0.0))
 
 
 def _isothermal():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                      transport=pops.IsothermalFlux(),
-                      source=pops.PotentialForce(charge=0.0),
-                      elliptic=pops.ChargeDensity(charge=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                      transport=engine.IsothermalFlux(),
+                      source=engine.PotentialForce(charge=0.0),
+                      elliptic=engine.ChargeDensity(charge=0.0))
 
 
 def test_collision_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.block("a", _compressible(1.4), spatial=pops.FiniteVolume())
-    sim.block("b", _compressible(1.4), spatial=pops.FiniteVolume())
+    sim.block("a", _compressible(1.4), spatial=engine.Spatial())
+    sim.block("b", _compressible(1.4), spatial=engine.Spatial())
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.5), v=_uni(0.2), p=_uni(1.0))
     sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(-0.3), v=_uni(0.1), p=_uni(1.0))
-    sim.add_coupling(pops.Collision("a", "b", 0.5))  # lowered via the preset -> add_coupling_operator
+    sim.add_coupling(engine.Collision("a", "b", 0.5))  # lowered via the preset -> add_coupling_operator
     # The coupling is registered as a TYPED operator with the declared momentum contract.
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["conserved_roles"] == ["momentum_x", "momentum_y"], ops
@@ -105,11 +106,11 @@ def test_ionization_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     for name in ("e", "i", "g"):
-        sim.block(name, _isothermal(), spatial=pops.FiniteVolume())
+        sim.block(name, _isothermal(), spatial=engine.Spatial())
     sim.set_primitive_state("e", rho=_uni(0.3), u=_uni(0.0), v=_uni(0.0))
     sim.set_primitive_state("i", rho=_uni(0.1), u=_uni(0.0), v=_uni(0.0))
     sim.set_primitive_state("g", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0))
-    sim.add_coupling(pops.Ionization("e", "i", "g", 1.7))
+    sim.add_coupling(engine.Ionization("e", "i", "g", 1.7))
     # Ionization is a declared NET SOURCE in density (electron creation), not a conserved exchange.
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["created_roles"] == ["density"], ops
@@ -129,11 +130,11 @@ def test_ionization_preset_matches_deleted_helper():
 def test_thermal_exchange_preset_matches_deleted_helper():
     sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.block("a", _compressible(1.4), spatial=pops.FiniteVolume())
-    sim.block("b", _compressible(1.6667), spatial=pops.FiniteVolume())
+    sim.block("a", _compressible(1.4), spatial=engine.Spatial())
+    sim.block("b", _compressible(1.6667), spatial=engine.Spatial())
     sim.set_primitive_state("a", rho=_uni(1.0), u=_uni(0.0), v=_uni(0.0), p=_uni(2.0))
     sim.set_primitive_state("b", rho=_uni(2.0), u=_uni(0.0), v=_uni(0.0), p=_uni(1.0))
-    sim.add_coupling(pops.ThermalExchange("a", "b", 0.3))
+    sim.add_coupling(engine.ThermalExchange("a", "b", 0.3))
     ops = sim.coupled_operators()
     assert len(ops) == 1 and ops[0]["conserved_roles"] == ["energy"], ops
     for step in range(len(THERMAL_REF)):

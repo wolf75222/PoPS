@@ -4,6 +4,7 @@
 #include <pops/runtime/config/route_ids.hpp>  // pops::verify_route_manifest (ADC-599: embedded route registry guard)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::dispatch_amr_compiled + build_amr_compiled (shared path)
 #include <pops/runtime/amr/amr_runtime.hpp>  // AmrRuntime + AmrRuntimeBlock (multi-block runtime engine)
+#include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
@@ -254,6 +255,11 @@ struct AmrSystem::Impl {
   };
 
   std::vector<BlockSpec> blocks;
+  // ADC-672: executable per-block plans installed before lazy hierarchy construction.  Their
+  // presence forces the common AmrRuntime route so the same plan is captured by every level RHS.
+  std::map<std::string, std::shared_ptr<PreparedBoundaryPlan>> boundary_plans_;
+  std::map<std::string, std::string> block_state_identities_;
+  std::map<std::string, std::string> boundary_field_routes_;
   struct BootstrapArray {
     std::string centering;
     int ncomp = 0;
@@ -272,6 +278,7 @@ struct AmrSystem::Impl {
   std::unordered_map<std::string, std::array<std::string, 2>> bootstrap_face_vectors;
   std::vector<std::uint8_t> program_accepted_state_;
   std::uint64_t program_accepted_state_revision_ = 0;
+  std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
 
   // Coupled inter-species sources (compiled pops.dsl.CoupledSource, flat P5 bytecode ABI) FROZEN at
   // add_coupled_source and injected into the AmrRuntime runtime engine at lazy build (build_multi).
@@ -717,7 +724,7 @@ struct AmrSystem::Impl {
         throw std::runtime_error(
             "AmrSystem::set_conservative_state : not transported by the compiled .so loader (block "
             "'" +
-            b.name + "') in multi-block ; use a native block pops.Model(...), or set_density.");
+            b.name + "') in multi-block ; use a private native ModelSpec block, or set_density.");
     // ADC-645: the composite FAC FIELD solve lives on the single-block coupler (AmrCouplerMP); the
     // multi-block AmrRuntime engine has no composite elliptic path. Refuse loud, never a silent
     // fallback to the Option A solve the caller explicitly opted out of.
@@ -747,7 +754,8 @@ struct AmrSystem::Impl {
         phi_grad_threshold > 0.0 || bootstrap_tag_spec != nullptr || tagging_spec != nullptr;
     const bool program_single_level = force_runtime_ && blocks.size() == 1 && !refinement_active;
     const int initial_levels = cfg.explicit_bootstrap ? 1 : (program_single_level ? 1 : 2);
-    const detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
+    detail::SharedAmrLayout S = detail::make_shared_amr_layout_levels(bp, initial_levels);
+    S.boundary_plans = &boundary_plans_;
     std::vector<pops::AmrRuntimeBlock> rblocks;
     rblocks.reserve(blocks.size());
     for (auto& b : blocks) {
@@ -776,7 +784,7 @@ struct AmrSystem::Impl {
           throw std::runtime_error(
               "AmrSystem : Newton options are not transported by the compiled .so loader "
               "(block '" +
-              b.name + "') ; use a native block pops.Model(...) in multi-block.");
+              b.name + "') ; use a private native ModelSpec block in multi-block.");
         // newton_diagnostics report likewise: the .so loader builder allocates no NewtonReport nor
         // threads it (flat ABI). Explicit rejection (defense in depth; the Python facade already
         // filters it upstream) rather than a silently empty report.
@@ -784,7 +792,7 @@ struct AmrSystem::Impl {
           throw std::runtime_error(
               "AmrSystem : newton_diagnostics (newton_report) is not transported by the "
               "compiled .so loader (block '" +
-              b.name + "') ; use a native block pops.Model(...).");
+              b.name + "') ; use a private native ModelSpec block.");
         // Zhang-Shu positivity floor (ADC-322): the AmrCompiledBlockBuilder now carries a floor slot,
         // so a loader regenerated against this header floors the Density-role face states like a native
         // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
@@ -837,9 +845,27 @@ struct AmrSystem::Impl {
           break;
       }
     }
+    if (!block_state_identities_.empty()) {
+      if (block_state_identities_.size() != rblocks.size())
+        throw std::runtime_error(
+            "AmrSystem materialized blocks differ from the exact state-route registry");
+      std::map<std::string, std::string> claimed;
+      for (auto& block : rblocks) {
+        const auto route = block_state_identities_.find(block.name);
+        if (route == block_state_identities_.end() ||
+            !claimed.emplace(route->second, block.name).second)
+          throw std::runtime_error(
+              "AmrSystem materialized block has a missing or duplicate state identity");
+        block.state_identity = route->second;
+      }
+    }
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(rblocks),
                                            S.base_per, S.replicated_coarse, S.wall);
+    if (!boundary_plans_.empty())
+      runtime->install_boundary_storage_routes(boundary_field_routes_);
+    if (!temporal_relations_.empty() || cfg.level_count == 1)
+      runtime->set_parent_child_temporal_relations(temporal_relations_);
     // The authored AMRTransfer registry is the authority for every public-DSL block's runtime
     // coarse/fine and temporal routes. Resolve the exact owner-qualified subject once, then retain
     // only prepared native callables in AmrRuntime; no string/kernel switch survives into stepping.
@@ -1008,7 +1034,7 @@ struct AmrSystem::Impl {
               throw std::runtime_error(
                   "AmrSystem::set_refinement : variable/role selector not supported on the compiled "
                   ".so block '" + blocks[b].name +
-                  "' (component 0 only) ; use a native block pops.Model(...)");
+                  "' (component 0 only) ; use a private native ModelSpec block");
             comp = detail::resolve_selected_component(
                 "AmrSystem::set_refinement", blocks[b].name,
                 runtime->block_cons_vars(b), refine_var_name, refine_var_role);
@@ -1292,6 +1318,204 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   p_->blocks.push_back(std::move(b));
 }
 
+POPS_EXPORT void AmrSystem::install_block_state_route(
+    const std::string& name, const std::string& state_identity) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_block_state_route");
+  if (P->built)
+    throw std::runtime_error(
+        "AmrSystem::install_block_state_route: system is already built");
+  if (!P->blocks.empty())
+    throw std::runtime_error(
+        "AmrSystem::install_block_state_route must precede block declarations");
+  if (name.empty() || state_identity.empty() || P->block_state_identities_.count(name) != 0)
+    throw std::runtime_error(
+        "AmrSystem block state route requires unique non-empty block/state identities");
+  for (const auto& [_, installed_identity] : P->block_state_identities_)
+    if (installed_identity == state_identity)
+      throw std::runtime_error(
+          "AmrSystem block state route has a duplicate qualified state identity");
+  P->block_state_identities_.emplace(name, state_identity);
+}
+
+POPS_EXPORT void AmrSystem::install_boundary_plan(
+    const std::string& name, const std::string& identity, int required_depth,
+    const std::vector<std::string>& face_types, const std::vector<double>& face_values, int ncomp,
+    const std::vector<int>& omitted_interface_faces, const std::string& state_identity) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_boundary_plan");
+  if (P->built)
+    throw std::runtime_error("AmrSystem::install_boundary_plan: system is already built");
+  if (name.empty() || state_identity.empty() || P->boundary_plans_.count(name) != 0)
+    throw std::runtime_error(
+        "AmrSystem::install_boundary_plan requires unique block/state-qualified identities");
+  const auto state_route = P->block_state_identities_.find(name);
+  if (state_route == P->block_state_identities_.end() ||
+      state_route->second != state_identity)
+    throw std::runtime_error(
+        "AmrSystem::install_boundary_plan state differs from the exact block state route");
+  if (ncomp < 1 || face_types.size() != 4 ||
+      face_values.size() != static_cast<std::size_t>(4 * ncomp))
+    throw std::runtime_error(
+        "AmrSystem::install_boundary_plan requires four face types and ncomp*4 values");
+  auto parse = [](const std::string& token) {
+    if (token == "periodic") return BCType::Periodic;
+    if (token == "foextrap") return BCType::Foextrap;
+    if (token == "dirichlet") return BCType::Dirichlet;
+    if (token == "external") return BCType::External;
+    throw std::runtime_error(
+        "AmrSystem::install_boundary_plan: unsupported face producer '" + token + "'");
+  };
+  std::vector<BCRec> components(static_cast<std::size_t>(ncomp));
+  for (int comp = 0; comp < ncomp; ++comp) {
+    BCRec& bc = components[static_cast<std::size_t>(comp)];
+    const BCType types[4] = {parse(face_types[0]), parse(face_types[1]),
+                             parse(face_types[2]), parse(face_types[3])};
+    const Real values[4] = {
+        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp)]),
+        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 1)]),
+        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 2)]),
+        static_cast<Real>(face_values[static_cast<std::size_t>(4 * comp + 3)])};
+    bc.xlo = types[0]; bc.xhi = types[1]; bc.ylo = types[2]; bc.yhi = types[3];
+    bc.xlo_val = values[0]; bc.xhi_val = values[1];
+    bc.ylo_val = values[2]; bc.yhi_val = values[3];
+  }
+  auto plan = std::make_shared<PreparedBoundaryPlan>(identity, required_depth,
+                                                     std::move(components),
+                                                     omitted_interface_faces,
+                                                     state_identity);
+  for (const auto& [_, installed] : P->boundary_plans_)
+    if (installed->state_identity() == state_identity)
+      throw std::runtime_error(
+          "AmrSystem::install_boundary_plan duplicate qualified state identity");
+  P->boundary_plans_.emplace(name, std::move(plan));
+  P->force_runtime_ = true;
+}
+
+POPS_EXPORT void AmrSystem::install_boundary_field_route(
+    const std::string& field_identity, const std::string& provider_slot) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_boundary_field_route");
+  if (P->built)
+    throw std::runtime_error(
+        "AmrSystem::install_boundary_field_route: system is already built");
+  if (field_identity.empty() || provider_slot.empty() ||
+      !P->boundary_field_routes_.emplace(field_identity, provider_slot).second)
+    throw std::runtime_error(
+        "AmrSystem boundary field route requires unique non-empty qualified identities");
+  P->force_runtime_ = true;
+}
+
+POPS_EXPORT void AmrSystem::discard_boundary_plans() {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "discard_boundary_plans");
+  if (P->built || !P->blocks.empty())
+    throw std::runtime_error(
+        "AmrSystem::discard_boundary_plans is restricted to a failed pre-block transaction");
+  P->boundary_plans_.clear();
+  P->block_state_identities_.clear();
+  P->boundary_field_routes_.clear();
+  P->force_runtime_ = false;
+}
+
+POPS_EXPORT void AmrSystem::install_ghost_boundary_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_ghost_boundary_component");
+  if (P->built)
+    throw std::runtime_error(
+        "AmrSystem::install_ghost_boundary_component: system is already built");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem ghost boundary requires an installed block boundary plan");
+  found->second->install_ghost_component(std::move(spec), std::move(component));
+  P->force_runtime_ = true;
+}
+
+POPS_EXPORT void AmrSystem::install_field_boundary_residual_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_field_boundary_residual_component");
+  if (P->built)
+    throw std::runtime_error("AmrSystem field boundary residual: system is already built");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem field boundary residual requires an installed block boundary plan");
+  found->second->install_residual_component(std::move(spec), std::move(component));
+  P->force_runtime_ = true;
+}
+
+POPS_EXPORT void AmrSystem::install_field_boundary_jvp_component(
+    const std::string& name, PreparedBoundaryComponentSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_field_boundary_jvp_component");
+  if (P->built)
+    throw std::runtime_error("AmrSystem field boundary JVP: system is already built");
+  const auto found = P->boundary_plans_.find(name);
+  if (found == P->boundary_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem field boundary JVP requires an installed block boundary plan");
+  found->second->install_jvp_component(std::move(spec), std::move(component));
+  P->force_runtime_ = true;
+}
+
+POPS_EXPORT void AmrSystem::install_interface_flux_component(
+    runtime::multiblock::AxisAlignedInterface route,
+    runtime::multiblock::PreparedInterfaceFluxSpec spec,
+    std::shared_ptr<component::LoadedComponent> component) {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "install_interface_flux_component");
+  if (route.identity.empty() || spec.interface_identity != route.identity)
+    throw std::invalid_argument(
+        "AmrSystem shared-interface route/spec identity mismatch");
+  if (!spec.execution)
+    throw std::invalid_argument(
+        "AmrSystem shared-interface component lacks exact ExecutionContext");
+  P->force_runtime_ = true;
+  P->ensure_built();
+  if (!P->runtime)
+    throw std::runtime_error(
+        "AmrSystem shared-interface installation requires the common AmrRuntime engine");
+  spec.normal_axis = route.left_axis == runtime::multiblock::InterfaceAxis::X ? 0 : 1;
+  spec.outward_sign = route.left_side == runtime::multiblock::InterfaceSide::Low ? -1 : 1;
+  const int level = route.level;
+  const Geometry geometry = P->runtime->level_geom(level);
+  spec.face_measure = spec.normal_axis == 0 ? static_cast<double>(geometry.dy())
+                                            : static_cast<double>(geometry.dx());
+  const PopsExecutionContextV1 execution = spec.execution->view();
+  P->runtime->install_level_interface_flux(
+      level, std::move(route), execution,
+      [spec = std::move(spec), component = std::move(component)]() mutable {
+        auto prepared =
+            std::make_shared<runtime::multiblock::PreparedInterfaceFluxComponent>(
+                std::move(spec), std::move(component));
+        return runtime::multiblock::InterfaceFluxEvaluator(
+            [prepared](const runtime::multiblock::BoundaryEvaluationPoint& point,
+                       const runtime::multiblock::InterfaceFluxBatch& batch) {
+              prepared->evaluate(point, batch);
+            });
+      });
+}
+
+POPS_EXPORT std::size_t AmrSystem::interface_evaluation_count(
+    const std::string& identity, int level) const {
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem shared-interface evaluation count requires a built runtime engine");
+  return p_->runtime->interface_evaluation_count(identity, level);
+}
+
+POPS_EXPORT void AmrSystem::discard_interface_flux_components() {
+  Impl* P = p_.get();
+  require_assembling_amr(P->bound_, "discard_interface_flux_components");
+  if (P->runtime) P->runtime->discard_interface_fluxes();
+}
+
 POPS_EXPORT void AmrSystem::set_compiled_block(
     int ncomp, double gamma, int substeps,
     std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
@@ -1537,13 +1761,14 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   // installer (pops_install_native_amr) only marshals the time STRING, and the add_compiled_model
   // template it inlines only maps {explicit, imex} (it does NOT freeze AmrBuildParams::time_method). Rather
   // than SILENTLY FALLING BACK to kEuler (option ignored), we REJECT explicitly here: an SSPRK3 block
-  // must go through a NATIVE block pops.Model(...) (AmrSystem.add_block), not a compiled .so loader.
+  // must use a private native ModelSpec block (AmrSystem.add_block), not a compiled .so loader.
   if (time == "ssprk3")
     throw std::runtime_error(
         "AmrSystem::add_native_block : time='ssprk3' not transported by the compiled .so loader "
         "(flat "
-        "ABI : only {explicit, imex} is marshaled) ; use a native block pops.Model(...) with "
-        "pops.Explicit(ssprk3=True) via AmrSystem.add_block.");
+        "ABI : only {explicit, imex} is marshaled) ; public authoring uses an explicit "
+        "pops.Program or pops.lib.time.SSPRK3(...); direct AmrSystem.add_block accepts only "
+        "private engine policies.");
   if (time != "explicit" && time != "imex")
     throw std::runtime_error(
         "AmrSystem::add_native_block : time 'explicit' | 'imex' on AMR (got '" + time + "')");
@@ -1745,6 +1970,31 @@ void AmrSystem::set_bootstrap_tagging(
       leaf_blocks, leaf_variables, leaf_ops, leaf_thresholds,
       refine_ops, refine_args, coarsen_ops, coarsen_args,
       min_cycles, equality, conflict, provider_identity});
+}
+
+void AmrSystem::set_temporal_relations(
+    const std::vector<std::int64_t>& numerators,
+    const std::vector<std::int64_t>& denominators,
+    const std::vector<std::string>& remainder_policies) {
+  require_assembling_amr(p_->bound_, "set_temporal_relations");
+  if (p_->built || numerators.size() != denominators.size() ||
+      numerators.size() != remainder_policies.size() ||
+      numerators.size() != static_cast<std::size_t>(p_->cfg.level_count - 1))
+    throw std::runtime_error(
+        "AmrSystem::set_temporal_relations requires one exact pre-build relation per transition");
+  std::vector<::pops::amr::ParentChildClockRelation> relations;
+  relations.reserve(numerators.size());
+  for (std::size_t index = 0; index < numerators.size(); ++index) {
+    const auto policy = remainder_policies[index] == "integral_only"
+                            ? ::pops::amr::RemainderPolicy::IntegralOnly
+                        : remainder_policies[index] == "explicit_final_substep"
+                            ? ::pops::amr::RemainderPolicy::ExplicitFinalSubstep
+                            : throw std::runtime_error(
+                                  "AmrSystem::set_temporal_relations has an unknown remainder policy");
+    relations.emplace_back(static_cast<int>(index), static_cast<int>(index + 1),
+                           ::pops::amr::Rational(numerators[index], denominators[index]), policy);
+  }
+  p_->temporal_relations_ = std::move(relations);
 }
 
 void AmrSystem::set_phi_refinement(double grad_threshold) {
@@ -2852,8 +3102,66 @@ std::vector<std::vector<std::string>> AmrSystem::program_accepted_state_manifest
                           : static_cast<int>(ring->second.size());
     rows.push_back({name, "program.block." + std::to_string(owner),
                     state.history_states.at(name), state.history_spaces.at(name),
+                    state.history_clocks.at(name), state.history_interpolations.at(name),
                     std::to_string(depth), std::to_string(state.level_clocks.size())});
   }
+  return rows;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_clock_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state = runtime::program::deserialize_amr_program_accepted_state(
+      p_->program_accepted_state_);
+  for (const auto& clock : state.level_clocks)
+    rows.push_back({"level", std::to_string(clock.level), std::to_string(clock.macro_step),
+                    std::to_string(clock.phase.numerator),
+                    std::to_string(clock.phase.denominator),
+                    std::to_string(clock.physical_time)});
+  for (const auto& [identity, tick] : state.logical_clock_ticks)
+    rows.push_back({"logical", identity, std::to_string(tick)});
+  return rows;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_flux_ledger_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state = runtime::program::deserialize_amr_program_accepted_state(
+      p_->program_accepted_state_);
+  const auto orientation = [](amr::FluxOrientation value) {
+    switch (value) {
+      case amr::FluxOrientation::XMinus: return "x_minus";
+      case amr::FluxOrientation::XPlus: return "x_plus";
+      case amr::FluxOrientation::YMinus: return "y_minus";
+      case amr::FluxOrientation::YPlus: return "y_plus";
+    }
+    return "invalid";
+  };
+  for (const auto& entry : state.accepted_flux_ledger)
+    rows.push_back({entry.key.owner, entry.key.state, entry.key.rate, entry.key.flux,
+                    std::to_string(entry.key.level),
+                    std::to_string(entry.key.clock.macro_step),
+                    std::to_string(entry.key.clock.phase.numerator),
+                    std::to_string(entry.key.clock.phase.denominator),
+                    std::to_string(entry.measure.stage_weight.numerator),
+                    std::to_string(entry.measure.stage_weight.denominator),
+                    orientation(entry.measure.orientation),
+                    std::to_string(entry.measure.face_measure),
+                    std::to_string(entry.measure.substep_duration)});
+  return rows;
+}
+std::vector<std::vector<std::string>> AmrSystem::program_sync_manifest() const {
+  std::vector<std::vector<std::string>> rows;
+  if (p_->program_accepted_state_.empty())
+    return rows;
+  const auto state = runtime::program::deserialize_amr_program_accepted_state(
+      p_->program_accepted_state_);
+  for (const auto& event : state.accepted_sync)
+    rows.push_back({std::to_string(event.parent_level), std::to_string(event.child_level),
+                    std::to_string(event.block), event.phase == 0 ? "reflux" : "average_down",
+                    std::to_string(event.clock.macro_step),
+                    std::to_string(event.clock.phase.numerator),
+                    std::to_string(event.clock.phase.denominator)});
   return rows;
 }
 // RUNTIME FREEZE LIFECYCLE (ADC-592, parity with System). mark_bound() is the ONE transition into the
@@ -2866,6 +3174,22 @@ void AmrSystem::mark_bound() {
     throw std::runtime_error(
         "AmrSystem::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
         "exactly once; a fresh run needs a fresh pops.bind)");
+  if (!p_->block_state_identities_.empty() &&
+      p_->block_state_identities_.size() != p_->blocks.size())
+    throw std::runtime_error(
+        "AmrSystem::mark_bound: block state routes do not exactly cover materialized blocks");
+  for (const auto& block : p_->blocks)
+    if (!p_->block_state_identities_.empty() &&
+        p_->block_state_identities_.find(block.name) == p_->block_state_identities_.end())
+      throw std::runtime_error(
+          "AmrSystem::mark_bound: materialized block lacks its exact state route");
+  for (const auto& [name, plan] : p_->boundary_plans_) {
+    if (std::none_of(p_->blocks.begin(), p_->blocks.end(),
+                     [&name](const Impl::BlockSpec& block) { return block.name == name; }))
+      throw std::runtime_error(
+          "AmrSystem::mark_bound: prepared boundary plan references unknown block '" + name + "'");
+    (void)plan->has_boundary_linearization();
+  }
   p_->bound_ = true;
 }
 std::string AmrSystem::lifecycle_state() const {
@@ -3163,24 +3487,11 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     }
     const std::vector<std::string> amr_names = block_names();
     const int n = block_count();
-    // FAIL LOUD (ADC-508 v1): the per-level AmrProgramContext driver supports a SINGLE-block AMR
-    // Program only. A Program binding >= 2 blocks would lower to the per-level solve_fields_from_state
-    // clobber path with no coupled coarse-fine re-solve -- a silently-wrong multilevel coupling. Reject
-    // it here with an actionable remedy rather than installing a half-wired multi-block driver. (The
-    // single-block AMR Program is the bit-identical parity gate; a genuine multi-block AMR runs the
-    // per-block NATIVE route -- pops.compile(Case(layout=AMR(...)), multi-block), ADC-503 -- or a
-    // multi-block Program on System.)
-    if (n > 1) {
-      pops::dynlib::close(h);
-      throw std::runtime_error(
-          "AmrSystem::install_program : the installed compiled time Program binds " +
-          std::to_string(n) +
-          " blocks, but a multi-block AMR Program is not supported in v1 (the per-level "
-          "AmrProgramContext driver wires a SINGLE block only). Use the per-block NATIVE AMR "
-          "route (pops.compile(Case(layout=AMR(...))) with a multi-block layout, ADC-503), or "
-          "install the multi-block Program on System (System.install_program). A single-block "
-          "AMR Program is supported.");
-    }
+    // The generated Program now emits one point-qualified rhs_group for every simultaneous set of
+    // block rates. AmrProgramContext maps every Program block by name and forwards that group to the
+    // common AmrRuntime, which evaluates a shared interface exactly once before either residual is
+    // consumed. Consequently the former single-block guard is obsolete; retaining it would reject a
+    // route whose coupled scheduler semantics are already proved at resolve time.
     std::vector<int> prog_to_sys(static_cast<std::size_t>(n), -1);
     for (int p = 0; p < n; ++p) {
       const std::string want = block_name(p);
@@ -3303,7 +3614,7 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
   report.amr_refinement.phi_refinement_enabled =
       p_->phi_grad_threshold > static_cast<double>(kAmrPhiRefinementDisabledThreshold);
   // ADC-616: effective Berger-Rigoutsos clustering params (default {0.7, 1, 32} unless overridden by
-  // the AmrSystemConfig cluster_* fields, which mirror the pops.mesh.amr.PatchClustering descriptor).
+  // the AmrSystemConfig cluster_* fields, mirrored by the private AMR clustering descriptor).
   report.amr_refinement.cluster_min_efficiency =
       p_->cfg.cluster_min_efficiency > 0.0 ? p_->cfg.cluster_min_efficiency : 0.7;
   report.amr_refinement.cluster_min_box_size =
@@ -3541,11 +3852,19 @@ void AmrSystem::restore_checkpoint_counters(int regrid_count, std::uint64_t topo
   }
   p_->runtime->restore_checkpoint_counters(regrid_count, topology_epoch);
 }
-std::vector<int> AmrSystem::checkpoint_temporal_ratios() const {
+std::vector<std::vector<std::string>> AmrSystem::checkpoint_temporal_relations() const {
   p_->ensure_built();
   if (!p_->runtime)
     return {};
-  return p_->runtime->checkpoint_temporal_ratios();
+  std::vector<std::vector<std::string>> rows;
+  for (const auto& relation : p_->runtime->checkpoint_temporal_relations())
+    rows.push_back({
+        std::to_string(relation.parent_level()), std::to_string(relation.child_level()),
+        std::to_string(relation.temporal_ratio().numerator),
+        std::to_string(relation.temporal_ratio().denominator),
+        relation.remainder_policy() == ::pops::amr::RemainderPolicy::IntegralOnly
+            ? "integral_only" : "explicit_final_substep"});
+  return rows;
 }
 std::vector<std::vector<std::string>> AmrSystem::checkpoint_transfer_routes() const {
   std::vector<std::vector<std::string>> rows;

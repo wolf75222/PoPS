@@ -6,14 +6,14 @@ On verifie :
     - pops_include() auto-detecte le dossier d'en-tetes (ici via POPS_INCLUDE, sinon le paquet) ;
     - pops_cache_dir() respecte POPS_CACHE_DIR et cree le dossier ;
     - la cle de cache (model_hash + abi_key + backend/target/name) DIFFERE quand le modele change
-      (param, formule, backend), et est STABLE pour un modele identique.
+      (param, formule, target), et est STABLE pour un modele identique.
 (2) BOUT EN BOUT (saute sans compilateur / en-tetes) :
-    - m.compile(backend="aot") ET backend="production" SANS so_path/include -> CompiledModel valide,
+    - m.compile(backend="production") SANS so_path/include -> CompiledModel valide,
       branchable via add_equation et qui tourne (run) ;
     - une 2e compilation du MEME modele est un cache HIT (PAS de recompilation : meme chemin, mtime
       inchange, marqueur present) ;
     - changer le modele (un parametre) BUSTE le cache (chemin different, recompilation) ;
-    - la forme a arguments EXPLICITES (so_path + include) marche toujours (retro-compat).
+    - la forme a destination EXPLICITE (so_path + include) respecte le chemin demande.
 
 Lance avec python3, meme PYTHONPATH que les autres tests DSL.
 """
@@ -28,13 +28,13 @@ import time
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.cache import _identity_cache_so_path, pops_cache_dir
 from pops.identity import artifact_spec_identity, make_identity
 from pops.codegen.loader import CompiledModel
 from pops.codegen.toolchain import pops_include
-from pops.ir.expr import Var
-from pops.ir.ops import sqrt
+from pops._ir.expr import Var
+from pops.math import sqrt
 from pops.physics._facade import Model
 
 from tests.python.support.requirements import repo_include
@@ -103,28 +103,27 @@ def pure_python_checks():
             del os.environ["POPS_INCLUDE"]
             print("OK  pops_include() honore POPS_INCLUDE")
 
-        # cle de cache : meme modele -> meme chemin ; param/formule/backend differents -> chemin different
+        # cle de cache : meme modele -> meme chemin ; param/formule/target differents -> chemin different
         abi = "fakeabikey"
         m = build_euler()
         h = m._model_hash()
-        p_aot = _typed_cache_path(h, abi, "aot", "system")
-        p_aot_again = _typed_cache_path(h, abi, "aot", "system")
-        assert p_aot == p_aot_again, "cle de cache non deterministe pour un modele identique"
-        assert p_aot.startswith(os.path.normpath(cache)), "le .so en cache doit vivre dans le cache dir"
+        p_prod = _typed_cache_path(h, abi, "production", "system")
+        p_prod_again = _typed_cache_path(h, abi, "production", "system")
+        assert p_prod == p_prod_again, "cle de cache non deterministe pour un modele identique"
+        assert p_prod.startswith(os.path.normpath(cache)), \
+            "le .so en cache doit vivre dans le cache dir"
 
-        # backend / target / abi differents -> chemins distincts (memes model_hash)
-        assert _typed_cache_path(h, abi, "production", "system") != p_aot, \
-            "backend different doit donner un chemin different"
+        # target / abi differents -> chemins distincts (memes model_hash)
         assert _typed_cache_path(h, abi, "production", "amr_system") != \
             _typed_cache_path(h, abi, "production", "system"), \
             "target different doit donner un chemin different"
-        assert _typed_cache_path(h, "autreabi", "aot", "system") != p_aot, \
+        assert _typed_cache_path(h, "autreabi", "production", "system") != p_prod, \
             "abi_key differente doit donner un chemin different"
 
         # un PARAMETRE different change model_hash, donc le chemin de cache (cache MISS)
         m2 = build_euler(gamma=1.4)
         assert m2._model_hash() != h, "un param different doit changer model_hash"
-        assert _typed_cache_path(m2._model_hash(), abi, "aot", "system") != p_aot, \
+        assert _typed_cache_path(m2._model_hash(), abi, "production", "system") != p_prod, \
             "un param different doit buster le cache"
 
         # une FORMULE differente change aussi model_hash : on ajoute une source non triviale
@@ -132,10 +131,9 @@ def pure_python_checks():
         rho3 = Var("rho", "cons")
         m3.source([0.0 * rho3, 0.0 * rho3, 0.0 * rho3, rho3])  # source != defaut -> formules differentes
         assert m3._model_hash() != h, "une formule differente (source) doit changer model_hash"
-        assert _typed_cache_path(m3._model_hash(), abi, "aot", "system") != p_aot, \
+        assert _typed_cache_path(m3._model_hash(), abi, "production", "system") != p_prod, \
             "une formule differente doit buster le cache"
-        print("OK  cle de cache : stable pour modele identique, distincte sur param/formule/backend/"
-              "target/abi")
+        print("OK  cle de cache : stable pour modele identique, distincte sur param/formule/target/abi")
     finally:
         if old is None:
             os.environ.pop("POPS_CACHE_DIR", None)
@@ -160,59 +158,59 @@ def end_to_end_checks():
     os.environ["POPS_CACHE_DIR"] = cache
     os.environ["POPS_INCLUDE"] = INCLUDE  # rend l'auto-detection robuste meme hors paquet installe
     try:
-        for backend, exp_adder in (("aot", "add_compiled_block"), ("production", "add_native_block")):
-            m = build_euler("euler_%s" % backend)
+        backend, exp_adder = "production", "add_native_block"
+        m = build_euler("euler_production")
 
-            # (a) compile SANS so_path NI include -> CompiledModel valide
-            cm = m.compile(backend=backend)
-            assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
-            assert cm.adder == exp_adder, "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
-            assert cm.so_path and os.path.exists(cm.so_path), "%s : .so absente" % backend
-            assert os.path.normpath(cm.so_path).startswith(os.path.normpath(cache)), \
-                "%s : .so hors du cache dir" % backend
-            assert cm.n_vars == 4 and cm.abi_key and cm.model_hash, "metadonnees CompiledModel"
-            print("OK  %s : compile() SANS so_path/include -> %s (cache %s)"
-                  % (backend, cm.adder, os.path.basename(cm.so_path)))
+        # (a) compile SANS so_path NI include -> CompiledModel valide
+        cm = m.compile(backend=backend)
+        assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
+        assert cm.adder == exp_adder, "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
+        assert cm.so_path and os.path.exists(cm.so_path), "%s : .so absente" % backend
+        assert os.path.normpath(cm.so_path).startswith(os.path.normpath(cache)), \
+            "%s : .so hors du cache dir" % backend
+        assert cm.n_vars == 4 and cm.abi_key and cm.model_hash, "metadonnees CompiledModel"
+        print("OK  %s : compile() SANS so_path/include -> %s (cache %s)"
+              % (backend, cm.adder, os.path.basename(cm.so_path)))
 
-            # (b) branchable via add_equation et tourne
-            s = System(n=n, periodic=True)
-            s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                               variables=Primitive()))
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
-            s.set_state("gas", initial_state(n))
-            nsteps = 0
-            while s.time() < 0.02:
-                s.step_cfl(0.4)
-                nsteps += 1
-            assert nsteps > 0 and np.all(np.isfinite(np.array(s.get_state("gas")))), \
-                "%s : run instable" % backend
-            print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
+        # (b) branchable via add_equation et tourne
+        s = System(n=n, periodic=True)
+        s.add_equation("gas", cm, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                           recon=Primitive()))
+        s.set_poisson(rhs="charge_density", solver="geometric_mg")
+        s.set_state("gas", initial_state(n))
+        nsteps = 0
+        while s.time() < 0.02:
+            s.step_cfl(0.4)
+            nsteps += 1
+        assert nsteps > 0 and np.all(np.isfinite(np.array(s.get_state("gas")))), \
+            "%s : run instable" % backend
+        print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
 
-            # (c) 2e compile du MEME modele -> cache HIT : meme chemin, PAS de recompilation
-            mtime1 = os.path.getmtime(cm.so_path)
-            time.sleep(1.1)  # resolution mtime : un vrai recompile changerait l'horodatage
-            cm_hit = m.compile(backend=backend)
-            assert cm_hit.so_path == cm.so_path, "%s : cache HIT chemin different" % backend
-            assert os.path.getmtime(cm_hit.so_path) == mtime1, \
-                "%s : cache HIT a RECOMPILE (mtime change)" % backend
-            print("OK  %s : 2e compile() = cache HIT (meme chemin, mtime inchange, pas de recompile)"
-                  % backend)
+        # (c) 2e compile du MEME modele -> cache HIT : meme chemin, PAS de recompilation
+        mtime1 = os.path.getmtime(cm.so_path)
+        time.sleep(1.1)  # resolution mtime : un vrai recompile changerait l'horodatage
+        cm_hit = m.compile(backend=backend)
+        assert cm_hit.so_path == cm.so_path, "%s : cache HIT chemin different" % backend
+        assert os.path.getmtime(cm_hit.so_path) == mtime1, \
+            "%s : cache HIT a RECOMPILE (mtime change)" % backend
+        print("OK  %s : 2e compile() = cache HIT (meme chemin, mtime inchange, pas de recompile)"
+              % backend)
 
-            # (d) changer un PARAMETRE buste le cache : chemin different, recompilation
-            m_diff = build_euler("euler_%s" % backend, gamma=1.4)  # gamma different -> model_hash different
-            cm_miss = m_diff.compile(backend=backend)
-            assert cm_miss.so_path != cm.so_path, "%s : param change n'a pas buste le cache" % backend
-            assert os.path.exists(cm_miss.so_path), "%s : cache MISS n'a pas compile" % backend
-            print("OK  %s : param different = cache MISS (chemin different, recompilation)" % backend)
+        # (d) changer un PARAMETRE buste le cache : chemin different, recompilation
+        m_diff = build_euler("euler_production", gamma=1.4)
+        cm_miss = m_diff.compile(backend=backend)
+        assert cm_miss.so_path != cm.so_path, "%s : param change n'a pas buste le cache" % backend
+        assert os.path.exists(cm_miss.so_path), "%s : cache MISS n'a pas compile" % backend
+        print("OK  %s : param different = cache MISS (chemin different, recompilation)" % backend)
 
-        # (e) retro-compat : forme a arguments EXPLICITES (so_path + include) marche toujours
+        # (e) forme a destination EXPLICITE (so_path + include)
         m = build_euler("euler_explicit")
         ex_path = os.path.join(explicit, "explicit.so")
-        cm_ex = m.compile(ex_path, INCLUDE, backend="aot")
+        cm_ex = m.compile(ex_path, INCLUDE, backend="production")
         assert cm_ex.so_path == ex_path and os.path.exists(ex_path), "so_path explicite casse"
         s = System(n=n, periodic=True)
-        s.add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                              variables=Primitive()))
+        s.add_equation("gas", cm_ex, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
+                                                              recon=Primitive()))
         s.set_poisson(rhs="charge_density", solver="geometric_mg")
         s.set_state("gas", initial_state(n))
         nsteps = 0
@@ -220,7 +218,7 @@ def end_to_end_checks():
             s.step_cfl(0.4)
             nsteps += 1
         assert nsteps > 0, "run via so_path explicite instable"
-        print("OK  retro-compat : compile(so_path, include, ...) explicite marche toujours")
+        print("OK  compile(so_path, include, ...) respecte la destination explicite")
     finally:
         for k, v in (("POPS_CACHE_DIR", old_cache), ("POPS_INCLUDE", old_inc)):
             if v is None:

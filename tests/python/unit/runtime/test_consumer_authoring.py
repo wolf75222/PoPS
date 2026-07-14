@@ -6,14 +6,14 @@ import pops
 from pops.diagnostics import Integral
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
-from pops.mesh import CartesianMesh, normalize_layout_plan
+from pops.mesh import normalize_layout_plan
 from pops.layouts import Uniform
-from pops.output import Checkpoint, HDF5, ScientificOutput
+from pops.output import Checkpoint, ConsumerGraph, HDF5, ScientificOutput
+from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.representations import Conservative
-from pops.runtime import ConsumerGraph
-from pops.runtime.consumer import ConsumerKind, ParallelMode
 from pops.spaces import CellState
 from pops.time import Clock, every
+from tests.python.support.layout_plan import cartesian_grid
 
 
 def _case():
@@ -52,7 +52,7 @@ def test_direct_consumers_resolve_references_layout_levels_and_parallel_mode():
 
     subjects = case.layout_subjects()
     layout = normalize_layout_plan(
-        Uniform(CartesianMesh(n=8)),
+        Uniform(cartesian_grid(n=8)),
         owner=case.owner_path.canonical(),
         states=subjects.states,
         fields=subjects.fields,

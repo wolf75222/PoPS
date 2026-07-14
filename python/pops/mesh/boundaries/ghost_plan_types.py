@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 import json
+import math
 from typing import TYPE_CHECKING, Any
 
 from .providers import BoundaryProvider
@@ -292,14 +293,98 @@ class InterfaceSide:
                 "projection": self.projection.canonical_identity()}
 
 
+class TangentialOrientation(str, Enum):
+    """Orientation of right-face samples in the canonical left-face order."""
+
+    ALIGNED = "aligned"
+    REVERSED = "reversed"
+
+
+@dataclass(frozen=True, slots=True)
+class InterfacePermutation:
+    """Executable component permutation, not merely a provenance Handle."""
+
+    handle: Handle
+    right_component_for_left: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        _handle(self.handle, where="InterfacePermutation.handle",
+                kinds=frozenset(("interface_permutation",)))
+        values = self.right_component_for_left
+        if not isinstance(values, tuple) or not values or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in values):
+            raise TypeError(
+                "InterfacePermutation.right_component_for_left must be a non-empty "
+                "tuple of integers >= 0"
+            )
+        if sorted(values) != list(range(len(values))):
+            raise ValueError("InterfacePermutation must be a bijection")
+
+    def canonical_identity(self) -> dict[str, Any]:
+        return {
+            "handle": self.handle.canonical_identity(),
+            "right_component_for_left": list(self.right_component_for_left),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class InterfaceAffineMapping:
+    """Exact 2-D axis-aligned map from the right face into the left frame.
+
+    The mapping is deliberately executable data.  The Handle authenticates its
+    provenance; it does not stand in for values the native scheduler would have
+    to guess.
+    """
+
+    handle: Handle
+    tangential_orientation: TangentialOrientation = TangentialOrientation.ALIGNED
+    right_normal_translation: float = 0.0
+    right_tangential_scale: float = 1.0
+    right_tangential_offset: float = 0.0
+
+    def __post_init__(self) -> None:
+        _handle(self.handle, where="InterfaceAffineMapping.handle",
+                kinds=frozenset(("interface_mapping",)))
+        if not isinstance(self.tangential_orientation, TangentialOrientation):
+            raise TypeError(
+                "InterfaceAffineMapping.tangential_orientation must be a "
+                "TangentialOrientation"
+            )
+        values = (
+            self.right_normal_translation,
+            self.right_tangential_scale,
+            self.right_tangential_offset,
+        )
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(float(value)) for value in values):
+            raise TypeError("InterfaceAffineMapping coefficients must be finite real values")
+        expected_scale = (
+            1.0 if self.tangential_orientation is TangentialOrientation.ALIGNED else -1.0
+        )
+        if float(self.right_tangential_scale) != expected_scale:
+            raise ValueError(
+                "InterfaceAffineMapping tangential scale must exactly match its orientation"
+            )
+
+    def canonical_identity(self) -> dict[str, Any]:
+        return {
+            "handle": self.handle.canonical_identity(),
+            "tangential_orientation": self.tangential_orientation.value,
+            "right_normal_translation": float(self.right_normal_translation),
+            "right_tangential_scale": float(self.right_tangential_scale),
+            "right_tangential_offset": float(self.right_tangential_offset),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class MultiBlockInterface:
     handle: Handle
     left: InterfaceSide
     right: InterfaceSide
     shared_conservative_flux: Handle
-    permutation: Handle
-    mapping: Handle
+    permutation: InterfacePermutation
+    mapping: InterfaceAffineMapping
 
     def __post_init__(self) -> None:
         _handle(self.handle, where="MultiBlockInterface.handle",
@@ -312,10 +397,10 @@ class MultiBlockInterface:
             raise ValueError("MultiBlockInterface sides require authenticated opposite orientations")
         _handle(self.shared_conservative_flux, where="MultiBlockInterface.shared_conservative_flux",
                 kinds=frozenset(("conservative_flux",)))
-        _handle(self.permutation, where="MultiBlockInterface.permutation",
-                kinds=frozenset(("interface_permutation",)))
-        _handle(self.mapping, where="MultiBlockInterface.mapping",
-                kinds=frozenset(("interface_mapping",)))
+        if not isinstance(self.permutation, InterfacePermutation):
+            raise TypeError("MultiBlockInterface.permutation must be an InterfacePermutation")
+        if not isinstance(self.mapping, InterfaceAffineMapping):
+            raise TypeError("MultiBlockInterface.mapping must be an InterfaceAffineMapping")
 
     @property
     def qualified_id(self) -> str:
@@ -390,5 +475,6 @@ __all__ = [
     "BoundaryLinearizationContribution", "BoundaryResidualContribution", "CornerCondition",
     "CornerConstraint", "CornerMode", "CornerPolicy", "GhostCoverageManifest",
     "GhostDepthCapability", "GhostDepthRequirement", "GhostRegion", "GhostStencilManifest",
-    "InterfaceSide", "MultiBlockInterface",
+    "InterfaceAffineMapping", "InterfacePermutation", "InterfaceSide",
+    "MultiBlockInterface", "TangentialOrientation",
 ]

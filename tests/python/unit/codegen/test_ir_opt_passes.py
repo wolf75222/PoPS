@@ -265,7 +265,7 @@ def test_redundant_solve_noop_is_canonically_identical():
 def _rk4(*, with_fields=True):
     from pops.descriptors import Descriptor
     from pops.fields import FieldDiscretization, FieldOperator
-    from pops.ir import ValueExpr
+    from pops.math import ValueExpr
     from pops.math import laplacian
     from pops.model import Module, RateSpace, Signature
     from pops.problem import Case

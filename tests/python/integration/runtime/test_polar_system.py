@@ -1,4 +1,4 @@
-"""Phase 2b grille polaire : chemin POLAIRE complet a travers System(mesh=pops.PolarMesh(...)).
+"""Phase 2b grille polaire : chemin POLAIRE via System(mesh=pops.mesh.PolarMesh(...)).
 
 Valide le LIVRABLE Python : un System polaire se construit (anneau global r x theta), recoit un bloc
 ExB scalaire + un Poisson polaire, une densite annulaire, puis avance par step() ET step_cfl() en
@@ -17,8 +17,9 @@ import math
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 
 
@@ -44,12 +45,12 @@ def _flat(field):
 
 def test_polar_system_step_and_cfl_conserve_mass():
     rmin, rmax, nr, nth = 0.30, 1.00, 48, 48
-    sim = System(mesh=pops.PolarMesh(r_min=rmin, r_max=rmax, nr=nr, ntheta=nth))
+    sim = System(mesh=PolarMesh(r_min=rmin, r_max=rmax, nr=nr, ntheta=nth))
     sim.block(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _annular_density(nr, nth, rmin, rmax))
 
@@ -86,7 +87,7 @@ def test_polar_rejects_nr_below_3():
     # REFUSE explicitement, aux DEUX niveaux. (1) PolarMesh leve a la construction du maillage.
     raised = False
     try:
-        pops.PolarMesh(r_min=0.3, r_max=1.0, nr=2, ntheta=8)
+        PolarMesh(r_min=0.3, r_max=1.0, nr=2, ntheta=8)
     except ValueError:
         raised = True
     assert raised, "PolarMesh(nr=2) doit lever (nr >= 3 requis)"

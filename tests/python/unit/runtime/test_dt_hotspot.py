@@ -23,7 +23,7 @@ import sys
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 fails = 0
@@ -49,12 +49,12 @@ CS2 = 0.5
 def make_sim(n=32):
     sim = System(n=n, L=1.0, periodic=True)
     sim.block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=CS2),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.NoSource(),
-                            elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit())
+                  engine.Model(state=engine.FluidState("isothermal", cs2=CS2),
+                            transport=engine.IsothermalFlux(),
+                            source=engine.NoSource(),
+                            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit())
     return sim
 
 

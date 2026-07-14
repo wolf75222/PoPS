@@ -21,6 +21,7 @@ from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime s
 from tests.python.support.layout_plan import resolved_layout_contract
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 from pops.runtime.amr import (  # noqa: E402
     AmrRuntimeView, PatchReport, RegridReport, GhostReport, RefluxReport, CheckpointReport,
@@ -29,14 +30,14 @@ from pops.runtime.amr import (  # noqa: E402
 
 def _model():
     """A minimal single-scalar ExB block model (no DSL compile; native bricks)."""
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
-    sim.block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
@@ -123,6 +124,7 @@ def test_explain_regrid_dynamic_vs_frozen():
     dyn = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4).amr.explain_regrid()
     assert isinstance(dyn, RegridReport)
     assert dyn.frozen is False and dyn.regrid_every == 4
+    assert dyn.regrid_count == 0 and dyn.topology_epoch == 0
     # The union-of-tags criteria are named (config-sourced shape, not a fabricated threshold).
     blob = " ".join(dyn.criteria)
     # The criteria are described by the public AMR tagging authority.
@@ -130,7 +132,20 @@ def test_explain_regrid_dynamic_vs_frozen():
 
     frozen = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0).amr.explain_regrid()
     assert frozen.frozen is True and frozen.regrid_every == 0
+    assert frozen.regrid_count == 0 and frozen.topology_epoch == 0
     assert any("frozen" in n for n in frozen.notes)
+
+
+def test_explain_regrid_reports_completed_native_regrid_and_topology_epoch():
+    sim = _built_amr(regrid_every=1)
+    rep = sim.amr.explain_regrid()
+
+    assert rep.regrid_count == sim._s.checkpoint_regrid_count() > 0
+    assert rep.topology_epoch == sim._s.checkpoint_topology_epoch() > 0
+    assert rep.to_dict()["regrid_count"] == rep.regrid_count
+    assert rep.to_dict()["topology_epoch"] == rep.topology_epoch
+    assert "completed regrids: %d" % rep.regrid_count in str(rep)
+    assert "topology epoch: %d" % rep.topology_epoch in str(rep)
 
 
 # --- explain_ghosts (honest deferral) -----------------------------------------
@@ -192,6 +207,8 @@ def test_inspect_returns_unified_runtime_inspection():
     assert set(payload) == {"hierarchy", "patches", "regrid", "limitations"}
     assert payload["hierarchy"]["patch_table"]["n_patches"] == payload["patches"]["n_patches"]
     assert payload["regrid"]["regrid_every"] == 2
+    assert payload["regrid"]["regrid_count"] > 0
+    assert payload["regrid"]["topology_epoch"] > 0
     # limitations rows carry a feature/status/reason shape; only non-available rows are listed.
     for row in payload["limitations"]:
         assert row["status"] != "available"
@@ -209,6 +226,21 @@ def test_inspect_before_build_reports_unbuilt_patches_honestly():
     assert report.regrid.frozen is True
 
 
+def test_inspect_explicitly_refuses_field_coupled_rhs_jacvec_above_level_zero():
+    report = AmrSystem(n=16, L=1.0, periodic=True).amr.inspect()
+    rows = [
+        row for row in report.limitations
+        if row["feature"] == "amr:field_coupled_rhs_jacvec"
+    ]
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["status"] == "unavailable"
+    assert "level > 0" in row["limitation"]
+    assert "AMR level > 0" in row["error_message"]
+    assert row["available_route"] == "field_coupled rhs_jacvec on AMR level 0"
+
+
 # --- compiled static delegation ------------------------------------------------
 def test_compiled_model_has_no_competing_layout_inspector():
     # A tiny stub CompiledModel (no .so dlopen needed) exposes no retired AMR-specific inspector.
@@ -224,8 +256,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     # The artifact retains the exact resolved layout; the sole public inspector reports its tags.
     from pops.codegen.loader import CompiledModel
     from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
-    from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
-    from pops.mesh import CartesianMesh
+    from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
     from pops.model.bind_schema import BindSchema
     from pops.problem._snapshot import AuthoringSnapshot
 
@@ -235,8 +266,8 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         caps={}, abi_key="k", model_hash="h", cxx="c++", std="23", target="amr_system")
     from pops.codegen._compiled_model_identity import compiled_model_identity
     cm.definition_identity = compiled_model_identity(model_hash="h")
-    from tests.python.support.layout_plan import final_amr_layout
-    carried = final_amr_layout(CartesianMesh(n=64))
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+    carried = final_amr_layout(cartesian_grid(n=64))
     snapshot = AuthoringSnapshot({"kind": "amr-runtime-inspect-stub"})
     schema = BindSchema()
     layout_plan, layout_coverage = resolved_layout_contract(
@@ -247,9 +278,13 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         backend="production",
         layout=carried,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
+        },
         time=None,
         blocks=(ResolvedBlock(
-            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "production", ("U",)),),
+            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "production", ("U",),
+            ("test::ne::state::U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -271,7 +306,7 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     assert payload["transition_ratios"] == [2]
 
     # A separately authored layout is inspected directly, with no artifact-specific override API.
-    override = pops.inspect(final_amr_layout(CartesianMesh(n=32)))["amr_report"]
+    override = pops.inspect(final_amr_layout(cartesian_grid(n=32)))["amr_report"]
     assert override["max_levels"] == 2 and "policies" in override
     assert {row["slot"] for row in override["policies"]} == set()
 

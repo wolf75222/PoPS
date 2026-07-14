@@ -1,238 +1,302 @@
-// Chemin "production" NATIF cote AMR (Plan Ideal etape 5 / DSL Phase D) : AmrSystem::add_native_block.
-//
-// On compile A L'EXECUTION un LOADER .so qui inline le gabarit en-tete add_compiled_model(AmrSystem&,
-// Model{...}) derriere l'ABI extern "C" MINCE attendue par AmrSystem::add_native_block (symbole
-// pops_install_native_amr + cle pops_native_abi_key). C'est exactement la source qu'emet le DSL
-// (dsl.emit_cpp_native_loader(target="amr_system")), mais ecrite ici pour un test C++ AUTONOME
-// (lance en ctest, sans le module Python). On le branche via AmrSystem::add_native_block puis on
-// compare a un AmrSystem ou le MEME modele est installe par add_compiled_model(AmrSystem&) EN DIRECT :
-// memes types, meme schema -> densite grossiere / masse / n_patches BIT-IDENTIQUES (dmax == 0).
-//
-// On verifie aussi le GARDE-FOU ABI : un loader dont la cle pops_native_abi_key est falsifiee (recompile
-// avec une signature d'en-tetes bidon) est REJETE explicitement par add_native_block (pas d'UB).
-//
-// Le modele est un transport pur (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
-// brique elliptique vaut 0, donc le solve MG donne phi=0 des deux cotes (zero bruit FP), parite stricte.
-//
-// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (dossier des en-tetes pops) et
-// POPS_TEST_CXX_STD (norme C++ du build, pour que la cle d'ABI du loader concorde avec celle du test).
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/amr_system.hpp>
+#include <pops/runtime/dynamic/component_consumers.hpp>
+#include <pops/runtime/dynamic/component_loader.hpp>
 
-#include <cmath>
-#include <cstdio>
+#include "component_abi_test_helpers.hpp"
+
+#include <array>
+#include <chrono>
 #include <cstdlib>
-#include <ctime>  // std::clock : suffixe unique pour les fichiers temporaires du test
+#include <filesystem>
 #include <fstream>
 #include <string>
-#include <vector>
-
-using namespace pops;
 
 namespace {
 
-using ProdModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+namespace abi = pops::component::test_support;
 
-// Parametres du modele FIGES dans le loader (alpha=0 : elliptic_rhs nul -> phi=0, parite stricte).
-constexpr double kGamma = 1.4;
+enum class FluxTableFixture { Exact, HeaderOnly, ForgedEntrySize };
 
-std::vector<double> bubble(int n) {  // bulle de densite lisse, periodique
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
-    }
-  return rho;
-}
+constexpr const char* kComponentId = "pops://test/final-flux@1.0.0";
+constexpr const char* kSemanticIdentity = "semantic-final-flux";
+constexpr const char* kManifestIdentity = "manifest-final-flux";
 
-// Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"). Le modele est
-// ecrit en dur (CompositeModel<Euler, NoSource, BackgroundDensity>) pour un test autonome. @p fake_sig
-// remplace -DPOPS_HEADER_SIG par une valeur bidon (cle d'ABI fausse) quand vrai.
-std::string loader_source() {
-  // Generated C++ source raw string: clang-format would reindent (or, with the
-  // interleaved R"CPP( delimiters, runaway-indent) the inner content. Fence it to keep the
-  // emitted source verbatim.
-  // clang-format off
+std::string component_source() {
   return R"CPP(
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/config/route_ids.hpp>
-#include <pops/runtime/dynamic/abi_key.hpp>
-#include <pops/physics/bricks/bricks.hpp>
-#include <string>
-namespace pops_generated {
-using ProdModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
-}
-// LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
-// vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
-extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
-extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
-extern "C" int pops_compiled_nparams() { return 0; }
-extern "C" const char* pops_compiled_param_names() { return ""; }
-extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
-                                       const char* riemann, const char* recon, const char* time,
-                                       double gamma, int substeps, const double*, int,
-                                       double pos_floor) {
-  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
-  pops::add_compiled_model<pops_generated::ProdModel>(
-      *s, name,
-      pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
-                               pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
-}
-)CPP";
-  // clang-format on
+#include <pops/runtime/config/generated_component_abi.hpp>
+#include <cstddef>
+
+namespace {
+int prepare_count = 0;
+int destroy_count = 0;
+
+int evaluate(void*, const PopsNumericalFluxRequestV1* request,
+             PopsNumericalFluxResultV1* result) {
+  const auto* left = static_cast<const double*>(request->left.data);
+  const auto* right = static_cast<const double*>(request->right.data);
+  auto* output = static_cast<double*>(result->normal_flux.data);
+  const auto points = request->left.extents[0] * request->left.extents[1];
+  for (std::size_t point = 0; point < points; ++point) {
+    for (std::size_t component = 0; component < request->left.component_count; ++component) {
+      const auto index = point * static_cast<std::size_t>(request->left.axis_strides[1]) +
+                         component * static_cast<std::size_t>(request->left.component_stride);
+      output[index] = 0.25 * left[index] + 0.75 * right[index];
+    }
+    result->stability_bounds[point] = 3.0;
+    result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+  }
+  result->status = {sizeof(PopsComponentStatusV1), 0,
+                    POPS_COMPONENT_CONTINUE_V1, nullptr};
+  return 0;
 }
 
-// Compile le loader en .so (g++/c++ a l'execution). @p extra : flags supplementaires (-DPOPS_HEADER_SIG
-// bidon pour le test de rejet d'ABI). Renvoie true si la compilation reussit.
-bool compile_loader(const std::string& src_path, const std::string& so_path,
-                    const std::string& extra) {
-  // Compilateur : POPS_TEST_CXX (= CMAKE_CXX_COMPILER) en general. Sur macOS, ce chemin pointe le c++
-  // de la toolchain Xcode SANS sysroot SDK -> '<algorithm> file not found' ; on prefere alors le
-  // wrapper /usr/bin/c++ (xcrun) qui resout l'SDK. Meme famille de compilateur (clang) donc __VERSION__
-  // identique -> cle d'ABI concordante avec ce binaire.
-#if defined(__APPLE__)
-  const std::string cc = "/usr/bin/c++";
+int apply_transfer(void*, const PopsTransferRequestV1*, PopsComponentStatusV1* status) {
+  *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+  return 0;
+}
+
+int prepare(const PopsComponentPrepareRequestV1*, void** state,
+            PopsComponentStatusV1* status) {
+  *state = new int(++prepare_count);
+  *status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1, nullptr};
+  return 0;
+}
+void destroy(void* state) {
+  ++destroy_count;
+  delete static_cast<int*>(state);
+}
+
+#if defined(POPS_TEST_HEADER_ONLY_FLUX_TABLE)
+const PopsComponentTableHeaderV1 flux{
+    sizeof(PopsComponentTableHeaderV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+    POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, &prepare, &destroy};
 #else
-  const std::string cc = POPS_TEST_CXX;
+const PopsNumericalFluxApiV1 flux{
+    {sizeof(PopsNumericalFluxApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, &prepare, &destroy},
+    &evaluate};
 #endif
-  // POPS_TEST_CXX_STD : meme norme que le build du test -> __cplusplus identique -> cle d'ABI concordante.
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + extra + " " + src_path + " -o " + so_path;
-#if defined(__APPLE__)
-  cmd +=
-      " -undefined dynamic_lookup";  // macOS : indefinis resolus a l'execution (set_compiled_block)
+const PopsTransferApiV1 transfer{
+    {sizeof(PopsTransferApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+     POPS_NATIVE_INTERFACE_TRANSFER_V1, 1, &prepare, &destroy},
+    &apply_transfer};
+const PopsComponentInterfaceEntryV1 interfaces[]{
+    {POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+#if defined(POPS_TEST_FORGED_FLUX_ENTRY_SIZE)
+     sizeof(PopsNumericalFluxApiV1), &flux},
+#else
+     sizeof(flux), &flux},
 #endif
-  cmd += " 2> /dev/null";
-  return std::system(cmd.c_str()) == 0;
+    {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1,
+     sizeof(PopsTransferApiV1), &transfer}};
+const PopsComponentApiV1 component{
+    sizeof(PopsComponentApiV1), POPS_COMPONENT_PROTOCOL_ABI_V1,
+    POPS_COMPONENT_CATALOG_SHA256_V1,
+    "pops://test/final-flux@1.0.0", "semantic-final-flux",
+    "manifest-final-flux", 2, interfaces};
+}  // namespace
+
+extern "C" const PopsComponentApiV1* pops_component_interface_v1() {
+  return &component;
+}
+extern "C" int pops_test_prepare_count() { return prepare_count; }
+extern "C" int pops_test_destroy_count() { return destroy_count; }
+)CPP";
 }
 
-AmrSystemConfig make_cfg(int n) {
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodic = true;
-  cfg.regrid_every = 4;
-  return cfg;
+std::filesystem::path compile_component(
+    FluxTableFixture fixture = FluxTableFixture::Exact) {
+  const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto base = std::filesystem::path(POPS_TEST_TMPDIR) /
+                    ("final_component_abi_" + std::to_string(stamp));
+  const auto source = base.string() + ".cpp";
+#if defined(__APPLE__)
+  const auto library = base.string() + ".dylib";
+  const std::string compiler = "/usr/bin/c++";
+  const std::string shared = " -dynamiclib";
+#else
+  const auto library = base.string() + ".so";
+  const std::string compiler = POPS_TEST_CXX;
+  const std::string shared = " -shared -fPIC";
+#endif
+  {
+    std::ofstream stream(source);
+    stream << component_source();
+  }
+  std::string fixture_flags;
+  if (fixture != FluxTableFixture::Exact)
+    fixture_flags += " -DPOPS_TEST_HEADER_ONLY_FLUX_TABLE";
+  if (fixture == FluxTableFixture::ForgedEntrySize)
+    fixture_flags += " -DPOPS_TEST_FORGED_FLUX_ENTRY_SIZE";
+  const std::string command = compiler + shared + fixture_flags +
+                              " -std=" + POPS_TEST_CXX_STD +
+                              " -O2 -I\"" + POPS_TEST_INCLUDE + "\" \"" + source +
+                              "\" -o \"" + library + "\"";
+  if (std::system(command.c_str()) != 0) {
+    std::filesystem::remove(source);
+    throw std::runtime_error("failed to compile exact component ABI fixture");
+  }
+  std::filesystem::remove(source);
+  return library;
+}
+
+pops::component::ExpectedNativeComponent expected() {
+  return {kComponentId, kSemanticIdentity, kManifestIdentity,
+          POPS_COMPONENT_CATALOG_SHA256_V1,
+          {{POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+            sizeof(PopsNumericalFluxApiV1)},
+           {POPS_NATIVE_INTERFACE_TRANSFER_V1, 1,
+            sizeof(PopsTransferApiV1)}}};
+}
+
+TEST(test_amr_native_loader, LoadsAuthenticatesAndExecutesExactFinalTable) {
+  const auto library = compile_component();
+  {
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    const auto& table = loaded.table<PopsNumericalFluxApiV1>(
+        POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1);
+    const std::array<double, 4> left{1.0, 3.0, 5.0, 7.0};
+    const std::array<double, 4> right{2.0, 4.0, 6.0, 8.0};
+    const std::array<double, 4> normals{1.0, 0.0, 1.0, 0.0};
+    std::array<double, 4> flux{};
+    std::array<double, 2> stability{};
+    std::array<PopsComponentActionV1, 2> actions{};
+    const auto execution = abi::host_execution_context();
+    const PopsNumericalFluxRequestV1 request{
+        sizeof(PopsNumericalFluxRequestV1),
+        abi::const_field_view(left.data(), 1, 2, 2),
+        abi::const_field_view(right.data(), 1, 2, 2),
+        abi::const_field_view(normals.data(), 1, 2, 2),
+        nullptr, abi::logical_time(), execution};
+    PopsNumericalFluxResultV1 result{
+        sizeof(PopsNumericalFluxResultV1),
+        abi::field_view(flux.data(), 1, 2, 2),
+        stability.data(), actions.data(), {}};
+    void* state = loaded.prepared_state(
+        POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution);
+    ASSERT_NE(state, nullptr);
+    ASSERT_EQ(pops::component::evaluate_faces(table, state, request, result), 0);
+    EXPECT_EQ(flux, (std::array<double, 4>{1.75, 3.75, 5.75, 7.75}));
+    EXPECT_EQ(stability, (std::array<double, 2>{3.0, 3.0}));
+    auto mismatched_context = execution;
+    mismatched_context.execution_identity = "test::other-execution-context";
+    EXPECT_THROW((void)loaded.prepared_state(
+                     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+                     mismatched_context), std::invalid_argument);
+  }
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, CachesPreparedResourcesPerExactTargetAndPinsExecutionContext) {
+  const auto library = compile_component();
+  const auto inspection = pops::dynlib::open(library.string());
+  ASSERT_TRUE(pops::dynlib::valid(inspection));
+  using CounterFn = int (*)();
+  const auto prepare_count = reinterpret_cast<CounterFn>(
+      pops::dynlib::sym(inspection, "pops_test_prepare_count"));
+  const auto destroy_count = reinterpret_cast<CounterFn>(
+      pops::dynlib::sym(inspection, "pops_test_destroy_count"));
+  ASSERT_NE(prepare_count, nullptr);
+  ASSERT_NE(destroy_count, nullptr);
+  {
+    auto loaded = pops::component::LoadedComponent::load(library.string(), expected());
+    const auto execution = abi::host_execution_context();
+    auto anonymous_execution = execution;
+    anonymous_execution.execution_identity = "";
+    EXPECT_THROW((void)loaded.prepared_state(
+                     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+                     anonymous_execution, R"({"scheme":"shared"})",
+                     R"({"identity":"target-a"})"),
+                 std::invalid_argument);
+    EXPECT_EQ(prepare_count(), 0);
+    auto incomplete_execution = execution;
+    incomplete_execution.backend_identity = nullptr;
+    EXPECT_THROW((void)loaded.prepared_state(
+                     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+                     incomplete_execution, R"({"scheme":"shared"})",
+                     R"({"identity":"target-a"})"),
+                 std::invalid_argument);
+    EXPECT_EQ(prepare_count(), 0);
+    void* first = loaded.prepared_state(
+        POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+        R"({"scheme":"shared"})", R"({"identity":"target-a"})");
+    EXPECT_EQ(prepare_count(), 1);
+    EXPECT_EQ(loaded.prepared_state(
+                  POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+                  R"({"scheme":"shared"})", R"({"identity":"target-a"})"),
+              first);
+    EXPECT_EQ(prepare_count(), 1);
+    void* second = loaded.prepared_state(
+        POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1, execution,
+        R"({"scheme":"shared"})", R"({"identity":"target-b"})");
+    EXPECT_NE(second, first);
+    EXPECT_EQ(prepare_count(), 2);
+
+    auto mismatched_context = execution;
+    mismatched_context.execution_identity = "test::other-execution-context";
+    EXPECT_THROW((void)loaded.prepared_state(
+                     POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1, 1,
+                     mismatched_context, R"({"scheme":"shared"})",
+                     R"({"identity":"target-c"})"),
+                 std::invalid_argument);
+    EXPECT_EQ(prepare_count(), 2);
+    EXPECT_EQ(destroy_count(), 0);
+  }
+  EXPECT_EQ(destroy_count(), 2);
+  pops::dynlib::close(inspection);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesIdentityInterfaceAndTableSizeMismatches) {
+  const auto library = compile_component();
+  auto forged = expected();
+  forged.semantic_identity = "forged-semantic";
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), forged),
+      std::runtime_error);
+
+  auto undeclared_export = expected();
+  undeclared_export.interfaces.pop_back();
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), undeclared_export),
+      std::runtime_error);
+
+  auto duplicate_expectation = expected();
+  duplicate_expectation.interfaces.push_back(duplicate_expectation.interfaces.front());
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), duplicate_expectation),
+      std::runtime_error);
+
+  auto missing = expected();
+  missing.interfaces = {{POPS_NATIVE_INTERFACE_TRANSFER_V1, 1,
+                         sizeof(PopsTransferApiV1)}};
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), missing),
+      std::runtime_error);
+
+  auto truncated = expected();
+  truncated.interfaces[0].minimum_table_size = sizeof(PopsNumericalFluxApiV1) + 1;
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), truncated),
+      std::runtime_error);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesHonestlyReportedHeaderOnlyInterfaceTable) {
+  const auto library = compile_component(FluxTableFixture::HeaderOnly);
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), expected()),
+      std::runtime_error);
+  std::filesystem::remove(library);
+}
+
+TEST(test_amr_native_loader, RefusesHeaderOnlyTableWithForgedFullEntrySize) {
+  const auto library = compile_component(FluxTableFixture::ForgedEntrySize);
+  EXPECT_THROW(
+      pops::component::LoadedComponent::load(library.string(), expected()),
+      std::runtime_error);
+  std::filesystem::remove(library);
 }
 
 }  // namespace
-
-static int pops_run_test_amr_native_loader(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
-  // Backend Kokkos : le loader serait recompile a l'execution par un g++ NU (sans les flags/headers
-  // Kokkos ni -DPOPS_HAS_KOKKOS) -> ABI incompatible avec ce module Kokkos (kernels for_each device),
-  // donc on SAUTE. La parite CPU complete est couverte par le job Release (backend hote, sans Kokkos)
-  // et par le test Python test_dsl_production_amr (qui compile le loader via le DSL). exit 0.
-  (void)argc;
-  (void)argv;
-  std::printf("skip test_amr_native_loader (backend Kokkos : loader CPU nu incompatible)\n");
-  return 0;
-#else
-  (void)argc;
-  (void)argv;
-
-  const char* cxx = POPS_TEST_CXX;
-  if (!cxx || cxx[0] == '\0') {  // pas de compilateur connu du build : on saute (exit 0)
-    std::printf("skip test_amr_native_loader (aucun compilateur C++ connu du build)\n");
-    return 0;
-  }
-
-  const int n = 64;
-  const std::vector<double> rho = bubble(n);
-
-  // Ecrit la source du loader puis compile le .so VALIDE (cle d'ABI concordante).
-  const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_native_loader_" +
-                          std::to_string(static_cast<long>(std::clock()));
-  const std::string src = tmp + ".cpp";
-  const std::string so = tmp + ".so";
-  {
-    std::ofstream f(src);
-    f << loader_source();
-  }
-  if (!compile_loader(src, so, "")) {
-    std::printf("skip test_amr_native_loader (echec de compilation du loader -- en-tetes/std ?)\n");
-    return 0;
-  }
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // (A) bloc "production" : loader .so -> AmrSystem::add_native_block (chemin natif AMR).
-  AmrSystem A(make_cfg(n));
-  A.add_native_block("gas", so, "minmod", "rusanov", "conservative", "explicit", kGamma, 1);
-  A.set_poisson("charge_density", "geometric_mg");
-  A.set_refinement(1.2);
-  A.set_density("gas", rho);
-
-  // (B) MEME modele installe EN DIRECT par add_compiled_model(AmrSystem&) (le chemin que le loader
-  // inline). Memes types + meme schema -> parite STRICTE attendue (bit-identique).
-  AmrSystem B(make_cfg(n));
-  add_compiled_model(
-      B, "gas",
-      ProdModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}},
-      "minmod", "rusanov", "conservative", "explicit", kGamma, 1);
-  B.set_poisson("charge_density", "geometric_mg");
-  B.set_refinement(1.2);
-  B.set_density("gas", rho);
-
-  chk(A.n_patches() == B.n_patches(), "n_patches initial loader == add_compiled_model");
-  const double m0 = A.mass();
-  chk(std::fabs(m0 - B.mass()) < 1e-12 * (std::fabs(m0) + 1.0), "masse initiale loader == direct");
-
-  const double dt = 2e-4;
-  for (int s = 0; s < 12; ++s) {
-    A.step(dt);
-    B.step(dt);
-  }
-  const std::vector<double> da = A.density(), db = B.density();
-  chk(da.size() == db.size() && !da.empty(), "densite non vide, memes tailles");
-  double dmax = 0, nrm = 0;
-  for (std::size_t k = 0; k < da.size() && k < db.size(); ++k) {
-    dmax = std::fmax(dmax, std::fabs(da[k] - db[k]));
-    nrm = std::fmax(nrm, std::fabs(db[k]));
-  }
-  chk(nrm > 1e-6, "densite directe non triviale");
-  chk(dmax == 0.0, "densite grossiere loader == add_compiled_model (bit-identique, dmax==0)");
-  chk(A.n_patches() == B.n_patches(), "n_patches final loader == direct (regrid identique)");
-
-  // (C) GARDE-FOU ABI : un loader a cle pops_native_abi_key falsifiee est REJETE par add_native_block.
-  const std::string so_bad = tmp + "_bad.so";
-  const bool built_bad =
-      compile_loader(src, so_bad, "-DPOPS_HEADER_SIG=\\\"deadbeef_fausse_signature\\\"");
-  if (built_bad) {
-    AmrSystem C(make_cfg(n));
-    bool raised = false;
-    try {
-      C.add_native_block("gas", so_bad, "minmod", "rusanov", "conservative", "explicit", kGamma, 1);
-    } catch (const std::runtime_error& e) {
-      // ADC-283 : le message anglais (ADC-272) est "incompatible ABI", pas "ABI incompatible".
-      raised = (std::string(e.what()).find("incompatible ABI") != std::string::npos);
-    }
-    chk(raised, "cle d'ABI falsifiee REJETEE par add_native_block");
-  } else {
-    std::printf("note : loader a cle fausse non compile (garde-fou ABI non exerce)\n");
-  }
-
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_native_loader (add_native_block == add_compiled_model(AmrSystem&) ; "
-        "dmax=%.1e ; ABI falsifiee rejetee)\n",
-        dmax);
-  return fails ? 1 : 0;
-#endif  // POPS_HAS_KOKKOS
-}
-
-TEST(test_amr_native_loader, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_native_loader, "test_amr_native_loader"), 0);
-}

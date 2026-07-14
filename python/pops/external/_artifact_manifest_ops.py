@@ -165,19 +165,6 @@ def apply_native_manifest(manifest, native):
     return CompiledArtifactManifest(**values)
 
 
-def load_native_manifest(so_path):
-    """Read the authoritative native manifest exported by a shared object."""
-    from pops.descriptors import load_compiled_manifest
-
-    return load_compiled_manifest(so_path)
-
-
-def build_compiled_manifest_from_so(compiled, so_path):
-    """Build carried metadata, then overlay the shared object's native facts."""
-    return apply_native_manifest(
-        build_compiled_manifest(compiled), load_native_manifest(so_path))
-
-
 _LAYOUT_SUPPORT_FLAG = {
     "amr": "supports_amr", "uniform": "supports_uniform", "system": "supports_uniform",
 }
@@ -208,6 +195,6 @@ def check_layout_supported(manifest, layout_kind):
 
 
 __all__ = [
-    "apply_native_manifest", "build_compiled_manifest", "build_compiled_manifest_from_so",
-    "check_layout_supported", "load_native_manifest", "validate_native_manifest",
+    "apply_native_manifest", "build_compiled_manifest", "check_layout_supported",
+    "validate_native_manifest",
 ]

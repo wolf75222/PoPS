@@ -6,7 +6,7 @@ This layer is pure Python. It defines scientific geometry before layout resoluti
 ```python
 from pops.domain import Rectangle, RectangleBoundaryNames
 from pops.frames import Cartesian2D
-from pops.mesh.grid import CartesianGrid
+from pops.mesh import CartesianGrid, PeriodicAxes
 
 domain = Rectangle(
     "unit_square",
@@ -25,6 +25,11 @@ x, y = frame.axes
 inlet = frame.boundaries.x_min
 outlet = frame.boundaries.x_max
 grid = CartesianGrid(frame=frame, cells=(128, 128))
+periodic_grid = CartesianGrid(
+    frame=frame,
+    cells=(128, 128),
+    periodic=PeriodicAxes(frame.axes),
+)
 ```
 
 `CartesianAxis`, `DomainBoundary`, `Rectangle`, `RectangleFrame`, and `CartesianGrid` are immutable,
@@ -38,13 +43,24 @@ contains the rectangle and its coordinate system. This makes the two required gr
 
 - axis order from the typed frame (`x`, then `y`);
 - physical extent from the rectangle;
-- the bounded topology from its four stable boundaries;
+- the periodic/physical axis partition from its four stable boundaries and optional typed
+  `PeriodicAxes` value;
 - cell widths from extent and cell counts.
 
 Every descriptor exposes an exact `to_dict()` / `from_dict()` round trip and a domain-separated
 `canonical_id`. Decoders reject missing, extra, stale, reordered, or inconsistent derived fields.
 Boundary geometry identities intentionally remain stable when semantic domain tags are added; Case
-qualification and periodic/physical classification happen later during resolution.
+qualification happens later during resolution. Periodicity is never a backend-shaped boolean:
+`PeriodicAxes` accepts only canonical typed axes, and the grid identity records both the periodic
+axes and the derived physical complement. A backend with only a global periodic switch must reject
+a one-axis topology rather than widening it silently.
+
+`CartesianGrid` is the only public Cartesian-grid descriptor. APIs that consume a grid do not
+accept an integer, a shape tuple, or a square-mesh compatibility object: domain, frame, extent,
+cells, and topology remain explicit. The real annular backend remains available separately through
+the advanced `pops.mesh.PolarMesh` descriptor; it is not a root-level shortcut and does not replace
+the framed Cartesian path. Adaptive authoring is imported from `pops.amr`; the internal
+The implementation package is private at `pops.mesh._amr`; `pops.mesh.amr` is not importable.
 
 This foundation does not claim a native lowering route. A platform-specific grid component must
 consume and authenticate this canonical descriptor during `resolve`/`compile`; authoring it never

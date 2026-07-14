@@ -1,10 +1,9 @@
 """pops.runtime._profile_summary -- the PerformanceSummary view over a native profile report.
 
-Split out of :mod:`pops.runtime.profile` for the 500-line cap (ADC-550): the parsing helpers,
+Split out of :mod:`pops.runtime._profile` for the 500-line cap (ADC-550): the parsing helpers,
 the :class:`Profile` level and the :class:`_Unavailable` sentinel stay in ``profile``; the
 printable :class:`PerformanceSummary` wrapper and its :func:`_view_to_dict` serialiser live here.
-``pops.runtime.profile`` re-exports :class:`PerformanceSummary`, so
-``from pops.runtime.profile import PerformanceSummary`` is unchanged.
+``pops.runtime._profile`` re-exports :class:`PerformanceSummary` for internal engine consumers.
 
 Like ``profile``, this is a pure typed/parsing wrapper: it imports neither ``_pops`` nor numpy.
 The native extension is reached only through the :class:`System` instance the context manager the
@@ -15,7 +14,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from pops.runtime.profile import (
+from pops.runtime._profile import (
     _AMR_MPI_COUNTER_TOKENS,
     _AMR_MPI_TIME_TOKENS,
     _ELLIPTIC_COUNTERS,

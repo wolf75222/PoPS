@@ -10,26 +10,58 @@
 #include <vector>
 
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
 #include <pops/runtime/amr/amr_program_reflux.hpp>
 
 namespace pops::runtime::program {
 
 namespace amr = ::pops::amr;
 
+struct AmrProgramFluxContribution {
+  int rate_id = -1;
+  amr::Rational weight{1, 1};
+  int dt_power = 0;
+  double duration = 0.0;
+  amr::ClockStamp evaluation_clock;
+  EdgeFlux payload;
+};
+
+struct AmrProgramFluxAuditEntry {
+  amr::FluxLedgerKey key;
+  amr::FluxMeasure measure;
+};
+
+struct AmrProgramSyncEvent {
+  int parent_level = 0;
+  int child_level = 0;
+  int block = 0;
+  int phase = 0;
+  amr::ClockStamp clock;
+};
+
 /// Complete accepted state owned by the compiled AMR Program context.  Engine-owned history values
 /// remain in the regular checkpoint arrays; this image carries the semantic clock/identity authority
 /// and the lagged effective-flux strips which cannot be reconstructed from state buffers alone.
 struct AmrProgramAcceptedState {
   std::vector<amr::ClockStamp> level_clocks;
+  std::map<std::string, std::int64_t> logical_clock_ticks;
   std::map<std::string, int> history_owners;
   std::map<std::string, std::string> history_states;
   std::map<std::string, std::string> history_spaces;
+  std::map<std::string, std::string> history_clocks;
+  std::map<std::string, std::string> history_interpolations;
   std::map<std::string, std::vector<std::vector<amr::ClockStamp>>> ring_clocks;
   std::map<std::string,
            std::vector<std::vector<std::optional<amr::HistoryIdentity>>>>
       ring_identities;
   std::map<std::string, std::vector<std::vector<EdgeFlux>>> ring_flux;
+  std::map<
+      std::string,
+      std::vector<std::vector<std::vector<AmrProgramFluxContribution>>>>
+      ring_flux_contributions;
   std::map<std::string, std::vector<char>> ring_flux_initialized;
+  std::vector<AmrProgramFluxAuditEntry> accepted_flux_ledger;
+  std::vector<AmrProgramSyncEvent> accepted_sync;
 };
 
 namespace checkpoint_detail {
@@ -131,6 +163,15 @@ inline amr::ClockStamp read_clock(Reader& in) {
   return {level, macro_step, amr::Rational(numerator, denominator), physical_time};
 }
 
+inline void write_rational(Writer& out, const amr::Rational& value) {
+  out.i64(value.numerator);
+  out.i64(value.denominator);
+}
+
+inline amr::Rational read_rational(Reader& in) {
+  return {in.i64(), in.i64()};
+}
+
 inline void write_identity(Writer& out, const amr::HistoryIdentity& value) {
   out.string(value.owner);
   out.string(value.state);
@@ -196,6 +237,77 @@ inline EdgeFlux read_flux(Reader& in) {
   return value;
 }
 
+inline void write_contribution(Writer& out, const AmrProgramFluxContribution& value) {
+  out.i32(value.rate_id);
+  write_rational(out, value.weight);
+  out.i32(value.dt_power);
+  out.real(value.duration);
+  write_clock(out, value.evaluation_clock);
+  write_flux(out, value.payload);
+}
+
+inline AmrProgramFluxContribution read_contribution(Reader& in) {
+  AmrProgramFluxContribution value;
+  value.rate_id = in.i32();
+  value.weight = read_rational(in);
+  value.dt_power = in.i32();
+  value.duration = in.real();
+  value.evaluation_clock = read_clock(in);
+  value.payload = read_flux(in);
+  return value;
+}
+
+inline void write_flux_audit(Writer& out, const AmrProgramFluxAuditEntry& value) {
+  out.string(value.key.owner);
+  out.string(value.key.state);
+  out.string(value.key.rate);
+  out.string(value.key.flux);
+  out.i32(value.key.level);
+  write_clock(out, value.key.clock);
+  write_rational(out, value.measure.stage_weight);
+  out.i32(static_cast<int>(value.measure.orientation));
+  out.real(value.measure.face_measure);
+  out.real(value.measure.substep_duration);
+}
+
+inline AmrProgramFluxAuditEntry read_flux_audit(Reader& in) {
+  AmrProgramFluxAuditEntry value;
+  value.key.owner = in.string();
+  value.key.state = in.string();
+  value.key.rate = in.string();
+  value.key.flux = in.string();
+  value.key.level = in.i32();
+  value.key.clock = read_clock(in);
+  value.measure.stage_weight = read_rational(in);
+  const int orientation = in.i32();
+  if (orientation < static_cast<int>(amr::FluxOrientation::XMinus) ||
+      orientation > static_cast<int>(amr::FluxOrientation::YPlus))
+    throw std::runtime_error(
+        "invalid AMR Program accepted-state payload: invalid flux orientation");
+  value.measure.orientation = static_cast<amr::FluxOrientation>(orientation);
+  value.measure.face_measure = in.real();
+  value.measure.substep_duration = in.real();
+  return value;
+}
+
+inline void write_sync(Writer& out, const AmrProgramSyncEvent& value) {
+  out.i32(value.parent_level);
+  out.i32(value.child_level);
+  out.i32(value.block);
+  out.i32(value.phase);
+  write_clock(out, value.clock);
+}
+
+inline AmrProgramSyncEvent read_sync(Reader& in) {
+  AmrProgramSyncEvent value;
+  value.parent_level = in.i32();
+  value.child_level = in.i32();
+  value.block = in.i32();
+  value.phase = in.i32();
+  value.clock = read_clock(in);
+  return value;
+}
+
 template <class Map, class WriteValue>
 void write_map(Writer& out, const Map& values, WriteValue&& write_value) {
   out.size(values.size());
@@ -223,12 +335,17 @@ inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
     const AmrProgramAcceptedState& state) {
   using namespace checkpoint_detail;
   Writer out;
-  out.u64(0x3154534153504f50ULL);  // "POPSAST1", little-endian bytes
+  out.u64(0x3254534153504f50ULL);  // "POPSAST2", little-endian bytes
   out.size(state.level_clocks.size());
   for (const auto& clock : state.level_clocks) write_clock(out, clock);
+  write_map(out, state.logical_clock_ticks,
+            [](Writer& w, std::int64_t value) { w.i64(value); });
   write_map(out, state.history_owners, [](Writer& w, int v) { w.i32(v); });
   write_map(out, state.history_states, [](Writer& w, const std::string& v) { w.string(v); });
   write_map(out, state.history_spaces, [](Writer& w, const std::string& v) { w.string(v); });
+  write_map(out, state.history_clocks, [](Writer& w, const std::string& v) { w.string(v); });
+  write_map(out, state.history_interpolations,
+            [](Writer& w, const std::string& v) { w.string(v); });
   write_map(out, state.ring_clocks, [](Writer& w, const auto& ring) {
     w.size(ring.size());
     for (const auto& slot : ring) {
@@ -253,10 +370,24 @@ inline std::vector<std::uint8_t> serialize_amr_program_accepted_state(
       for (const EdgeFlux& flux : slot) write_flux(w, flux);
     }
   });
+  write_map(out, state.ring_flux_contributions, [](Writer& w, const auto& ring) {
+    w.size(ring.size());
+    for (const auto& slot : ring) {
+      w.size(slot.size());
+      for (const auto& level : slot) {
+        w.size(level.size());
+        for (const auto& contribution : level) write_contribution(w, contribution);
+      }
+    }
+  });
   write_map(out, state.ring_flux_initialized, [](Writer& w, const auto& values) {
     w.size(values.size());
     for (char value : values) w.u64(value ? 1 : 0);
   });
+  out.size(state.accepted_flux_ledger.size());
+  for (const auto& entry : state.accepted_flux_ledger) write_flux_audit(out, entry);
+  out.size(state.accepted_sync.size());
+  for (const auto& event : state.accepted_sync) write_sync(out, event);
   return out.take();
 }
 
@@ -264,15 +395,21 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     const std::vector<std::uint8_t>& bytes) {
   using namespace checkpoint_detail;
   Reader in(bytes);
-  if (in.u64() != 0x3154534153504f50ULL)
+  if (in.u64() != 0x3254534153504f50ULL)
     throw std::runtime_error("invalid AMR Program accepted-state payload: unsupported magic/version");
   AmrProgramAcceptedState state;
   state.level_clocks.resize(in.size());
   for (auto& clock : state.level_clocks) clock = read_clock(in);
+  state.logical_clock_ticks = read_map<decltype(state.logical_clock_ticks)>(
+      in, [](Reader& r) { return r.i64(); });
   state.history_owners = read_map<std::map<std::string, int>>(in, [](Reader& r) { return r.i32(); });
   state.history_states = read_map<std::map<std::string, std::string>>(
       in, [](Reader& r) { return r.string(); });
   state.history_spaces = read_map<std::map<std::string, std::string>>(
+      in, [](Reader& r) { return r.string(); });
+  state.history_clocks = read_map<decltype(state.history_clocks)>(
+      in, [](Reader& r) { return r.string(); });
+  state.history_interpolations = read_map<decltype(state.history_interpolations)>(
       in, [](Reader& r) { return r.string(); });
   state.ring_clocks = read_map<decltype(state.ring_clocks)>(in, [](Reader& r) {
     std::vector<std::vector<amr::ClockStamp>> ring(r.size());
@@ -303,6 +440,18 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
     }
     return ring;
   });
+  state.ring_flux_contributions = read_map<decltype(state.ring_flux_contributions)>(
+      in, [](Reader& r) {
+        std::vector<std::vector<std::vector<AmrProgramFluxContribution>>> ring(r.size());
+        for (auto& slot : ring) {
+          slot.resize(r.size());
+          for (auto& level : slot) {
+            level.resize(r.size());
+            for (auto& contribution : level) contribution = read_contribution(r);
+          }
+        }
+        return ring;
+      });
   state.ring_flux_initialized = read_map<decltype(state.ring_flux_initialized)>(
       in, [](Reader& r) {
         std::vector<char> values(r.size());
@@ -314,6 +463,10 @@ inline AmrProgramAcceptedState deserialize_amr_program_accepted_state(
         }
         return values;
       });
+  state.accepted_flux_ledger.resize(in.size());
+  for (auto& entry : state.accepted_flux_ledger) entry = read_flux_audit(in);
+  state.accepted_sync.resize(in.size());
+  for (auto& event : state.accepted_sync) event = read_sync(in);
   in.finish();
   return state;
 }

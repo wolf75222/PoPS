@@ -9,7 +9,7 @@ def exact_finite_real(value: Any, *, where: str) -> Any:
     """Retain an exact Python scalar, rejecting annotations and non-numeric payloads."""
     # Lazy by design: solver descriptors remain an import-graph sink. Scalar inspection is needed
     # only when a numeric option is actually authored, never while importing pops.solvers.
-    from pops.ir.literals import scalar_literal
+    from pops._ir.literals import scalar_literal
     if isinstance(value, bool):
         raise TypeError("%s must be a real scalar, not bool" % where)
     try:

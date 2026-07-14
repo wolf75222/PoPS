@@ -1,8 +1,11 @@
-"""Narrow execution-provider seam for the unified runtime instance.
+"""Runtime provider selection for the unified installed instance.
 
-The selected provider is derived from the normalized ``LayoutPlan`` capabilities.  Compile target
-strings and public ``System``/``AmrSystem`` classes are not runtime dispatch authorities.
+The selected provider is derived from normalized ``LayoutPlan`` capabilities. Compile target
+strings and public ``System``/``AmrSystem`` classes are not runtime dispatch authorities. The
+multi-layout coordinator lives in :mod:`pops.runtime._multi_layout_executor`; this module owns only
+provider selection and the single-layout native installation seams.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -17,7 +20,7 @@ class RuntimeExecutorProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def install(self, install_plan: Any) -> Any:
+    def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
         raise NotImplementedError
 
 
@@ -29,27 +32,80 @@ def _adaptive(plan: Any) -> bool | None:
 
 
 def _require_native_geometry(plan: Any) -> None:
-    """The current native facade owns one geometry; aliases may share it exactly."""
+    """Require the one-geometry invariant of a single native facade."""
     snapshots = [row.descriptor_snapshot for row in plan.artifact.layout_plan.layouts]
     if snapshots and any(value != snapshots[0] for value in snapshots[1:]):
         raise NotImplementedError(
             "RuntimeInstance received heterogeneous native geometries; the LayoutPlan is retained "
-            "exactly, but this installed native provider cannot execute them in one kernel domain")
+            "exactly, but this installed native provider cannot execute them in one kernel domain"
+        )
+
+
+def _native_runtime_facts() -> dict[str, Any]:
+    from pops.runtime_environment import runtime_environment_report
+
+    return runtime_environment_report()
+
+
+def _require_supported_execution_context(plan: Any) -> None:
+    """Refuse every resource the native engines cannot consume before constructing one."""
+    from pops._platform_contracts import ExecutionContext
+
+    context = plan.execution_context
+    if type(context) is not ExecutionContext:
+        raise TypeError("runtime provider requires an exact ExecutionContext")
+    if context.communicator.identity != "serial" or context.communicator.handle is not None:
+        raise NotImplementedError(
+            "native RuntimeInstance providers require a serial communicator without a handle"
+        )
+    if context.datatype.identity != "float64" or context.datatype.handle is not None:
+        raise NotImplementedError(
+            "native RuntimeInstance providers require exact float64 without a handle"
+        )
+    if context.device.identity not in ("host", "cpu") or context.device.handle is not None:
+        raise NotImplementedError(
+            "native RuntimeInstance providers require host/cpu without a device handle"
+        )
+    facts = _native_runtime_facts()
+    if facts.get("mpi_active") is not False:
+        raise NotImplementedError(
+            "native runtime cannot prove MPI inactive and would capture process-global "
+            "MPI_COMM_WORLD; refusing before engine construction"
+        )
+    backend = str(facts.get("kokkos_backend", "")).lower()
+    if any(token in backend for token in ("cuda", "hip", "sycl", "openmptarget")):
+        raise NotImplementedError(
+            "native Kokkos execution space %r is incompatible with host ExecutionContext"
+            % facts.get("kokkos_backend")
+        )
 
 
 class _UniformNativeProvider(RuntimeExecutorProvider):
     def supports(self, install_plan: Any) -> bool:
         return _adaptive(install_plan) is False
 
-    def install(self, install_plan: Any) -> Any:
+    def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
         plan = require_install_plan(install_plan)
-        _require_native_geometry(plan)
-        from pops.runtime._system import System
-        from pops.runtime._runtime_mesh_lowering import system_config_from_layout
+        if len(plan.artifact.layout_plan.layouts) > 1:
+            if runtime_plan is None:
+                raise TypeError("multi-layout install requires its authenticated RuntimePlanBundle")
+            from pops.runtime._multi_layout_executor import install_multi_layout_uniform
 
-        engine = System(system_config_from_layout(plan.layout))
+            return install_multi_layout_uniform(plan, runtime_plan)
+
+        _require_native_geometry(plan)
+        from pops.runtime._runtime_mesh_lowering import system_config_from_layout
+        from pops.runtime._system import System
+
+        config = system_config_from_layout(plan.layout)
+        if any(block.boundaries for block in plan.artifact.plan.blocks):
+            # GhostProducerPlan is the topology authority. Physical transport boundaries must not
+            # leave unrelated native storage periodic through the legacy mesh flag.
+            config.periodic = False
+        engine = System(config)
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
+
         install_runtime_authorities(engine, plan)
         artifact = plan.artifact
         if artifact.program is None:
@@ -60,6 +116,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             params=plan.params,
             aux=plan.aux,
             field_plans=artifact.plan.field_plans,
+            install_plan=plan,
         )
         return engine
 
@@ -68,30 +125,30 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
     def supports(self, install_plan: Any) -> bool:
         return _adaptive(install_plan) is True
 
-    def install(self, install_plan: Any) -> Any:
+    def install(self, install_plan: Any, runtime_plan: Any = None) -> Any:
+        del runtime_plan
         plan = require_install_plan(install_plan)
         _require_native_geometry(plan)
-        from pops.runtime._system import AmrSystem
         from pops.runtime._amr_bind_lowering import amr_config_from_layout
         from pops.runtime._runtime_mesh_lowering import flow_amr_layout
+        from pops.runtime._system import AmrSystem
 
         artifact = plan.artifact
         if artifact.program is None:
             raise ValueError("RuntimeInstance adaptive execution requires the compiled Program")
-        engine = AmrSystem(amr_config_from_layout(
-            plan.layout, hierarchy=plan.resolved_hierarchy))
+        engine = AmrSystem(amr_config_from_layout(plan.layout, hierarchy=plan.resolved_hierarchy))
         engine._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
+
         install_runtime_authorities(engine, plan)
         schema = artifact.bind_schema
         by_id = {handle.qualified_id: value for handle, value in plan.initial_values.items()}
         initial_rows = []
         if plan.initial_condition_plan is not None:
-            from pops.mesh.amr import AnalyticReprojection
+            from pops.mesh._amr import AnalyticReprojection
 
             selections = {
-                row.subject.qualified_id: row.method
-                for row in plan.bootstrap_plan.selections
+                row.subject.qualified_id: row.method for row in plan.bootstrap_plan.selections
             }
             physical = {
                 requirement.subject.qualified_id: requirement
@@ -103,20 +160,24 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
                 subject = binding.subject
                 if subject.kind != "state":
                     raise NotImplementedError(
-                        "RuntimeInstance adaptive bootstrap currently accepts state Handles only")
+                        "RuntimeInstance adaptive bootstrap currently accepts state Handles only"
+                    )
                 requirement = physical[subject.qualified_id]
                 key = requirement.key.to_data()
                 block = subject.block_ref.local_id if subject.block_ref is not None else None
-                initial_rows.append((
-                    subject.qualified_id,
-                    block,
-                    by_id.get(subject.qualified_id),
-                    key["space"]["name"],
-                    key["centering"]["name"],
-                    "analytic" if type(selections[subject.qualified_id]) is AnalyticReprojection
-                    else "prolong",
-                    binding.source.options.to_data(),
-                ))
+                initial_rows.append(
+                    (
+                        subject.qualified_id,
+                        block,
+                        by_id.get(subject.qualified_id),
+                        key["space"]["name"],
+                        key["centering"]["name"],
+                        "analytic"
+                        if type(selections[subject.qualified_id]) is AnalyticReprojection
+                        else "prolong",
+                        binding.source.options.to_data(),
+                    )
+                )
         if plan.bootstrap_plan is None:
             flow_amr_layout(
                 engine,
@@ -135,6 +196,7 @@ class _AdaptiveNativeProvider(RuntimeExecutorProvider):
             initial_values=tuple(initial_rows),
             bootstrap_plan=plan.bootstrap_plan,
             amr_transfer=plan.amr_transfer,
+            install_plan=plan,
         )
         return engine
 
@@ -145,13 +207,15 @@ _PROVIDERS: tuple[RuntimeExecutorProvider, ...] = (
 )
 
 
-def install_runtime_executor(install_plan: Any) -> Any:
+def install_runtime_executor(install_plan: Any, runtime_plan: Any = None) -> Any:
     plan = require_install_plan(install_plan)
+    _require_supported_execution_context(plan)
     matches = tuple(provider for provider in _PROVIDERS if provider.supports(plan))
     if len(matches) != 1:
         raise ValueError(
-            "LayoutPlan must select exactly one RuntimeExecutorProvider; matched %d" % len(matches))
-    return matches[0].install(plan)
+            "LayoutPlan must select exactly one RuntimeExecutorProvider; matched %d" % len(matches)
+        )
+    return matches[0].install(plan, runtime_plan)
 
 
 __all__ = ["RuntimeExecutorProvider", "install_runtime_executor"]

@@ -12,12 +12,12 @@ from __future__ import annotations
 from typing import Any
 
 from pops._bootstrap import AmrSystemConfig, _AmrSystem
-from pops.runtime import threading as _threading
+from pops.runtime import _threading
 from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error,
     guard_assembling as _guard_assembling, _LifecycleMixin)
 from pops.runtime._numeric import native_real
-from pops.runtime.bricks import Spatial, Explicit
+from pops.runtime._engine_descriptors import Spatial, Explicit
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -30,7 +30,7 @@ from pops.runtime._amr_system_equation import _AmrSystemEquation
 from pops.runtime._amr_system_install import _AmrSystemInstall
 from pops.runtime._amr_system_io import _AmrSystemIO
 from pops.runtime._amr_system_program import _AmrSystemProgram
-from pops.runtime.profile import PerformanceSummary, Profile
+from pops.runtime._profile import PerformanceSummary, Profile
 
 
 def _profile_payload(system: Any) -> Any:
@@ -140,8 +140,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
                     fac_coarse_cycles: int = 0, fac_verbose: bool = False) -> Any:
         """Configure AMR Poisson with typed boundary and wall selectors.
 
-        ``bc`` accepts the typed selectors from :mod:`pops.runtime.bricks`; omission
-        keeps automatic selection. ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
+        ``bc`` accepts a typed native boundary descriptor; omission keeps automatic selection.
+        ``wall`` accepts :class:`pops.mesh.geometry.Disc` or
         :class:`pops.mesh.geometry.NoWall`; omission selects no wall. Native string tokens and the
         separate wall radius remain confined to :meth:`_set_poisson_native`.
         """
@@ -200,21 +200,21 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         Usage::
 
             sim.set_refinement(threshold)  # regrid_every > 0 in the config
-            with sim.profile(pops.Profile.Basic()) as prof:
+            with sim.profile() as prof:
                 for _ in range(n_steps):
                     sim.step_cfl(0.4)
             print(prof.summary().by_amr_mpi())  # regrid / fill_boundary / average_down timings
 
-        @p profile is a :class:`pops.Profile` level ; with no argument it comes from ``POPS_PROFILE``
-        (unset / ``off`` -> Basic()). The manager enables the native AMR profiler on entry and
-        disables it on exit (off-by-default contract). ``prof.summary().by_amr_mpi()`` surfaces the
-        AMR phase timings + counters as soon as a regrid / solve fired under the multi-block engine.
+        ``profile`` is the private engine ``Profile`` value. With no argument it comes from
+        ``POPS_PROFILE`` (unset / ``off`` -> Basic()). The manager enables the native AMR profiler
+        on entry and disables it on exit. ``prof.summary().by_amr_mpi()`` surfaces AMR phase timings
+        and counters as soon as a regrid or solve fired under the multi-block engine.
         """
         if profile is None:
             profile = Profile.from_env(default=Profile.Basic())
         elif not isinstance(profile, Profile):
             raise TypeError(
-                "AmrSystem.profile: expected a pops.Profile (Profile.Basic()/Advanced()), got %r"
+                "AmrSystem.profile: expected the private engine Profile value, got %r"
                 % type(profile).__name__)
         return _AmrProfileSession(self, profile)
 
@@ -244,7 +244,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         Returns this rank's owned-fab count (level-0 local_size()). With distribute_coarse=True the base
         is split into several boxes round-robin, so each rank owns a strict subset and the coarse
         transport is distributed; a replicated or single-box base owns the full count on every rank.
-        Compare with coarse_total_boxes() and pops.n_ranks() to confirm MPI strong-scaling of the base.
+        Compare with coarse_total_boxes() and the runtime communicator size to confirm MPI
+        strong-scaling of the base.
         Triggers the lazy build like n_patches().
         """
         return self._s.coarse_local_boxes()
@@ -263,8 +264,8 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """Installs an evolved block composed of NATIVE BRICKS on the shared AMR hierarchy.
 
         Low-level runtime seam. The documented PUBLIC path is the typed ``pops.Case`` assembly
-        lowered by ``pops.compile(problem, layout=AMR(...))`` and wired by ``pops.bind`` (which calls
-        this internally); ``add_block`` stays for that seam and the tests.
+        resolved with ``pops.resolve(case, layout=...)``, compiled with ``pops.compile(plan)`` and
+        wired by ``pops.bind`` (which calls this internally); ``add_block`` stays private.
 
         Refined counterpart of System.add_block. The 1st add_block opens the single-block path
         (AmrCouplerMP : dynamic regrid, reflux) ; each subsequent add_block co-locates one more block
@@ -274,15 +275,16 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         For a compiled DSL model (.so) or a dispatch on the model type, use add_equation.
 
         @param name unique name of the block.
-        @param model an pops.Model(...) (ModelSpec : composed native bricks).
-        @param spatial spatial discretization, an pops.Spatial(...) / pops.FiniteVolume(...) (default
-            minmod + rusanov + conservative). Limiter (none / minmod / vanleer / weno5 ; weno5 = 3
+        @param model private ``ModelSpec`` engine value composed from native bricks.
+        @param spatial private engine adapter lowered from ``pops.numerics.FiniteVolume(...)``
+            (default minmod + rusanov + conservative). Limiter (none / minmod / vanleer / weno5;
+            weno5 = 3
             ghosts, the coupler allocates its levels at Limiter::n_ghost and the regrid inherits n_grow()),
             Riemann flux (rusanov / hll / hllc / roe) and reconstructed variables
             (conservative / primitive).
-        @param time temporal treatment, an pops.Explicit (default) / pops.IMEX / pops.SourceImplicit.
-            Carries substeps, stride (multirate hold-then-catch-up), the implicit mask (implicit_vars
-            / implicit_roles) and the Newton options, threaded to the C++. newton_diagnostics is
+        @param time private engine policy. Public authoring uses an explicit ``pops.Program`` or a
+            ``pops.lib.time`` factory. It carries cadence, any implicit mask and Newton options,
+            threaded to C++. newton_diagnostics is
             wired in native multi-block and rejected at the C++ build in single-block (the coupler does not
             aggregate a report).
         spatial.positivity_floor > 0 (ADC-259) floors the Density-role face states AND the
@@ -347,7 +349,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         return self._s.named_field_values(name)
 
     def add_coupling(self, coupling: Any) -> Any:
-        """Add a generic inter-species COUPLED SOURCE (pops.dsl.CoupledSource(...).compile(...))
+        """Add a private compiled inter-species coupled-source engine record
         on the SHARED AMR hierarchy (MULTI-BLOCK), refined counterpart of System.add_coupling. The source
         is transported as bytecode and interpreted on the C++ side (AmrSystem.add_coupled_source; no
         per-cell Python callback). The coupling frequency (CoupledSource.frequency) is honored:
@@ -369,9 +371,9 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         # gamma; AmrSystem does not expose block_gamma, so a preset that requires it raises clearly.
         preset = lower_named_coupling(coupling, self._amr_block_gamma)
         if preset is None:
-            raise TypeError("AmrSystem.add_coupling expects pops.Ionization / Collision / "
-                            "ThermalExchange or a CompiledCoupledSource "
-                            "(pops.dsl.CoupledSource(...).compile(...))")
+            raise TypeError(
+                "AmrSystem.add_coupling expects a private named-coupling engine descriptor or "
+                "CompiledCoupledSource")
         preset.source.verify_declared_contract(conserved=preset.conserved, created=preset.created)
         args = coupling_operator_args(preset.source.compile(), preset.conserved, preset.created,
                                       frequency=preset.frequency)
@@ -380,10 +382,10 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
     def _amr_block_gamma(self, name: Any) -> Any:
         """Per-block adiabatic index for the ThermalExchange preset (ADC-595). AmrSystem does not expose
         a block_gamma accessor, so a ThermalExchange on AMR raises a clear error pointing at the generic
-        CoupledSource path (build the pressure closure with an explicit gamma via pops.dsl.CoupledSource)."""
+        private CompiledCoupledSource path with an explicit gamma."""
         raise NotImplementedError(
             "AmrSystem: the ThermalExchange preset needs a per-block gamma, which AMR does not expose; "
-            "author the thermal exchange as a generic pops.dsl.CoupledSource with an explicit gamma "
+            "author the thermal exchange as a private CompiledCoupledSource with an explicit gamma "
             "param, or use it on a uniform System.")
 
     @property
@@ -442,7 +444,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
 
     def __getattr__(self, attr: Any) -> Any:
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
-        # passthrough (sim._engine.set_refinement / install_program / ...) with the bind-vocabulary
+        # passthrough (instance.set_refinement / install_program / ...) with the bind-vocabulary
         # RuntimeError, so the bypass is closed even under a prebuilt .so whose C++ setters are not yet
         # frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":

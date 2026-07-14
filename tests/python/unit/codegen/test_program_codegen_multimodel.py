@@ -25,9 +25,9 @@ def test_two_model_program_emits_each_models_own_source_kernel():
 
     program = Program("two-model")._bind_operators(first.module)._bind_operators(second.module)
     first_state = program.state(
-        first_block, first.module.state_handle(first.module.state_spaces()["U"]))
+        first_block[first.module.state_handle(first.module.state_spaces()["U"])])
     second_state = program.state(
-        second_block, second.module.state_handle(second.module.state_spaces()["U"]))
+        second_block[second.module.state_handle(second.module.state_spaces()["U"])])
     first_rate = program.source(first_source, state=first_state.n)
     second_rate = program.source(second_source, state=second_state.n)
     program.commit(
@@ -44,8 +44,10 @@ def test_two_model_program_emits_each_models_own_source_kernel():
     )
 
     graph = ProgramModelGraph.from_resolved_blocks((
-        ResolvedBlock("first", first, None, "production", ("U",)),
-        ResolvedBlock("second", second, None, "production", ("U",)),
+        ResolvedBlock(
+            "first", first, None, "production", ("U",), ("test::first::state::U",)),
+        ResolvedBlock(
+            "second", second, None, "production", ("U",), ("test::second::state::U",)),
     ))
     source = program.emit_cpp_program(model_graph=graph)
 

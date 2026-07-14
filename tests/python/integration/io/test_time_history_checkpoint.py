@@ -86,7 +86,7 @@ def test_current_checkpoint_envelope_roundtrips(_t):
     from pops.runtime._run_manifest import RunManifest
     from pops.runtime._step_strategy import run_control_payload
     from pops.runtime._temporal_restart import TemporalRestartState
-    from pops.runtime.bricks import abi_key
+    from pops.runtime._engine_descriptors import abi_key
     from pops.time import FixedDt
 
     snapshot = BoundSnapshot(
@@ -102,7 +102,10 @@ def test_current_checkpoint_envelope_roundtrips(_t):
         controls={"t_end": 0.1, "step_transaction": run_control_payload(FixedDt(0.05)),
                   "max_steps": 10,
                   "output_mode": "current-directory"})
-    owner = SimpleNamespace(bound_snapshot=snapshot, last_run_identity=run.run_identity)
+    owner = SimpleNamespace(
+        _checkpoint_identities=lambda: (
+            snapshot.semantic_identity, snapshot.artifact_identity, snapshot.bind_identity),
+        last_run_identity=run.run_identity)
     temporal_state = TemporalRestartState()
     temporal_state.begin_run(
         run_control_payload(FixedDt(0.05)), time=0.0, macro_step=0)
@@ -295,6 +298,8 @@ def _passive_source_model(name):
 
 def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
+    import pops.runtime._engine_descriptors as engine
+
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
         return None, None
@@ -304,8 +309,8 @@ def _build_system(pops, np, n):
         print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
         return None, None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     return sim, True
 
 

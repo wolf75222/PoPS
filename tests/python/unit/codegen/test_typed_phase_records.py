@@ -8,13 +8,15 @@ import pytest
 
 from pops.codegen import _plans as plans
 from pops.codegen._layout_resolution import layout_lowering_coverage
-from pops.codegen.compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
 from pops.identity import make_identity
-from pops.mesh import CartesianMesh, normalize_layout_plan
+from pops.mesh import normalize_layout_plan
 from pops.layouts import Uniform
-from pops.model import OwnerPath
+from pops.model import Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
+from tests.python.unit.codegen._typed_artifact_fixture import artifact_fixture
+from tests.python.support.layout_plan import cartesian_grid
 
 
 class _Canonical:
@@ -51,17 +53,23 @@ class _Compiled:
 
 def _resolved_plan():
     nested_layout = {"mesh": {"shape": [16, 16]}}
+    owner = OwnerPath.case("typed-phases")
     layout_plan = normalize_layout_plan(
-        Uniform(CartesianMesh(n=16)), owner=OwnerPath.case("typed-phases"))
+        Uniform(cartesian_grid(n=16)), owner=owner,
+        blocks=(Handle("fluid", kind="block", owner=owner),))
     plan = plans.ResolvedSimulationPlan(
         snapshot=AuthoringSnapshot({"case": "typed-phases"}),
         target="system",
         backend="production",
         layout=nested_layout,
         layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "system" for row in layout_plan.layouts
+        },
         time=_Canonical("rk2"),
         blocks=(plans.ResolvedBlock(
-            "fluid", _Canonical("model"), {"flux": ["hll"]}, "production", ("U",)),),
+            "fluid", _Canonical("model"), {"flux": ["hll"]}, "production", ("U",),
+            ("test::fluid::state::U",)),),
         bind_schema=BindSchema(),
         compile_values={},
         field_plans={},
@@ -81,6 +89,7 @@ def _artifact(tmp_path):
     program_path.write_bytes(b"program-v1")
     block_path.write_bytes(b"block-v1")
     program = _Compiled(program_path, name="program")
+    program.program_block_routes = ((0, "fluid"),)
     block = _Compiled(block_path, name="block")
     artifact = CompiledSimulationArtifact(
         plan,
@@ -130,13 +139,22 @@ def test_compiled_artifact_is_one_exact_wrapper_and_rehashes_binaries(tmp_path):
         artifact.verify()
 
 
+def test_single_amr_artifact_authenticates_its_compiled_layout_program():
+    artifact = artifact_fixture(target="amr_system", amr_program=True)
+
+    assert artifact.program is artifact.layout_programs[0].program
+    assert artifact.layout_programs[0].target == "amr_system"
+    assert artifact.layout_programs[0].block_names == ("fluid",)
+    artifact.verify()
+
+
 def test_bind_inputs_preserve_array_references_but_detect_content_mutation():
     state = np.arange(8, dtype=np.float64)
     inputs = plans.BindInputs(
         initial_state={"fluid": state},
         params={"alpha": 2.0},
         aux={"gravity": state},
-        resources={"device": _Canonical("cpu:0")},
+        resources={"execution_context": _Canonical("serial-host")},
     )
     assert inputs.initial_state["fluid"] is state
     assert inputs.aux["gravity"] is state
@@ -154,6 +172,12 @@ def test_bind_inputs_preserve_array_references_but_detect_content_mutation():
 def test_bind_inputs_cannot_override_resolved_semantics(key):
     with pytest.raises(TypeError, match="cannot override resolved semantics"):
         plans.BindInputs(resources={key: _Canonical("forbidden")})
+
+
+@pytest.mark.parametrize("key", ["communicator", "device", "allocator", "stream"])
+def test_bind_inputs_reject_retired_standalone_runtime_resources(key):
+    with pytest.raises(TypeError, match="support only.*execution_context"):
+        plans.BindInputs(resources={key: _Canonical("retired")})
 
 
 def test_install_plan_is_bind_created_and_authenticates_all_inputs(tmp_path):

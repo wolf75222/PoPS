@@ -89,14 +89,21 @@ def native_capability_report(target: str = "module", *, flags: Any = None,
                              source: Any = None) -> Any:
     """Return the structured native capability report (ADC-591).
 
-    With a current ``_pops`` build, values come from C++ ``capability_report(target)``. ``flags`` is
-    the manifest fallback path for already-compiled artifacts: it builds the same stable envelope from
-    the manifest support flags and the Python inventory rows, without loading or recompiling the
-    artifact.
+    With a current ``_pops`` build, the native envelope comes from C++
+    ``capability_report(target)`` and is augmented only by narrower public Python contract rows that
+    are not expressible as module-wide C++ flags. ``flags`` is the manifest fallback path for
+    already-compiled artifacts: it builds the same stable envelope from the manifest support flags
+    and the Python inventory rows, without loading or recompiling the artifact.
     """
     if flags is None:
         report = _native_capability_report_from_extension(target)
         if report is not None:
+            existing = {row.feature for row in report.routes}
+            report.routes.extend(
+                row
+                for row in _python_contract_rows(report.capabilities, "python-contract")
+                if row.feature not in existing
+            )
             return report
         flags = _module_capabilities(target)
         source = source or ("native" if flags is not None else "source-only")
@@ -136,7 +143,8 @@ def _flag_error_message(feature: str) -> str:
         "supports_amr": ("layout=AMR", "layout=Uniform or backend='production' target='amr_system'",
                          "use layout=Uniform or compile with backend='production' target='amr_system'"),
         "supports_mpi": ("platform=MPI", "serial/OpenMP build", "rebuild _pops with POPS_USE_MPI=ON"),
-        "supports_gpu": ("platform=GPU", "host CPU platform", "use KokkosOpenMP/KokkosSerial or a CUDA/HIP build"),
+        "supports_gpu": ("platform=GPU", "host CPU platform",
+                         "use the delivered host/serial route or a separately proved CUDA/HIP artifact"),
         "supports_stride": ("strided cell access", "backend='production'",
                             "compile with backend='production'"),
         "supports_partial_imex_mask": ("partial IMEX mask", "full source implicit / split routes",
@@ -273,6 +281,34 @@ def _row(feature: str, *, layout: str = "any", backend: str = "any",
         available_route=available_route or "", alternative=alternative or "")
 
 
+def _python_contract_rows(flags: Any, source: str) -> list[Any]:
+    """Routes whose exact public constraint is narrower than the module-level native flags."""
+
+    mpi = bool(_flag_value(flags, "supports_mpi"))
+    gpu = bool(_flag_value(flags, "supports_gpu"))
+    return [
+        _row(
+            "amr:field_coupled_rhs_jacvec",
+            layout="amr",
+            backend="none",
+            platform="host",
+            mpi=mpi,
+            gpu=gpu,
+            status="unavailable",
+            limitation=(
+                "field-coupled rhs_jacvec has no level-qualified tangent-field provider ABI "
+                "for AMR level > 0"
+            ),
+            requested="field_coupled rhs_jacvec on AMR level > 0",
+            available_route="field_coupled rhs_jacvec on AMR level 0",
+            alternative=(
+                "use the level-0 route or implement a level-qualified tangent-field provider ABI"
+            ),
+            source=source,
+        ),
+    ]
+
+
 def _support_rows(flags: Any, source: Any) -> list:
     return [
         _row("supports_uniform", layout="uniform", backend="module", platform="host",
@@ -292,7 +328,8 @@ def _support_rows(flags: Any, source: Any) -> list:
              flags=flags, flag="supports_gpu", gpu=bool(_flag_value(flags, "supports_gpu")),
              limitation="GPU is available only for a Kokkos CUDA/HIP device build",
              requested="platform=GPU", available_route="host CPU platform",
-             alternative="use KokkosOpenMP/KokkosSerial or a CUDA/HIP build", source=source),
+             alternative=("use the delivered host/serial route or a separately proved CUDA/HIP "
+                          "artifact"), source=source),
         _row("supports_stride", layout="uniform|amr", backend="production", platform="host",
              flags=flags, flag="supports_stride",
              limitation="real cell stride is carried only by the production/native route",
@@ -420,6 +457,23 @@ def _inventory_rows(flags: Any, source: Any) -> list:
              limitation=("AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
                          "validate_amr_refinement_ratio() rejects other ratios"),
              source=source),
+        _row("amr:transition_envelope", layout="amr", backend="production", platform="host",
+             mpi=mpi, gpu=gpu, status="partial",
+             limitation=("transitions are 2D isotropic ratio-(2,2); every transition must share "
+                         "one isotropic buffer and one lookahead value"),
+             source=source),
+        _row("amr:hierarchy_policy_routes", layout="amr", backend="production",
+             platform="host", mpi=mpi, gpu=gpu, status="partial",
+             limitation=("native hierarchy route is shared_n_level with berger_rigoutsos "
+                         "clustering, box_array patch generation, and round_robin load balance"),
+             source=source),
+        _row("amr:transfer_contracts", layout="amr", backend="production", platform="host",
+             mpi=mpi, gpu=gpu, status="partial",
+             limitation=("physical transfer routes are exact dense cell/face_x/face_y/node "
+                         "contracts; restriction, coarse-fine fill and temporal interpolation "
+                         "currently accept cell-centered state only; derived fields recompute "
+                         "through elliptic_solve and caches rebuild through patch_topology"),
+             source=source),
         _row("parallel:mpi_world_communicator", layout="uniform|amr", backend="production",
              platform="mpi", mpi=mpi, status="partial",
              limitation=("MPI collectives use MPI_COMM_WORLD; a caller-provided communicator is not "
@@ -479,7 +533,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
              mpi=mpi,
              limitation="strict v3 accepted-state restart; non-Dense history replay keeps rank count",
              source=source),
-    ]
+    ] + _python_contract_rows(flags, source)
 
 
 def native_capability_matrix(*, owner: str = "module", layout: str = "module",

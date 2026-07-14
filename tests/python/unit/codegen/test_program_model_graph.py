@@ -31,7 +31,9 @@ class _EmitModel:
 
 
 def _block(name, model):
-    return ResolvedBlock(name, model, None, "production", (model.name,))
+    return ResolvedBlock(
+        name, model, None, "production", (model.name,),
+        ("test::%s::state::%s" % (name, model.name),))
 
 
 @pytest.fixture

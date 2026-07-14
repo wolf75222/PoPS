@@ -22,6 +22,8 @@ def rebuild_program(
     *,
     reference_of: Any = None,
     retain_operator_registries: bool = True,
+    state_keep: Any = None,
+    registry_keep: Any = None,
     canonical_owner: bool = False,
     transformation: str = "normalize",
 ) -> Any:
@@ -42,6 +44,10 @@ def rebuild_program(
     nodes, metadata, field provenance, histories, commits and temporal tables is replaced by
     that canonical detached value. ``retain_operator_registries=False`` then removes the
     authoring-only registry graph. Ordinary optimization passes use the defaults unchanged.
+
+    ``state_keep`` and ``registry_keep`` are exact partitioning hooks. They project state-owned
+    tables and model-scoped operator registries while the graph is rebuilt, so a partition never
+    retains foreign authoring authorities or temporal handles.
     """
     if reference_of is None:
         def _identity(value: Any) -> Any:
@@ -51,6 +57,19 @@ def rebuild_program(
         raise TypeError("Program._rebuild reference_of must be callable or None")
     if not isinstance(retain_operator_registries, bool):
         raise TypeError("Program._rebuild retain_operator_registries must be bool")
+    project_states = state_keep is not None
+    if state_keep is None:
+        def _keep_state(_state: Any) -> bool:
+            return True
+        state_keep = _keep_state
+    elif not callable(state_keep):
+        raise TypeError("Program._rebuild state_keep must be callable or None")
+    if registry_keep is None:
+        def _keep_registry(_owner: Any) -> bool:
+            return True
+        registry_keep = _keep_registry
+    elif not callable(registry_keep):
+        raise TypeError("Program._rebuild registry_keep must be callable or None")
     if not isinstance(canonical_owner, bool):
         raise TypeError("Program._rebuild canonical_owner must be bool")
     out = type(self)(self.name)
@@ -67,6 +86,10 @@ def rebuild_program(
     out._step_strategy = getattr(self, "_step_strategy", None)
     out._transaction_stores = tuple(getattr(self, "_transaction_stores", ()))
     out._acceptance_guards = tuple(getattr(self, "_acceptance_guards", ()))
+    if project_states and (self._dt_bound is not None or out._acceptance_guards):
+        raise ValueError(
+            "state-partitioned Program rebuild requires global dt bounds and guards to be lowered "
+            "by an explicit partitioning protocol")
     clock_map = {self.clock: out.clock}
 
     def remap_clock(clock: Clock) -> Clock:
@@ -88,27 +111,51 @@ def rebuild_program(
     out._state_spaces = {
         reference_of(state_ref): space
         for state_ref, space in getattr(self, "_state_spaces", {}).items()
+        if state_keep(state_ref)
     }
-    out._histories = dict(self._histories)
-    out._histories_ncomp = dict(getattr(self, "_histories_ncomp", {}))
-    out._history_spaces = dict(getattr(self, "_history_spaces", {}))
+    history_refs = getattr(self, "_history_state_refs", {})
+    if project_states:
+        unowned_histories = set(self._histories) - set(history_refs)
+        if unowned_histories:
+            raise ValueError(
+                "state-partitioned Program rebuild cannot project unqualified histories %s"
+                % sorted(unowned_histories))
+    history_names = {
+        name for name in self._histories
+        if not project_states or state_keep(history_refs[name])
+    }
+    out._histories = {name: value for name, value in self._histories.items()
+                      if name in history_names}
+    out._histories_ncomp = {
+        name: value for name, value in getattr(self, "_histories_ncomp", {}).items()
+        if name in history_names
+    }
+    out._history_spaces = {
+        name: value for name, value in getattr(self, "_history_spaces", {}).items()
+        if name in history_names
+    }
     out._history_blocks = {
         name: reference_of(block)
         for name, block in getattr(self, "_history_blocks", {}).items()
+        if name in history_names
     }
     out._history_state_refs = {
         name: reference_of(state)
-        for name, state in getattr(self, "_history_state_refs", {}).items()
+        for name, state in history_refs.items()
+        if name in history_names
     }
     from pops.time.history_persistence import HistoryPersistence
     out._history_persistence = {}
     for name, (depth, policy) in getattr(self, "_history_persistence", {}).items():
+        if name not in history_names:
+            continue
         copied = HistoryPersistence.from_manifest(policy.to_manifest())
         if hasattr(copied, "freeze"):
             copied.freeze()
         out._history_persistence[name] = (depth, copied)
     out._operator_registries = (
-        dict(self._operator_registries) if retain_operator_registries else {}
+        {owner: registry for owner, registry in self._operator_registries.items()
+         if registry_keep(owner)} if retain_operator_registries else {}
     )
     # ProgramValue deliberately has no hash: equality authors an Equation.  Every rewrite map is
     # therefore indexed by the stable SSA id, never by a symbolic object (which would otherwise
@@ -327,18 +374,25 @@ def rebuild_program(
     for v in kept:
         clone(v)
     out._values = [idmap[v.id] for v in kept]
-    out._commits = {reference_of(state_ref): idmap[rep(value).id]
-                    for state_ref, value in self._commits.items()}
+    out._commits = {
+        reference_of(state_ref): idmap[rep(value).id]
+        for state_ref, value in self._commits.items()
+        if state_keep(state_ref)
+    }
+    active_regions = {value.region for value in idmap.values()}
     out._region_imports = {
-        mapped_region(destination): {mapped_region(source) for source in sources}
+        mapped_region(destination): {
+            mapped_region(source) for source in sources if source in active_regions
+        }
         for destination, sources in getattr(self, "_region_imports", {}).items()
+        if destination in active_regions
     }
     if self._dt_bound is not None:
         sub, result = self._dt_bound
         cloned_sub = clone_block(sub)
         out._dt_bound = (cloned_sub, idmap[rep(result).id])
     self._rebuild_time_handle_tables(
-        out, idmap, rep, reference_of=reference_of)
+        out, idmap, rep, reference_of=reference_of, state_keep=state_keep)
     return out
 
 

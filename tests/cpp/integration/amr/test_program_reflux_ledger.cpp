@@ -18,6 +18,7 @@
 #include <pops/mesh/layout/box_array.hpp>
 
 #include <set>
+#include <limits>
 #include <vector>
 
 using namespace pops;
@@ -27,7 +28,8 @@ namespace {
 // executed here because construction needs a materialized AmrSystem hierarchy.
 [[maybe_unused]] void instantiate_recursive_driver(runtime::program::AmrProgramContext& context) {
   context.advance_hierarchy(0.1, [](double) {});
-  context.register_history("qualified", 2, -1, 0, "fluid.U", "state[rho]");
+  context.register_history(
+      "qualified", 2, -1, 0, "fluid.U", "state[rho]", "clock.macro", "dense.linear");
   (void)context.history_zero_start("qualified", 2, -1, 0);
 }
 
@@ -155,6 +157,77 @@ TEST(test_program_reflux_ledger, ab2_effective_flux_uses_lagged_flux) {
   EXPECT_EQ(commit.fine[0].fL[0], expected) << "ab2_Feff_uses_lagged";
 }
 
+TEST(test_program_reflux_ledger, rational_arithmetic_is_checked_before_int64_overflow) {
+  const std::int64_t limit = std::numeric_limits<std::int64_t>::max();
+  const std::int64_t minimum = std::numeric_limits<std::int64_t>::min();
+  EXPECT_THROW((void)(amr::Rational(limit, 1) + amr::Rational(1, 1)),
+               std::overflow_error);
+  EXPECT_THROW((void)(amr::Rational(limit, 1) * amr::Rational(2, 1)),
+               std::overflow_error);
+  EXPECT_THROW((void)(amr::Rational(-limit, 1) - amr::Rational(2, 1)),
+               std::overflow_error);
+  EXPECT_EQ(amr::Rational(minimum, 1).numerator, minimum);
+  EXPECT_EQ(amr::Rational(minimum + 1, 1) - amr::Rational(1, 1),
+            amr::Rational(minimum, 1));
+  EXPECT_EQ(amr::Rational(minimum, 3) + amr::Rational(-limit, 3),
+            amr::Rational(-6148914691236517205LL, 1));
+  EXPECT_EQ(amr::Rational(minimum, 3) - amr::Rational(limit, 3),
+            amr::Rational(-6148914691236517205LL, 1));
+  EXPECT_EQ(amr::Rational(-limit, 5) + amr::Rational(3074457345618258602LL, 1),
+            amr::Rational(6148914691236517203LL, 5));
+  EXPECT_EQ(amr::Rational(minimum, 1) / amr::Rational(minimum, 1),
+            amr::Rational(1, 1));
+  EXPECT_EQ(amr::Rational(2, minimum), amr::Rational(-1, std::int64_t{1} << 62));
+  EXPECT_THROW(amr::Rational(1, minimum), std::overflow_error);
+
+  // These cross products overflow int64, but comparison is exact and multiplication cross-cancels.
+  EXPECT_TRUE(amr::Rational(minimum, 1) < amr::Rational(-limit, 1));
+  EXPECT_TRUE(amr::Rational(limit - 1, limit) < amr::Rational(limit, limit - 1));
+  EXPECT_EQ(amr::Rational(limit, 2) * amr::Rational(2, limit), amr::Rational(1, 1));
+}
+
+TEST(test_program_reflux_ledger,
+     accepted_exact_ledger_is_the_unique_numerical_reflux_source) {
+  amr::TransactionalFluxLedger<EdgeFlux> ledger;
+  amr::FluxLedgerKey key{"fluid", "U", "transport", "physical_flux", 1,
+                         {1, 3, amr::Rational(1, 2), 0.15}};
+  ledger.begin();
+  ledger.accumulate(key,
+                    {amr::Rational(1, 2), amr::FluxOrientation::XMinus, 17.0, 0.1},
+                    fine_flux(Real(3)));
+  ledger.accumulate(key,
+                    {amr::Rational(1, 2), amr::FluxOrientation::XMinus, 0.25, 0.1},
+                    fine_flux(Real(5)));
+  ledger.begin();
+  ledger.accumulate(key,
+                    {amr::Rational(1, 1), amr::FluxOrientation::XMinus, 9.0, 0.2},
+                    fine_flux(Real(100)));
+  ledger.rollback();  // rejected contribution cannot reach the numerical route
+
+  const auto accepted_by_key = ledger.aggregate(
+      [](EdgeFlux& destination, double scale, const EdgeFlux& payload) {
+        detail::edge_flux_axpy(destination, static_cast<Real>(scale), payload);
+      });
+  const EdgeFlux accepted = accepted_by_key.at(key);
+  ledger.commit();
+  ASSERT_EQ(accepted.fine.size(), 1u);
+  const Real expected = Real(0.5) * Real(0.1) * Real(3) +
+                        Real(0.5) * Real(0.1) * Real(5);
+  EXPECT_EQ(accepted.fine[0].fL[0], expected);
+  EXPECT_EQ(amr::numerical_reflux_scale(
+                {amr::Rational(1, 2), amr::FluxOrientation::XMinus, 1000.0, 0.1}),
+            0.05)
+      << "face measure is audited but route_reflux_integrated applies geometry exactly once";
+
+  BoxArray fine(std::vector<Box2D>{Box2D{{4, 4}, {11, 11}}});
+  CoarseFineInterface cfi(Box2D{{0, 0}, {7, 7}}, fine);
+  FluxRegister correction(Box2D{{1, 1}, {6, 6}}, 1);
+  cfi.route_reflux_integrated(accepted.fine[0], Real(0.5), Real(0.5), correction, 1);
+  EXPECT_EQ(correction.at(1, 2, 0), -expected / Real(0.5));
+  EXPECT_NE(correction.at(1, 2, 0), -Real(100) * Real(0.2) / Real(0.5))
+      << "the rolled-back shadow never participates";
+}
+
 TEST(test_program_reflux_ledger, ratio_two_clocks_and_interpolation_are_exact) {
   const amr::ClockWindow parent{{0, 7, amr::Rational(0, 1), 2.0},
                                 {0, 7, amr::Rational(1, 1), 2.4}};
@@ -167,6 +240,61 @@ TEST(test_program_reflux_ledger, ratio_two_clocks_and_interpolation_are_exact) {
   EXPECT_EQ(children[1].window.begin.phase, amr::Rational(1, 2));
   EXPECT_EQ(children[1].window.end.phase, amr::Rational(1, 1));
   EXPECT_EQ(parent.alpha({0, 7, amr::Rational(1, 2), 2.2}), amr::Rational(1, 2));
+}
+
+TEST(test_program_reflux_ledger, logical_clock_domains_have_exact_nested_ticks_and_restart_cursors) {
+  runtime::program::ClockScheduleState clocks;
+  clocks.configure_primary_clock("clock.macro");
+  clocks.declare_relation("clock.macro", "clock.fine", 2);
+  clocks.declare_relation("clock.fine", "clock.micro", 3);
+
+  const auto accepted = clocks.accepted_ticks(4);
+  EXPECT_EQ(accepted.at("clock.macro"), 4);
+  EXPECT_EQ(accepted.at("clock.fine"), 8);
+  EXPECT_EQ(accepted.at("clock.micro"), 24);
+  clocks.restore_accepted_ticks(accepted, 4);
+  EXPECT_EQ(clocks.restored_accepted_ticks(), accepted);
+
+  const auto macro = clocks.coordinate(
+      runtime::program::ScheduleDomainKind::kAcceptedStep, "clock.macro", "", -1, -1, 4);
+  ASSERT_TRUE(macro.has_value());
+  EXPECT_EQ(macro->value, 4);
+  const auto level = clocks.coordinate(
+      runtime::program::ScheduleDomainKind::kAmrLevel, "clock.macro", "", 1, 1, 4);
+  ASSERT_TRUE(level.has_value());
+  EXPECT_EQ(level->value, 4);
+  EXPECT_FALSE(clocks.coordinate(runtime::program::ScheduleDomainKind::kAmrLevel,
+                                 "clock.macro", "", 1, 0, 4));
+
+  auto fine = clocks.subcycle("clock.macro", "clock.fine", 2);
+  fine.iteration(0);
+  const auto fine_tick = clocks.coordinate(
+      runtime::program::ScheduleDomainKind::kClockTick, "clock.fine", "", -1, -1, 4);
+  ASSERT_TRUE(fine_tick.has_value());
+  EXPECT_EQ(fine_tick->value, 8);
+  const auto fine_level_tick = clocks.coordinate(
+      runtime::program::ScheduleDomainKind::kAmrLevel, "clock.fine", "", 1, 1, 4);
+  ASSERT_TRUE(fine_level_tick.has_value());
+  EXPECT_EQ(fine_level_tick->value, 8);
+  auto micro = clocks.subcycle("clock.fine", "clock.micro", 3);
+  for (int k = 0; k < 3; ++k) {
+    micro.iteration(k);
+    const auto micro_tick = clocks.coordinate(
+        runtime::program::ScheduleDomainKind::kClockTick, "clock.micro", "", -1, -1, 4);
+    ASSERT_TRUE(micro_tick.has_value());
+    EXPECT_EQ(micro_tick->value, 24 + k);
+  }
+  micro.finish();
+  fine.iteration(1);
+  const auto second_fine_tick = clocks.coordinate(
+      runtime::program::ScheduleDomainKind::kClockTick, "clock.fine", "", -1, -1, 4);
+  ASSERT_TRUE(second_fine_tick.has_value());
+  EXPECT_EQ(second_fine_tick->value, 9);
+  fine.finish();
+
+  auto corrupted = accepted;
+  ++corrupted["clock.micro"];
+  EXPECT_THROW(clocks.restore_accepted_ticks(corrupted, 4), std::runtime_error);
 }
 
 TEST(test_program_reflux_ledger, history_identity_includes_owner_state_space_and_clock) {
@@ -241,9 +369,12 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
   runtime::program::AmrProgramAcceptedState state;
   state.level_clocks = {{0, 9, amr::Rational(0, 1), 0.9},
                         {1, 9, amr::Rational(0, 1), 0.9}};
+  state.logical_clock_ticks = {{"clock.macro", 9}, {"clock.fine", 18}};
   state.history_owners["rhs"] = 0;
   state.history_states["rhs"] = "fluid.U";
   state.history_spaces["rhs"] = "cell.conservative";
+  state.history_clocks["rhs"] = "clock.macro";
+  state.history_interpolations["rhs"] = "dense.linear";
   state.ring_clocks["rhs"] = {
       {{0, 9, amr::Rational(0, 1), 0.9}, {1, 9, amr::Rational(0, 1), 0.9}},
       {{0, 8, amr::Rational(0, 1), 0.8}, {1, 8, amr::Rational(0, 1), 0.8}}};
@@ -258,15 +389,45 @@ TEST(test_program_reflux_ledger, accepted_checkpoint_state_round_trips_canonical
     }
   state.ring_flux["rhs"] = {{fine_flux(Real(7)), fine_flux(Real(8))},
                              {fine_flux(Real(5)), fine_flux(Real(6))}};
+  auto& contributions = state.ring_flux_contributions["rhs"];
+  contributions.resize(2);
+  for (auto& slot : contributions) slot.resize(2);
+  contributions[1][0].push_back(
+      {17, amr::Rational(-1, 2), 1, 0.1,
+       {0, 8, amr::Rational(1, 2), 0.85}, fine_flux(Real(5))});
   state.ring_flux_initialized["rhs"] = {1, 1};
+  state.accepted_flux_ledger.push_back(
+      {scalar_key(),
+       {amr::Rational(2, 3), amr::FluxOrientation::YPlus, 0.25, 0.05}});
+  state.accepted_sync.push_back(
+      {0, 1, 0, 0, {0, 9, amr::Rational(1, 1), 0.9}});
+  state.accepted_sync.push_back(
+      {0, 1, 0, 1, {0, 9, amr::Rational(1, 1), 0.9}});
 
   const auto encoded = runtime::program::serialize_amr_program_accepted_state(state);
   const auto decoded = runtime::program::deserialize_amr_program_accepted_state(encoded);
   EXPECT_EQ(decoded.level_clocks, state.level_clocks);
+  EXPECT_EQ(decoded.logical_clock_ticks, state.logical_clock_ticks);
   EXPECT_EQ(decoded.history_owners, state.history_owners);
   EXPECT_EQ(decoded.history_states, state.history_states);
   EXPECT_EQ(decoded.history_spaces, state.history_spaces);
+  EXPECT_EQ(decoded.history_clocks, state.history_clocks);
+  EXPECT_EQ(decoded.history_interpolations, state.history_interpolations);
   EXPECT_EQ(decoded.ring_flux.at("rhs")[1][0].fine[0].fL[0], Real(5));
+  const auto& contribution = decoded.ring_flux_contributions.at("rhs")[1][0][0];
+  EXPECT_EQ(contribution.rate_id, 17);
+  EXPECT_EQ(contribution.weight, amr::Rational(-1, 2));
+  EXPECT_EQ(contribution.dt_power, 1);
+  EXPECT_EQ(contribution.duration, 0.1);
+  EXPECT_EQ(contribution.evaluation_clock.phase, amr::Rational(1, 2));
+  ASSERT_EQ(decoded.accepted_flux_ledger.size(), 1u);
+  EXPECT_EQ(decoded.accepted_flux_ledger[0].measure.stage_weight,
+            amr::Rational(2, 3));
+  EXPECT_EQ(decoded.accepted_flux_ledger[0].measure.orientation,
+            amr::FluxOrientation::YPlus);
+  ASSERT_EQ(decoded.accepted_sync.size(), 2u);
+  EXPECT_EQ(decoded.accepted_sync[0].phase, 0);
+  EXPECT_EQ(decoded.accepted_sync[1].phase, 1);
   EXPECT_EQ(runtime::program::serialize_amr_program_accepted_state(decoded), encoded)
       << "the accepted-state byte protocol is deterministic";
 }

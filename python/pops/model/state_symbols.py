@@ -31,7 +31,7 @@ def rebind_state_symbols(value: Any, state: Any, spaces: Any) -> Any:
     local component names.  This target-lowering step is therefore explicit and
     rejects a coordinate owned by a different state instead of aliasing it.
     """
-    from pops.ir.expr import Expr, Var
+    from pops._ir.expr import Expr, Var
 
     selected = {
         state_component_symbol(state, component): component

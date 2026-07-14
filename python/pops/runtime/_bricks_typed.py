@@ -17,7 +17,8 @@ Poisson solve), and are DISTINCT from two other typed boundary surfaces already 
   faces of the mesh).
 
 All objects here are inert (no ``_pops`` / numpy / runtime / codegen compute) and record/lower their
-boundary token. ``pops.runtime.bricks`` re-exports them.
+boundary token. Private native-engine adapters import them through
+``pops.runtime._engine_descriptors``.
 """
 from __future__ import annotations
 

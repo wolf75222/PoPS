@@ -103,8 +103,8 @@ class ScientificOutput(Descriptor):
         return tuple(result)
 
     def consumer_authoring(self) -> tuple[Any, ...]:
-        from pops.runtime._consumer_authoring import ConsumerAuthoringNode
-        from pops.runtime.consumer import ConsumerKind, ParallelMode
+        from ._consumer_authoring import ConsumerAuthoringNode
+        from ._consumer_contracts import ConsumerKind, ParallelMode
 
         mode = {
             "serial": ParallelMode.SERIAL,
@@ -151,9 +151,9 @@ class Checkpoint(Descriptor):
         return ()
 
     def consumer_authoring(self) -> tuple[Any, ...]:
-        from pops.runtime._consumer_authoring import ConsumerAuthoringNode
-        from pops.runtime.consumer import ConsumerKind, ParallelMode
-        from pops.runtime.restart_provider import RestartV3
+        from ._consumer_authoring import ConsumerAuthoringNode
+        from ._consumer_contracts import ConsumerKind, ParallelMode
+        from ._restart_provider import RestartV3
 
         return (ConsumerAuthoringNode(
             label="checkpoint-%s" % self.target.replace("/", "-"),

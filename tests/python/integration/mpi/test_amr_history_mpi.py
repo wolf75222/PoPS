@@ -20,6 +20,7 @@ try:
     import numpy as np
 
     import pops
+    import pops.runtime._engine_descriptors as engine
     import pops.lib.time as lt
     from pops.codegen._compile_drivers import compile_problem
     from pops import _pops
@@ -102,8 +103,8 @@ def _build(distribute_coarse):
         return None, "compile: %s" % str(exc)[:180]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_refinement(1.1)
         amr.set_density("blk", _blob())
         amr.install_program(compiled.so_path)
@@ -147,14 +148,14 @@ def _build_state_ring(distribute_coarse, regrid_every=4):
         return None, "compile: %s" % str(exc)[:180]
     try:
         amr.add_equation("blk", block_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         # FROZEN background block (ADC-635): >= 2 blocks keeps the 2-level seed (a single-block Program
         # is coarse-only, where regrid() is a structural no-op), so the in-window regrid COMPLETES and
         # the replay exercises the collective remap. The Program never commits "bg" (stays frozen).
         amr.add_equation("bg", bg_cm,
-                         spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                         time=pops.Explicit(method="ssprk2"))
+                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                         time=engine.Explicit(method="ssprk2"))
         amr.set_refinement(1.1)
         amr.set_density("blk", _blob())
         amr.set_density("bg", np.full((N, N), 0.5))  # flat, below threshold: tags nothing, ever

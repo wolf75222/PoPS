@@ -23,6 +23,13 @@ REQUIRED_PROOF_MARKERS = (
     "checkpoint:",
     "bit-identical restart:",
 )
+FORBIDDEN_FINAL_IMPORTS = (
+    "pops.ir",
+    "pops._ir",
+    "pops.runtime.bricks",
+    "pops.runtime.integrate",
+    "CartesianMesh",
+)
 # The published wheel matrix is CPU/Kokkos Serial without MPI or parallel HDF5. The full suite still
 # runs; this supported-platform subset is repeated with a strict all-pass/no-hidden-skip policy.
 PYTHON_REQUIRED_SELECTION = "not mpi and not hdf5"
@@ -72,6 +79,10 @@ def source_contract_errors(root: Path) -> list[str]:
         missing = [marker for marker in REQUIRED_PROOF_MARKERS if marker not in text]
         if missing:
             errors.append("%s lacks final proof markers %s" % (relative, missing))
+        forbidden = [name for name in FORBIDDEN_FINAL_IMPORTS if name in text]
+        if forbidden:
+            errors.append(
+                "%s imports transitional/internal authoring names %s" % (relative, forbidden))
     return errors
 
 

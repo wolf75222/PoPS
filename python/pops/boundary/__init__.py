@@ -7,14 +7,10 @@ spatial methods and the canonical Case ownership graph.
 
 from .transport import (
     BoundaryStencilRequirement,
-    ResolvedTransportBoundarySet,
-    ResolvedTransportCondition,
     TransportBoundarySet,
 )
 
 __all__ = [
     "BoundaryStencilRequirement",
-    "ResolvedTransportBoundarySet",
-    "ResolvedTransportCondition",
     "TransportBoundarySet",
 ]

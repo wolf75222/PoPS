@@ -10,7 +10,7 @@ bind-vocabulary error (issue requirement: shared semantics).
 Two pieces are shared:
 
   - :data:`FROZEN_STRUCTURAL` -- the set of NATIVE structural setter names a bound engine must not
-    expose through its ``__getattr__`` native passthrough (the ``sim._engine.install_program``
+    expose through its ``__getattr__`` native passthrough (the ``instance.install_program``
     bypass closer, effective even under an old ``.so`` with no native ``mark_bound``);
   - :func:`freeze_error` -- the shared, precise ``RuntimeError`` message (never recommends a legacy
     setter as the remedy; always points at ``pops.Case`` + ``pops.compile`` + ``pops.bind``).
@@ -34,7 +34,7 @@ else:
 # NATIVE structural setter names that the frozen engine must intercept in its ``__getattr__``
 # native passthrough (each exists on System and/or AmrSystem's C++ facade ``_s``). A bound engine
 # returns the freeze RuntimeError instead of the native callable for any of these, so
-# ``sim._engine.install_program(...)`` / ``sim._engine.set_refinement(...)`` cannot bypass the
+# ``instance.install_program(...)`` / ``instance.set_refinement(...)`` cannot bypass the
 # freeze even when the native ``mark_bound`` is absent. Raw parameter-carrier setters are also
 # structural after bind: only BindSchema may populate them. State/field/clock data remain mutable.
 FROZEN_STRUCTURAL = frozenset({
@@ -157,6 +157,17 @@ class _LifecycleMixin(_System):
         """Domain-``bind`` identity of the frozen bind manifest."""
         snapshot = getattr(self, "_bound_snapshot", None)
         return getattr(snapshot, "bind_identity", None) if snapshot is not None else None
+
+    def _checkpoint_identities(self) -> tuple[Any, Any, Any]:
+        """Provide the three authenticated bind identities to checkpoint envelopes."""
+        snapshot = getattr(self, "_bound_snapshot", None)
+        if snapshot is None:
+            raise RuntimeError("checkpoint requires a completed pops.bind transaction")
+        return (
+            snapshot.semantic_identity,
+            snapshot.artifact_identity,
+            snapshot.bind_identity,
+        )
 
     @property
     def last_run_manifest(self) -> Any:

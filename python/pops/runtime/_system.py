@@ -15,7 +15,7 @@ from typing import Any
 from pops._bootstrap import SystemConfig, _System  # noqa: F401  (SystemConfig re-exported below)
 # The config PODs remain private implementation details alongside their native engines.
 from pops._bootstrap import AmrSystemConfig  # noqa: F401  (re-exported via this module)
-from pops.runtime import threading as _threading
+from pops.runtime import _threading
 from pops.runtime._lifecycle import (
     FROZEN_STRUCTURAL as _FROZEN_STRUCTURAL, freeze_error as _freeze_error, _LifecycleMixin)
 from pops.runtime._amr_system import AmrSystem  # noqa: F401  (re-exported via this module)
@@ -24,7 +24,7 @@ from pops.runtime._system_diagnostics import _SystemDiagnostics
 from pops.runtime._system_install import _SystemInstall
 from pops.runtime._system_io import _SystemIO
 from pops.runtime._system_unified_install import _SystemUnifiedInstall
-from pops.runtime.profile import PerformanceSummary, Profile
+from pops.runtime._profile import PerformanceSummary, Profile
 
 
 def _profile_payload(system: Any) -> Any:
@@ -80,28 +80,34 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     are the low-level seam ``pops.bind`` builds on and the tests use, not the recommended front
     door.
 
-    add_block takes a composed model (pops.Model(...)) + Spatial / Explicit / IMEX objects.
+    ``add_block`` takes a private native ``ModelSpec`` plus private spatial and time adapters.
+    Public authoring uses ``pops.Model`` through ``pops.Case``; discretization and reusable
+    integration Programs live in ``pops.numerics`` and ``pops.lib.time`` respectively.
     Everything else (set_poisson, set_density, step, step_cfl, step_adaptive, diagnostics,
     primitives eval_rhs/get_state/set_state) is forwarded to the compiled facade.
 
-    GEOMETRY: the choice lives in a MESH object passed as mesh= (pops.CartesianMesh / pops.PolarMesh),
-    NOT in the scheme (pops.FiniteVolume stays reconstruction + Riemann + variables). Default (mesh=None
-    or pops.CartesianMesh) = square domain, bit-identical to the history. pops.PolarMesh (global ring)
-    is WIRED in System.step (Phase 2b): polar ExB transport + polar Poisson + aux in local basis
-    (e_r, e_theta). Limits: scalar ExB transport, single-rank, no cart<->polar coupling."""
+    GEOMETRY: ordinary Cartesian authoring is lowered from ``CartesianGrid`` to the private
+    ``SystemConfig`` before this engine is constructed. ``mesh=`` is an advanced geometry seam;
+    currently :class:`pops.mesh.PolarMesh` implements its private config-lowering protocol. The
+    polar route is wired in ``System.step`` (polar ExB transport + polar Poisson + aux in the local
+    ``(e_r, e_theta)`` basis). Limits: scalar ExB transport, single-rank, no cartesian/polar
+    coupling."""
 
     def __init__(self, config: Any = None, mesh: Any = None, **cfg_kw: Any) -> None:
         if config is None:
             config = SystemConfig()
             for k, v in cfg_kw.items():
                 setattr(config, k, v)
-        # The mesh (if provided) carries the geometry CHOICE and overrides the corresponding fields
-        # of the config. Applied AFTER cfg_kw: mesh= takes precedence over the n=/L= passed as keywords.
+        # The optional advanced geometry descriptor lowers through one deliberately private small
+        # protocol. Ordinary CartesianGrid authoring has already become SystemConfig upstream.
         if mesh is not None:
-            if not hasattr(mesh, "_apply"):
-                raise TypeError("System: mesh must be an pops.CartesianMesh / pops.PolarMesh (got %r)"
-                                % type(mesh).__name__)
-            mesh._apply(config)
+            lower = getattr(mesh, "_apply_system_config", None)
+            if not callable(lower):
+                raise TypeError(
+                    "System: advanced mesh must implement the private native-config lowering "
+                    "protocol (currently pops.mesh.PolarMesh); CartesianGrid belongs on a "
+                    "Uniform/AMR layout (got %r)" % type(mesh).__name__)
+            lower(config)
         # Mark the Kokkos init as imminent: _System(config) allocates Fabs -> Kokkos initializes
         # (lazy) here. Runtime thread environment must therefore be fixed before this allocation.
         _threading._first_system_built = True
@@ -152,21 +158,20 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
 
         Usage::
 
-            with sim.profile(pops.Profile.Basic()) as prof:
+            with sim.profile() as prof:
                 pops.run(sim, t_end=0.1, max_steps=1000)
             print(prof.summary())
 
-        @p profile is a :class:`pops.Profile` level (``Profile.Basic()`` / ``Profile.Advanced()``);
-        with no argument the level comes from ``POPS_PROFILE`` (unset / ``off`` -> Basic()). The
-        manager enables the native profiler on entry and disables it on exit, so a plain run (no
-        ``with sim.profile()``) leaves profiling off -- the off-by-default contract. ``prof.summary()``
-        returns a :class:`pops.PerformanceSummary`.
+        ``profile`` is the private engine ``Profile`` value. With no argument the level comes from
+        ``POPS_PROFILE`` (unset / ``off`` -> Basic()). The manager enables the native profiler on
+        entry and disables it on exit, so a plain run leaves profiling off. ``prof.summary()``
+        returns the private immutable ``PerformanceSummary`` runtime record.
         """
         if profile is None:
             profile = Profile.from_env(default=Profile.Basic())
         elif not isinstance(profile, Profile):
             raise TypeError(
-                "System.profile: expected a pops.Profile (Profile.Basic()/Advanced()), got %r"
+                "System.profile: expected the private engine Profile value, got %r"
                 % type(profile).__name__)
         return _ProfileSession(self, profile)
 
@@ -219,8 +224,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     @staticmethod
     def abi_key() -> Any:
         """Module ABI key (compiler, C++ standard, signature of the pops headers). Compared to
-        that of a native loader by add_native_block. Also exposed as a class attribute (the
-        __getattr__ delegate only covers instances), so pops.System.abi_key() works."""
+        that of a native loader by add_native_block. This is an internal class attribute; the
+        public lifecycle never exposes ``System``."""
         native: Any = _System
         return native.abi_key()
 
@@ -235,7 +240,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
                 "(its sim.amr returns an AmrRuntimeView), or pops.inspect(layout) for the "
                 "static authoring report.")
         # RUNTIME FREEZE (ADC-592): once bound, refuse a native STRUCTURAL setter reached through the
-        # passthrough (sim._engine.install_program / set_refinement / ...) with the bind-vocabulary
+        # passthrough (instance.install_program / set_refinement / ...) with the bind-vocabulary
         # RuntimeError -- NOT AttributeError -- so the bypass is closed even under a prebuilt .so whose
         # C++ setters are not yet frozen. The data / param / diagnostic passthrough is untouched.
         if attr in _FROZEN_STRUCTURAL and getattr(self, "_lifecycle", "assembling") != "assembling":

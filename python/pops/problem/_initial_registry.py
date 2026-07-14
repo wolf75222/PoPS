@@ -90,7 +90,7 @@ class InitialConditionRegistry(FreezableRegistry):
         if not self._conditions:
             raise ValueError("AMR resolution requires at least one Case initial condition")
         from pops.initial import InitialConditionAuthorities
-        from pops.mesh.amr import (
+        from pops.mesh._amr import (
             BootstrapOrdering,
             BootstrapSelection,
             InitialConditionPlanBuilder,

@@ -19,9 +19,9 @@ import sys
 
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Periodic
-from pops.ir.expr import Var
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
+from pops._ir.expr import Var
 from pops.physics.multispecies import CoupledSource
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
@@ -41,10 +41,10 @@ def rel(a, b):
 
 
 def iso_model(charge=1.0):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=charge),
-                     elliptic=pops.ChargeDensity(charge=charge))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.PotentialForce(charge=charge),
+                     elliptic=engine.ChargeDensity(charge=charge))
 
 
 def gaussian(n):
@@ -60,8 +60,8 @@ N = 16
 def make_system():
     sim = System(n=N, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-    sim.block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+    sim.block("a", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
+    sim.block("b", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
     return sim
 
 
@@ -142,8 +142,8 @@ KA = 300.0
 amr = AmrSystem(n=N, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
-amr.block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-amr.block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr.block("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
+amr.block("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
 rho = gaussian(N)
 amr.set_density("e1", rho.ravel())
 amr.set_density("e2", rho.ravel())

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from pops.runtime._consumer_contracts import ConsumerCursorSet, ScheduleCursor
-from pops.runtime.runtime_instance import RuntimeInstance
+from pops.output._consumer_contracts import ConsumerCursorSet, ScheduleCursor
+from pops.runtime._runtime_instance import RuntimeInstance
 from pops.time import ALL_PROVISIONAL_STORES
 
 
@@ -77,7 +77,7 @@ class _EffectTransaction:
         owner.temporaries.add("sample.tmp")
 
     def accept(self):
-        self.owner.native_executor.events.append("publish")
+        self.owner._executor.events.append("publish")
         self.owner.temporaries.discard("sample.tmp")
         self.owner.artifacts.add("sample.out")
         if self.owner.fail_effect:
@@ -102,9 +102,9 @@ class _EffectTransaction:
 
 class _Runtime(RuntimeInstance):
     def __init__(self, native, *, fail_effect=False):
-        self.native_executor = native
-        self.consumer_cursors = ConsumerCursorSet()
-        self.consumer_reports = ()
+        self._executor = native
+        self._consumer_cursors = ConsumerCursorSet()
+        self._consumer_reports = ()
         self._checkpoint_cursor_override = None
         self._attempt = 4
         self.fail_effect = fail_effect
@@ -125,7 +125,7 @@ def test_effect_failure_restores_native_and_python_envelopes_and_reports_phase()
     assert (native.time(), native.macro_step()) == (0.0, 0)
     assert runtime._attempt == 4
     assert runtime.consumer_cursors.rows == ()
-    assert runtime.consumer_reports == ()
+    assert runtime._consumer_reports == ()
     assert runtime.temporaries == set()
     assert runtime.artifacts == set()
     assert native.events == ["begin", "commit", "publish", "rollback"]
@@ -145,7 +145,7 @@ def test_success_commits_native_clock_cursors_and_attempt_counter_together():
     assert native._accepted is None
     assert runtime._attempt == 6
     assert runtime.consumer_cursors.for_consumer("sample").committed_samples == 1
-    assert runtime.consumer_reports == ((False, False),)
+    assert runtime._consumer_reports == ((False, False),)
     assert runtime.artifacts == {"sample.out"}
     assert native.events == ["begin", "commit", "publish", "finalize"]
 
@@ -176,7 +176,7 @@ def test_native_begin_failure_rolls_back_partial_mutation_and_python_envelope():
     assert native._accepted is None
     assert runtime._attempt == 4
     assert runtime.consumer_cursors.rows == ()
-    assert runtime.consumer_reports == ()
+    assert runtime._consumer_reports == ()
     assert native.events == ["begin", "rollback"]
 
 
@@ -189,7 +189,7 @@ def test_native_commit_failure_discards_prepared_outputs_before_they_become_visi
 
     assert (native.time(), native.macro_step()) == (0.0, 0)
     assert runtime.consumer_cursors.rows == ()
-    assert runtime.consumer_reports == ()
+    assert runtime._consumer_reports == ()
     assert runtime.temporaries == set()
     assert runtime.artifacts == set()
     assert "publish" not in native.events

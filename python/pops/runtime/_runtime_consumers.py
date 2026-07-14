@@ -4,11 +4,17 @@ from __future__ import annotations
 import os
 import tempfile
 import math
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from pops.identity import Identity, make_identity
+from pops.mesh._layout_plan_contracts import (
+    CARTESIAN_CELL_AREA,
+    POLAR_ANNULUS_CELL_AREA,
+    NormalizedGeometry,
+)
 from pops.output.data import (
     ArrayPiece,
     DiagnosticKey,
@@ -21,17 +27,17 @@ from pops.output.data import (
     OutputRequest,
     OutputSnapshot,
 )
+from pops.output._consumer_contracts import ConsumerKind, ParallelMode
 from pops.output.writers import deterministic_target
 
-from .consumer import (
+from ._consumer import (
     AcceptedSideEffect,
-    ConsumerKind,
     ConsumerPublisher,
-    ParallelMode,
     PreparedPublication,
     PublicationReceipt,
 )
-from .output_publisher import ConsumerOutputPublisher, OutputPreparation
+from ._component_execution_context import component_execution_data
+from ._output_publisher import ConsumerOutputPublisher, OutputPreparation
 
 
 def _block_name(reference: Any, names: tuple[str, ...]) -> str:
@@ -49,7 +55,7 @@ def _conservative_names(owner: Any, block: str) -> tuple[str, ...]:
     from pops.codegen._artifact_models import artifact_model_metadata
 
     rows = [
-        row for row in artifact_model_metadata(owner.install_plan.artifact)
+        row for row in artifact_model_metadata(owner._install_plan.artifact)
         if row.block_name == block
     ]
     if len(rows) != 1 or not rows[0].cons_names:
@@ -80,46 +86,40 @@ def _layout_identity(layout: Any) -> Identity:
     return make_identity("layout", _identity_payload(layout.to_data()))
 
 
-def _scalar(value: Any) -> float | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    if not isinstance(value, Mapping):
-        return None
-    row = value.get("$scalar")
-    if not isinstance(row, Mapping):
-        return None
-    kind, encoded = row.get("kind"), row.get("value")
-    if kind == "binary64":
-        return float.fromhex(encoded)
-    if kind in ("integer", "decimal"):
-        return float(encoded)
-    if kind == "rational":
-        numerator, denominator = encoded
-        return float(numerator) / float(denominator)
-    return None
+def _cartesian_cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
+    import numpy as np
+
+    nx, ny = (count * refinement for count in geometry.cells)
+    dx = geometry.lengths[0] / nx
+    dy = geometry.lengths[1] / ny
+    return np.full((ny, nx), dx * dy, dtype=np.float64)
 
 
-def _layout_length(layout: Any, engine: Any) -> float:
-    explicit = getattr(engine, "_L", None)
-    if explicit is not None:
-        return float(explicit)
-    found = []
+def _polar_annulus_cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
+    import numpy as np
 
-    def visit(value: Any) -> None:
-        if isinstance(value, Mapping):
-            for key, item in value.items():
-                if key == "L" and (number := _scalar(item)) is not None:
-                    found.append(number)
-                visit(item)
-        elif isinstance(value, tuple):
-            for item in value:
-                visit(item)
+    nr, ntheta = (count * refinement for count in geometry.cells)
+    dr = geometry.lengths[0] / nr
+    dtheta = geometry.lengths[1] / ntheta
+    inner = geometry.lower[0] + np.arange(nr, dtype=np.float64) * dr
+    radial_areas = 0.5 * ((inner + dr) ** 2 - inner ** 2) * dtheta
+    return np.broadcast_to(radial_areas, (ntheta, nr)).copy()
 
-    visit(layout.descriptor_snapshot)
-    values = set(found)
-    if len(values) != 1 or next(iter(values)) <= 0.0:
-        raise ValueError("layout geometry does not prove one positive physical extent L")
-    return next(iter(values))
+
+_CELL_VOLUME_PROJECTORS = {
+    CARTESIAN_CELL_AREA: _cartesian_cell_volumes,
+    POLAR_ANNULUS_CELL_AREA: _polar_annulus_cell_volumes,
+}
+
+
+def _cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
+    projector = _CELL_VOLUME_PROJECTORS.get(geometry.cell_measure)
+    if projector is None:
+        raise NotImplementedError(
+            "scientific output does not implement normalized cell measure %s"
+            % geometry.cell_measure
+        )
+    return projector(geometry, refinement)
 
 
 def _target(uri: str, format_data: Mapping[str, Any], snapshot: OutputSnapshot,
@@ -235,15 +235,304 @@ class _PreparedCheckpoint(PreparedPublication):
         self._discarded = True
 
 
+def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> dict[str, Any]:
+    """Project the complete selected snapshot into the generated Writer POD vocabulary."""
+    import numpy as np
+
+    fields = snapshot.select(request)
+    diagnostics = snapshot.select_diagnostics(request)
+    geometry_keys = {
+        (field.key.layout_identity.token, field.key.level) for field in fields
+    }
+    diagnostic_geometry_keys = {
+        (diagnostic.key.layout_identity.token, diagnostic.key.level)
+        for diagnostic in diagnostics
+    }
+    geometries = tuple(
+        geometry for geometry in snapshot.geometries
+        if geometry.key in geometry_keys
+        or geometry.key in diagnostic_geometry_keys
+    )
+    if not geometries:
+        raise ValueError("native Writer snapshot has no geometry for its exact selection")
+    geometry_rows = []
+    for geometry in geometries:
+        dimension = len(geometry.cell_shape)
+        patch_identity = make_identity("writer-geometry-domain", {
+            "layout": geometry.layout_identity.token,
+            "level": geometry.level,
+            "boxes": [list(box) for box in geometry.boxes],
+        }).token
+        geometry_rows.append({
+            "layout_identity": geometry.layout_identity.token,
+            "layout_kind": geometry.layout_kind,
+            "level": geometry.level,
+            "dimension": dimension,
+            "patch_identity": patch_identity,
+            "origin": geometry.origin,
+            "spacing": geometry.spacing,
+            "cell_shape": geometry.cell_shape,
+            "boxes": [
+                {"lower": tuple(box[:dimension]), "upper": tuple(box[dimension:])}
+                for box in geometry.boxes
+            ],
+            "valid_cells": np.ascontiguousarray(geometry.valid_cells, dtype=np.uint8),
+            "coverage": np.ascontiguousarray(geometry.coverage, dtype=np.uint8),
+            "cell_volumes": np.ascontiguousarray(geometry.cell_volumes, dtype=np.float64),
+        })
+    field_rows = []
+    for field in fields:
+        # Serial Writer v1 receives every piece, but still requires a complete exact selection.
+        # Materialization is validation only; the POD keeps the original piece boundaries.
+        field.materialize()
+        pieces = []
+        for piece in field.pieces:
+            values = np.asarray(piece.values)
+            if values.dtype != np.dtype(np.float64):
+                raise TypeError("native Writer ABI v1 accepts only exact float64 field pieces")
+            pieces.append({
+                "lower": piece.lower,
+                "upper": piece.upper,
+                "patch_identity": make_identity("writer-field-piece", {
+                    "field": field.key.identity.token,
+                    "lower": list(piece.lower), "upper": list(piece.upper),
+                }).token,
+                "values": np.ascontiguousarray(values),
+            })
+        field_rows.append({
+            "field_identity": field.key.identity.token,
+            "reference_id": field.key.reference.qualified_id,
+            "component_manifest_identity": field.key.component_manifest_identity.token,
+            "layout_identity": field.key.layout_identity.token,
+            "level": field.key.level,
+            "state_id": field.key.state_id,
+            "centering": field.centering,
+            "units": field.units,
+            "component_names": field.component_names,
+            "dimension": len(field.global_shape),
+            "global_shape": field.global_shape,
+            "pieces": pieces,
+        })
+    diagnostic_rows = [{
+        "diagnostic_identity": value.key.identity.token,
+        "reference_id": value.key.reference.qualified_id,
+        "component_manifest_identity": value.key.component_manifest_identity.token,
+        "layout_identity": value.key.layout_identity.token,
+        "level": value.key.level,
+        "state_id": value.key.state_id,
+        "reduction": value.key.reduction,
+        "value": value.value,
+        "units": value.units,
+        "terms_json": json.dumps(
+            {name: item.hex() for name, item in value.terms.items()},
+            sort_keys=True, separators=(",", ":")),
+    } for value in diagnostics]
+    return {
+        "geometries": geometry_rows,
+        "fields": field_rows,
+        "diagnostics": diagnostic_rows,
+        "metadata_json": json.dumps(
+            dict(snapshot.metadata), sort_keys=True, separators=(",", ":")),
+        "selection_identity": request.identity.token,
+    }
+
+
+class _PreparedExternalWriter(PreparedPublication):
+    """A verified native Writer temporary owned by one consumer transaction."""
+
+    def __init__(self, effect: AcceptedSideEffect, preparation: OutputPreparation,
+                 installed: Any, execution_context: Any) -> None:
+        from pops.output.provider import consumer_format_data
+
+        if preparation.request.consumer_id != effect.consumer_id:
+            raise ValueError("native Writer request identity differs from its accepted effect")
+        if consumer_format_data(
+                preparation.format, where="resolved native Writer format") != \
+                dict(effect.target.output_format):
+            raise ValueError("resolved native Writer format differs from its accepted target")
+        if effect.target.parallel_mode is not ParallelMode.SERIAL \
+                or preparation.request.parallel:
+            raise ValueError("native Writer ABI v1 requires one serial complete snapshot")
+        self._effect = effect
+        self._installed = installed
+        self._target = Path(preparation.target)
+        self._target.parent.mkdir(parents=True, exist_ok=True)
+        if self._target.exists():
+            raise FileExistsError("native Writer target collision: %s" % self._target)
+        fd, temporary = tempfile.mkstemp(
+            prefix=".%s." % self._target.name, suffix=".writer-stage",
+            dir=str(self._target.parent))
+        os.close(fd)
+        os.unlink(temporary)
+        self._temporary = Path(temporary)
+        self._wire = _writer_snapshot_data(preparation.snapshot, preparation.request)
+        self._execution = component_execution_data(execution_context)
+        self._snapshot_identity = make_identity(
+            "native-writer-snapshot", preparation.snapshot.to_data(preparation.request)).token
+        clock = preparation.snapshot.clock
+        if clock.stage != "accepted":
+            raise ValueError("native Writer publishes only an accepted snapshot stage")
+        self._request_data = {
+            "snapshot": self._wire,
+            "execution": self._execution,
+            "temporary_path": str(self._temporary),
+            "published_path": str(self._target),
+            "snapshot_identity": self._snapshot_identity,
+            "logical_time": {
+                "clock_identity": clock.clock_id,
+                "tick": clock.tick,
+                "level": clock.level,
+                "substep": clock.substep,
+                "stage": clock.stage_index,
+                "fraction_numerator": clock.fraction_numerator,
+                "fraction_denominator": clock.fraction_denominator,
+                "dt": float.fromhex(clock.dt_hex),
+                "physical_time": float.fromhex(clock.time_hex),
+            },
+        }
+        interface = installed.interface.to_data()
+        self._interface_uri = interface["uri"]
+        self._interface_version = interface["version"]
+        self._published = False
+        self._discarded = False
+        try:
+            receipt = self._invoke("verify")
+            if not self._temporary.is_file():
+                raise RuntimeError("native Writer verify did not create its exact temporary file")
+            if receipt["bytes_written"] != self._temporary.stat().st_size:
+                raise RuntimeError("native Writer verify receipt size differs from its temporary")
+            if not receipt["content_digest"]:
+                raise RuntimeError("native Writer verify returned no content digest")
+            self._verified_receipt = dict(receipt)
+        except BaseException:
+            try:
+                self._invoke("rollback")
+            finally:
+                self._temporary.unlink(missing_ok=True)
+                self._target.unlink(missing_ok=True)
+            raise
+
+    @property
+    def effect_identity(self) -> Identity:
+        return self._effect.identity
+
+    @property
+    def payload_identity(self) -> Identity:
+        return self._effect.payload.identity
+
+    @property
+    def temporary(self) -> Path:
+        return self._temporary
+
+    @property
+    def target(self) -> Path:
+        return self._target
+
+    def _invoke(self, operation: str) -> Any:
+        return self._installed.native_handle._invoke_component_operation(
+            self._interface_uri, self._interface_version, operation,
+            self._request_data)
+
+    def publish(self) -> PublicationReceipt:
+        if self._discarded:
+            raise RuntimeError("discarded native Writer preparation cannot be published")
+        if not self._published:
+            if self._target.exists():
+                raise FileExistsError("native Writer target collision: %s" % self._target)
+            try:
+                receipt = self._invoke("publish")
+                self._published = self._target.is_file()
+                if not self._published or self._temporary.exists():
+                    raise RuntimeError(
+                        "native Writer publish did not atomically consume its temporary")
+                if dict(receipt) != self._verified_receipt:
+                    raise RuntimeError(
+                        "native Writer publish receipt differs from verified preparation")
+            except BaseException:
+                try:
+                    self._invoke("rollback")
+                finally:
+                    self._temporary.unlink(missing_ok=True)
+                    self._target.unlink(missing_ok=True)
+                    self._published = False
+                    self._discarded = True
+                raise
+        artifact = make_identity("native-writer-artifact", {
+            "component_artifact": self._installed.artifact_identity.token,
+            "snapshot": self._snapshot_identity,
+            "target": str(self._target),
+            "content_digest": self._verified_receipt["content_digest"],
+        })
+        return PublicationReceipt(
+            self.effect_identity, self.payload_identity,
+            "pops.output.external-writer.v1", artifact.token)
+
+    def discard(self) -> None:
+        if self._discarded:
+            return
+        if self._published:
+            self.rollback()
+            return
+        try:
+            self._invoke("discard")
+        finally:
+            self._temporary.unlink(missing_ok=True)
+            self._discarded = True
+
+    def rollback(self) -> None:
+        if self._discarded:
+            return
+        try:
+            self._invoke("rollback")
+        finally:
+            self._temporary.unlink(missing_ok=True)
+            self._target.unlink(missing_ok=True)
+            self._published = False
+            self._discarded = True
+
+
 class RuntimeConsumerPublisher(ConsumerPublisher):
     """One publisher for diagnostics, exact outputs, monitors and restart checkpoints."""
 
     def __init__(self, owner: Any) -> None:
         self._owner = owner
-        self._by_id = {row.qualified_id: row for row in owner.consumer_graph.nodes}
+        self._by_id = {row.qualified_id: row for row in owner._consumer_graph.nodes}
         self._pending: dict[str, tuple[DiagnosticPayload, ...]] = {}
         self._diagnostics: dict[str, DiagnosticPayload] = {}
         self._output = ConsumerOutputPublisher(self._resolve_output)
+        self._external_writers: dict[str, Any] = {}
+        exact_targets: dict[str, str] = {}
+        from pops import interfaces
+        for manifest in owner._consumer_graph.nodes:
+            if manifest.kind is not ConsumerKind.SCIENTIFIC_OUTPUT:
+                continue
+            data = manifest.output_format_data
+            if data.get("provider_id") != "pops.output.external-writer.v1":
+                continue
+            component_id = data.get("component_id")
+            installed = owner._installed_components.get(component_id)
+            if installed is None:
+                raise ValueError(
+                    "ScientificOutput names native Writer %r but that exact component is not "
+                    "installed" % component_id)
+            if installed.component_manifest.token != data.get("component_manifest_identity"):
+                raise ValueError(
+                    "ScientificOutput native Writer manifest identity differs from installation")
+            if installed.interface != interfaces.Writer \
+                    or dict(data.get("native_interface", {})) != interfaces.Writer.to_data():
+                raise ValueError("ScientificOutput component does not implement exact Writer v1")
+            if installed.native_handle is None:
+                raise ValueError("ScientificOutput native Writer was installed but not loaded")
+            target = Path(manifest.target_uri)
+            canonical_target = target if target.suffix else target.with_suffix(data["extension"])
+            collision_key = canonical_target.as_posix()
+            previous = exact_targets.get(collision_key)
+            if previous is not None:
+                raise ValueError(
+                    "two qualified native Writers select the same exact output target: %s "
+                    "and %s" % (previous, manifest.qualified_id))
+            exact_targets[collision_key] = manifest.qualified_id
+            self._external_writers[manifest.qualified_id] = installed
 
     @property
     def diagnostics(self) -> tuple[DiagnosticPayload, ...]:
@@ -261,11 +550,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         return manifest
 
     def _diagnostic_values(self, manifest: Any) -> tuple[DiagnosticPayload, ...]:
-        engine = self._owner.native_executor
-        names = tuple(engine.block_names())
+        names = tuple(self._owner._component_manifests)
         values = []
         for quantity in manifest.quantities:
             block = _block_name(quantity.reference, names)
+            engine = self._owner._executor_for_block(block)
             variables = _conservative_names(self._owner, block)
             if quantity.reference.local_id in variables:
                 component = variables.index(quantity.reference.local_id)
@@ -282,8 +571,9 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 engine.reduce_component(block, reduction, component)
             key = DiagnosticKey(
                 quantity.reference,
-                self._owner.component_manifests[block].manifest_digest,
+                self._owner._component_manifests[block].manifest_digest,
                 self._owner.layout_identity(quantity.layout_id),
+                0,
                 "accepted",
                 reduction,
             )
@@ -294,7 +584,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                              values: tuple[DiagnosticPayload, ...]) -> None:
         for value in values:
             self._diagnostics[value.key.identity.token] = value
-            recorder = getattr(self._owner.native_executor, "record_program_diagnostic", None)
+            recorder = getattr(self._owner._executor, "record_program_diagnostic", None)
             if callable(recorder):
                 recorder(effect.consumer_id, value.value)
         self._pending.pop(effect.identity.token, None)
@@ -329,12 +619,12 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
     def _resolve_output(self, effect: AcceptedSideEffect) -> OutputPreparation:
         manifest = self._manifest(effect)
-        snapshot, request = self._owner.output_snapshot(manifest, self.diagnostics)
+        snapshot, request = self._owner._output_snapshot(manifest, self.diagnostics)
         fmt = manifest.output_format
         target = _target(
             effect.target.uri, manifest.output_format_data, snapshot, request,
-            manifest.handle.local_id, self._owner.output_root)
-        communicator = self._owner.execution_context.communicator.handle \
+            manifest.handle.local_id, self._owner._output_root)
+        communicator = self._owner._execution_context.communicator.handle \
             if effect.target.parallel_mode is not ParallelMode.SERIAL else None
         return OutputPreparation(fmt, snapshot, request, target, communicator)
 
@@ -345,11 +635,16 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         if manifest.kind in (ConsumerKind.DIAGNOSTIC, ConsumerKind.MONITOR):
             return self._prepare_diagnostic(effect, manifest)
         if manifest.kind is ConsumerKind.SCIENTIFIC_OUTPUT:
+            installed = self._external_writers.get(manifest.qualified_id)
+            if installed is not None:
+                return _PreparedExternalWriter(
+                    effect, self._resolve_output(effect), installed,
+                    self._owner._execution_context)
             return self._output.prepare(effect)
         if manifest.kind is ConsumerKind.CHECKPOINT:
             target = Path(effect.target.uri)
-            if self._owner.output_root is not None:
-                target = Path(self._owner.output_root) / target.name
+            if self._owner._output_root is not None:
+                target = Path(self._owner._output_root) / target.name
             extension = manifest.operation_data["extension"]
             if target.suffix != extension:
                 target = target.with_suffix(extension)
@@ -365,7 +660,7 @@ class RuntimeOutputSnapshot:
         self._owner = owner
 
     def _layout(self, layout_id: str) -> Any:
-        rows = [row for row in self._owner.layout_plan.layouts
+        rows = [row for row in self._owner._layout_plan.layouts
                 if row.handle.qualified_id == layout_id]
         if len(rows) != 1:
             raise KeyError("consumer selected unknown layout %s" % layout_id)
@@ -374,15 +669,27 @@ class RuntimeOutputSnapshot:
     def _geometry(self, layout: Any, level: int) -> LevelGeometry:
         import numpy as np
 
-        engine = self._owner.native_executor
-        nx = int(engine.nx())
-        # The current native AMR provider is an exact square-grid authority and
-        # deliberately exposes one base extent.  Uniform systems expose both
-        # extents independently.
-        ny = nx if layout.adaptive else int(engine.ny())
+        engine = self._owner._executor_for_layout(layout.handle.qualified_id)
+        geometry = layout.geometry
+        if type(geometry) is not NormalizedGeometry:
+            raise TypeError("runtime output requires an exact normalized layout geometry")
+        if geometry.dimension != 2:
+            raise NotImplementedError(
+                "the installed scientific-output provider supports rank-2 geometry; "
+                "the normalized geometry has rank %d" % geometry.dimension)
+        base_nx, base_ny = geometry.cells
+        if int(engine.nx()) != base_nx:
+            raise ValueError(
+                "runtime x cell count does not match normalized layout geometry")
+        if layout.adaptive:
+            if base_nx != base_ny:
+                raise NotImplementedError(
+                    "adaptive scientific output requires the native square-grid geometry")
+        elif int(engine.ny()) != base_ny:
+            raise ValueError(
+                "runtime y cell count does not match normalized layout geometry")
         scale = layout.levels[level].refinement
-        nx, ny = nx * scale, ny * scale
-        length = _layout_length(layout, engine)
+        nx, ny = base_nx * scale, base_ny * scale
         boxes = ((0, 0, ny, nx),)
         if layout.adaptive and level > 0:
             native = [row for row in engine.patch_boxes() if int(row[0]) == level]
@@ -401,21 +708,24 @@ class RuntimeOutputSnapshot:
                 )
                 coverage[int(jlo) // ratio:(int(jhi) + 1 + ratio - 1) // ratio,
                          int(ilo) // ratio:(int(ihi) + 1 + ratio - 1) // ratio] = True
-        spacing = (length / nx, length / ny)
-        volumes = np.full((ny, nx), spacing[0] * spacing[1], dtype=np.float64)
+        spacing = (geometry.lengths[0] / nx, geometry.lengths[1] / ny)
+        volumes = _cell_volumes(geometry, scale)
         return LevelGeometry(
             _layout_identity(layout), "amr" if layout.adaptive else "uniform", level,
-            (0.0, 0.0), spacing, (ny, nx), boxes, coverage, volumes)
+            geometry.lower, spacing, (ny, nx), boxes, coverage, volumes,
+            coordinate_system=geometry.coordinate_system,
+            cell_measure=geometry.cell_measure,
+            axis_names=geometry.axis_names)
 
     def _state(
         self, block: str, layout: Any, level: int, *, collective: bool
     ) -> tuple[tuple[ArrayPiece, ...], tuple[str, ...]]:
         import numpy as np
 
-        engine = self._owner.native_executor
+        engine = self._owner._executor_for_block(block)
         names = _conservative_names(self._owner, block)
         if layout.adaptive:
-            communicator = self._owner.execution_context.communicator.handle
+            communicator = self._owner._execution_context.communicator.handle
             size = 1 if communicator is None else int(communicator.Get_size())
             if collective and size > 1:
                 raise NotImplementedError(
@@ -429,7 +739,18 @@ class RuntimeOutputSnapshot:
             raw = getter(block, level) if multi else getter(level)
             n = int(engine.nx()) * layout.levels[level].refinement
             values = np.asarray(raw, dtype=np.float64).reshape(len(names), n, n)
-            return (ArrayPiece((0, 0), (n, n), values),), names
+            pieces = []
+            for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
+                if int(level_index) != level:
+                    continue
+                lower = (int(jlo), int(ilo))
+                upper = (int(jhi) + 1, int(ihi) + 1)
+                pieces.append(ArrayPiece(
+                    lower, upper,
+                    np.ascontiguousarray(values[:, lower[0]:upper[0], lower[1]:upper[1]])))
+            if not pieces:
+                raise ValueError("selected adaptive field has no exact native patch pieces")
+            return tuple(pieces), names
         if collective:
             pieces = []
             for index, (ilo, jlo, ihi, jhi) in enumerate(engine._s.local_boxes(block)):
@@ -448,16 +769,16 @@ class RuntimeOutputSnapshot:
         """Read one resolved field by its authenticated native provider slot."""
         import numpy as np
 
-        plans = self._owner.install_plan.artifact.plan.field_plans
+        plans = self._owner._install_plan.artifact.plan.field_plans
         plan = plans.get(reference.local_id)
         if plan is None:
             raise ValueError(
                 "scientific output field %r has no resolved install plan"
                 % reference.local_id
             )
-        engine = self._owner.native_executor
+        engine = self._owner._executor_for_layout(layout.handle.qualified_id)
         if collective:
-            communicator = self._owner.execution_context.communicator.handle
+            communicator = self._owner._execution_context.communicator.handle
             size = 1 if communicator is None else int(communicator.Get_size())
             if size > 1:
                 raise NotImplementedError(
@@ -473,15 +794,26 @@ class RuntimeOutputSnapshot:
             raw = engine._s.field_potential_global(slot)
             n = int(engine.nx())
         values = np.asarray(raw, dtype=np.float64).reshape(1, n, n)
-        return (
-            (ArrayPiece((0, 0), (n, n), values),),
-            (plan.operator.unknown.local_id,),
-        )
+        if layout.adaptive:
+            pieces = []
+            for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
+                if int(level_index) != level:
+                    continue
+                lower = (int(jlo), int(ilo))
+                upper = (int(jhi) + 1, int(ihi) + 1)
+                pieces.append(ArrayPiece(
+                    lower, upper,
+                    np.ascontiguousarray(values[:, lower[0]:upper[0], lower[1]:upper[1]])))
+            if not pieces:
+                raise ValueError("selected adaptive field has no exact native patch pieces")
+        else:
+            pieces = [ArrayPiece((0, 0), (n, n), values)]
+        return tuple(pieces), (plan.operator.unknown.local_id,)
 
     def build(self, manifest: Any, diagnostics: tuple[DiagnosticPayload, ...]) \
             -> tuple[OutputSnapshot, OutputRequest]:
         geometries, fields, keys = {}, [], []
-        names = tuple(self._owner.native_executor.block_names())
+        names = tuple(self._owner._component_manifests)
         from pops.problem.handles import FieldHandle
         for quantity in manifest.quantities:
             layout = self._layout(quantity.layout_id)
@@ -506,7 +838,7 @@ class RuntimeOutputSnapshot:
                     )
                 key = FieldKey(
                     quantity.reference,
-                    self._owner.component_manifests[block].manifest_digest,
+                    self._owner._component_manifests[block].manifest_digest,
                     geometry.layout_identity,
                     level,
                     "accepted",
@@ -532,27 +864,37 @@ class RuntimeOutputSnapshot:
             manifest.parallel_mode is ParallelMode.COLLECTIVE,
             tuple(value.key for value in selected_diagnostics),
         )
-        engine = self._owner.native_executor
+        engine = self._owner._executor
+        logical_clock = manifest.schedule.domain.clock
+        temporal = getattr(engine, "_temporal_restart_state", None)
+        if temporal is None:
+            raise RuntimeError("output snapshot requires accepted qualified temporal state")
+        cursor = temporal.cursor_for_clock(logical_clock)
+        last_dt_hex = temporal.controller_state.get("last_accepted_dt")
+        accepted_dt = 0.0 if last_dt_hex is None else float.fromhex(last_dt_hex)
         run_identity = getattr(engine, "_last_run_identity", None)
         if type(run_identity) is not Identity:
             run_identity = make_identity("run", {
-                "runtime": self._owner.runtime_plan.identity.token,
+                "runtime": self._owner._runtime_plan.identity.token,
                 "time": float(engine.time()).hex(),
                 "macro_step": int(engine.macro_step()),
             })
         snapshot = OutputSnapshot(
-            OutputClock.at("solution", engine.time(), engine.macro_step(), stage="accepted"),
+            OutputClock.at(
+                logical_clock.qualified_id, engine.time(), engine.macro_step(),
+                stage="accepted", tick=int(cursor["tick"]), level=0, substep=0,
+                stage_index=0, fraction=(1, 1), dt=accepted_dt),
             OutputProvenance(
-                self._owner.install_plan.artifact.plan.plan_identity,
-                self._owner.install_plan.bind_identity,
+                self._owner._install_plan.artifact.plan.plan_identity,
+                self._owner._install_plan.bind_identity,
                 run_identity,
                 "runtime-instance-accepted-state",
             ),
             tuple(geometries.values()),
             tuple(fields),
             {
-                "consumer_graph": self._owner.consumer_graph.identity.token,
-                "runtime_plan": self._owner.runtime_plan.identity.token,
+                "consumer_graph": self._owner._consumer_graph.identity.token,
+                "runtime_plan": self._owner._runtime_plan.identity.token,
             },
             diagnostics=selected_diagnostics,
         )

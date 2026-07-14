@@ -7,8 +7,8 @@ par composante ; (2) max_wave_speed coherent ; (3) check() detecte une variable 
 """
 import numpy as np
 
-from pops.ir.expr import Var
-from pops.ir.ops import sqrt
+from pops._ir.expr import Var
+from pops.math import sqrt
 from pops.physics._model import HyperbolicModel
 
 GAMMA = 1.4

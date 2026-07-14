@@ -7,7 +7,7 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import Any
 
-from pops.ir.literals import (
+from pops._ir.literals import (
     ScalarLiteral,
     exact_decimal_add,
     exact_decimal_divide,

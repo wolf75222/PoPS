@@ -38,7 +38,7 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.moments import (bgk_source, build_moment_model, gaussian_closure,
                          lorentz_sources, maxwellian_moments, moment_indices,
@@ -317,8 +317,8 @@ except RuntimeError as ex:
 n = 16
 sim = System(n=n, L=1.0, periodic=True)
 sim.add_equation("mom", model=compiled,
-                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-                 time=pops.Explicit())
+                 spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
+                 time=engine.Explicit())
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="ij")
 pert = 1.0 + 0.1 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)

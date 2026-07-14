@@ -1,8 +1,8 @@
 """pops.mesh.aux -- the per-field aux halo / ghost boundary policy (Spec 5 sec.5.9).
 
 ``AuxHalo`` declares a per-field aux ghost boundary policy, passed to
-``set_aux_field(..., halo=pops.AuxHalo(...))``. Spec 5 re-homes the mesh-level objects
-into ``pops.mesh``; the field-side re-export (``pops.fields.aux``) lands in Spec 5 Phase E.
+``set_aux_field(..., halo=pops.mesh.AuxHalo(...))``. It has one canonical owner in
+``pops.mesh`` and no root or field-side alias.
 """
 from __future__ import annotations
 

@@ -6,7 +6,7 @@ from fractions import Fraction
 
 import pytest
 
-from pops.ir import Const, ScalarLiteral, scalar_data
+from pops._ir import Const, ScalarLiteral, scalar_data
 from pops.model import StateSpace
 from pops.time import FailRun, Program
 from typed_program_support import typed_state
@@ -254,7 +254,7 @@ def test_solver_iteration_budget_rejects_bool():
 
 
 def test_board_operator_scales_never_erase_annotations_or_mix_number_domains():
-    from pops.ir.expr import Partial
+    from pops._ir.expr import Partial
 
     annotated = ScalarLiteral.from_value(Fraction(1, 3), unit="m")
     with pytest.raises(TypeError, match="unit or target annotation"):
@@ -267,8 +267,8 @@ def test_board_operator_scales_never_erase_annotations_or_mix_number_domains():
 
 
 def test_symbolic_diff_preserves_fraction_and_decimal_exponents_exactly():
-    from pops.ir.expr import Var
-    from pops.ir.lowering import diff
+    from pops._ir.expr import Var
+    from pops._ir.lowering import diff
 
     x = Var("x", "cons")
     fraction_cpp = diff(x ** Fraction(2, 3), x).to_cpp()
@@ -280,16 +280,16 @@ def test_symbolic_diff_preserves_fraction_and_decimal_exponents_exactly():
 
 
 def test_symbolic_constant_folding_refuses_implicit_number_domain_mixing():
-    from pops.ir.expr import Const
-    from pops.ir.lowering import _s_add
+    from pops._ir.expr import Const
+    from pops._ir.lowering import _s_add
 
     with pytest.raises(TypeError, match="explicit target conversion"):
         _s_add(Const(Fraction(1, 3)), Const(0.5))
 
 
 def test_symbolic_annotation_algebra_preserves_or_refuses_semantics():
-    from pops.ir.expr import Mul, Var
-    from pops.ir.lowering import _s_add, _s_div, _s_mul, _s_sub
+    from pops._ir.expr import Mul, Var
+    from pops._ir.lowering import _s_add, _s_div, _s_mul, _s_sub
 
     metres_a = Const(ScalarLiteral.from_value(Fraction(1, 3), unit="m", target="Real32"))
     metres_b = Const(ScalarLiteral.from_value(Fraction(2, 3), unit="m", target="Real32"))
@@ -321,8 +321,8 @@ def test_symbolic_annotation_algebra_preserves_or_refuses_semantics():
 
 def test_diff_and_decimal_folding_are_context_independent_and_annotation_safe():
     from decimal import localcontext
-    from pops.ir.expr import Div, Var
-    from pops.ir.lowering import _s_add, _s_div, _s_mul, diff
+    from pops._ir.expr import Div, Var
+    from pops._ir.lowering import _s_add, _s_div, _s_mul, diff
 
     left = Decimal("1.123456789012345678901234567890123456789")
     right = Decimal("2.000000000000000000000000000000000000001")

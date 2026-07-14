@@ -87,7 +87,7 @@ def validate_history_persistence(program, report: ReportTree) -> ReportTree:
     For each ``keep_history`` ring (recorded on ``program._history_persistence`` as ``(depth,
     policy)``): validate the policy coherence against depth (loud), then -- for a non-Dense policy --
     scan the Program op graph and refuse if any op is (or may be) non-deterministic (the replay would
-    silently drift). @p report is an immutable :class:`pops.ReportTree`; every issue carries the
+    silently drift). @p report is an immutable validation tree; every issue carries the
     source ``"history_persistence"`` and the ring name for a precise, verbatim message.
     Returns @p report (chains)."""
     persistence = getattr(program, "_history_persistence", None) or {}

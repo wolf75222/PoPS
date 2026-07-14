@@ -246,7 +246,7 @@ class FieldOperator(Descriptor):
         # Blackboard formula Vars are coordinates of the authenticated compiled provider, not
         # declaration identities. Resolve every Handle leaf while preserving those coordinate Vars;
         # the generic Expr API remains strict and still rejects a free-name Var.
-        from pops.ir.expr_references import resolve_expr_references
+        from pops._ir.expr_references import resolve_expr_references
         resolved.equation = resolve_expr_references(
             self.equation, resolver, {}, allow_formula_vars=True)
         resolved.outputs = tuple(

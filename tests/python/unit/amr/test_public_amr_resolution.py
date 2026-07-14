@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+from fractions import Fraction
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 import pops
 import pytest
@@ -22,7 +24,7 @@ def _example():
 
 
 def _resolved_target(*, hysteresis=None, conflict_policy=None):
-    from pops.amr import AMRResolutionContext
+    from pops.amr._resolution import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
 
     target = _example().build_final_case()
@@ -70,7 +72,7 @@ def _resolved_target(*, hysteresis=None, conflict_policy=None):
 
 
 def test_final_amr_authorities_derive_discrete_context_and_nesting():
-    from pops.mesh.amr import GradientAbove, GradientBelow
+    from pops.mesh._amr import GradientAbove, GradientBelow
 
     target, layout, layout_plan, authorities = _resolved_target()
     assert layout.capabilities().get("transition_ratios") == [2, 2]
@@ -94,6 +96,78 @@ def test_final_amr_authorities_derive_discrete_context_and_nesting():
     assert graph.refine.context.stencil.kind == "stencil"
     assert authorities.initial_conditions.layout_plan_id == layout_plan.qualified_id
     assert authorities.bootstrap.tagging == authorities.tagging.graph
+
+
+def test_temporal_relations_are_exact_explicit_and_independent_from_spatial_ratios():
+    from pops.amr import (
+        AMRClockRelation,
+        AMRExecution,
+        AMRRemainderPolicy,
+    )
+
+    relation = AMRClockRelation(0, 1, 3)
+    execution = AMRExecution.subcycled((relation,))
+    assert relation.temporal_ratio == Fraction(3, 1)
+    assert execution.to_data()["relations"] == [{
+        "parent_level": 0,
+        "child_level": 1,
+        "temporal_ratio": {"numerator": 3, "denominator": 1},
+        "remainder_policy": "integral_only",
+    }]
+    with pytest.raises(ValueError, match="EXPLICIT_FINAL_SUBSTEP"):
+        AMRClockRelation(0, 1, Fraction(3, 2))
+    remainder = AMRClockRelation(
+        0, 1, Fraction(3, 2), AMRRemainderPolicy.EXPLICIT_FINAL_SUBSTEP)
+    assert remainder.temporal_ratio == Fraction(3, 2)
+    with pytest.raises(ValueError, match="synchronous"):
+        AMRExecution("synchronous", (relation,))
+    with pytest.raises(OverflowError, match="native exact-clock range"):
+        AMRClockRelation(0, 1, Fraction(1 << 63, 1))
+
+
+def test_runtime_authority_installs_exact_temporal_relation_without_spatial_inference():
+    from pops.amr import AMRClockRelation, AMRExecution
+    from pops._platform_contracts import (
+        ExecutionContext,
+        ExecutionResource,
+        proven_serial_manifest,
+    )
+    from pops.runtime._runtime_authorities import install_runtime_authorities
+
+    class Engine:
+        _s = None
+        installed = None
+
+        def set_temporal_relations(self, numerators, denominators, policies):
+            self.installed = (numerators, denominators, policies)
+
+    artifact = SimpleNamespace(
+        blocks=(),
+        plan=SimpleNamespace(blocks=(), field_plans={}),
+        layout_plan=SimpleNamespace(layouts=(SimpleNamespace(adaptive=True),)),
+    )
+    execution_context = ExecutionContext(
+        backend=proven_serial_manifest(
+            backend="production",
+            target="amr_system",
+            abi="test|python-runtime-authorities|v1",
+            runtime=True,
+        ),
+        communicator=ExecutionResource("communicator", "serial"),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+    install_plan = SimpleNamespace(
+        artifact=artifact,
+        amr_execution=AMRExecution.subcycled((AMRClockRelation(0, 1, 3),)),
+        resolved_hierarchy=SimpleNamespace(plan=SimpleNamespace(transitions=(object(),))),
+        bootstrap_plan=None,
+        params={},
+        execution_context=execution_context,
+    )
+    engine = Engine()
+    install_runtime_authorities(engine, install_plan)
+    assert engine.installed == ([3], [1], ["integral_only"])
 
 
 def test_tagging_resolution_preserves_explicit_hysteresis_equality_and_conflict():
@@ -204,8 +278,7 @@ def test_layout_preserves_heterogeneous_transitions_before_provider_refusal():
 
 
 def test_symbolic_gradient_indicator_cannot_escape_discrete_resolution():
-    from pops.ir import SymbolicTruthValueError, ValueExpr
-    from pops.math import grad, norm
+    from pops.math import SymbolicTruthValueError, ValueExpr, grad, norm
 
     core = _example().build_authoring()
     indicator = norm(grad(ValueExpr(core.tracer_state)))

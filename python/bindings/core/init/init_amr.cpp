@@ -1,4 +1,7 @@
 #include "../bindings_detail.hpp"
+#include "boundary_component_install.hpp"
+
+#include <pops/runtime/dynamic/component_loader.hpp>
 
 #include <limits>
 
@@ -60,6 +63,82 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           // the AMR transport. 0 (default) = inactive, bit-identical. Marshaled from spatial.positivity_floor
           // by the AmrSystem.add_block / add_equation Python facade.
           py::arg("positivity_floor") = 0.0)
+      .def("_install_boundary_plan", &AmrSystem::install_boundary_plan, py::arg("name"),
+           py::arg("identity"), py::arg("required_depth"), py::arg("face_types"),
+           py::arg("face_values"), py::arg("ncomp"),
+           py::arg("omitted_interface_faces") = std::vector<int>{},
+           py::arg("state_identity") = std::string{},
+           "Install one resolved per-block ghost-production plan before lazy AMR construction.")
+      .def("_install_block_state_route", &AmrSystem::install_block_state_route,
+           py::arg("name"), py::arg("state_identity"),
+           "Bind one exact state Handle identity to native AMR block storage.")
+      .def("_install_boundary_field_route", &AmrSystem::install_boundary_field_route,
+           py::arg("field_identity"), py::arg("provider_slot"),
+           "Bind one exact boundary field Handle to native provider storage.")
+      .def("_discard_boundary_plans", &AmrSystem::discard_boundary_plans,
+           "Roll back one failed pre-block boundary authority transaction.")
+      .def(
+          "_install_ghost_boundary_component",
+          [](AmrSystem& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_ghost_boundary_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_residual_component",
+          [](AmrSystem& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_field_boundary_residual_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_field_boundary_jvp_component",
+          [](AmrSystem& system, const std::string& name,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& row, const std::string& parameters_json,
+             const std::string& target_json, const py::dict& execution) {
+            system.install_field_boundary_jvp_component(
+                name, pops::python::detail::boundary_component_spec_from_python(
+                          row, parameters_json, target_json, execution),
+                std::move(component));
+          },
+          py::arg("name"), py::arg("component"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"), py::arg("execution_context"))
+      .def(
+          "_install_interface_flux_component",
+          [](AmrSystem& system, std::size_t left_block, std::size_t right_block, int level,
+             std::shared_ptr<pops::component::LoadedComponent> component,
+             const py::dict& interface, const py::dict& binding,
+             const std::string& parameters_json, const std::string& target_json,
+             const py::dict& execution) {
+            auto route = pops::python::detail::interface_route_from_python(
+                interface, left_block, right_block, level);
+            auto spec = pops::python::detail::interface_flux_spec_from_python(
+                interface, binding, parameters_json, target_json, execution);
+            system.install_interface_flux_component(
+                std::move(route), std::move(spec), std::move(component));
+          },
+          py::arg("left_block"), py::arg("right_block"), py::arg("level"),
+          py::arg("component"), py::arg("interface"), py::arg("binding"),
+          py::arg("parameters_json"), py::arg("target_json"),
+          py::arg("execution_context"))
+      .def("_interface_evaluation_count", &AmrSystem::interface_evaluation_count,
+           py::arg("identity"), py::arg("level") = 0)
+      .def("_discard_interface_flux_components",
+           &AmrSystem::discard_interface_flux_components,
+           "Roll back one failed post-block interface authority transaction.")
       // Newton report (IMEX diagnostics OPT-IN, native MULTI-BLOCK): dict {enabled, converged,
       // max_residual, max_iters_used, n_failed, failed_cell, failed_component}, aggregated over the
       // levels/substeps of the LAST advance of the block. failed_cell = (i, j) or None. EXACT shape of
@@ -457,6 +536,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
             std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
       }, py::arg("payload"))
       .def("program_accepted_state_manifest", &AmrSystem::program_accepted_state_manifest)
+      .def("program_clock_manifest", &AmrSystem::program_clock_manifest)
+      .def("program_flux_ledger_manifest", &AmrSystem::program_flux_ledger_manifest)
+      .def("program_sync_manifest", &AmrSystem::program_sync_manifest)
       // ADC-631: True on the multi-block AmrRuntime engine (a compiled Program forces it even for ONE
       // block), False on the single-block coupler. The v3 checkpoint routes per-block vs mono state I/O
       // on this (n_blocks()==1 does not imply the coupler under a Program).
@@ -652,7 +734,9 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
       .def("checkpoint_topology_epoch", &AmrSystem::checkpoint_topology_epoch)
       .def("restore_checkpoint_counters", &AmrSystem::restore_checkpoint_counters,
            py::arg("regrid_count"), py::arg("topology_epoch"))
-      .def("checkpoint_temporal_ratios", &AmrSystem::checkpoint_temporal_ratios)
+      .def("checkpoint_temporal_relations", &AmrSystem::checkpoint_temporal_relations)
+      .def("set_temporal_relations", &AmrSystem::set_temporal_relations,
+           py::arg("numerators"), py::arg("denominators"), py::arg("remainder_policies"))
       .def("checkpoint_transfer_routes", &AmrSystem::checkpoint_transfer_routes)
       // ADC-631 multistep history rings on the compiled-Program AMR route: the SAME seam names as
       // System (init_system.cpp) so _system_io_history.py serialize/restore is reused verbatim.

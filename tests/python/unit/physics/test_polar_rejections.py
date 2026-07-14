@@ -13,7 +13,7 @@ Rejets confirmes (lus dans python/system.cpp et include/pops/runtime/block_build
        NB : 'hll' est desormais CABLE en polaire (fluide isotherme, gate model.wave_speeds) -- voir
        test_polar_hll.py ; sur un transport ExB SCALAIRE (pas de wave_speeds) 'hll' leve aussi un
        rejet clair (teste R2c ci-dessous).
-  R3 - time=pops.IMEX() sur un System polaire :
+  R3 - time=engine.IMEX() sur un System polaire :
        add_block leve RuntimeError :
        "System::add_block (polaire) : time='imex' non supporte ..."
   R4 - set_epsilon_field / set_epsilon_anisotropic_field / set_reaction_field puis step() :
@@ -32,8 +32,9 @@ from pops.numerics.riemann import HLLC
 from pops.numerics.riemann import Roe
 import numpy as np
 
-import pops
-from pops.runtime.bricks import Dirichlet
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
+from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
@@ -43,22 +44,22 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 def _exb_model():
     """Bloc ExB scalaire standard : le seul transport valide en Phase 2b."""
-    return pops.Model(
-        state=pops.Scalar(),
-        transport=pops.ExB(B0=1.0),
-        source=pops.NoSource(),
-        elliptic=pops.ChargeDensity(charge=1.0),
+    return engine.Model(
+        state=engine.Scalar(),
+        transport=engine.ExB(B0=1.0),
+        source=engine.NoSource(),
+        elliptic=engine.ChargeDensity(charge=1.0),
     )
 
 
 def _compressible_model():
     """Bloc fluide compressible : transport NON supporte en polaire (Phase 2b).
     Le second membre elliptique est neutre (fond nul) ; seul le transport est teste ici."""
-    return pops.Model(
-        state=pops.FluidState(kind="compressible", gamma=1.4),
-        transport=pops.CompressibleFlux(),
-        source=pops.NoSource(),
-        elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0),
+    return engine.Model(
+        state=engine.FluidState(kind="compressible", gamma=1.4),
+        transport=engine.CompressibleFlux(),
+        source=engine.NoSource(),
+        elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
     )
 
 
@@ -68,14 +69,14 @@ _RMIN, _RMAX = 0.3, 1.0
 
 def _make_polar_sim():
     """System polaire minimal (ExB scalaire, Rusanov, Explicit), sans bloc encore ajoute."""
-    return System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
+    return System(mesh=PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
 
 
 def _make_polar_sim_ready(solver="polar"):
     """System polaire minimal avec bloc ExB et densite initiale : pret pour step()."""
-    sim = System(mesh=pops.PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
+    sim = System(mesh=PolarMesh(r_min=_RMIN, r_max=_RMAX, nr=_NR, ntheta=_NTH))
     sim.block("ne", model=_exb_model(),
-                  spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                  spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
     sim.set_density("ne", [1.0] * (_NR * _NTH))
     return sim
@@ -96,7 +97,7 @@ def test_polar_rejects_non_exb_transport():
     msg = ""
     try:
         sim.block("fluid", model=_compressible_model(),
-                      spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+                      spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     except RuntimeError as e:
         raised = True
         msg = str(e)
@@ -124,7 +125,7 @@ def test_polar_rejects_non_rusanov_flux():
     msg = ""
     try:
         sim.block("ne", model=_exb_model(),
-                      spatial=pops.Spatial(flux=HLLC()), time=pops.Explicit())
+                      spatial=engine.Spatial(flux=HLLC()), time=engine.Explicit())
     except RuntimeError as e:
         raised = True
         msg = str(e)
@@ -140,7 +141,7 @@ def test_polar_rejects_roe_flux():
     raised = False
     try:
         sim.block("ne", model=_exb_model(),
-                      spatial=pops.Spatial(flux=Roe()), time=pops.Explicit())
+                      spatial=engine.Spatial(flux=Roe()), time=engine.Explicit())
     except RuntimeError:
         raised = True
     assert raised, "add_block avec flux='roe' sur PolarMesh aurait du lever RuntimeError"
@@ -159,7 +160,7 @@ def test_polar_rejects_hll_on_scalar_exb():
     msg = ""
     try:
         sim.block("ne", model=_exb_model(),
-                      spatial=pops.Spatial(flux=HLL()), time=pops.Explicit())
+                      spatial=engine.Spatial(flux=HLL()), time=engine.Explicit())
     except RuntimeError as e:
         raised = True
         msg = str(e)
@@ -170,11 +171,11 @@ def test_polar_rejects_hll_on_scalar_exb():
 
 
 # ---------------------------------------------------------------------------
-# R3 : time=pops.IMEX() sur un System polaire
+# R3 : time=engine.IMEX() sur un System polaire
 # ---------------------------------------------------------------------------
 
 def test_polar_rejects_imex_time():
-    """R3 : add_block avec time=pops.IMEX() sur PolarMesh doit lever RuntimeError.
+    """R3 : add_block avec time=engine.IMEX() sur PolarMesh doit lever RuntimeError.
 
     Confirme (python/system.cpp, chemin polaire dans add_block) :
       "System::add_block (polaire) : time='imex' non supporte ..."
@@ -184,7 +185,7 @@ def test_polar_rejects_imex_time():
     msg = ""
     try:
         sim.block("ne", model=_exb_model(),
-                      spatial=pops.Spatial(minmod=True), time=pops.IMEX())
+                      spatial=engine.Spatial(minmod=True), time=engine.IMEX())
     except RuntimeError as e:
         raised = True
         msg = str(e)

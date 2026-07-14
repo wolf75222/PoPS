@@ -23,7 +23,7 @@ def _skip(msg):
 try:
     import pops
     from pops.codegen._compile_drivers import compile_problem
-    from pops.runtime.bricks import (
+    from pops.runtime._engine_descriptors import (
         BackgroundDensity, FluidState, IsothermalFlux, Model as NativeBrickModel, NoSource,
     )
     from tests.python.integration._final_field_program import scalar_advection_field_model
