@@ -63,7 +63,23 @@ def component_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]
     model = compiled.model
     if model is None:
         return ()
-    return (_metadata(compiled.program_name, model),)
+    routes = compiled.program_block_routes
+    if type(routes) is not tuple or len(routes) != 1:
+        raise ValueError(
+            "component metadata for a CompiledProblem requires exactly one program block route"
+        )
+    route = routes[0]
+    if (
+        type(route) is not tuple
+        or len(route) != 2
+        or type(route[0]) is not int
+        or type(route[1]) is not str
+        or not route[1]
+    ):
+        raise ValueError(
+            "component metadata requires an unambiguous (index, block_name) program route"
+        )
+    return (_metadata(route[1], model),)
 
 
 def primary_artifact_model(compiled: Any) -> Any:
