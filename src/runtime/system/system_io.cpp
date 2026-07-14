@@ -3,7 +3,7 @@
 // scheduler-cache save/restore accessors. This TU is a subdivision of system.cpp (persistence and
 // checkpoint surface of the compiled program runtime state).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (binding-private)
+#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 namespace pops {
 

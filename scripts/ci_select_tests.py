@@ -3,8 +3,9 @@
 
 The policy is intentionally conservative. C++ selection is COMPOSITIONAL per file (ADC-646):
 each changed file contributes its own impact and the selection is their union -- an
-``include/pops/`` header adds its include-closure suites, a ``python/bindings`` translation
-unit adds the test targets that compile it, a ``python/pops/codegen`` emitter adds the
+``include/pops/`` header adds its include-closure suites, a ``src/runtime`` translation
+unit adds the test targets that compile it, a pybind adapter adds the bindings suites, and a
+``python/pops/codegen`` emitter adds the
 codegen / native-loader group, a ``tests/cpp`` source adds its own target, and docs / non-codegen
 ``python/pops`` / ``tests/python`` add nothing. A global-includer or missing header, or any
 unmapped build input (cmake / workflows / scripts / CMakeLists / the manifest), fails safe to ALL.
@@ -39,6 +40,7 @@ CPP_BROAD_FILES = {
     "CMakeLists.txt",
     "CMakePresets.json",
     "tests/CMakeLists.txt",
+    "src/CMakeLists.txt",
     "tests/cpp/test_sources.cmake",
     "tests/test_manifest.toml",
 }
@@ -53,6 +55,7 @@ CPP_BROAD_PREFIXES = (
 PYTHON_BROAD_FILES = {
     "pyproject.toml",
     "python/CMakeLists.txt",
+    "src/CMakeLists.txt",
     "python/pops/__init__.py",
     "tests/python/conftest.py",
     "tests/test_manifest.toml",
@@ -80,8 +83,10 @@ CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("include/pops/runtime/amr/",), ("amr", "runtime")),
     (("include/pops/runtime/",), ("runtime",)),
     (("include/pops/validation/",), ("physics", "validation")),
-    (("python/bindings/amr/",), ("amr", "runtime", "codegen")),
-    (("python/bindings/system/",), ("runtime", "physics", "codegen")),
+    (("src/runtime/amr/", "src/runtime/builders/amr/"), ("amr", "runtime", "codegen")),
+    (("src/runtime/system/",), ("runtime", "physics", "codegen")),
+    (("src/runtime/builders/",), ("runtime", "physics", "amr", "codegen")),
+    (("python/bindings/core/",), ("runtime", "physics", "amr", "codegen")),
     (("scripts/gen_solver_kernel.py",), ("codegen", "elliptic")),
 )
 
@@ -143,21 +148,18 @@ CPP_INCLUDE_PREFIX = "include/pops/"
 CPP_HEADER_SUFFIXES = (".hpp", ".h", ".hh", ".hxx", ".inc", ".ipp", ".tpp")
 
 # ADC-646 per-file C++ impact classification.
-# A ``python/bindings/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
+# A ``src/runtime/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
 # (``pops_runtime_system`` / ``pops_runtime_amr``) that most test targets link. The precise
-# per-target linkage is not encoded in the sanctioned target-source knowledge (test manifest,
-# tests/cpp/test_sources.cmake, seam_combinations.cmake), so a binding-TU edit maps to the
-# bindings LABEL GROUP -- the same areas the coarse logic already used for bindings -- NOT
-# select-all. The ``.cpp``/``.hpp`` suffixes below are the compiled units; any other binding
-# artifact (cmake fragment, ``.cpp.in`` seam template) is a build input and fails open to ALL.
+# per-target linkage is recovered from the central source manifest and test consumers. The
+# ``.cpp``/``.hpp`` suffixes below are compiled units; any other runtime artifact (CMake fragment
+# or ``.cpp.in`` seam template) is a build input and fails open to ALL.
+CPP_RUNTIME_PREFIX = "src/runtime/"
+CPP_RUNTIME_TU_SUFFIXES = (".cpp", ".hpp", ".h", ".hh", ".hxx")
+# ``python/bindings`` now contains only module/init adapters. These feed only ``_pops`` and map to
+# the bindings label group; they are never treated as runtime implementation ownership.
 CPP_BINDING_PREFIX = "python/bindings/"
 CPP_BINDING_TU_SUFFIXES = (".cpp", ".hpp", ".h", ".hh", ".hxx")
 CPP_BINDING_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("python/bindings/amr/",), ("amr", "runtime", "codegen")),
-    (("python/bindings/system/",), ("runtime", "physics", "codegen")),
-    # The ``_pops`` module entry TUs (``core/init/init_*.cpp`` / ``core/bindings.cpp``) wire the
-    # whole binding surface; when one is the ONLY match it feeds only ``_pops``, so it maps to the
-    # broad bindings label group (its documented fallback), not a raw select-all.
     (("python/bindings/core/",), ("runtime", "physics", "amr", "codegen")),
 )
 # ADC-646: a DSL codegen emitter under ``python/pops/codegen/**`` only changes the C++ that is
@@ -290,38 +292,35 @@ def is_cpp_header(path: str) -> bool:
 
 
 def is_cpp_binding_tu(path: str) -> bool:
-    """True if ``path`` is a compiled ``python/bindings/**`` C++ translation unit."""
+    """True if ``path`` is a compiled pybind module/init adapter."""
     return path.startswith(CPP_BINDING_PREFIX) and path.endswith(CPP_BINDING_TU_SUFFIXES)
 
 
-# tests/CMakeLists.txt is the target-source map for the shared runtime OBJECT libs.
+def is_cpp_runtime_tu(path: str) -> bool:
+    """True if ``path`` is a compiled ``src/runtime/**`` source or private header."""
+    return path.startswith(CPP_RUNTIME_PREFIX) and path.endswith(CPP_RUNTIME_TU_SUFFIXES)
+
+
+# src/CMakeLists.txt is the target-source map; tests/CMakeLists.txt owns only consumers.
 TESTS_CMAKE = ROOT / "tests" / "CMakeLists.txt"
-# The heavy binding TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
+RUNTIME_CMAKE = ROOT / "src" / "CMakeLists.txt"
+# The heavy runtime TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
 # and spliced into every consuming test target. A change to a TU in one of them impacts exactly
-# that lib's consumers, so we read both the lib's source list and its consumers from the one file.
-_BINDING_OBJECT_LIBS = ("pops_runtime_system", "pops_runtime_amr")
+# that lib's consumers, so we read the central source list and the test consumer list together.
+_RUNTIME_OBJECT_LIBS = ("pops_runtime_system", "pops_runtime_amr")
 
 
 def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
-    """Repo-relative ``python/bindings/**`` sources listed in ``add_library(<lib> OBJECT ...)``.
-
-    Also folds in the ``POPS_AMR_SEAM`` list variable spliced into ``pops_runtime_amr`` (the two
-    hand-written riemann dispatchers). Generated ``.cpp`` seams live under the build tree, not the
-    repo, so they are not source paths a changeset can name -- their source-of-truth is the seam
-    ``.cpp.in`` template, handled by the broad-file / unmapped guards.
-    """
+    """Repo-relative native sources in the central object-library source manifest."""
     sources: set[str] = set()
-    match = re.search(
-        r"add_library\(\s*" + re.escape(libname) + r"\s+OBJECT\b(.*?)\)", text, re.DOTALL
-    )
+    source_var = {
+        "pops_runtime_system": "POPS_RUNTIME_SYSTEM_SOURCES",
+        "pops_runtime_amr": "POPS_RUNTIME_AMR_SOURCES",
+    }[libname]
+    match = re.search(r"set\(\s*" + source_var + r"\b(.*?)\)", text, re.DOTALL)
     if match:
-        for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
-            sources.add(hit.group(1))
-    if libname == "pops_runtime_amr":
-        seam = re.search(r"set\(\s*POPS_AMR_SEAM\b(.*?)\)", text, re.DOTALL)
-        if seam:
-            for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", seam.group(1)):
-                sources.add(hit.group(1))
+        for hit in re.finditer(r"\b(runtime/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
+            sources.add("src/" + hit.group(1))
     return sources
 
 
@@ -341,33 +340,42 @@ def _cmake_object_lib_consumers(text: str, libname: str) -> set[str]:
     return consumers
 
 
-_binding_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
+_runtime_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
 
 
-def _binding_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Return ``(lib_sources, lib_consumers)`` parsed from ``tests/CMakeLists.txt`` (memoized).
+def _runtime_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Return central ``(lib_sources, lib_consumers)`` maps (memoized).
 
-    ``lib_sources[lib]`` is the set of ``python/bindings/**`` ``.cpp``/``.hpp`` compiled into the
+    ``lib_sources[lib]`` is the set of ``src/runtime/**`` ``.cpp``/``.hpp`` compiled into the
     OBJECT lib; ``lib_consumers[lib]`` is the set of test-target names that link it. A change to
     ``tests/CMakeLists.txt`` is a broad-file force-all (``CPP_BROAD_FILES``), so a stale parse can
     never under-select on a changeset that edited the map.
     """
-    key = str(TESTS_CMAKE)
-    if key not in _binding_map_cache:
-        text = TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore") if TESTS_CMAKE.is_file() else ""
-        sources = {lib: _cmake_object_lib_sources(text, lib) for lib in _BINDING_OBJECT_LIBS}
-        consumers = {lib: _cmake_object_lib_consumers(text, lib) for lib in _BINDING_OBJECT_LIBS}
-        _binding_map_cache[key] = (sources, consumers)
-    return _binding_map_cache[key]
+    key = str(RUNTIME_CMAKE) + "\0" + str(TESTS_CMAKE)
+    if key not in _runtime_map_cache:
+        runtime_text = (
+            RUNTIME_CMAKE.read_text(encoding="utf-8", errors="ignore")
+            if RUNTIME_CMAKE.is_file()
+            else ""
+        )
+        tests_text = (
+            TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore")
+            if TESTS_CMAKE.is_file()
+            else ""
+        )
+        sources = {lib: _cmake_object_lib_sources(runtime_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
+        consumers = {lib: _cmake_object_lib_consumers(tests_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
+        _runtime_map_cache[key] = (sources, consumers)
+    return _runtime_map_cache[key]
 
 
-def _binding_header_included_by(path: str, lib_sources: set[str]) -> bool:
-    """True if the binding header ``path`` is ``#include``d by any ``.cpp`` TU in ``lib_sources``.
+def _runtime_header_included_by(path: str, lib_sources: set[str]) -> bool:
+    """True if a private runtime header is ``#include``d by a source in ``lib_sources``.
 
-    Binding TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
+    Runtime TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
     next to ``system_fields.cpp``), so a change to that header impacts the same OBJECT lib as the
     TUs. Matched by basename against each TU's quoted includes -- best-effort source parse, safe:
-    a miss falls back to the bindings label group (a superset), never under-selection.
+    a miss is treated as an unregistered runtime input and fails open to all tests.
     """
     target_base = Path(path).name
     for source in lib_sources:
@@ -383,23 +391,22 @@ def _binding_header_included_by(path: str, lib_sources: set[str]) -> bool:
     return False
 
 
-def binding_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
-    """Map a ``python/bindings/**`` C++ file to the serial test targets that compile it.
+def runtime_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
+    """Map a ``src/runtime/**`` C++ file to serial tests consuming its object library.
 
     Resolves ``path`` to the runtime OBJECT lib(s) it belongs to -- either it IS one of the lib's
     listed ``.cpp``/``.hpp`` sources, or (for a private header) it is ``#include``d by one of the
     lib's ``.cpp`` TUs -- and returns that lib's serial consumer targets. Returns
-    ``(targets, matched_libs)``. An empty ``matched_libs`` means the TU feeds only the ``_pops``
-    module entry TUs (``init_*.cpp`` / ``bindings.cpp``), not any test target: the caller then
-    falls back to the bindings LABEL GROUP (never select-all).
+    ``(targets, matched_libs)``. An empty ``matched_libs`` means the source is missing from the
+    central manifest and must fail open rather than silently under-select.
     """
-    lib_sources, lib_consumers = _binding_object_lib_map()
+    lib_sources, lib_consumers = _runtime_object_lib_map()
     matched: list[str] = []
     targets: set[str] = set()
-    for lib in _BINDING_OBJECT_LIBS:
+    for lib in _RUNTIME_OBJECT_LIBS:
         sources = lib_sources[lib]
         belongs = path in sources or (
-            path.endswith((".hpp", ".h", ".hh", ".hxx")) and _binding_header_included_by(path, sources)
+            path.endswith((".hpp", ".h", ".hh", ".hxx")) and _runtime_header_included_by(path, sources)
         )
         if belongs:
             matched.append(lib)
@@ -487,11 +494,12 @@ def classify_cpp_impact(
     all-or-nothing rule where a single non-header file collapsed the whole change to coarse
     labels. Returns ``(selected, full_reasons, areas, impact)``:
 
-    * ``selected`` -- the union of every file's include-closure / binding-label / codegen-label /
+    * ``selected`` -- the union of every file's include-closure / runtime-target / binding-label /
+      codegen-label /
       direct-test targets;
     * ``full_reasons`` -- non-empty iff some file forces a FULL selection (a global-includer or
       missing header, or an unmapped build-input path); the caller then escalates to ALL;
-    * ``areas`` -- the label areas contributed by binding / codegen files (for the summary line);
+    * ``areas`` -- the label areas contributed by runtime/binding/codegen files;
     * ``impact`` -- ``{file: {"kind": ..., "targets": [...]/"labels": [...]/...}}`` for the
       ``--explain-file`` plan, so every file's reason is auditable.
 
@@ -499,10 +507,10 @@ def classify_cpp_impact(
 
     * ``include/pops/**`` header -> ``include-impact`` (its source-closure suites) or, when the
       header is a global includer / absent, ``all`` (soundness / fail-open);
-    * ``python/bindings/**`` ``.cpp``/``.hpp`` -> ``binding-tu-targets`` (the serial consumers of
-      the runtime OBJECT lib that compiles it) or, when it feeds only ``_pops``, ``binding-labels``
-      (the bindings label group); any other ``python/bindings/**`` artifact (seam template, cmake
-      fragment) -> ``all`` (build input, fail-open);
+    * ``src/runtime/**`` ``.cpp``/``.hpp`` -> ``runtime-tu-targets`` (the serial consumers of its
+      central OBJECT lib); an unregistered source or other build input fails open to ``all``;
+    * ``python/bindings/**`` adapters -> ``binding-labels``; non-source adapter build inputs fail
+      open to ``all``;
     * ``tests/cpp/**`` ``.cpp`` -> ``test-target`` (that one suite, when it is a serial target);
     * ``python/pops/codegen/**`` -> ``codegen-labels`` (the native_loader / compiled-model group);
     * other ``python/pops/**``, ``docs/**``, ``tutorials/**``, ``tests/python/**``, top-level
@@ -555,37 +563,43 @@ def classify_cpp_impact(
             impact[path] = {"kind": "include-impact", "targets": sorted(hit_targets)}
             continue
 
-        if path.startswith(CPP_BINDING_PREFIX):
-            if is_cpp_binding_tu(path):
-                tu_targets, matched_libs = binding_tu_targets(path, all_target_set)
-                if matched_libs:
-                    # The TU is compiled into a runtime OBJECT lib: select exactly that lib's
-                    # test consumers (the precise "targets that compile this TU").
-                    selected.update(tu_targets)
-                    for target in tu_targets:
-                        add_reason(reasons, target, "binding-tu:" + ",".join(sorted(matched_libs)))
+        if path.startswith(CPP_RUNTIME_PREFIX):
+            if is_cpp_runtime_tu(path):
+                tu_targets, matched_libs = runtime_tu_targets(path, all_target_set)
+                if not matched_libs:
                     impact[path] = {
-                        "kind": "binding-tu-targets",
-                        "object_libs": sorted(matched_libs),
-                        "targets": sorted(tu_targets),
+                        "kind": "all",
+                        "reason": "runtime-source-not-in-central-manifest",
                     }
-                else:
-                    # The TU feeds only the ``_pops`` module (an ``init_*.cpp`` entry / private
-                    # header of the module glue), not any test target -> bindings label group.
-                    file_areas = areas_for(path, CPP_BINDING_AREAS)
-                    areas.update(file_areas)
-                    hit = select_cpp_by_labels(suites, file_areas, reasons)
-                    selected.update(hit)
-                    impact[path] = {
-                        "kind": "binding-labels",
-                        "labels": sorted(expand_area_labels(file_areas)),
-                        "targets": sorted(hit),
-                    }
+                    full_reasons.append(f"{path}:runtime-source-not-in-central-manifest")
+                    continue
+                selected.update(tu_targets)
+                for target in tu_targets:
+                    add_reason(reasons, target, "runtime-tu:" + ",".join(sorted(matched_libs)))
+                impact[path] = {
+                    "kind": "runtime-tu-targets",
+                    "object_libs": sorted(matched_libs),
+                    "targets": sorted(tu_targets),
+                }
             else:
-                # A ``python/bindings`` build input (seam template, cmake fragment): the include
-                # graph does not model it -> fail open to ALL.
+                impact[path] = {"kind": "all", "reason": "runtime-build-input"}
+                full_reasons.append(f"{path}:runtime-build-input")
+            continue
+
+        if path.startswith(CPP_BINDING_PREFIX):
+            if not is_cpp_binding_tu(path):
                 impact[path] = {"kind": "all", "reason": "binding-build-input"}
                 full_reasons.append(f"{path}:binding-build-input")
+                continue
+            file_areas = areas_for(path, CPP_BINDING_AREAS)
+            areas.update(file_areas)
+            hit = select_cpp_by_labels(suites, file_areas, reasons)
+            selected.update(hit)
+            impact[path] = {
+                "kind": "binding-labels",
+                "labels": sorted(expand_area_labels(file_areas)),
+                "targets": sorted(hit),
+            }
             continue
 
         if path.startswith("tests/cpp/") and path.endswith(".cpp"):

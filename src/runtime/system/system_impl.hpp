@@ -1,7 +1,7 @@
-// ADC-632: BINDING-PRIVATE definition of System::Impl and the System-facade helpers, hoisted out
+// ADC-632: RUNTIME-PRIVATE definition of System::Impl and the System-facade helpers, hoisted out
 // of system.cpp so the responsibility-split sibling TUs (system_install / system_fields /
 // system_io / system_profiling / system_program.cpp) share ONE Impl definition. Impl is binding-
-// internal (NOT public API) -> it stays under python/bindings, not include/pops. The formerly
+// internal (NOT public API) -> it stays under src/runtime, not include/pops. The formerly
 // anonymous-namespace helpers become header-inline (ODR-safe single definition across the TUs).
 // VERBATIM move: bodies unchanged, no logic touched -> production trajectories bit-identical.
 // native_loader.hpp is included by the install TU after this private definition.

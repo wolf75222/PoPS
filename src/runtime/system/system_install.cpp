@@ -3,7 +3,7 @@
 // coupled sources) plus install_program. This TU is the
 // subdivision of system.cpp that instantiates the production package loader after System::Impl is complete.
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (binding-private)
+#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches

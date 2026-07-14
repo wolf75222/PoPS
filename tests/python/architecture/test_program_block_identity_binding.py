@@ -6,8 +6,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 LOADERS = (
-    ROOT / "python" / "bindings" / "system" / "base" / "system_io.cpp",
-    ROOT / "python" / "bindings" / "amr" / "amr_system.cpp",
+    ROOT / "src" / "runtime" / "system" / "system_io.cpp",
+    ROOT / "src" / "runtime" / "amr" / "amr_system.cpp",
 )
 
 

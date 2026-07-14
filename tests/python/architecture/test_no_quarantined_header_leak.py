@@ -5,9 +5,9 @@ roots the compiled/bound artifacts pull in:
 
   1. EMITTER includes -- the ``#include <pops/...>`` lines the DSL codegen writes verbatim
      into every generated ``.cpp`` (parsed from the ``python/pops`` string literals).
-  2. BINDINGS includes -- every ``#include <pops/...>`` in ``python/bindings`` (the pybind
-     translation units and their headers).
-  3. SEAM includes -- the ``python/bindings/templates/*.cpp.in`` transport/flux seams.
+  2. RUNTIME includes -- every ``#include <pops/...>`` in ``src/runtime`` (the System/AMR
+     translation units, private implementation headers and generated-seam templates).
+  3. BINDINGS includes -- the actual pybind module/init adapters under ``python/bindings``.
 
 A residual set of headers is validation/reference/legacy test scaffolding that must stay OUT
 of that production include closure. This file pins the quarantine as a pure SOURCE-PARSE check
@@ -30,6 +30,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 INCLUDE_DIR = REPO_ROOT / "include"
 POPS_CODEGEN = REPO_ROOT / "python" / "pops"
 BINDINGS_DIR = REPO_ROOT / "python" / "bindings"
+RUNTIME_DIR = REPO_ROOT / "src" / "runtime"
 CPP_TESTS_DIR = REPO_ROOT / "tests" / "cpp"
 HEADER_MANIFEST = INCLUDE_DIR / "pops_public_headers.manifest"
 
@@ -69,13 +70,14 @@ def _pops_includes(text):
 
 
 def _root_includes():
-    """Collect the production root include set from the emitter, bindings and seam sources."""
+    """Collect the production root include set from emitter, runtime and adapter sources."""
     roots = set()
     for py in POPS_CODEGEN.rglob("*.py"):
         roots |= _pops_includes(py.read_text(encoding="utf-8", errors="ignore"))
     for pattern in ("*.cpp", "*.cpp.in", "*.hpp", "*.h"):
-        for src in BINDINGS_DIR.rglob(pattern):
-            roots |= _pops_includes(src.read_text(encoding="utf-8", errors="ignore"))
+        for source_root in (RUNTIME_DIR, BINDINGS_DIR):
+            for src in source_root.rglob(pattern):
+                roots |= _pops_includes(src.read_text(encoding="utf-8", errors="ignore"))
     return roots
 
 
@@ -115,7 +117,7 @@ def test_production_never_reaches_a_quarantined_header():
     closure = _production_closure()
     leaked = sorted(closure.intersection(_QUARANTINED))
     assert not leaked, (
-        "production headers (the codegen-emitter, bindings and seam include set) must never reach "
+        "production headers (the codegen-emitter, runtime and binding-adapter include set) must never reach "
         "a quarantined validation/reference/test-only header, but the include closure now pulls "
         "%s -- remove the offending #include so the quarantined header stays out of production" % leaked
     )

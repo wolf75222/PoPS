@@ -31,7 +31,7 @@ endforeach()
 # enable_testing() pollue. Surchargenable (-DPOPS_BUILD_TESTS=ON) dans les deux sens.
 option(POPS_BUILD_TESTS    "Build tests"    ${PROJECT_IS_TOP_LEVEL})
 # Module Python `pops` (pybind11) : c'est LES BINDINGS DE LA LIB, donc ils vivent ici.
-# Le coeur reste header-only ; le module compile la facade runtime System (python/system.cpp)
+# Le coeur public reste header-only ; le module lie les objets runtime centraux (src/runtime)
 # + les bindings. adc_cases ne contient QUE du code Python qui importe ce module.
 option(POPS_BUILD_PYTHON   "Build the pybind11 Python module `pops`" OFF)
 # Backend de dispatch on-node : KOKKOS EST LE SEUL backend on-node, et il est OBLIGATOIRE.
@@ -302,12 +302,14 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/PopsDevTooling.cmake)
 # Sans ca, `ctest --test-dir build-py` avec POPS_BUILD_TESTS=OFF ne voit aucun test.
 if(POPS_BUILD_TESTS OR POPS_BUILD_PYTHON)
   enable_testing()
+  # One compiled-runtime source manifest for both mutually-exclusive consumers (tests and Python).
+  add_subdirectory(src)
 endif()
 if(POPS_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# Module Python `pops` (bindings de la lib). Compile la facade runtime System + pybind11.
+# Module Python `pops` : adaptateurs pybind11 lies aux facades runtime centrales.
 if(POPS_BUILD_PYTHON)
   include(FetchContent)
   # macOS expose souvent plusieurs Python (framework Python.org, conda, brew). Sans garde,

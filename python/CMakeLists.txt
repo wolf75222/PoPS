@@ -13,60 +13,36 @@
 # plus de test "Performing Test HAS_FLTO - Failed" parasite, et le build est rapide/previsible. ON =>
 # THIN_LTO (clang) pour un binaire "release perf" PONCTUEL ; exige une toolchain dont le linker accepte
 # -flto=thin (sur macOS, plutot la chaine clang conda complete que le melange AppleClang + linker conda).
-# ADC-593: the per-route block-build SEAM translation units (system/{isothermal,compressible}, amr/block,
-# amr/compiled) are no longer hand-written one .cpp per (transport, flux). They are GENERATED from ONE
-# declarative manifest (bindings/seam_combinations.cmake) into ${CMAKE_CURRENT_BINARY_DIR}/generated_seams
-# by configure_file per row -- byte-equivalent in symbols/semantics to the deleted files. Adding a Riemann
-# is now one manifest row, never a new pybind file (the acceptance criterion). The build-memory mitigation
-# is UNCHANGED: the generated TUs are still one leaf each, still serialized by the JOB_POOL below.
-include(${CMAKE_CURRENT_SOURCE_DIR}/bindings/seam_combinations.cmake)
-set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
-set(POPS_GENERATED_SEAM_SOURCES "")
-foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
-  pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_GENERATED_SEAM_SOURCES)
-endforeach()
-
-# The HAND-WRITTEN binding TUs: the module entry + init split, the two heavy facades (system.cpp /
-# amr_system.cpp), the unique polar visitor body, and the two thin riemann DISPATCHERS
-# (amr_block_compressible.cpp / amr_compiled_compressible.cpp -- one per transport, genuinely distinct
-# control flow, classified in docs/design/pybind-binding-audit.md). The per-(transport, flux) seam leaves
-# come from POPS_GENERATED_SEAM_SOURCES.
-set(POPS_MODULE_SOURCES
+# The Python subtree owns only pybind module/init adapters.  System, AmrSystem, native builders and
+# generated seam leaves are compiled once by the central targets in src/CMakeLists.txt.
+set(POPS_MODULE_BINDING_SOURCES
     bindings/core/bindings.cpp bindings/core/init/init_core.cpp bindings/core/init/init_identity.cpp
     bindings/core/init/init_component_loader.cpp
     bindings/core/init/init_system.cpp
-    bindings/core/init/init_amr.cpp bindings/system/base/system.cpp bindings/system/base/system_polar.cpp
-    # ADC-632: system.cpp split by responsibility into sibling TUs sharing system_impl.hpp (install /
-    # fields / io / profiling / program). Smaller TUs also cut the per-TU compile peak (the JOB_POOL
-    # memory serialization below still applies, now over lighter units).
-    bindings/system/base/system_install.cpp bindings/system/base/system_fields.cpp
-    bindings/system/base/system_io.cpp bindings/system/base/system_profiling.cpp
-    bindings/system/base/system_program.cpp
-    bindings/amr/amr_system.cpp bindings/amr/block/compressible/amr_block_compressible.cpp
-    bindings/amr/compiled/compressible/amr_compiled_compressible.cpp
-    ${POPS_GENERATED_SEAM_SOURCES})
+    bindings/core/init/init_amr.cpp)
 
 option(POPS_PY_LTO "LTO (ThinLTO) sur le module _pops (OFF = build rapide, recommande)" OFF)
 if(POPS_PY_LTO)
-  pybind11_add_module(_pops THIN_LTO ${POPS_MODULE_SOURCES})
+  pybind11_add_module(_pops THIN_LTO ${POPS_MODULE_BINDING_SOURCES})
+  pops_runtime_enable_python_thin_lto()
 else()
   # NO_EXTRAS empeche pybind11 d'ACTIVER le LTO sur _pops. C'est NECESSAIRE, pas cosmetique : des que
   # le test HAS_FLTO passe (cas du pybind11 de l'env, p.ex. conda), pybind11_add_module activerait le
   # ThinLTO par defaut -> link/codegen au LINK -> build nettement plus long (le backend -O3 est deja le
   # goulot). On re-applique la visibilite cachee (seule "extra" qui compte ici) pour rester identique au
   # binaire produit jusqu'ici ; le chemin DSL "production" exporte quand meme ses symboles via POPS_EXPORT.
-  pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_SOURCES})
+  pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_BINDING_SOURCES})
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
-target_link_libraries(_pops PRIVATE pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
+target_link_libraries(_pops PRIVATE pops_runtime_system pops_runtime_amr pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 
-# RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du module (system.cpp / bindings/amr/amr_system.cpp =
+# RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du runtime (system.cpp / amr_system.cpp =
 # facades completes, briques + AMR instanciees) pese plusieurs GB CHACUNE ; des que DEUX compilent
 # en parallele (preset ci-kokkos-python, jobs: 2), le runner GitHub est tue par famine memoire
 # ("runner received a shutdown signal", exit 143). Cas reel post vague ADC-63..71 (job "Kokkos
-# (OpenMP)", step build du module) : bindings/core/bindings.cpp sort du ccache en ~20 s, puis bindings/system/base/system.cpp et
-# bindings/amr/amr_system.cpp partent ENSEMBLE (jobs: 2, miss ccache) et le runner meurt ~9 min plus tard --
+# (OpenMP)", step build du module) : bindings/core/bindings.cpp sort du ccache en ~20 s, puis les
+# cibles src/runtime System et AMR partent ENSEMBLE (jobs: 2, miss ccache) --
 # la veille, la meme paire concurrente passait encore (runs verts a 15-23 min) : la vague a fait
 # deborder le pic cumule. On serialise donc les compiles DU MODULE par un pool Ninja taille 1
 # (declare dans le CMakeLists racine, bloc Kokkos), pattern pops_heavy_tu de tests/CMakeLists.txt.
@@ -102,12 +78,8 @@ target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER
 # distribuee construite DANS le loader (p.ex. AmrSystem(distribute_coarse=True)) se replique sur chaque
 # rang (pas de strong-scaling). dsl.py (_native_mpi_flags) lit cet attribut pour recompiler le loader
 # avec le MEME MPI que le module. Sans MPI (build serie) : attribut absent -> loader serie inchange.
-if(TARGET MPI::MPI_CXX)
-  get_target_property(_pops_mpi_inc MPI::MPI_CXX INTERFACE_INCLUDE_DIRECTORIES)
-  if(_pops_mpi_inc)
-    string(REPLACE ";" "|" _pops_mpi_inc "${_pops_mpi_inc}")
-    target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${_pops_mpi_inc}")
-  endif()
+if(POPS_NATIVE_MPI_INCLUDE)
+  target_compile_definitions(_pops PRIVATE POPS_MPI_INCLUDE="${POPS_NATIVE_MPI_INCLUDE}")
 endif()
 
 # Signature des en-tetes PUBLICS installes, BAKED dans la cle d'ABI du module (pops/runtime/abi_key.hpp
@@ -117,15 +89,8 @@ endif()
 # CALCUL (miroir bit-pour-bit de pops_header_signature) : sha256 du concatene TRIE, pour chaque ligne
 # `public` du manifeste partage, de "<chemin relatif>\n<sha256 du contenu>\n". Les neuf en-tetes de
 # test n'entrent ni dans l'installation ni dans l'identite ABI publiee.
-set(_pops_include "${CMAKE_CURRENT_SOURCE_DIR}/../include")
-set(_pops_hdr_blob "")
-foreach(_h IN LISTS POPS_PUBLIC_HEADERS)
-  file(SHA256 "${_pops_include}/${_h}" _h_digest)
-  string(APPEND _pops_hdr_blob "${_h}\n${_h_digest}\n")
-endforeach()
-string(SHA256 _pops_header_sig "${_pops_hdr_blob}")
-target_compile_definitions(_pops PRIVATE POPS_HEADER_SIG="${_pops_header_sig}")
-message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${_pops_header_sig}")
+target_compile_definitions(_pops PRIVATE POPS_HEADER_SIG="${POPS_NATIVE_HEADER_SIGNATURE}")
+message(STATUS "pops Python module: signature en-tetes POPS_HEADER_SIG=${POPS_NATIVE_HEADER_SIGNATURE}")
 
 # L'extension va dans le paquet pops/ ; on y copie aussi les sources Python du paquet.
 set(POPS_PY_PKG ${CMAKE_CURRENT_BINARY_DIR}/pops)

@@ -228,4 +228,4 @@ Recommended order:
 4. `include/pops/numerics/time`;
 5. `include/pops/numerics/elliptic`;
 6. `include/pops/runtime`;
-7. `python/bindings/system/base/system.cpp` by extraction/refactor, not only comments.
+7. `src/runtime/system/system.cpp` by extraction/refactor, not only comments.

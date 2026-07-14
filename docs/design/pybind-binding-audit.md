@@ -7,13 +7,18 @@ identity. Pybind materializes the already-resolved plan and does not reinterpret
 
 ## Translation-unit ownership
 
-Bindings live under `python/bindings/` and have only three responsibilities:
+Bindings live under `python/bindings/` and have only two responsibilities:
 
 | Family | Responsibility |
 | --- | --- |
 | module initialization | register value types and the private native execution entry points |
 | plan installation | decode authenticated generated records and construct a `RuntimeInstance` |
-| generated template leaves | instantiate bounded builtin template products without owning route policy |
+
+Compiled execution ownership is separate: `src/runtime/system/` and `src/runtime/amr/` implement
+the engines, while `src/runtime/builders/` owns the declarative seam manifest, templates and bounded
+builtin template instantiations. `src/CMakeLists.txt` builds the single `pops_runtime_system` and
+`pops_runtime_amr` source manifests consumed by both Python and native tests. Nothing below
+`python/bindings/` defines a `System::` or `AmrSystem::` method.
 
 The `System` and `AmrSystem` C++ types are private execution engines. Their pybind classes may expose
 installation seams used by `pops.bind`, but no public Python authoring object delegates to their old
@@ -42,7 +47,8 @@ component base class and no `provides(any)` escape hatch.
 
 ## Generated builtin leaves and build memory
 
-Some builtin C++ policies remain template-instantiated in `_pops` for zero-overhead device kernels.
+Some builtin C++ policies remain template-instantiated in the central runtime objects linked into
+`_pops` for zero-overhead device kernels.
 That is an implementation strategy, not a second registration path. Their identities and supported
 combinations come from the generated catalog; generated visitors map resolved numeric IDs to typed
 leaves. A handwritten pybind `if/else` on transport, flux, limiter, layout or model is forbidden.

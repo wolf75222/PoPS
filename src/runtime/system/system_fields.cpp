@@ -3,7 +3,7 @@
 // names/roles, reduce_component, mass/density/potential and their global gathers, and the local-box
 // accessors. This TU is a subdivision of system.cpp (state marshaling + field derivation surface).
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (binding-private)
+#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 namespace pops {
 

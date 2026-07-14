@@ -2,7 +2,7 @@
 // (include/pops/coupling/source/coupled_source_program.hpp:42-45 -- kCsMaxReg, kCsMaxStack, kCsMaxProg,
 // kCsMaxTerms), kCsMaxReg / kCsMaxProg / kCsMaxTerms are already exercised as OVERFLOW checks against the
 // C++ guard reachable from the public path: System::add_coupled_source
-// (python/bindings/system/base/system.cpp) throws EXPLICITLY when in_blocks+consts > kCsMaxReg,
+// (src/runtime/system/system.cpp) throws EXPLICITLY when in_blocks+consts > kCsMaxReg,
 // out_blocks > kCsMaxTerms, or a term's prog_lens > kCsMaxProg -- BEFORE calling
 // validate_cs_program_stack. kCsMaxStack had no equivalent OVERFLOW test: only the MALFORMED-program
 // cases (underflow, leftover stack) are covered by test_public_validation_errors.cpp, calling

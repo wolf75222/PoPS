@@ -1,0 +1,113 @@
+"""Source-ownership fence for the compiled System/AMR runtime.
+
+``src/CMakeLists.txt`` is the only native source manifest.  Python owns pybind adapters, tests own
+executables, and both consume the same central object targets without compiling private runtime
+implementation files a second time.
+"""
+
+from __future__ import annotations
+
+import pathlib
+import re
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[3]
+RUNTIME = ROOT / "src" / "runtime"
+BINDINGS = ROOT / "python" / "bindings"
+ROOT_CMAKE = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+SRC_CMAKE = (ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")
+PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
+TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
+
+
+def _rel(path: pathlib.Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
+def test_python_bindings_contains_only_pybind_core_adapters():
+    files = [path for path in BINDINGS.rglob("*") if path.is_file()]
+    misplaced = [_rel(path) for path in files if path.relative_to(BINDINGS).parts[0] != "core"]
+    assert not misplaced, (
+        "python/bindings is reserved for actual module/init adapters; native runtime/builders "
+        "belong under src/runtime:\n  " + "\n  ".join(misplaced)
+    )
+
+    binding_sources = sorted(path for path in files if path.suffix == ".cpp")
+    missing = [
+        _rel(path)
+        for path in binding_sources
+        if path.relative_to(ROOT / "python").as_posix() not in PYTHON_CMAKE
+    ]
+    assert not missing, "pybind adapter source missing from POPS_MODULE_BINDING_SOURCES: " + str(missing)
+
+
+def test_no_system_method_definition_lives_below_python_bindings():
+    # Method references such as ``&System::step`` are legitimate pybind glue. A qualified name at the
+    # start of a C++ declaration/body line is an implementation definition and is forbidden here.
+    definition = re.compile(
+        r"(?m)^\s*(?:[A-Za-z_]\w*(?:::\w+)*(?:<[^;{}]*>)?[\s*&]+)*"
+        r"(?:System|AmrSystem)::(?:~?\w+|operator\S*)\s*\("
+    )
+    offenders = []
+    for source in BINDINGS.rglob("*.cpp"):
+        if definition.search(source.read_text(encoding="utf-8", errors="ignore")):
+            offenders.append(_rel(source))
+    assert not offenders, "System/AmrSystem implementation leaked into pybind adapters: " + str(offenders)
+
+
+def test_src_cmake_is_the_single_runtime_source_authority():
+    for target in ("pops_runtime_system", "pops_runtime_amr"):
+        assert SRC_CMAKE.count(f"add_library({target} OBJECT") == 1
+        assert not re.search(rf"add_library\(\s*{target}\b", PYTHON_CMAKE)
+        assert not re.search(rf"add_library\(\s*{target}\b", TESTS_CMAKE)
+
+    hand_written_sources = sorted(RUNTIME.rglob("*.cpp"))
+    missing = []
+    for source in hand_written_sources:
+        manifest_path = source.relative_to(ROOT / "src").as_posix()
+        if SRC_CMAKE.count(manifest_path) != 1:
+            missing.append(manifest_path)
+    assert not missing, "runtime .cpp must occur exactly once in src/CMakeLists.txt: " + str(missing)
+
+    for consumer, text in (("python", PYTHON_CMAKE), ("tests", TESTS_CMAKE)):
+        relisted = sorted(
+            source.relative_to(ROOT / "src").as_posix()
+            for source in hand_written_sources
+            if source.relative_to(ROOT / "src").as_posix() in text
+        )
+        assert not relisted, f"{consumer}/CMakeLists.txt relists central runtime sources: {relisted}"
+
+
+def test_python_and_tests_consume_the_central_targets():
+    assert re.search(
+        r"target_link_libraries\(\s*_pops\s+PRIVATE\s+"
+        r"pops_runtime_system\s+pops_runtime_amr\b",
+        PYTHON_CMAKE,
+    )
+    for target in ("pops_runtime_system", "pops_runtime_amr"):
+        assert target in TESTS_CMAKE, f"tests have no consumers for {target}"
+
+    positions = {
+        name: re.search(rf"(?m)^\s*add_subdirectory\({name}\)\s*$", ROOT_CMAKE).start()
+        for name in ("src", "tests", "python")
+    }
+    assert positions["src"] < positions["tests"]
+    assert positions["src"] < positions["python"]
+
+
+def test_central_targets_preserve_consumer_specific_compile_contracts():
+    required = (
+        "pops_heavy_tu=${POPS_HEAVY_TU_POOL}",
+        "JOB_POOL_COMPILE pops_heavy_tu",
+        "JOB_POOL_COMPILE pops_heavy_module_tu",
+        "POSITION_INDEPENDENT_CODE ON",
+        "CXX_VISIBILITY_PRESET hidden",
+        "VISIBILITY_INLINES_HIDDEN ON",
+        "pops_dev_options",
+        "_pops_EXPORTS",
+        "POPS_HEADER_SIG=\"${POPS_NATIVE_HEADER_SIGNATURE}\"",
+        "$<CONFIG:Release,RelWithDebInfo,MinSizeRel>",
+        ":-O0>",
+    )
+    missing = [fact for fact in required if fact not in SRC_CMAKE]
+    assert not missing, "central runtime targets lost compile-contract facts: " + str(missing)

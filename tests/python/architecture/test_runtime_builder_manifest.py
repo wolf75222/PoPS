@@ -1,8 +1,8 @@
-"""ADC-593: source-only gates locking the pybind block-build SEAM TUs to ONE declarative manifest.
+"""ADC-593: source-only gates locking native block builders to ONE declarative manifest.
 
 The _pops extension used to carry ~20 hand-written .cpp files, one per (side, transport, flux) numeric
 combination, and grew by a new file every time a Riemann or reconstruction was added. Those leaves are
-now GENERATED from python/bindings/seam_combinations.cmake (configure_file per row, into the build tree),
+now GENERATED from src/runtime/builders/seam_combinations.cmake (configure_file per row),
 so the growth strategy is a manifest row, not a hand-written file.
 
 These gates enforce that invariant WITHOUT a build (source tree only, no _pops import):
@@ -10,7 +10,7 @@ These gates enforce that invariant WITHOUT a build (source tree only, no _pops i
   1. the hand-written specialization files are GONE from git and the manifest + templates exist;
   2. every manifest row's (transport, flux) is a legal generated component-catalog route, so the
      manifest cannot invent a route and is NOT itself the descriptor registry;
-  3. no NEW hand-written .cpp under python/bindings/ carries the seam-leaf signature (build_*_for_make /
+  3. no NEW hand-written .cpp under src/runtime/builders carries the seam-leaf signature (build_*_for_make /
      build_amr_*_for_flux + make_block_ / dispatch_amr_): that pattern belongs in the templates only,
      so a new numeric combination cannot sneak back in as a hand-written file.
 
@@ -25,9 +25,9 @@ import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-BINDINGS = REPO_ROOT / "python" / "bindings"
-MANIFEST = BINDINGS / "seam_combinations.cmake"
-TEMPLATES = BINDINGS / "templates"
+BUILDERS = REPO_ROOT / "src" / "runtime" / "builders"
+MANIFEST = BUILDERS / "seam_combinations.cmake"
+TEMPLATES = BUILDERS / "templates"
 GENERATED_CATALOG = (
     REPO_ROOT / "python" / "pops" / "runtime" / "_generated_component_routes.py"
 )
@@ -56,15 +56,10 @@ GENERATED_LEAF_PATHS = (
     "amr/compiled/compressible/amr_compiled_compressible_roe.cpp",
 )
 
-# The hand-written TUs that STAY (unique shapes, not per-combination growth): the two heavy facades, the
-# unique polar visitor body, and the two thin riemann DISPATCHERS (one per transport). They are exempt
-# from the "no seam signature outside templates" gate below.
+# The two hand-written riemann dispatchers have unique control flow (one per transport) and stay.
 HAND_WRITTEN_KEPT = {
-    "python/bindings/system/base/system.cpp",
-    "python/bindings/system/base/system_polar.cpp",
-    "python/bindings/amr/amr_system.cpp",
-    "python/bindings/amr/block/compressible/amr_block_compressible.cpp",
-    "python/bindings/amr/compiled/compressible/amr_compiled_compressible.cpp",
+    "src/runtime/builders/amr/block/compressible/amr_block_compressible.cpp",
+    "src/runtime/builders/amr/compiled/compressible/amr_compiled_compressible.cpp",
 }
 
 # A manifest row is a quoted string of exactly 7 non-empty |-separated fields starting with a template
@@ -107,11 +102,11 @@ def test_manifest_and_templates_exist():
 
 
 def test_specialized_leaf_files_are_generated_not_tracked():
-    present = [rel for rel in GENERATED_LEAF_PATHS if (BINDINGS / rel).exists()]
+    present = [rel for rel in GENERATED_LEAF_PATHS if (BUILDERS / rel).exists()]
     assert not present, (
         "these per-route seam TUs must be GENERATED from seam_combinations.cmake, not hand-written "
         "source files; delete them and add a manifest row instead:\n  "
-        + "\n  ".join("python/bindings/" + rel for rel in present)
+        + "\n  ".join("src/runtime/builders/" + rel for rel in present)
     )
 
 
@@ -173,15 +168,15 @@ def _has_seam_leaf_signature(text):
 
 def test_no_new_hand_written_seam_leaf():
     violations = []
-    for path in sorted(BINDINGS.rglob("*.cpp")):
+    for path in sorted(BUILDERS.rglob("*.cpp")):
         rel = _rel(path)
         if rel in HAND_WRITTEN_KEPT:
             continue
         if _has_seam_leaf_signature(path.read_text(encoding="utf-8")):
             violations.append(rel)
     assert not violations, (
-        "new hand-written pybind seam-leaf TU(s) found; a per-(transport, flux) leaf must be a ROW in "
-        "python/bindings/seam_combinations.cmake (generated from a template), never a hand-written "
+        "new hand-written runtime seam-leaf TU(s) found; a per-(transport, flux) leaf must be a ROW in "
+        "src/runtime/builders/seam_combinations.cmake, never a hand-written "
         "file (ADC-593 acceptance criterion):\n  " + "\n  ".join(violations)
     )
 

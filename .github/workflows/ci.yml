@@ -132,6 +132,7 @@ jobs:
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
+              - 'src/**'
               - 'python/bindings/**/*.cpp'
               - 'python/bindings/**/*.hpp'
               - 'python/CMakeLists.txt'
@@ -159,6 +160,7 @@ jobs:
               - 'CMakePresets.json'
               - 'pyproject.toml'
               - 'python/**'
+              - 'src/**'
               - 'scripts/**'
 
   # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
@@ -456,7 +458,7 @@ jobs:
       # compiled _pops.so (the ~37 min header-PR build); on a PR that touches NO .so-affecting
       # input we want to reuse it instead of recompiling. The key hashes EVERY input that can change
       # the .so, so a stale binary can never be served:
-      #   * include/** + python/bindings/**  -- the C++ / pybind sources and headers;
+      #   * include/** + src/** + python/bindings/** -- native runtime and pybind adapter sources;
       #   * python/CMakeLists.txt + CMakeLists.txt + cmake/** + CMakePresets.json -- the build graph,
       #     compile flags and POPS_CXX_STD (the presets are the single source of the std/flags);
       #   * the Kokkos version + commit -- the .so links this exact Kokkos runtime (a bump must miss);
@@ -469,7 +471,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-${{ runner.os }}-${{ hashFiles('include/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
+          key: pops-module-${{ runner.os }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
 
       # Fast path: on an EXACT module-cache hit AND no C++/build path changed on this PR, the cached
       # .so is authoritative. Re-sync the PR's pure-Python sources over the cached copies (the .py are
@@ -835,7 +837,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ${{ env.POPS_CACHE_DIR }}
-          key: pops-dslcache-${{ runner.os }}-${{ hashFiles('include/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'python/pops/**', 'tests/python/integration/mpi/test_compile_cache_backend.py') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
+          key: pops-dslcache-${{ runner.os }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'python/pops/**', 'tests/python/integration/mpi/test_compile_cache_backend.py') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
           restore-keys: |
             pops-dslcache-${{ runner.os }}-
 

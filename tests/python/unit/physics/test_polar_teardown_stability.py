@@ -3,7 +3,7 @@
 Bug PRE-EXISTANT (signale a la revue de PR #176, present sur master propre, pas une regression) :
 un System polaire stepant un profil INSTABLE (Gaussienne raide + BackgroundDensity n0=0) crashait au
 teardown / a la premiere lecture hote (density()/potential()). Cause RACINE : les bindings (to_2d /
-to_3d, python/bindings.cpp) remodelaient TOUT champ en CARRE (nx(), nx()), alors qu'un anneau polaire
+to_3d, python/bindings/core/bindings.cpp) remodelaient TOUT champ en CARRE (nx(), nx()), alors qu'un anneau polaire
 fait nr*ntheta valeurs. Quand nr != ntheta le memcpy debordait le tampon numpy (nr*ntheta > nx()^2),
 corrompant le tas ; avec des valeurs non finies (run instable) les octets debordes (motif NaN
 0x7ff8...) ecrasaient les metadonnees de la free-list, d'ou l'abort au teardown. Le cas STABLE de

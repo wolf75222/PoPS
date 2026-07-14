@@ -202,7 +202,7 @@ def test_plan_python_broad_file_runs_all(tmp_path):
 
 def test_plan_python_bindings_change_runs_all(tmp_path):
     """A ``python/bindings`` change (extension-affecting) forces the whole suite."""
-    outputs, _ = _run_plan_python(tmp_path, ["python/bindings/system/init_system.cpp"])
+    outputs, _ = _run_plan_python(tmp_path, ["python/bindings/core/init/init_system.cpp"])
     assert outputs["python_mode"] == "all"
 
 

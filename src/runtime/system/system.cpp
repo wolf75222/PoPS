@@ -3,7 +3,7 @@
 // header system_impl.hpp; the responsibility split (install / fields / io / profiling / program)
 // moves the remaining method bodies into sibling TUs that all include system_impl.hpp. This file
 // keeps: abi_key, the ctor/dtor/move, mark_bound / lifecycle_state, and the thin step forwards.
-#include "system_impl.hpp"  // ADC-632: System::Impl + shared facade helpers (binding-private)
+#include "system_impl.hpp"  // ADC-632: System::Impl + shared facade helpers (runtime-private)
 
 // native_loader.hpp templates instantiate on Impl; included AFTER system_impl.hpp so the Impl
 // definition is complete (the historical "templates instantiated lower down" ordering, per-TU).

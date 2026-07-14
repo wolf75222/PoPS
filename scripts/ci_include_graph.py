@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INCLUDE_DIR = ROOT / "include"
 POPS_CODEGEN = ROOT / "python" / "pops"
 BINDINGS_DIR = ROOT / "python" / "bindings"
+RUNTIME_DIR = ROOT / "src" / "runtime"
 CPP_TESTS_DIR = ROOT / "tests" / "cpp"
 
 # Matches ``#include <pops/...>`` both as a real directive and inside a codegen string literal.
@@ -106,17 +107,18 @@ def source_closure(source_rel: str) -> set[str]:
     return transitive_closure(pops_includes(_read(path)))
 
 
-def bindings_and_seam_includes() -> set[str]:
-    """Collect the direct ``pops/...`` includes of every bindings and seam-template source.
+def runtime_and_binding_includes() -> set[str]:
+    """Collect direct ``pops/...`` includes of native runtime and pybind adapter sources.
 
-    Covers ``python/bindings/**`` ``.cpp`` / ``.hpp`` / ``.h`` AND the generated seam templates
-    (``*.cpp.in``). These translation units are compiled into or linked by effectively every
-    test target, so their transitive closure is the GLOBAL-INCLUDERS set below.
+    Covers ``src/runtime/**`` production sources and seam templates plus the actual adapter TUs
+    under ``python/bindings/**``. These translation units are compiled into or linked by
+    effectively every test target, so their transitive closure is the GLOBAL-INCLUDERS set below.
     """
     roots: set[str] = set()
     for pattern in ("*.cpp", "*.cpp.in", "*.hpp", "*.h"):
-        for src in BINDINGS_DIR.rglob(pattern):
-            roots |= pops_includes(_read(src))
+        for source_root in (RUNTIME_DIR, BINDINGS_DIR):
+            for src in source_root.rglob(pattern):
+                roots |= pops_includes(_read(src))
     return roots
 
 
@@ -156,7 +158,7 @@ def global_includer_roots() -> set[str]:
     the seed; ``ci_select_tests`` closes it transitively.
     """
     return (
-        bindings_and_seam_includes()
+        runtime_and_binding_includes()
         | emitter_includes()
         | cpp_support_includes()
     )

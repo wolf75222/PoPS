@@ -1,4 +1,4 @@
-// GENERATED from python/bindings/seam_combinations.cmake (do not edit here; edit the manifest row).
+// GENERATED from src/runtime/builders/seam_combinations.cmake (do not edit here; edit the manifest row).
 // ADC-593 seam generation, ADC-335 (P0-B) provenance: single-block AMR seam (AmrCouplerMP) for the
 // @SEAM_TRANSPORT@ transport. Instantiates only the @SEAM_TRANSPORT@ build_amr_compiled leaves. See
 // amr_block_seam.hpp.

@@ -183,81 +183,14 @@ function(pops_native_loader_definitions out)
     PARENT_SCOPE)
 endfunction()
 
-set_property(GLOBAL APPEND PROPERTY JOB_POOLS pops_heavy_tu=${POPS_HEAVY_TU_POOL})
-
 function(pops_cap_opt_for_kokkos_ram target)
   target_compile_options(${target} PRIVATE
     $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
   set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
 endfunction()
 
-# --- ADC-336 (P0-A) : les deux TU lourdes du runtime compilees UNE SEULE FOIS par config -----------
-# Avant, ~23 executables de test re-listaient python/bindings/system/base/system.cpp et/ou python/bindings/amr/amr_system.cpp en source
-# (chacune une compilation cc1plus de plusieurs Go / centaines de secondes -- la meme TU recompilee
-# jusqu'a 20x dans un build de tests). On les compile UNE fois dans deux bibliotheques OBJECT, splicees
-# dans chaque executable consommateur EXACTEMENT comme si la .cpp y etait encore listee : memes objets,
-# donc tous les symboles (y compris POPS_EXPORT) presents, et -rdynamic les exporte toujours.
-# Parite bit-a-bit : la cible de reference est ce que ces tests compilaient deja -- pops::pops seul,
-# AUCUN pops_dev_options, AUCUN define POPS_* (les POPS_TEST_* des loaders natifs sont PRIVATE a leur .cpp
-# et inutilises par la TU lourde) -- donc on n'ajoute rien.
-# -O0 PUBLIC : cape la TU lourde ET se propage a la .cpp de chaque test consommateur, pour que le chemin
-# add_compiled_model (instancie dans la .cpp du test) reste au MEME -O que le chemin add_block (dans cet
-# objet partage). L'ancien cap par cible couvrait les deux a -O0 ; le preserver garde l'ensemble
-# (TU, flags) identique a aujourd'hui et evite toute derive de bits par contraction FMA a -O3 (GCC).
-# Le pool ninja pops_heavy_tu (taille 1, declare ci-dessus) reste PRIVATE : seule la TU lourde se
-# serialise (anti-OOM), pas les petites .cpp de test.
-# _pops (python/CMakeLists.txt) n'est PAS touche : il compile deja chaque TU une fois avec ses propres
-# flags de production (POPS_HEADER_SIG/visibilite/...), et AUCUN preset ne co-construit tests+python
-# (POPS_BUILD_TESTS et POPS_BUILD_PYTHON sont mutuellement exclusifs dans CMakePresets.json) -- cette
-# bibliotheque est donc strictement tests-only et ne peut pas etre partagee avec _pops.
-# ADC-593: the per-route block-build seam TUs (system/{isothermal,compressible}, amr/block, amr/compiled)
-# are GENERATED from the same declarative manifest the _pops module uses (python/bindings/
-# seam_combinations.cmake), into ${CMAKE_CURRENT_BINARY_DIR}/generated_seams here. The C++ test targets
-# splice the SAME generated leaves the module compiles, so a manifest row is the ONE place a (transport,
-# flux) leaf is registered for both the module and the tests. amr_system.cpp / system.cpp CALL the seams,
-# so the generated leaves must be compiled/linked wherever those heavy TUs are.
-include(${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/seam_combinations.cmake)
-set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
-set(POPS_SYSTEM_GENERATED_SEAMS "")
-set(POPS_AMR_GENERATED_SEAMS "")
-foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
-  string(REPLACE "|" ";" _cols "${_seam_row}")
-  list(GET _cols 1 _side)
-  if(_side STREQUAL "system")
-    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_SYSTEM_GENERATED_SEAMS)
-  else()
-    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_AMR_GENERATED_SEAMS)
-  endif()
-endforeach()
-
-# ADC-632: system.cpp is split by responsibility into sibling TUs sharing the binding-private
-# system_impl.hpp (install / fields / io / profiling / program); the OBJECT lib compiles the same
-# six TUs the _pops module does, so every consumer keeps the full System facade symbol set.
-add_library(pops_runtime_system OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_install.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_fields.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_io.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_profiling.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_program.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_polar.cpp
-            ${POPS_SYSTEM_GENERATED_SEAMS})
-# ADC-335: the AMR transport-seam TUs (multi-block build_amr_block_<t> + single-block
-# build_amr_compiled_<t>). amr_system.cpp CALLS them, so they must be compiled/linked wherever
-# amr_system.cpp is -- the pops_runtime_amr object lib AND the ENABLE_EXPORTS native-loader tests that
-# re-list amr_system.cpp directly (below). One list, reused, so none is forgotten. The two thin riemann
-# DISPATCHERS (amr_block_compressible.cpp / amr_compiled_compressible.cpp) stay hand-written; the per-flux
-# leaves come from POPS_AMR_GENERATED_SEAMS.
-set(POPS_AMR_SEAM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible.cpp
-    ${POPS_AMR_GENERATED_SEAMS})
-add_library(pops_runtime_amr    OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/amr_system.cpp ${POPS_AMR_SEAM})
-foreach(_rt pops_runtime_system pops_runtime_amr)
-  target_link_libraries(${_rt} PUBLIC pops::pops ${CMAKE_DL_LIBS})
-  target_compile_options(${_rt} PUBLIC
-    $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
-  set_target_properties(${_rt} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
-endforeach()
+# The central object targets are defined, configured and populated exclusively by src/CMakeLists.txt.
+# Test executables below consume them through EXTRA_LIBS; this file never repeats runtime sources.
 
 # Generated C++ solver kernel used by test_solver_codegen_generated.
 find_package(Python3 COMPONENTS Interpreter QUIET)

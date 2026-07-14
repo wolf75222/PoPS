@@ -2,7 +2,7 @@
 """ADC-593 runtime sibling of the seam-manifest architecture gate.
 
 The per-route block-build seam TUs (system/{isothermal,compressible}, amr/block, amr/compiled) are now
-GENERATED from python/bindings/seam_combinations.cmake instead of hand-written one file per (transport,
+GENERATED from src/runtime/builders/seam_combinations.cmake instead of hand-written one file per (transport,
 flux). This test proves the generation is not just source-equivalent but FUNCTIONAL: it drives a native
 System (and AmrSystem) add_block for EVERY (transport, flux) combination the manifest declares, then
 asserts a CFL step advances by a finite, positive dt. If a generated seam were mis-wired (wrong ctor,
@@ -26,7 +26,8 @@ except Exception as exc:  # noqa: BLE001
 
 
 # The manifest combinations, expressed in the public brick vocabulary. Kept in sync with
-# python/bindings/seam_combinations.cmake by tests/python/architecture/test_pybind_seam_manifest.py (that gate
+# src/runtime/builders/seam_combinations.cmake by
+# tests/python/architecture/test_runtime_builder_manifest.py (that gate
 # locks the manifest to the catalog / registry; this list is the runtime projection of the same rows).
 # (transport, flux) with flux=None for the transport-only (whole make_block dispatcher) seams.
 _SYSTEM_COMBOS = [

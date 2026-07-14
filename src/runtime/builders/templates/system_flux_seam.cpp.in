@@ -1,4 +1,4 @@
-// GENERATED from python/bindings/seam_combinations.cmake (do not edit here; edit the manifest row).
+// GENERATED from src/runtime/builders/seam_combinations.cmake (do not edit here; edit the manifest row).
 // ADC-593 seam generation, ADC-335 / ADC-342 (P0-B flux subdivision) provenance: this TU instantiates
 // ONLY the @SEAM_FLUX@ flux build_block leaves of the @SEAM_TRANSPORT@ transport (via
 // make_block_@SEAM_FLUX@), so they compile in parallel with the other flux TUs. The flux is dispatched by

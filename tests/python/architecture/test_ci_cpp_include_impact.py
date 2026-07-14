@@ -290,41 +290,41 @@ def _run_plan_cpp_explain(tmp_path, changed_lines):
     return outputs, targets, plan
 
 
-def test_binding_tu_selects_only_its_object_lib_consumers(tmp_path):
-    """A binding TU maps to the test targets compiling it, NOT the broad label group.
+def test_runtime_tu_selects_only_its_object_lib_consumers(tmp_path):
+    """A runtime TU maps to the test targets compiling it, NOT the broad label group.
 
     ``system_fields.cpp`` is one of the ``pops_runtime_system`` OBJECT-lib TUs; the selection is
     exactly that lib's serial consumers (+ smoke), a strict subset far below the old bindings
     label group. The precise consumer set is read from ``tests/CMakeLists.txt``.
     """
     outputs, targets, plan = _run_plan_cpp_explain(
-        tmp_path, ["python/bindings/system/base/system_fields.cpp"]
+        tmp_path, ["src/runtime/system/system_fields.cpp"]
     )
     assert outputs["cpp_mode"] == "subset"
-    _sources, consumers = sel._binding_object_lib_map()
+    _sources, consumers = sel._runtime_object_lib_map()
     serial = {s["name"] for s in _serial_suites()}
     expected = {t for t in consumers["pops_runtime_system"] if t in serial}
     assert expected, "no serial consumers parsed for pops_runtime_system"
     assert expected <= set(targets)
     for smoke in sel.CPP_SMOKE_TARGETS:
         assert smoke in targets
-    entry = plan["impact"]["python/bindings/system/base/system_fields.cpp"]
-    assert entry["kind"] == "binding-tu-targets"
+    entry = plan["impact"]["src/runtime/system/system_fields.cpp"]
+    assert entry["kind"] == "runtime-tu-targets"
     assert entry["object_libs"] == ["pops_runtime_system"]
 
 
-def test_binding_private_header_maps_to_the_same_object_lib(tmp_path):
-    """A binding private header impacts the OBJECT lib whose TUs ``#include`` it.
+def test_runtime_private_header_maps_to_the_same_object_lib(tmp_path):
+    """A runtime-private header impacts the OBJECT lib whose TUs ``#include`` it.
 
     ``system_impl.hpp`` is included by the ``pops_runtime_system`` TUs, so a change to it selects
     the same consumers as a change to one of those TUs.
     """
     outputs, targets, plan = _run_plan_cpp_explain(
-        tmp_path, ["python/bindings/system/base/system_impl.hpp"]
+        tmp_path, ["src/runtime/system/system_impl.hpp"]
     )
     assert outputs["cpp_mode"] == "subset"
-    entry = plan["impact"]["python/bindings/system/base/system_impl.hpp"]
-    assert entry["kind"] == "binding-tu-targets"
+    entry = plan["impact"]["src/runtime/system/system_impl.hpp"]
+    assert entry["kind"] == "runtime-tu-targets"
     assert entry["object_libs"] == ["pops_runtime_system"]
     assert set(entry["targets"]) <= set(targets)
 
@@ -360,16 +360,16 @@ def test_pops_non_codegen_python_has_zero_cpp_impact(tmp_path):
 
 
 def test_compositional_union_prunes_a_mixed_change(tmp_path):
-    """A leaf header + binding TU + codegen + zero-impact files select their UNION, not ALL.
+    """A leaf header + runtime TU + codegen + zero-impact files select their UNION, not ALL.
 
     The core ADC-646 win: none of these files is a global includer or an unmapped build input, so
-    the change prunes to the union of the leaf-header closure, the binding-TU consumers and the
+    the change prunes to the union of the leaf-header closure, the runtime-TU consumers and the
     codegen group -- a strict subset -- instead of collapsing to coarse labels or ALL.
     """
     changed = [
         "CHANGELOG.md",
         "include/pops/numerics/time/schemes/splitting.hpp",
-        "python/bindings/system/base/system_fields.cpp",
+        "src/runtime/system/system_fields.cpp",
         "python/pops/codegen/program_emit_control.py",
         "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
@@ -381,7 +381,7 @@ def test_compositional_union_prunes_a_mixed_change(tmp_path):
     assert "test_splitting" in targets
     kinds = {f: v["kind"] for f, v in plan["impact"].items()}
     assert kinds["include/pops/numerics/time/schemes/splitting.hpp"] == "include-impact"
-    assert kinds["python/bindings/system/base/system_fields.cpp"] == "binding-tu-targets"
+    assert kinds["src/runtime/system/system_fields.cpp"] == "runtime-tu-targets"
     assert kinds["python/pops/codegen/program_emit_control.py"] == "codegen-labels"
     assert kinds["python/pops/time/_program/api.py"] == "none"
 
@@ -390,7 +390,7 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
     """A global-includer header anywhere in the change escalates the union to FULL (soundness).
 
     This is the literal ADC-427 shape: ``system.hpp`` / the program-context headers are global
-    includers (compiled into every target via the binding TUs and the emitter), so the sound
+    includers (compiled into every target via the runtime TUs and the emitter), so the sound
     selection is ALL -- the plan spells out the per-file reason for each.
     """
     changed = [
@@ -398,7 +398,7 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
         "include/pops/runtime/program/amr_program_context.hpp",
         "include/pops/runtime/program/program_context.hpp",
         "include/pops/runtime/system.hpp",
-        "python/bindings/system/base/system_fields.cpp",
+        "src/runtime/system/system_fields.cpp",
         "python/pops/codegen/program_emit_control.py",
         "python/pops/time/_program/api.py",
         "tests/python/unit/time/test_time_condensed_schur.py",
@@ -414,8 +414,8 @@ def test_global_header_in_a_mixed_change_still_forces_all(tmp_path):
         assert plan["impact"][header]["kind"] == "all"
         assert plan["impact"][header]["reason"] == "header-in-global-includer-closure"
     # The narrow files still carry their real per-file impact in the plan (auditable).
-    assert plan["impact"]["python/bindings/system/base/system_fields.cpp"]["kind"] == (
-        "binding-tu-targets"
+    assert plan["impact"]["src/runtime/system/system_fields.cpp"]["kind"] == (
+        "runtime-tu-targets"
     )
 
 
@@ -429,13 +429,13 @@ def test_unmapped_path_fails_safe_to_all(tmp_path):
 
 
 def test_seam_template_is_a_build_input_selecting_all(tmp_path):
-    """A ``python/bindings`` seam ``.cpp.in`` template is a build input -> FULL."""
+    """A runtime-builder seam ``.cpp.in`` template is a build input -> FULL."""
     outputs, _targets, plan = _run_plan_cpp_explain(
-        tmp_path, ["python/bindings/templates/system_flux_seam.cpp.in"]
+        tmp_path, ["src/runtime/builders/templates/system_flux_seam.cpp.in"]
     )
     assert outputs["cpp_mode"] == "all"
-    assert plan["impact"]["python/bindings/templates/system_flux_seam.cpp.in"]["reason"] == (
-        "binding-build-input"
+    assert plan["impact"]["src/runtime/builders/templates/system_flux_seam.cpp.in"]["reason"] == (
+        "runtime-build-input"
     )
 
 
@@ -443,7 +443,7 @@ def test_explain_plan_has_per_file_impact_for_every_changed_file(tmp_path):
     """The explain plan maps EVERY changed file to an impact kind (auditability)."""
     changed = [
         "include/pops/numerics/time/schemes/splitting.hpp",
-        "python/bindings/system/base/system_fields.cpp",
+        "src/runtime/system/system_fields.cpp",
         "python/pops/codegen/program_emit_ops.py",
         "docs/x.md",
     ]
@@ -452,7 +452,7 @@ def test_explain_plan_has_per_file_impact_for_every_changed_file(tmp_path):
     for entry in plan["impact"].values():
         assert entry["kind"] in {
             "include-impact",
-            "binding-tu-targets",
+            "runtime-tu-targets",
             "binding-labels",
             "codegen-labels",
             "test-target",
@@ -461,11 +461,11 @@ def test_explain_plan_has_per_file_impact_for_every_changed_file(tmp_path):
         }
 
 
-def test_binding_object_lib_map_is_parsed_from_tests_cmake():
-    """The binding OBJECT-lib source/consumer map is discoverable from ``tests/CMakeLists.txt``."""
-    sources, consumers = sel._binding_object_lib_map()
-    assert "python/bindings/system/base/system_fields.cpp" in sources["pops_runtime_system"]
-    assert "python/bindings/amr/amr_system.cpp" in sources["pops_runtime_amr"]
+def test_runtime_object_lib_map_uses_central_sources_and_test_consumers():
+    """Sources come from ``src/CMakeLists.txt`` and consumers from ``tests/CMakeLists.txt``."""
+    sources, consumers = sel._runtime_object_lib_map()
+    assert "src/runtime/system/system_fields.cpp" in sources["pops_runtime_system"]
+    assert "src/runtime/amr/amr_system.cpp" in sources["pops_runtime_amr"]
     assert consumers["pops_runtime_system"], "no system consumers parsed"
     assert consumers["pops_runtime_amr"], "no amr consumers parsed"
 

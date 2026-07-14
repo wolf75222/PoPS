@@ -8,24 +8,25 @@
 #   (ADC-335 / ADC-342 / ADC-359): the full product (~1700 leaves) in one TU exceeds 7 GB at -O3
 #   under Kokkos, so per-flux TUs parallelize and cap peak memory. That mitigation is correct and
 #   stays. What was wrong was the GROWTH STRATEGY: a new Riemann or reconstruction meant a new
-#   hand-written pybind file.
+#   hand-written runtime file.
 #
-#   This manifest is the SINGLE declarative list those TUs are now generated from
-#   (python/CMakeLists.txt and tests/CMakeLists.txt configure_file a template per row into
-#   ${build}/generated_seams/). The generated .cpp is byte-equivalent in symbols and semantics to
+#   This manifest is the SINGLE declarative list those TUs are now generated from.
+#   src/CMakeLists.txt configures one template per row into ${build}/src/generated_seams/; Python
+#   and native tests consume those central object targets instead of generating their own product.
+#   The generated .cpp is byte-equivalent in symbols and semantics to
 #   the deleted hand-written file; only a "generated" header comment is added.
 #
 # THE GROWTH RULE (acceptance criterion of ADC-593)
 #   Adding a Riemann or reconstruction = ONE ROW here + the make_block_<flux> / dispatch_amr_*
-#   template in the headers (that is NUMERICS, not bindings). NO new hand-written pybind file. This
-#   manifest is NOT the descriptor registry: the declarative registry is brick_catalog.hpp (its
+#   template in the headers (that is NUMERICS, not binding glue). NO new hand-written runtime leaf.
+#   This manifest is NOT the descriptor registry: the declarative registry is brick_catalog.hpp (its
 #   Python mirror brick_catalog.py) for transports and routes.py _REGISTRY["riemann"] for fluxes;
-#   tests/python/architecture/test_pybind_seam_manifest.py asserts every row's (transport, flux) is legal
+#   tests/python/architecture/test_runtime_builder_manifest.py asserts every row's (transport, flux) is legal
 #   there, so the manifest cannot invent a route.
 #
 # ROW FORMAT (fields separated by "|", one row per string in the list):
 #   template | side | transport | flux | symbol | out_subdir | out_name
-#     template   template stem under python/bindings/templates/<template>.cpp.in
+#     template   template stem under src/runtime/builders/templates/<template>.cpp.in
 #     side       system | amr_block | amr_compiled (audit category; documentation only)
 #     transport  exb | isothermal | compressible (must be a brick_catalog transport id)
 #     flux       -                       for a transport-only seam (whole make_block dispatcher)
@@ -43,7 +44,7 @@
 #   amr_compiled_flux_seam      build_amr_compiled_for_flux(<ctor>, ..., dispatch_amr_compiled_<flux>) [comp x flux]
 #
 # NOT generated (kept hand-written -- unique shapes, classified in docs/design/pybind-binding-audit.md):
-#   system/base/system_polar.cpp            verbatim polar visitor body (not a template leaf)
+#   src/runtime/system/system_polar.cpp     verbatim polar visitor body (not a template leaf)
 #   amr/block/compressible/amr_block_compressible.cpp        thin riemann DISPATCHER (one per transport)
 #   amr/compiled/compressible/amr_compiled_compressible.cpp  thin riemann DISPATCHER (one per transport)
 

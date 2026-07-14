@@ -3,7 +3,7 @@
 // evaluators, program block map, block_project, program diagnostics and params, installed hash and
 // poisson_solver). This TU is a subdivision of system.cpp isolating the Program forwards.
 // Pure body move from system.cpp, no logic changed -> production trajectories bit-identical.
-#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (binding-private)
+#include "system_impl.hpp"  // ADC-632: shared System::Impl + facade helpers (runtime-private)
 
 namespace pops {
 
