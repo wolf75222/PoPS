@@ -494,8 +494,10 @@ struct System::Impl {
     return fields_.solve_named_field_from_state(field, block_idx, U_stage);
   }
   void register_elliptic_field(const std::string& block, const std::string& field,
-                               int phi_comp, int gx_comp, int gy_comp) {
-    fields_.register_named_field(block, field, phi_comp, gx_comp, gy_comp);
+                               int phi_comp, int gx_comp, int gy_comp,
+                               int gradient_sign) {
+    fields_.register_named_field(
+        block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
   }
 
   // State marshaling DELEGATED to the store (Batch B.3): copy_comp0 / copy_state / write_state carry the

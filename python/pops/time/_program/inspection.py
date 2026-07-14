@@ -69,7 +69,7 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             histories=dict(getattr(self, "_histories", {})), dt_bound=dt_bound,
             scratch=dict(estimate))
 
-    def ir_nodes(self) -> Any:
+    def ir_nodes(self, *, recursive: bool = False) -> Any:
         """The generated IR nodes as a structured, inert list (ADC-554 inspection surface).
 
         One dict per SSA node in build order -- ``{name, op, vtype, block, inputs, attrs}`` -- plus the
@@ -78,7 +78,15 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
         equivalent manual Program expose the SAME node list, so a caller can inspect what a
         ``pops.lib.time`` macro generated without reaching into ``self._values``. Read-only: it copies
         each node's ``attrs`` (never the live dict) and mutates nothing.
+
+        ``recursive=False`` preserves the historical flat step-body report. ``recursive=True`` also
+        emits every node owned by control-flow, matrix-free-apply and nonlinear-residual subregions in
+        deterministic pre-order. Capability gates must request the recursive view: an operation that
+        is legal only inside a subregion (for example ``rhs_jacvec``) otherwise cannot be proved.
         """
+        if type(recursive) is not bool:
+            raise TypeError("Program.ir_nodes recursive must be bool")
+
         def _attr(val: Any) -> Any:
             # Keep the report array-free and JSON-friendly: reference Values / sub-blocks by name/id,
             # pass scalars through, summarize anything else by its type name.
@@ -91,8 +99,23 @@ class _ProgramInspect(_ProgramConstants, _ProgramBase):
             return type(val).__name__
 
         from pops.time._program.serialization import _serialize_field_context
+        subblock_keys = (
+            "cond_block", "body_block", "apply_block", "residual_block",
+            "true_block", "false_block",
+        )
+
+        def _values(values: Any) -> Any:
+            for value in values:
+                yield value
+                if not recursive:
+                    continue
+                for key in subblock_keys:
+                    block = value.attrs.get(key)
+                    if isinstance(block, (list, tuple)):
+                        yield from _values(block)
+
         nodes = []
-        for v in self._values:
+        for v in _values(self._values):
             # logical_shape / source_location are INSPECTION-ONLY (ADC-530): derived on demand and
             # never serialized into the IR / the hash, so surfacing them here cannot change a .so cache
             # key. source_location is None unless the Program enabled capture_source_locations().

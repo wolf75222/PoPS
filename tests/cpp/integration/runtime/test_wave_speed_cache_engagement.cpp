@@ -126,9 +126,9 @@ TEST(WaveSpeedCacheEngagement, CacheIsBitExactAndCallsWaveSpeedsFewerTimes) {
 
   Counter calls("ws_calls");
   CountingIsothermal model{Real(1), /*busy=*/0, calls};
-  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
                                  nullptr, Real(0), /*wave_speed_cache=*/false);
-  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
                                 nullptr, Real(0), /*wave_speed_cache=*/true);
 
   MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1), U0(ba, dm, 3, 1);
@@ -178,9 +178,9 @@ TEST(WaveSpeedCacheEngagement, CostlyWaveSpeedsStaysBitExact) {
 
   Counter calls("ws_calls_costly");
   CountingIsothermal model{Real(1), /*busy=*/100, calls};  // emule moments + factorisations
-  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+  BlockClosures off = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
                                  nullptr, Real(0), false);
-  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "ssprk2", {}, {},
+  BlockClosures on = make_block(model, "none", "hll", ctx, false, false, "explicit", {}, {},
                                 nullptr, Real(0), true);
   MultiFab Uoff(ba, dm, 3, 1), Uon(ba, dm, 3, 1);
   init_state(Uoff, geom, dom);

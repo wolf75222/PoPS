@@ -48,6 +48,18 @@ static void fill_f(MultiFab& f, const Geometry& g) {
   }
 }
 
+static void fill_screened_f(MultiFab& f, const Geometry& g, Real reaction) {
+  for (int li = 0; li < f.local_size(); ++li) {
+    Array4 a = f.fab(li).array();
+    const Box2D b = f.box(li);
+    for (int j = b.lo[1]; j <= b.hi[1]; ++j)
+      for (int i = b.lo[0]; i <= b.hi[0]; ++i)
+        a(i, j, 0) =
+            -(Real(18) * Real(kPi) * Real(kPi) + reaction) *
+            Real(u_exact(g.x_cell(i), g.y_cell(j)));
+  }
+}
+
 // checksum of the REPLICATED coarse (identical on every rank) = sum of phi_coarse^2 over the domain.
 static double coarse_checksum(CompositeFacPoisson& fac) {
   const ConstArray4 P = fac.phi_coarse().fab(0).const_array();
@@ -178,6 +190,31 @@ static int pops_run_test_mpi_composite_fac(int argc, char** argv) {
     }
     if (!(sp == 0.0)) {
       if (me == 0) std::printf("FAIL adjacent not bit-identical cross-rank\n");
+      ++fails;
+    }
+  }
+
+  // --- (D) screened composite: scalar kappa is identical on every rank and every FAC level ---
+  {
+    const Real reaction = Real(40);
+    const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
+    Box2D fb{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
+    CompositeFacPoisson fac(geom_c, ba_c, bc, fb, r);
+    fac.set_reaction(reaction);
+    fill_screened_f(fac.rhs_coarse(), geom_c, reaction);
+    fill_screened_f(fac.rhs_fine(), g1, reaction);
+    const Real rf = fac.solve(40, 80, 1e-10, 0.0);
+    const double cc = coarse_checksum(fac), fc = fine_checksum(fac.phi_fine());
+    const double sp = std::fmax(spread(cc), spread(rf));
+    if (me == 0)
+      std::printf("FACSCREEN np=%d rfac=%.17e csum_c=%.17e csum_f=%.17e spread=%.3e\n",
+                  np, rf, cc, fc, sp);
+    if (!(std::isfinite(rf) && rf < 1e-2)) {
+      if (me == 0) std::printf("FAIL screened 2-level not converged\n");
+      ++fails;
+    }
+    if (!(sp == 0.0)) {
+      if (me == 0) std::printf("FAIL screened 2-level not bit-identical cross-rank\n");
       ++fails;
     }
   }

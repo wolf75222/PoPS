@@ -1,188 +1,182 @@
-#!/usr/bin/env python3
-"""m.enable_roe() (solde de l'audit, GENERICITY point 11) : la capability ROE est EMISE par le
-DSL depuis les ROLES, et le solveur Roe-like generique du coeur (HasRoeDissipation) devient
-disponible hors Euler 4 variables.
+"""Numerical regressions for the final board-authored Roe capability.
 
-  (1) PARITE 4-var : un Euler DSL (roles + 'p' + enable_roe) avance avec riemann='roe' comme le
-      bloc NATIF add_block(compressible, riemann='roe') -- l'emission transcrit l'algebre
-      canonique du coeur (memes moyennes de Roe, meme gamma-1 deduit, meme entropy fix) ;
-  (2) 3-var isotherme + enable_roe : riemann='roe' ACCEPTE (capability), pas finis, et un
-      cisaillement stationnaire (rho const, u=0, v(x)) est preserve EXACTEMENT (la dissipation
-      de Roe s'annule onde par onde : dp=du_n=drho=0 et |u_n|=0 sur l'onde de cisaillement) ;
-  (3) rejets explicites : 3-var SANS capability -> ValueError ; enable_roe sans 'p' ou sans
-      roles -> erreur a l'emission ; has_roe expose par CompiledModel.
-
-Invariants par assert ; imprime "OK test_dsl_roe" en cas de succes.
+The test deliberately crosses the authenticated compiler-provider boundary instead of importing
+the former PDE facade.  Both models are ordinary :class:`pops.physics.Model` values and execute in
+the native ``System`` route with the generic ``Roe`` descriptor.
 """
-from pops.params import ConstParam
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.numerics.riemann import Roe
-import os
-import shutil
-import sys
-import tempfile
+from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 import pops.runtime._engine_descriptors as engine
-from pops.math import sqrt
-from pops.physics._facade import Model
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
-
-fails = 0
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.math import ddt, div, sqrt
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Roe
+from pops.physics import Density, Energy, Model, Momentum
+from pops.runtime._system import System
 from tests.python.support.requirements import (
-    missing_compiler_requirement,
+    default_cxx,
+    missing_aot_requirement,
     repo_include,
-    skip_process_test,
 )
+
+
 INCLUDE = repo_include()
 GAMMA = 1.4
 
-
-def chk(cond, label):
-    global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
-        fails += 1
-
-
-def gaussian(n, amp=0.4):
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="xy")
-    return 1.0 + amp * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+pytestmark = (
+    pytest.mark.compiler,
+    pytest.mark.kokkos,
+    pytest.mark.native_loader,
+    pytest.mark.regression,
+)
 
 
-def euler4_dsl(name, roe=False):
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars(
-        "rho", "rho_u", "rho_v", "E",
-        roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.value(m.param(ConstParam("gamma", GAMMA)))
-    u = rhou / rho
-    v = rhov / rho
-    p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    H = (E + p) / rho
-    c = sqrt(g * p / rho)
-    m.flux(x=[rhou, rhou * u + p, rhou * v, rho * H * u],
-           y=[rhov, rhov * u, rhov * v + p, rho * H * v])
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([prho, prho * pu, prho * pv,
-                         pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
-    m.elliptic_rhs(0.0 * rho)
-    if roe:
-        m.enable_roe()
-    return m
+def _frame(name: str):
+    return Rectangle(name, (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
 
 
-def iso3_dsl(name, roe=False, p_decl=True):
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my",
-                                      roles=["Density", "MomentumX", "MomentumY"])
+def _compile_native(model: Model, path: Path):
+    """Compile through the final explicit provider, never through ``Model.compile``."""
+    lowering = model.__pops_compiler_lowering__()
+    assert lowering.facade is model
+    assert lowering.source_module is model.module
+    return lowering.emit_model.compile(str(path), INCLUDE, backend="production")
+
+
+def _require_native_toolchain() -> None:
+    reason = missing_aot_requirement(INCLUDE, default_cxx())
+    if reason:
+        pytest.skip(reason)
+
+
+def _euler(name: str) -> Model:
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U",
+        components=("rho", "rho_u", "rho_v", "E"),
+        roles={
+            "rho": Density(),
+            "rho_u": Momentum(axis=x_axis),
+            "rho_v": Momentum(axis=y_axis),
+            "E": Energy(),
+        },
+    )
+    rho, rho_u, rho_v, energy = state
+    u = model.primitive("u", rho_u / rho)
+    v = model.primitive("v", rho_v / rho)
+    pressure = model.scalar(
+        "p", (GAMMA - 1.0) * (energy - 0.5 * rho * (u * u + v * v)))
+    enthalpy = model.scalar("H", (energy + pressure) / rho)
+    sound_speed = model.scalar("c", sqrt(GAMMA * pressure / rho))
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (rho_u, rho_u * u + pressure, rho_u * v, rho * enthalpy * u),
+            y_axis: (rho_v, rho_v * u, rho_v * v + pressure, rho * enthalpy * v),
+        },
+        # Four entries retain the repeated entropy/shear eigenvalue explicitly.
+        waves={
+            x_axis: (u - sound_speed, u, u, u + sound_speed),
+            y_axis: (v - sound_speed, v, v, v + sound_speed),
+        },
+    )
+    model.riemann(Roe(), flux=flux, pressure=pressure)
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
+
+
+def _isothermal(name: str) -> Model:
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state(
+        "U",
+        components=("rho", "rho_u", "rho_v"),
+        roles={
+            "rho": Density(),
+            "rho_u": Momentum(axis=x_axis),
+            "rho_v": Momentum(axis=y_axis),
+        },
+    )
+    rho, rho_u, rho_v = state
     cs2 = 0.5
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    if p_decl:
-        m.primitive("p", cs2 * rho)
-    c = sqrt(cs2)
-    m.flux(x=[mx, mx * u + cs2 * rho, mx * v], y=[my, my * u, my * v + cs2 * rho])
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    m.primitive_vars(rho, u, v)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.elliptic_rhs(0.0 * rho)
-    if roe:
-        m.enable_roe()
-    return m
+    u = model.primitive("u", rho_u / rho)
+    v = model.primitive("v", rho_v / rho)
+    pressure = model.scalar("p", cs2 * rho)
+    sound_speed = sqrt(cs2)
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (rho_u, rho_u * u + pressure, rho_u * v),
+            y_axis: (rho_v, rho_v * u, rho_v * v + pressure),
+        },
+        waves={
+            x_axis: (u - sound_speed, u, u + sound_speed),
+            y_axis: (v - sound_speed, v, v + sound_speed),
+        },
+    )
+    model.riemann(Roe(), flux=flux, pressure=pressure)
+    model.rate("transport", equation=ddt(state) == -div(flux))
+    return model
 
 
-missing = missing_compiler_requirement(INCLUDE)
-if missing:
-    skip_process_test(f"test_dsl_roe : {missing}")
+def _smooth_density(n: int, amplitude: float = 0.4) -> np.ndarray:
+    points = (np.arange(n) + 0.5) / n
+    x, y = np.meshgrid(points, points, indexing="xy")
+    return 1.0 + amplitude * np.exp(-60.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
 
-tmp = tempfile.mkdtemp()
-try:
+
+def test_board_roe_runs_euler_and_preserves_stationary_shear(tmp_path: Path) -> None:
+    _require_native_toolchain()
+
     n = 24
-    print("== (1) parite 4-var : DSL enable_roe == bloc natif compressible riemann='roe' ==")
-    cm = euler4_dsl("euler_roe", roe=True).compile(os.path.join(tmp, "euler_roe.so"), INCLUDE,
-                                                   backend="production")
-    chk(getattr(cm, "has_roe", False), "CompiledModel.has_roe = True (capability emise)")
-    rho0 = gaussian(n)
-    z = np.zeros((n, n))
-    p0 = 1.0 + 0.0 * rho0
+    roe_spatial = engine.Spatial(limiter=FirstOrder(), flux=Roe())
 
-    sd = System(n=n, L=1.0, periodic=True)
-    sd.set_poisson()
-    sd.add_equation("gas", model=cm, spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
-                    time=engine.Explicit())
-    sd.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
+    euler = _compile_native(_euler("final_euler_roe"), tmp_path / "euler_roe.so")
+    assert euler.has_roe
+    rho = _smooth_density(n)
+    u = np.full_like(rho, 0.1)
+    v = np.zeros_like(rho)
+    pressure = np.ones_like(rho)
+    energy = pressure / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)
+    initial = np.stack((rho, rho * u, rho * v, energy))
 
-    sn = System(n=n, L=1.0, periodic=True)
-    sn.set_poisson()
-    sn.block("gas",
-                 engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
-                           transport=engine.CompressibleFlux(), source=engine.NoSource(),
-                           elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0)),
-                 spatial=engine.Spatial(limiter=Minmod(), flux=Roe()))
-    sn.set_primitive_state("gas", rho=rho0, u=z + 0.1, v=z, p=p0)
-
+    gas = System(n=n, L=1.0, periodic=True)
+    gas.add_equation(
+        "gas", model=euler, spatial=roe_spatial, time=engine.Explicit())
+    gas.set_state("gas", initial)
     for _ in range(8):
-        sd.step(2e-4)
-        sn.step(2e-4)
-    dd, dn = np.asarray(sd.density("gas")), np.asarray(sn.density("gas"))
-    err = float(np.max(np.abs(dd - dn))) / float(np.max(np.abs(dn)))
-    chk(err < 1e-12, f"8 pas roe : DSL generique == natif canonique (ecart rel {err:.2e})")
-    chk(np.all(np.isfinite(dd)), "etat fini")
+        gas.step(2.0e-4)
+    final = np.asarray(gas.get_state("gas"))
+    assert np.isfinite(final).all()
+    np.testing.assert_allclose(final[[0, 3]].sum(axis=(1, 2)),
+                               initial[[0, 3]].sum(axis=(1, 2)), rtol=1.0e-12, atol=1.0e-12)
 
-    print("== (2) 3-var isotherme + enable_roe : accepte, fini, cisaillement EXACT ==")
-    cm3 = iso3_dsl("iso3_roe", roe=True).compile(os.path.join(tmp, "iso3_roe.so"), INCLUDE,
-                                                 backend="production")
-    s3 = System(n=n, L=1.0, periodic=True)
-    s3.set_poisson()
-    s3.add_equation("f", model=cm3, spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
-                    time=engine.Explicit())
-    x = (np.arange(n) + 0.5) / n
-    vshear = np.tile(0.3 * np.sin(2 * np.pi * x), (n, 1))
-    s3.set_primitive_state("f", rho=1.0 + z, u=z, v=vshear)
-    before = np.asarray(s3.get_state("f")).copy()
+    isothermal = _compile_native(
+        _isothermal("final_isothermal_roe"), tmp_path / "isothermal_roe.so")
+    assert isothermal.has_roe
+    points = (np.arange(n) + 0.5) / n
+    transverse_velocity = np.tile(0.3 * np.sin(2.0 * np.pi * points), (n, 1))
+    shear = np.stack((np.ones((n, n)), np.zeros((n, n)), transverse_velocity))
+    fluid = System(n=n, L=1.0, periodic=True)
+    fluid.add_equation(
+        "fluid", model=isothermal, spatial=roe_spatial, time=engine.Explicit())
+    fluid.set_state("fluid", shear)
+    before = np.asarray(fluid.get_state("fluid")).copy()
     for _ in range(6):
-        s3.step_cfl(0.3)
-    after = np.asarray(s3.get_state("f"))
-    dmax = float(np.max(np.abs(after - before)))
-    chk(dmax == 0.0, f"cisaillement stationnaire preserve EXACTEMENT (dmax={dmax:.1e})")
-
-    print("== (3) rejets explicites + garde-fous d'emission ==")
-    cm_no = iso3_dsl("iso3_noroe").compile(os.path.join(tmp, "iso3_noroe.so"), INCLUDE,
-                                           backend="production")
-    try:
-        s = System(n=16, L=1.0, periodic=True)
-        s.add_equation("f", model=cm_no, spatial=engine.Spatial(limiter=Minmod(),
-                                                                  flux=Roe()))
-        chk(False, "roe sans capability sur 3-var aurait du lever")
-    except (ValueError, RuntimeError) as e:
-        chk("roe" in str(e), f"rejet sans capability : {str(e)[:70]}")
-    try:
-        iso3_dsl("iso3_nop", roe=True, p_decl=False).compile(
-            os.path.join(tmp, "iso3_nop.so"), INCLUDE, backend="production")
-        chk(False, "enable_roe sans primitive 'p' aurait du lever a l'emission")
-    except ValueError as e:
-        chk("'p'" in str(e) or "pression" in str(e), f"sans 'p' rejete : {str(e)[:70]}")
-    try:
-        mm = Model("noroles")
-        a, b, c_ = mm.conservative_vars("a", "b", "c")
-        mm.primitive("p", a)
-        mm.flux(x=[b, a, c_], y=[c_, a, b])
-        mm.eigenvalues(x=[a, a, a], y=[a, a, a])
-        mm.primitive_vars(a, b, c_)
-        mm.conservative_from([a, b, c_])
-        mm.enable_roe()
-        mm.compile(os.path.join(tmp, "noroles.so"), INCLUDE, backend="production")
-        chk(False, "enable_roe sans roles fluides aurait du lever a l'emission")
-    except ValueError as e:
-        chk("roles" in str(e), f"sans roles rejete : {str(e)[:70]}")
-finally:
-    shutil.rmtree(tmp, ignore_errors=True)
-
-if fails:
-    print(f"FAIL test_dsl_roe : {fails} echec(s)")
-    sys.exit(1)
-print("OK test_dsl_roe")
+        fluid.step_cfl(0.3)
+    after = np.asarray(fluid.get_state("fluid"))
+    # The contact/shear wave has zero normal speed, so Roe adds exactly no dissipation.
+    np.testing.assert_array_equal(after, before)

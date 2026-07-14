@@ -7,6 +7,10 @@ import pytest
 
 import pops
 from pops.math import ddt, div
+from pops.numerics import DiscretizationPlan, FiniteVolume
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Rusanov
+from pops.numerics.variables import Conservative
 from pops.physics import Model as BoardModel
 from pops.physics._facade import Model as DslModel
 from pops.problem._snapshot import build_problem_snapshot
@@ -35,6 +39,21 @@ def _board_advection(name="board_advection"):
     )
     model.rate("A", equation=ddt(state) == -div(flux))
     return model, state
+
+
+def _attach_advection_numerics(case, block, model, state):
+    """Give the evolved board rate its exact final discretization authority."""
+    plan = DiscretizationPlan()
+    plan.rates.add(
+        model.operators["A"],
+        FiniteVolume(
+            flux=model.fluxes["F"],
+            variables=Conservative(state),
+            reconstruction=FirstOrder(),
+            riemann=Rusanov(),
+        ),
+    )
+    case.numerics(plan, block=block)
 
 
 def test_dsl_freeze_is_idempotent_deep_and_codegen_readable():
@@ -75,7 +94,8 @@ def test_dsl_freeze_is_idempotent_deep_and_codegen_readable():
 def test_case_freezes_external_board_reference_and_keeps_snapshot_stable():
     model, _state = _board_advection()
     case = pops.Case(name="frozen-physics")
-    case.block("transport", model)
+    block = case.block("transport", model)
+    _attach_advection_numerics(case, block, model, _state)
     module_hash = model.module.module_hash()
 
     snapshot = case.freeze()
@@ -113,7 +133,7 @@ def test_multispecies_owned_module_and_registry_are_sealed():
     hash_before = module.module_hash()
 
     case = pops.Case(name="multi-freeze")
-    case.block("plasma", model)
+    case.block("plasma", model, states=(electrons, ions))
     case.freeze()
 
     assert module.frozen and module.operator_registry().frozen

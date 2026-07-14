@@ -7,7 +7,9 @@ POURQUOI un rejet et pas un fix : l'ABI PLATE du loader .so (symbole pops_instal
 add_native_block) ne transporte NI stride NI le masque IMEX. Passes par ce chemin, ils prendraient
 leurs defauts EN SILENCE (stride=1, masque vide = backward-Euler plein) -> demi-fix silencieux interdit.
 La facade les rejette donc clairement (meme esprit que System.add_equation, qui rejette stride>1 et le
-masque sur les backends compiles .so : cf. tests/python/unit/time/test_stride.py section 8).
+masque sur les backends compiles .so ; les cadences supportees sont prouvees nativement par
+tests/cpp/unit/physics/test_multirate_stride.cpp et
+tests/cpp/integration/amr/test_amr_stride_cadence.cpp).
 
 Route explicite vers les chemins qui SUPPORTENT ces parametres :
   - AmrSystem.add_block (modele natif engine.Model(...)) : stride + masque cables (et FORWARDES par
@@ -17,7 +19,7 @@ Route explicite vers les chemins qui SUPPORTENT ces parametres :
 
 Ce test est PUR PYTHON et NE DEPEND PAS d'un compilateur : la garde est purement Python et leve AVANT
 tout dlopen du .so, donc un CompiledModel FACTICE (backend='production', target='amr_system', .so
-inexistant) suffit (deterministe en CI minimale ; meme recette que test_stride.py).
+inexistant) suffit de maniere deterministe en CI minimale.
 """
 
 import sys

@@ -151,9 +151,12 @@ def test_field_operator_builder_failure_is_observationally_atomic(monkeypatch):
     phi = model.field("phi")
     before = _snapshot(model)
 
-    def fail_after_mutation(name, rhs, operator="poisson", aux=None):
+    def fail_after_mutation(
+        name, rhs, operator="poisson", aux=None, *, gradient_sign=1,
+    ):
         model._dsl._m._elliptic_fields[name] = {
             "rhs": rhs, "operator": operator, "aux": aux,
+            "gradient_sign": gradient_sign,
         }
         raise RuntimeError("injected elliptic builder failure")
 

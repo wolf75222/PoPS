@@ -25,6 +25,7 @@ def resolve_capability_evidence(
     libraries: Any = (),
     time: Any = None,
     module_abi_key: Any = None,
+    amr_program_context: Any = None,
 ) -> dict[str, Any]:
     """Join requirements and providers before artifact creation.
 
@@ -46,7 +47,6 @@ def resolve_capability_evidence(
         _add_tokens(provider_sources, source, _tokens(row.get("capabilities")))
         required.update(_tokens(row.get("requirements")))
 
-    provided = set(provider_sources)
     external_evidence = []
     for source, row in library_rows:
         if _is_external_row(row):
@@ -58,7 +58,8 @@ def resolve_capability_evidence(
             }
             external_evidence.append(
                 _resolve_external_row(source, row, layout_name, external_providers))
-    amr_evidence = _resolve_amr_program(layout_name, time)
+    amr_evidence = _resolve_amr_program(
+        layout_name, time, context=amr_program_context)
     evidence = {
         "schema_version": CAPABILITY_EVIDENCE_SCHEMA_VERSION,
         "layout": layout_name,
@@ -177,12 +178,18 @@ def _external_evidence(record: Mapping, layout_name: str, provided: set[str]) ->
     }
 
 
-def _resolve_amr_program(layout_name: str, time: Any) -> dict[str, Any]:
+def _resolve_amr_program(
+    layout_name: str, time: Any, *, context: Any,
+) -> dict[str, Any]:
     if layout_name != "amr" or time is None:
         return {"groups": [], "status": "not_applicable"}
     from pops.runtime.amr_program_support import amr_program_op_support
 
-    support = amr_program_op_support(time)
+    if context is None:
+        raise CapabilityResolutionError(
+            "AMR Program resolution requires resolved hierarchy, shared-interface and "
+            "field-provider evidence")
+    support = amr_program_op_support(time, context=context)
     pending = {name: status for name, status in support.items() if status != "green"}
     if pending:
         details = ", ".join("%s=%s" % item for item in sorted(pending.items()))

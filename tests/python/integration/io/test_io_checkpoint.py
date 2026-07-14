@@ -37,13 +37,13 @@ def build(n=16):
     le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.block("ions",
+    sim.add_equation("ions",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
                             source=engine.PotentialForce(charge=1.0),
                             elliptic=engine.ChargeDensity(charge=1.0)),
                   spatial=engine.Spatial(limiter=Minmod()), time=engine.Explicit())
-    sim.block("slow",
+    sim.add_equation("slow",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
                             source=engine.PotentialForce(charge=-1.0),

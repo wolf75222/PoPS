@@ -87,9 +87,9 @@ def main():
 
         def build_ref(limiter, riemann, recon, evolve=True):
             sys = System(n=n, L=L, periodic=True)
-            sys.block("gas", spec,
-                          spatial=spatial(limiter, riemann, recon),
-                          time=engine.Explicit(), evolve=evolve)
+            sys.add_equation("gas", spec,
+                             spatial=spatial(limiter, riemann, recon),
+                             time=engine.Explicit(), evolve=evolve)
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys

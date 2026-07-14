@@ -50,6 +50,7 @@
 #include <map>  // named_aux_: model-named aux fields (comp -> coarse field), re-applied each solve
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -120,6 +121,8 @@ struct AmrFieldSolveConfig {
   std::vector<int> boundary_state_components;
   std::vector<const MultiFab*> boundary_state_buffers;
   FieldBoundaryExecutionContext boundary_context{};
+  bool has_reaction = false;
+  Real reaction = Real(0);
   bool has_newton = false;
   FieldNewtonOptions newton{};
   std::string nullspace_assertion = "none";
@@ -1870,8 +1873,8 @@ class AmrRuntime {
   /// (mg_) is untouched / bit-identical. Empty default -> the named-field loop is a no-op.
   /// @{
   /// Registers named @c field's aux output components: @p phi_comp where the solved potential lands, @p
-  /// gx_comp / @p gy_comp where its centered gradient lands. @p gx_comp / @p gy_comp < 0 => only phi is
-  /// written (the field declared fewer than 3 aux slots). Idempotent (re-register overwrites the
+  /// gx_comp / @p gy_comp where its centered gradient lands. Both equal -1 for phi-only; otherwise
+  /// @p gradient_sign (exactly -1 or +1) scales both centered derivatives. Idempotent (re-register overwrites the
   /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver
   /// is built on the first solve, never here.
   void install_field_plan(const std::string& provider_slot, const AmrFieldSolveConfig& plan) {
@@ -1972,7 +1975,22 @@ class AmrRuntime {
   }
 
   void register_named_field(const std::string& block, const std::string& provider_key,
-                            int phi_comp, int gx_comp, int gy_comp) {
+                            int phi_comp, int gx_comp, int gy_comp,
+                            int gradient_sign) {
+    const bool has_gradient = gx_comp >= 0 && gy_comp >= 0;
+    const bool has_no_gradient = gx_comp == -1 && gy_comp == -1;
+    if (phi_comp < 0 || (!has_gradient && !has_no_gradient) ||
+        (has_gradient &&
+         (phi_comp == gx_comp || phi_comp == gy_comp || gx_comp == gy_comp)))
+      throw std::invalid_argument(
+          "AmrRuntime: named elliptic field output components must be one potential or "
+          "three distinct potential/gradient components");
+    if (gradient_sign != -1 && gradient_sign != 1)
+      throw std::invalid_argument(
+          "AmrRuntime: named elliptic field gradient sign must be exactly -1 or 1");
+    if (!has_gradient && gradient_sign != 1)
+      throw std::invalid_argument(
+          "AmrRuntime: a named elliptic field without gradient outputs must use sign +1");
     bool matched = false;
     for (auto& [slot, field] : named_fields_) {
       if (!field.has_plan || field.plan.output_block != block ||
@@ -1981,6 +1999,7 @@ class AmrRuntime {
       field.phi_comp = phi_comp;
       field.gx_comp = gx_comp;
       field.gy_comp = gy_comp;
+      field.gradient_sign = gradient_sign;
       field.mg.reset();
       field.level_mg.clear();
       field.fac.reset();
@@ -2399,6 +2418,14 @@ class AmrRuntime {
         throw std::runtime_error("AmrRuntime : named elliptic field '" + field +
                                  "' aux component out of the channel width (add the block that "
                                  "declares its aux fields)");
+      if (nf.gradient_sign != -1 && nf.gradient_sign != 1)
+        throw std::runtime_error(
+            "AmrRuntime: named elliptic field has no valid gradient sign");
+      const bool has_gradient = nf.gx_comp >= 0 && nf.gy_comp >= 0;
+      if (nf.phi_comp >= aux_ncomp_ ||
+          (has_gradient && (nf.gx_comp >= aux_ncomp_ || nf.gy_comp >= aux_ncomp_)))
+        throw std::runtime_error(
+            "AmrRuntime: named elliptic field output components exceed the aux channel width");
       nf.plan.boundary_state_buffers.clear();
       for (std::size_t index = 0; index < nf.plan.boundary_state_blocks.size(); ++index) {
         const int block = block_index(nf.plan.boundary_state_blocks[index]);
@@ -2439,6 +2466,9 @@ class AmrRuntime {
             saxpy(rhs, binding.coefficient, contribution);
           }
         }
+        // Public field equations use ``-div(A grad phi)+kappa*phi=rhs`` while the
+        // native MG/FAC residual stores ``div(A grad phi)-kappa*phi=rhs_native``.
+        scale(rhs, Real(-1));
       };
       derive_named_nullspace(nf);
       const SolveReport* attempted_report = nullptr;
@@ -2497,7 +2527,8 @@ class AmrRuntime {
         apply_field_gauge(phi_mf, nf.level_nullspace[0]);
       device_fence();
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
-      const bool grad = (cgx >= 0 && cgx < aux_ncomp_ && cgy >= 0 && cgy < aux_ncomp_);
+      const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
+      const bool grad = has_gradient;
       for (int li = 0; li < aux_[0].local_size(); ++li) {
         const ConstArray4 p = phi_mf.fab(li).const_array();
         Array4 a = aux_[0].fab(li).array();
@@ -2506,8 +2537,10 @@ class AmrRuntime {
           for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
             a(i, j, cphi) = p(i, j);
             if (grad) {
-              a(i, j, cgx) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-              a(i, j, cgy) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+              a(i, j, cgx) =
+                  gradient_scale * (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+              a(i, j, cgy) =
+                  gradient_scale * (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
             }
           }
       }
@@ -2515,18 +2548,16 @@ class AmrRuntime {
     if (!has_completed_solve)
       throw std::runtime_error(
           "AmrRuntime::solve_named_fields selected an unknown field");
-    // Ghost-fill and inject only the components owned by this named solve. Unrelated aux components,
-    // including their physical/inter-box ghosts, are not written by a selected solve.
-    publish_aux_components(named_aux_components(selected));
-    // Composite fields own a solved potential on every level. Publish them last so the generic
-    // coarse injection above cannot overwrite the refined values.
+    // Composite and level-local fields own a solved potential on every level. Write every valid
+    // value before materialising halos so no coarse injection can overwrite refined solutions.
     for (auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
         continue;
       if (!nf.fac && nf.level_mg.size() <= 1)
         continue;
       const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
-      const bool grad = (cgx >= 0 && cgx < aux_ncomp_ && cgy >= 0 && cgy < aux_ncomp_);
+      const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
+      const bool grad = nf.gx_comp >= 0 && nf.gy_comp >= 0;
       if (nf.fac) {
         std::vector<MultiFab*> phi_levels;
         for (int k = 0; k < nlev_; ++k)
@@ -2549,13 +2580,37 @@ class AmrRuntime {
             for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
               a(i, j, cphi) = p(i, j);
               if (grad) {
-                a(i, j, cgx) = (p(i + 1, j) - p(i - 1, j)) / (Real(2) * level_dx);
-                a(i, j, cgy) = (p(i, j + 1) - p(i, j - 1)) / (Real(2) * level_dy);
+                a(i, j, cgx) = gradient_scale *
+                    (p(i + 1, j) - p(i - 1, j)) / (Real(2) * level_dx);
+                a(i, j, cgy) = gradient_scale *
+                    (p(i, j + 1) - p(i, j - 1)) / (Real(2) * level_dy);
               }
             }
         }
       }
     }
+    // Publish each component according to the solver authority that produced it. A composite or
+    // level-local field owns every refined valid cell, so only its halos may receive parent data.
+    // A coarse-only field has no fine solve and must retain the historical full coarse injection,
+    // including fine valid cells. Grouping disjoint components keeps this to two pack/fill passes
+    // even when several named fields are solved together.
+    std::set<int> coarse_components;
+    std::set<int> refined_components;
+    auto add_component = [&](std::set<int>& destination, int component) {
+      if (component >= 0 && component < aux_ncomp_)
+        destination.insert(component);
+    };
+    for (const auto& [field, nf] : named_fields_) {
+      if (selected != nullptr && field != *selected)
+        continue;
+      std::set<int>& destination =
+          (nf.fac || nf.level_mg.size() > 1) ? refined_components : coarse_components;
+      add_component(destination, nf.phi_comp);
+      add_component(destination, nf.gx_comp);
+      add_component(destination, nf.gy_comp);
+    }
+    publish_aux_components({coarse_components.begin(), coarse_components.end()});
+    publish_refined_aux_components({refined_components.begin(), refined_components.end()});
     return completed;
   }
 
@@ -3740,6 +3795,7 @@ class AmrRuntime {
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
+    int gradient_sign = 0;
     bool has_plan = false;
     AmrFieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
@@ -3786,6 +3842,7 @@ class AmrRuntime {
   void unpack_aux_components(const std::vector<MultiFab>& packed,
                              const std::vector<int>& components) noexcept;
   void publish_aux_components(const std::vector<int>& components);
+  void publish_refined_aux_components(const std::vector<int>& components);
   FieldSolveSnapshot capture_field_solve_snapshot(const FieldSolveScope& scope);
   void restore_field_solve_snapshot(FieldSolveSnapshot&& snapshot) noexcept;
 
@@ -3831,9 +3888,10 @@ class AmrRuntime {
 
   // Builds a NAMED elliptic field's dedicated coarse GeometricMG (ADC-428), lazily, IDENTICAL to the
   // default mg_ (same coarse geometry / BoxArray / Poisson BC / wall predicate / replication). REUSES the
-  // native solver -- no operator is reimplemented. The variable / anisotropic permittivity of the default
-  // Poisson is NOT carried onto a named field (a named field is a plain Laplacian, like the System named
-  // path). No-op if already built.
+  // native solver -- no operator is reimplemented. The variable / anisotropic permittivity of the
+  // default Poisson is not carried onto a named field. A resolved scalar reaction coefficient is
+  // installed on every GeometricMG level or on the composite FAC Helmholtz operator. No-op if
+  // already built.
   void ensure_named_elliptic(NamedField& nf) {
     if (nf.mg || nf.fac || !nf.level_mg.empty())
       return;
@@ -3852,6 +3910,8 @@ class AmrRuntime {
       fac_options.coarse_abs_tol = nf.plan.mg_opts.abs_tol;
       fac_options.coarse_cycles = nf.plan.mg_opts.max_cycles;
       nf.fac->set_options(fac_options);
+      if (nf.plan.has_reaction)
+        nf.fac->set_reaction(nf.plan.reaction);
       if (nf.plan.has_boundary_kernel)
         nf.fac->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
       if (nf.plan.has_newton)
@@ -3869,6 +3929,10 @@ class AmrRuntime {
           mg.min_coarse, mg.nu1, mg.nu2, mg.nbottom, /*cut_cell=*/false,
           std::function<Real(Real, Real)>{}, kEbCutFractionFloor, mg.coarse_threshold);
       solver->set_abs_tol(mg.abs_tol);
+      if (nf.plan.has_reaction) {
+        const Real reaction = nf.plan.reaction;
+        solver->set_reaction([reaction](Real, Real) { return reaction; });
+      }
       if (nf.plan.has_boundary_kernel && k == 0)
         solver->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
       if (nf.plan.has_newton && k == 0)
@@ -3919,7 +3983,8 @@ class AmrRuntime {
     if (nf.nullspace_ready)
       return;
     const BCRec boundary = nf.plan.has_explicit_bc ? nf.plan.explicit_bc : bcPhi_;
-    const bool derived_constant = field_bc_has_constant_kernel(boundary);
+    const bool derived_constant =
+        !nf.plan.has_reaction && field_bc_has_constant_kernel(boundary);
     if (nf.plan.nullspace_assertion == "constant" && !derived_constant)
       throw std::runtime_error(
           "AMR field nullspace assertion disagrees with operator + topology + boundary closure");
@@ -4006,9 +4071,9 @@ class AmrRuntime {
     return out;
   }
 
-  // Per-field aux HALO override (ADC-369) on the COARSE aux, AFTER the shared fill_ghosts. Overrides
-  // only each declared component's physical-face ghosts (aux_halo_override keeps periodic faces
-  // periodic). No-op without a policy. Mirror of SystemFieldSolver::apply_named_aux_bc.
+  // Per-field aux HALO override (ADC-369), AFTER the shared fill_ghosts. Overrides only each
+  // declared component's physical-face ghosts (aux_halo_override keeps periodic faces periodic).
+  // No-op without a policy. Mirror of SystemFieldSolver::apply_named_aux_bc.
   void apply_named_aux_bc(MultiFab& packed, const std::vector<int>& components);
 
   // Index of the block named @p name in the registry (-1 if absent). Counterpart of

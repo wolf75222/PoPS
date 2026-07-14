@@ -38,7 +38,7 @@ def _density(n):
 
 def phi_set_poisson(eps, n=64):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("gas", model=_charge_model(),
+    sim.add_equation("gas", model=_charge_model(),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
     sim.set_density("gas", _density(n).reshape(-1).tolist())
     sim.set_poisson(rhs="charge_density", solver="fft", epsilon=eps)
@@ -58,7 +58,7 @@ def main():
 
     # meme resultat via l'EPM compose (div_eps_grad(2.0))
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("gas", model=_charge_model(),
+    sim.add_equation("gas", model=_charge_model(),
                   spatial=engine.Spatial(flux=Rusanov()), time=engine.Explicit())
     sim.set_density("gas", _density(n).reshape(-1).tolist())
     sim.add_elliptic_model("poisson",
@@ -90,7 +90,7 @@ def variable_epsilon_tests():
 
     def solve(eps_field, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
-        s.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
+        s.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if eps_field is not None:
@@ -118,7 +118,7 @@ def variable_epsilon_tests():
 
     # eps(x) variable + solveur 'fft' (coefficient constant) : refus explicite au solve.
     sp = System(n=n, L=1.0, periodic=True)
-    sp.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
+    sp.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)
     sp.set_epsilon_field(eps)

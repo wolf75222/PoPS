@@ -294,6 +294,8 @@ class SystemFieldSolver {
     std::vector<const MultiFab*> boundary_state_buffers;
     std::vector<const MultiFab*> boundary_field_buffers;
     FieldBoundaryExecutionContext boundary_context{};
+    bool has_reaction = false;
+    Real reaction = Real(0);
     bool has_newton = false;
     FieldNewtonOptions newton{};
     FieldNullspacePlan nullspace{};
@@ -354,8 +356,11 @@ class SystemFieldSolver {
         SystemFieldSolver& owner, MultiFab& value,
         const FieldSolveConfig& plan) override {
       require_field_nullspace_compatible(value, plan.nullspace);
-      if (owner.p_eps_ == Real(1)) return;
-      scale(value, Real(1) / owner.p_eps_);
+      // FieldOperator authoring uses the physical ``-div(A grad phi)+kappa*phi=rhs``
+      // convention. GeometricMG/FFT carry the historical internal
+      // ``div(A grad phi)-kappa*phi=rhs_native`` residual, so builtin routes consume the
+      // opposite RHS. External components receive the public convention directly.
+      scale(value, Real(-1) / owner.p_eps_);
     }
     SolveReport solve(SystemFieldSolver&, const FieldSolveConfig& plan) override {
       return std::visit(
@@ -451,6 +456,7 @@ class SystemFieldSolver {
     int phi_comp = -1;
     int gx_comp = -1;
     int gy_comp = -1;
+    int gradient_sign = 0;
     bool has_plan = false;
     FieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
@@ -489,6 +495,24 @@ class SystemFieldSolver {
     found->second.topology_provider_kind = provider_kind;
     found->second.topology_provenance = provenance;
     found->second.topology_digest = digest;
+    auto registered = named_fields_.find(slot);
+    if (registered != named_fields_.end()) {
+      registered->second.plan = found->second;
+      registered->second.backend.reset();
+    }
+  }
+
+  void set_named_reaction(const std::string& slot, Real reaction) {
+    if (!std::isfinite(static_cast<double>(reaction)) || reaction <= Real(0))
+      throw std::invalid_argument(
+          "screened field reaction coefficient must be finite and strictly positive");
+    auto found = named_field_plans_.find(slot);
+    if (found == named_field_plans_.end())
+      throw std::runtime_error("screened field reaction names an unknown provider slot");
+    if (found->second.solver != "geometric_mg")
+      throw std::runtime_error("screened fields require the GeometricMG provider");
+    found->second.has_reaction = true;
+    found->second.reaction = reaction;
     auto registered = named_fields_.find(slot);
     if (registered != named_fields_.end()) {
       registered->second.plan = found->second;
@@ -591,12 +615,28 @@ class SystemFieldSolver {
   }
 
   /// Register a named elliptic field (ADC-428): records the aux output components (where the field's
-  /// solved phi and centered gradient land). @p gx_comp / @p gy_comp < 0 => only phi is written (the
-  /// model declared fewer than 3 aux slots for the field). Idempotent (re-register overwrites the
+  /// solved phi and centered gradient land). @p gx_comp / @p gy_comp both equal -1 for phi-only;
+  /// otherwise @p gradient_sign (exactly -1 or +1) scales both centered derivatives. Idempotent
+  /// (re-register overwrites the
   /// component map, drops the lazily-built solver so the next solve rebuilds it). The DEDICATED solver
   /// is built on first solve, never here.
   void register_named_field(const std::string& block, const std::string& provider_key,
-                            int phi_comp, int gx_comp, int gy_comp) {
+                            int phi_comp, int gx_comp, int gy_comp,
+                            int gradient_sign) {
+    const bool has_gradient = gx_comp >= 0 && gy_comp >= 0;
+    const bool has_no_gradient = gx_comp == -1 && gy_comp == -1;
+    if (phi_comp < 0 || (!has_gradient && !has_no_gradient) ||
+        (has_gradient &&
+         (phi_comp == gx_comp || phi_comp == gy_comp || gx_comp == gy_comp)))
+      throw std::invalid_argument(
+          "System: named elliptic field output components must be one potential or "
+          "three distinct potential/gradient components");
+    if (gradient_sign != -1 && gradient_sign != 1)
+      throw std::invalid_argument(
+          "System: named elliptic field gradient sign must be exactly -1 or 1");
+    if (!has_gradient && gradient_sign != 1)
+      throw std::invalid_argument(
+          "System: a named elliptic field without gradient outputs must use sign +1");
     for (const auto& configured : named_field_plans_) {
       if (configured.second.output_block != block || configured.second.output_key != provider_key)
         continue;
@@ -604,6 +644,7 @@ class SystemFieldSolver {
       nf.phi_comp = phi_comp;
       nf.gx_comp = gx_comp;
       nf.gy_comp = gy_comp;
+      nf.gradient_sign = gradient_sign;
       nf.has_plan = true;
       nf.plan = configured.second;
       named_fields_[configured.first] = std::move(nf);
@@ -1334,12 +1375,15 @@ class SystemFieldSolver {
   /// Builds the DEDICATED cartesian elliptic solver of named field @p nf, the SAME poisson operator as
   /// the default ell_ (ensure_elliptic): GeometricMG (default) or PoissonFFTSolver/RemappedFFTSolver,
   /// with the System's Poisson BC and wall. REUSES the native solver -- no operator is reimplemented.
-  /// The variable / anisotropic permittivity and reaction coefficients of the DEFAULT Poisson are NOT
-  /// carried onto a named field (a named field is a plain Laplacian; its own coefficients are a future
-  /// extension). Built lazily; no-op if already built.
+  /// The variable / anisotropic permittivity of the DEFAULT Poisson is not carried onto a named
+  /// field. A named field may carry its own resolved scalar reaction coefficient; it is installed
+  /// only on GeometricMG. Built lazily; no-op if already built.
   void ensure_named_backend(NamedField& nf, const std::string& slot) {
     if (nf.backend) return;
     if (nf.plan.solver == "external_component_v1") {
+      if (nf.plan.has_reaction)
+        throw std::runtime_error(
+            "System: external FieldSolver ABI v2 cannot consume a reaction coefficient");
       const auto by_slot = external_field_components_.find(slot);
       if (by_slot == external_field_components_.end())
         throw std::runtime_error(
@@ -1355,6 +1399,9 @@ class SystemFieldSolver {
         ? std::function<bool(Real, Real)>{}
         : wall_active();
     if (solver == "fft" || solver == "fft_spectral") {
+      if (nf.plan.has_reaction)
+        throw std::runtime_error(
+            "System: FFT field solvers cannot consume a reaction coefficient");
       if (nf.plan.has_boundary_kernel)
         throw std::runtime_error(
             "System: generated field boundary kernels require a residual/JVP solver route; "
@@ -1385,6 +1432,11 @@ class SystemFieldSolver {
       if (geometric == nullptr)
         throw std::logic_error("System: builtin GeometricMG backend lost its solver type");
       geometric->set_abs_tol(mg.abs_tol);
+      if (nf.plan.has_reaction) {
+        const Real reaction = nf.plan.reaction;
+        geometric->set_reaction(
+            [reaction](Real, Real) { return reaction; });
+      }
       if (nf.plan.has_boundary_kernel) {
         geometric->set_boundary_kernel(nf.plan.boundary_kernel, nf.plan.boundary_context);
         if (nf.plan.has_newton)
@@ -1450,6 +1502,15 @@ class SystemFieldSolver {
           "System: named elliptic field '" + field +
           "' aux component out of the channel width (add the block that declares "
           "its aux fields before solving)");
+    if (nf.gradient_sign != -1 && nf.gradient_sign != 1)
+      throw std::runtime_error(
+          "System: named elliptic field has no valid gradient sign");
+    const bool has_gradient = nf.gx_comp >= 0 && nf.gy_comp >= 0;
+    if (nf.phi_comp >= owner_->aux_ncomp_ ||
+        (has_gradient &&
+         (nf.gx_comp >= owner_->aux_ncomp_ || nf.gy_comp >= owner_->aux_ncomp_)))
+      throw std::runtime_error(
+          "System: named elliptic field output components exceed the aux channel width");
     prepare_boundary_dependencies(nf, block_idx, &U_stage);
     ensure_named_backend(nf, field);
     nf.backend->configure_boundary(nf.plan);
@@ -1478,8 +1539,8 @@ class SystemFieldSolver {
     device_fence();
     const Real dx = owner_->geom.dx(), dy = owner_->geom.dy();
     const int cphi = nf.phi_comp, cgx = nf.gx_comp, cgy = nf.gy_comp;
-    const bool grad =
-        (cgx >= 0 && cgx < owner_->aux_ncomp_ && cgy >= 0 && cgy < owner_->aux_ncomp_);
+    const Real gradient_scale = static_cast<Real>(nf.gradient_sign);
+    const bool grad = has_gradient;
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       const ConstArray4 p = phi_mf.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
@@ -1488,8 +1549,10 @@ class SystemFieldSolver {
         for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
           a(i, j, cphi) = p(i, j);
           if (grad) {
-            a(i, j, cgx) = (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-            a(i, j, cgy) = (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
+            a(i, j, cgx) =
+                gradient_scale * (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
+            a(i, j, cgy) =
+                gradient_scale * (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
           }
         }
     }

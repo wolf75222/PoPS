@@ -53,7 +53,7 @@ _CHILD = textwrap.dedent(
         return rho
 
     sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.block(
+    sim.add_equation(
         "ne",
         model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
                         source=engine.NoSource(),

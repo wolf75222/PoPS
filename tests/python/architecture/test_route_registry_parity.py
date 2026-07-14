@@ -19,6 +19,7 @@ CPP_ACCESSORS = ROOT / "include" / "pops" / "runtime" / "config" / "generated_ro
 ROUTE_API = ROOT / "include" / "pops" / "runtime" / "config" / "route_ids.hpp"
 DISPATCH_API = ROOT / "include" / "pops" / "runtime" / "config" / "dispatch_tags.hpp"
 MODEL_API = ROOT / "include" / "pops" / "runtime" / "dynamic" / "model_registry.hpp"
+MODULE_CAPABILITIES = ROOT / "include" / "pops" / "runtime" / "module_capabilities.hpp"
 
 
 def _load(path: Path, name: str):
@@ -65,6 +66,12 @@ def test_runtime_headers_consume_generated_catalog_instead_of_mirroring_rows():
     assert "inline constexpr RouteInfo kRiemannRoutes[]" not in ROUTE_API.read_text(encoding="utf-8")
     assert "inline constexpr LimiterTag kLimiters[]" not in DISPATCH_API.read_text(encoding="utf-8")
     assert "inline constexpr TransportTag kTransports[]" not in MODEL_API.read_text(encoding="utf-8")
+
+
+def test_native_capability_layout_parity_uses_the_generated_route_tokens():
+    source = MODULE_CAPABILITIES.read_text(encoding="utf-8")
+    assert "kLayoutRouteTokensCsv" in source
+    assert '"uniform|amr"' not in source
 
 
 def test_one_catalog_row_generates_both_language_surfaces():

@@ -3,8 +3,8 @@ FiniteVolume + run). PUR-PYTHON au-dessus de HyperbolicModel : aucune numerique 
 docs/DSL_MODEL_DESIGN.md.
 
 Deux niveaux :
-(1) PUR-PYTHON (aucun compilateur requis) : Param nomme + runtime supporte (P7-b), flux vs eval_flux distincts,
-    primitive_vars kwargs (layout ordonne, rho conservatif rejoint le layout sans etre redefini),
+(1) PUR-PYTHON (aucun compilateur requis) : Param nomme + runtime supporte (P7-b), flux vs flux_value distincts,
+    etat/roles et axes physiques types,
     FiniteVolume(riemann=), et les erreurs explicites (backend/target inconnus, hllc sans pression,
     remplacement de noms interdit sur un package natif).
 (2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="production") ->
@@ -24,11 +24,12 @@ import numpy as np
 import pops
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.math import sqrt
-from pops.physics._facade import Model
+from pops.math import ddt, div, sqrt
+from pops.physics import Density, Energy, Model, Momentum
 from pops.params import ConstParam, RuntimeParam
 
 from tests.python.support.initial_states import euler_bubble_state
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import repo_include
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
@@ -36,53 +37,30 @@ GAMMA = 1.6667
 
 
 def build_euler(name="euler_pa"):
-    """Euler 2D ecrit via la FACADE Model (kwargs primitive_vars, param gamma nomme)."""
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars(
-        "rho", "rho_u", "rho_v", "E",
-        roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.value(m.param(ConstParam("gamma", GAMMA)))                       # Param NOMME, inline au codegen + set_gamma
-    u = rhou / rho
-    v = rhov / rho
-    p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    H = (E + p) / rho
-    c = sqrt(g * p / rho)
-    m.flux(x=[rhou, rhou * u + p, rhou * v, rho * H * u],
-           y=[rhov, rhov * u, rhov * v + p, rho * H * v])   # DECLARATEUR
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    # KWARGS : rho conservatif rejoint le layout ; renvoie les Var PRIMITIVES (rho/u/v/p comme
-    # locales primitives), a utiliser dans conservative_from (qui exprime cons EN FONCTION des prim).
-    prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([prho, prho * pu, prho * pv,
-                         pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
-    # ADC-590 : riemann='hllc' generique exige la capability EMISE (plus de fallback Euler implicite).
-    m.enable_hllc()
+    """Euler 2D through the final board model and typed frame/role descriptors."""
+    m = Model(name, frame=FRAME)
+    U = m.state("U", components=["rho", "rho_u", "rho_v", "E"], roles={
+        "rho": Density(), "rho_u": Momentum(axis=X_AXIS), "rho_v": Momentum(axis=Y_AXIS),
+        "E": Energy(),
+    })
+    rho, rhou, rhov, E = U
+    g = m.value(m.param(ConstParam("gamma", GAMMA)))
+    u = m.primitive("u", rhou / rho)
+    v = m.primitive("v", rhov / rho)
+    p = m.scalar("p", (g - 1.0) * (E - 0.5 * rho * (u * u + v * v)))
+    H = m.scalar("H", (E + p) / rho)
+    c = m.scalar("c", sqrt(g * p / rho))
+    F = m.flux("transport", frame=FRAME, state=U, components={
+        X_AXIS: [rhou, rhou * u + p, rhou * v, rho * H * u],
+        Y_AXIS: [rhov, rhov * u, rhov * v + p, rho * H * v],
+    }, waves={X_AXIS: [u - c, u, u + c], Y_AXIS: [v - c, v, v + c]})
+    m.rate("transport", equation=ddt(U) == -div(F))
     return m
 
 
 def build_euler_predef(name="euler_predef"):
-    """IDENTIQUE a build_euler, mais u/v/p sont des Var PRIMITIVES deja definies (m.primitive(...))
-    passees en SELF-REFERENCE a primitive_vars(rho=rho, u=u, v=v, p=p). C'est le style cible avec des
-    Var pre-definies : sans le garde-fou self-ref, u=u redefinirait la primitive en `const Real u = u;`
-    (auto-init -> NaN). Doit produire le MEME modele que build_euler (formes equivalentes)."""
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars(
-        "rho", "rho_u", "rho_v", "E",
-        roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.value(m.param(ConstParam("gamma", GAMMA)))
-    u = m.primitive("u", rhou / rho)                  # Var PRIMITIVE deja definie
-    v = m.primitive("v", rhov / rho)
-    p = m.primitive("p", (g - 1.0) * (E - 0.5 * rho * (u * u + v * v)))
-    H = (E + p) / rho
-    c = sqrt(g * p / rho)
-    m.flux(x=[rhou, rhou * u + p, rhou * v, rho * H * u],
-           y=[rhov, rhov * u, rhov * v + p, rho * H * v])
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)   # u=u : Var primitive self-ref
-    m.conservative_from([prho, prho * pu, prho * pv,
-                         pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
-    m.enable_hllc()  # ADC-590 : meme capability que build_euler (les deux formes restent le MEME modele)
-    return m
+    """The old primitive-layout spelling has one final board representation."""
+    return build_euler(name)
 
 
 def initial_state(n):
@@ -116,7 +94,7 @@ def advance_low_level(system, *, t_end, cfl):
 def pure_python_checks():
     # Declarations explicites + identites de handles ; runtime supporte (P7-b).
     m = build_euler()
-    g = m.params["gamma"]
+    g = m.module.params()["gamma"]
     assert isinstance(g, ConstParam) and g.name == "gamma" and abs(g.value - GAMMA) < 1e-12
     # P7-b : les parametres runtime sont desormais implementes (cf. test_dsl_runtime_params). L'ancienne
     # assertion "runtime rejete -> NotImplementedError" etait perimee depuis l'arrivee de la feature et
@@ -126,16 +104,15 @@ def pure_python_checks():
     assert m.value(kp) is not kp
     print("OK  declarations explicites + handles distincts des Expr")
 
-    # flux declarateur vs eval_flux evaluateur : noms distincts, methodes distinctes
-    assert m.flux is not m.eval_flux, "flux et eval_flux doivent etre distincts"
-    assert m._m._flux.get("x"), "m.flux(...) a bien declare le flux x"
-    print("OK  m.flux (declarateur) != m.eval_flux (evaluateur)")
+    # The final host oracle is typed by an axis, distinct from flux declaration.
+    assert m.flux is not m.flux_value, "flux et flux_value doivent etre distincts"
+    assert "transport" in m.fluxes, "m.flux(...) a bien declare le flux transport"
+    print("OK  m.flux (declarateur) != m.flux_value (oracle axe type)")
 
-    # primitive_vars kwargs : layout ordonne [rho,u,v,p] ; rho (conservatif) PAS redefini en primitive
-    assert m.prim_state == ["rho", "u", "v", "p"], "layout primitif kwargs : %r" % m.prim_state
-    assert "rho" not in m._m.prim_defs, "rho conservatif ne doit pas etre redefini comme primitive"
-    assert "u" in m._m.prim_defs and "p" in m._m.prim_defs, "u/p definis comme primitives"
-    print("OK  primitive_vars kwargs : layout ordonne, rho conservatif rejoint le layout")
+    state = m.module.state_spaces()["U"]
+    assert state.components == ("rho", "rho_u", "rho_v", "E")
+    assert state.roles["rho"] == "Density" and state.roles["E"] == "Energy"
+    print("OK  etat final : composantes et roles physiques types")
 
     # FiniteVolume : riemann (PAS flux) -> Spatial.flux ; variables -> recon
     fv = engine.Spatial(limiter=Minmod(), flux=HLLC(), recon=Primitive())
@@ -195,9 +172,7 @@ def end_to_end_checks():
         assert np.all(np.isfinite(final)), "production : etat fini"
         print("OK  production : add_equation + run(%d pas) -> etat fini" % nsteps)
 
-        # Garde-fou self-ref kwargs (style cible avec Var pre-definies) : u/v/p definies par m.primitive
-        # puis passees en primitive_vars(rho=rho, u=u, v=v, p=p). Doit (a) ne PAS produire de NaN
-        # (sans le fix, u=u -> `Real u = u;` auto-init) et (b) donner le MEME modele que la forme expr.
+        # The former alternate primitive-layout spelling now maps to the same typed board model.
         mp = build_euler_predef("euler_predef")
         cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="production")
         sp = System(n=n, periodic=True)
@@ -207,10 +182,10 @@ def end_to_end_checks():
         sp.set_state("gas", initial_state(n))
         advance_low_level(sp, t_end=0.02, cfl=0.4)
         pf = np.array(sp.get_state("gas"))
-        assert np.all(np.isfinite(pf)), "primitive_vars kwargs (Var pre-definies) : etat fini, pas de NaN"
+        assert np.all(np.isfinite(pf)), "modele board equivalent : etat fini, pas de NaN"
         dp = float(np.max(np.abs(pf - final)))
-        assert dp < 1e-10, "primitive_vars(u=u) Var pre-definie == forme expr (meme modele), dmax=%.3e" % dp
-        print("OK  primitive_vars kwargs Var pre-definies : pas de NaN, == forme expr (dmax=%.3e)" % dp)
+        assert dp < 1e-10, "forme board equivalente : meme modele, dmax=%.3e" % dp
+        print("OK  forme board equivalente : == forme de reference (dmax=%.3e)" % dp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -240,17 +215,11 @@ def modelspec_substeps_check():
 
 
 def predef_primitive_selfref_check():
-    """primitive_vars(rho=rho, u=u, v=v, p=p) avec u/v/p des Var PRIMITIVES deja definies (m.primitive).
-    Le garde-fou self-ref ne doit PAS redefinir u en `u = u` (auto-init NaN) : prim_defs garde la
-    formule d'origine (rho_u/rho), pas un renvoi a soi. Pur-Python (aucun compilateur requis)."""
+    """The final board route has one unambiguous primitive declaration per name."""
     m = build_euler_predef("euler_predef_pp")
-    pd = m._m.prim_defs
-    for nm in ("u", "v", "p"):
-        assert nm in pd, "primitive '%s' absente de prim_defs" % nm
-        assert pd[nm].to_cpp() != nm, \
-            "primitive '%s' auto-initialisee (self-ref kwargs mal gere : `%s = %s;`)" % (nm, nm, nm)
-    assert "rho_u" in pd["u"].deps(), "primitive 'u' doit garder sa formule (depend de rho_u)"
-    print("OK  primitive_vars kwargs Var pre-definies : pas d'auto-init (formules prim_defs preservees)")
+    assert set(m.fluxes) == {"transport"}
+    assert "transport" in m.module.operator_registry().names()
+    print("OK  declarations primitives finalisees sans chemin self-reference legacy")
 
 
 def main():

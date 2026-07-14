@@ -178,6 +178,7 @@ class _SystemUnifiedInstall(_System):
         # loaders have installed those closures; no legacy m.elliptic_field name is inferred.
         for field_plan in field_plans.values():
             self._register_field_plan_output(field_plan, resolved_models)
+            self._install_field_reaction(field_plan, params)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. Before install_program.
         for field_name, field in aux.items():
@@ -484,6 +485,14 @@ class _SystemUnifiedInstall(_System):
         self._s.set_field_boundary_parameters(
             field_plan.native_options["provider_slot"], values)
 
+    def _install_field_reaction(self, field_plan: Any, params: Any) -> None:
+        """Bind one screened-Poisson scalar into its exact qualified native field slot."""
+        effective = field_plan.native_reaction_value(params)
+        if effective is None:
+            return
+        self._s.set_field_reaction(
+            field_plan.native_options["provider_slot"], effective)
+
     def _register_field_plan_output(self, field_plan: Any, models: Any) -> None:
         route = field_plan.native_options["output_route"]
         block = route["owner_block"]
@@ -502,8 +511,13 @@ class _SystemUnifiedInstall(_System):
                 % (field_plan.name, block, ", ".join(components))
             ) from error
         indices.extend([-1] * (3 - len(indices)))
+        gradient_sign = route.get("gradient_sign")
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError("field output route has no valid GradientOutput sign")
+        if indices[1] < 0 and gradient_sign != 1:
+            raise ValueError("field output route carries a sign without gradient components")
         self._s.register_elliptic_field(
-            block, route["key"], indices[0], indices[1], indices[2])
+            block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
 
     def _install_solver(self, field: Any, solver_brick: Any,
                         declared_fields: Any = frozenset()) -> Any:

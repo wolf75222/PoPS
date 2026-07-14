@@ -1,10 +1,10 @@
-"""pops.moments -- generic 2D moment-model generator + the Spec-4 facade API.
+"""pops.moments -- generic 2D moment-model generator and facade API.
 
 The GENERATOR surface (the systematic binomial algebra for 2D Vlasov/QMOM moment
 hierarchies) is re-exported from the sub-modules: index helpers, the Gaussian closure,
 the source terms, and the model-builder entry point.
 
-The Spec-4 NEW API is a set of thin facades over that generator: a fluent
+The public construction API is a set of thin facades over that generator: a fluent
 :class:`MomentModel` (built by :func:`CartesianVelocityMoments`) that records options and
 calls :func:`build_moment_model` only on ``.build()``, plus the inert structural
 descriptors (:class:`MomentHierarchy` / :class:`MomentBasis` / ... ) and the closures
@@ -17,7 +17,7 @@ from .sources import (lorentz_sources, maxwellian_moments, bgk_source,
 from .closures import (gaussian_closure, closure, Closure, LocalClosure,
                        apply_local_closure, HyQMOM15Closure)
 
-# --- Spec-4 facade API (thin wrappers over the generator) -------------------
+# --- facade API (thin wrappers over the generator) -------------------------
 from .hierarchy import CartesianVelocityMoments, MomentModel, MomentHierarchy
 from .ordering import MomentOrdering
 from .basis import MomentBasis, RawMomentBasis
@@ -36,7 +36,7 @@ __all__ = [
     "maxwellian_moments",
     "bgk_source",
     "build_moment_model",
-    # Spec-4 NEW API
+    # facade API
     "CartesianVelocityMoments",
     "MomentModel",
     "MomentHierarchy",

@@ -350,9 +350,10 @@ struct AmrSystem::Impl {
   // NAMED multi-elliptic fields (ADC-428): the native AMR loader declares them (register_elliptic_field)
   // and attaches each field's per-block RHS closure (set_block_elliptic_field) BEFORE the lazy build,
   // when the AmrRuntime engine does not yet exist. We stash both here and replay them on the runtime at
-  // build_multi. ell_field_comps_: field -> {phi_comp, gx_comp, gy_comp}. ell_field_rhs_: field -> {block
+  // build_multi. ell_field_comps_: field -> {phi_comp, gx_comp, gy_comp, gradient_sign}.
+  // ell_field_rhs_: field -> {block
   // name -> RHS closure}. Empty default -> bit-identical (no named field registered).
-  std::map<std::pair<std::string, std::string>, std::array<int, 3>> ell_field_comps_;
+  std::map<std::pair<std::string, std::string>, std::array<int, 4>> ell_field_comps_;
   std::map<std::string, std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>>>
       ell_field_rhs_;
   // Complete plans are keyed by the digest of the canonical block-qualified provider identity.
@@ -981,7 +982,7 @@ struct AmrSystem::Impl {
       runtime->install_field_plan(slot, plan);
     for (const auto& kv : ell_field_comps_)
       runtime->register_named_field(kv.first.first, kv.first.second, kv.second[0], kv.second[1],
-                                    kv.second[2]);
+                                    kv.second[2], kv.second[3]);
     for (const auto& [field, by_block] : ell_field_rhs_)
       for (const auto& [block_name, rhs] : by_block) {
         const int bi = block_index(block_name);
@@ -1625,12 +1626,28 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
 // resolved by the generated AMR .so loader across the dlopen boundary (same as set_compiled_block).
 POPS_EXPORT void AmrSystem::register_elliptic_field(const std::string& block_name,
                                                     const std::string& provider_key,
-                                                    int phi_comp, int gx_comp, int gy_comp) {
+                                                    int phi_comp, int gx_comp, int gy_comp,
+                                                    int gradient_sign) {
   require_assembling_amr(p_->bound_,
                          "register_elliptic_field");  // frozen once pops.bind completes (ADC-592)
   if (p_->built)
     throw std::runtime_error("AmrSystem::register_elliptic_field : the system is already built");
-  p_->ell_field_comps_[{block_name, provider_key}] = {phi_comp, gx_comp, gy_comp};
+  const bool has_gradient = gx_comp >= 0 && gy_comp >= 0;
+  const bool has_no_gradient = gx_comp == -1 && gy_comp == -1;
+  if (phi_comp < 0 || (!has_gradient && !has_no_gradient) ||
+      (has_gradient &&
+       (phi_comp == gx_comp || phi_comp == gy_comp || gx_comp == gy_comp)))
+    throw std::invalid_argument(
+        "AmrSystem::register_elliptic_field requires one potential or three distinct "
+        "potential/gradient components");
+  if (gradient_sign != -1 && gradient_sign != 1)
+    throw std::invalid_argument(
+        "AmrSystem::register_elliptic_field gradient_sign must be exactly -1 or 1");
+  if (!has_gradient && gradient_sign != 1)
+    throw std::invalid_argument(
+        "AmrSystem::register_elliptic_field without gradients requires sign +1");
+  p_->ell_field_comps_[{block_name, provider_key}] = {
+      phi_comp, gx_comp, gy_comp, gradient_sign};
   p_->force_runtime_ =
       true;  // the named-field solve needs the AmrRuntime engine (even single-block)
 }
@@ -2187,6 +2204,24 @@ void AmrSystem::set_field_solver_plan(
   plan.mg_opts.nu2 = post_smooth;
   plan.mg_opts.nbottom = bottom_sweeps;
   plan.mg_opts.coarse_threshold = coarse_threshold;
+  p_->force_runtime_ = true;
+}
+
+void AmrSystem::set_field_reaction(const std::string& provider_slot, double reaction) {
+  require_assembling_amr(p_->bound_, "set_field_reaction");
+  if (p_->built)
+    throw std::runtime_error("AmrSystem::set_field_reaction: system already built");
+  if (!std::isfinite(reaction) || reaction <= 0.0)
+    throw std::runtime_error(
+        "AmrSystem::set_field_reaction requires a finite, strictly positive coefficient");
+  auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem::set_field_reaction names an unknown provider slot");
+  if (found->second.solver != "geometric_mg")
+    throw std::runtime_error("AMR screened fields require GeometricMG");
+  found->second.has_reaction = true;
+  found->second.reaction = static_cast<Real>(reaction);
   p_->force_runtime_ = true;
 }
 

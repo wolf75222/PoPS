@@ -13,6 +13,7 @@
 #include <pops/runtime/dynamic/model_registry.hpp>
 
 #include <cstddef>
+#include <iterator>
 #include <string>
 
 using namespace pops;
@@ -70,12 +71,14 @@ TEST(BrickCatalog, CatalogCsvMatchesCanonicalIdListPerCategory) {
 
 TEST(BrickCatalog, JsonListsEveryIdWithExternalBrickGrammar) {
   const std::string j = brick_catalog_json();
-  bool ok = contains(j, "{\"bricks\":[");
+  bool ok = contains(j, "{\"catalog_digest\":\"") &&
+            contains(j, "\"catalog_semantic_digest\":\"") &&
+            contains(j, "\"bricks\":[");
   for (const BrickCatalogEntry& e : kBrickCatalog) {
     const std::string id_field = std::string("\"id\":\"") + e.id + "\"";
     ok = ok && contains(j, id_field.c_str());
   }
-  EXPECT_TRUE(ok) << "brick_catalog_json() commence par {\"bricks\":[ et liste chaque \"id\":\"<id>\"";
+  EXPECT_TRUE(ok) << "brick_catalog_json() exposes both digests and every catalog id";
   EXPECT_TRUE(contains(j, "\"catalog_digest\":\"") &&
               contains(j, "\"catalog_semantic_digest\":\"") &&
               contains(j, "\"category\":\"transport\"") &&
@@ -108,16 +111,16 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
     }
     EXPECT_TRUE(i == 3 && ok) << "transport : catalog == kTransports == kTransportRoutes (3 lignes)";
   }
-  // Sources : catalog == kSources aux positions CANONIQUES (les 2 alias 4 et 6 sont sautes) ==
-  // kSourceRoutes. Re-assert dynamique de sources_mirror().
+  // Sources : the generated registry contains canonical rows only, in route order.
   {
-    const std::size_t canonical_pos[] = {0, 1, 2, 3, 5};
     bool ok = true;
     std::size_t i = 0;
     for (const BrickCatalogEntry& e : kBrickCatalog) {
       if (std::string(e.category) != "source")
         continue;
-      const SourceTag& s = kSources[canonical_pos[i]];
+      ASSERT_LT(i, std::size(kSources));
+      ASSERT_LT(i, std::size(kSourceRoutes));
+      const SourceTag& s = kSources[i];
       const RouteInfo& r = kSourceRoutes[i];
       ok = ok && std::string(e.id) == s.name && e.n_vars == s.min_vars &&
            std::string(e.summary) == s.summary && e.route_index == r.index &&
@@ -126,7 +129,8 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
            std::string(e.limitations) == r.limitations;
       ++i;
     }
-    EXPECT_TRUE(i == 5 && ok) << "source : catalog == kSources canoniques == kSourceRoutes (5 lignes)";
+    EXPECT_TRUE(i == std::size(kSources) && ok)
+        << "source : catalog == canonical kSources == kSourceRoutes";
   }
   // Elliptics : catalog == kElliptics (name/summary, n_vars == -1) == kEllipticRoutes.
   {

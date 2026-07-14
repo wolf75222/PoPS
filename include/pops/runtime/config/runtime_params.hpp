@@ -47,4 +47,4 @@ struct RuntimeParams {
 
 }  // namespace pops
 
-// (P7-b) DSL runtime params: see test_dsl_runtime_params.py
+// Runtime-parameter bind contract: see test_program_runtime_params.py.

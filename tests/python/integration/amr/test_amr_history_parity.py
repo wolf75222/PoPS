@@ -22,7 +22,6 @@ try:
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
     from pops.runtime._system import AmrSystem, System
-    from pops.time import FailRun
     from tests.python.integration._final_field_program import (
         compile_block_model,
         passive_field_model,
@@ -55,12 +54,10 @@ def _passive_source_model(name):
 def _ab2_plan(model, *, target, name="adc631_ab2"):
     return resolve_periodic_field_program(
         model,
-        lambda state, rate, fields: lt.AdamsBashforth(
+        lambda state, rate, _fields: lt.AdamsBashforth(
             state,
             rate=rate,
-            fields=fields,
             order=2,
-            solve_action=FailRun(),
         ),
         name=name,
         block_name="blk",

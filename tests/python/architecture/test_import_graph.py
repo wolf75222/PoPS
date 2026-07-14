@@ -22,8 +22,7 @@ The sub-packages form a directed acyclic dependency stack:
     params    -> (nothing)                       (typed parameter dependency sink)
     output    -> model, time                     (qualified selections and schedules)
     external  -> model                           (authenticated component manifests)
-    lib       -> _ir, model, time, physics, moments, numerics,
-                 fields, params, solvers
+    lib       -> identity, frames, time, physics, moments, fields, params, solvers
     codegen   -> _ir, model, physics, time, lib, solvers, params,
                  external, fields
     runtime   -> authoring/lowering contracts, including resolved fields
@@ -70,7 +69,9 @@ ALLOWED = {
     "diagnostics": {"linalg"},
     "output": {"identity", "model", "time"},
     "external": {"identity", "model"},
-    "lib": {"fields", "frames", "moments", "params", "physics", "solvers", "time"},
+    # Ready implementations may mint canonical semantic identities, but identity is a strict sink:
+    # this edge cannot introduce a cycle or pull compiler/runtime authority into pops.lib.
+    "lib": {"fields", "frames", "identity", "moments", "params", "physics", "solvers", "time"},
     "codegen": {"_ir", "fields", "identity", "model", "params", "solvers", "time"},
     "runtime": {"_ir", "codegen", "fields", "identity", "mesh", "model", "output", "time"},
 }

@@ -121,8 +121,8 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         self._linear_sources = {}  # NAMED local linear operators (linear_source): name -> [[Expr]]
                                    # (n_cons x n_cons), coefficients linear in U (no cons/prim dependency).
         self._elliptic = None   # Expr (contribution to the elliptic right-hand side) or None
-        self._elliptic_fields = {}  # NAMED elliptic fields (elliptic_field, ADC-419): name -> dict
-                                    # {"rhs": Expr, "operator": str, "aux": [str]}. The unnamed default
+        self._elliptic_fields = {}  # NAMED elliptic fields: name -> {rhs, operator, aux,
+                                    # gradient_sign}. The unnamed default
                                     # stays in self._elliptic (m.elliptic_rhs); the named keys enter
                                     # _model_hash ONLY when non-empty (cache key preserved). The runtime
                                     # is qualified by Case.field together with its typed numerical

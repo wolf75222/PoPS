@@ -161,7 +161,7 @@ def rate(state: Any) -> Any:
 
 
 def unknown(name: Any) -> Any:
-    """A named solve unknown, e.g. ``unknown("U*")``."""
+    """An explicit symbolic solve unknown from a name or declared field Handle."""
     return Unknown(name)
 
 

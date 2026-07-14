@@ -32,6 +32,7 @@ std::string component_source() {
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 namespace {
 int prepare_count = 0;

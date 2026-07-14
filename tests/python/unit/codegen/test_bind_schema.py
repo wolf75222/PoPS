@@ -129,7 +129,8 @@ def test_schema_alias_authentication_does_not_retain_live_authoring_graph():
 def test_raw_module_cannot_add_parameters_after_problem_freeze():
     module = model.Module("frozen-raw-module")
     module.param(RuntimeParam("speed", default=1.0))
-    problem = Case(name="frozen-raw-module-case").block("fluid", physics=module)
+    problem = Case(name="frozen-raw-module-case")
+    problem.block("fluid", module)
 
     snapshot = problem.freeze()
     with pytest.raises(RuntimeError, match="frozen.*parameter"):

@@ -45,8 +45,8 @@ def _skip(msg):
 try:
     import numpy as np
 
-    import pops
     import pops.runtime._engine_descriptors as engine
+    from pops.codegen import compile_problem
     from pops import time as adctime
     from tests.python.support.typed_program import program_states, synthetic_module
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
@@ -78,7 +78,7 @@ EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached
 
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.block("ions", plasma_model(),
+    sim.add_equation("ions", plasma_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
@@ -123,7 +123,7 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "step_cfl"):
 
 print("== compile the held-schedule Program to a problem.so ==")
 try:
-    compiled = pops.codegen.compile_problem(model=plasma_model(), time=held_program())
+    compiled = compile_problem(model=plasma_model(), time=held_program())
 except RuntimeError as exc:  # no compiler / no visible Kokkos / .so compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:200])
 chk(bool(compiled.program_hash), "compiled handle carries the IR hash (%s...)" % compiled.program_hash[:12])
@@ -192,9 +192,9 @@ chk(len(py_calls) == 0,
 # afresh into a sim built from a model whose Python object is then deleted + gc-collected.
 orphan = System(n=N, L=1.0, periodic=True)
 _m = plasma_model()
-orphan.block("ions", _m,
-                 spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                 time=engine.Explicit(method="euler"))
+orphan.add_equation("ions", _m,
+                    spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                    time=engine.Explicit(method="euler"))
 orphan.set_poisson("charge_density", "geometric_mg")
 _x = (np.arange(N) + 0.5) / N
 _X, _Y = np.meshgrid(_x, _x, indexing="ij")

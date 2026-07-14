@@ -16,7 +16,7 @@ from pops.runtime_environment import (  # noqa: E402
 
 
 def test_runtime_environment_report_shape():
-    report = pops.runtime_environment_report()
+    report = runtime_environment_report()
     assert report["dimension"] == NATIVE_DIMENSION == 2
     assert report["amr_refinement_ratio"] == NATIVE_AMR_REFINEMENT_RATIO == 2
     assert report["precision"] == NATIVE_PRECISION == "double"

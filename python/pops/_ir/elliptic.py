@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from .expr import _BoardNode, _EllipticTerm
-from .literals import exact_numeric_scalar, exact_scale_prefix
+from .literals import exact_numeric_scalar, exact_scale_prefix, scalar_literal
 
 
 def _as_elliptic(x: Any) -> Any:
@@ -32,6 +32,40 @@ def _as_elliptic(x: Any) -> Any:
 def principal_kinds(node: Any) -> Any:
     """The set of elliptic principal-operator kinds in a field-equation LHS (empty if none)."""
     return node._principal_kinds() if isinstance(node, _EllipticTerm) else set()
+
+
+def elliptic_terms(node: Any) -> tuple[Any, ...]:
+    """Return the ordered primitive terms of one elliptic left-hand side.
+
+    Consumers lower the terms through small capabilities instead of branching on every
+    possible accumulated-expression shape.  A non-elliptic node has no terms.
+    """
+    return tuple(node._elliptic_terms()) if isinstance(node, _EllipticTerm) else ()
+
+
+def constant_reaction_scalar(value: Any) -> Any:
+    """Return an exact compile-time scalar coefficient, or ``NotImplemented``.
+
+    Literal coefficients and explicit ``ConstParam``/compile-derived reads share this small
+    protocol: parameter authoring lowers the latter to :class:`Const` while retaining the exact
+    declaration identity on that node.  Runtime parameter reads and spatial coefficient
+    descriptors deliberately do not pass this projection.
+    """
+    from .expr import Const
+
+    try:
+        literal = value.literal if isinstance(value, Const) else scalar_literal(value)
+    except (TypeError, ValueError):
+        return NotImplemented
+    if literal.unit is not None or literal.target is not None:
+        return NotImplemented
+    try:
+        scalar = literal.to_python()
+    except TypeError:
+        return NotImplemented
+    if isinstance(scalar, bool):
+        return NotImplemented
+    return scalar
 
 
 class Reaction(_EllipticTerm):
@@ -112,4 +146,7 @@ class EllipticSum(_EllipticTerm):
         return "EllipticSum(%r)" % (self.terms,)
 
 
-__all__ = ["Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "principal_kinds"]
+__all__ = [
+    "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum",
+    "constant_reaction_scalar", "elliptic_terms", "principal_kinds",
+]

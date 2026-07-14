@@ -15,11 +15,20 @@ from fractions import Fraction
 
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
+elliptic = pytest.importorskip("pops.solvers.elliptic")
+krylov = pytest.importorskip("pops.solvers.krylov")
+nonlinear = pytest.importorskip("pops.solvers.nonlinear")
+_options = pytest.importorskip("pops.solvers.options")
+_preconditioners = pytest.importorskip("pops.solvers.preconditioners")
+_tolerances = pytest.importorskip("pops.solvers.tolerances")
 
-from pops.solvers import elliptic, krylov, nonlinear
-from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
-from pops.solvers.preconditioners import preconditioners
-from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
+Chebyshev = _options.Chebyshev
+DirectSmallGrid = _options.DirectSmallGrid
+RedBlackGaussSeidel = _options.RedBlackGaussSeidel
+preconditioners = _preconditioners.preconditioners
+Absolute = _tolerances.Absolute
+AbsoluteFloor = _tolerances.AbsoluteFloor
+Relative = _tolerances.Relative
 
 
 # --- the package is wired and exposed ----------------------------------------------------
@@ -160,7 +169,7 @@ def test_geometric_mg_capabilities():
     assert caps.supports("gpu") is True
     assert caps.supports("variable_epsilon") is True
     assert caps.supports("anisotropic") is False
-    assert caps.supports("screened") is False
+    assert caps.supports("screened") is True
 
 
 def test_geometric_mg_inspect_and_lower():

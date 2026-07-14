@@ -45,7 +45,7 @@ def _scalar_charge(q, B0=1.0):
 # --- (a) mono-bloc + multi-blocs ssprk3 : fini + masse conservee, patchs fins actifs ---
 def _check_mono(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.block("ne", _scalar_charge(+1.0),
+    sim.add_equation("ne", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(ssprk3=True))  # SSPRK3 mono-bloc (chemin AmrCouplerMP)
     sim.set_poisson(bc=Periodic())
@@ -65,10 +65,10 @@ def _check_mono(n=32):
 
 def _check_multi(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=4)
-    sim.block("ions", _scalar_charge(+1.0),
+    sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(ssprk3=True))     # SSPRK3 multi-blocs (moteur AmrRuntime)
-    sim.block("electrons", _scalar_charge(-1.0),
+    sim.add_equation("electrons", _scalar_charge(-1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(ssprk3=True))     # 2e bloc ssprk3, SCHEMA SPATIAL DIFFERENT
     sim.set_poisson(bc=Periodic())
@@ -94,7 +94,7 @@ def _check_multi(n=32):
 def _check_default_bit_identical(n=32):
     def run_euler():
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-        s.block("ne", _scalar_charge(+1.0),
+        s.add_equation("ne", _scalar_charge(+1.0),
                     spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # time defaut = Explicit() euler
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
@@ -113,7 +113,7 @@ def _build_advect(n, kind):
     """AMR mono-bloc, hierarchie FIGEE (regrid_every=0, patch seed central) : SEULE la methode
     temporelle (time) change entre les runs -> l'erreur mesuree est purement TEMPORELLE."""
     s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    s.block("ne", _scalar_charge(+1.0),
+    s.add_equation("ne", _scalar_charge(+1.0),
                 spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),  # MEME schema spatial pour tous
                 time=engine.Explicit(ssprk3=True) if kind == "ssprk3" else engine.Explicit())
     s.set_poisson(bc=Periodic())
@@ -135,9 +135,12 @@ def _check_order(n=32):
     assert dt > 0.0 and np.isfinite(dt), "sonde CFL : dt invalide (%r)" % dt
     nsteps, k = 10, 8
 
-    se = _build_advect(n, "euler");  se.advance(dt, nsteps)
-    ss = _build_advect(n, "ssprk3"); ss.advance(dt, nsteps)
-    sr = _build_advect(n, "ssprk3"); sr.advance(dt / k, nsteps * k)  # reference temps-convergee
+    se = _build_advect(n, "euler")
+    se.advance(dt, nsteps)
+    ss = _build_advect(n, "ssprk3")
+    ss.advance(dt, nsteps)
+    sr = _build_advect(n, "ssprk3")
+    sr.advance(dt / k, nsteps * k)  # reference temps-convergee
 
     ref = np.asarray(sr.density())
     err_euler = float(np.abs(np.asarray(se.density()) - ref).mean())   # L1 (moyenne) vs reference
@@ -167,7 +170,7 @@ def _check_imex_ssprk3_rejected(n=16):
                       newton_abs_tol=0.0, newton_fd_eps=1e-7, newton_damping=1.0,
                       newton_fail_policy="none", newton_diagnostics=False)
         kwargs.update(kw)
-        s._s.block("b", model, "minmod", "rusanov", "conservative", time, 1, 1,
+        s._s.add_block("b", model, "minmod", "rusanov", "conservative", time, 1, 1,
                        kwargs["implicit_vars"], kwargs["implicit_roles"], kwargs["newton_max_iters"],
                        kwargs["newton_rel_tol"], kwargs["newton_abs_tol"], kwargs["newton_fd_eps"],
                        kwargs["newton_damping"], kwargs["newton_fail_policy"],

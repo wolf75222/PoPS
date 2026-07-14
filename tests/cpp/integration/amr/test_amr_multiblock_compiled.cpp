@@ -90,22 +90,28 @@ struct StiffMomentumRelax {
   }
 };
 
-// Modele COMPILE 4 variables a SOURCE RAIDE LOCALE (pour exercer le chemin IMEX du bloc compile multi-
-// bloc en DIRECT, add_compiled_model). elliptic "background" alpha=0 : rhs nul (raideur PUREMENT locale,
-// aucun couplage Poisson) -> on separe la stabilite de la source de tout couplage. TYPE CONCRET (pas de
-// dispatch generique) : reste compilable sous nvcc, comme le reste du fichier.
-using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, BackgroundDensity>;
+// A genuinely state-independent zero elliptic brick. This keeps the stiff-source oracle independent
+// of Poisson even after the deliberately unstable explicit trajectory becomes non-finite: unlike
+// `0 * state`, it cannot manufacture NaNs in an otherwise exact-zero periodic RHS.
+struct ZeroElliptic {
+  template <class State>
+  POPS_HD Real rhs(const State&) const {
+    return Real(0);
+  }
+};
+
+using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
 static StiffCModel stiff_cmodel(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffCModel{Euler{Real(1.4)}, r, BackgroundDensity{Real(0), Real(0)}};
+  return StiffCModel{Euler{Real(1.4)}, r, ZeroElliptic{}};
 }
 
 // Modele COMPILE 4 variables NEUTRE (Euler sans source) : un bloc voisin explicite, MEME nombre de
 // variables que le bloc raide (layout coherent sur la hierarchie partagee).
-using NeutralCModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+using NeutralCModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
 static NeutralCModel neutral_cmodel() {
-  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, ZeroElliptic{}};
 }
 
 // densite "bulle" gaussienne (gradients non triviaux -> le transport engendre de l'impulsion que la
@@ -129,6 +135,18 @@ static std::vector<double> bump(int n, double base, double amp) {
       r[static_cast<std::size_t>(j) * n + i] = base + (in ? amp : -amp / 3.0);
     }
   return r;
+}
+
+static double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+static double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                                const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
 }
 
 template <class F>
@@ -211,6 +229,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
   const double q0 = +1.0, q1 = -1.0;  // ions (block 0), electrons (block 1)
   const std::vector<double> rho0 = bump(N, 1.0, 0.40);
   const std::vector<double> rho1 = bump(N, 1.0, 0.20);
+  ASSERT_NEAR(periodic_rhs_mean(q0, rho0, q1, rho1), 0.0, 1e-13)
+      << "charged two-block fixtures must satisfy the periodic Poisson nullspace before solve";
 
   // ============================================================================================
   // (A) DEUX BLOCS COMPILES a schemas DIFFERENTS, sans couplage. Le 2e add_compiled_model ne leve
@@ -265,9 +285,12 @@ TEST(test_amr_multiblock_compiled, Runs) {
   // ============================================================================================
   // (B) COUPLAGE entre deux blocs compiles : ionisation-like +S/-S (ions gagnent, neutrals perdent).
   //     La masse COMPOSITE n_ions + n_neutrals est conservee globalement ; la masse ions AUGMENTE.
-  //     neutrals q=0 (pas de contribution Poisson) -> couplage pur entre deux blocs compiles.
+  //     Both blocks are field-neutral here: this section isolates the coupled source and keeps the
+  //     fully periodic elliptic RHS exactly compatible with its constant nullspace.
   // ============================================================================================
   {
+    ASSERT_EQ(periodic_rhs_mean(0.0, rho0, 0.0, rho1), 0.0)
+        << "field-neutral source fixture must have an exactly zero periodic RHS mean before solve";
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
@@ -275,7 +298,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
-    add_compiled_model(sim, "ions", exb_model(q0, B0), "minmod", "rusanov", "conservative",
+    add_compiled_model(sim, "ions", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);
     add_compiled_model(sim, "neutrals", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);
@@ -333,6 +356,9 @@ TEST(test_amr_multiblock_compiled, Runs) {
   //     mono-bloc compile vers le nouveau moteur, qui differe sur l'ordre des operations flottantes).
   // ============================================================================================
   {
+    const std::vector<double> periodic_state = bump(N, 0.0, 0.40);
+    ASSERT_NEAR(periodic_rhs_mean(q0, periodic_state, 0.0, periodic_state), 0.0, 1e-13)
+        << "single charged periodic fixture must have zero RHS mean before solve";
     auto run_mono = [&]() {
       AmrSystemConfig cfg;
       cfg.n = N;
@@ -344,7 +370,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
                          "explicit",
                          /*gamma=*/1.4);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("ne", rho0);
+      // A single periodic charged block must itself have zero mean; no projection is allowed.
+      sim.set_density("ne", periodic_state);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };

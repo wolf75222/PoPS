@@ -7,6 +7,7 @@ instance handle.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 from pops.model import (
@@ -116,7 +117,7 @@ def state_refs(
             declaration_space = _space_key(getattr(existing[1], "space", None))
             if space is None or declaration_space == requested_space:
                 return existing
-        for known_key, candidate in context.models.items():
+        for candidate in context.models.values():
             candidate_state = candidate.state
             if candidate_state.local_id != state_name:
                 continue
@@ -216,7 +217,6 @@ def fresh_field_refs(
     provider: Any = None,
 ) -> tuple[Any, Any]:
     """Build one exact factory state reference and its Case-owned field solve authority."""
-    module = getattr(model, "module", model)
     declarations = tuple(
         item for item in model.declaration_index().records() if item.kind == "state")
     if len(declarations) != 1:
@@ -370,6 +370,41 @@ def solve_field_blocks(
     return outcome.consume(action=FailRun() if action is None else action)
 
 
+def codegen_field_plans(program: Program) -> dict[str, Any]:
+    """Build the minimal resolved-route evidence needed by focused codegen tests.
+
+    Production compilation obtains complete :class:`ResolvedFieldInstallPlan` objects from
+    ``Case.resolve``.  These pure emitter tests do not install a numerical solver, but they still
+    cross the same strict field-route boundary: every solve must carry its exact Case-owned
+    ``FieldHandle`` and the output components recorded by its ``FieldContext``.  Keeping this fixture
+    here avoids each historical script inventing a subtly different pseudo-plan.
+    """
+    plans: dict[str, Any] = {}
+    for value in program._values:
+        if value.op not in ("solve_fields", "solve_fields_from_blocks"):
+            continue
+        field = value.attrs["field"]
+        components = tuple(value.field_context.outputs)
+        existing = plans.get(field.local_id)
+        if existing is not None:
+            expected = tuple(existing.native_options["output_route"]["components"])
+            if expected != components:
+                raise ValueError(
+                    "test field route %r changes outputs from %r to %r"
+                    % (field.local_id, expected, components)
+                )
+            continue
+        plans[field.local_id] = SimpleNamespace(
+            name=field.local_id,
+            native_options={
+                "provider_slot": field.local_id,
+                "output_route": {"components": list(components)},
+                "boundary_kernel_required": False,
+            },
+        )
+    return plans
+
+
 def commits_by_block(program: Program) -> dict[str, Any]:
     """Readable test projection of typed commit keys onto their block labels."""
     return {
@@ -379,6 +414,6 @@ def commits_by_block(program: Program) -> dict[str, Any]:
 
 
 __all__ = [
-    "commits_by_block", "fresh_field_refs", "fresh_state_refs", "solve_field",
-    "solve_field_blocks", "state_refs", "typed_field", "typed_state",
+    "codegen_field_plans", "commits_by_block", "fresh_field_refs", "fresh_state_refs",
+    "solve_field", "solve_field_blocks", "state_refs", "typed_field", "typed_state",
 ]

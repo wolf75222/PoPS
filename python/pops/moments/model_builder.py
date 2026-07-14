@@ -4,9 +4,9 @@ Symbols are re-exported via python/pops/lib/moments/__init__.py.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
 :mod:`pops._ir` at module scope (the IR is lightweight and lib may import it).
-The PDE-model facade (``physics.PdeModel``) is imported
-LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
-compile machinery transitively, and ``lib`` must stay importable without it.
+The public blackboard model is imported LAZILY inside
+:func:`build_moment_model` so the symbolic helpers remain importable without
+constructing the compiler-facing model layer.
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def moment_flux_expressions(author: Any, variables: Any, order: Any, closure: An
     """Build closure-local algebra independently of the surrounding Model facade.
 
     ``author`` only needs ``primitive(name, expression)``.  This deliberately small protocol
-    lets the legacy expression evaluator and the final blackboard ``physics.Model`` share the
+    lets the host expression evaluator and the blackboard ``physics.Model`` share the
     exact M -> C -> S -> closure -> flux construction without model-name dispatch.
     """
     if isinstance(order, bool) or not isinstance(order, int) or order < 2:
@@ -147,7 +147,8 @@ def moment_flux_expressions(author: Any, variables: Any, order: Any, closure: An
 
 def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
                        exact_speeds: bool = True, robust: bool = False, eps_m00: Any = 1e-12,
-                       eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False) -> Any:
+                       eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False,
+                       frame: Any = None) -> Any:
     """2D moment model with an arbitrary closure: flux and intermediates GENERATED.
 
     @p order: max order of the transported moments (order=2 -> 6 variables, order=4 -> 15).
@@ -171,26 +172,45 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
        kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
        for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
        still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
-    @return pops.physics.PdeModel ready to compile (the caller may still add elliptic_rhs,
-       params, aux... before m.compile)."""
-    from pops import physics as _physics
-    if order < 2:
-        raise ValueError("build_moment_model: order >= 2 required (standardization relies "
-                         "on C20/C02; order %r)" % (order,))
-    m = _physics.PdeModel(name)
-    cons = m.conservative_vars(*moment_names(order))
+    @p frame: a typed Cartesian frame exposing the ``x`` and ``y`` axes; ``None`` selects
+       :class:`Cartesian2D`.
+    @return the canonical :class:`pops.physics.Model`, ready to attach to a Problem."""
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div
+    from pops.physics import Density, Model
+
+    if isinstance(order, bool) or not isinstance(order, int) or order < 2:
+        raise ValueError("build_moment_model: order must be an int >= 2 "
+                         "(standardization relies on C20/C02; order %r)" % (order,))
+    selected_frame = Cartesian2D() if frame is None else frame
+    axes = getattr(selected_frame, "axes", None)
+    if (not isinstance(axes, tuple) or len(axes) != 2
+            or tuple(getattr(axis, "name", None) for axis in axes) != ("x", "y")):
+        raise TypeError("build_moment_model frame must expose the typed Cartesian axes x and y")
+
+    m = Model(name, frame=selected_frame)
+    state = m.state(
+        "U", components=tuple(moment_names(order)), roles={"M00": Density()})
     expressions = moment_flux_expressions(
-        m, cons, order, closure, robust=robust, eps_m00=eps_m00, eps_cov=eps_cov)
-    m.flux(x=expressions.x, y=expressions.y)
+        m, tuple(state), order, closure,
+        robust=robust, eps_m00=eps_m00, eps_cov=eps_cov)
+    flux = m.flux(
+        "transport",
+        frame=selected_frame,
+        state=state,
+        components={axes[0]: expressions.x, axes[1]: expressions.y},
+    )
 
     if exact_speeds:
         m.wave_speeds_from_jacobian(blocks=blocks)
     if roe:
         m.roe_from_jacobian()
+    rhs = -div(flux)
     if sources is not None:
-        m.source(sources(m, expressions.moments))
-    m.primitive_vars(*cons)
-    m.conservative_from(list(cons))
+        source = m.source(
+            "source", on=state, value=sources(m, expressions.moments))
+        rhs = rhs + source
+    m.rate("transport", equation=ddt(state) == rhs)
     return m
 
 

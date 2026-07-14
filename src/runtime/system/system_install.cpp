@@ -37,16 +37,16 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
   // (validate_newton_options, in implicit_stepper.hpp). Whether non-default options are ALLOWED
   // (the time='imex' gate below) stays here -- it differs from the AMR path.
   validate_newton_options(newton, "System::add_block");
-  // @p time carries the TREATMENT and, in explicit, the RK SCHEME: "explicit"/"ssprk2" = SSPRK2
-  // (historical default), "ssprk3" = SSPRK3 (order 3), "euler" = ForwardEuler (order 1, fidelity to
+  // @p time carries the TREATMENT and, in explicit, the RK SCHEME: "explicit" = SSPRK2
+  // (canonical default), "ssprk3" = SSPRK3 (order 3), "euler" = ForwardEuler (order 1, fidelity to
   // first-order references -- validation), "imex" = explicit transport + local backward-Euler implicit
   // stiff source (order 1), "imexrk_ars222" = IMEX-RK family scheme ARS(2,2,2)
   // (order 2, distinct PARALLEL advance, Cartesian only). The RK math stays a CORE FUNCTOR
   // (build_block). "imex" and "imexrk_ars222" share the @c imex flag; @c method distinguishes them.
-  if (time != "explicit" && time != "ssprk2" && time != "ssprk3" && time != "euler" &&
+  if (time != "explicit" && time != "ssprk3" && time != "euler" &&
       time != "imex" && time != "imexrk_ars222")
     throw std::runtime_error(
-        "System::add_block : time 'explicit'|'ssprk2'|'ssprk3'|'euler'|'imex'|'imexrk_ars222' "
+        "System::add_block : time 'explicit'|'ssprk3'|'euler'|'imex'|'imexrk_ars222' "
         "(received '" +
         time + "')");
   if (recon != "conservative" && recon != "primitive")
@@ -68,7 +68,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
       throw std::runtime_error("System::add_block : wave_speed_cache not supported with time='" +
                                time +
                                "' (wired on the explicit advance ; use time "
-                               "'explicit'/'ssprk2'/'ssprk3'/'euler')");
+                               "'explicit'/'ssprk3'/'euler')");
     if (P->polar_)
       throw std::runtime_error(
           "System::add_block : wave_speed_cache not supported on the polar "
@@ -156,7 +156,7 @@ void System::add_block(const std::string& name, const ModelSpec& model, const st
           "System::add_block (polar) : time='" + time +
           "' (IMEX / IMEX-RK ARS(2,2,2)) unsupported "
           "(ring : coupling by explicit local source, no stiff source to handle implicitly "
-          "at this stage). Use 'explicit'/'ssprk2'/'ssprk3'.");
+          "at this stage). Use 'explicit'/'ssprk3'.");
     const PolarGridContext pctx = P->grid_ctx_polar();
     bb = detail::build_block_polar(model, limiter, riemann, pctx, recon_prim, method,
                                    static_cast<Real>(positivity_floor), &P->aux);
@@ -788,6 +788,11 @@ void System::set_field_solver_plan(const std::string& provider_slot,
     registered->second.prepared_providers.clear();
     registered->second.backend.reset();
   }
+}
+
+void System::set_field_reaction(const std::string& provider_slot, double reaction) {
+  require_assembling(p_->lifecycle_, "set_field_reaction");
+  p_->fields_.set_named_reaction(provider_slot, static_cast<Real>(reaction));
 }
 
 POPS_EXPORT void System::install_field_solver_components(

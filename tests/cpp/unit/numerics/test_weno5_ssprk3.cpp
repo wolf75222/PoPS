@@ -7,7 +7,7 @@
 //      direct (le dispatch route bien vers Weno5 ; spatial_operator branche weno5z a n_ghost >= 3).
 //  (2) SSPRK3 : build_block<..., method="ssprk3"> avance == SSPRK3Step du coeur applique a la main au
 //      meme residu (le tag temporel selectionne bien le bon foncteur RK).
-//  (3) NO-DEFAULT-CHANGE : make_block("minmod", "rusanov") avec method par defaut == method="ssprk2"
+//  (3) NO-DEFAULT-CHANGE : make_block("minmod", "rusanov") defaults to canonical method="explicit"
 //      == build_block<Minmod, RusanovFlux> sans method (BIT-IDENTIQUE : residu ET avance). Le chemin
 //      historique n'est pas touche.
 //  (4) ORDRE / PRECISION : advection lineaire d'un sinus lisse periodique sur une periode complete.
@@ -208,7 +208,7 @@ TEST(test_weno5_ssprk3, substep_scratch_reuse_matches_oneshot_steps) {
   EXPECT_LT(d, 1e-14) << "advance(n=4) == 4x take_step one-shot (reuse du scratch bit-identique)";
 }
 
-// (3) NO-DEFAULT-CHANGE : minmod/rusanov, method par defaut == "ssprk2" == build_block<Minmod>
+// (3) NO-DEFAULT-CHANGE : minmod/rusanov, default == canonical "explicit" SSPRK2 route.
 // sans tag. Residu ET avance BIT-IDENTIQUES (le chemin historique n'a pas bouge d'un bit).
 TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
   const int n = 48;
@@ -235,7 +235,7 @@ TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
   init(Ub);
   BlockClosures cdef = make_block(model, "minmod", "rusanov", ctx, false, false);  // method par defaut
   BlockClosures cs2 =
-      make_block(model, "minmod", "rusanov", ctx, false, false, "ssprk2");  // explicite
+      make_block(model, "minmod", "rusanov", ctx, false, false, "explicit");
   // residu identique
   MultiFab Ra(ba, dm, 1, 0), Rb(ba, dm, 1, 0);
   cdef.rhs_into(Ua, Ra);
@@ -247,7 +247,7 @@ TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
       for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
         dr = std::fmax(dr, std::fabs(ra(i, j, 0) - rb(i, j, 0)));
   }
-  EXPECT_EQ(dr, 0.0) << "minmod : rhs_into defaut == ssprk2 (bit-identique)";
+  EXPECT_EQ(dr, 0.0) << "minmod : default rhs_into == explicit SSPRK2 (bit-identical)";
   // avance identique sur 20 pas
   for (int s = 0; s < 20; ++s) {
     cdef.advance(Ua, 1e-3, 1);
@@ -260,13 +260,13 @@ TEST(test_weno5_ssprk3, minmod_default_method_matches_explicit_ssprk2) {
       for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
         da = std::fmax(da, std::fabs(ua(i, j, 0) - ub(i, j, 0)));
   }
-  EXPECT_EQ(da, 0.0) << "minmod/ssprk2 : avance defaut == ssprk2 (bit-identique, no-default-change)";
+  EXPECT_EQ(da, 0.0) << "minmod : default advance == explicit SSPRK2 (bit-identical)";
 }
 
 // (4) ORDRE / PRECISION : advection 1D d'un sinus sur une periode. WENO5+SSPRK3 plus precis que
 // Minmod+SSPRK2 a meme n, et pente de convergence > 2 (au-dela de l'ordre 2 du MUSCL).
 TEST(test_weno5_ssprk3, weno5_ssprk3_more_accurate_and_higher_order_than_minmod) {
-  const double e_minmod_64 = advect_error(64, "minmod", "ssprk2");
+  const double e_minmod_64 = advect_error(64, "minmod", "explicit");
   const double e_weno_64 = advect_error(64, "weno5", "ssprk3");
   EXPECT_LT(e_weno_64, e_minmod_64) << "WENO5+SSPRK3 plus precis que Minmod+SSPRK2 a n=64";
   const double e_weno_32 = advect_error(32, "weno5", "ssprk3");

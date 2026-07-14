@@ -197,7 +197,7 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
 
 def validate_shared_interface_program(
         blocks: tuple[Any, ...], layout_plan: Any, program: Any, *,
-        target: str, resolved_hierarchy: Any = None) -> None:
+        target: str, resolved_hierarchy: Any = None) -> bool:
     """Prove that every interface is installed and evaluated as one atomic RHS group.
 
     This runs during resolve, before code generation or engine construction.  The runtime
@@ -227,7 +227,7 @@ def validate_shared_interface_program(
                     if side.boundary in owned_boundaries:
                         endpoint_owners[identity][side_name].add(block.name)
     if not declarations:
-        return
+        return False
     if program is None:
         raise ValueError("shared block interfaces require one explicit whole-system Program")
 
@@ -275,8 +275,10 @@ def validate_shared_interface_program(
     if target == "amr_system":
         from pops.mesh._amr import FrozenHierarchy
 
-        hierarchy = getattr(resolved_hierarchy, "plan", None)
-        if hierarchy is None or hierarchy.level_count != 1 or type(hierarchy.regrid) is not FrozenHierarchy:
+        if resolved_hierarchy is None:
+            raise TypeError("shared-interface AMR validation requires a resolved hierarchy")
+        hierarchy = resolved_hierarchy.plan
+        if hierarchy.level_count != 1 or type(hierarchy.regrid) is not FrozenHierarchy:
             raise NotImplementedError(
                 "shared block interfaces on AMR require a prepared interface-flux reflux ledger; "
                 "the installed scheduler supports only one frozen level and refuses refined or "
@@ -351,6 +353,7 @@ def validate_shared_interface_program(
         raise ValueError(
             "shared interface default-flux evaluations were not proved simultaneous: %s"
             % sorted(ungrouped))
+    return True
 
 
 __all__ = ["validate_prepared_boundary_jacvec", "validate_shared_interface_program"]

@@ -175,7 +175,7 @@ def test_plan_python_leaf_change_is_a_strict_subset_with_smoke(tmp_path):
     assert "import-closure" in outputs["python_why"]
     assert "tests/python/unit/runtime/test_diagnostics_typed.py" in selected
     for smoke in (
-        "tests/python/integration/bindings/test_bindings.py",
+        "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
         "tests/python/unit/runtime/test_capabilities.py",
     ):
         assert smoke in selected
@@ -191,6 +191,15 @@ def test_plan_python_direct_test_edit_pulls_cross_test_family(tmp_path):
     assert "direct-test" in outputs["python_why"]
     assert importer in selected
     assert "tests/python/unit/codegen/test_dsl_brick.py" in selected
+
+
+def test_plan_python_nested_suite_test_is_in_the_selection_universe(tmp_path):
+    """A manifest suite owns nested test directories, not only its immediate children."""
+    nested = "tests/python/unit/mesh/amr/test_hierarchy_contract.py"
+    outputs, selected = _run_plan_python(tmp_path, [nested])
+    assert outputs["python_mode"] == "subset"
+    assert "direct-test" in outputs["python_why"]
+    assert nested in selected
 
 
 def test_plan_python_broad_file_runs_all(tmp_path):
@@ -241,3 +250,99 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     offenders = [n for n in names if "mpi" in n.split("_")]
     assert not offenders, f"MPI-only suites leaked into the serial selection: {offenders}"
     assert "test_splitting" in names
+
+
+def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "mpi: ${{ steps.filter.outputs.mpi }}" in workflow
+    for mpi_input in (
+        "include/pops/parallel/**",
+        "include/pops/runtime/amr/**",
+        "src/runtime/amr/**",
+        "python/bindings/core/init/init_amr.cpp",
+        "tests/**/mpi/**",
+    ):
+        assert mpi_input in workflow
+    for selector_input in (
+        "schemas/**",
+        "tests/cpp/test_durations.json",
+        "tests/test_manifest.toml",
+        "scripts/generate_component_catalog.py",
+        "scripts/ci_select_tests.py",
+        "scripts/ci_shard_binpack.py",
+        ".github/workflows/ci.yml",
+    ):
+        assert selector_input in workflow
+
+    filter_text = workflow.split("\n          filters: |\n", 1)[1].split(
+        "\n  # Calcule si la suite COMPLETE", 1)[0]
+    cpp_filter = filter_text.split("            cpp:\n", 1)[1].split(
+        "\n            python:\n", 1)[0]
+    python_filter = filter_text.split("            python:\n", 1)[1].split(
+        "\n            python_arch:\n", 1)[0]
+    for cpp_control in (
+        "tests/cpp/test_sources.cmake",
+        "tests/cpp/test_durations.json",
+        "tests/test_manifest.toml",
+        "scripts/ci_select_tests.py",
+        "scripts/ci_shard_binpack.py",
+        "scripts/ci_include_graph.py",
+        ".github/actions/setup-kokkos/**",
+        ".github/workflows/ci.yml",
+    ):
+        assert cpp_control in cpp_filter
+    for python_control in (
+        "tests/python/test_durations.json",
+        "tests/test_manifest.toml",
+        "pyproject.toml",
+        "scripts/ci_select_tests.py",
+        "scripts/ci_shard_binpack.py",
+        "scripts/ci_import_closure.py",
+        ".github/actions/setup-kokkos/**",
+        ".github/workflows/ci.yml",
+    ):
+        assert python_control in python_filter
+
+    gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
+    assert "needs: [changes, set-mode," in gate_block
+    assert "mpi, kokkos-openmp" in gate_block
+    assert "needs.set-mode.result" in gate_block
+    assert "needs.set-mode.outputs.full" in gate_block
+    assert "needs.mpi.result" in gate_block
+    assert "needs.kokkos-openmp.result" in gate_block
+
+    mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  kokkos-openmp:\n", 1)[0]
+    assert "needs: [set-mode, changes]" in mpi_block
+    assert "needs.changes.outputs.mpi == 'true'" in mpi_block
+
+    architecture_block = workflow.split(
+        "\n  gate-python-architecture:\n", 1)[1].split(
+            "\n  gate-python-build:\n", 1)[0]
+    assert "python3 scripts/generate_component_catalog.py --check" in architecture_block
+
+    python_build_block = workflow.split(
+        "\n  gate-python-build:\n", 1)[1].split("\n  gate-python:\n", 1)[0]
+    python_shards_block = workflow.split(
+        "\n  gate-python:\n", 1)[1].split("\n  gate-python-compile-cache:\n", 1)[0]
+    python_cache_block = workflow.split(
+        "\n  gate-python-compile-cache:\n", 1)[1].split("\n  gate:\n", 1)[0]
+    assert "timeout-minutes: 20" in python_build_block
+    assert "timeout-minutes: 30" in python_shards_block
+    assert "timeout-minutes: 30" in python_cache_block
+
+
+def test_ci_control_plane_inputs_force_full_functional_selection():
+    selector = _load("ci_select_tests")
+    for path in (
+        ".github/workflows/ci.yml",
+        "scripts/ci_select_tests.py",
+        "scripts/ci_shard_binpack.py",
+        "tests/test_manifest.toml",
+    ):
+        assert path in selector.CPP_BROAD_FILES
+        assert path in selector.PYTHON_BROAD_FILES
+    assert "tests/cpp/test_sources.cmake" in selector.CPP_BROAD_FILES
+    assert "tests/cpp/test_durations.json" in selector.CPP_BROAD_FILES
+    assert "scripts/ci_include_graph.py" in selector.CPP_BROAD_FILES
+    assert "tests/python/test_durations.json" in selector.PYTHON_BROAD_FILES
+    assert "scripts/ci_import_closure.py" in selector.PYTHON_BROAD_FILES

@@ -70,6 +70,7 @@ def _transfer_manifest() -> ComponentManifest:
 def _transfer_source(manifest: ComponentManifest) -> bytes:
     source = r"""#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
+#include <cstdint>
 
 namespace {
 int apply(void*, const PopsTransferRequestV1* request, PopsComponentStatusV1* status) {

@@ -43,8 +43,23 @@ def test_no_parallel_validation_issue_or_report_classes_remain():
         assert "ProblemValidationIssue =" not in source
 
 
-def test_public_surface_exports_tree_and_strict_exception():
-    source = (POPS / "__init__.py").read_text()
-    assert "from ._report import DiagnosticError, ReportPhase, ReportSeverity, ReportTree" in source
-    assert "from ._inspect import explain, inspect" in source
+def test_root_exports_explain_but_keeps_report_tree_as_internal_authority():
+    root_source = (POPS / "__init__.py").read_text()
+    root_tree = ast.parse(root_source)
+    exported = set()
+    for node in ast.walk(root_tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "__all__"
+                for target in node.targets) and isinstance(node.value, (ast.List, ast.Tuple)):
+            exported.update(
+                item.value for item in node.value.elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str))
 
+    assert "from ._inspect import explain, inspect" in root_source
+    assert {"explain", "inspect"} <= exported
+    assert {"ReportTree", "ReportPhase", "ReportSeverity", "DiagnosticError"}.isdisjoint(exported)
+    assert "from ._report import" not in root_source
+
+    inspect_source = (POPS / "_inspect.py").read_text()
+    assert "from pops._report import ReportTree" in inspect_source
+    assert "def explain(" in inspect_source

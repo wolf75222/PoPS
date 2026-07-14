@@ -106,11 +106,12 @@ class GeometricMG(Descriptor):
 
     def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, amr=True, mpi=True, gpu=True,
-                                            variable_epsilon=True, periodic_bc=True, wall_bc=True))
+                                            variable_epsilon=True, screened=True,
+                                            periodic_bc=True, wall_bc=True))
 
     def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
         del target, layout
-        return {"native_solver": "geometric_mg", "linear": True}
+        return {"native_solver": "geometric_mg", "linear": True, "screened": True}
 
     def options(self) -> dict:
         view = {

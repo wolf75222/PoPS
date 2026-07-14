@@ -42,8 +42,7 @@ def test_finitevolume_rejects_string_riemann():
     with pytest.raises(TypeError) as exc:
         engine.Spatial(flux="rusanov")
     msg = str(exc.value)
-    # The message names the FiniteVolume parameter, not the internal Spatial slot.
-    assert "riemann='rusanov'" in msg
+    assert "flux='rusanov'" in msg
     assert "pops.numerics.riemann" in msg
 
 
@@ -51,7 +50,7 @@ def test_finitevolume_rejects_string_variables():
     with pytest.raises(TypeError) as exc:
         engine.Spatial(recon="conservative")
     msg = str(exc.value)
-    assert "variables='conservative'" in msg
+    assert "recon='conservative'" in msg
     assert "pops.numerics.variables" in msg
 
 
@@ -93,7 +92,8 @@ def test_typed_flux_descriptors_lower():
 def test_typed_limiter_descriptors_lower():
     cases = ((FirstOrder(), "none"), (Minmod(), "minmod"), (VanLeer(), "vanleer"),
              (WENO5(), "weno5"), (WENO5Z(), "weno5"),
-             (MUSCL(limiter="minmod"), "minmod"), (MUSCL(limiter="vanleer"), "vanleer"))
+             (MUSCL(limiter=Minmod()), "minmod"),
+             (MUSCL(limiter=VanLeer()), "vanleer"))
     for desc, token in cases:
         s = engine.Spatial(limiter=desc)
         assert s.limiter == token, (desc, s.limiter)

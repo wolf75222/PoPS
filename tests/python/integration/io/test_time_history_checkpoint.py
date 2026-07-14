@@ -320,19 +320,22 @@ def _rho0(np, n):
     return 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
 
-def _compile_program(pops, t, builder, prog_name, model_name):
-    """compile_problem for the program built by @p builder (e.g. lt.adams_bashforth2). Returns the
-    handle or None if the toolchain is absent."""
-    from tests.python.support.typed_program import program_states, synthetic_module
+def _compile_program(pops, t, builder, builder_options, prog_name, model_name):
+    """Compile a ready scheme built from exact final-API Case/Model handles."""
+    from pops.problem import Case
 
-    P = t.Program(prog_name)
-    module = synthetic_module("%s_state" % prog_name, components=("rho",))
-    _case, states = program_states(P, module, ("blk",))
-    builder(P, states["blk"])
+    model = _passive_source_model(model_name)
+    rate = model.rate("%s_rate" % prog_name, flux=False, sources=("default",))
+    case = Case(name="%s-case" % prog_name)
+    block = case.block("blk", model.module)
+    spaces = tuple(model.module.state_spaces().values())
+    assert len(spaces) == 1, "the passive checkpoint model has exactly one state"
+    declaration = model.module.state_handle(spaces[0])
+    P = builder(block[declaration], rate=rate, **builder_options)
     P.step_strategy(t.FixedDt(_DT))
     try:
         from pops.codegen._compile_drivers import compile_problem
-        return compile_problem(model=_passive_source_model(model_name), time=P)
+        return compile_problem(model=model, time=P)
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
         print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
         return None
@@ -354,7 +357,8 @@ def _run_section_b(t):
         print("-- (B) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
         return None
 
-    compiled = _compile_program(pops, t, lt.adams_bashforth2, "ab2_ckpt", "ab2_prog_b")
+    compiled = _compile_program(
+        pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_ckpt", "ab2_prog_b")
     if compiled is None:
         return None
 
@@ -442,8 +446,9 @@ def _run_section_c(t):
         print("-- (C) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
         return None
 
-    ab2 = _compile_program(pops, t, lt.adams_bashforth2, "ab2_c", "ab2_prog_c")
-    fe = _compile_program(pops, t, lt.forward_euler, "fe_c", "fe_prog_c")
+    ab2 = _compile_program(
+        pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_c", "ab2_prog_c")
+    fe = _compile_program(pops, t, lt.ForwardEuler, {}, "fe_c", "fe_prog_c")
     if ab2 is None or fe is None:
         return None
     assert ab2.program_hash != fe.program_hash, \

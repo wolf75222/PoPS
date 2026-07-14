@@ -23,7 +23,13 @@ MUST be added in the SAME order the Program declares them via ``P.state``.
 """
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import solve_field, solve_field_blocks, typed_field, typed_state
+from typed_program_support import (
+    codegen_field_plans,
+    solve_field,
+    solve_field_blocks,
+    typed_field,
+    typed_state,
+)
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -46,6 +52,11 @@ def _pops_time():
 
 
 fails = 0
+
+
+def _emit(program, *, model=None):
+    return emit_cpp_program(
+        program, model=model, field_plans=codegen_field_plans(program))
 
 
 def chk(cond, label):
@@ -132,7 +143,7 @@ def section_a(t):
         endpoint = typed_state(P, blk, state_name="U").next
         P.commit(endpoint, P.value(
             blk + "_next", U + dt * R, at=endpoint.point))
-    src = emit_cpp_program(P)
+    src = _emit(P)
     chk("ctx.state(0)" in src and "ctx.state(1)" in src, "two blocks bind ctx.state(0) and state(1)")
     chk("ctx.rhs_into(0, " in src and "ctx.rhs_into(1, " in src, "RHS routed per block index")
 
@@ -146,7 +157,7 @@ def section_a(t):
     Pro.commit(endpoint_a, Pro.value(
         "a1", Ua + Pro.dt * Ra, at=endpoint_a.point))
     chk(Pro.validate() is True, "a read-only (uncommitted) block validates")
-    src_ro = emit_cpp_program(Pro)
+    src_ro = _emit(Pro)
     chk("ctx.state(1)" in src_ro, "the read-only block still binds its index (ctx.state(1))")
 
     # A double commit is rejected at build time.
@@ -184,7 +195,7 @@ def section_a(t):
         "b1", Ubc + Pc.dt * Pc.rhs(
             state=Ubc, terms=[Flux(), DefaultSource()]),
         at=endpoint_b.point))
-    src_c = emit_cpp_program(Pc)
+    src_c = _emit(Pc)
     chk("ctx.solve_fields_from_blocks(" in src_c,
         "solve_fields_from_blocks lowers to the coupled multi-block solve")
     chk("std::vector<const pops::MultiFab*>" in src_c,
@@ -215,7 +226,7 @@ def section_a(t):
 
     def _cf_body(prog, x):
         return prog.value(
-            None,
+            "ranged_block_b",
             x + prog.dt * prog.rhs(
                 state=x, terms=[Flux(), DefaultSource()]),
             at=endpoint_b.point,
@@ -223,7 +234,7 @@ def section_a(t):
 
     ranged = Pcf.range(Ubcf, 2, _cf_body)
     Pcf.commit(endpoint_b, Pcf.value("b_next", ranged, at=endpoint_b.point))
-    src_cf = emit_cpp_program(Pcf)
+    src_cf = _emit(Pcf)
     chk("ctx.rhs_into(1, " in src_cf,
         "control flow inside block b routes its body RHS to index 1 (not silently 0)")
 

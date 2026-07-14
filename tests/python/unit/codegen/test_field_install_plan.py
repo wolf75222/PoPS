@@ -14,6 +14,7 @@ from pops.fields import (
     boundary_value,
     logical_time,
 )
+from pops.fields._identity import strict_field_data
 from pops.fields.bcs import (
     AllPhysicalBoundaries,
     BoundaryCondition,
@@ -21,7 +22,7 @@ from pops.fields.bcs import (
     Mixed,
     Neumann,
 )
-from pops.math import laplacian
+from pops.math import Laplacian, elliptic_terms, laplacian
 from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
@@ -126,7 +127,7 @@ def _case(*conditions: object):
     problem = Case(name="field-case-%d" % len(conditions))
     problem.block("material", model)
     handles = []
-    for operator, condition in zip(operators, conditions):
+    for operator, condition in zip(operators, conditions, strict=True):
         handles.append(problem.field(
             operator,
             _disc(condition, singular=isinstance(condition, Neumann)),
@@ -163,6 +164,84 @@ def test_two_fields_keep_distinct_qualified_provider_slots_and_solver_plans() ->
     assert set(plans) == {"potential_0", "potential_1"}
     assert len({plan.native_options["provider_slot"] for plan in plans.values()}) == 2
     assert len({plan.identity.token for plan in plans.values()}) == 2
+
+
+@pytest.mark.parametrize("target", ("system", "amr_system"))
+@pytest.mark.parametrize("sign", (-1, 1))
+def test_gradient_output_sign_is_part_of_the_exact_native_output_route(
+    target: str, sign: int,
+) -> None:
+    model = Model("signed-gradient-%s-%d" % (target, sign))
+    (rho,) = model.state("U", components=["rho"])
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
+        outputs=(
+            FieldOutput("potential", unknown),
+            GradientOutput("electric_field", unknown, sign=sign),
+        ),
+    )
+    problem = Case(name="signed-gradient-case-%s-%d" % (target, sign))
+    problem.block("material", model)
+    problem.field(operator, _disc(Dirichlet(0.0)))
+
+    plan = capture_field_plans(
+        problem, lambda value: value, target=target, layout=_LAYOUT)["potential"]
+
+    assert plan.native_options["output_route"]["components"] == (
+        "potential", "electric_field_x", "electric_field_y")
+    assert plan.native_options["output_route"]["gradient_sign"] == sign
+
+
+def test_non_unit_laplacian_scale_is_preserved_by_exact_rhs_normalization() -> None:
+    model = Model("scaled-laplacian-model")
+    (rho,) = model.state("U", components=["rho"])
+    unknown = model.field("potential")
+    operator = model.field_operator(
+        "potential",
+        unknown=unknown,
+        equation=(Laplacian(unknown, scale=-2.0) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+
+    lowered_model = model.__pops_compiler_lowering__().emit_model._m
+    lowered_rhs = lowered_model._elliptic_fields["potential"]["rhs"]
+    assert strict_field_data(lowered_rhs) == strict_field_data(rho / 2.0)
+
+    problem = Case(name="scaled-laplacian-case")
+    problem.block("material", model)
+    problem.field(operator, _disc(Dirichlet(0.0)))
+    plan = capture_field_plans(
+        problem, lambda value: value, target="system", layout=_LAYOUT)["potential"]
+
+    (laplacian_term,) = elliptic_terms(plan.operator.equation.lhs)
+    assert laplacian_term.scale == -2.0
+
+
+def test_native_lowering_rejects_a_mutated_same_owner_output_source() -> None:
+    model = Model("defensive-output-source-model")
+    (rho,) = model.state("U", components=["rho"])
+    unknown = model.field("potential")
+    peer = model.field("peer")
+    operator = model.field_operator(
+        "potential",
+        unknown=unknown,
+        equation=(-laplacian(unknown) == rho),
+        outputs=(FieldOutput("potential", unknown),),
+    )
+    problem = Case(name="defensive-output-source-case")
+    problem.block("material", model)
+    problem.field(operator, _disc(Dirichlet(0.0)))
+
+    # Registration normally validates this invariant.  Mutate afterwards to prove the native
+    # lowering boundary independently fails closed instead of routing the solved ``potential``
+    # values under a descriptor claiming they came from ``peer``.
+    operator.outputs = (FieldOutput("potential", peer),)
+    with pytest.raises(ValueError, match="FieldOutput source disagrees.*solved unknown"):
+        capture_field_plans(
+            problem, lambda value: value, target="system", layout=_LAYOUT)
 
 
 def test_external_field_plan_crosses_registration_resolution_and_lowering_structurally() -> None:

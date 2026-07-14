@@ -5,11 +5,10 @@ A thin, numerics-free facade over the generic generator in
 :mod:`pops.moments.sources` (``lorentz_sources`` / ``maxwellian_moments`` /
 ``bgk_source``).
 
-The facade carries NO numeric Python: chainable methods RECORD options on a small dict
+The facade carries NO per-cell numeric Python: chainable methods RECORD options on a small dict
 and return ``self``; only :meth:`MomentModel.build` touches the engine, mapping the
 recorded options literally onto ``build_moment_model``'s existing signature. The Poisson
-coupling additions (``elliptic_rhs`` / ``aux``) are applied to the returned model exactly
-as the engine docstring leaves them to the caller.
+coupling is authored as an ordinary blackboard field operator on the returned model.
 """
 from __future__ import annotations
 
@@ -23,6 +22,94 @@ from .basis import MomentBasis
 from .transforms import CenteredTransform, StandardizedTransform
 from .speeds import ExactSpeeds
 from .projection import RealizabilityProjection
+
+
+def _order(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 2:
+        raise ValueError("MomentModel order must be an int >= 2 (got %r)" % (value,))
+    return value
+
+
+def _flag(value: Any, *, name: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError("MomentModel %s must be bool" % name)
+    return value
+
+
+def _identifier(value: Any, *, name: str) -> str:
+    if not isinstance(value, str) or not value.isidentifier():
+        raise TypeError("MomentModel %s must be a non-empty identifier" % name)
+    return value
+
+
+def _coefficient(value: Any, *, name: str) -> Any:
+    """Return one explicit typed parameter declaration for a physical coefficient."""
+    from pops.params import ConstParam, ParameterDeclaration, RuntimeParam
+
+    if isinstance(value, (ConstParam, RuntimeParam)):
+        if value.is_owned:
+            raise ValueError(
+                "MomentModel %s parameter %r is already owned by %s; sharing requires an "
+                "explicit shared owner or tie"
+                % (name, value.name, value.owner_identity)
+            )
+        return value
+    if isinstance(value, ParameterDeclaration):
+        raise TypeError(
+            "MomentModel %s supports ConstParam or RuntimeParam coefficients; "
+            "DerivedParam dependencies belong to a concrete model owner" % name
+        )
+    if isinstance(value, bool):
+        raise TypeError(
+            "MomentModel %s must be a numeric scalar or typed ParameterDeclaration, not bool"
+            % name)
+    try:
+        return ConstParam(name, value)
+    except (TypeError, ValueError) as exc:
+        raise type(exc)(
+            "MomentModel %s must be a finite numeric scalar or typed "
+            "ParameterDeclaration: %s" % (name, exc)) from None
+
+
+def _fresh_coefficient(declaration: Any) -> Any:
+    """Copy ownerless coefficient metadata so every build gets its own registry authority."""
+    from pops.params import ConstParam, RuntimeParam
+
+    # A declaration can be ownerless when recorded and claimed by another model before build().
+    # Recheck at the clone boundary so deferred construction cannot bypass the single-owner
+    # authority enforced by ParameterDeclaration._claim_owner().
+    if declaration.is_owned:
+        raise ValueError(
+            "MomentModel parameter %r is already owned by %s; sharing requires an explicit "
+            "shared owner or tie" % (declaration.name, declaration.owner_identity)
+        )
+    common = {
+        "dtype": declaration.dtype,
+        "domain": declaration.domain,
+        "unit": declaration.unit,
+        "provenance": declaration.provenance,
+    }
+    if isinstance(declaration, ConstParam):
+        return ConstParam(declaration.name, declaration.value, **common)
+    if isinstance(declaration, RuntimeParam):
+        return RuntimeParam(declaration.name, default=declaration.default, **common)
+    raise TypeError("unsupported MomentModel coefficient declaration %r" % type(declaration).__name__)
+
+
+def _parameter_value(model: Any, declaration: Any, registered: dict[str, Any]) -> Any:
+    """Register one declaration once per built model and return its symbolic value."""
+    existing = registered.get(declaration.name)
+    if existing is not None:
+        owner, value = existing
+        if owner is not declaration:
+            raise ValueError(
+                "MomentModel parameters reuse name %r for distinct declarations"
+                % declaration.name)
+        return value
+    handle = model.param(_fresh_coefficient(declaration))
+    value = model.value(handle)
+    registered[declaration.name] = (declaration, value)
+    return value
 
 
 def CartesianVelocityMoments(order: Any, *, closure: Any = None, robust: bool = True,
@@ -41,16 +128,16 @@ def CartesianVelocityMoments(order: Any, *, closure: Any = None, robust: bool = 
     """
     model = MomentModel(order)
     model._closure = closure
-    model._robust = bool(robust)
-    model._exact_speeds = bool(exact_speeds)
-    model._roe = bool(roe)
+    model._robust = _flag(robust, name="robust")
+    model._exact_speeds = _flag(exact_speeds, name="exact_speeds")
+    model._roe = _flag(roe, name="roe")
     if sources is not None:
         model._extra_sources = sources
     return model
 
 
 class MomentModel:
-    """A recorded 2D moment-model specification; builds a ``physics.PdeModel`` on demand.
+    """A recorded 2D moment-model specification; builds a ``physics.Model`` on demand.
 
     Every chainable method mutates a small option dict and returns ``self``. The recorded
     options map literally onto :func:`build_moment_model`'s signature; :meth:`build` is the
@@ -58,9 +145,7 @@ class MomentModel:
     """
 
     def __init__(self, order: Any) -> None:
-        if order < 2:
-            raise ValueError("MomentModel: order >= 2 required (got %r)" % (order,))
-        self._order = int(order)
+        self._order = _order(order)
         self._closure = None
         self._robust = True
         self._exact_speeds = True
@@ -84,30 +169,37 @@ class MomentModel:
     def add_poisson_coupling(self, phi: Any = "phi", eps: Any = 1.0) -> Any:
         """Record a Poisson coupling: the elliptic RHS is the charge density (``eps * M00``) and
         the model reads the field gradient aux (``grad_x`` / ``grad_y``). Applied to the built model."""
-        self._poisson = (str(phi), float(eps))
+        self._poisson = (
+            _identifier(phi, name="Poisson field"),
+            _coefficient(eps, name="eps"),
+        )
         return self
 
     def add_vlasov_electric_source(self, ex: Any, ey: Any, q_over_m: Any) -> Any:
         """Record the Vlasov electric source: the Lorentz electric branch over the aux fields
         @p ex / @p ey (e.g. ``grad_x`` / ``grad_y``) scaled by the param @p q_over_m."""
-        self._electric = (str(ex), str(ey), str(q_over_m))
+        self._electric = (
+            _identifier(ex, name="electric x field"),
+            _identifier(ey, name="electric y field"),
+            _coefficient(q_over_m, name="q_over_m"),
+        )
         return self
 
     def add_magnetic_source(self, omega_c: Any) -> Any:
         """Record the magnetic source: the Lorentz magnetic branch with cyclotron frequency
-        @p omega_c (a param name)."""
-        self._magnetic = str(omega_c)
+        @p omega_c (a typed parameter declaration or explicit numeric constant)."""
+        self._magnetic = _coefficient(omega_c, name="omega_c")
         return self
 
     def add_numerics(self, *, robust: Any = None, exact_speeds: Any = None,
                      roe: Any = None) -> Any:
         """Override the numerics knobs (any of ``robust`` / ``exact_speeds`` / ``roe``)."""
         if robust is not None:
-            self._robust = bool(robust)
+            self._robust = _flag(robust, name="robust")
         if exact_speeds is not None:
-            self._exact_speeds = bool(exact_speeds)
+            self._exact_speeds = _flag(exact_speeds, name="exact_speeds")
         if roe is not None:
-            self._roe = bool(roe)
+            self._roe = _flag(roe, name="roe")
         return self
 
     def set_realizability(self, projection: Any) -> Any:
@@ -130,7 +222,7 @@ class MomentModel:
         """The closure to build with (the recorded one, or ``gaussian_closure(order)``)."""
         return self._closure if self._closure is not None else gaussian_closure(self._order)
 
-    def _sources_cb(self) -> Any:
+    def _sources_cb(self, registered: dict[str, Any]) -> Any:
         """Assemble the recorded source contributions into ONE ``(m, M) -> list`` callable.
 
         Returns ``None`` when no source was recorded (the engine then wires no source).
@@ -151,19 +243,13 @@ class MomentModel:
                     acc[k] = t if acc[k] is None else (acc[k] + t)
 
             if electric is not None:
-                ex_name, ey_name, qom_name = electric
-                from pops.params import ConstParam
-
+                ex_name, ey_name, qom_declaration = electric
                 ex = m.aux(ex_name)
                 ey = m.aux(ey_name)
-                qom_handle = m.param(ConstParam(qom_name, value=1.0))
-                qom = m.value(qom_handle)
+                qom = _parameter_value(m, qom_declaration, registered)
                 add(lorentz_sources(M, ex, ey, qom, 0.0))
             if magnetic is not None:
-                from pops.params import ConstParam
-
-                omega_handle = m.param(ConstParam(magnetic, value=1.0))
-                omega_c = m.value(omega_handle)
+                omega_c = _parameter_value(m, magnetic, registered)
                 add(lorentz_sources(M, 0.0, 0.0, 1.0, omega_c))
             if extra is not None:
                 add(extra(m, M))
@@ -172,19 +258,19 @@ class MomentModel:
         return sources
 
     def build(self, name: Any = "moments") -> Any:
-        """Build the recorded specification into a ``physics.PdeModel`` (the single engine call).
+        """Build the recorded specification into the canonical ``physics.Model``.
 
-        Maps the recorded options literally onto :func:`build_moment_model`, then applies the
-        recorded Poisson coupling (``elliptic_rhs`` + ``grad_x`` / ``grad_y`` aux) to the
-        returned model. Returns the model, ready to compile.
+        Maps the recorded options literally onto :func:`build_moment_model`, then authors the
+        recorded Poisson coupling through the same field/operator contracts as user code.
         """
+        registered: dict[str, Any] = {}
         m = build_moment_model(
             name, self._order, self._resolved_closure(),
             exact_speeds=self._exact_speeds, robust=self._robust,
-            sources=self._sources_cb(), roe=self._roe,
+            sources=self._sources_cb(registered), roe=self._roe,
             eps_m00=self._proj.eps_m00, eps_cov=self._proj.eps_cov)
         if self._poisson is not None:
-            self._apply_poisson(m)
+            self._apply_poisson(m, registered)
         return m
 
     def check(self, name: Any = "moments") -> Any:
@@ -192,18 +278,25 @@ class MomentModel:
         return self.build(name)
 
     # --- internals ----------------------------------------------------------
-    def _apply_poisson(self, m: Any) -> None:
-        """Apply the recorded Poisson coupling to a built model: elliptic RHS = ``eps * M00``
-        (the density), and declare the field-gradient aux ``grad_x`` / ``grad_y`` (deduping
-        against aux the electric source already declared)."""
-        from pops._ir.expr import Var
-        _phi, eps = self._poisson
-        density = Var(moment_names(self._order)[0], "cons")  # M00 is the first moment
-        m.elliptic_rhs(eps * density)
-        declared = set(getattr(m._m, "aux_names", ()))
-        for grad in ("grad_x", "grad_y"):
-            if grad not in declared:
-                m.aux(grad)
+    def _apply_poisson(self, m: Any, registered: dict[str, Any]) -> None:
+        """Author ``-laplacian(phi) == eps * M00`` and its gradient outputs."""
+        from pops.fields import FieldOutput, GradientOutput
+        from pops.math import laplacian
+
+        phi_name, eps_declaration = self._poisson
+        eps = _parameter_value(m, eps_declaration, registered)
+        state = m.states["U"]
+        density = state[moment_names(self._order)[0]]
+        phi = m.field(phi_name)
+        m.field_operator(
+            "poisson",
+            unknown=phi,
+            equation=-laplacian(phi) == eps * density,
+            outputs=(
+                FieldOutput(phi_name, phi),
+                GradientOutput("grad", phi),
+            ),
+        )
 
 
 class MomentHierarchy:

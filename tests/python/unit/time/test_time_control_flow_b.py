@@ -44,6 +44,7 @@ def _fe_body():
     serves the codegen asserts (one ``ctx.rhs_into`` per emitted copy of the body)."""
     def body(_P, x):
         return _P.value(
+            "forward_euler_body",
             x + _P.dt * _P.rhs(state=x, terms=[Flux(), DefaultSource()]),
             at=TimePoint(_P.clock, step=1),
         )
@@ -54,7 +55,7 @@ def _contraction_body(target):
     """A dt-free contraction x -> 0.5*x + 0.5*target (uses only linear_combine, so it runs in the
     compiled .so with no flux / solve_fields and has a closed-form offline reference)."""
     def body(_P, x):
-        return _P.value(0.5 * x + 0.5 * target)
+        return _P.value("contraction_body", 0.5 * x + 0.5 * target)
     return body
 
 
@@ -96,7 +97,7 @@ def test_branch_emits_if_else(t):
     Uf = P.branch(
         cond,
         lambda T: body(T, U),
-        lambda T: T.value(U, at=TimePoint(T.clock, step=1)),
+        lambda T: T.value("branch_identity", U, at=TimePoint(T.clock, step=1)),
     )
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("branch_next", Uf, at=endpoint.point))
@@ -146,7 +147,8 @@ def test_static_range_body_changes_hash(t):
         target = P.value("target", 2.0 * U)
         endpoint = typed_state(P, "blk", state_name="U").next
         result = P.static_range(
-            U, 2, lambda _P, x: _P.value(c * x + 0.5 * target))
+            U, 2, lambda _P, x: _P.value(
+                "scaled_static_body", c * x + 0.5 * target))
         P.commit(endpoint, P.value("range_next", result, at=endpoint.point))
         return P._ir_hash()
     assert prog(0.5) != prog(0.25), "a different unrolled body must change the IR hash"

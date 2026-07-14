@@ -31,6 +31,9 @@ adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
 from pops._ir.expr import Var  # noqa: E402
+from pops.descriptors import Descriptor  # noqa: E402
+from pops.fields import FieldDiscretization, FieldOperator  # noqa: E402
+from pops.math import ValueExpr, laplacian  # noqa: E402
 from pops.problem import Case  # noqa: E402
 from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
 
@@ -307,7 +310,7 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     m, _e, _i, _n = _three_fluid_board()
     mod = m.module
     sp = mod.state_spaces()
-    P, _, _, states = _typed_program_states(
+    P, _, case, states = _typed_program_states(
         "ms_fields", mod,
         (("electrons", sp["electrons"]),
          ("ions", sp["ions"]),
@@ -315,7 +318,32 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     )
     e_n, i_n, n_n = (
         states["electrons"].n, states["ions"].n, states["neutrals"].n)
-    field_solve = mod.operator_handle("fields")
+    block = case.blocks()["electrons"]
+    provider = case.qualify(mod.operator_handle("fields"), block=block)
+    unknown = block[mod.field_handle(mod.field_spaces()["fields"])]
+    electron_state = block[mod.state_handle(sp["electrons"])]
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self):
+            return {"type": "unit-krylov"}
+
+    field_solve = case.field(
+        FieldOperator(
+            "fields",
+            unknown=unknown,
+            equation=-laplacian(ValueExpr(unknown)) == ValueExpr(electron_state),
+            providers=provider,
+        ),
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
     f = field_solve(e_n, i_n, n_n).consume(action=adctime.FailRun())
     token = f.inputs[0].inputs[0]
     assert token.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"

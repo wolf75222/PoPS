@@ -13,7 +13,7 @@ On verifie ici, sans compilateur :
      (le protocole est structurel) et donne le meme flux ;
  (3) AUCUN fichier n'a ete ajoute sous python/pops/lib/models/moments (la fermeture vit dans le
      code utilisateur, pas dans la bibliotheque des modeles fournis).
-Test pur Python : eval_flux evalue l'AST symbolique en flottants, aucun _pops / Kokkos requis.
+Test pur Python : flux_value evalue l'AST symbolique en flottants, aucun _pops / Kokkos requis.
 """
 import pathlib
 import sys
@@ -95,8 +95,8 @@ def my_closure(S):  # noqa: N803  (S mirrors the engine variable name)
 chk(isinstance(my_closure, Closure),
     "la fermeture utilisateur satisfait le protocole Closure (structurel)")
 model = CartesianVelocityMoments(2, closure=my_closure).add_transport().build(name="custom_fn")
-fx = np.asarray(model.eval_flux(U6, {}, 0)).ravel()
-fy = np.asarray(model.eval_flux(U6, {}, 1)).ravel()
+fx = np.asarray(model.flux_value(U6, {}, model.frame.axes[0])).ravel()
+fy = np.asarray(model.flux_value(U6, {}, model.frame.axes[1])).ravel()
 e1 = max(np.abs(fx - FX_REF).max(), np.abs(fy - FY_REF).max())
 chk(e1 < 1e-13, f"flux facade (fermeture-fonction) == miroir manuel a la main ({e1:.2e})")
 
@@ -115,7 +115,7 @@ obj_closure = PolyClosure()
 chk(isinstance(obj_closure, Closure),
     "la fermeture-objet satisfait le protocole Closure")
 model_obj = CartesianVelocityMoments(2, closure=obj_closure).build(name="custom_obj")
-fxo = np.asarray(model_obj.eval_flux(U6, {}, 0)).ravel()
+fxo = np.asarray(model_obj.flux_value(U6, {}, model_obj.frame.axes[0])).ravel()
 chk(np.abs(fxo - FX_REF).max() < 1e-13,
     "flux facade (fermeture-objet) == miroir manuel (meme AST que la fonction)")
 

@@ -103,7 +103,9 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   sim.set_program_block_map({0});
 
   runtime::program::ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("macro");
   ctx.install([ctx](double h) {
+    ctx.begin_step(h);
     ctx.solve_fields();
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);

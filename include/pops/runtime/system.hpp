@@ -342,6 +342,8 @@ class System {
                              double rel_tol, int max_cycles, int min_coarse,
                              int pre_smooth, int post_smooth, int bottom_sweeps,
                              int coarse_threshold);
+  /// Install the resolved scalar reaction coefficient of one named screened field.
+  void set_field_reaction(const std::string& provider_slot, double reaction);
   /// Couple the exact generated FieldTopology and FieldSolver component tables to an already
   /// authenticated field plan.  Both components stay owned until the System is destroyed.
   POPS_EXPORT void install_field_solver_components(
@@ -647,10 +649,10 @@ class System {
                                                  const MultiFab& U_stage);
   /// Register named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native loader for each m.elliptic_field once the block is installed. @p gx_comp / @p gy_comp
-  /// < 0 => only phi is written (the field declared fewer than 3 aux slots).
+  /// equal -1 => only phi is written; @p gradient_sign is exactly -1 or +1 and scales both derivatives.
   POPS_EXPORT void register_elliptic_field(const std::string& block,
                                           const std::string& field, int phi_comp,
-                                          int gx_comp, int gy_comp);
+                                          int gx_comp, int gy_comp, int gradient_sign);
   /// Attach named @p field's RHS closure (+= elliptic_field_rhs(U)) to block @p block_name. Called by
   /// the native loader (make_poisson_rhs of the per-field brick). @throws if the block is unknown.
   POPS_EXPORT void set_block_elliptic_field(const std::string& block_name, const std::string& field,

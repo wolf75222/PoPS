@@ -54,7 +54,7 @@ def gaussian(n):
 print("== System : FiniteVolume(minmod, hll, primitive) sur isotherme 3 var ==")
 n = 32
 sim = System(n=n, L=1.0, periodic=True)
-sim.block("ions", iso_model(),
+sim.add_equation("ions", iso_model(),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
 sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
@@ -74,7 +74,7 @@ sim2 = System(n=16, L=1.0, periodic=True)
 scal = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0), source=engine.NoSource(),
                  elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 try:
-    sim2.block("e", scal, spatial=engine.Spatial(limiter=Minmod(), flux=HLL()))
+    sim2.add_equation("e", scal, spatial=engine.Spatial(limiter=Minmod(), flux=HLL()))
     chk(False, "hll sur scalaire ExB aurait du lever")
 except RuntimeError as e:
     chk("wave_speeds" in str(e) or "hll" in str(e), f"erreur explicite : {e}")
@@ -83,7 +83,7 @@ except RuntimeError as e:
 print("== hllc sur isotherme 3 var natif : rejet explicite (ni capability HLLC, ni Euler 2D) ==")
 sim3 = System(n=16, L=1.0, periodic=True)
 try:
-    sim3.block("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod(), flux=HLLC()))
+    sim3.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod(), flux=HLLC()))
     chk(False, "hllc sur isotherme 3 var aurait du lever")
 except RuntimeError as e:
     chk("hllc" in str(e), f"erreur explicite : {e}")
@@ -93,7 +93,7 @@ print("== AmrSystem : add_block(riemann='hll') accepte sur isotherme ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)  # aucun raffinement : hierarchie mono-niveau (le sujet est le ROUTAGE hll)
-amr.block("ions", iso_model(),
+amr.add_equation("ions", iso_model(),
               spatial=engine.Spatial(limiter=Minmod(), flux=HLL(), recon=Primitive()),
               time=engine.Explicit())
 amr.set_density("ions", gaussian(32).ravel())

@@ -591,7 +591,7 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// ForwardEuler + backward_euler_source in IMEX. The closures are NAMED FUNCTORS (cf. namespace detail)
 /// and not lambdas: the add_compiled_model path (first instantiation from an external TU) then emits
 /// cleanly under nvcc. @p method affects ONLY the explicit advance (IMEX keeps its ForwardEuler
-/// half-step + implicit source); "ssprk2" reproduces the historical advance (bit-identical). In IMEX
+/// half-step + implicit source); canonical route "explicit" selects SSPRK2. In IMEX
 /// (@p imex), @p method "imexrk_ars222" selects the IMEX-RK ARS(2,2,2) family (order 2, advance
 /// PARALLEL to AdvanceImex, full cartesian only); any other value keeps the historical backward-Euler
 /// IMEX (order 1, bit-identical).
@@ -606,7 +606,7 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// residual is dispatched (assemble_rhs_masked / _eb).
 template <class Limiter, class Flux, class Model>
 POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex,
-                                      bool recon_prim, const std::string& method = "ssprk2",
+                                      bool recon_prim, const std::string& method = "explicit",
                                       const std::vector<int>& implicit_components = {},
                                       const NewtonOptions& newton_opts = {},
                                       NewtonReport* newton_report = nullptr,
@@ -629,8 +629,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       wave_speed_cache ? std::make_shared<MultiFab>() : std::shared_ptr<MultiFab>{};
   // Decode @p method ONCE through the typed TimeRouteId (ADC-641): the imex branch keeps its
   // imexrk_ars222-vs-historical split and the explicit branch is a switch; both are bit-identical to the
-  // old method=="..." string ladder (parse_time_route("explicit")==parse_time_route("ssprk2")==
-  // kExplicitSsprk2, so a compiled Program crossing "explicit" decodes to the SSPRK2 advance).
+  // old method=="..." string ladder. The canonical "explicit" route decodes to SSPRK2; legacy
+  // scheme aliases are rejected by parse_time_route rather than silently normalized.
   const TimeRouteId time_route = parse_time_route(method, "System");
   if (imex) {
     if (time_route == TimeRouteId::kImexRkArs222) {
@@ -681,9 +681,9 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
           m, ctx, eb_domain, recon_prim, pos_floor};
   } else {
     // kImex reaches here only when imex==false (a compiled Program's hyperbolic stage never asks for the
-    // implicit source); every other explicit route was handled above. Message preserved verbatim.
+    // implicit source); every other explicit route was handled above.
     throw std::runtime_error("System: unknown explicit time method '" + method +
-                             "' (euler|ssprk2|ssprk3)");
+                             "' (explicit|euler|ssprk3)");
   }
   bc.rhs_into =
       detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
@@ -741,7 +741,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 /// by requires: they demand a 4-variable transport exposing pressure (otherwise an explicit error).
 /// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes to
 /// weno5z when Limiter::n_ghost >= 3 (the caller must allocate 3 ghosts, cf. block_n_ghost).
-/// @p method chooses the EXPLICIT advance (ssprk2 by default, ssprk3 | euler optional); no effect in IMEX.
+/// @p method chooses the EXPLICIT advance (explicit/SSPRK2 by default, ssprk3 | euler optional);
+/// no effect in IMEX.
 /// @p implicit_components: IMEX implicit mask carried by the block (indices; empty = model default,
 /// bit-identical). cf. build_block.
 // Per-flux limiter ladders, split out of make_block (ADC-335) so each flux's build_block leaves can be
@@ -918,7 +919,7 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
 template <class Model>
 POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
                                      const std::string& riem, const GridContext& ctx, bool imex,
-                                     bool recon_prim, const std::string& method = "ssprk2",
+                                     bool recon_prim, const std::string& method = "explicit",
                                      const std::vector<int>& implicit_components = {},
                                      const NewtonOptions& newton_opts = {},
                                      NewtonReport* newton_report = nullptr,

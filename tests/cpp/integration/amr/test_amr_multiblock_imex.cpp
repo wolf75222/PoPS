@@ -77,22 +77,28 @@ struct StiffMomentumRelax {
     return s;
   }
 };
-// elliptic "background" alpha=0 : rhs nul -> phi=0, aucun couplage au champ (raideur PUREMENT locale,
-// le cas propre pour separer la stabilite de la source de tout couplage Poisson).
-using StiffModel = CompositeModel<Euler, StiffMomentumRelax, BackgroundDensity>;
+// A genuinely state-independent zero elliptic brick. The deliberately unstable explicit oracle can
+// reach non-finite state without turning an authored zero RHS into `0 * NaN`.
+struct ZeroElliptic {
+  template <class State>
+  POPS_HD Real rhs(const State&) const {
+    return Real(0);
+  }
+};
+
+using StiffModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
 StiffModel make_stiff(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, BackgroundDensity{Real(0), Real(0)}};
+  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, ZeroElliptic{}};
 }
 
 // Modele EXPLICITE neutre (Euler sans source, charge nulle) : un 2e bloc "voisin" pour exercer le
 // MULTI-BLOCS (hierarchie partagee, Poisson somme) sans raideur. ExB scalaire ne convient pas (1 var) ;
 // on prend un Euler 4 var a source nulle, MEME nombre de variables que le bloc raide (layout coherent).
-using NeutralModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+using NeutralModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
 NeutralModel make_neutral() {
-  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{},
-                      BackgroundDensity{Real(0), Real(0)}};
+  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, ZeroElliptic{}};
 }
 
 // densite + impulsion initiales : une bulle de densite avec une impulsion non nulle (pour que la source
@@ -107,6 +113,18 @@ std::vector<double> bubble(int n) {
       rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
     }
   return rho;
+}
+
+double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                         const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
 }
 
 bool all_finite(const std::vector<double>& v) {
@@ -225,6 +243,13 @@ TEST(test_amr_multiblock_imex, Runs) {
   const int N = 32;
   const double L = 1.0;
   const std::vector<double> rho = bubble(N);
+  ASSERT_EQ(periodic_rhs_mean(0.0, rho, 0.0, rho), 0.0)
+      << "exact-zero elliptic bricks must have zero periodic RHS mean before solve";
+
+  const std::vector<double> facade_rho_a = bump(N, 1.0, 0.40);
+  const std::vector<double> facade_rho_b = bump(N, 1.0, 0.20);
+  ASSERT_NEAR(periodic_rhs_mean(+1.0, facade_rho_a, -1.0, facade_rho_b), 0.0, 1e-13)
+      << "charged facade fixtures must satisfy the periodic Poisson nullspace before solve";
 
   // ============================================================================================
   // (1)+(2)+(3) STABILITE RAIDE + CONSERVATION + DISABLE-AND-FAIL, au niveau du moteur AmrRuntime.
@@ -366,8 +391,8 @@ TEST(test_amr_multiblock_imex, Runs) {
     sim.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1);
     sim.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
-    sim.set_density("A", bump(N, 1.0, 0.40));
-    sim.set_density("B", bump(N, 1.0, 0.20));
+    sim.set_density("A", facade_rho_a);
+    sim.set_density("B", facade_rho_b);
     for (int s = 0; s < 6; ++s)
       sim.step(5e-3);
     EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
@@ -393,8 +418,8 @@ TEST(test_amr_multiblock_imex, Runs) {
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x", "momentum_y"});
       s3.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
       s3.set_poisson("charge_density", "geometric_mg", "periodic");
-      s3.set_density("A", bump(N, 1.0, 0.40));
-      s3.set_density("B", bump(N, 1.0, 0.20));
+      s3.set_density("A", facade_rho_a);
+      s3.set_density("B", facade_rho_b);
       bool ok = false;
       try {
         for (int s = 0; s < 4; ++s)
@@ -414,8 +439,8 @@ TEST(test_amr_multiblock_imex, Runs) {
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"});
       s4.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
       s4.set_poisson("charge_density", "geometric_mg", "periodic");
-      s4.set_density("A", bump(N, 1.0, 0.40));
-      s4.set_density("B", bump(N, 1.0, 0.20));
+      s4.set_density("A", facade_rho_a);
+      s4.set_density("B", facade_rho_b);
       EXPECT_THROW(s4.step(5e-3), std::runtime_error)  // build paresseux : role absent -> leve
           << "facade_partial_mask_absent_role_throws";
     }

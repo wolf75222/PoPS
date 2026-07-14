@@ -9,7 +9,7 @@ import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 def _make_system():
     sim = System(n=4, L=1.0, periodic=True)
-    sim.block(
+    sim.add_equation(
         "ne",
         engine.Model(
             state=engine.Scalar(),

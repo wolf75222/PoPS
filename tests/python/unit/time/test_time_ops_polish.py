@@ -55,7 +55,7 @@ def test_solve_local_nonlinear_validates_inputs(t):
         raise AssertionError("solve_local_nonlinear must reject a non-callable residual")
 
     def good_residual(P, Uit, U0):
-        return P.value(Uit - U0)
+        return P.value("validation_residual", Uit - U0)
     try:  # the initial_guess must be a State value
         P.solve(LocalResidual(good_residual, "nope"), name="u", solver=LocalNewton())
     except ValueError as exc:
@@ -105,7 +105,7 @@ def test_solve_local_nonlinear_rejects_non_local_residual(t):
     def bad_residual(P, Uit, U0):
         R = P.rhs(
             state=Uit, terms=[Flux(), DefaultSource()])  # a non-local divergence-bearing rhs
-        return P.value(Uit - U0 - P.dt * R, at=Uit.point)
+        return P.value("nonlocal_residual", Uit - U0 - P.dt * R, at=Uit.point)
     try:
         P.solve(LocalResidual(bad_residual, U), name="W", solver=LocalNewton())
     except ValueError as exc:
@@ -186,7 +186,7 @@ def test_reductions_lower_to_adc_reductions(t):
     P.record_scalar("s_min", s_min)
     P.record_scalar("s_c", s_c)
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("reductions_next", U + P.dt * R, at=endpoint.point))
     src = emit_cpp_program(P)
     for frag in ("pops::reduce_sum(", "pops::reduce_max(", "pops::reduce_min("):
         assert frag in src, "the reduction codegen must contain %r\n%s" % (frag, src)
@@ -201,7 +201,7 @@ def test_fill_boundary_ir_and_codegen(t):
     assert Uf.op == "fill_boundary" and Uf.vtype == "state", (Uf.op, Uf.vtype)
     R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.value(Uf + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("filled_next", Uf + P.dt * R, at=endpoint.point))
     src = emit_cpp_program(P)
     assert "ctx.fill_boundary(" in src, "fill_boundary lowers to ctx.fill_boundary\n%s" % src
 
@@ -221,7 +221,7 @@ def test_project_ir_and_codegen(t):
     U = typed_state(P, "blk")
     R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
-    U1 = P.value(U + P.dt * R, at=endpoint.point)
+    U1 = P.value("project_input", U + P.dt * R, at=endpoint.point)
     Up = P.project(state=U1)
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
     P.commit(endpoint, Up)
@@ -254,7 +254,7 @@ def test_record_scalar_ir_and_codegen(t):
     rec = P.record_scalar("rhs_norm", P.norm2(R))
     assert rec.op == "record_scalar" and rec.attrs["diagnostic"] == "rhs_norm"
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("record_next", U + P.dt * R, at=endpoint.point))
     src = emit_cpp_program(P)
     assert 'ctx.record_scalar("rhs_norm", ' in src, "record_scalar lowers to ctx.record_scalar\n%s" % src
 
@@ -284,7 +284,7 @@ def test_ir_hash_distinguishes_new_ops(t):
         R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
         build(P, U, R)
         endpoint = typed_state(P, "blk", state_name="U").next
-        P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
+        P.commit(endpoint, P.value("hash_next", U + P.dt * R, at=endpoint.point))
         return P._ir_hash()
 
     base = _h(lambda P, U, R: None)
@@ -323,7 +323,7 @@ def _reductions_program(t):
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
     endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.value(U + P.dt * R, at=endpoint.point))
+    P.commit(endpoint, P.value("reductions_next", U + P.dt * R, at=endpoint.point))
     return P
 
 
@@ -409,7 +409,7 @@ def _fill_project_program(t):
     Uf = P.fill_boundary(U)
     R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
-    U1 = P.value(Uf + P.dt * R, at=endpoint.point)
+    U1 = P.value("project_input", Uf + P.dt * R, at=endpoint.point)
     P.commit(endpoint, P.project(state=U1))
     return P
 

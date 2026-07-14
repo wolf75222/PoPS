@@ -42,6 +42,9 @@
 
 using namespace pops;
 
+constexpr double kIonFieldCharge = 0.0;
+constexpr double kNeutralFieldCharge = 0.0;
+
 // Spec ExB scalaire (1 var) a charge q : advection pilotee par grad phi (le couplage Poisson lit q*n).
 // q=0 -> bloc neutre (ne contribue PAS au Poisson), advecte par le MEME phi que les autres.
 static ModelSpec exb_charge(double q, double B0) {
@@ -63,6 +66,18 @@ static std::vector<double> bump(int n, double base, double amp) {
       r[static_cast<std::size_t>(j) * n + i] = base + (in ? amp : -amp / 3.0);
     }
   return r;
+}
+
+static double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+static double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                                const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
 }
 
 // tout fini (ni nan ni inf) : garde AVANT toute comparaison de tolerance (un nan passerait une borne).
@@ -93,8 +108,8 @@ static double dmax_pair_sum(const std::vector<double>& a, const std::vector<doub
   return d;
 }
 
-// Construit un AmrRuntime a DEUX blocs ExB ("ions" q=+1, "neutrals" q=0) sur une hierarchie 2 niveaux
-// figee N x N (un patch fin central), avec stride par bloc. Densites initiales rho0/rho1 sur le grossier.
+// Build two field-neutral ExB blocks on the shared hierarchy. This isolates the coupled-source
+// contract and keeps the periodic field RHS exactly compatible while mass moves between blocks.
 static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<double>& rho_ions,
                                  const std::vector<double>& rho_neut, int stride_ions,
                                  int stride_neut) {
@@ -105,12 +120,12 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   bp.poisson.bc = BCRec{};  // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
-  detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {
+  detail::dispatch_model(exb_charge(kIonFieldCharge, B0), [&](auto m) {
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "ions", rho_ions,
                                                 /*has_density=*/true, 1.4, 1, false, false,
                                                 stride_ions));
   });
-  detail::dispatch_model(exb_charge(0.0, B0), [&](auto m) {
+  detail::dispatch_model(exb_charge(kNeutralFieldCharge, B0), [&](auto m) {
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "neutrals", rho_neut,
                                                 /*has_density=*/true, 1.4, 1, false, false,
                                                 stride_neut));
@@ -154,6 +169,8 @@ TEST(test_amr_multiblock_coupled_source, Runs) {
   const double L = 1.0, B0 = 1.0, k = 0.5;
   const std::vector<double> rho_ions = bump(N, 1.0, 0.40);
   const std::vector<double> rho_neut = bump(N, 1.0, 0.20);
+  ASSERT_EQ(periodic_rhs_mean(kIonFieldCharge, rho_ions, kNeutralFieldCharge, rho_neut), 0.0)
+      << "field-neutral coupled-source fixtures must have zero periodic RHS mean before solve";
   const Real dt = Real(0.01);
   const int K = 6;  // macro-pas
 

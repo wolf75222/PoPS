@@ -1,424 +1,354 @@
-"""Champs aux NOMMES declares par le modele -- ADC-70 phase 1 (System cartesien).
+"""Named auxiliary-field regression on the native runtime seams.
 
-Un modele DSL peut declarer un champ auxiliaire ARBITRAIRE via m.aux_field("nom") (au-dela des champs
-canoniques phi/grad/B_z/T_e). Le k-ieme nom reserve la composante AUX_NAMED_BASE + k (= 5 + k) du canal
-aux, lue en C++ via aux.extra_field(k). La FACADE resout nom -> composante par bloc
-(System.set_aux_field / aux_field) ; le C++ ne manipule que des indices.
-
-Couvre :
-  (forme, sans compilateur) helpers de largeur, emission n_aux + extra_field, retro-compat (modele sans
-    champ nomme -> pas de n_aux), rejets DSL (nom canonique, doublon, depassement), rejets FACADE
-    (B_z/T_e/canonique rediriges, bloc inconnu) ;
-  (bout en bout, saute sans compilateur C++) source S = -kappa*n lisant aux_field("kappa") :
-    (a) kappa CONSTANT -> residu == -kappa*n exact ; kappa SPATIAL (gaussien) -> residu suit le champ ;
-    (b) PERSISTANCE : le champ nomme survit a plusieurs step() (relecture aux_field) ;
-    (c) defaut : un modele simple SANS aux_field garde n_aux=3 ;
-    (d) lecture AVANT ecriture -> zeros (documente) ; champ inconnu d'un bloc enregistre -> rejet.
+The final user lifecycle supplies fields through ``Case.field`` and ``pops.bind``.  The native
+runtime still owns the named auxiliary channel installed by that lifecycle, including uniform,
+polar and AMR execution.  These tests keep its shape, rejection, persistence, regrid and isolation
+oracles without restoring the retired AOT backend.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import os
 import shutil
 import tempfile
 
 import numpy as np
 
-import pops.runtime._engine_descriptors as engine
+from pops.codegen import Production
 from pops.mesh import PolarMesh
-from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Rusanov
 from pops.physics._facade import Model
 from pops.physics._model import HyperbolicModel
-
+from pops.physics.aux import AUX_NAMED_BASE, AUX_NAMED_MAX, aux_total_n_aux
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._system import AmrSystem, System
 from tests.python.support.requirements import repo_include
-from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+
+
 INCLUDE = repo_include()
 
 
 def build_decay_model():
-    """Scalaire 'n' sans flux, source S = -kappa * n ou kappa est un champ aux NOMME (aux_field).
-    flux nul -> eval_rhs = source = -kappa * n (verifiable exactement)."""
-    m = Model("kappadecay")
-    (nn,) = m.conservative_vars("n")
-    zero = 0.0 * nn                      # expression nulle (flux/eig n'enrobent pas un float brut)
-    m.flux(x=[zero], y=[zero])
-    m.eigenvalues(x=[zero], y=[zero])
-    m.primitive_vars(n=nn)               # layout Prim = [n]
-    m.conservative_from([nn])
-    kappa = m.aux_field("kappa")         # champ aux NOMME -> composante 5
-    m.source([-(kappa * nn)])            # S = -kappa n
-    return m
+    """Build ``dn/dt = -kappa*n`` where kappa is a named auxiliary field."""
+    model = Model("kappadecay")
+    (density,) = model.conservative_vars("n")
+    zero = 0.0 * density
+    model.flux(x=[zero], y=[zero])
+    model.eigenvalues(x=[zero], y=[zero])
+    model.primitive_vars(n=density)
+    model.conservative_from([density])
+    kappa = model.aux_field("kappa")
+    model.source([-(kappa * density)])
+    return model
 
 
 def test_form():
-    """Garde-fous PUR-PYTHON (aucun compilateur) : largeurs, emission, retro-compat, rejets DSL."""
-    # (1) largeur totale du canal : base seule = 3 ; un champ nomme -> AUX_NAMED_BASE + 1 = 6.
+    """Channel width, emitted reads and declaration rejections require no compiler."""
     assert aux_total_n_aux([], []) == 3
     assert aux_total_n_aux([], ["kappa"]) == 6
     assert aux_total_n_aux([], ["kappa", "sigma"]) == 7
-    assert aux_total_n_aux(["B_z"], ["kappa"]) == 6  # max(4, 6)
+    assert aux_total_n_aux(["B_z"], ["kappa"]) == 6
     assert AUX_NAMED_BASE == 5
-    print("OK  aux_total_n_aux : base=3, 1 nomme=6 (AUX_NAMED_BASE=5), 2 nommes=7")
 
-    # (2) emission : un modele lisant aux_field('kappa') declare n_aux=6 et lit a.extra_field(0).
-    m = HyperbolicModel("decay")
-    (nn,) = m.conservative_vars("n")
-    kappa = m.aux_field("kappa")
-    m.set_source([-(kappa * nn)])
-    src = m.emit_cpp_source(name="GenDecaySrc")
-    assert "static constexpr int n_aux = 6;" in src, "n_aux=6 absent : %s" % src
-    assert "const pops::Real kappa = a.extra_field(0);" in src, "lecture extra_field(0) absente : %s" % src
-    print("OK  emit_cpp_source(aux_field) : n_aux=6 + a.extra_field(0)")
+    model = HyperbolicModel("decay")
+    (density,) = model.conservative_vars("n")
+    kappa = model.aux_field("kappa")
+    model.set_source([-(kappa * density)])
+    source = model.emit_cpp_source(name="GenDecaySrc")
+    assert "static constexpr int n_aux = 6;" in source
+    assert "const pops::Real kappa = a.extra_field(0);" in source
 
-    # (3) retro-compat : un modele SANS aux_field n'emet PAS de n_aux (bit-identique a l'historique).
-    m2 = HyperbolicModel("plain")
-    (n2,) = m2.conservative_vars("n")
-    m2.set_source([0.0 * n2])
-    src2 = m2.emit_cpp_source(name="GenPlainSrc")
-    assert "n_aux" not in src2, "n_aux ne doit pas etre emis pour un modele sans champ aux : %s" % src2
-    assert m2._total_n_aux() == 3, "modele simple : n_aux total doit rester 3"
-    print("OK  modele sans aux_field : pas de n_aux emis, largeur 3 (defaut)")
+    plain = HyperbolicModel("plain")
+    (plain_density,) = plain.conservative_vars("n")
+    plain.set_source([0.0 * plain_density])
+    plain_source = plain.emit_cpp_source(name="GenPlainSrc")
+    assert "n_aux" not in plain_source
+    assert plain._total_n_aux() == 3
 
-    # (4) rejets DSL : nom canonique, doublon, depassement de la borne kAuxMaxExtra.
-    m3 = HyperbolicModel("rej")
-    m3.conservative_vars("n")
-    for bad in ("B_z", "T_e", "phi", "grad_x"):
+    rejected = HyperbolicModel("rejected")
+    rejected.conservative_vars("n")
+    for name in ("B_z", "T_e", "phi", "grad_x"):
         try:
-            m3.aux_field(bad)
+            rejected.aux_field(name)
         except ValueError:
             pass
         else:
-            raise AssertionError("aux_field(%r) aurait du lever (nom canonique)" % bad)
-    m3.aux_field("kappa")
+            raise AssertionError("canonical auxiliary name %r must be rejected" % name)
+
+    rejected.aux_field("kappa")
     try:
-        m3.aux_field("kappa")  # doublon
+        rejected.aux_field("kappa")
     except ValueError:
         pass
     else:
-        raise AssertionError("aux_field doublon aurait du lever")
-    # remplir jusqu'a la borne (kappa deja pose -> 3 de plus = 4 max), le 5e leve.
-    m3.aux_field("a")
-    m3.aux_field("b")
-    m3.aux_field("c")
+        raise AssertionError("duplicate auxiliary names must be rejected")
+
+    rejected.aux_field("a")
+    rejected.aux_field("b")
+    rejected.aux_field("c")
     try:
-        m3.aux_field("d")  # 5e champ : depasse AUX_NAMED_MAX
+        rejected.aux_field("d")
     except ValueError:
         pass
     else:
-        raise AssertionError("aux_field au-dela de AUX_NAMED_MAX aurait du lever")
-    print("OK  aux_field rejette : nom canonique, doublon, > %d champs" % AUX_NAMED_MAX)
+        raise AssertionError("more than %d named auxiliary fields must be rejected" % AUX_NAMED_MAX)
 
 
 def test_facade_rejects():
-    """Rejets de la FACADE qui ne demandent aucun bloc compile (resolution avant la table) : B_z / T_e
-    rediriges vers leur chemin dedie, nom canonique non fixable, bloc inconnu."""
-    sim = System(n=8, L=1.0, periodic=True)
+    """The low-level setter refuses canonical fields and unknown blocks explicitly."""
+    runtime = System(n=8, L=1.0, periodic=True)
     field = np.ones((8, 8))
-    # B_z -> set_magnetic_field (message redirigeant)
+
     try:
-        sim.set_aux_field("blk", "B_z", field)
-    except ValueError as ex:
-        assert "set_magnetic_field" in str(ex), "le message B_z devrait rediriger : %r" % str(ex)
+        runtime.set_aux_field("block", "B_z", field)
+    except ValueError as exc:
+        assert "set_magnetic_field" in str(exc)
     else:
-        raise AssertionError("set_aux_field('B_z') aurait du lever")
-    # T_e -> set_electron_temperature_from
+        raise AssertionError("B_z must use the dedicated magnetic-field path")
+
     try:
-        sim.set_aux_field("blk", "T_e", field)
-    except ValueError as ex:
-        assert "set_electron_temperature_from" in str(ex), "le message T_e devrait rediriger : %r" % str(ex)
+        runtime.set_aux_field("block", "T_e", field)
+    except ValueError as exc:
+        assert "set_electron_temperature_from" in str(exc)
     else:
-        raise AssertionError("set_aux_field('T_e') aurait du lever")
-    # autre nom canonique (phi) non fixable
+        raise AssertionError("T_e must use the dedicated temperature path")
+
     try:
-        sim.set_aux_field("blk", "phi", field)
+        runtime.set_aux_field("block", "phi", field)
     except ValueError:
         pass
     else:
-        raise AssertionError("set_aux_field('phi') aurait du lever")
-    # bloc inconnu (aucun champ nomme enregistre)
+        raise AssertionError("derived canonical fields cannot be written as named auxiliaries")
+
     try:
-        sim.set_aux_field("inexistant", "kappa", field)
-    except ValueError as ex:
-        assert "inexistant" in str(ex)
+        runtime.set_aux_field("missing", "kappa", field)
+    except ValueError as exc:
+        assert "missing" in str(exc)
     else:
-        raise AssertionError("set_aux_field sur bloc inconnu aurait du lever")
-    print("OK  facade : B_z/T_e/phi rediriges, bloc inconnu rejete")
-
-
-def test_end_to_end():
-    """Bout en bout : source lisant aux_field('kappa'), branchee via add_equation (backend AOT)."""
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute (%s)" % INCLUDE)
-        print("test_aux_named : OK (forme seulement)")
-        return
-
-    n, L = 16, 1.0
-    tmp = tempfile.mkdtemp()
-    try:
-        m = build_decay_model()
-        compiled = m.compile(os.path.join(tmp, "kappadecay.so"), include=INCLUDE, backend="aot")
-        assert compiled.aux_extra_names == ["kappa"], "aux_extra_names attendu ['kappa']"
-        assert compiled.n_aux == 6, "n_aux=6 attendu (5 + 1 champ nomme)"
-
-        sim = System(n=n, L=L, periodic=True)
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sim.add_equation("decay", model=compiled,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit())
-        sim.set_density("decay", np.ones((n, n)))
-
-        # (d) lecture AVANT ecriture : le champ nomme vaut 0 partout (canal initialise a zero).
-        before = sim.aux_field("decay", "kappa")
-        assert before.shape == (n, n) and float(np.max(np.abs(before))) == 0.0, \
-            "kappa avant ecriture devrait etre 0 partout"
-        print("OK  lecture avant ecriture : kappa == 0 (documente)")
-
-        # (a1) kappa CONSTANT : eval_rhs = S = -kappa*n = -2 (n=1 partout).
-        kc = 2.0
-        sim.set_aux_field("decay", "kappa", kc * np.ones((n, n)))
-        sim.solve_fields()
-        R = np.array(sim.eval_rhs("decay"))
-        err = float(np.max(np.abs(R + kc)))  # R = -kappa*n = -2
-        assert err < 1e-12, "kappa constant non lu (max|R+kappa| = %.2e)" % err
-        # relecture : aux_field rend bien le champ pose.
-        rk = sim.aux_field("decay", "kappa")
-        assert float(np.max(np.abs(rk - kc))) < 1e-12, "aux_field ne relit pas kappa constant"
-        print("OK  kappa constant : eval_rhs == -kappa*n (max ecart %.2e)" % err)
-
-        # (a2) kappa SPATIAL (gaussien) : eval_rhs = -kappa(x)*n suit le champ exactement.
-        x = (np.arange(n) + 0.5) / float(n)
-        X, Y = np.meshgrid(x, x, indexing="xy")
-        ks = 1.0 + 3.0 * np.exp(-30.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
-        sim.set_aux_field("decay", "kappa", ks)
-        sim.solve_fields()
-        R2 = np.array(sim.eval_rhs("decay"))
-        err2 = float(np.max(np.abs(R2 + ks)))  # n=1 -> R = -kappa(x)
-        assert err2 < 1e-12, "kappa spatial non suivi (max|R+kappa| = %.2e)" % err2
-        print("OK  kappa spatial (gaussien) : eval_rhs suit -kappa(x) (max ecart %.2e)" % err2)
-
-        # (b) PERSISTANCE : plusieurs step() ; kappa (champ statique) reste inchange.
-        for _ in range(5):
-            sim.step_cfl(0.4)
-        rk2 = sim.aux_field("decay", "kappa")
-        errp = float(np.max(np.abs(rk2 - ks)))
-        assert errp < 1e-12, "kappa n'a pas persiste apres 5 step (max ecart %.2e)" % errp
-        print("OK  persistance : kappa intact apres 5 step (max ecart %.2e)" % errp)
-
-        # (d) champ inconnu d'un bloc ENREGISTRE -> rejet listant les champs connus.
-        try:
-            sim.set_aux_field("decay", "sigma", np.ones((n, n)))
-        except ValueError as ex:
-            assert "sigma" in str(ex) and "kappa" in str(ex), "le rejet devrait lister les champs : %r" % str(ex)
-        else:
-            raise AssertionError("set_aux_field('decay','sigma') aurait du lever (non declare)")
-        print("OK  champ aux nomme inconnu d'un bloc enregistre rejete")
-
-        print("test_aux_named : tout est vert")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        raise AssertionError("an unknown block must be rejected")
 
 
 def _have_compiler():
-    return bool((shutil.which("c++") or shutil.which("g++") or shutil.which("clang++"))
-                and os.path.isdir(INCLUDE))
+    return bool(
+        (shutil.which("c++") or shutil.which("g++") or shutil.which("clang++"))
+        and os.path.isdir(INCLUDE)
+    )
+
+
+def _compile_decay(directory, filename, *, target="system"):
+    return build_decay_model().compile(
+        os.path.join(directory, filename),
+        include=INCLUDE,
+        backend=Production(),
+        target=target,
+    )
+
+
+def _spatial():
+    return engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
+
+
+def test_end_to_end():
+    """A production package reads constant and spatial kappa and preserves it while stepping."""
+    if not _have_compiler():
+        return
+
+    n = 16
+    directory = tempfile.mkdtemp()
+    try:
+        compiled = _compile_decay(directory, "kappadecay.so")
+        assert compiled.aux_extra_names == ["kappa"]
+        assert compiled.n_aux == 6
+
+        runtime = System(n=n, L=1.0, periodic=True)
+        runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
+        runtime.add_equation(
+            "decay", model=compiled, spatial=_spatial(), time=engine.Explicit())
+        runtime.set_density("decay", np.ones((n, n)))
+
+        before = runtime.aux_field("decay", "kappa")
+        assert before.shape == (n, n)
+        assert float(np.max(np.abs(before))) == 0.0
+
+        constant = 2.0
+        runtime.set_aux_field("decay", "kappa", constant * np.ones((n, n)))
+        runtime.solve_fields()
+        residual = np.asarray(runtime.eval_rhs("decay"))
+        assert float(np.max(np.abs(residual + constant))) < 1e-12
+        assert float(np.max(np.abs(runtime.aux_field("decay", "kappa") - constant))) < 1e-12
+
+        x = (np.arange(n) + 0.5) / float(n)
+        X, Y = np.meshgrid(x, x, indexing="xy")
+        spatial_kappa = 1.0 + 3.0 * np.exp(-30.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+        runtime.set_aux_field("decay", "kappa", spatial_kappa)
+        runtime.solve_fields()
+        residual = np.asarray(runtime.eval_rhs("decay"))
+        assert float(np.max(np.abs(residual + spatial_kappa))) < 1e-12
+
+        for _ in range(5):
+            runtime.step_cfl(0.4)
+        assert float(np.max(np.abs(
+            runtime.aux_field("decay", "kappa") - spatial_kappa))) < 1e-12
+
+        try:
+            runtime.set_aux_field("decay", "sigma", np.ones((n, n)))
+        except ValueError as exc:
+            assert "sigma" in str(exc) and "kappa" in str(exc)
+        else:
+            raise AssertionError("an undeclared auxiliary field must be rejected")
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_polar_named_aux():
-    """ADC-291 phase 2 : un aux NOMME (aux_field) lu en geometrie POLAIRE via System(PolarMesh).
-    Avant ADC-291, le chemin polaire n'elargissait pas le canal aux (System::add_block polaire sans
-    ensure_aux_width) -> set_aux_field('kappa') aurait leve 'canal a 3 composantes' (ou lu hors borne).
-    On verifie set + lecture + eval_rhs = source = -kappa*n exact sur l'anneau."""
+    """The polar executor widens and reads the same named auxiliary channel."""
     if not _have_compiler():
-        print("skip  polar named aux (compilateur/en-tetes absents)")
         return
-    tmp = tempfile.mkdtemp()
+
+    directory = tempfile.mkdtemp()
     try:
-        m = build_decay_model()
-        compiled = m.compile(os.path.join(tmp, "kpolar.so"), include=INCLUDE, backend="aot")
-        nr, nth = 16, 16
-        sim = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
-        sim.add_equation("decay", model=compiled,
-                         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                         time=engine.Explicit())
-        sim.set_density("decay", np.ones((nth, nr)))
+        compiled = _compile_decay(directory, "kpolar.so")
+        nr, ntheta = 16, 16
+        runtime = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=ntheta))
+        runtime.add_equation(
+            "decay", model=compiled, spatial=_spatial(), time=engine.Explicit())
+        runtime.set_density("decay", np.ones((ntheta, nr)))
 
-        # lecture avant ecriture : 0 partout (le canal s'est bien elargi : pas de rejet, pas d'OOB).
-        before = sim.aux_field("decay", "kappa")
-        assert before.shape == (nth, nr) and float(np.max(np.abs(before))) == 0.0, \
-            "kappa polaire avant ecriture devrait etre 0 (canal elargi par ensure_aux_width)"
+        before = runtime.aux_field("decay", "kappa")
+        assert before.shape == (ntheta, nr)
+        assert float(np.max(np.abs(before))) == 0.0
 
-        # kappa constant : eval_rhs = S = -kappa*n = -3 (flux nul, n=1).
-        kc = 3.0
-        sim.set_aux_field("decay", "kappa", kc * np.ones((nth, nr)))
-        R = np.array(sim.eval_rhs("decay"))
-        err = float(np.max(np.abs(R + kc)))
-        assert err < 1e-12, "polar : kappa non lu (max|R+kappa| = %.2e)" % err
-        rk = sim.aux_field("decay", "kappa")
-        assert float(np.max(np.abs(rk - kc))) < 1e-12, "polar : aux_field ne relit pas kappa"
-        print("OK  polar named aux : eval_rhs == -kappa*n (max ecart %.2e)" % err)
+        constant = 3.0
+        runtime.set_aux_field("decay", "kappa", constant * np.ones((ntheta, nr)))
+        residual = np.asarray(runtime.eval_rhs("decay"))
+        assert float(np.max(np.abs(residual + constant))) < 1e-12
+        assert float(np.max(np.abs(runtime.aux_field("decay", "kappa") - constant))) < 1e-12
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-def _compile_amr_decay(tmp, fname):
-    """Decay model compiled for the AMR native path (backend='production', target='amr_system')."""
-    return build_decay_model().compile(os.path.join(tmp, fname), include=INCLUDE,
-                                       backend="production", target="amr_system")
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def _bump_density(n, lo, hi, base, peak):
-    """Uniform @p base with a square bump @p peak in [lo, hi)^2 (drives the refinement criterion)."""
-    rho = np.full((n, n), float(base))
-    rho[lo:hi, lo:hi] = float(peak)
-    return rho
+    density = np.full((n, n), float(base))
+    density[lo:hi, lo:hi] = float(peak)
+    return density
 
 
 def test_amr_named_aux_single_block_regrid():
-    """ADC-291 : aux NOMME sur le chemin AMR MONO-BLOC (AmrCouplerMP), avec un VRAI niveau fin + regrid.
-    Le modele decay (flux nul, S=-kappa*n) sur une densite a BOSSE centrale > seuil -> set_refinement
-    construit un patch fin sur la bosse ; regrid_every=1 RECONSTRUIT (et re-zero) l'aux fin a chaque pas.
-    kappa UNIFORME -> chaque cellule (grossiere ET fine) doit decroitre du MEME facteur : si le champ
-    nomme n'etait pas re-applique + re-injecte au fin apres regrid, la zone raffinee ne decroitrait PAS
-    (ratio ~1 vs ~0.9 ailleurs). On verrouille donc (a) un niveau fin existe, (b) la masse decroit a
-    chaque pas (persistance a travers le regrid), (c) la decroissance est ~uniforme (aux nomme present
-    au fin). Sans set_aux_field (kappa=0) la masse est inchangee."""
+    """Named auxiliaries persist on fine patches reconstructed at every step."""
     if not _have_compiler():
-        print("skip  AMR named aux single-block (compilateur absent)")
         return
-    tmp = tempfile.mkdtemp()
+
+    directory = tempfile.mkdtemp()
     try:
         n = 24
-        sp = engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
-        lo, hi = n // 3, 2 * n // 3  # central bump [8, 16)^2
+        lo, hi = n // 3, 2 * n // 3
 
-        # (a) reference : SANS set_aux_field -> kappa=0 -> masse inchangee (meme avec raffinement).
-        ref = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        ref.add_equation("decay", model=_compile_amr_decay(tmp, "amr0.so"), spatial=sp, time=engine.Explicit())
-        ref.set_poisson(rhs="charge_density", solver="geometric_mg")
-        ref.set_refinement(2.0)  # refine where density (comp 0) > 2 -> tags the bump
-        ref.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
-        m0 = ref.mass("decay")
+        reference = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        reference.add_equation(
+            "decay",
+            model=_compile_decay(directory, "amr0.so", target="amr_system"),
+            spatial=_spatial(),
+            time=engine.Explicit(),
+        )
+        reference.set_poisson(rhs="charge_density", solver="geometric_mg")
+        reference.set_refinement(2.0)
+        reference.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
+        initial_mass = reference.mass("decay")
         for _ in range(3):
-            ref.step(1e-2)
-        assert abs(ref.mass("decay") - m0) < 1e-10, "sans kappa la masse AMR devrait etre inchangee"
+            reference.step(1e-2)
+        assert abs(reference.mass("decay") - initial_mass) < 1e-10
 
-        # (b) AVEC kappa uniforme + raffinement + regrid : decroissance persistante ET uniforme.
-        sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=_compile_amr_decay(tmp, "amr1.so"), spatial=sp, time=engine.Explicit())
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sim.set_refinement(2.0)
-        rho0 = _bump_density(n, lo, hi, 1.0, 5.0)
-        sim.set_density("decay", rho0)
-        sim.set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
-        masses = [sim.mass("decay")]
-        for _ in range(5):  # regrid_every=1 -> the fine aux is rebuilt (zeroed) + re-injected each step
-            sim.step(1e-2)
-            masses.append(sim.mass("decay"))
-        assert sim.n_patches() > 0, "a fine level must exist (regrid path exercised)"
-        assert all(masses[i + 1] < masses[i] - 1e-9 for i in range(len(masses) - 1)), \
-            "decay must persist across regrid (kappa re-applied each solve), got %r" % masses
-        # uniform kappa -> the refined bump region must decay like the rest (named aux reached the fine
-        # level). If the fine cells read kappa=0, the bump's ratio would be ~1 while background ~0.9.
-        ratio = np.array(sim.density("decay")) / rho0
-        assert float(np.std(ratio)) < 1e-2, \
-            "named aux must reach the FINE level (uniform decay), std(ratio)=%.3e" % float(np.std(ratio))
-        assert float(np.mean(ratio)) < 0.95, "a real decay was expected, mean ratio=%.3f" % float(np.mean(ratio))
-        print("OK  AMR single-block named aux + regrid : n_patches=%d, mass %.5f->%.5f, decay std %.2e"
-              % (sim.n_patches(), masses[0], masses[-1], float(np.std(ratio))))
+        runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime.add_equation(
+            "decay",
+            model=_compile_decay(directory, "amr1.so", target="amr_system"),
+            spatial=_spatial(),
+            time=engine.Explicit(),
+        )
+        runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
+        runtime.set_refinement(2.0)
+        density = _bump_density(n, lo, hi, 1.0, 5.0)
+        runtime.set_density("decay", density)
+        runtime.set_aux_field("decay", "kappa", 2.0 * np.ones((n, n)))
+        masses = [runtime.mass("decay")]
+        for _ in range(5):
+            runtime.step(1e-2)
+            masses.append(runtime.mass("decay"))
+
+        assert runtime.n_patches() > 0
+        assert all(masses[index + 1] < masses[index] - 1e-9
+                   for index in range(len(masses) - 1))
+        ratio = np.asarray(runtime.density("decay")) / density
+        assert float(np.std(ratio)) < 1e-2
+        assert float(np.mean(ratio)) < 0.95
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(directory, ignore_errors=True)
 
 
-def build_const_decay_model(name, c0):
-    """Scalaire 'n', flux nul, source CONSTANTE S = -c0*n (c0 fige a la compilation), SANS aux_field
-    (n_aux=3) : decroit a un taux FIXE c0, INDEPENDANT du canal aux partage -> temoin d'isolation."""
-    m = Model(name)
-    (nn,) = m.conservative_vars("n")
-    zero = 0.0 * nn
-    m.flux(x=[zero], y=[zero]); m.eigenvalues(x=[zero], y=[zero])
-    m.primitive_vars(n=nn); m.conservative_from([nn])
-    m.source([-(float(c0) * nn)])
-    return m
+def _constant_decay_model(name, coefficient):
+    model = Model(name)
+    (density,) = model.conservative_vars("n")
+    zero = 0.0 * density
+    model.flux(x=[zero], y=[zero])
+    model.eigenvalues(x=[zero], y=[zero])
+    model.primitive_vars(n=density)
+    model.conservative_from([density])
+    model.source([-(float(coefficient) * density)])
+    return model
 
 
 def test_amr_named_aux_multiblock_regrid():
-    """ADC-291 : aux NOMME sur le chemin AMR MULTI-BLOCS (AmrRuntime, moteur DIFFERENT du mono-bloc) avec
-    regrid actif ET niveau fin. Le canal aux est PARTAGE entre les blocs (comme B_z). Deux blocs :
-    'decay' LIT extra_field(0) (kappa GRAND), 'plain' a une source CONSTANTE (taux c0, n_aux=3, ne lit
-    pas la composante nommee). Verrouille : (a) 'decay' s'effondre (kappa applique par AmrRuntime + re-
-    injecte au fin apres regrid), (b) ISOLATION non triviale : 'plain' decroit SEULEMENT a son taux c0
-    (le kappa du canal partage ne fuit PAS dans 'plain') -- si kappa fuyait, 'plain' s'effondrerait aussi."""
+    """A shared AMR channel reaches fine patches without leaking into another block."""
     if not _have_compiler():
-        print("skip  AMR named aux multi-block (compilateur absent)")
         return
-    tmp = tempfile.mkdtemp()
+
+    directory = tempfile.mkdtemp()
     try:
         n = 24
-        sp = engine.Spatial(limiter=FirstOrder(), flux=Rusanov())
         lo, hi = n // 3, 2 * n // 3
-        decay_so = _compile_amr_decay(tmp, "amrdecay.so")
-        c0 = 1.0
-        plain_so = build_const_decay_model("plaindecay", c0).compile(
-            os.path.join(tmp, "amrplain.so"), include=INCLUDE, backend="production", target="amr_system")
-        sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
-        sim.add_equation("decay", model=decay_so, spatial=sp, time=engine.Explicit())
-        sim.add_equation("plain", model=plain_so, spatial=sp, time=engine.Explicit())
-        sim.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sim.set_refinement(2.0)  # refine on the 'decay' bump -> a real fine level + regrid
-        sim.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
-        sim.set_density("plain", np.ones((n, n)))
-        kappa = 50.0  # LARGE: a leak into 'plain' would crash its mass; c0=1 keeps 'plain' mild
-        sim.set_aux_field("decay", "kappa", kappa * np.ones((n, n)))
-        md0, mp0 = sim.mass("decay"), sim.mass("plain")
+        decay = _compile_decay(directory, "amrdecay.so", target="amr_system")
+        plain = _constant_decay_model("plaindecay", 1.0).compile(
+            os.path.join(directory, "amrplain.so"),
+            include=INCLUDE,
+            backend=Production(),
+            target="amr_system",
+        )
+
+        runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime.add_equation(
+            "decay", model=decay, spatial=_spatial(), time=engine.Explicit())
+        runtime.add_equation(
+            "plain", model=plain, spatial=_spatial(), time=engine.Explicit())
+        runtime.set_poisson(rhs="charge_density", solver="geometric_mg")
+        runtime.set_refinement(2.0)
+        runtime.set_density("decay", _bump_density(n, lo, hi, 1.0, 5.0))
+        runtime.set_density("plain", np.ones((n, n)))
+        runtime.set_aux_field("decay", "kappa", 50.0 * np.ones((n, n)))
+        decay_before, plain_before = runtime.mass("decay"), runtime.mass("plain")
         for _ in range(5):
-            sim.step(1e-2)
-        md1, mp1 = sim.mass("decay"), sim.mass("plain")
-        assert sim.n_patches() > 0, "a fine level must exist (multi-block regrid path exercised)"
-        assert md1 < 0.5 * md0, \
-            "AMR multi-bloc : 'decay' (kappa=50) devrait s'effondrer, got %.6f->%.6f" % (md0, md1)
-        # ISOLATION : 'plain' decays ONLY at c0=1 (ratio ~ 0.99^5 ~ 0.95), NOT at kappa. A leak would
-        # push it well below 0.9 (toward 'decay's collapse). Lower bound rejects a leak; upper rejects
-        # "plain didn't run at all".
-        rp = mp1 / mp0
-        assert 0.90 < rp < 0.99, \
-            "AMR multi-bloc : 'plain' doit decroitre a son taux c0 SEUL (canal partage isole), ratio=%.4f" % rp
-        print("OK  AMR multi-block named aux + regrid : decay %.5f->%.5f (collapse), plain ratio %.4f (c0 only)"
-              % (md0, md1, rp))
+            runtime.step(1e-2)
+        decay_after, plain_after = runtime.mass("decay"), runtime.mass("plain")
+
+        assert runtime.n_patches() > 0
+        assert decay_after < 0.5 * decay_before
+        assert 0.90 < plain_after / plain_before < 0.99
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 def test_amr_named_aux_rejections():
-    """ADC-291 : rejets de la facade AMR set_aux_field (parite avec System) : canal canonique redirige,
-    bloc inconnu, champ non declare. Aucun compilateur requis (resolution AVANT le build)."""
-    sim = AmrSystem(n=8, L=1.0, periodic=True)
+    """AMR rejects canonical fields and unknown blocks before compilation."""
+    runtime = AmrSystem(n=8, L=1.0, periodic=True)
     field = np.ones((8, 8))
-    for nm, redirect in (("B_z", "set_magnetic_field"), ("phi", "CANONICAL")):
+    for name, expected in (("B_z", "set_magnetic_field"), ("phi", "CANONICAL")):
         try:
-            sim.set_aux_field("blk", nm, field)
-        except ValueError as ex:
-            assert redirect in str(ex), "le message %s devrait mentionner %s : %r" % (nm, redirect, str(ex))
+            runtime.set_aux_field("block", name, field)
+        except ValueError as exc:
+            assert expected in str(exc)
         else:
-            raise AssertionError("AmrSystem.set_aux_field(%r) aurait du lever" % nm)
-    # bloc inconnu (aucun champ nomme enregistre).
+            raise AssertionError("AMR canonical field %r must be rejected" % name)
+
     try:
-        sim.set_aux_field("inexistant", "kappa", field)
-    except ValueError as ex:
-        assert "inexistant" in str(ex)
+        runtime.set_aux_field("missing", "kappa", field)
+    except ValueError as exc:
+        assert "missing" in str(exc)
     else:
-        raise AssertionError("AmrSystem.set_aux_field sur bloc inconnu aurait du lever")
-    print("OK  AMR facade : B_z/phi rediriges, bloc inconnu rejete")
-
-
-def main():
-    test_form()
-    test_facade_rejects()
-    test_end_to_end()
-    test_polar_named_aux()
-    test_amr_named_aux_single_block_regrid()
-    test_amr_named_aux_multiblock_regrid()
-    test_amr_named_aux_rejections()
-
-
-if __name__ == "__main__":
-    main()
+        raise AssertionError("an unknown AMR block must be rejected")

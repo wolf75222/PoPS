@@ -52,7 +52,7 @@ BlockClosures external_make_block(const Model& m, const std::string& lim, const 
   const char* kCtx = "external riemann brick";
   return dispatch_limiter(parse_limiter_route(lim, kCtx), kCtx, [&](auto tag) {
     using L = typename decltype(tag)::type;
-    return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
+    return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "explicit", {}, {}, nullptr,
                                 pos_floor);
   });
 }

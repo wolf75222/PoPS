@@ -45,15 +45,16 @@ def _component(
 ):
     root = tmp_path / name
     root.mkdir()
+    alias = name.replace("-", "_")
     manifest = _manifest(name, interface, manifest_parameters)
     source = source_factory(manifest).encode()
     source_name = name + ".cpp"
     (root / source_name).write_bytes(source)
     package = build_source_package_manifest(
-        components={name: manifest}, payloads={source_name: ("source", source)})
+        components={alias: manifest}, payloads={source_name: ("source", source)})
     manifest_path = root / (name + ".pops.json")
     manifest_path.write_text(json.dumps(package), encoding="utf-8")
-    factory = load(manifest_path).require(name, interface=interface)
+    factory = load(manifest_path).require(alias, interface=interface)
     return factory(**({} if instance_parameters is None else instance_parameters))
 
 
@@ -190,7 +191,7 @@ int solve(void* value, const PopsFieldSolverRequestV2* request,
                   "external-test-topology") != 0 ||
       !request->topology_digest ||
       std::strcmp(request->topology_digest,
-                  "external-test-topology-digest-v1") != 0 ||
+                  "external-test-topology-digest-v2") != 0 ||
       !request->boundary_contract_json ||
       std::strstr(request->boundary_contract_json, "identity") == nullptr)
     return 3;

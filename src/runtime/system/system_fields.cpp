@@ -189,8 +189,9 @@ POPS_EXPORT SolveReport System::solve_fields_from_state(const std::string& field
 // generated problem.so / native loader across the dlopen boundary.
 POPS_EXPORT void System::register_elliptic_field(const std::string& block,
                                                 const std::string& field, int phi_comp,
-                                                int gx_comp, int gy_comp) {
-  p_->register_elliptic_field(block, field, phi_comp, gx_comp, gy_comp);
+                                                int gx_comp, int gy_comp,
+                                                int gradient_sign) {
+  p_->register_elliptic_field(block, field, phi_comp, gx_comp, gy_comp, gradient_sign);
 }
 
 // Attach a named elliptic-field RHS closure to block @p block_name (ADC-428): the per-field Poisson

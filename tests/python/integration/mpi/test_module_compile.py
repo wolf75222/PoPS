@@ -13,7 +13,6 @@ try:
     from pops import model
     from pops._ir.expr import Const, Var
     from pops.math import sqrt
-    from pops.time import FailRun
     import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
 except Exception as exc:  # pops not importable here -> skip, never fake
     print("skip test_module_compile (pops unavailable: %s)" % exc)
@@ -78,17 +77,9 @@ def test_pure_module_program_emits():
     problem = Case(name="module-compile")
     block = problem.block("plasma", mod)
     state = mod.state_handle(mod.state_spaces()["U"])
-    predictor = libtime.PredictorCorrector(
-        block[state],
-        fields=_op(mod, "fields_from_state"),
-        explicit=_op(mod, "explicit_rhs"),
-        implicit=_op(mod, "lorentz"),
-        solve_action=FailRun(),
-    )
-    assert predictor.validate() is True
-    # Direct Module emission has no Case-owned FieldDiscretization to resolve. Keep the final
-    # PredictorCorrector authoring proof above, then emit a field-free Program through the same exact
-    # Module authority; field-solving codegen is covered only through a resolved Case field plan.
+    # A bare Module owns operator formulas, not the numerical field installation selected by a Case.
+    # Exercise its self-contained compilation route with a field-free macro here; PredictorCorrector
+    # is covered through real Case.field(...) handles in the dedicated factory tests.
     P = libtime.ForwardEuler(
         block[state], rate=_op(mod, "transport_rhs"))
     src = emit_cpp_program(P, model=mod.to_dsl())

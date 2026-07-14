@@ -247,7 +247,10 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         self._m.rate_operator(name, flux=flux, sources=sources, fluxes=fluxes)
         return self._typed_handle(name)
 
-    def field_solve(self, name: Any, rhs: Any, *, operator: str = "poisson", aux: Any = None) -> Any:
+    def field_solve(
+        self, name: Any, rhs: Any, *, operator: str = "poisson", aux: Any = None,
+        gradient_sign: int = 1,
+    ) -> Any:
         """Declare a FIELD-SOLVE operator ``F: U -> Fields`` (ADC-559): the mathematical spelling of
         :meth:`elliptic_field`. Solves ``operator(field) = rhs(U)`` populating the named ``aux`` fields
         (default the electrostatic triple); the returned inspectable handle carries the derived
@@ -255,7 +258,8 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         ``FieldDiscretization`` supply the runtime route; the model declaration itself chooses no
         numerical solver.
         """
-        self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
+        self._m.elliptic_field(
+            name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign)
         return self._typed_handle(name)
 
     def local_linear_map(self, name: Any, matrix: Any) -> Any:
@@ -357,12 +361,16 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         """Contribution to the elliptic right-hand side (Poisson coupling; delegates to set_elliptic_rhs)."""
         self._m.set_elliptic_rhs(e)
 
-    def elliptic_field(self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None) -> None:
+    def elliptic_field(
+        self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None,
+        *, gradient_sign: int = 1,
+    ) -> None:
         """NAMED elliptic field: an elliptic solve operator(field) = rhs(U) populating the named @p aux
         fields (default ['phi', 'grad_x', 'grad_y']); delegates to HyperbolicModel.elliptic_field. The
         IR, validation and hash feed the case-owned callable field route. Solver and boundary choices
         remain in ``FieldDiscretization`` rather than this physics declaration."""
-        self._m.elliptic_field(name, rhs, operator=operator, aux=aux)
+        self._m.elliptic_field(
+            name, rhs, operator=operator, aux=aux, gradient_sign=gradient_sign)
 
     def gamma(self, value: Any) -> None:
         """Adiabatic index (EOS), carried by POPS_EXPORT_BLOCK_GAMMA (delegates to set_gamma)."""

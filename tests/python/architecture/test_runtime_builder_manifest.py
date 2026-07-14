@@ -14,7 +14,7 @@ These gates enforce that invariant WITHOUT a build (source tree only, no _pops i
      build_amr_*_for_flux + make_block_ / dispatch_amr_): that pattern belongs in the templates only,
      so a new numeric combination cannot sneak back in as a hand-written file.
 
-The runtime sibling (a native add_block of every manifest combo actually advancing) lives in
+The runtime sibling (a native ``add_equation`` of every manifest combo actually advancing) lives in
 tests/python/unit/runtime/test_seam_combinations.py; this file is the pure-source architecture gate.
 """
 import importlib.util

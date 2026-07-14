@@ -1,8 +1,6 @@
-"""Authoring-layer import and typed descriptor summary gates."""
+"""Pure-Python authoring-layer import and typed descriptor summary gates."""
 import ast
 import pathlib
-
-import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 PHYSICS = REPO_ROOT / "python" / "pops" / "physics"
@@ -28,7 +26,6 @@ def test_physics_never_imports_codegen_at_module_scope():
 
 
 def test_typed_descriptor_repr_is_short_and_has_no_array_dump():
-    import pops._pops  # noqa: F401
     from pops.diagnostics import Integral, MinMax, Norm
     from pops.linalg import L2
     from pops.numerics.reconstruction import FirstOrder, MUSCL, WENO5

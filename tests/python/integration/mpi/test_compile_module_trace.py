@@ -22,11 +22,15 @@ def _skip(msg):
 
 try:
     import pops
+    import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
     from pops.runtime._engine_descriptors import (
         BackgroundDensity, FluidState, IsothermalFlux, Model as NativeBrickModel, NoSource,
     )
-    from tests.python.integration._final_field_program import scalar_advection_field_model
+    from tests.python.integration._final_field_program import (
+        resolve_periodic_field_program,
+        scalar_advection_field_model,
+    )
     from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001
     _skip("pops unavailable: %s" % exc)
@@ -75,8 +79,20 @@ def bricks_model():
 # Standard flow: pass the final Model directly, with no manual Module lowering.
 try:
     compiled_model = physics_model()
+    resolved = resolve_periodic_field_program(
+        compiled_model,
+        lambda state, rate, _fields: libtime.ForwardEuler(state, rate=rate),
+        name="module-trace",
+        block_name="ions",
+        target="system",
+        n=8,
+    )
     compiled = compile_problem(
-        time=_fe_program(compiled_model), model=compiled_model)
+        time=resolved.time,
+        model=compiled_model,
+        field_plans=resolved.field_plans,
+        problem_snapshot=resolved.snapshot,
+    )
 except (RuntimeError, Exception) as exc:  # noqa: BLE001
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -86,11 +102,11 @@ chk(report.get("module_manifest") is not None,
     "compiled.inspect() carries the lowered-module trace (operator-first Module)")
 chk(bool(compiled.module_hash()), "the handle carries a compile-time module_hash for drift detection")
 
-# The trace lists the operator-first operators (flux_default / electrostatic) without the user
+# The trace lists the operator-first operators (transport / electrostatic) without the user
 # ever building a Module by hand.
 ops = [op.get("name") for op in report["module_manifest"].get("operators", [])] \
     if report.get("module_manifest") else []
-chk("flux_default" in ops and "electrostatic" in ops,
+chk("transport" in ops and "electrostatic" in ops,
     "the lowered-module trace lists the operators (%s)" % ops)
 
 # The retired root-level ModelSpec composition no longer enters Program compilation. Its explicit,

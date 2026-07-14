@@ -83,8 +83,8 @@ def resolve(
             "field_solve_from_blocks",
         }
         present = sorted({
-            value.op for value in getattr(resolved_time, "_values", ())
-            if getattr(value, "op", None) in co_layout_ops
+            node["op"] for node in resolved_time.ir_nodes()
+            if node["op"] in co_layout_ops
         })
         if present:
             _refuse_runtime(
@@ -225,7 +225,7 @@ def resolve(
     )
 
     validate_prepared_boundary_jacvec(blocks, resolved_time)
-    validate_shared_interface_program(
+    has_shared_interfaces = validate_shared_interface_program(
         blocks, layout_plan, resolved_time, target=target,
         resolved_hierarchy=resolved_hierarchy,
     )
@@ -237,9 +237,26 @@ def resolve(
         problem, resolved_time, layout=layout_plan, libraries=())
     from pops.codegen._resolution import resolve_capability_evidence
 
+    amr_program_context = None
+    if target == "amr_system":
+        from pops.mesh._amr import FrozenHierarchy
+        from pops.runtime.amr_program_support import AMRProgramSupportContext
+
+        if resolved_hierarchy is None:
+            raise TypeError("resolved AMR hierarchy evidence is missing")
+        hierarchy = resolved_hierarchy.plan
+        amr_program_context = AMRProgramSupportContext(
+            refined_hierarchy=(
+                hierarchy.level_count != 1
+                or type(hierarchy.regrid) is not FrozenHierarchy
+            ),
+            shared_block_interfaces=has_shared_interfaces,
+            field_routes_validated=True,
+        )
+
     evidence = resolve_capability_evidence(
         problem, layout=layout_plan, libraries=(), time=resolved_time,
-        module_abi_key=None)
+        module_abi_key=None, amr_program_context=amr_program_context)
     amr_requirements = None
     amr_capabilities = None
     if bootstrap_plan is not None:

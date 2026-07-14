@@ -2,8 +2,8 @@
 
 ``pops.linalg`` NAMES the linear algebra of a solve: the system ``A x = b``
 (:class:`LinearProblem`), the operators (:class:`LinearOperator` /
-:class:`MatrixFreeOperator`), the residual ``b - A x`` (:class:`Residual`), the typed vector
-norms (:class:`L1` / :class:`L2` / :class:`LInf`) and the scalar reductions (:class:`Dot` /
+:class:`MatrixFreeOperator`), the typed vector norms (:class:`L1` / :class:`L2` /
+:class:`LInf`) and the scalar reductions (:class:`Dot` /
 :class:`Norm2`, with the :func:`dot` / :func:`norm2` builders).
 
 It does NOT solve and it does NOT compute in Python -- everything is an inert typed descriptor;

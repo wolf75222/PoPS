@@ -1,22 +1,12 @@
-"""Architecture gate: public bind consumes InstallPlan with no live-authoring fallback."""
+"""Source-only gate: public bind consumes InstallPlan with no live-authoring fallback."""
 from __future__ import annotations
 
 import ast
-import inspect
-import textwrap
+from pathlib import Path
 
-import pytest
 
-phases = pytest.importorskip("pops.codegen._phases")
-plans = pytest.importorskip("pops.codegen._plans")
-adapters = pytest.importorskip("pops.runtime._bind_adapters")
-runtime_executor = pytest.importorskip("pops.runtime._runtime_executor")
-runtime_instance = pytest.importorskip("pops.runtime._runtime_instance")
-mesh_lowering = pytest.importorskip("pops.runtime._runtime_mesh_lowering")
-bind_validation = pytest.importorskip("pops.runtime._bind_validation")
-install_params = pytest.importorskip("pops.runtime._install_param_routing")
-system_install = pytest.importorskip("pops.runtime._system_unified_install")
-amr_install = pytest.importorskip("pops.runtime._amr_system_install")
+ROOT = Path(__file__).resolve().parents[3]
+POPS = ROOT / "python" / "pops"
 
 
 _RETIRED_AUTHORING_ATTRS = {
@@ -31,8 +21,19 @@ _RECONSTRUCTION_CALLS = {
 }
 
 
-def _tree(value):
-    return ast.parse(textwrap.dedent(inspect.getsource(value)))
+def _definition(relative, qualified_name):
+    """Return one top-level function or class method without importing its module."""
+    path = POPS / relative
+    source = path.read_text(encoding="utf-8")
+    body = ast.parse(source, filename=str(path)).body
+    parts = qualified_name.split(".")
+    for part in parts:
+        node = next((item for item in body
+                     if isinstance(item, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+                     and item.name == part), None)
+        assert node is not None, "%s no longer defines %s" % (relative, qualified_name)
+        body = node.body
+    return node
 
 
 def _getattr_literal(node):
@@ -48,8 +49,8 @@ def _getattr_literal(node):
     return node.args[0], node.args[1].value
 
 
-def _assert_no_authoring_reconstruction(label, value):
-    tree = _tree(value)
+def _assert_no_authoring_reconstruction(label, relative, qualified_name):
+    tree = _definition(relative, qualified_name)
     bad_attributes = {
         node.attr
         for node in ast.walk(tree)
@@ -89,8 +90,7 @@ def _assert_no_authoring_reconstruction(label, value):
 
 
 def test_bind_reads_the_install_plan_and_no_retired_authoring_mirror():
-    source = textwrap.dedent(inspect.getsource(phases.bind))
-    tree = ast.parse(source)
+    tree = _definition("codegen/_phases.py", "bind")
     calls = {
         node.func.id
         for node in ast.walk(tree)
@@ -118,43 +118,51 @@ def test_bind_reads_the_install_plan_and_no_retired_authoring_mirror():
 def test_complete_bind_install_path_has_no_live_authoring_fallback():
     """Every public bind/install hop is plan/data-only, including helpers below bind()."""
     path = {
-        "bind": phases.bind,
-        "install": phases.install,
-        "require_install_plan": plans.require_install_plan,
-        "runtime install_plan": adapters.install_plan,
-        "RuntimeInstance.__init__": runtime_instance.RuntimeInstance.__init__,
-        "RuntimeInstance._run": runtime_instance.RuntimeInstance._run,
-        "install_runtime_executor": runtime_executor.install_runtime_executor,
-        "Uniform provider install": runtime_executor._UniformNativeProvider.install,
-        "Adaptive provider install": runtime_executor._AdaptiveNativeProvider.install,
-        "flow_amr_layout": mesh_lowering.flow_amr_layout,
-        "_apply_refine_criterion": mesh_lowering._apply_refine_criterion,
-        "_refine_threshold_value": mesh_lowering._refine_threshold_value,
-        "_refine_subject_name": mesh_lowering._refine_subject_name,
-        "run_bind_gates": bind_validation.run_bind_gates,
-        "validate_install_arguments": bind_validation.validate_install_arguments,
-        "System._install_compiled": system_install._SystemUnifiedInstall._install_compiled,
+        "bind": ("codegen/_phases.py", "bind"),
+        "install": ("codegen/_phases.py", "install"),
+        "require_install_plan": ("codegen/_plans.py", "require_install_plan"),
+        "runtime install_plan": ("runtime/_bind_adapters.py", "install_plan"),
+        "RuntimeInstance.__init__": ("runtime/_runtime_instance.py", "RuntimeInstance.__init__"),
+        "RuntimeInstance._run": ("runtime/_runtime_instance.py", "RuntimeInstance._run"),
+        "install_runtime_executor": ("runtime/_runtime_executor.py", "install_runtime_executor"),
+        "Uniform provider install": (
+            "runtime/_runtime_executor.py", "_UniformNativeProvider.install"),
+        "Adaptive provider install": (
+            "runtime/_runtime_executor.py", "_AdaptiveNativeProvider.install"),
+        "flow_amr_layout": ("runtime/_runtime_mesh_lowering.py", "flow_amr_layout"),
+        "_apply_refine_criterion": (
+            "runtime/_runtime_mesh_lowering.py", "_apply_refine_criterion"),
+        "_refine_threshold_value": (
+            "runtime/_runtime_mesh_lowering.py", "_refine_threshold_value"),
+        "_refine_subject_name": (
+            "runtime/_runtime_mesh_lowering.py", "_refine_subject_name"),
+        "run_bind_gates": ("runtime/_bind_validation.py", "run_bind_gates"),
+        "validate_install_arguments": (
+            "runtime/_bind_validation.py", "validate_install_arguments"),
+        "System._install_compiled": (
+            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._install_compiled"),
         "System._resolve_instance_model": (
-            system_install._SystemUnifiedInstall._resolve_instance_model),
+            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._resolve_instance_model"),
         "System._declared_elliptic_fields": (
-            system_install._SystemUnifiedInstall._declared_elliptic_fields),
+            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._declared_elliptic_fields"),
         "System._install_program_params": (
-            system_install._SystemUnifiedInstall._install_program_params),
-        "AmrSystem._install_compiled": amr_install._AmrSystemInstall._install_compiled,
+            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._install_program_params"),
+        "AmrSystem._install_compiled": (
+            "runtime/_amr_system_install.py", "_AmrSystemInstall._install_compiled"),
         "AmrSystem._declared_elliptic_fields": (
-            amr_install._AmrSystemInstall._declared_elliptic_fields),
-        "_require_schema": install_params._require_schema,
-        "_slot_for_block": install_params._slot_for_block,
-        "_resolved_value": install_params._resolved_value,
-        "route_block_params": install_params.route_block_params,
-        "route_program_params": install_params.route_program_params,
+            "runtime/_amr_system_install.py", "_AmrSystemInstall._declared_elliptic_fields"),
+        "_require_schema": ("runtime/_install_param_routing.py", "_require_schema"),
+        "_slot_for_block": ("runtime/_install_param_routing.py", "_slot_for_block"),
+        "_resolved_value": ("runtime/_install_param_routing.py", "_resolved_value"),
+        "route_block_params": ("runtime/_install_param_routing.py", "route_block_params"),
+        "route_program_params": ("runtime/_install_param_routing.py", "route_program_params"),
     }
-    for label, value in path.items():
-        _assert_no_authoring_reconstruction(label, value)
+    for label, (relative, qualified_name) in path.items():
+        _assert_no_authoring_reconstruction(label, relative, qualified_name)
 
 
 def test_program_param_routing_requires_captured_metadata_not_codegen_reentry():
-    tree = _tree(install_params.route_program_params)
+    tree = _definition("runtime/_install_param_routing.py", "route_program_params")
     calls = {
         node.func.id
         for node in ast.walk(tree)

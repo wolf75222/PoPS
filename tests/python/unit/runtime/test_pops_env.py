@@ -25,7 +25,7 @@ import pytest
 
 try:
     from pops.codegen.env import CodegenEnv, resolve_log_level, resolve_autotune
-    from pops.codegen.loader import CompiledProblem
+    from pops.codegen.loader import CompiledModel, CompiledProblem
     from pops.numerics.terms import DefaultSource, Flux
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_pops_env (pops unavailable: %s)" % exc)
@@ -37,20 +37,35 @@ from tests.python.unit.runtime._typed_program import typed_program_state
 INCLUDE = str(Path(__file__).resolve().parents[4] / "include")
 
 
-def _program(name="env_demo"):
+def _program_fixture(name="env_demo"):
     """A real in-memory Program (a state, a Forward-Euler commit) -- no compile."""
-    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    P, module, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
     U = temporal.n
     R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
-    return P
+    return P, module
+
+
+def _program(name="env_demo"):
+    return _program_fixture(name)[0]
+
+
+def _compiled_model():
+    """Exact metadata carrier for synthetic handles; no compiler is involved."""
+    return CompiledModel(
+        so_path="<synthetic>", backend="production", cons_names=["u"],
+        cons_roles=["Scalar"], prim_names=["u"], n_vars=1, gamma=None, n_aux=0,
+        params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="env-model",
+        cxx="c++", std="c++23",
+    )
 
 
 def _handle(env, program=None):
     """A synthetic CompiledProblem carrying a resolved CodegenEnv (no .so on disk)."""
     P = program if program is not None else _program()
-    return CompiledProblem("/tmp/pops-cache/problem.so", P, None, "SIG|c++|c++23", "c++", "c++23",
+    return CompiledProblem("/tmp/pops-cache/problem.so", P, _compiled_model(),
+                           "SIG|c++|c++23", "c++", "c++23",
                            codegen_env=env)
 
 
@@ -122,7 +137,8 @@ def test_env_state_surfaced_in_inspect():
 
 def test_inspect_without_env_is_empty_not_faked():
     # A handle built outside compile_problem carries no env -> {} (documented absence, not a default).
-    bare = CompiledProblem("/tmp/x/problem.so", _program(), None, "SIG", "c++", "c++23")
+    bare = CompiledProblem("/tmp/x/problem.so", _program(), _compiled_model(),
+                           "SIG", "c++", "c++23")
     assert bare.codegen_env is None
     assert bare.inspect().env == {}
 
@@ -163,8 +179,9 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         monkeypatch.setenv("POPS_DUMP_CPP", "1")
         monkeypatch.setenv("POPS_AUTOTUNE", "basic")
 
+        program, module = _program_fixture("wired")
         compiled = cd.compile_problem(
-            time=_program("wired"), force=True, include=INCLUDE)
+            model=module, time=program, force=True, include=INCLUDE)
 
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
@@ -181,7 +198,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
 
         # A second call hits the cache (the placeholder .so exists) and STILL records the env.
         again = cd.compile_problem(
-            time=_program("wired"), force=False, include=INCLUDE)
+            model=module, time=program, force=False, include=INCLUDE)
         assert again.codegen_env is not None
         assert again.so_path == compiled.so_path
 
@@ -199,8 +216,9 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
         monkeypatch.delenv("POPS_KEEP_GENERATED", raising=False)
+        program, module = _program_fixture("dbg")
         compiled = cd.compile_problem(
-            time=_program("dbg"), force=True, debug=True, include=INCLUDE)
+            model=module, time=program, force=True, debug=True, include=INCLUDE)
         assert compiled.codegen_env.keep_generated is True
         assert compiled.generated_sources and os.path.exists(compiled.generated_sources[0])
 

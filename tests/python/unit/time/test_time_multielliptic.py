@@ -32,7 +32,7 @@ Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- 
 """
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import solve_field, typed_field, typed_state
+from typed_program_support import codegen_field_plans, solve_field, typed_field, typed_state
 
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
@@ -137,9 +137,14 @@ def _prog(name, field=None, model=None):
     return P
 
 
+def _emit(program, *, model=None):
+    return emit_cpp_program(
+        program, model=model, field_plans=codegen_field_plans(program))
+
+
 # default solve_fields lowers to the 2-arg ctx call (historical), named to the 3-arg ctx call.
 default_codegen_model = default_model()
-src_default = emit_cpp_program(_prog("me_def_prog", model=default_codegen_model),
+src_default = _emit(_prog("me_def_prog", model=default_codegen_model),
     model=default_codegen_model)
 chk("ctx.solve_fields_from_state(0, " in src_default,
     "default solve_fields lowers to ctx.solve_fields_from_state(0, ...)")
@@ -147,7 +152,7 @@ chk('ctx.solve_fields_from_state("' not in src_default,
     "default solve_fields does NOT use the named (3-arg) overload")
 
 named_codegen_model = named_model()
-src_named = emit_cpp_program(_prog("me_nam_prog", field="phi2", model=named_codegen_model),
+src_named = _emit(_prog("me_nam_prog", field="phi2", model=named_codegen_model),
     model=named_codegen_model)
 chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named,
     "named solve_fields lowers to ctx.solve_fields_from_state(\"phi2\", 0, ...)")
@@ -161,10 +166,10 @@ chk("set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
 
 # Validation: unknown field / missing model / aux-reading rhs / undeclared aux output / amr target.
 unknown_model = named_model("me_unknown_model")
-chk(raises(ValueError, lambda: emit_cpp_program(_prog(
+chk(raises(ValueError, lambda: _emit(_prog(
     "me_unknown", field="nope", model=unknown_model), model=unknown_model)),
     "an unknown elliptic_field name in solve_fields raises ValueError")
-chk(raises(NotImplementedError, lambda: emit_cpp_program(_prog("me_nomodel", field="phi2"))),
+chk(raises(NotImplementedError, lambda: _emit(_prog("me_nomodel", field="phi2"))),
     "a named solve_fields without a model raises NotImplementedError")
 
 
@@ -204,7 +209,7 @@ chk("pops::AmrSystem*" in amr_loader,
 # assert the default program never emits the named (3-arg) ctx call (above) AND that adding a named
 # field to a SECOND model leaves the default model's lowering untouched.
 default_codegen_model2 = default_model()
-src_default2 = emit_cpp_program(_prog("me_def_prog", model=default_codegen_model2),
+src_default2 = _emit(_prog("me_def_prog", model=default_codegen_model2),
     model=default_codegen_model2)
 chk(src_default == src_default2, "the default program lowers deterministically (no named-field leak)")
 

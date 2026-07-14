@@ -179,8 +179,15 @@ def _field_rhs_providers(problem: Any, registration: Any) -> tuple[tuple[Any, ..
                 "field %r provider block is not registered by this Problem" % operator.name)
     from pops.fields._identity import strict_field_data
     expected = operator.equation.rhs
-    if getattr(operator.equation.lhs, "scale", -1) > 0:
-        expected = -expected
+    from pops.math import Laplacian, elliptic_terms
+    laplacians = [
+        term for term in elliptic_terms(operator.equation.lhs)
+        if isinstance(term, Laplacian)
+    ]
+    if len(laplacians) == 1:
+        normalization = -float(laplacians[0].scale)
+        if normalization != 1.0:
+            expected = expected / normalization
     if strict_field_data(composed_body) != strict_field_data(expected):
         raise ValueError(
             "field %r descriptor RHS differs from its ordered provider composition"

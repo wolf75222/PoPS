@@ -70,8 +70,8 @@ def main():
             sys = System(n=n, L=L, periodic=True)
             lim = {"none": dict(none=True), "minmod": dict(minmod=True),
                    "weno5": dict(weno5=True)}[limiter]
-            sys.block("gas", spec, spatial=engine.Spatial(flux=Rusanov(), recon=Conservative(),
-                                                           **lim), time=engine.Explicit())
+            sys.add_equation("gas", spec, spatial=engine.Spatial(flux=Rusanov(), recon=Conservative(),
+                                                                    **lim), time=engine.Explicit())
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             sys.solve_fields()
@@ -115,9 +115,9 @@ def main():
 
         def build_ref_step():
             sys = System(n=n, L=L, periodic=True)
-            sys.block("gas", spec, spatial=engine.Spatial(weno5=True, flux=Rusanov(),
-                                                           recon=Conservative()),
-                          time=engine.Explicit())
+            sys.add_equation("gas", spec, spatial=engine.Spatial(weno5=True, flux=Rusanov(),
+                                                                    recon=Conservative()),
+                             time=engine.Explicit())
             sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys

@@ -86,7 +86,8 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
         },
         time=None,
         blocks=(ResolvedBlock(
-            "ne", module, None, "production", ("U",), ("test::ne::state::U",)),),
+            "ne", module, {"ghost_depth": 1}, "production", ("U",),
+            ("test::ne::state::U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -98,13 +99,14 @@ the resolved AMR layout and a target-specific compiled block. No ``.so`` is dlop
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
-        blocks=(CompiledBlockArtifact("ne", handle, None, ("U",)),),
+        blocks=(CompiledBlockArtifact(
+            "ne", handle, {"ghost_depth": 1}, ("U",)),),
     )
     inputs = BindInputs()
     InstallPlan(
         artifact=artifact,
         bind_inputs=inputs,
-        instances={"ne": {"model": handle, "spatial": None}},
+        instances={"ne": {"model": handle, "spatial": {"ghost_depth": 1}}},
         params=schema.resolve_bind({}, compile_values=resolved.compile_values),
         aux={},
     )
@@ -141,16 +143,19 @@ def test_estimate_memory_on_the_amr_route_handle_adds_a_patch_budget():
 def test_generic_inspection_surfaces_the_carried_refine_regrid_tags():
     artifact = _amr_route_handle()
     assert not hasattr(artifact, "inspect_amr")
-    rep = pops.inspect(artifact.layout)["amr_report"]
+    inspected = pops.inspect(artifact.layout)
+    rep = inspected["amr_report"]
     assert rep["layout"] == "amr" and rep["max_levels"] == 2
-    slots = {row["slot"] for row in rep["policies"]}
-    assert "refine" in slots and "regrid" in slots
+    # The final AMR descriptor owns typed authorities, not the retired ``refine``/``patches``
+    # policy slots.  Their complete payloads remain visible under the ordinary layout options.
+    assert {"tagging", "regrid", "transfer", "execution"} <= set(inspected["options"])
+    assert inspected["options"]["hierarchy"]["max_levels"] == 2
 
 
 # --- live runtime profile + CFL on a real AmrSystem ------------------------------
 def _built_amr(n=32):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16)
-    sim.block("ne", engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
+    sim.add_equation("ne", engine.Model(engine.Scalar(), engine.ExB(B0=1.0), engine.NoSource(),
                                    engine.ChargeDensity(charge=1.0)),
                   spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())

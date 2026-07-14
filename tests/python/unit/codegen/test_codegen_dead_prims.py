@@ -77,6 +77,22 @@ def realizable_states(nstates, seed):
     return out
 
 
+def moment_model(name, closure):
+    """Final public moment construction used by both the numeric and codegen checks."""
+    return (M.CartesianVelocityMoments(ORDER, closure=closure, robust=False)
+            .add_transport()
+            .build(name=name))
+
+
+def codegen_lower(model):
+    """Internal lowering boundary, intentionally isolated to this C++ emission test."""
+    dsl = getattr(model, "_dsl", None)
+    lowered = getattr(dsl, "_m", None)
+    if lowered is None or not callable(getattr(lowered, "emit_cpp_brick", None)):
+        raise TypeError("codegen test requires the model's internal brick-lowering protocol")
+    return lowered
+
+
 HARNESS = r"""
 #include <pops/physics/bricks/bricks.hpp>
 #include <pops/core/model/physical_model.hpp>
@@ -126,8 +142,8 @@ def check_d_is_zero():
     def zfloat(S):
         return {"S%d%d" % (p, ORDER + 1 - p): 0.0 for p in range(ORDER + 2)}
 
-    mc = M.build_moment_model("zc", ORDER, zconst)._m
-    mf = M.build_moment_model("zf", ORDER, zfloat)._m
+    mc = codegen_lower(moment_model("zc", zconst))
+    mf = codegen_lower(moment_model("zf", zfloat))
     const_top = [c for c in top if c in mc.prim_defs]
     chk(const_top == [], "Const(0.0) closure: higher-order reconstruction NOT emitted (%s)" % const_top)
     chk(list(mc.prim_defs) == list(mf.prim_defs), "Const(0.0) == float 0.0 (same primitives)")
@@ -158,29 +174,29 @@ def check_bc_numerique(m, cxx):
         tag, k, d, i, val = line.split()
         (fd if tag == "D" else fh)[(int(k), int(d), int(i))] = float(val)
 
-    facade = M.build_moment_model("ref", ORDER, M.gaussian_closure(ORDER))  # eval_flux Python
+    facade = moment_model("ref", M.gaussian_closure(ORDER))
     rel_ref = 0.0
     rel_hoi = 0.0
     for k, s in enumerate(states):
         U = np.array(s, dtype=float).reshape(NV, 1, 1)
         for d in range(2):
-            ref = facade.eval_flux(U, {}, d).reshape(NV)
+            ref = facade.flux_value(U, {}, facade.frame.axes[d]).reshape(NV)
             cd = np.array([fd[(k, d, i)] for i in range(NV)])
             ch = np.array([fh[(k, d, i)] for i in range(NV)])
             den = np.maximum(np.abs(ref), 1e-300)
             rel_ref = max(rel_ref, float(np.max(np.abs(cd - ref) / den)))
             rel_hoi = max(rel_hoi, float(np.max(np.abs(ch - cd) / np.maximum(np.abs(cd), 1e-300))))
-    chk(rel_ref < 1e-13, "compiled flux (filtered) == Python eval_flux (rtol %.2e)" % rel_ref)
+    chk(rel_ref < 1e-13, "compiled flux (filtered) == Python flux_value (rtol %.2e)" % rel_ref)
     chk(rel_hoi < 1e-13, "hoist flux == default flux (rtol %.2e, rounding changes but < 1e-13)" % rel_hoi)
 
 
 def main():
-    m = M.build_moment_model("mom", ORDER, M.gaussian_closure(ORDER))._m
+    m = codegen_lower(moment_model("mom", M.gaussian_closure(ORDER)))
     check_a_filtrage(m)
     check_d_is_zero()
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if cxx and os.path.isdir(INCLUDE):
-        check_bc_numerique(M.build_moment_model("mom", ORDER, M.gaussian_closure(ORDER))._m, cxx)
+        check_bc_numerique(codegen_lower(moment_model("mom", M.gaussian_closure(ORDER))), cxx)
     else:
         print("skip  (b)/(c): compiler or pops headers absent (%s)" % INCLUDE)
     print("FAILS =", fails)

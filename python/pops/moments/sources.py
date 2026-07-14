@@ -115,7 +115,7 @@ def bgk_source(M: Any, nu: Any) -> list:
     return out
 
 
-# --- thin facades over the free functions (Spec 4 moments NEW API) ---------
+# --- thin facades over the free functions ----------------------------------
 # These carry no math: they forward to the closure-free free functions above so the
 # arithmetic stays in one place and lowers to the same generated flux.
 class VlasovSources:

@@ -28,6 +28,8 @@
 
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/runtime/system.hpp>
+#include <pops/coupling/base/elliptic_rhs.hpp>
+#include <pops/core/state/state.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 
@@ -207,4 +209,78 @@ TEST(test_coupled_fieldsolve, coupled_solve_matches_solve_fields_and_honors_stag
 
   if (!chk.failed())
     std::printf("OK test_coupled_fieldsolve\n");
+}
+
+TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign) {
+#if defined(POPS_HAS_KOKKOS)
+  int argc = 1;
+  char arg0[] = "test_named_gradient_sign";
+  char* argv[] = {arg0, nullptr};
+  Kokkos::ScopeGuard guard(argc, argv);
+#endif
+  const int n = 32;
+  System system(SystemConfig{n, 1.0, true});
+  const std::string slot = "signed-gradient-provider";
+  system.set_field_solver_plan(
+      slot, "test:signed-gradient-provider", "test:plasma", "plasma", "potential",
+      {"test:plasma/potential/rhs"}, {"plasma"}, {"potential"}, {1.0},
+      "geometric_mg", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0);
+  system.set_field_topology_authority(
+      slot, "builtin_rectangular_cell_graph_v1", "test:periodic-cartesian",
+      "test:periodic-cartesian:v1");
+  system.set_field_boundary_plan(
+      slot, {"periodic", "periodic", "periodic", "periodic"},
+      {0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.0, 0.0},
+      {0.0, 0.0, 0.0, 0.0});
+  system.set_field_nullspace(slot, true, true);
+
+  ModelSpec spec;
+  spec.transport = "exb";
+  spec.source = "none";
+  spec.elliptic = "charge";
+  spec.q = 1.0;
+  spec.B0 = 1.0;
+  system.add_block(
+      "plasma", spec, "minmod", "rusanov", "conservative", "explicit", 1, true);
+  system.ensure_aux_width(kAuxNamedBase + 3);
+  EXPECT_THROW(
+      system.register_elliptic_field(
+          "plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
+          kAuxNamedBase + 2, 0),
+      std::invalid_argument);
+  system.register_elliptic_field(
+      "plasma", "potential", kAuxNamedBase, kAuxNamedBase + 1,
+      kAuxNamedBase + 2, -1);
+  system.set_block_elliptic_field(
+      "plasma", "potential", [](const MultiFab& state, MultiFab& rhs) {
+        add_scaled_component(state, Real(1), 0, rhs);
+      });
+  system.set_density("plasma", charge_density(n, 1.0, 0.0));
+
+  const SolveReport report =
+      system.solve_fields_from_state(slot, 0, system.block_state(0));
+  ASSERT_TRUE(report.solved()) << report.status_name();
+  const std::vector<double> phi = system.field_potential_global(slot);
+  const std::vector<double> gx = system.aux_field_component(kAuxNamedBase + 1);
+  const std::vector<double> gy = system.aux_field_component(kAuxNamedBase + 2);
+  ASSERT_EQ(phi.size(), static_cast<std::size_t>(n) * n);
+  ASSERT_EQ(gx.size(), phi.size());
+  ASSERT_EQ(gy.size(), phi.size());
+  const double scale = -0.5 * n;
+  double error = 0.0;
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const int im = (i + n - 1) % n, ip = (i + 1) % n;
+      const int jm = (j + n - 1) % n, jp = (j + 1) % n;
+      const std::size_t cell = static_cast<std::size_t>(j) * n + i;
+      const double expected_x = scale *
+          (phi[static_cast<std::size_t>(j) * n + ip] -
+           phi[static_cast<std::size_t>(j) * n + im]);
+      const double expected_y = scale *
+          (phi[static_cast<std::size_t>(jp) * n + i] -
+           phi[static_cast<std::size_t>(jm) * n + i]);
+      error = std::fmax(error, std::fabs(gx[cell] - expected_x));
+      error = std::fmax(error, std::fabs(gy[cell] - expected_y));
+    }
+  EXPECT_EQ(error, 0.0) << "GradientOutput(sign=-1) must publish -grad(phi)";
 }

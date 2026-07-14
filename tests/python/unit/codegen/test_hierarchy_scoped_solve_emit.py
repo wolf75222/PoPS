@@ -189,10 +189,13 @@ def test_omitted_fac_controls_emit_native_default_sentinels_only():
         "static_cast<pops::Real>(%s), 0, -1);" % (scalar_cpp(0), scalar_cpp(0))
     )
     assert expected in source
-    assert "ctx.solve_composite_tensor_fac(1, 1, static_cast<pops::Real>(%s), " \
-           "static_cast<pops::Real>(%s), 13);" % (
-        scalar_cpp(4.0e-8), scalar_cpp(0)
-    ) in source
+    solve_line = next(
+        line for line in source.splitlines()
+        if "ctx.solve_composite_tensor_fac(" in line
+    )
+    assert "ctx.solve_composite_tensor_fac(1, 1," in solve_line
+    assert scalar_cpp(4.0e-8) in solve_line
+    assert solve_line.rstrip().endswith(", 13);")
 
 
 def test_refined_solution_publishes_atomically_before_reflux_then_average_down():

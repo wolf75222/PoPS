@@ -77,6 +77,47 @@ def test_field_operator_identity_observes_unknown_equation_and_outputs() -> None
     assert changed_output.identity != baseline_identity
 
 
+@pytest.mark.parametrize("invalid", (0, 2, -2, True, False, 1.0, "-1"))
+def test_gradient_output_sign_is_an_exact_signed_integer(invalid: object) -> None:
+    with pytest.raises(ValueError, match="exactly -1 or 1"):
+        GradientOutput("electric_field", _handle("phi"), sign=invalid)
+
+
+def test_elliptic_term_must_target_the_exact_unknown_not_a_same_owner_peer() -> None:
+    owner = OwnerPath.model("two-fields")
+    phi = _handle("phi", kind="field", owner=owner)
+    psi = _handle("psi", kind="field", owner=owner)
+    operator = FieldOperator(
+        "mismatched-principal-field",
+        unknown=phi,
+        equation=(-laplacian(ValueExpr(psi)) == ValueExpr(_handle("rho", owner=owner))),
+        providers=_handle("rhs", kind="field_operator", owner=owner),
+        outputs=(FieldOutput("phi", phi),),
+    )
+
+    with pytest.raises(ValueError, match="elliptic term Laplacian.*exact declared unknown"):
+        operator.validate()
+
+
+@pytest.mark.parametrize("output_type", (FieldOutput, GradientOutput))
+def test_recipe_output_source_must_match_unknown_not_a_same_owner_peer(
+    output_type: type[FieldOutput] | type[GradientOutput],
+) -> None:
+    owner = OwnerPath.model("two-output-fields")
+    phi = _handle("phi", kind="field", owner=owner)
+    psi = _handle("psi", kind="field", owner=owner)
+    operator = FieldOperator(
+        "mismatched-output-field",
+        unknown=phi,
+        equation=(-laplacian(ValueExpr(phi)) == ValueExpr(_handle("rho", owner=owner))),
+        providers=_handle("rhs", kind="field_operator", owner=owner),
+        outputs=(output_type("mismatched", psi),),
+    )
+
+    with pytest.raises(ValueError, match=r"(Field|Gradient)Output.*source.*unknown"):
+        operator.validate()
+
+
 def test_field_operator_resolves_handles_in_equation_and_outputs() -> None:
     authoring_owner = OwnerPath.fresh(OwnerPath.model("authoring").kind, "authoring")
     phi = _handle("phi", owner=authoring_owner)

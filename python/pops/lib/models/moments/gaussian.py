@@ -75,9 +75,9 @@ def _author(
         components={frame.x: expressions.x, frame.y: expressions.y},
     )
     if exact_speeds:
-        model._dsl.wave_speeds_from_jacobian()
+        model.wave_speeds_from_jacobian()
     if roe:
-        model._dsl.roe_from_jacobian()
+        model.roe_from_jacobian()
 
     sources = []
     if q_over_m is not None or poisson_scale is not None:

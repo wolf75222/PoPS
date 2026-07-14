@@ -124,7 +124,7 @@ def section_a(t):
         "a non-callable residual is rejected")
 
     def resid(P, Uit, U0):
-        return P.value(Uit - U0)
+        return P.value("validation_residual", Uit - U0)
     chk(raises(ValueError, lambda: P.solve(LocalResidual(resid, "x"), solver=LocalNewton())),
         "a non-State initial_guess is rejected")
     chk(raises(ValueError, lambda: LocalNewton(max_iterations=0)),
@@ -135,7 +135,7 @@ def section_a(t):
     # A non-local residual op (P.rhs carries a divergence / halo) cannot live in a per-cell kernel.
     def bad_resid(P, Uit, U0):
         R = P.rhs(state=Uit, terms=[Flux(), DefaultSource()])
-        return P.value(Uit - U0 - P.dt * R, at=Uit.point)
+        return P.value("nonlocal_residual", Uit - U0 - P.dt * R, at=Uit.point)
     chk(raises(ValueError, lambda: P.solve(
         LocalResidual(bad_resid, U), solver=LocalNewton())),
         "a non-local residual op (P.rhs) is rejected")
@@ -160,6 +160,7 @@ def section_a(t):
 
         def r(Q, Uit, U0):
             return Q.value(
+                "parameterized_residual",
                 Uit - U0 - dt * Q._source("react", state=Uit), at=Uit.point)
         Q.commit(endpoint, Q.solve(
             LocalResidual(r, guess), name="W", solver=LocalNewton(
@@ -199,6 +200,7 @@ def section_a(t):
 
     def big_resid(P, Uit, U0):
         return P.value(
+            "wide_residual",
             Uit - U0 - P.dt * P._source("react", state=Uit), at=Uit.point)
     Pbig.commit(endpoint,
                 Pbig.solve(

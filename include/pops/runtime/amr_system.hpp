@@ -581,6 +581,8 @@ class AmrSystem {
                              const std::string& hierarchy, double abs_tol, double rel_tol,
                              int max_cycles, int min_coarse, int pre_smooth,
                              int post_smooth, int bottom_sweeps, int coarse_threshold);
+  /// Install the resolved scalar reaction coefficient of one named screened field.
+  void set_field_reaction(const std::string& provider_slot, double reaction);
   void set_field_topology_authority(const std::string& provider_slot,
                                     const std::string& provider_kind,
                                     const std::string& provenance,
@@ -698,10 +700,11 @@ class AmrSystem {
   /// @{
   /// Registers named @p field's aux output components (where its solved phi / centered grad land). Called
   /// by the native AMR loader for each m.elliptic_field. @p gx_comp / @p gy_comp < 0 => only phi is
-  /// written (the field declared fewer than 3 aux slots). @throws if the system is already built.
+  /// written (both must equal -1); @p gradient_sign is exactly -1 or +1 and scales both derivatives.
+  /// @throws if the system is already built or the output contract is malformed.
   POPS_EXPORT void register_elliptic_field(const std::string& block_name,
                                            const std::string& provider_key, int phi_comp,
-                                           int gx_comp, int gy_comp);
+                                           int gx_comp, int gy_comp, int gradient_sign);
   /// Attaches named @p field's RHS closure (rhs += elliptic_field_rhs(U)) to block @p block_name. Called
   /// by the native AMR loader (make_poisson_rhs of the per-field brick). @throws if the system is already
   /// built or the block is unknown.

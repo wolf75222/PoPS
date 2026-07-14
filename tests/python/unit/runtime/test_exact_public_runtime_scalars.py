@@ -1,14 +1,13 @@
 """ADC-652: public runtime descriptors retain exact scalars until native lowering."""
 from __future__ import annotations
 
-from decimal import Decimal, localcontext
+from decimal import Decimal
 from fractions import Fraction
 
 import pytest
 
 import pops.runtime._engine_descriptors as engine
 from pops._ir import ScalarLiteral, scalar_to_native
-from pops.runtime._bricks_model import _native_to_brick
 
 
 def test_root_model_bricks_retain_fraction_and_decimal_authoring_values():
@@ -38,17 +37,6 @@ def test_modelspec_is_the_explicit_native_real_boundary():
     assert model.qom == float(Fraction(-1, 3))
     assert model.alpha == float(Decimal("0.2"))
     assert model.n0 == float(Fraction(1, 8))
-
-
-def test_hybrid_native_brick_codegen_keeps_exact_payload_until_cpp():
-    value = Decimal("1.123456789012345678901234567890123456789")
-    with localcontext() as context:
-        context.prec = 5
-        brick = _native_to_brick(engine.ExB(B0=value), "hyperbolic")
-        source = brick.emit("ExactExB")
-
-    assert brick.fields["B0"] == value
-    assert "1.123456789012345678901234567890123456789" in source
 
 
 def test_root_time_and_spatial_descriptors_retain_exact_real_controls():

@@ -37,7 +37,8 @@ def _model():
 def _built_amr(regrid_every=2, n=32):
     """A small built AmrSystem with one refined patch (density bump + a few steps)."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
-    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    sim.add_equation(
+        "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
@@ -57,6 +58,13 @@ def test_amr_handle_is_an_inert_runtime_view():
     # The str is short and array-free (sec.12.1).
     text = str(view)
     assert "AmrRuntimeView" in text and "array(" not in text and len(text) < 200
+    mutators = [name for name in dir(view)
+                if not name.startswith("_")
+                and (name.startswith(("set_", "configure", "add_"))
+                     or "level" in name.lower() or "ratio" in name.lower())]
+    assert not mutators, (
+        "sim.amr is a read-only runtime view; it must expose no AMR-config mutator, found: %s"
+        % mutators)
 
 
 def test_system_has_no_amr_handle_with_a_clear_error():
@@ -172,7 +180,7 @@ def test_explain_reflux_reports_route_requirement():
 # --- explain_checkpoint --------------------------------------------------------
 def test_explain_checkpoint_restartable_for_frozen_single_block():
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    sim.block("ne", model=_model())
+    sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert isinstance(rep, CheckpointReport)
     assert rep.restartable is True and rep.violations == []
@@ -181,7 +189,7 @@ def test_explain_checkpoint_restartable_for_frozen_single_block():
 
 def test_explain_checkpoint_supports_dynamic_regrid():
     sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=3)
-    sim.block("ne", model=_model())
+    sim.add_equation("ne", model=_model())
     rep = sim.amr.explain_checkpoint()
     assert rep.restartable is True and rep.violations == []
     assert any("active regridding is supported" in n for n in rep.notes)
@@ -283,8 +291,8 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
         },
         time=None,
         blocks=(ResolvedBlock(
-            "ne", {"kind": "amr-runtime-inspect-stub"}, None, "production", ("U",),
-            ("test::ne::state::U",)),),
+            "ne", {"kind": "amr-runtime-inspect-stub"}, {"ghost_depth": 1},
+            "production", ("U",), ("test::ne::state::U",)),),
         bind_schema=schema,
         compile_values=schema.resolve_compile(),
         field_plans={},
@@ -296,14 +304,15 @@ def test_compiled_artifact_exposes_its_layout_to_the_generic_inspector():
     artifact = CompiledSimulationArtifact(
         plan=resolved,
         program=None,
-        blocks=(CompiledBlockArtifact("ne", cm, None, ("U",)),),
+        blocks=(CompiledBlockArtifact(
+            "ne", cm, {"ghost_depth": 1}, ("U",)),),
     )
 
     assert not hasattr(artifact, "inspect_amr")
     payload = pops.inspect(artifact.layout)["amr_report"]
     assert payload["layout"] == "amr"
     assert payload["max_levels"] == 2
-    assert payload["transition_ratios"] == [2]
+    assert payload["ratio"] == 2
 
     # A separately authored layout is inspected directly, with no artifact-specific override API.
     override = pops.inspect(final_amr_layout(cartesian_grid(n=32)))["amr_report"]

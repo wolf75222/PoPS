@@ -60,6 +60,7 @@ struct FacRedBlackFivePointSorKernel {
   Real idx2;
   Real idy2;
   Real omega;
+  Real reaction;
   int color;
   bool has_eps;
 
@@ -70,7 +71,7 @@ struct FacRedBlackFivePointSorKernel {
     const Real exp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i + 1, j, 0)) : Real(1);
     const Real eym = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j - 1, 0)) : Real(1);
     const Real eyp = has_eps ? eps_harmonic(eps(i, j, 0), eps(i, j + 1, 0)) : Real(1);
-    const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
+    const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 + reaction;
     const Real nb =
         (exm * phi(i - 1, j, 0) + exp * phi(i + 1, j, 0)) * idx2 +
         (eym * phi(i, j - 1, 0) + eyp * phi(i, j + 1, 0)) * idy2;
@@ -385,7 +386,9 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
       for (int s = 0; s < sweeps; ++s)
         for (int color = 0; color < 2; ++color)
           for_each_cell(vb, detail::FacRedBlackFivePointSorKernel{P, F, E, idx2, idy2,
-                                                                  omega, color, he});
+                                                                  omega,
+                                                                  has_reaction_ ? reaction_ : Real(0),
+                                                                  color, he});
       continue;
     }
     // CoverageMask is host storage. The intermediate-level mask and the nine-point same-color
@@ -403,7 +406,8 @@ inline void CompositeFacPoisson::fine_sor_level_(int m, const MultiFab& f_eff, i
             const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
             const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
             const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
-            const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
+            const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 +
+                              (has_reaction_ ? reaction_ : Real(0));
             const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
                             (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
             const Real cross =
@@ -563,6 +567,8 @@ inline Real CompositeFacPoisson::composite_residual_(int m) {
                   has_eps_ ? &eps_level(m) : nullptr,
                   /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &a_xy_level(m) : nullptr,
                   has_cross_ ? &a_yx_level(m) : nullptr);
+  if (has_reaction_)
+    apply_constant_reaction_(lap, operator_view);
   if (m + 1 == n_levels_) {
     Real nrm = Real(0);
     for (int li = 0; li < resm.local_size(); ++li) {

@@ -1,7 +1,9 @@
 """Total resolve-time lowering from field declarations to runtime install plans."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 from types import MappingProxyType
 from typing import Any
 
@@ -27,7 +29,7 @@ from pops.fields.discretization import (
 )
 from pops.fields.gauges import MeanValueGauge
 from pops.fields.nullspace import ConstantNullspace
-from pops.fields.operator import FieldOperator
+from pops.fields.operator import FieldOperator, _field_targets_unknown
 
 
 def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: str) -> None:
@@ -39,6 +41,41 @@ def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: st
 
 def _zero(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+
+def _validate_reaction_manifest(reaction: Any) -> None:
+    """Validate the closed scalar-reaction plan variants carried across compile/bind."""
+    if reaction is None:
+        return
+    if not isinstance(reaction, Mapping) or reaction.get("schema_version") != 1:
+        raise TypeError("field reaction plan must be a schema-v1 mapping")
+    kind = reaction.get("kind")
+    from pops.solvers._numeric import native_float
+    if kind == "scalar_constant":
+        if set(reaction) != {"schema_version", "kind", "value"}:
+            raise ValueError("scalar_constant reaction plan has an invalid shape")
+        value = native_float(reaction["value"], where="constant field reaction")
+        if value <= 0.0:
+            raise ValueError("constant field reaction must be strictly positive")
+        return
+    if kind == "scalar_bind_parameter":
+        if set(reaction) != {"schema_version", "kind", "parameter", "multiplier"}:
+            raise ValueError("scalar_bind_parameter reaction plan has an invalid shape")
+        parameter = reaction["parameter"]
+        if not isinstance(parameter, Mapping) \
+                or parameter.get("kind") != "parameter" \
+                or parameter.get("param_kind") not in ("runtime", "derived") \
+                or not isinstance(parameter.get("qualified_id"), str) \
+                or not parameter["qualified_id"]:
+            raise ValueError(
+                "scalar_bind_parameter reaction plan requires one canonical runtime/derived "
+                "parameter identity")
+        multiplier = native_float(
+            reaction["multiplier"], where="field reaction parameter multiplier")
+        if multiplier <= 0.0:
+            raise ValueError("field reaction parameter multiplier must be strictly positive")
+        return
+    raise ValueError("field reaction plan carries unknown kind %r" % kind)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +121,7 @@ class ResolvedFieldInstallPlan:
             validate()
             if to_data() != nonlinear_manifest:
                 raise ValueError("field nonlinear provider disagrees with its canonical manifest")
+        _validate_reaction_manifest(self.native_options.get("reaction"))
         object.__setattr__(self, "native_options", MappingProxyType(dict(self.native_options)))
         expected = field_identity("resolved-field-install", self.to_data(include_identity=False))
         if self.identity != expected:
@@ -115,6 +153,49 @@ class ResolvedFieldInstallPlan:
                     handle.canonical_identity()
                     handles.setdefault(handle.qualified_id, handle)
         return tuple(handles[key] for key in sorted(handles))
+
+    def reaction_parameter_handles(self) -> tuple[Any, ...]:
+        """Exact owner-qualified scalar coefficient consumed by a screened solve."""
+        reaction = self.native_options.get("reaction")
+        if reaction is None or reaction["kind"] == "scalar_constant":
+            return ()
+        if reaction["kind"] != "scalar_bind_parameter":
+            raise ValueError("screened field plan carries an unknown reaction kind")
+        qualified_id = reaction["parameter"]["qualified_id"]
+        matches = tuple(
+            reference for reference in self.operator.declaration_references()
+            if getattr(reference, "kind", None) == "parameter"
+            and reference.qualified_id == qualified_id
+        )
+        if len(matches) != 1:
+            raise ValueError(
+                "screened field plan lost its exact reaction parameter identity")
+        matches[0].canonical_identity()
+        return matches
+
+    def native_reaction_value(self, params: Mapping[Any, Any]) -> float | None:
+        """Resolve either reaction variant to the one native scalar installed for this solve."""
+        reaction = self.native_options.get("reaction")
+        if reaction is None:
+            return None
+        from pops.solvers._numeric import native_float
+        if reaction["kind"] == "scalar_constant":
+            return native_float(reaction["value"], where="constant field reaction")
+        handles = self.reaction_parameter_handles()
+        if len(handles) != 1 or handles[0] not in params:
+            qualified_id = reaction["parameter"]["qualified_id"]
+            raise ValueError(
+                "screened field reaction parameter is missing at bind: %s" % qualified_id)
+        value = native_float(
+            params[handles[0]], where="screened field reaction parameter %s" %
+            handles[0].qualified_id)
+        multiplier = native_float(
+            reaction["multiplier"], where="screened field reaction multiplier")
+        effective = value * multiplier
+        if not math.isfinite(effective) or effective <= 0.0:
+            raise ValueError(
+                "screened field reaction coefficient must be strictly positive at bind")
+        return effective
 
     def component_bindings(self) -> tuple[dict[str, Any], ...]:
         """Exact external component pair required by this field provider, if any."""
@@ -193,15 +274,112 @@ def resolve_field_install_plan(
             "field output space must resolve to one potential component or "
             "potential plus two gradient components"
         )
+    from pops.fields.outputs import FieldOutput, GradientOutput
+    outputs = tuple(operator.outputs)
+    if len(output_components) == 1:
+        if len(outputs) != 1 or not isinstance(outputs[0], FieldOutput):
+            raise TypeError(
+                "native scalar field output must be exactly one FieldOutput")
+        gradient_sign = 1
+    else:
+        if (len(outputs) != 2 or not isinstance(outputs[0], FieldOutput)
+                or not isinstance(outputs[1], GradientOutput)):
+            raise TypeError(
+                "native gradient field output must be FieldOutput + GradientOutput")
+        gradient_sign = outputs[1].sign
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError("resolved GradientOutput sign must be exactly -1 or 1")
+    potential_source = outputs[0].source
+    if potential_source is not None and potential_source != operator.unknown:
+        raise ValueError(
+            "native FieldOutput source disagrees with the FieldOperator solved unknown")
+    if len(outputs) == 2 and outputs[1].source != operator.unknown:
+        raise ValueError(
+            "native GradientOutput source disagrees with the FieldOperator solved unknown")
     rows: list[LoweringCoverageRow] = []
     layout_contract = field_layout_contract(layout)
     resolved_topology_recipe = topology_recipe(layout)
     source = "field:%s:operator" % name
     kinds = principal_kinds(operator.equation.lhs)
-    if "laplacian" not in kinds or kinds - {"laplacian"}:
+    if "laplacian" not in kinds or kinds - {"laplacian", "reaction"}:
         _reject(rows, source, "field.operator.not_native",
                 "field %r is generic but its principal operator %s has no native lowering"
                 % (name, sorted(kinds)))
+    from pops._ir.elliptic import Reaction, constant_reaction_scalar, elliptic_terms
+    from pops._ir.expr import Laplacian
+    from pops._ir.values import RuntimeParamRef
+
+    terms = elliptic_terms(operator.equation.lhs)
+    laplacians = [term for term in terms if isinstance(term, Laplacian)]
+    reactions = [term for term in terms if isinstance(term, Reaction)]
+    if len(laplacians) != 1 or len(reactions) > 1 or len(terms) != 1 + len(reactions):
+        _reject(rows, source, "field.operator.poisson_shape_not_native",
+                "field %r requires exactly one Laplacian and at most one scalar reaction term"
+                % name)
+
+    laplacian_term = laplacians[0]
+    if not _field_targets_unknown(laplacian_term.field, operator.unknown):
+        _reject(rows, source, "field.operator.unknown_mismatch",
+                "field %r Laplacian does not act on its declared unknown" % name)
+    normalization = -float(laplacian_term.scale)
+    if not math.isfinite(normalization) or normalization == 0.0:
+        _reject(rows, source, "field.operator.invalid_laplacian_scale",
+                "field %r Laplacian scale must be finite and non-zero" % name)
+    reaction_options = None
+    if reactions:
+        reaction = reactions[0]
+        coefficient = reaction.coeff
+        handle = getattr(coefficient, "handle", None)
+        multiplier = float(reaction.scale) / normalization
+        constant = constant_reaction_scalar(coefficient)
+        bind_parameter = (
+            isinstance(coefficient, RuntimeParamRef)
+            and handle is not None
+            and getattr(handle, "kind", None) == "parameter"
+            and getattr(handle, "param_kind", None) in ("runtime", "derived")
+            and coefficient.dtype == "Real"
+        )
+        if not _field_targets_unknown(reaction.field, operator.unknown):
+            _reject(rows, source, "field.operator.reaction_unknown_mismatch",
+                    "field %r reaction does not act on its declared unknown" % name)
+        if constant is NotImplemented and not bind_parameter:
+            _reject(rows, source, "field.operator.reaction_coefficient_not_native",
+                    "field %r reaction requires an exact finite real/ConstParam or one typed "
+                    "Real RuntimeParam/DerivedParam read" % name)
+        if not math.isfinite(multiplier):
+            _reject(rows, source, "field.operator.reaction_sign_not_native",
+                    "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
+                    % name)
+        if constant is NotImplemented:
+            if multiplier <= 0.0:
+                _reject(rows, source, "field.operator.reaction_sign_not_native",
+                        "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
+                        % name)
+            reaction_options = {
+                "schema_version": 1,
+                "kind": "scalar_bind_parameter",
+                "parameter": handle.canonical_identity(),
+                "multiplier": multiplier,
+            }
+            reaction_route = "scalar-bind"
+        else:
+            try:
+                effective = float(constant) * multiplier
+            except (TypeError, ValueError, OverflowError):
+                effective = float("nan")
+            if not math.isfinite(effective) or effective <= 0.0:
+                _reject(rows, source, "field.operator.reaction_sign_not_native",
+                        "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
+                        % name)
+            reaction_options = {
+                "schema_version": 1,
+                "kind": "scalar_constant",
+                "value": effective,
+            }
+            reaction_route = "scalar-constant"
+        rows.append(LoweringCoverageRow(
+            "field:%s:reaction" % name, "lowered",
+            ("field-install:%s:reaction:%s" % (name, reaction_route),)))
     rows.append(LoweringCoverageRow(source, "lowered", (
         "field-install:%s:residual" % name,)))
     if not rhs_providers or len(rhs_providers) != len(provider_route):
@@ -344,6 +522,14 @@ def resolve_field_install_plan(
             "topology_recipe_identity": topology_identity,
         }
         solver_label = solver_token
+    if reaction_options is not None:
+        if provider_kind == "external_component_v1":
+            _reject(rows, solver_source, "field.solver.external_screened_protocol_unavailable",
+                    "field %r is screened, but FieldSolver ABI v2 has no reaction coefficient "
+                    "carrier" % name)
+        if solver_label != "geometric_mg":
+            _reject(rows, solver_source, "field.solver.screened_route_unavailable",
+                    "field %r is screened and requires the native GeometricMG route" % name)
     rows.append(LoweringCoverageRow(solver_source, "lowered", (
         "field-install:%s:solver:%s" % (name, solver_label),)))
     nonlinear_options = None
@@ -394,7 +580,7 @@ def resolve_field_install_plan(
     statically_anchored = boundary_faces is not None and any(
         face["type"] != "periodic" and "alpha" not in face["dynamic"]
         and face["alpha"] != 0.0 for face in boundary_faces)
-    if dynamic_alpha and not statically_anchored:
+    if reaction_options is None and dynamic_alpha and not statically_anchored:
         _reject(rows, "field:%s:boundaries" % name,
                 "field.boundary.dynamic_nullspace_topology",
                 "field %r has a dynamic Robin alpha that can change the nullspace dimension; "
@@ -415,7 +601,8 @@ def resolve_field_install_plan(
     singular_faces = boundary_faces is not None and all(
         face["type"] == "periodic" or face["alpha"] == 0.0
         for face in boundary_faces)
-    derived_nullspace = "constant" if singular_faces else "none"
+    derived_nullspace = (
+        "constant" if reaction_options is None and singular_faces else "none")
     nullspace_assertion = "none"
     if plan.nullspace is not None:
         if not isinstance(plan.nullspace, ConstantNullspace):
@@ -484,6 +671,7 @@ def resolve_field_install_plan(
             "owner_block": operator.unknown.block_ref.local_id,
             "key": operator.name,
             "components": output_components,
+            "gradient_sign": gradient_sign,
         },
         "rhs_identity": field_identity(
             "field-rhs", {
@@ -492,6 +680,7 @@ def resolve_field_install_plan(
         "solver_provider": solver_provider,
         "method": method_options,
         "solver_capabilities": solver_options,
+        "reaction": reaction_options,
         "nonlinear": nonlinear_options,
         "bc": bc,
         "boundary_faces": boundary_faces,

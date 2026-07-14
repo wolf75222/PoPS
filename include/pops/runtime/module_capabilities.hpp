@@ -312,7 +312,7 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
                        "Program.solve and its provider protocol are physics-independent; AMR "
                        "hierarchy lowering currently supports one top-level linear solve with "
                        "CompositeTensorFAC()",
-                       "uniform|amr", "production", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("program_context:system", "available",
                        "compiled ProgramContext install on System", "uniform", "production", "host",
                        mpi, gpu),

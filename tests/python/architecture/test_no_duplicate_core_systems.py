@@ -289,6 +289,10 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     from pops.math import laplacian
     from pops.model import Module, Signature
     from pops.problem import Case
+    from pops.runtime.amr_program_support import (
+        AMRProgramSupportContext,
+        amr_program_op_support,
+    )
     from pops.time import Program
 
     class _Method(Descriptor):
@@ -335,6 +339,14 @@ def test_field_handle_is_the_sole_public_field_solve_route():
     assert not hasattr(program, "solve_fields")
     assert type(outcome).__name__ == "FieldSolveOutcome"
     assert [value.op for value in program._values].count("solve_fields") == 1
+    assert amr_program_op_support(
+        program,
+        context=AMRProgramSupportContext(
+            refined_hierarchy=False,
+            shared_block_interfaces=False,
+            field_routes_validated=True,
+        ),
+    ) == {"named_field_solve": "green"}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -374,11 +386,11 @@ def test_no_public_function_takes_an_amr_config_string_kwarg():
 
 
 def test_amr_config_lives_in_the_layout_descriptor_only():
-    """Installed-package gate: AMR(...) configures; sim.amr is a read-only view.
+    """Source-only gate: AMR(...) configures; the runtime view has no config mutator.
 
     Reuses the ADC-598 shape: AMR(...).inspect() carries capabilities.layout=="amr" (the config
-    manifest), while sim.amr.inspect() is a {hierarchy, patches, regrid, limitations} VIEW with NO
-    configuration mutator (no set_/configure_/add_ method that changes levels/ratio).
+    manifest).  The installed-package integration test exercises ``sim.amr`` and its concrete
+    inspection payload; this architecture lane deliberately never imports the native runtime.
     """
     from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
@@ -387,20 +399,20 @@ def test_amr_config_lives_in_the_layout_descriptor_only():
     assert manifest["capabilities"]["layout"] == "amr", (
         "AMR(...) must be the typed AMR configuration surface")
 
-    # sim.amr is a runtime VIEW: no config mutator, and inspect() is the fixed four-key view.
-    # ADC-545: the engine left the top-level surface -- reach it via the advanced runtime seam.
-    from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
-    sim = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=4)
-
-    view = sim.amr
-    mutators = [name for name in dir(view)
-                if not name.startswith("_")
-                and (name.startswith(("set_", "configure", "add_"))
-                     or "level" in name.lower() or "ratio" in name.lower())]
+    view_path = POPS / "runtime" / "amr" / "_view.py"
+    classes = [node for node in _public_classes(_parse(view_path))
+               if node.name == "AmrRuntimeView"]
+    assert len(classes) == 1, "the canonical AMR runtime view must remain unique"
+    public_methods = {name for name in _class_methods(classes[0]) if not name.startswith("_")}
+    mutators = sorted(
+        name for name in public_methods
+        if name.startswith(("set_", "configure", "add_"))
+        or "level" in name.lower()
+        or "ratio" in name.lower()
+    )
     assert not mutators, (
         "sim.amr is a read-only runtime view; it must expose no AMR-config mutator, found: %s"
         % mutators)
-    assert set(view.inspect().to_dict()) == {"hierarchy", "patches", "regrid", "limitations"}
 
 
 if __name__ == "__main__":

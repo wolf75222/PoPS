@@ -138,8 +138,8 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{ return &ap
 
 def _program(left_state, right_state, rate):
     program = pops.Program("shared_interface_forward_euler")
-    left = program.state(left_state, name="left")
-    right = program.state(right_state, name="right")
+    left = program.state(left_state)
+    right = program.state(right_state)
     stage = StagePoint("shared_stage", {"main": TimePoint(program.clock, 0)})
     left_rate = program.value("left_rate", rate(left.n), at=stage)
     right_rate = program.value("right_rate", rate(right.n), at=stage)

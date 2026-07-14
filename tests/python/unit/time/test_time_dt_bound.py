@@ -18,7 +18,7 @@ never fakes the engine.
 """
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import solve_field, typed_state
+from typed_program_support import codegen_field_plans, solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -41,6 +41,10 @@ except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
+
+
+def _emit(program):
+    return emit_cpp_program(program, field_plans=codegen_field_plans(program))
 
 
 def chk(cond, label):
@@ -70,7 +74,7 @@ def _fe(name="fe_dtbound"):
 # (A1) a Program WITHOUT a dt bound emits has_dt_bound() -> false; the dt_bound function returns +inf.
 P_no = _fe("fe_no_bound")
 chk(not P_no.has_dt_bound(), "a fresh Program has no dt bound")
-src_no = emit_cpp_program(P_no)
+src_no = _emit(P_no)
 chk("bool pops_program_has_dt_bound()" in src_no, "has_dt_bound ABI function emitted")
 chk("pops::Real pops_program_dt_bound(" in src_no, "dt_bound ABI function emitted")
 chk("return false;" in src_no, "no-bound Program: has_dt_bound() returns false")
@@ -89,7 +93,7 @@ def _dt_bound(P, cfl):
 
 
 chk(P_dec.has_dt_bound(), "@P.dt_bound records the bound")
-src_dec = emit_cpp_program(P_dec)
+src_dec = _emit(P_dec)
 chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns true")
 chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")

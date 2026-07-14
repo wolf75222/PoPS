@@ -9,8 +9,8 @@ These checks pin the Spec 5 sec.6 / sec.7 descriptor contract:
     run a numeric loop or touch the runtime);
   - pops.inspect(descriptor) returns the descriptor-owned structured record;
   - reject_string_selector() raises a clear TypeError with the spec message;
-  - Availability is now the SAME class in pops.descriptors and pops.mesh._descriptor (the
-    duplicate the reviewers flagged is gone).
+  - Availability has one public owner in pops.descriptors; private mesh implementation modules do
+    not re-export it.
 
 Pure Python: it only imports the inert authoring packages (the compiled _pops loads as a side
 effect of ``import pops`` but no model is built or run).
@@ -201,9 +201,9 @@ def test_reject_string_selector_raises():
 
 
 def test_availability_is_unified_single_class():
-    # Spec 5 Phase D: the parallel mesh Availability duplicate is gone; it is now re-exported.
-    assert mesh_descriptor.Availability is Availability
-    # MeshDescriptor is a subclass of the shared Descriptor base.
+    # The shared type has one public owner. Private implementation modules use it internally but do
+    # not create a second import route that users could depend upon.
+    assert not hasattr(mesh_descriptor, "Availability")
     assert issubclass(mesh_descriptor.MeshDescriptor, Descriptor)
     assert isinstance(PolarMesh(0.1, 1.0, 8, 16), Descriptor)
 

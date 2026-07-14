@@ -29,7 +29,15 @@ class _SourceMixin(_HyperbolicModel):
     def set_source(self, s: Any) -> None: self._source = [_wrap(e) for e in s]
     def set_elliptic_rhs(self, e: Any) -> None: self._elliptic = _wrap(e)
 
-    def elliptic_field(self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None) -> None:
+    def elliptic_field(
+        self,
+        name: Any,
+        rhs: Any,
+        operator: str = "poisson",
+        aux: Any = None,
+        *,
+        gradient_sign: int = 1,
+    ) -> None:
         """Declare a NAMED elliptic field (ADC-419): an elliptic solve ``operator(field) = rhs(U)``
         whose solution + derived quantities populate the NAMED aux fields @p aux (default
         ``["phi", "grad_x", "grad_y"]``, the canonical electrostatic triple). @p rhs is an Expr of
@@ -65,6 +73,12 @@ class _SourceMixin(_HyperbolicModel):
             raise ValueError(
                 "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
                 "cannot register %d outputs yet" % (name, len(aux)))
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
+        if len(aux) == 1 and gradient_sign != 1:
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign=-1 requires two gradient outputs" % name)
         for a in aux:
             if not (isinstance(a, str) and a.isidentifier()):
                 raise ValueError("elliptic_field('%s'): aux field %r is not a valid identifier"
@@ -84,7 +98,12 @@ class _SourceMixin(_HyperbolicModel):
                              "right-hand side is a function of the conservative state only (the same "
                              "surface as m.elliptic_rhs). Read the SOLVED field's aux in a source/flux."
                              % (name, sorted(rhs_aux)))
-        self._elliptic_fields[name] = {"rhs": rhs, "operator": operator, "aux": aux}
+        self._elliptic_fields[name] = {
+            "rhs": rhs,
+            "operator": operator,
+            "aux": aux,
+            "gradient_sign": gradient_sign,
+        }
 
     def source_term(self, name: Any, exprs: Any) -> Any:
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons

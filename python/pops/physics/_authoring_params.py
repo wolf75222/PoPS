@@ -54,6 +54,12 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out += list(self.cons_from)
         if self._elliptic is not None:
             out.append(self._elliptic)
+        # Named elliptic fields are emitted as standalone RHS bricks, but they consume the same
+        # block-qualified RuntimeParams carrier as the composite model.  A parameter referenced only
+        # by one of these providers must therefore participate in the shared index/layout authority;
+        # otherwise its generated ``params.get(index)`` has no BindSchema slot to populate.
+        for info in (getattr(self, "_elliptic_fields", {}) or {}).values():
+            out.append(_wrap(info["rhs"]))
         if self._roe_rows is not None:  # Roe rows provided: discover their runtime params (via StateRef)
             out += self._roe_rows["x"] + self._roe_rows["y"]
         return out

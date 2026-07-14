@@ -79,7 +79,7 @@ def test_history_builds_state_value(t):
     assert Rp.is_field(), "a history value is a grid field (affine algebra applies)"
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(
-        U + P.dt * (R - Rp), at=endpoint.point))
+        "history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True, "the history Program must validate"
 
 
@@ -109,8 +109,8 @@ def test_ab2_macro_lowers(t):
     P = _ab2_program(t)
     assert P.validate() is True, "the AB2 macro must validate"
     src = emit_cpp_program(P)
-    for frag in ('ctx.history("plasma.R", 1)', 'ctx.store_history("plasma.R"',
-                 "ctx.rotate_histories();"):
+    for frag in ('ctx.history("plasma.rate", 1)', 'ctx.store_history("plasma.rate"',
+                 "ctx.rotate_histories("):
         assert frag in src, "the AB2 codegen must contain %r\n%s" % (frag, src)
     # The AB2 coefficients: +3/2 dt on R_n, -1/2 dt on R_{n-1}.
     assert ("pops::Real(3) / pops::Real(2)" in src
@@ -125,7 +125,7 @@ def test_store_before_read_in_body(t):
     P = _ab2_program(t)
     src = emit_cpp_program(P)
     body = src[src.index("ctx.install"):]
-    read = body.index("= ctx.history(\"plasma.R\", 1);")  # the bound read, not the bare registration
+    read = body.index("= ctx.history(\"plasma.rate\", 1);")  # the bound read, not the bare registration
     assert body.index("ctx.store_history") < read, \
         "store_history must precede the lag-1 read in the step body\n%s" % body
     assert read < body.index("ctx.rotate_histories"), \
@@ -154,7 +154,7 @@ def _hist_program(t, name, lag):
         name, lag=lag, space=U.space, block=U.block, state_ref=U.state_ref)
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(
-        U + P.dt * (R - Rp), at=endpoint.point))
+        "history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     return P
 
 
@@ -176,7 +176,7 @@ def test_absent_history_program_lowers(t):
     R = P.rhs(state=U, terms=[DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value(
-        U + P.dt * (R - Rp), at=endpoint.point))
+        "missing_history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True
     src = emit_cpp_program(P)
     assert 'ctx.history("missing.R", 1)' in src, src
@@ -304,7 +304,7 @@ def _run_section_c(t):
     R = P.rhs(state=U, terms=[DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U", model=program_model).next
     P.commit(endpoint, P.value(
-        U + P.dt * (R - Rp), at=endpoint.point))
+        "missing_history_delta", U + P.dt * (R - Rp), at=endpoint.point))
 
     try:
         compiled = compile_drivers.compile_problem(model=program_model, time=P)

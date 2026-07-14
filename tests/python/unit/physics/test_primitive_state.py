@@ -1,22 +1,9 @@
-"""Init et diagnostic en variables PRIMITIVES (System-pipeline P4) :
+"""Native primitive/conservative conversion regression.
 
-    sim.set_primitive_state("e", rho=rho0, u=u0, v=v0, p=p0)   # init DEPUIS les primitives
-    P = sim.get_primitive_state("e")                            # relit les primitives (diagnostic)
-
-set_density ne pose que la densite (reste au repos). Pour un vrai modele on initialise depuis les
-PRIMITIVES (rho, u, v, p) -- converties en CONSERVATIVES par le MODELE du bloc (compressible :
-E = p/(g-1) + 1/2 rho|v|^2 ; isotherme : rho u ; scalaire : identite) -- et on veut relire les
-primitives pour les diagnostics (vitesses, pression). La conversion est celle du MODELE du bloc, pas
-une formule recodee : elle est forwardee a l'execution pour le natif compose (add_block) ET pour le
-package DSL ``production``, via les memes formules que le flux.
-
-On verifie :
- - round-trip set_primitive_state -> get_primitive_state == identite a la precision machine ;
- - apres set_primitive_state, un pas tourne et l'etat conservatif reste physique ;
- - un bloc COMPRESSIBLE (4 var, avec p) ET un bloc ISOTHERME (3 var, sans p) ET un bloc SCALAIRE ;
- - un modele DSL compile en package natif ``production`` -- s'auto-saute sans compilateur C++ ;
- - set_density marche toujours (pas de regression) ;
- - erreur claire sur un nom de primitive inconnu (ou manquant).
+The final public lifecycle binds conservative initial values through ``Case``.  The native executor
+still owns model-specific primitive conversion for diagnostics and internal initialisation, so this
+test keeps that numerical oracle on the exact ``add_equation`` engine seam.  It does not restore the
+retired ``System.block`` alias or any public compatibility method.
 """
 import os
 import shutil
@@ -24,11 +11,13 @@ import tempfile
 
 import numpy as np
 
+from pops.codegen import Production
 import pops.runtime._engine_descriptors as engine
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System
+from tests.python.support.requirements import repo_include
+
 
 N, L = 24, 1.0
-from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()
 
 
@@ -42,169 +31,167 @@ def _fields(n=N):
     return rho, u, v, p
 
 
-def _roundtrip_err(sim, name, **prims):
-    """set_primitive_state(**prims) puis get_primitive_state : ecart max sur chaque primitive."""
-    sim.set_primitive_state(name, **prims)
-    out = sim.get_primitive_state(name)
-    return max(float(np.max(np.abs(out[k] - np.asarray(prims[k])))) for k in prims)
+def _runtime(name, model):
+    runtime = System(n=N, L=L, periodic=True)
+    runtime.add_equation(
+        name,
+        model,
+        spatial=engine.Spatial(minmod=True),
+        time=engine.Explicit(),
+    )
+    return runtime
 
 
-def test_compressible():
-    """Bloc Euler compressible (4 var) : round-trip (rho, u, v, p) exact + pas physique."""
+def _roundtrip_error(runtime, name, **primitives):
+    runtime.set_primitive_state(name, **primitives)
+    result = runtime.get_primitive_state(name)
+    return max(
+        float(np.max(np.abs(result[key] - np.asarray(value))))
+        for key, value in primitives.items()
+    )
+
+
+def test_compressible_primitive_roundtrip_and_step():
     rho, u, v, p = _fields()
-    spec = engine.Model(state=engine.FluidState("compressible", gamma=1.4),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
-    s = System(n=N, L=L, periodic=True)
-    s.block("e", spec, spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    assert s.variable_names("e", "primitive") == ["rho", "u", "v", "p"]
+    runtime = _runtime(
+        "gas",
+        engine.Model(
+            state=engine.FluidState("compressible", gamma=1.4),
+            transport=engine.CompressibleFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
+        ),
+    )
+    assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
+    assert _roundtrip_error(runtime, "gas", rho=rho, u=u, v=v, p=p) < 1e-13
 
-    err = _roundtrip_err(s, "e", rho=rho, u=u, v=v, p=p)
-    assert err < 1e-13, "compressible : round-trip cons<->prim non exact (%.2e)" % err
+    state = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
+    expected_energy = p / (1.4 - 1.0) + 0.5 * rho * (u * u + v * v)
+    np.testing.assert_allclose(state[1], rho * u, rtol=0.0, atol=1e-13)
+    np.testing.assert_allclose(state[2], rho * v, rtol=0.0, atol=1e-13)
+    np.testing.assert_allclose(state[3], expected_energy, rtol=0.0, atol=1e-13)
 
-    # E conservatif coherent avec la formule du modele (pas seulement rho pose) : v != 0, E != rho/(g-1).
-    U = np.array(s.get_state("e")).reshape(4, N, N)
-    assert float(np.abs(U[1]).max()) > 1e-3 and float(np.abs(U[2]).max()) > 1e-3, "qte de mvt nulle"
-    E_expected = p / (1.4 - 1.0) + 0.5 * rho * (u * u + v * v)
-    assert float(np.max(np.abs(U[3] - E_expected))) < 1e-13, "E != p/(g-1) + 1/2 rho|v|^2"
-
-    # un pas tourne et l'etat reste physique (densite > 0, fini).
-    s.set_poisson()
+    runtime.set_poisson()
     for _ in range(5):
-        s.step_cfl(0.4)
-    U1 = np.array(s.get_state("e")).reshape(4, N, N)
-    assert np.isfinite(U1).all() and U1[0].min() > 0, "etat non physique apres set_primitive_state + pas"
-    print("OK  compressible (4 var) : round-trip %.1e, E coherent, pas physique" % err)
+        runtime.step_cfl(0.4)
+    advanced = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
+    assert np.isfinite(advanced).all() and advanced[0].min() > 0.0
 
 
-def test_isothermal():
-    """Bloc Euler isotherme (3 var, sans p) : round-trip (rho, u, v) exact."""
+def test_isothermal_primitive_roundtrip_and_step():
     rho, u, v, _ = _fields()
-    spec = engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
-                     transport=engine.IsothermalFlux(),
-                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
-    s = System(n=N, L=L, periodic=True)
-    s.block("g", spec, spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    assert s.variable_names("g", "primitive") == ["rho", "u", "v"]
+    runtime = _runtime(
+        "gas",
+        engine.Model(
+            state=engine.FluidState("isothermal", cs2=0.5),
+            transport=engine.IsothermalFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
+        ),
+    )
+    assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v"]
+    assert _roundtrip_error(runtime, "gas", rho=rho, u=u, v=v) < 1e-13
+    state = np.asarray(runtime.get_state("gas")).reshape(3, N, N)
+    np.testing.assert_allclose(state[1], rho * u, rtol=0.0, atol=1e-13)
+    np.testing.assert_allclose(state[2], rho * v, rtol=0.0, atol=1e-13)
 
-    err = _roundtrip_err(s, "g", rho=rho, u=u, v=v)
-    assert err < 1e-13, "isotherme : round-trip cons<->prim non exact (%.2e)" % err
-
-    U = np.array(s.get_state("g")).reshape(3, N, N)
-    assert float(np.max(np.abs(U[1] - rho * u))) < 1e-13, "rho_u != rho * u"
-    assert float(np.max(np.abs(U[2] - rho * v))) < 1e-13, "rho_v != rho * v"
-
-    s.set_poisson()
+    runtime.set_poisson()
     for _ in range(5):
-        s.step_cfl(0.4)
-    U1 = np.array(s.get_state("g")).reshape(3, N, N)
-    assert np.isfinite(U1).all() and U1[0].min() > 0, "isotherme : etat non physique apres init + pas"
-    print("OK  isotherme (3 var, sans p) : round-trip %.1e, rho u coherent, pas physique" % err)
+        runtime.step_cfl(0.4)
+    advanced = np.asarray(runtime.get_state("gas")).reshape(3, N, N)
+    assert np.isfinite(advanced).all() and advanced[0].min() > 0.0
 
 
-def test_scalar():
-    """Bloc scalaire (1 var) : prim == cons -> conversion identite, round-trip exact."""
+def test_scalar_conversion_is_identity():
     rho, _, _, _ = _fields()
-    spec = engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
-    s = System(n=N, L=L, periodic=True)
-    s.block("q", spec, spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    name = s.variable_names("q", "primitive")[0]
-    err = _roundtrip_err(s, "q", **{name: rho})
-    assert err < 1e-15, "scalaire : round-trip (identite) non exact (%.2e)" % err
-    print("OK  scalaire (1 var) : round-trip identite %.1e" % err)
+    runtime = _runtime(
+        "tracer",
+        engine.Model(
+            state=engine.Scalar(),
+            transport=engine.ExB(B0=1.0),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
+        ),
+    )
+    primitive, = runtime.variable_names("tracer", "primitive")
+    assert _roundtrip_error(runtime, "tracer", **{primitive: rho}) < 1e-15
 
 
-def test_set_density_unchanged():
-    """Pas de regression : set_density pose la densite (comp 0) + reste au repos."""
+def test_set_density_preserves_rest_state_and_energy_default():
     rho, _, _, _ = _fields()
-    spec = engine.Model(state=engine.FluidState("compressible", gamma=1.4),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
-    s = System(n=N, L=L, periodic=True)
-    s.block("e", spec, spatial=engine.Spatial(minmod=True), time=engine.Explicit())
-    s.set_density("e", rho)
-    U = np.array(s.get_state("e")).reshape(4, N, N)
-    assert float(np.max(np.abs(U[0] - rho))) < 1e-15, "set_density : densite incorrecte"
-    assert float(np.abs(U[1]).max()) == 0.0 and float(np.abs(U[2]).max()) == 0.0, "set_density : pas au repos"
-    assert float(np.max(np.abs(U[3] - rho / (1.4 - 1.0)))) < 1e-13, "set_density : E != rho/(g-1)"
-    print("OK  set_density inchange (densite posee, reste au repos, pas de regression)")
+    runtime = _runtime(
+        "gas",
+        engine.Model(
+            state=engine.FluidState("compressible", gamma=1.4),
+            transport=engine.CompressibleFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
+        ),
+    )
+    runtime.set_density("gas", rho)
+    state = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
+    np.testing.assert_array_equal(state[0], rho)
+    assert np.count_nonzero(state[1]) == 0 and np.count_nonzero(state[2]) == 0
+    np.testing.assert_allclose(state[3], rho / (1.4 - 1.0), rtol=0.0, atol=1e-13)
 
 
-def test_errors():
-    """Erreur CLAIRE sur un nom de primitive inconnu, et sur une primitive manquante."""
+def test_primitive_input_errors_name_missing_and_extra_components():
     rho, u, v, p = _fields()
-    spec = engine.Model(state=engine.FluidState("compressible", gamma=1.4),
-                     transport=engine.CompressibleFlux(),
-                     source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0))
-    s = System(n=N, L=L, periodic=True)
-    s.block("e", spec, spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    runtime = _runtime(
+        "gas",
+        engine.Model(
+            state=engine.FluidState("compressible", gamma=1.4),
+            transport=engine.CompressibleFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
+        ),
+    )
+    try:
+        runtime.set_primitive_state("gas", rho=rho, u=u, v=v, p=p, bogus=p)
+    except ValueError as exc:
+        assert "bogus" in str(exc)
+    else:
+        raise AssertionError("unknown primitive name must be rejected")
 
     try:
-        s.set_primitive_state("e", rho=rho, u=u, v=v, p=p, bogus=p)
-        raise AssertionError("aucune erreur sur une primitive inconnue")
-    except ValueError as ex:
-        assert "bogus" in str(ex), "message d'erreur sans le nom fautif : %s" % ex
-
-    try:
-        s.set_primitive_state("e", rho=rho, u=u)  # v, p manquantes
-        raise AssertionError("aucune erreur sur des primitives manquantes")
-    except ValueError as ex:
-        assert "missing primitive(s)" in str(ex), "message sans la mention 'missing primitive(s)' : %s" % ex
-    print("OK  erreurs claires : primitive inconnue + primitive manquante")
+        runtime.set_primitive_state("gas", rho=rho, u=u)
+    except ValueError as exc:
+        assert "missing primitive(s)" in str(exc)
+    else:
+        raise AssertionError("missing primitive values must be rejected")
 
 
-def test_dsl_production():
-    """Le package natif ``production`` forwarde la conversion cons<->prim du modele DSL."""
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  DSL compile : compilateur ou en-tetes pops absents")
+def test_production_model_primitive_roundtrip_and_step():
+    """A production package forwards its authored conservative/primitive conversion."""
+    compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
+    if not compiler or not os.path.isdir(INCLUDE):
         return
-    # build_euler_poisson : Euler 4 var (rho, u, v, p) avec to_primitive / to_conservative declares
-    # (set_primitive_state / set_conservative_from dans le DSL). cf. test_dsl_coupled.
-    from test_dsl_coupled import build_euler_poisson
+
+    from tests.python.unit.codegen.test_dsl_coupled import build_euler_poisson
 
     rho, u, v, p = _fields()
-    e = build_euler_poisson()
-    tmp = tempfile.mkdtemp()
+    directory = tempfile.mkdtemp()
     try:
-        compiled = e.compile(
-            os.path.join(tmp, "euler_poisson_native.so"),
+        compiled = build_euler_poisson().compile(
+            os.path.join(directory, "euler_poisson_native.so"),
             INCLUDE,
-            backend="production",
+            backend=Production(),
         )
-        a = System(n=N, L=L, periodic=True)
-        a.add_equation(
+        runtime = System(n=N, L=L, periodic=True)
+        runtime.add_equation(
             "gas",
             compiled,
             spatial=engine.Spatial(minmod=True),
             time=engine.Explicit(),
         )
         assert compiled.backend == "production"
-        assert a.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
-        err = _roundtrip_err(a, "gas", rho=rho, u=u, v=v, p=p)
-        assert err < 1e-13, "DSL production : round-trip cons<->prim non exact (%.2e)" % err
-        # Le pas tourne (etat conservatif physique) apres init depuis les primitives.
-        a.set_poisson(rhs="charge_density")
+        assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
+        assert _roundtrip_error(runtime, "gas", rho=rho, u=u, v=v, p=p) < 1e-13
+
+        runtime.set_poisson(rhs="charge_density")
         for _ in range(5):
-            a.step_cfl(0.4)
-        Ua = np.array(a.get_state("gas")).reshape(4, N, N)
-        assert np.isfinite(Ua).all() and Ua[0].min() > 0, \
-            "DSL production : etat non physique apres init + pas"
-        print("OK  DSL production : round-trip %.1e, pas physique" % err)
+            runtime.step_cfl(0.4)
+        state = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
+        assert np.isfinite(state).all() and state[0].min() > 0.0
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-def main():
-    test_compressible()
-    test_isothermal()
-    test_scalar()
-    test_set_density_unchanged()
-    test_errors()
-    test_dsl_production()
-    print("test_primitive_state : tout est vert")
-
-
-if __name__ == "__main__":
-    main()
+        shutil.rmtree(directory, ignore_errors=True)

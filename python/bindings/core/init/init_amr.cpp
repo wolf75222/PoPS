@@ -378,6 +378,8 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
            py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
            py::arg("coarse_threshold"))
+      .def("set_field_reaction", &AmrSystem::set_field_reaction,
+           py::arg("provider_slot"), py::arg("reaction"))
       .def("_set_field_topology_authority",
            &AmrSystem::set_field_topology_authority,
            py::arg("provider_slot"), py::arg("provider_kind"),
@@ -400,7 +402,7 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("provider_slot"))
       .def("register_elliptic_field", &AmrSystem::register_elliptic_field,
            py::arg("block"), py::arg("field"), py::arg("phi_comp"),
-           py::arg("gx_comp"), py::arg("gy_comp"))
+           py::arg("gx_comp"), py::arg("gy_comp"), py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &AmrSystem::set_field_boundary_plan,
            py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
            py::arg("value"))

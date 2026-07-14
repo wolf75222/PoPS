@@ -460,6 +460,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("max_cycles"), py::arg("min_coarse"), py::arg("pre_smooth"),
            py::arg("post_smooth"), py::arg("bottom_sweeps"),
            py::arg("coarse_threshold"))
+      .def("set_field_reaction", &System::set_field_reaction,
+           py::arg("provider_slot"), py::arg("reaction"))
       .def(
           "_install_field_solver_components",
           [](System& system, const std::string& provider_slot,
@@ -513,7 +515,7 @@ void bind_system_physics(py::class_<System>& cls) {
           py::arg("provider_slot"))
       .def("register_elliptic_field", &System::register_elliptic_field,
            py::arg("block"), py::arg("field"), py::arg("phi_comp"),
-           py::arg("gx_comp"), py::arg("gy_comp"))
+           py::arg("gx_comp"), py::arg("gy_comp"), py::arg("gradient_sign"))
       .def("set_field_boundary_plan", &System::set_field_boundary_plan,
            py::arg("provider_slot"), py::arg("kind"), py::arg("alpha"), py::arg("beta"),
            py::arg("value"))

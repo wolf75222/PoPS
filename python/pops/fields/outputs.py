@@ -79,7 +79,7 @@ class GradientOutput(_Output):
     recipe = "gradient"
 
     def __init__(self, name: Any, source: Any, *, sign: int = -1) -> None:
-        if sign not in {-1, 1}:
+        if type(sign) is not int or sign not in {-1, 1}:
             raise ValueError("GradientOutput sign must be exactly -1 or 1")
         super().__init__(name, source=source)
         self.sign = sign

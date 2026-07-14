@@ -113,6 +113,7 @@ jobs:
       cpp: ${{ steps.filter.outputs.cpp }}
       python: ${{ steps.filter.outputs.python }}
       python_arch: ${{ steps.filter.outputs.python_arch }}
+      mpi: ${{ steps.filter.outputs.mpi }}
       full: ${{ steps.filter.outputs.full }}
     steps:
       - uses: actions/checkout@v7
@@ -129,6 +130,9 @@ jobs:
               - 'tests/**/*.cpp'
               - 'tests/**/*.hpp'
               - 'tests/CMakeLists.txt'
+              - 'tests/cpp/test_sources.cmake'
+              - 'tests/cpp/test_durations.json'
+              - 'tests/test_manifest.toml'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
@@ -137,12 +141,51 @@ jobs:
               - 'python/bindings/**/*.hpp'
               - 'python/CMakeLists.txt'
               - 'scripts/gen_solver_kernel.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_include_graph.py'
+              - '.github/actions/setup-kokkos/**'
+              - '.github/workflows/ci.yml'
             python:
               - 'python/**'
               - 'tests/python/**'
+              - 'tests/python/test_durations.json'
+              - 'tests/test_manifest.toml'
+              - 'pyproject.toml'
               - 'scripts/gen_solver_kernel.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_import_closure.py'
+              - '.github/actions/setup-kokkos/**'
+              - '.github/workflows/ci.yml'
             python_arch:
               - 'tests/python/architecture/**'
+              - 'schemas/**'
+              - 'tests/cpp/test_durations.json'
+              - 'tests/test_manifest.toml'
+              - 'scripts/generate_component_catalog.py'
+              - 'scripts/ci_import_closure.py'
+              - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - '.github/workflows/ci.yml'
+            # Une modification du chemin distribue doit exercer MPI sur la PR sans dependre
+            # d'un label manuel. Les changements generaux restent couverts par ci-full/nightly.
+            mpi:
+              - 'include/pops/parallel/**'
+              - 'include/pops/runtime/amr/**'
+              - 'include/pops/runtime/amr_system.hpp'
+              - 'include/**/*mpi*'
+              - 'src/runtime/amr/**'
+              - 'src/**/*mpi*'
+              - 'python/bindings/**/*mpi*'
+              - 'python/bindings/core/init/init_amr.cpp'
+              - 'tests/**/mpi/**'
+              - 'tests/CMakeLists.txt'
+              - 'tests/test_manifest.toml'
+              - 'cmake/**'
+              - 'CMakeLists.txt'
+              - 'CMakePresets.json'
             # Les changements de workflows/actions CI sont valides par revue + lint YAML local,
             # et ne compilent pas Kokkos par defaut. Ajouter `ci-kokkos` pour forcer les gates
             # Serial, ou `ci-full` pour MPI + OpenMP.
@@ -207,26 +250,37 @@ jobs:
           echo "full=$full" >> "$GITHUB_OUTPUT"
           echo "Mode plein (MPI + Kokkos OpenMP) : $full (event=${{ github.event_name }}, full_paths=$FULL_PATHS)"
 
-  # GATE C++ (ADC-171). Ex-moitie C++ du job sequentiel build-and-test, isole pour tourner EN
-  # PARALLELE de gate-python. Pas de `needs: set-mode` (le gate Serial tourne dans tous les modes) ;
-  # `needs: changes` sert UNIQUEMENT au routage par chemins sur pull_request.
-  gate-cpp:
-    name: ubuntu-latest / Kokkos Serial (C++)
+  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en six shards deterministes
+  # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
+  # construit TOUJOURS ses cibles explicites (meme en mode all) puis applique la regex CTest du meme
+  # shard : 176 executables ne sont plus sur le chemin critique d'un runner unique.
+  gate-cpp-shards:
+    name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
 
     env:
-      # ccache borne : evite que le cache enfle sans fin entre les runs.
+      # Un cache par shard, borne a 512 Mo : 3 Go maximum par generation. Chaque shard ne construit
+      # qu'environ un sixieme des cibles, ce qui evite le thrashing du cache monolithique.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 512M
       # ADC-366 ccache cross-run/cross-checkout hit-rate (codegen-neutral, keys unchanged; paired with
       # -ffile-prefix-map on the cmake line below).
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale,time_macros
+      # Cle exacte unique par tentative : cache/save peut persister le travail partiel d'un shard
+      # apres echec/annulation. Les restore prefixes restent limites au MEME shard (PR puis master) ;
+      # aucun fallback vers l'ancien cache monolithique de 1.3 Go, qui serait duplique six fois.
+      CCACHE_CACHE_KEY: ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Prefixe FIXE ou Kokkos est installe par l'action composite (meme chemin que kokkos-prefix) ;
       # mis en cache (le gros gain : pas de reconstruction de Kokkos a chaque run). Serial, PIC.
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
@@ -260,21 +314,25 @@ jobs:
             --changed-files "${{ steps.changed-files.outputs.path }}" \
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-total 6 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_areas=$(grep '^cpp_areas=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           {
             echo "### affected C++ tests"
             echo ""
             echo "- ${cpp_summary}"
+            echo "- ${cpp_shard_summary}"
             echo "- areas: ${cpp_areas}"
-            echo "- plan: artifact \`gate-cpp-test-plan\`"
+            echo "- plan: artifact \`gate-cpp-test-plan-shard-${{ matrix.shard }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload C++ test plan
         uses: actions/upload-artifact@v7
         with:
-          name: gate-cpp-test-plan
+          name: gate-cpp-test-plan-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/cpp-test-plan.json
 
       # Action composite : apt deps (Eigen / Ninja / ccache) + mold, et install Kokkos Serial PIC
@@ -286,18 +344,20 @@ jobs:
         with:
           extra-apt: mold
 
-      # ccache : cle la plus specifique (os+job+ref+sha) en ecriture, restore-keys
-      # du plus precis au plus large (meme job sur la branche -> sur master -> n'importe).
-      # Cle INCHANGEE depuis l'ancien job build-and-test (kokkos-serial).
-      - name: Cache ccache (Kokkos Serial)
-        uses: actions/cache@v6
+      # actions/cache est immutable. restore/save separes + cle unique par tentative permettent a
+      # l'etape save sous `always()` de conserver les objets compiles avant un echec/une annulation.
+      - name: Restore ccache (Kokkos Serial, shard ${{ matrix.shard }})
+        id: ccache-restore
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-${{ github.sha }}
+          key: ${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
-            ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-
-            ccache-${{ runner.os }}-kokkos-serial-refs/heads/master-
-            ccache-${{ runner.os }}-kokkos-serial-
+            ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-refs/heads/master-
+
+      - name: Reset ccache stats (Kokkos Serial, shard ${{ matrix.shard }})
+        run: ccache --zero-stats
 
       # Flags du build : CMakePresets.json (preset ci-kokkos) = SOURCE UNIQUE DE VERITE, partagee
       # avec le dev local ; Kokkos_ROOT vient de $KOKKOS_PREFIX (install en cache ci-dessus) et
@@ -316,23 +376,18 @@ jobs:
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
-            cmake --build --preset ci-kokkos
-          else
-            read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_targets }}"
-            if [ "${#cpp_targets[@]}" -eq 0 ]; then
-              echo "No affected C++ tests selected."
-              exit 0
-            fi
-            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
+          read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_shard_targets }}"
+          if [ "${#cpp_targets[@]}" -eq 0 ]; then
+            echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
+            exit 0
           fi
+          cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
-          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
-            ctest --preset ci-kokkos
-          else
-            ctest --preset ci-kokkos -R '${{ steps.test-plan.outputs.cpp_regex }}'
-          fi
+          # GTest exposes CTest names such as BrickCatalog.EntryRoundTrips, which do not
+          # necessarily start with their build target. Select through the target label installed
+          # by pops_add_gtest_suite so every discovered case of every built target runs exactly once.
+          ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
           {
             echo "### gate-cpp (Kokkos Serial, C++)"
@@ -342,6 +397,7 @@ jobs:
             echo "| configure + build | ${build_s} |"
             echo "| tests (ctest) | ${test_s} |"
             echo "| selection | ${{ steps.test-plan.outputs.cpp_summary }} |"
+            echo "| shard | ${{ steps.test-plan.outputs.cpp_shard_summary }} |"
             echo ""
             echo "Hit-rate ccache :"
             echo '```'
@@ -349,9 +405,37 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: ccache stats (Kokkos Serial)
-        if: always()
+      - name: ccache stats (Kokkos Serial, shard ${{ matrix.shard }})
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
         run: ccache -s
+
+      - name: Save ccache (Kokkos Serial, shard ${{ matrix.shard }})
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_CACHE_KEY }}
+
+  # Check historique stable pour la branch protection et l'agregateur global. Le resultat d'un
+  # job matrix est agrege par GitHub : un seul shard en echec/timeout/annulation fait echouer ce
+  # verdict ; un matrix skippe par le routage reste un succes explicite.
+  gate-cpp:
+    name: ubuntu-latest / Kokkos Serial (C++)
+    runs-on: ubuntu-latest
+    needs: [changes, gate-cpp-shards]
+    if: always()
+    steps:
+      - name: Verdict C++ shards
+        run: |
+          echo "changes=${{ needs.changes.result }} gate-cpp-shards=${{ needs.gate-cpp-shards.result }}"
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::routage C++ indisponible"
+            exit 1
+          fi
+          case "${{ needs.gate-cpp-shards.result }}" in
+            success|skipped) echo "C++ shards OK" ;;
+            *) echo "::error::un shard C++ a echoue, expire ou ete annule" ; exit 1 ;;
+          esac
 
   # GATE PYTHON ARCHITECTURE : tests source-only (pas de _pops, pas de Kokkos). Ils couvrent les
   # invariants de structure du package Python et doivent rester legers meme quand seule l'architecture
@@ -392,6 +476,11 @@ jobs:
       - name: M2 temporal gate manifest
         run: python3 scripts/run_m2_gate.py --check-only
 
+      - name: Generated component catalog
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
+        run: python3 scripts/generate_component_catalog.py --check
+
       - name: Pyright
         run: pyright
 
@@ -401,6 +490,7 @@ jobs:
   gate-python-build:
     name: ubuntu-latest / Kokkos Serial (Python build)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: changes
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
@@ -554,6 +644,7 @@ jobs:
   gate-python:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, gate-python-build]
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
     strategy:
@@ -786,6 +877,7 @@ jobs:
   gate-python-compile-cache:
     name: ubuntu-latest / Kokkos Serial (Python) compile-cache
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: [changes, gate-python-build]
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
 
@@ -919,14 +1011,18 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
     if: always()
     steps:
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }}"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
           if [ "${{ needs.changes.result }}" != "success" ]; then
             echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
+            exit 1
+          fi
+          if [ "${{ needs.set-mode.result }}" != "success" ]; then
+            echo "::error::decision fast/full indisponible : les jobs MPI/OpenMP ne peuvent pas etre qualifies comme optionnels"
             exit 1
           fi
           for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}" "${{ needs.gate-python-compile-cache.result }}"; do
@@ -935,14 +1031,36 @@ jobs:
               *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
             esac
           done
+          full="${{ needs.set-mode.outputs.full }}"
+          mpi_route="${{ needs.changes.outputs.mpi }}"
+          mpi_result="${{ needs.mpi.result }}"
+          openmp_result="${{ needs.kokkos-openmp.result }}"
+          if [ "$full" = "true" ] || [ "$mpi_route" = "true" ]; then
+            if [ "$mpi_result" != "success" ]; then
+              echo "::error::MPI etait requis (full=$full, mpi_route=$mpi_route) mais vaut $mpi_result"
+              exit 1
+            fi
+          elif [ "$mpi_result" != "success" ] && [ "$mpi_result" != "skipped" ]; then
+            echo "::error::MPI optionnel a echoue ou ete annule ($mpi_result)"
+            exit 1
+          fi
+          if [ "$full" = "true" ]; then
+            if [ "$openmp_result" != "success" ]; then
+              echo "::error::OpenMP etait requis en mode plein mais vaut $openmp_result"
+              exit 1
+            fi
+          elif [ "$openmp_result" != "success" ] && [ "$openmp_result" != "skipped" ]; then
+            echo "::error::OpenMP optionnel a echoue ou ete annule ($openmp_result)"
+            exit 1
+          fi
           echo "gates OK"
 
   mpi:
     name: ubuntu-latest / MPI + Kokkos Serial
     runs-on: ubuntu-latest
-    needs: set-mode
-    # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
-    if: needs.set-mode.outputs.full == 'true'
+    needs: [set-mode, changes]
+    # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
+    if: needs.set-mode.outputs.full == 'true' || needs.changes.outputs.mpi == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache

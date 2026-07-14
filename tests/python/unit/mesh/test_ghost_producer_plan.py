@@ -285,7 +285,12 @@ def _physical_provider(boundary, name):
 
 
 def _interface(topology):
-    left_boundary, right_boundary = topology.physical
+    left_boundary = topology.physical[0]
+    # A per-block ghost plan owns exactly one endpoint of a shared interface.  The peer boundary
+    # belongs to the neighbouring block and therefore must not also appear in this local topology.
+    right_boundary = BoundaryHandle(
+        "remote_y_max", owner=CASE,
+        orientation=BoundaryOrientation(1, BoundarySide.UPPER))
     left = InterfaceSide(
         left_boundary, _h("left_layout", "layout", CASE),
         _h("fv", "discretization"), left_boundary.orientation,

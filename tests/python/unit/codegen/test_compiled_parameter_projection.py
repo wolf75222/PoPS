@@ -104,7 +104,12 @@ def test_seal_projects_params_and_preserves_runtime_compatibility():
     assert compiled.runtime_param_values() == [1.5, None]
     assert fallback.runtime_param_names == ["speed", "speed2"]
     assert fallback.runtime_param_values() == [1.5, None]
-    assert compiled.arguments().params["speed"]["kind"] == "runtime"
+    # A detached component no longer fabricates the resolved spatial plan needed by
+    # artifact-level argument introspection.  The projected metadata itself remains exact; the
+    # full ``arguments()`` surface belongs to ``CompiledSimulationArtifact``.
+    assert compiled.params["speed"].kind == "runtime"
+    with pytest.raises(ValueError, match="no resolved block plan"):
+        compiled.arguments()
 
 
 def test_sealed_compiled_model_drops_module_registry_and_authority_graph():

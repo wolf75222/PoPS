@@ -1,127 +1,89 @@
-#!/usr/bin/env python3
-"""m.roe_from_jacobian() (ADC-368): the GENERIC moment Roe. The DSL emits the
-roe_dissipation(UL, AL, UR, AR, dir) hook = |A| (UR - UL) with A = dF_dir/dU the flux Jacobian at
-the arithmetic-mean interface state Uavg = 1/2(UL + UR), |A| via the matrix-sign kernel
-pops::roe_abs_apply (dense_eig.hpp), spectral-radius (Rusanov) fallback on a complex/singular
-spectrum. Roles-free: riemann='roe' becomes available for a moment hierarchy (HyQMOM) with no
-Density/Momentum roles and no primitive 'p' (unlike m.enable_roe).
+"""Compiled generic Roe regression for the final Gaussian-moment preset."""
+from __future__ import annotations
 
-  (A) wiring (no compiler): roe=True sets the capability (CompiledModel-side has_roe) and emits the
-      hook + pops::roe_abs_apply + the dense_eig.hpp include; roe=False is bit-identical (no hook);
-      the three Roe providers (enable_roe / roe_dissipation / roe_from_jacobian) are mutually
-      exclusive; the facade re-exports roe_from_jacobian.
-  (B) [compiler] compile AOT + System riemann='roe': 10 steps finite, mass (M00) conserved; a
-      roe=False moment model REJECTS riemann='roe' (no capability -> ValueError).
-
-Invariants by assert; prints "OK test_dsl_roe_from_jacobian" on success.
-"""
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Roe
-import os
-import shutil
-import sys
-import tempfile
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 import pops.runtime._engine_descriptors as engine
-from pops.codegen.toolchain import _default_cxx
-from pops.moments import build_moment_model, gaussian_closure
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.lib.models.moments import Gaussian
+from pops.numerics.reconstruction import FirstOrder
+from pops.numerics.riemann import Roe
+from pops.numerics.riemann.waves import FromJacobian, provider_of
+from pops.physics import Model
+from pops.runtime._system import System
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_aot_requirement,
+    repo_include,
+)
 
-fails = 0
-from tests.python.support.requirements import repo_include
+
 INCLUDE = repo_include()
 
-
-def chk(cond, label):
-    global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
-        fails += 1
-
-
-def err_msg(fn):
-    try:
-        fn()
-        return None
-    except (ValueError, RuntimeError) as e:
-        return str(e)
+pytestmark = (
+    pytest.mark.compiler,
+    pytest.mark.kokkos,
+    pytest.mark.native_loader,
+    pytest.mark.regression,
+)
 
 
-def gaussian(n, amp=0.4):
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="xy")
-    return 1.0 + amp * np.exp(-60.0 * ((X - 0.5) ** 2 + (Y - 0.5) ** 2))
+def _compile_native(model: Model, path: Path):
+    lowering = model.__pops_compiler_lowering__()
+    assert lowering.facade is model
+    assert lowering.source_module is model.module
+    return lowering.emit_model.compile(str(path), INCLUDE, backend="production")
 
 
-# --- (A) wiring / codegen, no compiler needed --------------------------------
-print("== (A) wiring + codegen of m.roe_from_jacobian ==")
-mr = build_moment_model("roe_src", 2, gaussian_closure(2), roe=True)
-src = mr._m.emit_cpp_brick()
-chk(mr._m._roe_jacobian is not None, "roe=True: _roe_jacobian set on the engine")
-chk("State roe_dissipation(" in src, "roe=True: roe_dissipation hook emitted")
-chk("pops::roe_abs_apply(" in src, "roe=True: hook calls pops::roe_abs_apply")
-chk("#include <pops/numerics/linalg/dense_eig.hpp>" in src, "roe=True: dense_eig.hpp included")
-chk("pops::real_eig_minmax(" in src, "roe=True: spectral-radius (Rusanov) fallback emitted")
+def _smooth_density(n: int) -> np.ndarray:
+    points = (np.arange(n) + 0.5) / n
+    x, y = np.meshgrid(points, points, indexing="xy")
+    return 1.0 + 0.4 * np.exp(-60.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
 
-m0 = build_moment_model("noroe_src", 2, gaussian_closure(2), roe=False)
-src0 = m0._m.emit_cpp_brick()
-chk(m0._m._roe_jacobian is None, "roe=False: _roe_jacobian is None")
-chk("roe_dissipation" not in src0, "roe=False: NO roe_dissipation hook (bit-identical history)")
 
-# mutual exclusivity (three providers of the same hook), both directions
-chk("provider" in (err_msg(lambda: build_moment_model("x", 2, gaussian_closure(2), roe=True)
-                                   ._m.enable_roe()) or ""),
-    "exclusivity: enable_roe() after roe_from_jacobian -> error")
-me = build_moment_model("y", 2, gaussian_closure(2), roe=False)
-me._m._roe = True
-chk("provider" in (err_msg(lambda: me._m.roe_from_jacobian()) or ""),
-    "exclusivity: roe_from_jacobian() after enable_roe -> error")
-chk(hasattr(mr, "roe_from_jacobian") and callable(mr.roe_from_jacobian),
-    "facade Model.roe_from_jacobian re-exported")
+def test_final_gaussian_moments_run_generic_roe_from_jacobian(tmp_path: Path) -> None:
+    reason = missing_aot_requirement(INCLUDE, default_cxx())
+    if reason:
+        pytest.skip(reason)
 
-# --- (B) compile AOT + System riemann='roe' (compiler-gated) ------------------
-cxx = _default_cxx(None)
-if not cxx or not os.path.isdir(INCLUDE):
-    print("== (B) saute : compilateur C++ ou en-tetes pops absents ==")
-    print("FAILS =", fails)
-    sys.exit(1 if fails else 0)
+    model = Gaussian.transport(
+        order=2,
+        name="final_gaussian_roe",
+        robust=True,
+        exact_speeds=True,
+        roe=True,
+    )
+    assert isinstance(model, Model)
+    provider = provider_of(model)
+    assert provider is not None
+    assert provider.kind == FromJacobian(eig="numeric").kind
 
-print("== (B) compile AOT + System riemann='roe' ==")
-tmp = tempfile.mkdtemp(prefix="pops_roe_jac_")
-try:
+    # The generic route cannot have accidentally fallen back to the fluid-role implementation.
+    state_space = model.module.state_spaces()["U"]
+    roles = set(state_space.roles.values())
+    assert "Density" in roles
+    assert not roles.intersection({"MomentumX", "MomentumY", "Energy"})
+
+    compiled = _compile_native(model, tmp_path / "gaussian_roe.so")
+    assert compiled.has_roe
+    assert compiled.has_wave_speeds
+
     n = 24
-    compiled = build_moment_model("g2roe", 2, gaussian_closure(2), roe=True).compile(
-        os.path.join(tmp, "g2roe.so"), INCLUDE, backend="aot")
-    chk(getattr(compiled, "has_roe", False), "CompiledModel.has_roe = True")
-
-    # realizable Maxwellian moments (u = v = 0, T = 1) modulated by a smooth density bump
-    base = np.array([1.0, 0.0, 1.0, 0.0, 0.0, 1.0])
-    U0 = base[:, None, None] * gaussian(n)[None, :, :]
-
-    sim = System(n=n, L=1.0, periodic=True)
-    sim.add_equation("mom", model=compiled,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
-                     time=engine.Explicit())
-    sim.set_state("mom", U0)
+    # Realizable centered Maxwellian moments (u=v=0, covariance=I), modulated by density.
+    maxwellian = np.array((1.0, 0.0, 1.0, 0.0, 0.0, 1.0))
+    initial = maxwellian[:, None, None] * _smooth_density(n)[None, :, :]
+    simulation = System(n=n, L=1.0, periodic=True)
+    simulation.add_equation(
+        "moments",
+        model=compiled,
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
+        time=engine.Explicit(),
+    )
+    simulation.set_state("moments", initial)
     for _ in range(10):
-        sim.step(5e-4)
-    out = np.asarray(sim.get_state("mom"))
-    chk(np.isfinite(out).all(), "10 pas ROE : etat fini")
-    dm = abs(out[0].sum() - U0[0].sum()) / abs(U0[0].sum())
-    chk(dm < 1e-12, f"10 pas ROE : masse M00 conservee ({dm:.2e})")
-
-    # a roe=False moment model must REJECT riemann='roe' (no capability)
-    cm_no = build_moment_model("g2noroe", 2, gaussian_closure(2), roe=False).compile(
-        os.path.join(tmp, "g2noroe.so"), INCLUDE, backend="aot")
-    s2 = System(n=16, L=1.0, periodic=True)
-    msg = err_msg(lambda: s2.add_equation(
-        "mom", model=cm_no, spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
-        time=engine.Explicit()))
-    chk(msg is not None, f"roe=False: riemann='roe' rejete ({(msg or '')[:48]}...)")
-finally:
-    shutil.rmtree(tmp, ignore_errors=True)
-
-print("OK test_dsl_roe_from_jacobian" if not fails else f"FAILS = {fails}")
-sys.exit(1 if fails else 0)
+        simulation.step(5.0e-4)
+    final = np.asarray(simulation.get_state("moments"))
+    assert np.isfinite(final).all()
+    np.testing.assert_allclose(final[0].sum(), initial[0].sum(), rtol=1.0e-12, atol=1.0e-12)

@@ -117,7 +117,7 @@ function(pops_add_gtest_suite)
   endif()
 
   set(_pops_test_properties
-    LABELS "${ARG_LABELS}"
+    LABELS "${ARG_LABELS};cpp-target:${ARG_NAME}"
     TIMEOUT ${ARG_TIMEOUT})
   if(ARG_RESOURCE_LOCK)
     list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
@@ -197,10 +197,13 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
   add_test(
     NAME test_component_catalog_generated
-    COMMAND ${CMAKE_COMMAND} -E env "PYTHONDONTWRITEBYTECODE=1"
+    COMMAND ${CMAKE_COMMAND} -E env
+            "PYTHONDONTWRITEBYTECODE=1"
+            "PYTHONPATH=${CMAKE_SOURCE_DIR}/python"
             "${Python3_EXECUTABLE}"
             "${CMAKE_SOURCE_DIR}/scripts/generate_component_catalog.py" --check)
-  set_tests_properties(test_component_catalog_generated PROPERTIES LABELS "architecture;generated")
+  set_tests_properties(test_component_catalog_generated PROPERTIES
+    LABELS "python;architecture;generated")
 
   set(_pops_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
   file(GLOB_RECURSE _pops_gen_solver_pysrc CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/python/pops/*.py")

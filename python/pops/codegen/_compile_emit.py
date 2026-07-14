@@ -102,9 +102,11 @@ def model_hash(model: Any, params: Any = None) -> str:
     parts.append("elliptic=%s" % (repr(m._elliptic) if m._elliptic is not None else ""))
     if getattr(m, "_elliptic_fields", None):
         parts.append("elliptic_fields=%s" % ";".join(
-            "%s:%s:%s:[%s]" % (k, m._elliptic_fields[k]["operator"],
-                               repr(m._elliptic_fields[k]["rhs"]),
-                               ",".join(m._elliptic_fields[k]["aux"]))
+            "%s:%s:%s:[%s]:gradient_sign=%d" % (
+                k, m._elliptic_fields[k]["operator"],
+                repr(m._elliptic_fields[k]["rhs"]),
+                ",".join(m._elliptic_fields[k]["aux"]),
+                m._elliptic_fields[k]["gradient_sign"])
             for k in sorted(m._elliptic_fields)))
     parts.append("stab_speed=%s" % (repr(m._stab_speed) if m._stab_speed is not None else ""))
     parts.append("stab_dt=%s" % (repr(m._stab_dt) if m._stab_dt is not None else ""))
@@ -241,16 +243,44 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
            'POPS_LOADER_API const char* pops_native_abi_key() {\n'
            '  return POPS_ABI_KEY_LITERAL;\n'
            '}\n')
+    # Construct every elliptic RHS closure while ``model`` still owns the runtime parameters bound
+    # from BindSchema.  The default field must capture the generated CompositeModel: its Ell brick
+    # intentionally exposes only rhs(State), while CompositeModel supplies State + elliptic_rhs.
+    # Named-field bricks are standalone models, so copy the same bound RuntimeParams carrier into
+    # each one before type-erasing it.  Attachment remains after add_compiled_model because the block
+    # must exist before set_block_elliptic_field is called.
+    ell_field_prepare_lines = ""
+    ell_field_attach_lines = ""
+    for index, (fld, brick, phi_c, gx_c, gy_c) in enumerate(ell_field_regs):
+        gradient_sign = m._elliptic_fields[fld]["gradient_sign"]
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % fld)
+        if gx_c < 0 and gradient_sign != 1:
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign=-1 requires gradient outputs" % fld)
+        ell_field_prepare_lines += (
+            '  auto named_elliptic_model_%d = %s{};\n'
+            '  pops::compiled_model::apply_runtime_params(\n'
+            '      named_elliptic_model_%d,\n'
+            '      pops::compiled_model::declaration_runtime_params(model));\n'
+            '  auto named_elliptic_rhs_%d = pops::make_poisson_rhs(named_elliptic_model_%d);\n'
+            % (index, brick, index, index, index)
+        )
+        ell_field_attach_lines += (
+            '  s->register_elliptic_field(name, "%s", %d, %d, %d, %d);\n'
+            '  s->set_block_elliptic_field(name, "%s", std::move(named_elliptic_rhs_%d));\n'
+            % (fld, phi_c, gx_c, gy_c, gradient_sign, fld, index)
+        )
+    if m._elliptic is not None:
+        ell_field_prepare_lines += (
+            '  auto fields_from_state_rhs = pops::make_poisson_rhs(model);\n'
+        )
+        ell_field_attach_lines += (
+            '  s->set_block_elliptic_field(name, "fields_from_state", '
+            'std::move(fields_from_state_rhs));\n'
+        )
     if target == "system":
-        ell_field_lines = "".join(
-            '  s->register_elliptic_field(name, "%s", %d, %d, %d);\n'
-            '  s->set_block_elliptic_field(name, "%s", pops::make_poisson_rhs(%s{}));\n'
-            % (fld, phi_c, gx_c, gy_c, fld, brick)
-            for (fld, brick, phi_c, gx_c, gy_c) in ell_field_regs)
-        if m._elliptic is not None:
-            ell_field_lines += (
-                '  s->set_block_elliptic_field(name, "fields_from_state", '
-                'pops::make_poisson_rhs(pops_generated::%sEll{}));\n' % nm)
         install = ('POPS_LOADER_API void pops_install_native(void* sys, const char* name, const char* limiter,\n'
                    '                                    const char* riemann, const char* recon,\n'
                    '                                    const char* time, double gamma, int substeps,\n'
@@ -259,26 +289,18 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '  pops::System* s = reinterpret_cast<pops::System*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
+                   + ell_field_prepare_lines +
                    '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, evolve != 0, stride,\n'
                    '                                                    pos_floor);\n'
-                   + ell_field_lines +
+                   + ell_field_attach_lines +
                    '}\n')
     else:
         # NAMED elliptic fields on the AMR layout (ADC-428): mirror the uniform System branch, but on the
         # AmrSystem facade. register_elliptic_field records the field's aux output components and FORCES
         # the AmrRuntime engine (the named-field solve lives there); set_block_elliptic_field attaches the
         # per-field RHS brick to the block (name == this block). The default Poisson path is untouched.
-        ell_field_lines = "".join(
-            '  s->register_elliptic_field(name, "%s", %d, %d, %d);\n'
-            '  s->set_block_elliptic_field(name, "%s", pops::make_poisson_rhs(%s{}));\n'
-            % (fld, phi_c, gx_c, gy_c, fld, brick)
-            for (fld, brick, phi_c, gx_c, gy_c) in ell_field_regs)
-        if m._elliptic is not None:
-            ell_field_lines += (
-                '  s->set_block_elliptic_field(name, "fields_from_state", '
-                'pops::make_poisson_rhs(pops_generated::%sEll{}));\n' % nm)
         install = ('POPS_LOADER_API void pops_install_native_amr(void* sys, const char* name,\n'
                    '                                        const char* limiter, const char* riemann,\n'
                    '                                        const char* recon, const char* time,\n'
@@ -288,12 +310,13 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
                    '  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);\n'
                    '  auto model = pops::compiled_model::bind_runtime_params(\n'
                    '      pops_generated::ProdModel{}, params, nparams);\n'
+                   + ell_field_prepare_lines +
                    '  pops::add_compiled_model<pops_generated::ProdModel>(*s, name, std::move(model),\n'
                    '                                                    limiter, riemann, recon, time, gamma,\n'
                    '                                                    substeps, /*stride=*/1,\n'
                    '                                                    /*implicit_vars=*/{},\n'
                    '                                                    /*implicit_roles=*/{}, pos_floor);\n'
-                   + ell_field_lines +
+                   + ell_field_attach_lines +
                    '}\n')
     install += ('POPS_LOADER_API int pops_compiled_nparams() {\n'
                 '  return pops::compiled_model::runtime_param_count<pops_generated::ProdModel>();\n'

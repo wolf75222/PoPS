@@ -22,12 +22,22 @@ def _load(name: str, path: Path):
 
 
 def _release_module():
+    previous = {
+        name: module for name, module in sys.modules.items()
+        if name == "pops" or name.startswith("pops.")
+    }
     package = types.ModuleType("pops")
     package.__path__ = [str(ROOT / "python" / "pops")]
-    sys.modules["pops"] = package
-    _load("pops._generated_release_contract",
-          ROOT / "python" / "pops" / "_generated_release_contract.py")
-    return _load("pops.release", ROOT / "python" / "pops" / "release.py")
+    try:
+        sys.modules["pops"] = package
+        _load("pops._generated_release_contract",
+              ROOT / "python" / "pops" / "_generated_release_contract.py")
+        return _load("pops.release", ROOT / "python" / "pops" / "release.py")
+    finally:
+        for name in tuple(sys.modules):
+            if name == "pops" or name.startswith("pops."):
+                sys.modules.pop(name, None)
+        sys.modules.update(previous)
 
 
 def test_generated_release_contract_is_current_and_preflight_passes_static_checks():

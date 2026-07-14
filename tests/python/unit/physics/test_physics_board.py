@@ -91,6 +91,28 @@ def test_state_is_unpackable_into_components():
     assert expr is not None
 
 
+def test_flux_value_uses_axis_identity_not_frame_iteration_order():
+    class ReversedCartesianFrame:
+        canonical_id = "frame:reversed-cartesian-test"
+        axes = (Y_AXIS, X_AXIS)
+
+        def to_dict(self):
+            return {"frame_type": "cartesian_2d", "axes": ["y", "x"]}
+
+    frame = ReversedCartesianFrame()
+    m = physics.Model("reversed_frame", frame=frame)
+    state = m.state("U", components=("u",))
+    m.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={X_AXIS: (state[0],), Y_AXIS: (2.0 * state[0],)},
+    )
+
+    assert m.flux_value((3.0,), {}, X_AXIS) == [3.0]
+    assert m.flux_value((3.0,), {}, Y_AXIS) == [6.0]
+
+
 def test_board_model_lowers_to_operator_first_ir():
     m = _euler_poisson_lorentz()
     mod = m.module

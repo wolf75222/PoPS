@@ -170,7 +170,10 @@ class _OperatorViewMixin(_HyperbolicModel):
                                  _model.FieldSpace(nm, components=tuple(info["aux"]))),
                 capabilities={"requires_solver": True, "supports_device": True},
                 requirements={"elliptic_operator": info["operator"]},
-                lowering={"field_provider": {"key": nm}},
+                lowering={
+                    "field_provider": {"key": nm},
+                    "gradient_sign": info["gradient_sign"],
+                },
                 source=None,
                 body=info["rhs"]))
 

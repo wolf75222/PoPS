@@ -64,6 +64,18 @@ static std::vector<double> bump(int n, double base, double amp) {
   return r;
 }
 
+static double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+static double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                                const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
+}
+
 // tout fini (ni nan ni inf) : garde AVANT toute comparaison de tolerance (un nan passerait une borne).
 static bool all_finite(const std::vector<double>& v) {
   for (double x : v)
@@ -121,6 +133,8 @@ TEST(test_amr_multiblock_substeps, Runs) {
   const double q0 = +1.0, q1 = -1.0;  // A : ions ; B : electrons
   const std::vector<double> rho0 = bump(N, 1.0, 0.40);
   const std::vector<double> rho1 = bump(N, 1.0, 0.20);
+  ASSERT_NEAR(periodic_rhs_mean(q0, rho0, q1, rho1), 0.0, 1e-13)
+      << "all charged two-block fixtures must satisfy the periodic nullspace before solve";
   const Real dt = Real(0.01);
   const int K = 6;  // macro-pas
 
@@ -210,13 +224,14 @@ TEST(test_amr_multiblock_substeps, Runs) {
   }
 
   // ============================================================================================
-  // (3) step_cfl SUBSTEPS/STRIDE-AWARE : config connue. Deux blocs IDENTIQUES (meme modele, schema,
-  //     densite) -> meme vitesse d'onde w pour les deux. A substeps=4 stride=1, B substeps=1 stride=2.
+  // (3) step_cfl SUBSTEPS/STRIDE-AWARE : the two ExB blocks share B0 and the resolved field, hence
+  //     the same wave speed w. Opposite charges preserve periodic nullspace compatibility.
+  //     A substeps=4 stride=1, B substeps=1 stride=2.
   //     min_b(substeps_b/(stride_b*w)) = min(4/(1*w), 1/(2*w)) = 0.5/w. Donc dt attendu = cfl*h*0.5/w,
   //     avec w = rt.max_speed() (max sur blocs identiques = w commun) et h = dx_coarse = L/N.
   // ============================================================================================
   {
-    AmrRuntime rt = make_two_block(N, L, q0, q0, B0, rho0, rho0, "minmod", "minmod",
+    AmrRuntime rt = make_two_block(N, L, q0, q1, B0, rho0, rho1, "minmod", "minmod",
                                    /*sub0=*/4, /*sub1=*/1, /*stride0=*/1, /*stride1=*/2);
     const Real h = Real(L) / Real(N);  // dx_coarse
     const Real cfl = Real(0.4);
@@ -235,6 +250,9 @@ TEST(test_amr_multiblock_substeps, Runs) {
   //     qui differe sur l'ordre des operations flottantes).
   // ============================================================================================
   {
+    const std::vector<double> periodic_state = bump(N, 0.0, 0.40);
+    ASSERT_NEAR(periodic_rhs_mean(q0, periodic_state, 0.0, periodic_state), 0.0, 1e-13)
+        << "single charged periodic fixture must have zero RHS mean before solve";
     auto run_step = [&]() {
       AmrSystemConfig cfg;
       cfg.n = N;
@@ -244,7 +262,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("ne", rho0);
+      sim.set_density("ne", periodic_state);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -261,7 +279,7 @@ TEST(test_amr_multiblock_substeps, Runs) {
       AmrSystem sim(cfg);
       sim.add_block("ne", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("ne", rho0);
+      sim.set_density("ne", periodic_state);
       double last = 0;
       for (int s = 0; s < 5; ++s)
         last = sim.step_cfl(0.4);

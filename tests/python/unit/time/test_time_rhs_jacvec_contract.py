@@ -7,6 +7,10 @@ import pytest
 
 from pops import model as model_api
 from pops.numerics.terms import DefaultSource, Flux
+from pops.runtime.amr_program_support import (
+    AMRProgramSupportContext,
+    amr_program_op_support,
+)
 from pops.time import Program, StagePoint, TimePoint
 
 from typed_program_support import solve_field, typed_field, typed_state
@@ -100,6 +104,32 @@ def test_rhs_jacvec_accepts_one_exact_field_context_from_the_frozen_iterate():
     jacvec = next(node for node in completed.attrs["apply_block"] if node.op == "rhs_jacvec")
     assert jacvec.attrs["field_coupled"] is True
     assert r0.field_context.field is field
+
+
+def test_recursive_ir_exposes_field_coupled_jacvec_to_the_amr_capability_gate():
+    program, iterate, operator, _named_flux = _program()
+    field = typed_field(program, "potential")
+    fields = solve_field(program, iterate, field=field, name="iterate_fields")
+    r0 = program.rhs(
+        name="r0", state=iterate, fields=fields,
+        terms=[Flux(), DefaultSource()])
+    _record(program, operator, iterate, r0, field_coupled=True)
+
+    assert "rhs_jacvec" not in {node["op"] for node in program.ir_nodes()}
+    recursive = program.ir_nodes(recursive=True)
+    assert any(
+        node["op"] == "rhs_jacvec"
+        and node["attrs"].get("field_coupled") is True
+        for node in recursive
+    )
+    context = AMRProgramSupportContext(
+        refined_hierarchy=True,
+        shared_block_interfaces=False,
+        field_routes_validated=True,
+    )
+    assert amr_program_op_support(program, context=context) == {
+        "fine_level_field_perturbation": "pending",
+    }
 
 
 def test_rhs_jacvec_rejects_field_coupling_without_an_exact_field_context():

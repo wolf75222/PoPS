@@ -170,6 +170,8 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         )
     except RuntimeError as exc:
         return None, "compile (System): %s" % str(exc)[:140]
+    for field, field_plan in plan.field_plans.items():
+        sim._install_field_plan(field, field_plan)
     sim.add_equation("plasma", block_cm,
                      spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                      time=engine.Explicit(method="ssprk2"))
@@ -200,9 +202,12 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
-        # Wire the block + field solver, seed the FULL conservative state BEFORE the build (install_program
+        # Install the exact resolved field route, wire the block, seed the FULL conservative state
+        # BEFORE the build (install_program
         # forces ensure_built, which freezes the layout -- set_conservative_state must precede it), then
         # install the compiled time Program on the hierarchy.
+        for field, field_plan in plan.field_plans.items():
+            amr._install_field_plan(field, field_plan)
         amr.add_equation("plasma", block_cm,
                          spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                          time=engine.Explicit(method="ssprk2"))

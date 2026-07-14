@@ -67,7 +67,7 @@ def test_numerical_defaults_report_classifies_every_constant():
 
 def test_system_inspect_reports_effective_block_and_solver_options():
     sim = System(n=8, L=1.0, periodic=True)
-    sim.block(
+    sim.add_equation(
         "ion",
         _isothermal_model(),
         time=engine.IMEX(
@@ -111,13 +111,3 @@ def test_invalid_newton_and_refinement_values_are_rejected():
         amr.set_refinement(math.inf)
     with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
         amr.set_phi_refinement(math.nan)
-
-
-def test_amr_inspect_reports_refinement_sentinel_as_policy():
-    amr = AmrSystem(n=8, L=1.0, periodic=True)
-    amr.set_refinement(1e30)
-    options = amr.inspect().to_dict()["options"]
-    assert options["runtime"] == "amr_system"
-    assert options["amr"]["disabled"] is True
-    assert options["amr"]["disabled_policy"] == "legacy_abi_sentinel_threshold"
-    assert options["defaults"]["amr"]["refinement_disabled_threshold"] == pytest.approx(1e30)

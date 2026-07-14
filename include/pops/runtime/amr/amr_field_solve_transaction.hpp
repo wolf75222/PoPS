@@ -171,6 +171,37 @@ inline void AmrRuntime::publish_aux_components(const std::vector<int>& component
   unpack_aux_components(packed, components);
 }
 
+/// Publish components whose valid cells already carry a resolved value on every AMR level.  The
+/// coarse-only publication above deliberately injects the parent across the child's whole grown
+/// box; doing that here would destroy the independently solved fine valid cells.  FillPatch instead
+/// materializes parent values only in coarse/fine ghosts, then lets the same-level/physical halo
+/// fill override the regions for which a fine-level authority exists.
+inline void AmrRuntime::publish_refined_aux_components(
+    const std::vector<int>& components) {
+  if (components.empty())
+    return;
+  std::vector<MultiFab> packed = pack_aux_components(components);
+  Box2D level_domain = dom_;
+  BCRec level_bc = aux_bc_;
+  fill_ghosts_profiled(packed[0], level_domain, level_bc);
+  // AuxHalo is a coarse-level authoring policy by contract. Fine patches retain the shared
+  // physical BC while independently solved valid cells remain authoritative.
+  apply_named_aux_bc(packed[0], components);
+  for (int level = 1; level < nlev_; ++level) {
+    level_domain = level_domain.refine(kAmrRefRatio);
+    level_bc.dx /= Real(kAmrRefRatio);
+    level_bc.dy /= Real(kAmrRefRatio);
+    MultiFab& fine = packed[static_cast<std::size_t>(level)];
+    // The local-parent path is correct for both distributed and replicated parents, including a
+    // replicated multi-box coarse layout whose fine grown box crosses a coarse tile boundary.
+    mf_fill_fine_ghosts_spatial_mb(
+        fine, packed[static_cast<std::size_t>(level - 1)],
+        /*replicated_parent=*/false);
+    fill_ghosts_profiled(fine, level_domain, level_bc);
+  }
+  unpack_aux_components(packed, components);
+}
+
 inline AmrRuntime::FieldSolveSnapshot AmrRuntime::capture_field_solve_snapshot(
     const FieldSolveScope& scope) {
   device_fence();

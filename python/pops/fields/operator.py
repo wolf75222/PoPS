@@ -10,12 +10,30 @@ from typing import Any
 from pops.descriptors import Availability, Descriptor
 from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.identity import Identity
-from pops.math import Equation
+from pops.math import Equation, elliptic_terms
 from pops.model import Handle
 
 from ._identity import field_identity, strict_field_data
 from ._references import collect_references, reference_label, resolve_handle, resolve_value
-from .outputs import _Output
+from .outputs import FieldOutput, GradientOutput, _Output
+
+
+def _field_targets_unknown(field: Any, unknown: Handle) -> bool:
+    """Return whether an elliptic field operand names exactly ``unknown``.
+
+    Public field equations may spell the operand as the Handle itself, as
+    ``ValueExpr(handle)``, or as ``unknown(handle)``.  All three retain a typed
+    owner-qualified Handle.  A free-name ``unknown("phi")`` deliberately does
+    not: matching that spelling by local name would silently alias two fields
+    owned by different models or blocks.
+    """
+    if isinstance(field, Handle):
+        reference = field
+    else:
+        reference = getattr(field, "reference", None)
+        if not isinstance(reference, Handle):
+            reference = getattr(field, "handle", None)
+    return isinstance(reference, Handle) and reference == unknown
 
 
 class FieldProviderMeasure(Descriptor):
@@ -215,6 +233,24 @@ class FieldOperator(Descriptor):
         return Availability.yes("physical field operator is structurally complete")
 
     def validate(self, context: Any = None) -> bool:
+        for term in elliptic_terms(self.equation.lhs):
+            if not _field_targets_unknown(getattr(term, "field", None), self.unknown):
+                raise ValueError(
+                    "FieldOperator elliptic term %s must target its exact declared unknown %s"
+                    % (type(term).__name__, self.unknown.qualified_id)
+                )
+        for output in self.outputs:
+            if isinstance(output, FieldOutput):
+                if output.source is not None and output.source != self.unknown:
+                    raise ValueError(
+                        "FieldOutput %r source must be None or the FieldOperator unknown %s"
+                        % (output.name, self.unknown.qualified_id)
+                    )
+            elif isinstance(output, GradientOutput) and output.source != self.unknown:
+                raise ValueError(
+                    "GradientOutput %r source must be the FieldOperator unknown %s"
+                    % (output.name, self.unknown.qualified_id)
+                )
         references = self.declaration_references()
         authenticate = getattr(context, "authenticate", None)
         if callable(authenticate):

@@ -493,6 +493,32 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             self._fluxes[name] = h
         return h
 
+    def flux_value(self, state: Any, aux: Any, axis: Any) -> Any:
+        """Evaluate the authored single-state flux through the host-side oracle.
+
+        ``axis`` is one of this model's typed frame axes; integer and string directions are
+        deliberately rejected.  This is an authoring/debug oracle only: compiled simulations use
+        the emitted native flux and never execute this Python path per cell.
+        """
+        if self._multi_module is not None:
+            raise ValueError(
+                "flux_value does not implicitly select a species flux; inspect the compiled "
+                "multi-state operator instead")
+        axes = None if self._frame is None else self._frame.axes
+        if not isinstance(axes, tuple) or axis not in axes:
+            raise ValueError("flux_value axis must be one of the Model frame's typed axes")
+        # The native formula backend has canonical Cartesian directions 0=x and 1=y.  Frame axis
+        # iteration order is presentation data, not a direction selector: a valid typed frame may
+        # expose ``(y, x)`` while its flux mapping is still keyed by axis identity.  Resolve by the
+        # same canonical axis name used by ``flux()`` so host oracles cannot silently swap physics.
+        directions = {"x": 0, "y": 1}
+        name = getattr(axis, "name", None)
+        if name not in directions:
+            raise ValueError(
+                "flux_value requires an installed Cartesian x/y axis identity")
+        return self._dsl.eval_flux(
+            state, {} if aux is None else aux, directions[name])
+
     def projection(self, expressions: Any) -> None:
         """Install one native pointwise state projection expression per component."""
         self._dsl.projection(expressions)

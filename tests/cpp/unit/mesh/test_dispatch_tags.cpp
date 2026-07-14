@@ -2,7 +2,7 @@
 // verite partagee par tous les dispatchs (System make_block, AMR dispatch_amr_*, polaire). Ce test
 // est VOLONTAIREMENT LEGER (il n'inclut QUE dispatch_tags.hpp, aucun System / modele) : il verrouille
 //   (1) la MATRICE d'acceptation/rejet de validate_limiter / validate_riemann (cartesien ET polaire),
-//   (2) les n_ghost de limiter_n_ghost (1/2/2/3 + fallback MUSCL 2 sur inconnu),
+//   (2) les n_ghost de limiter_n_ghost (1/2/2/3, unknown tokens fail closed),
 //   (3) la presence des FRAGMENTS de messages que des tests grepent ("unknown limiter",
 //       "unknown Riemann flux", "unsupported" / "polar") + le prefixe de contexte,
 //   (4) le contenu des tables kLimiters / kRiemanns (noms, n_ghost, polar_ok).
@@ -99,7 +99,8 @@ TEST(test_dispatch_tags, limiter_n_ghost_widths) {
   EXPECT_EQ(limiter_n_ghost("minmod"), 2) << "n_ghost(minmod) == 2";
   EXPECT_EQ(limiter_n_ghost("vanleer"), 2) << "n_ghost(vanleer) == 2";
   EXPECT_EQ(limiter_n_ghost("weno5"), 3) << "n_ghost(weno5) == 3";
-  EXPECT_EQ(limiter_n_ghost("bogus"), 2) << "n_ghost(inconnu) == 2 (fallback MUSCL, historique)";
+  EXPECT_THROW((void)limiter_n_ghost("bogus"), std::runtime_error)
+      << "an unknown limiter must never select a fallback halo";
   // variante compile-time (utilisee par les static_assert de non-derive de block_builder.hpp).
   static_assert(limiter_n_ghost_ct("none") == 1, "ct none");
   static_assert(limiter_n_ghost_ct("weno5") == 3, "ct weno5");

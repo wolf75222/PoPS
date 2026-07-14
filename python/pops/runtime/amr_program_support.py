@@ -1,22 +1,20 @@
-"""AMR Program op-support capability query (ADC-634): which ops a Program uses run on AMR.
+"""Resolved AMR Program capability query and fail-closed pre-artifact gate.
 
-The clean AMR route (``pops.compile(problem, layout=<structured AMR descriptor>)`` with a whole-system time
-``Program``) compiles + installs + runs for ANY Program: a body using a deferred op still
-COMPILES against ``AmrProgramContext`` (the signatures match ``ProgramContext`` byte-for-byte) and
-throws the honest ``AmrProgramContext`` backstop only when that op is reached at run. ADC-634 adds
-NO compile-time gate and NO route refusal. This module is the read-only CAPABILITY QUERY that
-drives the Spec 6 matrix and ``inspect``: it enumerates the ops a Program actually uses (from its
-IR) and reports, per capability group, whether the AMR Program path serves it today (``"green"``)
-or defers it to a follow-up issue (``"pending:ADC-6xx"``).
+Program IR alone cannot prove an AMR route: hierarchy refinement, shared block interfaces and
+authenticated field-provider routes are independent resolve-time authorities.  This module joins
+those facts in :class:`AMRProgramSupportContext`, enumerates the Program operations that are
+actually reachable, and reports whether every required AMR capability group is implemented.
+``pops.resolve`` rejects a pending group before code generation; C++ deferred-operation checks stay
+as defensive runtime backstops rather than the primary compatibility mechanism.
 
 Three single sources of truth, none duplicated here:
 
-  1. Op enumeration is the Program's own IR (``Program.ir_nodes()`` -- the ``_pops``-free op walk);
+  1. Op enumeration is the Program's own IR plus an exact resolved support context;
   2. the op -> capability-group map reuses the codegen's OWN op-group vocabulary
      (``program_emit_kernels._CONDENSED_OPS`` et al.), imported lazily -- not a hand list;
   3. the AMR support status derives from the ONE C++ source of truth,
-     ``include/pops/runtime/program/amr_program_context.hpp``: every deferral there (a
-     ``deferred_op(...)`` op, a ``history_deferred`` method, an inline-throw method) is mirrored in
+     ``include/pops/runtime/program/amr_program_context.hpp``: every capability deferral there is an
+     explicit ``deferred_op("<unambiguous-id>", ...)`` call mirrored in
      :data:`DEFERRED_GROUPS` and LOCKED by
      ``tests/python/architecture/test_amr_program_support_parity.py`` (the ``route_registry_parity``
      pattern). When ADC-631 / ADC-633 remove their throws, the header-derived deferred set shrinks,
@@ -29,17 +27,39 @@ sets and ``Program.ir_nodes`` are reached LAZILY inside the functions that need 
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class AMRProgramSupportContext:
+    """Resolved execution facts required for a complete AMR capability query.
+
+    A Program alone cannot reveal whether its blocks share an interface, whether the hierarchy can
+    refine, or whether field-provider routes were authenticated.  Resolve constructs this value only
+    after those independent authorities have been validated; callers cannot obtain a green route
+    verdict from Program IR alone.
+    """
+
+    refined_hierarchy: bool
+    shared_block_interfaces: bool
+    field_routes_validated: bool
+
+    def __post_init__(self) -> None:
+        for name in (
+            "refined_hierarchy", "shared_block_interfaces", "field_routes_validated",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError("AMRProgramSupportContext.%s must be bool" % name)
 
 # --- Capability groups: the ONE mirror of the AmrProgramContext deferral surface ----------------
 # Each group names (a) the AmrProgramContext C++ methods that FAIL LOUD for it -- the header-derived
 # deferred identifiers the parity test locks against amr_program_context.hpp -- and (b) the Python
 # IR op names that route into that group. ``issue`` is the follow-up that greens the group (None for
 # a group with no scheduled implementation). A group whose ``header_methods`` is EMPTY is served
-# today (green); a non-empty one is pending. The header_methods are: the string literals passed to
-# ``deferred_op("<name>", ...)``, the method names that call ``history_deferred(...)``, and the
-# method names whose body throws inline for a deferral (apply_projection / the named
-# solve_fields_from_state / solve_fields_from_blocks / scheduler_error). This is the SINGLE place the
+# today (green); a non-empty one is pending. The header_methods are exactly the unambiguous string
+# identifiers passed to ``deferred_op("<name>", ...)``. Ordinary validation/runtime exceptions are
+# deliberately outside this capability mirror. This is the SINGLE place the
 # AMR support status is declared; :func:`deferred_groups` / :func:`amr_program_op_support` read it.
 #
 # op_source names the codegen op-group set this group's ir_ops mirror (documentary: the parity of the
@@ -66,19 +86,43 @@ DEFERRED_GROUPS: dict = {
         "issue": None,
         "op_source": "program_emit_kernels._ALLOWED_OPS['project']",
         "ir_ops": frozenset({"project"}),
-        "header_methods": frozenset({"apply_projection"}),
+        "header_methods": frozenset(),
     },
     "coupled_solve": {
         "issue": None,
         "op_source": "program_emit_kernels._AUX_OUTPUT_OPS['solve_fields_from_blocks']",
         "ir_ops": frozenset({"solve_fields_from_blocks"}),
-        "header_methods": frozenset({"solve_fields_from_blocks"}),
+        "header_methods": frozenset(),
     },
     "named_field_solve": {
         "issue": None,
-        "op_source": "program_emit_ops.solve_fields_from_state(field, ...)",
-        "ir_ops": frozenset({"solve_fields_from_state"}),
-        "header_methods": frozenset({"solve_fields_from_state"}),
+        "op_source": "Program IR solve_fields -> program_emit_ops ctx.solve_fields_from_state",
+        "ir_ops": frozenset({"solve_fields"}),
+        "header_methods": frozenset(),
+    },
+    "unqualified_field_solve": {
+        "issue": None,
+        "op_source": "not representable in final Program IR (field identity is mandatory)",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset({"solve_fields_from_state_default"}),
+    },
+    "unqualified_coupled_solve": {
+        "issue": None,
+        "op_source": "not representable in final Program IR (field identity is mandatory)",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset({"solve_fields_from_blocks_default"}),
+    },
+    "refined_shared_block_interfaces": {
+        "issue": None,
+        "op_source": "captured rhs_group with shared block interfaces on a refined hierarchy",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset({"refined_shared_block_interfaces"}),
+    },
+    "fine_level_field_perturbation": {
+        "issue": None,
+        "op_source": "field-provider perturbation inside an implicit solve",
+        "ir_ops": frozenset(),
+        "header_methods": frozenset({"solve_fields_from_state_at_fine_level"}),
     },
     "scheduler": {
         "issue": None,
@@ -118,7 +162,9 @@ def deferred_groups() -> dict:
     return status
 
 
-def amr_program_op_support(program: Any) -> dict:
+def amr_program_op_support(
+    program: Any, *, context: AMRProgramSupportContext,
+) -> dict:
     """Report the AMR Program op support for the ops @p program actually USES: ``{group: status}``.
 
     Enumerates @p program's ops via its own ``ir_nodes()`` (the ``_pops``-free IR walk) plus the
@@ -130,7 +176,14 @@ def amr_program_op_support(program: Any) -> dict:
     the fully-green report. NO refusal and NO mutation: this is a capability query, the route compiles
     and installs the Program regardless.
     """
-    used_groups = _used_groups(program)
+    if type(context) is not AMRProgramSupportContext:
+        raise TypeError(
+            "amr_program_op_support requires the resolved AMRProgramSupportContext; "
+            "Program IR alone is insufficient")
+    if not context.field_routes_validated:
+        raise ValueError(
+            "amr_program_op_support requires authenticated resolved field-provider routes")
+    used_groups = _used_groups(program, context=context)
     return {name: _group_status(DEFERRED_GROUPS[name]) for name in sorted(used_groups)}
 
 
@@ -142,12 +195,12 @@ def _group_status(group: dict) -> str:
     return "pending:%s" % issue if issue else "pending"
 
 
-def _used_groups(program: Any) -> set:
+def _used_groups(program: Any, *, context: AMRProgramSupportContext) -> set:
     """The capability groups the ops of @p program map into.
 
     Walks ``program.ir_nodes()`` (each node's ``op``) and maps a used op to its group via the
     ``ir_ops`` membership in :data:`DEFERRED_GROUPS`. A ``rhs`` node carrying NAMED fluxes maps into
-    the ``named_flux`` group (the named-flux -div path), a ``solve_fields_from_state`` carrying a
+    the ``named_flux`` group (the named-flux -div path), a ``solve_fields`` node carrying a
     ``field`` attr into ``named_field_solve``, and a node carrying a schedule attr into ``scheduler``
     -- the attr-borne derivations the codegen lowers into the same deferred seams. Every mapping
     reads the IR only; it binds / dlopens nothing.
@@ -157,7 +210,8 @@ def _used_groups(program: Any) -> set:
         for op in group["ir_ops"]:
             op_to_group[op] = name
     used: set = set()
-    for node in _ir_nodes(program):
+    nodes = _ir_nodes(program)
+    for node in nodes:
         op = node.get("op")
         attrs = node.get("attrs") or {}
         if op in op_to_group:
@@ -165,12 +219,22 @@ def _used_groups(program: Any) -> set:
         # A rhs with named fluxes (not the default flux) lowers to the deferred named-flux -div seam.
         if op == "rhs" and _has_named_fluxes(attrs):
             used.add("named_flux")
-        # A per-stage named-field re-solve (solve_fields_from_state with a field name) -> named_field.
-        if op == "solve_fields_from_state" and attrs.get("field"):
+        # The canonical IR op is solve_fields; code generation alone lowers that operation to the
+        # C++ AmrProgramContext::solve_fields_from_state seam.
+        if op == "solve_fields" and attrs.get("field"):
             used.add("named_field_solve")
         # A held / scheduled node lowers to the deferred scheduler cache seams.
         if attrs.get("schedule") is not None:
             used.add("scheduler")
+        # A field-coupled finite-difference Jacobian re-solves the provider at a perturbed state.
+        # AmrProgramContext serves this on the coarse level, but cannot do so on a fine level until
+        # a composite stage solver exists.  This is conditional on resolved hierarchy evidence, not
+        # a property that Program IR can decide alone.
+        if op == "rhs_jacvec" and attrs.get("field_coupled") is True \
+                and context.refined_hierarchy:
+            used.add("fine_level_field_perturbation")
+    if context.refined_hierarchy and context.shared_block_interfaces:
+        used.add("refined_shared_block_interfaces")
     return used
 
 
@@ -188,14 +252,33 @@ def _has_named_fluxes(attrs: dict) -> bool:
 
 
 def _ir_nodes(program: Any) -> Any:
-    """The Program's IR nodes (``program.ir_nodes()``), or ``[]`` for an object that exposes none.
+    """Return a validated copy of the Program's machine-readable IR nodes.
 
-    Reads the machine-readable, ``_pops``-free op walk the authoring layer already provides; a handle
-    that is not a Program (no ``ir_nodes``) yields no ops (an empty support report, never an error).
+    A missing or malformed inspection surface is unknown capability evidence and therefore a hard
+    error.  Treating it as an empty Program would incorrectly manufacture a green AMR verdict.
     """
     ir_nodes = getattr(program, "ir_nodes", None)
-    return ir_nodes() if callable(ir_nodes) else []
+    if not callable(ir_nodes):
+        raise TypeError("AMR Program capability query requires Program.ir_nodes()")
+    # Deferred operations may be legal only inside a control/solver subregion.  The historical flat
+    # report cannot expose them (notably rhs_jacvec is always inside matrix_free_operator.apply_block),
+    # so accepting it here would manufacture a green AMR verdict for an operation reached at runtime.
+    nodes = ir_nodes(recursive=True)
+    if not isinstance(nodes, list):
+        raise TypeError("Program.ir_nodes(recursive=True) must return a list")
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise TypeError("Program.ir_nodes(recursive=True)[%d] must be a mapping" % index)
+        op = node.get("op")
+        attrs = node.get("attrs")
+        if not isinstance(op, str) or not op:
+            raise TypeError(
+                "Program.ir_nodes(recursive=True)[%d].op must be a non-empty string" % index)
+        if not isinstance(attrs, dict):
+            raise TypeError(
+                "Program.ir_nodes(recursive=True)[%d].attrs must be a mapping" % index)
+    return list(nodes)
 
 
-__all__ = ["DEFERRED_GROUPS", "header_deferred_methods", "deferred_groups",
-           "amr_program_op_support"]
+__all__ = ["AMRProgramSupportContext", "DEFERRED_GROUPS", "header_deferred_methods",
+           "deferred_groups", "amr_program_op_support"]

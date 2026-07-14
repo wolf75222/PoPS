@@ -227,6 +227,15 @@ class CartesianGrid:
             **self.options(),
         }
 
+    def __pops_semantic_data__(self) -> dict[str, Any]:
+        """Project this immutable grid through the open semantic-value protocol.
+
+        Layout descriptors may embed a mesh value in their own semantic data.  The dunder keeps
+        that extension boundary explicit: snapshot code consumes one protocol instead of growing
+        concrete ``CartesianGrid`` / third-party mesh branches.
+        """
+        return self.to_dict()
+
     canonical_identity = to_dict
 
     @property

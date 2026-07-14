@@ -57,7 +57,7 @@ def cyclotron_model(q):
 
 def build(time_policy, q, B0, rho0=1.0, u0=1.0, v0=0.0, n=8):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("e", cyclotron_model(q), spatial=engine.Spatial(limiter=Minmod()),
+    sim.add_equation("e", cyclotron_model(q), spatial=engine.Spatial(limiter=Minmod()),
                   time=time_policy)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_magnetic_field(B0 * np.ones(n * n))
@@ -126,7 +126,7 @@ print("== (d) rejets explicites : AMR / polaire / Strang / masque partiel ==")
 # (d1) AMR
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
 try:
-    amr.block("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
+    amr.add_equation("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
                   time=engine.IMEXRK())
     chk(False, "AMR + IMEXRK aurait du lever")
 except (RuntimeError, ValueError, TypeError) as e:
@@ -135,7 +135,7 @@ except (RuntimeError, ValueError, TypeError) as e:
 # (d2) polaire (anneau) : la source raide implicite n'y est pas cablee
 simp = System(mesh=PolarMesh(r_min=0.2, r_max=1.0, nr=16, ntheta=16))
 try:
-    simp.block("e",
+    simp.add_equation("e",
                    engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
                              source=engine.NoSource(), elliptic=engine.BackgroundDensity()),
                    spatial=engine.Spatial(), time=engine.IMEXRK())
@@ -149,7 +149,7 @@ try:
     # engine.IMEXRK n'expose pas implicit_vars ; on force l'attribut pour exercer la garde C++.
     pol = engine.IMEXRK()
     pol.implicit_vars = ["rho_u"]
-    sim_mask.block("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
+    sim_mask.add_equation("e", cyclotron_model(1.0), spatial=engine.Spatial(limiter=Minmod()),
                        time=pol)
     chk(False, "IMEXRK + implicit_vars aurait du lever")
 except (RuntimeError, ValueError) as e:

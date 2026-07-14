@@ -38,7 +38,15 @@ class Expr(ImmutableSymbolic):
     def __radd__(self, o: Any) -> Any: return Add(_wrap(o), self)
     def __sub__(self, o: Any) -> Any: return Sub(self, _wrap(o))
     def __rsub__(self, o: Any) -> Any: return Sub(_wrap(o), self)
-    def __mul__(self, o: Any) -> Any: return Mul(self, _wrap(o))
+    def __mul__(self, o: Any) -> Any:
+        # ``kappa_expr * unknown`` is an elliptic reaction term, not an ordinary pointwise
+        # multiplication.  Keeping this conversion here makes the natural screened-Poisson
+        # spelling work for an explicit ``model.value(RuntimeParam(...))`` while Handles retain
+        # ordinary Boolean equality/hash semantics.
+        if isinstance(o, Unknown):
+            from .elliptic import Reaction
+            return Reaction(o, self)
+        return Mul(self, _wrap(o))
     def __rmul__(self, o: Any) -> Any: return Mul(_wrap(o), self)
     def __truediv__(self, o: Any) -> Any: return Div(self, _wrap(o))
     def __rtruediv__(self, o: Any) -> Any: return Div(_wrap(o), self)
@@ -592,9 +600,25 @@ class Unknown(_BoardNode):
     """A solve unknown: ``unknown("U*")`` in ``(I - dt*C) @ unknown("U*") == rhs``."""
 
     def __init__(self, name: Any) -> None:
+        from pops.model import Handle
+
+        if isinstance(name, Handle):
+            if name.kind != "field":
+                raise TypeError("Unknown Handle must be a declared field Handle")
+            self.reference = name
+            self.name = name.local_id
+            return
         if not isinstance(name, str) or not name:
-            raise TypeError("Unknown: name must be a non-empty string")
+            raise TypeError("Unknown requires a non-empty name or a declared field Handle")
+        self.reference = None
         self.name = name
+
+    def __pops_ir_key__(self, recurse: Any) -> Any:
+        # The surrounding FieldOperator owns the canonical, owner-qualified field Handle and
+        # validates that this symbolic leaf denotes that exact declaration.  Keeping the leaf key
+        # local makes it usable while the model is still authoring-owned without weakening the
+        # resolved operator identity.
+        return ("unknown", self.name)
 
     def __rmatmul__(self, operator: Any) -> Any:
         """``operator @ unknown("U*")`` -- the left-hand side of an implicit solve."""

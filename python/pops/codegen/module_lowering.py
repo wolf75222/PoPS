@@ -257,8 +257,18 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             # names use their dedicated slots and must never be redeclared as named extras.
             if output not in AUX_CANONICAL and output not in m._m.aux_extra_names:
                 m.aux_field(output)
+        gradient_sign = op.lowering.get("gradient_sign", 1)
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError(
+                "compile_problem: field_operator %r gradient_sign must be exactly -1 or 1"
+                % op.name)
+        if len(outputs) == 1 and gradient_sign != 1:
+            raise ValueError(
+                "compile_problem: field_operator %r has no gradient outputs for gradient_sign=-1"
+                % op.name)
         m.elliptic_field(
-            op.name, _body_for_state(op.body), operator="poisson", aux=outputs)
+            op.name, _body_for_state(op.body), operator="poisson", aux=outputs,
+            gradient_sign=gradient_sign)
 
     def _b_local_rate(op: Any) -> None:
         low = op.lowering

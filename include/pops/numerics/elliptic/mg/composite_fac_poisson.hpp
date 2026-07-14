@@ -24,8 +24,9 @@
 #include <vector>
 
 /// @file
-/// @brief CompositeFacPoisson: 2-level AMR COMPOSITE elliptic solver (Fast Adaptive Composite,
-///        FAC) for the SCALAR Poisson Lap phi = f on a coarse level + ONE fine patch (ratio 2).
+/// @brief CompositeFacPoisson: AMR COMPOSITE elliptic solver (Fast Adaptive Composite, FAC) for
+///        ``div(A grad phi) - kappa phi = f`` across a nested hierarchy. ``kappa=0`` is Poisson;
+///        a positive constant is the screened-Poisson/Helmholtz route.
 ///
 /// MOTIVATION (amr-schur path). The current AMR Poisson (Option A) solves the elliptic only on the
 /// coarse level then injects grad phi (piecewise constant) onto the fine patches: the patches refine
@@ -81,6 +82,16 @@ struct FacSetAllKernel {
   POPS_HD void operator()(int i, int j) const { dst(i, j, comp) = value; }
 };
 
+struct FacApplyConstantReactionKernel {
+  Array4 value;
+  ConstArray4 phi;
+  Real reaction;
+
+  POPS_HD void operator()(int i, int j) const {
+    value(i, j, 0) -= reaction * phi(i, j, 0);
+  }
+};
+
 /// BILINEAR interpolation of the coarse potential (cell-centered, @p C with ghosts) at the CENTER of the
 /// fine cell (i, j). Ratio @p r. The fine center has abscissa (i+0.5)/r in coarse-step units, i.e.
 /// the coarse center-index fx = (i+0.5)/r - 0.5; we interpolate the 4 surrounding coarse centers.
@@ -99,7 +110,7 @@ POPS_HD inline Real fac_bilerp_coarse(const ConstArray4& C, int i, int j, int r)
 
 }  // namespace detail
 
-/// 2-level COMPOSITE FAC Poisson solver (scalar). Built on the coarse layout (replicated mono-box)
+/// Composite FAC Poisson/Helmholtz solver (scalar). Built on the coarse layout (replicated mono-box)
 /// + the fine patch (mono-box). The caller provides f_c (coarse) and f_f (fine); the solver returns
 /// phi_c (coarse, covered = average_down of the fine) and phi_f (fine).
 class CompositeFacPoisson {
@@ -202,8 +213,8 @@ class CompositeFacPoisson {
 
   MultiFab& rhs_coarse() {
     return f_c_;
-  }  ///< coarse right-hand side f_c (div(eps grad phi_c) = f_c)
-  MultiFab& rhs_fine() { return f_f_; }  ///< fine right-hand side f_f (div(eps grad phi_f) = f_f)
+  }  ///< coarse RHS for div(eps grad phi_c) - kappa phi_c = f_c
+  MultiFab& rhs_fine() { return f_f_; }  ///< fine RHS for the same composite operator
   MultiFab& phi_coarse() { return phi_c_; }
   MultiFab& phi_fine() { return phi_f_; }
   /// VARIABLE permittivity eps (at cell centers) PER LEVEL. Fill + use_variable_coefficient(true)
@@ -212,6 +223,21 @@ class CompositeFacPoisson {
   MultiFab& eps_coarse() { return eps_c_; }
   MultiFab& eps_fine() { return eps_f_; }
   void use_variable_coefficient(bool v) { has_eps_ = v; }
+  /// Install a spatially uniform reaction coefficient. The internal FAC operator is
+  /// ``div(eps grad phi) - kappa phi``; public ``-div(eps grad phi) + kappa phi`` equations negate
+  /// their RHS at the runtime boundary. The same kappa is installed on every correction MG and in
+  /// every composite residual/SOR level, so refined solves remain one exact Helmholtz operator.
+  void set_reaction(Real reaction) {
+    if (!std::isfinite(static_cast<double>(reaction)) || reaction <= Real(0))
+      throw std::invalid_argument(
+          "CompositeFacPoisson reaction must be finite and strictly positive");
+    reaction_ = reaction;
+    has_reaction_ = true;
+    mg_.set_reaction([reaction](Real, Real) { return reaction; });
+    for (auto& level : level_mg_)
+      if (level)
+        level->set_reaction([reaction](Real, Real) { return reaction; });
+  }
   /// Cross terms a_xy / a_yx (at cell centers) PER LEVEL: FULL tensor A = diag(eps,eps) +
   /// [[0,a_xy],[a_yx,0]]. This is the condensed Schur operator at B_z != 0 (a_xy = c rho w/det,
   /// a_yx = -a_xy, w = theta dt B_z) -- antisymmetric, NON self-adjoint. Small for the Schur step
@@ -331,6 +357,7 @@ class CompositeFacPoisson {
       throw std::invalid_argument("CompositeFacPoisson abs_tol must be finite and nonnegative");
 
     last_solve_report_ = {};
+    diagnostics_.clear();
     const bool fallible_linear_boundary =
         has_boundary_kernel_ && !boundary_kernel_.observes_iteration;
     if (fallible_linear_boundary)
@@ -371,6 +398,7 @@ class CompositeFacPoisson {
           std::to_string(boundary_failure_.j) + ")");
     if (!std::isfinite(static_cast<double>(incoming_residual)))
       return mark_invalid_linear_solve_(0);
+    record_residual(-1, incoming_residual);
     if (incoming_residual <= stop) {
       last_residual_ = incoming_residual;
       last_solve_report_.iters = 0;
@@ -776,7 +804,7 @@ class CompositeFacPoisson {
                  ratio_);  // consistency: coarse covered = fine average (multi-box OK)
   }
 
-  /// Red-black SOR over EACH fine patch: div(eps grad phi_f) = f_f (eps = face harmonic), FROZEN
+  /// Red-black SOR over EACH fine patch: div(eps grad phi_f)-kappa phi_f=f_f, FROZEN
   /// ghosts (no re-filling). eps == 1 everywhere (scalar) -> Laplacian, bit-identical to Phase 1.
   /// The over-relaxation factor is computed PER PATCH (own size). Since the patches are separated, the
   /// 9-point stencil of a patch never reads the valid cells of another (frozen ghosts only).
@@ -807,7 +835,8 @@ class CompositeFacPoisson {
               const Real exp = he ? eps_harmonic(E(i, j, 0), E(i + 1, j, 0)) : Real(1);
               const Real eym = he ? eps_harmonic(E(i, j, 0), E(i, j - 1, 0)) : Real(1);
               const Real eyp = he ? eps_harmonic(E(i, j, 0), E(i, j + 1, 0)) : Real(1);
-              const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2;
+              const Real diag = (exm + exp) * idx2 + (eym + eyp) * idy2 +
+                                (has_reaction_ ? reaction_ : Real(0));
               const Real nb = (exm * P(i - 1, j, 0) + exp * P(i + 1, j, 0)) * idx2 +
                               (eym * P(i, j - 1, 0) + eyp * P(i, j + 1, 0)) * idy2;
               // EXPLICIT cross terms (9 points, read from the current P): div(A grad phi) =
@@ -835,6 +864,8 @@ class CompositeFacPoisson {
     apply_laplacian(operator_view, geom_c_, lap_c_, /*coef=*/nullptr, has_eps_ ? &eps_c_ : nullptr,
                     /*kappa=*/nullptr, /*eps_y=*/nullptr, has_cross_ ? &axy_c_ : nullptr,
                     has_cross_ ? &ayx_c_ : nullptr);
+    if (has_reaction_)
+      apply_constant_reaction_(lap_c_, operator_view);
     device_fence();
     Array4 R = res_c_.fab(0).array();
     const ConstArray4 LAP = lap_c_.fab(0).const_array();
@@ -963,6 +994,8 @@ class CompositeFacPoisson {
       make_runtime_diagnostics_report("pops.numerics.elliptic.composite_fac_poisson");
   bool has_eps_ = false;    ///< true: div(eps grad phi) operator; false: scalar Laplacian (Phase 1)
   bool has_cross_ = false;  ///< true: adds the cross terms a_xy/a_yx (full tensor, Schur B_z!=0)
+  bool has_reaction_ = false;  ///< true: constant Helmholtz term -reaction_*phi on every level
+  Real reaction_ = Real(0);
   bool has_boundary_kernel_ = false;
   CompiledFieldBoundaryKernel boundary_kernel_{};
   FieldBoundaryExecutionContext boundary_context_{};
@@ -1032,6 +1065,12 @@ class CompositeFacPoisson {
   MultiFab& lap_level_(int m) { return m == 0 ? lap_c_ : (m == 1 ? lap_f_ : lap_lv_[m - 2]); }
   void add_uncovered_level_(int m, MultiFab& phi, const MultiFab& e);  // phi += e on uncovered cells
   void copy0_(MultiFab& dst, const MultiFab& src);                     // dst <- src (comp 0, valid)
+  void apply_constant_reaction_(MultiFab& value, const MultiFab& phi) const {
+    for (int li = 0; li < value.local_size(); ++li)
+      for_each_cell(value.box(li), detail::FacApplyConstantReactionKernel{
+                                          value.fab(li).array(),
+                                          phi.fab(li).const_array(), reaction_});
+  }
   // Average-down phi_level(m) -> phi_level(m-1). When the parent (m-1) is the REPLICATED coarse under
   // MPI, parallel_copy would only update the src-owner rank; this routes the covered-cell averages
   // through a single-writer FluxRegister so every rank's replicated parent gets the same values

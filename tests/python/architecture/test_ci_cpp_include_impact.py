@@ -23,6 +23,7 @@ self-maintaining as the tree drifts.
 import importlib.util
 import json
 import pathlib
+import re
 import sys
 
 import pytest
@@ -262,6 +263,103 @@ def test_empty_change_selects_none(tmp_path):
     assert targets == []
 
 
+# --------------------------------------------------------------------------- #
+# Duration-balanced C++ matrix partition                                      #
+# --------------------------------------------------------------------------- #
+def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=6):
+    changed = tmp_path / f"changed-{shard_index}.txt"
+    changed.write_text("".join(f"{c}\n" for c in changed_lines), encoding="utf-8")
+    out = tmp_path / f"gh-out-{shard_index}.txt"
+
+    class Args:
+        pass
+
+    args = Args()
+    args.changed_files = str(changed)
+    args.github_output = str(out)
+    args.explain_file = None
+    args.force_all = False
+    args.shard_index = shard_index
+    args.shard_total = shard_total
+    sel.plan_cpp(args)
+    outputs = {}
+    for line in out.read_text().splitlines():
+        key, _, value = line.partition("=")
+        outputs[key] = value
+    return outputs
+
+
+def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
+    targets = sorted(suite["name"] for suite in _serial_suites())
+    measured = sel.ci_shard_binpack.load_durations(sel.CPP_DURATIONS_JSON)
+    assert set(measured) == set(targets), "C++ duration catalog must exactly mirror the manifest"
+    weights = {
+        target: sel.CPP_BUILD_CPU_SECONDS_PER_TARGET
+        + sel.CPP_CTEST_PARALLEL_JOBS * measured[target]
+        for target in targets
+    }
+
+    first = sel.cpp_target_shards(targets, 4)
+    assert sel.cpp_target_shards(list(reversed(targets)), 4) == first
+    flat = [target for shard in first for target in shard]
+    assert set(flat) == set(targets)
+    assert len(flat) == len(set(flat)), "a C++ target was duplicated across shards"
+
+    loads = [sum(weights[target] for target in shard) for shard in first]
+    lower_bound = max(max(weights.values()), sum(weights.values()) / len(first))
+    lpt_bound = (4.0 / 3.0 - 1.0 / (3.0 * len(first))) * lower_bound
+    assert max(loads) <= lpt_bound + 1.0e-9
+
+
+def test_cpp_ctest_selection_uses_target_labels_not_gtest_suite_names():
+    cmake = (REPO_ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert 'cpp-target:${ARG_NAME}' in cmake
+    regex = sel.cpp_target_label_regex(["test_brick_catalog", "test_program_runtime"])
+    assert re.search(regex, "cpp-target:test_brick_catalog")
+    assert re.search(regex, "cpp-target:test_program_runtime")
+    assert not re.search(regex, "BrickCatalog.EntryRoundTripsAllElevenRows")
+
+
+def test_full_cpp_plan_six_shards_preserves_every_cpp_target(tmp_path):
+    outputs = [
+        _run_plan_cpp_shard(tmp_path, ["CMakeLists.txt"], shard_index)
+        for shard_index in range(6)
+    ]
+    selected = set(outputs[0]["cpp_targets"].split())
+    sharded = [output["cpp_shard_targets"].split() for output in outputs]
+    flat = [target for shard in sharded for target in shard]
+
+    assert outputs[0]["cpp_mode"] == "all"
+    assert int(outputs[0]["cpp_count"]) == int(outputs[0]["cpp_total"])
+    assert set(flat) == selected
+    assert len(flat) == len(set(flat)), "matrix duplicates a C++ target"
+    assert all(
+        output["cpp_shard_counts"] == outputs[0]["cpp_shard_counts"]
+        for output in outputs
+    )
+
+    assert not any(
+        re.search(output["cpp_shard_label_regex"], "test_component_catalog_generated")
+        for output in outputs
+    ), "the generated catalog is a pure-Python architecture test, not a C++ shard"
+
+
+def test_subset_cpp_plan_six_shards_preserves_selected_union(tmp_path):
+    changed = ["include/pops/numerics/time/schemes/splitting.hpp"]
+    outputs = [
+        _run_plan_cpp_shard(tmp_path, changed, shard_index)
+        for shard_index in range(6)
+    ]
+    selected = set(outputs[0]["cpp_targets"].split())
+    flat = [
+        target
+        for output in outputs
+        for target in output["cpp_shard_targets"].split()
+    ]
+
+    assert outputs[0]["cpp_mode"] == "subset"
+    assert set(flat) == selected
+    assert len(flat) == len(set(flat)), "subset matrix duplicates a C++ target"
 # --------------------------------------------------------------------------- #
 # ADC-646: compositional per-file impact (union of per-file impacts)           #
 # --------------------------------------------------------------------------- #

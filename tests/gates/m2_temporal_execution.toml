@@ -75,7 +75,7 @@ requirement = "residual_operator"
 polarity = "positive"
 kind = "pytest"
 target = "residual"
-nodeid = "tests/python/unit/time/test_residual_program_graph.py::test_residual_product_and_solve_are_exact_immutable_graph_references"
+nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_builds_newton_ir"
 
 [[check]]
 issue = "ADC-664"
@@ -83,7 +83,7 @@ requirement = "residual_operator"
 polarity = "refusal"
 kind = "pytest"
 target = "residual"
-nodeid = "tests/python/unit/time/test_residual_program_graph.py::test_residual_rejects_product_and_initial_space_mismatches_before_compile"
+nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_validates_inputs"
 
 [[check]]
 issue = "ADC-665"

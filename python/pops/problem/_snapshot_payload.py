@@ -338,7 +338,7 @@ def _descriptor_semantic_data(value: Any, *, where: str) -> Any:
 
 
 def _semantic_option_data(value: Any, *, where: str) -> Any:
-    """Closed extension values admitted inside typed Descriptor options."""
+    """Canonicalize typed Descriptor options through the open semantic-value protocol."""
     from decimal import Decimal
     from fractions import Fraction
     from pops.descriptors import Descriptor
@@ -355,6 +355,13 @@ def _semantic_option_data(value: Any, *, where: str) -> Any:
         return value.canonical_identity()
     if isinstance(value, Descriptor):
         return _descriptor_semantic_data(value, where=where)
+    semantic_data = getattr(value, "__pops_semantic_data__", None)
+    if callable(semantic_data):
+        data = semantic_data()
+        if not isinstance(data, Mapping):
+            raise TypeError(
+                "%s __pops_semantic_data__() must return a mapping" % where)
+        return _semantic_option_data(data, where=where)
     if isinstance(value, Mapping):
         return {key: _semantic_option_data(item, where="%s.%s" % (where, key))
                 for key, item in value.items()}

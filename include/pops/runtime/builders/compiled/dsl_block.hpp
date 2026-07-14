@@ -78,7 +78,7 @@ void add_compiled_model(System& sys, const std::string& name, Model model,
   // this template): the ONE canonical spelling of the typed route (ADC-641), replacing the enum ->
   // string round-trip. route_token(kSsprk3)=="ssprk3", route_token(kForwardEuler)=="euler",
   // route_token(kExplicitSsprk2)=="explicit", route_token(kImex)=="imex" -- and build_block decodes it
-  // once via parse_time_route ("explicit" and "ssprk2" both resolve to the SSPRK2 advance, "imex" is
+  // once via parse_time_route (canonical "explicit" resolves to the SSPRK2 advance, "imex" is
   // ignored past the imex flag), so the advance selected is bit-identical to the old ternary.
   const std::string method = route_token(time_route);
   // The block may read extra auxiliary fields (aux_comps<Model> > 3, e.g. B_z of a magnetized

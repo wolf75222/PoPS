@@ -329,8 +329,9 @@ class AmrProgramContext {
       throw std::invalid_argument("AMR Program RHS group cannot be empty");
     if (capturing()) {
       if (eng_->has_level_interfaces(level_))
-        throw std::runtime_error(
-            "AMR shared block interfaces across a refined hierarchy require a prepared "
+        deferred_op(
+            "refined_shared_block_interfaces",
+            "shared block interfaces across a refined hierarchy require a prepared "
             "interface-flux reflux ledger; coarse-only execution is supported");
       for (const auto& request : requests) {
         if (request.state == nullptr || request.rhs == nullptr ||
@@ -388,9 +389,9 @@ class AmrProgramContext {
 
   // --- field solve (the SHARED coarse Poisson) ------------------------------------------------------
   /// The default head-of-step elliptic solve: the coarse system Poisson + coarse->fine aux injection.
-  /// v1 runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard): calling it again at fine
-  /// levels within the same macro-step is a no-op cache-hit (parity: the body stays atomic, the solve
-  /// fires once -- the OncePerStep cadence the native AMR step uses).
+  /// The AMR runtime runs it EXACTLY ONCE per macro-step (a level-0 / not-yet-solved guard):
+  /// calling it again at fine levels within the same macro-step is a no-op cache-hit (parity: the
+  /// body stays atomic, the solve fires once -- the OncePerStep cadence the native AMR step uses).
   SolveReport solve_fields() const {
     if (level_ == 0 || !default_solve_report_) {
       default_solve_report_.reset();
@@ -421,9 +422,10 @@ class AmrProgramContext {
         default_solve_report_ = report;
       return report;
     }
-    throw std::runtime_error(
-        "AmrProgramContext::solve_fields_from_state: per-stage fine-level field re-solve is not "
-        "implemented; use OncePerStep field cadence or provide a composite stage solver");
+    deferred_op(
+        "solve_fields_from_state_default",
+        "the default per-stage fine-level field re-solve requires a composite stage solver; use "
+        "OncePerStep field cadence or an exact named field provider");
   }
   SolveReport solve_fields_from_state_at(
       const runtime::multiblock::BoundaryEvaluationPoint& point,
@@ -435,9 +437,9 @@ class AmrProgramContext {
       throw std::out_of_range(
           "AmrProgramContext::solve_fields_from_state_at level is out of range");
     if (point.level != 0)
-      throw std::runtime_error(
-          "AmrProgramContext::solve_fields_from_state_at: a fine-level stage perturbation "
-          "requires a composite field solver");
+      deferred_op(
+          "solve_fields_from_state_at_fine_level",
+          "a fine-level stage perturbation requires a composite field solver");
     named_solve_reports_.erase(provider_slot);
     MultiFab& live = eng_->level_state(
         static_cast<std::size_t>(sys_block(b)), point.level);
@@ -454,7 +456,8 @@ class AmrProgramContext {
     if (report.solved()) named_solve_reports_[provider_slot] = report;
     return report;
   }
-  /// Named multi-elliptic field re-solve: deferred on AMR (ADC-513 companion). Fail loud.
+  /// Named multi-elliptic field re-solve. The coarse solve publishes and injects every level once;
+  /// fine levels consume only that exact provider-qualified report.
   SolveReport solve_fields_from_state(const std::string& field, int b,
                                       MultiFab& u_stage) const {
     if (level_ != 0) {
@@ -481,14 +484,14 @@ class AmrProgramContext {
       named_solve_reports_[field] = report;
     return report;
   }
-  /// Coupled multi-block field solve: deferred on AMR (the per-block summed-RHS at fine levels needs the
-  /// coupled re-solve path). Fail loud rather than a silent half-implementation.
+  /// Retained default-provider overload: the final Program IR always carries an exact field identity,
+  /// while an unqualified coupled solve has no provider authority and therefore fails loud.
   SolveReport solve_fields_from_blocks(
       const std::vector<const MultiFab*>& /*u_stages*/) const {
-    throw std::runtime_error(
-        "AmrProgramContext::solve_fields_from_blocks: a coupled multi-block field solve under a "
-        "compiled Program on AMR is deferred (v1, Spec 3 criterion 24). Use System, or a single-block "
-        "AMR Program.");
+    deferred_op(
+        "solve_fields_from_blocks_default",
+        "an unqualified coupled multi-block field solve has no AMR provider authority; use the "
+        "exact field-qualified Program operation");
   }
 
   SolveReport solve_fields_from_blocks(const std::string& field,
@@ -538,8 +541,9 @@ class AmrProgramContext {
   MultiFab& aux() const { return const_cast<MultiFab&>(eng_->aux(level_)); }
   /// The current level's metric (dx/dy >> level, domain << level).
   Geometry geom() const { return eng_->level_geom(level_); }
-  /// AMR v1 is Cartesian.  The metric queries still exist on this context so one generated Program
-  /// body instantiates against both runtime contexts without geometry-specific source-stage classes.
+  /// The installed AMR route is Cartesian.  The metric queries still exist on this context so one
+  /// generated Program body instantiates against both runtime contexts without geometry-specific
+  /// source-stage classes.
   bool is_polar_geometry() const { return false; }
   Real radial_origin() const { return Real(0); }
   Real radial_spacing() const { return geom().dx(); }
@@ -921,7 +925,7 @@ class AmrProgramContext {
     return s.solve_composite(rel_tol, abs_tol, max_iter);
   }
 
-  // --- named-flux primitive: DEFERRED on AMR (v1), fail loud -----------------------------------------
+  // --- named-flux primitive: DEFERRED on AMR, fail loud ----------------------------------------------
   // The named-flux divergence is a ProgramContext method the codegen can lower for a named-flux (ADC-419)
   // Program. The AMR named-flux -div path is NOT wired (out of ADC-633 scope); it fails loud so the SAME
   // lowered body compiles on target='amr_system' and throws only when the op is REACHED at run.
@@ -932,9 +936,9 @@ class AmrProgramContext {
         "whose flux IR runs through the level RHS.");
   }
 
-  // --- scheduler value cache: DEFERRED on AMR (v1), fail loud ----------------------------------------
+  // --- scheduler value cache: DEFERRED on AMR, fail loud ---------------------------------------------
   // The codegen lowers a held / scheduled field-solve node (ADC-458) against these cache seams. The
-  // CacheManager that backs them is owned by System (per-installed-Program, keyed by node id); AMR v1
+  // CacheManager that backs them is owned by System (per-installed-Program, keyed by node id); AMR
   // has no AmrSystem cache store, so a held schedule on AMR is not wired. Same EXACT signatures as
   // ProgramContext; each throws rather than silently caching nothing (which would read a stale value).
   bool cache_should_update(int /*node_id*/, int /*every_n*/) const {
@@ -976,8 +980,9 @@ class AmrProgramContext {
   /// AMR path never installs a schedule (the cache seams above fail loud first), so this only fires if
   /// the body reaches the off-cadence branch directly. Keep the exact [[noreturn]] signature.
   [[noreturn]] void scheduler_error(const std::string& what) const {
-    throw std::runtime_error("pops Program scheduler (AMR): " + what +
-                             " (scheduled Programs on AMR are deferred in v1; use System)");
+    deferred_op("scheduler_error",
+                ("the scheduled error policy reached its off-cadence branch (" + what +
+                 "); scheduled Programs on AMR are deferred; use System"));
   }
 
  private:
@@ -987,14 +992,14 @@ class AmrProgramContext {
     return std::runtime_error(std::move(message));
   }
 
-  /// Fail loud for an op the codegen can emit but the v1 AMR Program path does not yet wire (named-flux /
+  /// Fail loud for an op the codegen can emit but the installed AMR Program path does not wire (named-flux /
   /// scheduled Programs). [[noreturn]] so a non-void stub needs no dummy return -- the caller's signature
   /// stays byte-faithful to ProgramContext (the duck-typing requirement) without fabricating a value. @p
   /// op names the seam; @p detail names the alternative (System or the native AMR route) so the message
   /// is actionable, mirroring the inline fail-loud stubs above.
-  [[noreturn]] static void deferred_op(const char* op, const char* detail) {
+  [[noreturn]] static void deferred_op(const char* op, std::string detail) {
     throw std::runtime_error(std::string("AmrProgramContext: ") + op +
-                             " is not wired on the AMR Program path (v1); " + detail);
+                             " is not wired on the AMR Program path; " + std::move(detail));
   }
 
   /// The exact block/component composite tensor-elliptic driver a condensed-implicit Program routes to
@@ -1969,7 +1974,7 @@ class AmrProgramContext {
   // inside the recursive level advance, before couple_levels reflux modifies the coarse live state. We defer the
   // rotate to couple_levels (after the reflux + slot-0 resync), so a multistep Program never reads a
   // pre-reflux ring slot against a post-reflux live state. On nlev==1 the deferral collapses to the
-  // original store->rotate order -> bit-identical to Uniform / v1.
+  // original store->rotate order -> bit-identical to the Uniform route.
   mutable bool rotate_pending_ = false;
   mutable ClockScheduleState clock_schedule_;
   mutable std::string primary_clock_;

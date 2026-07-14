@@ -7,9 +7,14 @@ from types import MappingProxyType
 
 import pytest
 
-from pops.codegen._compiled_model_identity import model_compile_identity
+from pops.codegen import CompilerLowering
+from pops.codegen._compiled_model_identity import (
+    compiled_model_identity,
+    model_compile_identity,
+)
 from pops.codegen._orchestration_compile import compile_install_model
 from pops.codegen.loader import CompiledModel
+from pops.model import Module
 from pops.problem._snapshot import AuthoringSnapshot, attach_problem_snapshot
 
 
@@ -18,16 +23,31 @@ class _SourceModel:
         self.name = name
         self.returned_hash = returned_hash
         self.extra = extra
+        self.module = Module("compiled_model_boundary")
+        self.module.state_space("U", ("u",), roles=("Scalar",))
 
     def _model_hash(self):
         return "structural:%s" % self.name
 
+    def check(self):
+        return None
+
+    def __pops_compiler_lowering__(self):
+        return CompilerLowering(
+            emit_model=self,
+            source_module=self.module,
+            facade=self,
+        )
+
     def compile(self, *, backend, target, **kwargs):
-        identity_source = _SourceModel(self.returned_hash or self.name)
+        model_hash = "structural:%s" % (self.returned_hash or self.name)
         compiled = _compiled(
             target=target,
-            model_hash=identity_source._model_hash(),
-            identity=model_compile_identity(identity_source),
+            model_hash=model_hash,
+            identity=compiled_model_identity(
+                model_hash=model_hash,
+                module_hash=self.module.module_hash(),
+            ),
         )
         if self.extra is not None:
             compiled.extension = self.extra
@@ -89,6 +109,7 @@ def test_compile_result_identity_and_model_hash_must_agree():
 
 def test_matching_identity_is_scalar_only_and_does_not_retain_source():
     source = _SourceModel()
+    module_hash = source.module.module_hash()
     source_ref = weakref.ref(source)
     compiled = _compile(source)
     del source
@@ -98,7 +119,7 @@ def test_matching_identity_is_scalar_only_and_does_not_retain_source():
     assert dict(compiled.definition_identity) == {
         "protocol": "pops.compiled-model-identity.v1",
         "model_hash": "structural:source",
-        "module_hash": None,
+        "module_hash": module_hash,
     }
 
 
@@ -160,7 +181,7 @@ def test_subclass_noop_seal_cannot_bypass_canonical_boundary():
 
     source = _SourceModel()
     loader = NoOpSealLoader(
-        "<noop-seal>", "production", "add_native_block", ("u",), ("Scalar",), ("u",),
+        "<noop-seal>", "production", ("u",), ("Scalar",), ("u",),
         1, None, 0, {}, {"cpu": True}, "abi", source._model_hash(), "c++", "c++23",
         definition_identity=model_compile_identity(source),
     )

@@ -30,7 +30,7 @@ Run with python3 (PYTHONPATH = built pops package).
 """
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
-from typed_program_support import solve_field, typed_state
+from typed_program_support import codegen_field_plans, solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -54,6 +54,11 @@ except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this 
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
+
+
+def _emit(program, *, model=None):
+    return emit_cpp_program(
+        program, model=model, field_plans=codegen_field_plans(program))
 
 
 def chk(cond, label):
@@ -117,7 +122,7 @@ print("== (A) rhs flux=False routing: IR + codegen ==")
 m = advect_model()
 
 # THE BUG PROBE (codegen): flux=False, sources=["default"] must be SOURCE-ONLY -- no flux base.
-src_noflux_default = emit_cpp_program(one_step_program(
+src_noflux_default = _emit(one_step_program(
     "p_nf_default", ["default"], flux=False, model=m), model=m)
 chk("ctx.source_default_into(0," in src_noflux_default,
     "flux=False, sources=['default'] lowers to ctx.source_default_into (source only)")
@@ -145,12 +150,12 @@ def two_block_noflux(name, model=None):
     return P
 
 
-src_2blk = emit_cpp_program(two_block_noflux("p_2blk_nf", model=m), model=m)
+src_2blk = _emit(two_block_noflux("p_2blk_nf", model=m), model=m)
 chk("ctx.source_default_into(0," in src_2blk and "ctx.source_default_into(1," in src_2blk,
     "flux=False source-only routes to its block's bidx (block b -> index 1, not a hardcoded 0)")
 
 # flux=False, sources=[] -> the zero RHS: NO flux base, NO source.
-src_noflux_empty = emit_cpp_program(one_step_program(
+src_noflux_empty = _emit(one_step_program(
     "p_nf_empty", [], flux=False, model=m), model=m)
 chk("ctx.rhs_into(" not in src_noflux_empty
     and "ctx.neg_div_flux_default_into(" not in src_noflux_empty
@@ -159,7 +164,7 @@ chk("ctx.rhs_into(" not in src_noflux_empty
 
 # flux=False, sources=["decay"] (named only) -> NO flux base, the named source axpy is the whole RHS.
 named_model = advect_model_with_named()
-src_noflux_named = emit_cpp_program(one_step_program(
+src_noflux_named = _emit(one_step_program(
     "p_nf_named", ["decay"], flux=False, model=named_model),
         model=named_model)
 chk("ctx.rhs_into(" not in src_noflux_named
@@ -170,9 +175,9 @@ chk("ctx.axpy(" in src_noflux_named,
     "flux=False, sources=['decay'] axpys the named source onto the zeroed RHS")
 
 # flux=True paths UNCHANGED (ADC-425 routing): rhs_into for default, flux-only for [].
-src_flux_default = emit_cpp_program(one_step_program(
+src_flux_default = _emit(one_step_program(
     "p_f_default", ["default"], flux=True, model=m), model=m)
-src_flux_empty = emit_cpp_program(one_step_program(
+src_flux_empty = _emit(one_step_program(
     "p_f_empty", [], flux=True, model=m), model=m)
 chk("ctx.rhs_into(0," in src_flux_default and "ctx.source_default_into(" not in src_flux_default,
     "flux=True, sources=['default'] still lowers to ctx.rhs_into (unchanged)")
@@ -198,7 +203,7 @@ def _noflux_named_fluxes(model=None):
 rejected = False
 try:
     rejected_model = advect_model()
-    emit_cpp_program(_noflux_named_fluxes(model=rejected_model), model=rejected_model)
+    _emit(_noflux_named_fluxes(model=rejected_model), model=rejected_model)
 except TypeError:
     rejected = True
 chk(rejected, "flux=False with named fluxes is rejected (no flux base to divide)")

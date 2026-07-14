@@ -14,17 +14,17 @@ transforms / ``MomentOrdering`` / ``VlasovSources`` / ``MomentHierarchy``); they
 algorithm choice, so they stay lightweight handles and are NOT descriptors. ``MomentOrdering``
 in particular has a single forced layout, so it is a handle, not a route chooser.
 
-Pure Python: only ``import pops`` (the compiled _pops loads as a side effect, but nothing
-here builds or runs a moment model).
+Pure Python: this imports only the public descriptor surface; nothing here builds or runs a
+native moment model.
 """
 import sys
 
 import pytest
 
-import pops
-
 from pops import moments  # noqa: E402
 from pops.descriptors import Availability, Descriptor, DescriptorProtocol  # noqa: E402
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.physics import Model  # noqa: E402
 
 
 def test_exact_speeds_descriptor_contract():
@@ -134,6 +134,52 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     assert snapshot.speeds.options()["kind"] == moments.ExactSpeeds.ROE_DISSIPATION
     assert isinstance(snapshot.projection, Descriptor)
     assert snapshot.projection.capabilities().to_dict()["guard_level"] == "bare"
+
+
+def test_moment_coefficients_preserve_typed_storage_and_numeric_values():
+    eps = RuntimeParam("eps_runtime", default=2.5)
+    q_over_m = RuntimeParam("q_over_m_runtime", default=-3.0)
+    specification = (moments.CartesianVelocityMoments(order=2)
+                     .add_poisson_coupling(eps=eps)
+                     .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
+                     .add_magnetic_source(-0.25))
+    first = specification.build("typed_moment_coefficients_a").module.params()
+    second = specification.build("typed_moment_coefficients_b").module.params()
+
+    assert eps.is_owned is False and q_over_m.is_owned is False
+    for parameters in (first, second):
+        assert parameters["eps_runtime"] == eps
+        assert parameters["q_over_m_runtime"] == q_over_m
+        assert parameters["eps_runtime"] is not eps
+        assert parameters["q_over_m_runtime"] is not q_over_m
+        assert isinstance(parameters["omega_c"], ConstParam)
+        assert parameters["omega_c"].value == -0.25
+    assert first["eps_runtime"] is not second["eps_runtime"]
+    assert first["eps_runtime"].owner_identity != second["eps_runtime"].owner_identity
+
+
+def test_moment_coefficients_refuse_implicit_string_and_bool_coercions():
+    with pytest.raises(TypeError, match="q_over_m"):
+        moments.CartesianVelocityMoments(2).add_vlasov_electric_source(
+            "grad_x", "grad_y", "q_over_m")
+    with pytest.raises(TypeError, match="eps"):
+        moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=True)
+    with pytest.raises(TypeError, match="robust"):
+        moments.CartesianVelocityMoments(2, robust=1)
+
+
+def test_moment_coefficients_cannot_clone_another_registry_owner():
+    already_owned = RuntimeParam("owned_eps", default=1.0)
+    Model("coefficient_owner").param(already_owned)
+    with pytest.raises(ValueError, match=r"already owned.*shared owner or tie"):
+        moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=already_owned)
+
+    claimed_after_recording = RuntimeParam("late_owned_eps", default=1.0)
+    specification = moments.CartesianVelocityMoments(2).add_poisson_coupling(
+        eps=claimed_after_recording)
+    Model("late_coefficient_owner").param(claimed_after_recording)
+    with pytest.raises(ValueError, match=r"already owned.*shared owner or tie"):
+        specification.build("late_owned_moment_model")
 
 
 # ---------------------------------------------------------------------------------------------

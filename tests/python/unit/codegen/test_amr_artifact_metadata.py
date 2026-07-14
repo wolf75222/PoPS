@@ -25,7 +25,12 @@ def test_amr_artifact_without_whole_system_program_is_explicit_and_multiblock():
 def test_amr_artifact_reports_aggregate_every_declared_block():
     artifact = artifact_fixture(target="amr_system", block_names=("ions", "electrons"))
 
-    assert artifact.so_path == "/tmp/ions.so"
+    with pytest.raises(ValueError, match="aggregate artifact has no scalar so_path"):
+        _ = artifact.so_path
+    assert {block.name: block.model.so_path for block in artifact.blocks} == {
+        "ions": "/tmp/ions.so",
+        "electrons": "/tmp/electrons.so",
+    }
     assert {row["name"] for row in artifact.inspect().blocks} == {"ions", "electrons"}
     assert artifact.requirements().constraints["layout"] == "amr"
     assert set(artifact.manifest().blocks) == {"ions", "electrons"}
@@ -40,5 +45,8 @@ def test_amr_artifact_reports_aggregate_every_declared_block():
 
 def test_system_artifact_cannot_omit_the_compiled_program():
     artifact = artifact_fixture()
-    with pytest.raises(ValueError, match="requires a compiled program"):
+    with pytest.raises(
+        ValueError,
+        match="layout_programs must cover every and only per-layout system target",
+    ):
         CompiledSimulationArtifact(plan=artifact.plan, program=None, blocks=artifact.blocks)

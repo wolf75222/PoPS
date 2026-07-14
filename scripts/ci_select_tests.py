@@ -22,6 +22,7 @@ from collections.abc import Iterable
 import json
 import os
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -34,18 +35,30 @@ import ci_shard_binpack  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/test_manifest.toml"
+CPP_DURATIONS_JSON = ROOT / "tests/cpp/test_durations.json"
+# Historical cold CI build 29352485297 consumed about 17,300 CPU-seconds for 176
+# targets on four workers. A 100 s/target floor models compilation; multiplying CTest
+# wall time by the preset's four test workers puts both phases on the same CPU-second scale.
+CPP_BUILD_CPU_SECONDS_PER_TARGET = 100.0
+CPP_CTEST_PARALLEL_JOBS = 4.0
 
 
 CPP_BROAD_FILES = {
+    ".github/workflows/ci.yml",
     "CMakeLists.txt",
     "CMakePresets.json",
+    "scripts/ci_include_graph.py",
+    "scripts/ci_select_tests.py",
+    "scripts/ci_shard_binpack.py",
     "tests/CMakeLists.txt",
+    "tests/cpp/test_durations.json",
     "src/CMakeLists.txt",
     "tests/cpp/test_sources.cmake",
     "tests/test_manifest.toml",
 }
 
 CPP_BROAD_PREFIXES = (
+    ".github/actions/setup-kokkos/",
     "cmake/",
     "include/pops/core/",
     "include/pops/parallel/",
@@ -53,15 +66,21 @@ CPP_BROAD_PREFIXES = (
 )
 
 PYTHON_BROAD_FILES = {
+    ".github/workflows/ci.yml",
     "pyproject.toml",
     "python/CMakeLists.txt",
+    "scripts/ci_import_closure.py",
+    "scripts/ci_select_tests.py",
+    "scripts/ci_shard_binpack.py",
     "src/CMakeLists.txt",
     "python/pops/__init__.py",
     "tests/python/conftest.py",
+    "tests/python/test_durations.json",
     "tests/test_manifest.toml",
 }
 
 PYTHON_BROAD_PREFIXES = (
+    ".github/actions/setup-kokkos/",
     "python/bindings/",
     "tests/python/support/",
 )
@@ -190,7 +209,7 @@ CPP_SMOKE_TARGETS = (
 )
 
 PYTHON_SMOKE_TESTS = (
-    "tests/python/integration/bindings/test_bindings.py",
+    "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
     "tests/python/unit/runtime/test_capabilities.py",
 )
 
@@ -265,6 +284,20 @@ def manifest_cpp_suites(manifest: dict) -> list[dict]:
 
 
 def manifest_python_suites(manifest: dict) -> list[dict]:
+    # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
+    # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
+    # test.  A source archive without Git falls back to its complete filesystem tree.
+    try:
+        tracked_output = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "tests/python"],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+        )
+        tracked = {
+            item.decode("utf-8") for item in tracked_output.split(b"\0") if item
+        }
+    except (FileNotFoundError, subprocess.CalledProcessError, UnicodeDecodeError):
+        tracked = None
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -275,7 +308,14 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         if "architecture" in labels:
             continue
         suite_path = ROOT / path
-        files = sorted(str(p.relative_to(ROOT)) for p in suite_path.glob("test_*.py"))
+        # A suite path owns its full subtree, matching the manifest coverage fence.  Using
+        # ``glob`` here silently omitted nested families such as unit/mesh/amr even though the
+        # manifest correctly declared their parent suite.
+        files = sorted(
+            str(p.relative_to(ROOT))
+            for p in suite_path.rglob("test_*.py")
+            if tracked is None or str(p.relative_to(ROOT)) in tracked
+        )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
         suites.append({"name": name, "path": path, "labels": labels, "files": files})
@@ -474,6 +514,49 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
         return ci_shard_binpack.shard_files(items, index, total)
     except ci_shard_binpack.PartitionError as exc:
         raise SystemExit(f"shard partition invariant violated: {exc}") from exc
+
+
+def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
+    """Return a deterministic, duration-balanced exact partition of C++ targets.
+
+    The committed timings are aggregate CTest wall times per build target. The shared LPT
+    binpacker prevents a shard from accidentally receiving multiple long-running scientific
+    tests while preserving a stable assignment. Missing timing rows fail closed: every new C++
+    target must be measured or explicitly seeded in the same change that registers it.
+    """
+    if total <= 0:
+        raise SystemExit(f"invalid C++ shard total: {total}")
+    if len(targets) != len(set(targets)):
+        raise SystemExit("C++ shard partition input contains duplicate targets")
+    measured_test_seconds = ci_shard_binpack.load_durations(CPP_DURATIONS_JSON)
+    missing_weights = sorted(set(targets) - measured_test_seconds.keys())
+    if missing_weights:
+        raise SystemExit(
+            "C++ duration catalog is missing selected targets: " + ", ".join(missing_weights)
+        )
+    weights = {
+        target: CPP_BUILD_CPU_SECONDS_PER_TARGET
+        + CPP_CTEST_PARALLEL_JOBS * measured_test_seconds[target]
+        for target in targets
+    }
+    try:
+        shards = ci_shard_binpack.assign_shards(targets, total, weights)
+        ci_shard_binpack.verify_partition(targets, shards, excluded=())
+    except ci_shard_binpack.PartitionError as exc:
+        raise SystemExit(f"C++ shard partition invariant violated: {exc}") from exc
+    return shards
+
+
+def cpp_test_regex(names: Iterable[str]) -> str:
+    """Match CTest names belonging to the supplied manifest targets / standalone tests."""
+    escaped = [re.escape(name) for name in names]
+    return "^(" + "|".join(escaped) + r")(\.|$)" if escaped else "$^"
+
+
+def cpp_target_label_regex(names: Iterable[str]) -> str:
+    """Match the per-build-target CTest labels installed by pops_add_gtest_suite."""
+    escaped = [re.escape(f"cpp-target:{name}") for name in names]
+    return "^(" + "|".join(escaped) + ")$" if escaped else "$^"
 
 
 def write_explain_file(path: str | None, payload: dict) -> None:
@@ -694,13 +777,35 @@ def plan_cpp(args: argparse.Namespace) -> int:
     else:
         mode = "subset" if selected else "none"
         targets = sorted(selected)
-        regex = "^(" + "|".join(re.escape(t) for t in targets) + r")(\.|$)" if targets else "$^"
+        regex = cpp_test_regex(targets)
+
+    shard_index_arg = getattr(args, "shard_index", None)
+    shard_total_arg = getattr(args, "shard_total", None)
+    if shard_index_arg is None and shard_total_arg is None:
+        shard_index = 0
+        shard_total = 1
+    elif shard_index_arg is None or shard_total_arg is None:
+        raise SystemExit("C++ sharding requires both --shard-index and --shard-total")
+    else:
+        shard_index = shard_index_arg
+        shard_total = shard_total_arg
+    if shard_index < 0 or shard_index >= shard_total:
+        raise SystemExit(f"invalid C++ shard {shard_index}/{shard_total}")
+
+    target_shards = cpp_target_shards(targets, shard_total)
+    shard_targets = target_shards[shard_index]
+    shard_regex = cpp_test_regex(shard_targets)
+    shard_label_regex = cpp_target_label_regex(shard_targets)
 
     summary = f"{mode}: {len(targets)}/{len(all_targets)} C++ tests"
+    shard_summary = (
+        f"{len(shard_targets)} targets in shard {shard_index}/{shard_total}"
+    )
     print(summary)
+    print(shard_summary)
     if areas:
         print("areas=" + ",".join(sorted(areas)))
-    for target in targets:
+    for target in shard_targets:
         print(target)
 
     write_github_outputs(
@@ -711,8 +816,16 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "cpp_regex": regex,
             "cpp_count": str(len(targets)),
             "cpp_total": str(len(all_targets)),
+            "cpp_shard_index": str(shard_index),
+            "cpp_shard_total": str(shard_total),
+            "cpp_shard_targets": " ".join(shard_targets),
+            "cpp_shard_regex": shard_regex,
+            "cpp_shard_label_regex": shard_label_regex,
+            "cpp_shard_count": str(len(shard_targets)),
+            "cpp_shard_counts": ",".join(str(len(shard)) for shard in target_shards),
             "cpp_areas": ",".join(sorted(areas)) if areas else "-",
             "cpp_summary": summary,
+            "cpp_shard_summary": shard_summary,
         },
     )
     write_explain_file(
@@ -726,6 +839,14 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "full_reasons": full_reasons,
             "selected_count": len(targets),
             "total_count": len(all_targets),
+            "shard_index": shard_index,
+            "shard_total": shard_total,
+            "shard_count": len(shard_targets),
+            "shard_counts": [len(shard) for shard in target_shards],
+            "shard_targets": shard_targets,
+            "shard_regex": shard_regex,
+            "shard_label_regex": shard_label_regex,
+            "target_shards": target_shards,
             "selected": targets,
             "selected_reasons": {key: sorted(value) for key, value in sorted(reasons.items()) if key in targets},
             # ADC-646: per-file impact -- {file: {kind, targets/labels/reason}} -- so the plan
@@ -976,6 +1097,8 @@ def main() -> int:
     cpp.add_argument("--changed-files", required=True)
     cpp.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     cpp.add_argument("--explain-file")
+    cpp.add_argument("--shard-index", type=int)
+    cpp.add_argument("--shard-total", type=int)
     cpp.add_argument("--force-all", action="store_true")
     cpp.set_defaults(func=plan_cpp)
 

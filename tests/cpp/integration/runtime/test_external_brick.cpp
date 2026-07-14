@@ -56,14 +56,19 @@ TEST(ExternalBrick, RegistryLookupListingAndReregistration) {
     EXPECT_TRUE(ids.size() >= 2) << "ids_at_least_two";
   }
 
-  // --- register_brick is idempotent on id: re-registering replaces, never duplicates ---
+  // --- exact re-registration is idempotent; a conflicting row is a schema error ---
   {
     const std::size_t before = reg.ids().size();
     BrickRegistry::instance().register_brick(
-        {"test_hllc", "riemann", "pressure,wave_speeds,contact_speed", ""});
+        {"test_hllc", "riemann", "pressure,wave_speeds", "", "test_hllc"});
     EXPECT_TRUE(reg.ids().size() == before) << "reregister_does_not_duplicate";
+    EXPECT_THROW(
+        BrickRegistry::instance().register_brick(
+            {"test_hllc", "riemann", "pressure,wave_speeds,contact_speed", "", "test_hllc"}),
+        std::runtime_error)
+        << "conflicting_reregistration_is_rejected";
     const BrickManifestEntry* e = reg.lookup("test_hllc");
-    EXPECT_TRUE(e != nullptr && e->requirements == "pressure,wave_speeds,contact_speed")
-        << "reregister_replaces_entry";
+    EXPECT_TRUE(e != nullptr && e->requirements == "pressure,wave_speeds")
+        << "conflicting_reregistration_does_not_mutate_original";
   }
 }
