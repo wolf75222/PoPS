@@ -26,8 +26,10 @@
 // Each must return a solved report (iters > 1, small residual) and recover phi_exact. We also
 // assert that max_iters = 0 throws std::invalid_argument (spec error 13).
 //
-// SERIAL test: no MPI (single box, DistributionMapping(1, 1)); the dot products in the loops are
-// nonetheless COLLECTIVE (pops::dot -> all_reduce_sum), the identity in serial.
+// SERIAL + MPI test: the serial registration retains one box; under a live multi-rank communicator
+// the domain is tiled into four boxes and round-robin distributed. CTest registers a focused real
+// np=2 variant, so CG, GMRES and BiCGStab execute with cross-rank halo exchange and collective
+// reductions without also paying for the intentionally slow Richardson stress test.
 
 #include <gtest/gtest.h>
 
@@ -128,8 +130,11 @@ class GenericKrylov : public ::testing::Test {
   static void SetUpTestSuite() {
     dom_ = new Box2D(Box2D::from_extents(kN, kN));
     geom_ = new Geometry{*dom_, 0.0, 1.0, 0.0, 1.0};
-    ba_ = new BoxArray(std::vector<Box2D>{*dom_});
-    dm_ = new DistributionMapping(1, 1);
+    if (n_ranks() > 1)
+      ba_ = new BoxArray(BoxArray::from_domain(*dom_, kN / 2));
+    else
+      ba_ = new BoxArray(std::vector<Box2D>{*dom_});
+    dm_ = new DistributionMapping(ba_->size(), n_ranks());
     bc_ = new BCRec{};  // all faces default to Periodic -> fill_ghosts wraps in x and y
 
     // SPD Helmholtz operator A(in) = in - alpha*Lap(in), matrix-free: fill periodic ghosts of `in`,
@@ -330,6 +335,32 @@ TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence
   EXPECT_THROW(
       (void)KrylovWorkspace(one_ghost, KrylovMethod::kRichardson, claims_preconditioner),
       std::invalid_argument);
+}
+
+TEST_F(GenericKrylov, arbitrary_halo_depth_is_a_first_class_prepared_footprint) {
+  MultiFab x(*ba_, *dm_, 1, 3);
+  MultiFab rhs(*ba_, *dm_, 1, 0);
+  PureFieldAlgebra::zero(x);
+  PureFieldAlgebra::copy(rhs, *phi_exact_mf_);
+  ApplyFn identity = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+
+  const SolveReport report = run_prepared(
+      identity, x, rhs, KrylovMethod::kCg,
+      LinearOperatorProperties::symmetric_positive_definite());
+  EXPECT_TRUE(report.solved());
+  EXPECT_EQ(x.n_grow(), 3);
+  EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol);
+}
+
+TEST_F(GenericKrylov, mpi_variant_distributes_real_work_to_every_rank) {
+  if (n_ranks() == 1)
+    GTEST_SKIP() << "the serial registration has no remote rank";
+  MultiFab field(*ba_, *dm_, 1, 1);
+  EXPECT_GT(field.local_size(), 0)
+      << "the np=2 generic Krylov variant must not leave a rank as a collective-only spectator";
+  EXPECT_EQ(static_cast<int>(all_reduce_sum(static_cast<double>(field.local_size()))), ba_->size());
 }
 
 TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
@@ -562,4 +593,32 @@ TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
   EXPECT_TRUE(second.solved());
   EXPECT_EQ(workspace.allocation_count(), allocations);
   EXPECT_EQ(x.halo_cache().exchange_pool_size(), halo_resources);
+}
+
+TEST_F(GenericKrylov, extension_apply_mutation_is_refused_before_result_consumption) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  KrylovFootprint footprint{1, 1, 0, false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(x);
+  bool mutate_during_apply = false;
+  ApplyFn extension_apply = [&snapshot, &mutate_during_apply](MultiFab& out,
+                                                              const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+    if (mutate_during_apply)
+      ++snapshot.revision;
+  };
+  PreparedAffineLinearProblem problem(
+      x, std::move(extension_apply), PreparedLinearPreconditioner::identity(),
+      LinearOperatorProperties::symmetric_positive_definite(), footprint,
+      [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(x, KrylovMethod::kCg, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  mutate_during_apply = true;
+
+  EXPECT_THROW(
+      (void)solve_prepared_affine(
+          problem, workspace, x, *rhs_,
+          KrylovControls{KrylovMethod::kCg, kRelTol, Real(0), 10, 0, Real(1)}),
+      std::logic_error);
 }

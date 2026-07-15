@@ -767,7 +767,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::PreparedAffineLinearProblem>("
         "*%s, %s, %s, %s, %s, [ctx_owner, %s]() { "
-        "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, %s);"
+        "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, "
+        "%s, pops::OperatorApplyPurity::kAuthenticatedProgram);"
         % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
            snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
            freeze_expr))

@@ -16,13 +16,15 @@ captured into the step closure), reused across every step and every Krylov itera
     <= 0 -> ValueError "dynamic solver loops require max_iter"; tol <= 0 -> error; unknown method ->
     error; operator not a matrix_free_operator -> error).
 
-(B) End-to-end parity (skips unless the full toolchain is present): a 1-variable model (rho, zero
+(B) Internal native-ABI parity (skips unless the full toolchain is present): a 1-variable model
+    installed through the private ``_system`` seam (rho, zero
     flux); A = matrix_free_operator with apply out = in - alpha*Lap(in) (alpha = 0.1, SPD); the
     Program solves (I - alpha*Lap) phi = U via cg (tol 1e-10, max_iter 200) and commits U = phi.
     compile_problem -> install_program -> set a smooth periodic rho0 -> step once -> get_state, vs an
     OFFLINE numpy CG on the SAME discrete periodic 5-point system. Asserts max|compiled - offline| <=
     1e-6, the solve changed the state, and the offline solve took > 1 iteration. Self-skips (exit 0)
     without numpy / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
+    Public lifecycle acceptance is separate in ``test_public_krylov_lifecycle.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program

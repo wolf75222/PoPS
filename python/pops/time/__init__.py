@@ -68,8 +68,9 @@ from pops.time._schedule.synchronization import (  # noqa: F401
 from pops.time._schedule.protocol import UnresolvedScheduleCondition  # noqa: F401
 from pops.time.value_collections import StageStateSet  # noqa: F401
 from pops.time.values import ProgramValue  # noqa: F401
+from pops.time.stencil import StencilAccess  # noqa: F401
 
-__all__ = ["Program", "ProgramValue", "StageStateSet", "ResidualSolution",
+__all__ = ["Program", "ProgramValue", "StageStateSet", "StencilAccess", "ResidualSolution",
            "CoupledImplicitEuler", "LocalLinear", "LocalResidual",
            "SolveOutcome", "FieldSolveOutcome", "SolveAction", "FailRun", "RejectAttempt",
            "SOLVE_STATUSES", "Schedule",

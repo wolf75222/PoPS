@@ -220,6 +220,11 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             raise ValueError(
                 "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
                 "Krylov path; use GMRES() or BiCGStab()")
+        if preconditioner == "geometric_mg" and op_ncomp != 1:
+            raise ValueError(
+                "solve_linear: preconditioners.GeometricMG() is scalar-only (ncomp=1); "
+                "a component-coupled multigrid operator is not implemented, so a multi-component "
+                "Krylov solve must use Identity() or another genuinely block-aware provider")
         from pops._ir.literals import scalar_literal
         try:
             tol_literal = scalar_literal(tol)
@@ -259,12 +264,13 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         # restart is a positive int on the gmres path (validated above); the None union member the
         # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
         restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
-        footprint_ops = {
-            node.op for node in operator.attrs["apply_block"]
-            if node.op not in ("apply_in", "apply_out", "scalar_field")
-        }
-        input_ghosts = int(bool(footprint_ops & {
-            "laplacian", "gradient", "divergence", "apply_laplacian_coeff", "rhs_jacvec"}))
+        from pops.time.stencil import StencilAccess
+        stencil_access = operator.attrs.get("stencil_access")
+        if type(stencil_access) is not StencilAccess:
+            raise ValueError(
+                "solve_linear: matrix-free operator has no authenticated StencilAccess; "
+                "call set_apply on a current operator declaration")
+        input_ghosts = stencil_access.required_ghost_depth
         attrs = {"method": method, "preconditioner": preconditioner, "tol": tol_literal,
                  "abs_tol": abs_tol_literal,
                  "max_iter": int(max_iter), "has_guess": initial_guess is not None,

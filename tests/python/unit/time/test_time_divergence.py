@@ -20,10 +20,12 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
       discretization error -- the reference the compiled ctx.divergence reproduces;
     - the generic matrix-free ``Program.solve`` path retains the complete div(grad) operator.
 
-(B) End-to-end parity (skips unless the full toolchain is present): the div(grad) Helmholtz Program is
+(B) Internal native-ABI parity (skips unless the full toolchain is present): through the private
+    ``_system`` seam, the div(grad) Helmholtz Program is
     compiled + installed + stepped, then compared to an OFFLINE numpy CG on the identical discrete
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
-    / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
+    / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine. It is not
+    counted as public lifecycle coverage; see ``test_public_krylov_lifecycle.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program

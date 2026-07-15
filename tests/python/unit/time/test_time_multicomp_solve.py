@@ -13,7 +13,8 @@ component 0 alone and leave the rest unsolved.
     (``ctx.alloc_scalar_field(2, 1)``); the scalar default is unchanged (ncomp=1, ``alloc(1, 1)``); the
     ncomp / domain validation fires (ncomp<1, domain!=range_, a too-small scalar_field rhs).
 
-(B) End-to-end parity (skips unless the full toolchain is present): a 2-component block (rho, e, zero
+(B) Internal native-ABI parity (skips unless the full toolchain is present): a 2-component block
+    installed through the private ``_system`` seam (rho, e, zero
     flux); A = a state-valued matrix_free_operator (ncomp=2) with apply out = in - alpha*Lap(in)
     (alpha=0.1, SPD per component). The Program solves (I - alpha*Lap) x = U on the 2-component state via
     cg and commits U = x. compile_problem -> install_program -> set rho0/e0 to DIFFERENT smooth fields
@@ -22,7 +23,8 @@ component 0 alone and leave the rest unsolved.
     match is the regression guard for the full-component norm: with a comp-0-only dot the loop would stop
     on component 0's residual and leave component 1 unsolved). A scalar (ncomp=1) solve still matches the
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
-    / a visible Kokkos -- never fakes the engine.
+    / a visible Kokkos -- never fakes the engine. This is not labelled as public DSL lifecycle
+    coverage; that contract is exercised by ``test_public_krylov_lifecycle.py``.
 """
 from tests.python.support.requirements import require_native_or_skip
 from pops.codegen.program_codegen import emit_cpp_program
@@ -206,6 +208,23 @@ def test_multicomp_codegen(t):
     # the scalar path still allocates 1-component fields only
     src1 = emit_cpp_program(_mc_program(t, 1))
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1
+
+
+def test_multicomp_geometric_mg_preconditioner_is_rejected_before_codegen(t):
+    from pops.solvers import preconditioners
+
+    try:
+        _mc_program(
+            t, 2,
+            method=krylov.GMRES(
+                max_iter=20, rel_tol=1e-9,
+                preconditioner=preconditioners.GeometricMG()),
+        )
+    except ValueError as exc:
+        assert "GeometricMG" in str(exc) and "scalar-only" in str(exc), str(exc)
+    else:
+        raise AssertionError(
+            "scalar GeometricMG must not masquerade as a block preconditioner")
 
 
 # ---- (B) end-to-end parity: skips unless the full toolchain is present ----

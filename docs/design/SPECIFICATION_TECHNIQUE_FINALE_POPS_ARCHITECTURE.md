@@ -873,6 +873,16 @@ aux méthodes générales. `CG` est refusé sans
 Les solveurs Krylov portent un arrêt mixte exact
 `max(rel_tol * reference_residual_norm, abs_tol)` et leur footprint persistant est dérivé de la
 méthode, du nombre de composantes, de la largeur de halo, du restart et du préconditionneur.
+La largeur n'est pas un booléen « stencil présent » : chaque opération porte une capacité immuable
+`StencilAccess(required_ghost_depth=n)` et `set_apply` compose le sous-graphe par le maximum de ces
+capacités, sans table centrale de noms d'opérations. `matrix_free_operator(stencil_depth=n)` reste une
+contrainte explicite pour un provider plus profond : elle est refusée sous le minimum composé et
+transporte autrement tout entier `n >= 0` jusqu'aux allocations natives.
+
+Le préconditionneur livré `preconditioners.GeometricMG()` est un opérateur scalaire : son `phi`, son
+second membre et son V-cycle natifs ont exactement une composante. Il est donc refusé à l'authoring
+pour `ncomp != 1`, avec une seconde garde native ; PoPS ne diagonalise pas silencieusement un problème
+multicomposant. Un tel problème utilise `Identity()` ou un futur provider réellement block-aware.
 
 À la frontière C++, un solve global ne reçoit jamais un callback brut plus un entier de méthode. Le
 code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinearPreconditioner` et
@@ -890,7 +900,11 @@ Les récurrences utilisent une algèbre de champs pure qui ne touche ni le ledge
 effets temporels de `ProgramContext`. Aucune allocation de champ, de plan halo, de buffer MPI ou de
 scratch de field solve et aucun calcul cellule par cellule n'ont lieu en Python ou dans la boucle
 Krylov ; les capacités sont persistantes et les kernels de champ et réductions collectives restent
-Kokkos/C++. Un résidu préconditionné ou l'estimation de Hessenberg de GMRES peut seulement demander
+Kokkos/C++. L'initialisation des vecteurs persistants, y compris le départ froid de chaque V-cycle de
+préconditionnement, remplit les cellules valides par un kernel Kokkos sur l'espace d'exécution courant ;
+les fantômes restent la responsabilité du plan halo/BC typé qui les écrase avant toute lecture. Aucun
+balayage cellule par cellule n'a lieu sur l'hôte dans le hot path. Un résidu préconditionné ou
+l'estimation de Hessenberg de GMRES peut seulement demander
 une confirmation : seul le résidu scientifique vrai `b - A(u)` peut publier `kSolved`. Le résidu de
 référence est `||b - A(0)||`; un warm start déjà convergé retourne zéro itération.
 

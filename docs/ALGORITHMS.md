@@ -1183,6 +1183,8 @@ condensed_rhs = T.condensed_rhs(
 operator = T.matrix_free_operator(
     "condensed_tensor",
     scope=scope,
+    # stencil_depth is inferred as 1 from apply_laplacian_coeff; an explicit
+    # non-negative depth is reserved for a custom provider with a deeper stencil.
 )
 
 def apply_condensed_tensor(builder, _out, value):
@@ -1216,6 +1218,14 @@ one `ctx.solve_composite_tensor_fac` then solves the complete hierarchy; only a 
 solution is published to every level. The accepted synchronization subsequently applies reflux and
 then average-down. The authored operator supplies $B^{-1}$; no physics-specific time preset,
 source-stage stepper or System setter exists.
+
+The prepared footprint carries the exact integer stencil depth, not a 0/1 approximation. Every typed
+operation carries an immutable `StencilAccess` capability and apply regions compose those capabilities
+by maximum depth, without an opcode-name table. `matrix_free_operator(stencil_depth=n)` may declare a
+larger provider halo and is rejected if `n` is smaller than the composed requirement. The wired
+`preconditioners.GeometricMG()` is intentionally scalar-only and is rejected for a multi-component
+operator until a genuinely block-coupled multigrid provider exists; no component-wise fallback is
+performed.
 
 **Code.** The generic linear-solve protocol is in
 [`python/pops/codegen/program_emit_solve.py`](../python/pops/codegen/program_emit_solve.py), and the

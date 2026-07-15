@@ -110,7 +110,18 @@ struct OperatorEvaluationSnapshot {
 
 using OperatorSnapshotProbe = std::function<OperatorEvaluationSnapshot()>;
 
+/// Trust boundary for the native operator callback. Generated PoPS applies are compiled from a
+/// restricted, side-effect-free Program region and need no second snapshot probe after each matvec.
+/// Extension callbacks default to verified mode, which detects a mutation performed by the callback
+/// itself before the result can be consumed.
+enum class OperatorApplyPurity : std::uint8_t {
+  kVerifyAfterApply,
+  kAuthenticatedProgram,
+};
+
 namespace detail {
+
+struct PreparedProblemAccess;
 
 inline std::uint64_t fingerprint_mix_word(std::uint64_t hash, std::uint64_t value) {
   constexpr std::uint64_t prime = 1099511628211ull;
@@ -258,13 +269,16 @@ class PreparedAffineLinearProblem {
                               PreparedLinearPreconditioner preconditioner,
                               LinearOperatorProperties properties, KrylovFootprint footprint,
                               OperatorSnapshotProbe snapshot_probe,
-                              PreparedResourceFn freeze_resources = {})
+                              PreparedResourceFn freeze_resources = {},
+                              OperatorApplyPurity apply_purity =
+                                  OperatorApplyPurity::kVerifyAfterApply)
       : raw_apply_(std::move(raw_apply)),
         preconditioner_(std::move(preconditioner)),
         properties_(properties),
         footprint_(footprint),
         snapshot_probe_(std::move(snapshot_probe)),
         freeze_resources_(std::move(freeze_resources)),
+        apply_purity_(apply_purity),
         zero_(prototype.box_array(), prototype.dmap(), prototype.ncomp(), footprint.input_ghosts),
         constant_(prototype.box_array(), prototype.dmap(), prototype.ncomp(),
                   footprint.input_ghosts),
@@ -317,36 +331,30 @@ class PreparedAffineLinearProblem {
   bool has_preconditioner() const { return !preconditioner_.is_identity(); }
 
   void effective_rhs(MultiFab& out, const MultiFab& rhs) const {
-    require_current();
     require_vector_field(rhs, "PreparedAffineLinearProblem::effective_rhs(rhs)");
     require_operator_field(out, "PreparedAffineLinearProblem::effective_rhs(out)");
-    detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
+    effective_rhs_prepared_(out, rhs);
   }
 
   /// A_lin(v) = A(v) - A(0), valid for search directions even when boundaries/sources make A affine.
   void apply_linear(MultiFab& out, const MultiFab& direction) const {
-    require_current();
     require_operator_field(direction, "PreparedAffineLinearProblem::apply_linear(direction)");
     require_operator_field(out, "PreparedAffineLinearProblem::apply_linear(out)");
-    raw_apply_(out, direction);
-    detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
+    apply_linear_prepared_(out, direction);
   }
 
   /// Scientific residual R(u) = b - A(u), never a preconditioned or Arnoldi estimate.
   void true_residual(MultiFab& out, const MultiFab& rhs, const MultiFab& iterate) const {
-    require_current();
     require_vector_field(rhs, "PreparedAffineLinearProblem::true_residual(rhs)");
     require_operator_field(iterate, "PreparedAffineLinearProblem::true_residual(iterate)");
     require_operator_field(out, "PreparedAffineLinearProblem::true_residual(out)");
-    raw_apply_(out, iterate);
-    detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), out);
+    true_residual_prepared_(out, rhs, iterate);
   }
 
   void apply_preconditioner(MultiFab& out, const MultiFab& in) const {
-    require_current();
     require_operator_field(in, "PreparedAffineLinearProblem::apply_preconditioner(in)");
     require_operator_field(out, "PreparedAffineLinearProblem::apply_preconditioner(out)");
-    preconditioner_.apply(out, in, *snapshot_);
+    apply_preconditioner_prepared_(out, in);
   }
 
   void require_vector_field(const MultiFab& value, const char* where) const {
@@ -368,16 +376,76 @@ class PreparedAffineLinearProblem {
   }
 
  private:
+  friend struct detail::PreparedProblemAccess;
+
+  void verify_external_apply_() const {
+    if (apply_purity_ == OperatorApplyPurity::kVerifyAfterApply)
+      require_current();
+  }
+
+  void effective_rhs_prepared_(MultiFab& out, const MultiFab& rhs) const {
+    require_current();
+    detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), constant_);
+  }
+
+  void apply_linear_prepared_(MultiFab& out, const MultiFab& direction) const {
+    require_current();
+    raw_apply_(out, direction);
+    verify_external_apply_();
+    detail::PreparedFieldAlgebra::axpy(out, Real(-1), constant_);
+  }
+
+  void true_residual_prepared_(MultiFab& out, const MultiFab& rhs,
+                               const MultiFab& iterate) const {
+    require_current();
+    raw_apply_(out, iterate);
+    verify_external_apply_();
+    detail::PreparedFieldAlgebra::lincomb(out, Real(1), rhs, Real(-1), out);
+  }
+
+  void apply_preconditioner_prepared_(MultiFab& out, const MultiFab& in) const {
+    require_current();
+    preconditioner_.apply(out, in, *snapshot_);
+    verify_external_apply_();
+  }
+
   ApplyFn raw_apply_;
   mutable PreparedLinearPreconditioner preconditioner_;
   LinearOperatorProperties properties_{};
   KrylovFootprint footprint_{};
   OperatorSnapshotProbe snapshot_probe_;
   PreparedResourceFn freeze_resources_;
+  OperatorApplyPurity apply_purity_ = OperatorApplyPurity::kVerifyAfterApply;
   MultiFab zero_;
   MultiFab constant_;
   OperatorFingerprint layout_{};
   std::optional<OperatorEvaluationSnapshot> snapshot_{};
 };
+
+namespace detail {
+
+/// Private, allocation-free access used only after solve_prepared_affine has authenticated the
+/// caller-owned iterate/RHS and KrylovWorkspace against the prepared problem. Public direct calls on
+/// PreparedAffineLinearProblem retain their complete defensive layout validation.
+struct PreparedProblemAccess {
+  static void effective_rhs(const PreparedAffineLinearProblem& problem, MultiFab& out,
+                            const MultiFab& rhs) {
+    problem.effective_rhs_prepared_(out, rhs);
+  }
+  static void apply_linear(const PreparedAffineLinearProblem& problem, MultiFab& out,
+                           const MultiFab& direction) {
+    problem.apply_linear_prepared_(out, direction);
+  }
+  static void true_residual(const PreparedAffineLinearProblem& problem, MultiFab& out,
+                            const MultiFab& rhs, const MultiFab& iterate) {
+    problem.true_residual_prepared_(out, rhs, iterate);
+  }
+  static void apply_preconditioner(const PreparedAffineLinearProblem& problem, MultiFab& out,
+                                   const MultiFab& in) {
+    problem.apply_preconditioner_prepared_(out, in);
+  }
+};
+
+}  // namespace detail
 
 }  // namespace pops

@@ -72,7 +72,7 @@ inline SolveReport report(Real reference, Real residual, int iterations, SolveSt
 
 inline Real true_residual_norm(const PreparedAffineLinearProblem& problem, MultiFab& scratch,
                                const MultiFab& rhs, const MultiFab& iterate) {
-  problem.true_residual(scratch, rhs, iterate);
+  PreparedProblemAccess::true_residual(problem, scratch, rhs, iterate);
   return PreparedFieldAlgebra::norm(scratch);
 }
 
@@ -89,7 +89,7 @@ inline SolveReport solve_richardson(const PreparedAffineLinearProblem& problem,
                                     const MultiFab& rhs, const KrylovControls& controls) {
   MultiFab& effective_rhs = workspace.field(0);
   MultiFab& residual = workspace.field(1);
-  problem.effective_rhs(effective_rhs, rhs);
+  PreparedProblemAccess::effective_rhs(problem, effective_rhs, rhs);
   const Real reference = PreparedFieldAlgebra::norm(effective_rhs);
   Real residual_norm = true_residual_norm(problem, residual, rhs, iterate);
   if (!finite(reference) || !finite(residual_norm))
@@ -117,7 +117,7 @@ inline SolveReport solve_cg(const PreparedAffineLinearProblem& problem,
   MultiFab& residual = workspace.field(1);
   MultiFab& direction = workspace.field(2);
   MultiFab& applied = workspace.field(3);
-  problem.effective_rhs(effective_rhs, rhs);
+  PreparedProblemAccess::effective_rhs(problem, effective_rhs, rhs);
   const Real reference = PreparedFieldAlgebra::norm(effective_rhs);
   Real residual_norm = true_residual_norm(problem, residual, rhs, iterate);
   if (!finite(reference) || !finite(residual_norm))
@@ -129,7 +129,7 @@ inline SolveReport solve_cg(const PreparedAffineLinearProblem& problem,
   PreparedFieldAlgebra::copy(direction, residual);
   Real squared = PreparedFieldAlgebra::dot(residual, residual);
   for (int iteration = 1; iteration <= controls.max_iterations; ++iteration) {
-    problem.apply_linear(applied, direction);
+    PreparedProblemAccess::apply_linear(problem, applied, direction);
     const Real curvature = PreparedFieldAlgebra::dot(direction, applied);
     if (!finite(curvature) || !finite(squared))
       return checked_report(problem, applied, rhs, iterate, reference, iteration - 1,
@@ -185,7 +185,7 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
   MultiFab& prepared_direction = problem.has_preconditioner() ? workspace.field(7) : direction;
   MultiFab& prepared_intermediate = problem.has_preconditioner() ? workspace.field(8) : intermediate;
 
-  problem.effective_rhs(effective_rhs, rhs);
+  PreparedProblemAccess::effective_rhs(problem, effective_rhs, rhs);
   const Real reference = PreparedFieldAlgebra::norm(effective_rhs);
   Real residual_norm = true_residual_norm(problem, residual, rhs, iterate);
   if (!finite(reference) || !finite(residual_norm))
@@ -222,8 +222,8 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     }
 
     if (problem.has_preconditioner())
-      problem.apply_preconditioner(prepared_direction, direction);
-    problem.apply_linear(applied, prepared_direction);
+      PreparedProblemAccess::apply_preconditioner(problem, prepared_direction, direction);
+    PreparedProblemAccess::apply_linear(problem, applied, prepared_direction);
     const Real denominator = PreparedFieldAlgebra::dot(shadow, applied);
     if (!finite(denominator) || denominator == Real(0))
       return checked_report(problem, second_applied, rhs, iterate, reference, iteration - 1,
@@ -249,8 +249,8 @@ inline SolveReport solve_bicgstab(const PreparedAffineLinearProblem& problem,
     }
 
     if (problem.has_preconditioner())
-      problem.apply_preconditioner(prepared_intermediate, intermediate);
-    problem.apply_linear(second_applied, prepared_intermediate);
+      PreparedProblemAccess::apply_preconditioner(problem, prepared_intermediate, intermediate);
+    PreparedProblemAccess::apply_linear(problem, second_applied, prepared_intermediate);
     const Real second_norm_squared = PreparedFieldAlgebra::dot(second_applied, second_applied);
     const Real projection = PreparedFieldAlgebra::dot(second_applied, intermediate);
     if (!finite(second_norm_squared) || !finite(projection))
@@ -319,7 +319,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
   MultiFab& applied_or_residual = workspace.field(static_cast<std::size_t>(restart + 2));
   MultiFab& prepared_vector = workspace.field(static_cast<std::size_t>(restart + 3));
 
-  problem.effective_rhs(effective_rhs, rhs);
+  PreparedProblemAccess::effective_rhs(problem, effective_rhs, rhs);
   const Real reference = PreparedFieldAlgebra::norm(effective_rhs);
   Real residual_norm = true_residual_norm(problem, applied_or_residual, rhs, iterate);
   if (!finite(reference) || !finite(residual_norm))
@@ -330,7 +330,7 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
 
   int iterations = 0;
   while (iterations < controls.max_iterations) {
-    problem.apply_preconditioner(prepared_vector, applied_or_residual);
+    PreparedProblemAccess::apply_preconditioner(problem, prepared_vector, applied_or_residual);
     const Real beta = PreparedFieldAlgebra::norm(prepared_vector);
     if (!finite(beta))
       return report(reference, residual_norm, iterations, SolveStatus::kInvalidEvaluation);
@@ -351,8 +351,8 @@ inline SolveReport solve_gmres(const PreparedAffineLinearProblem& problem,
     bool estimate_reached = false;
     bool invalid = false;
     for (int column = 0; column < restart && iterations < controls.max_iterations; ++column) {
-      problem.apply_linear(applied_or_residual, basis(column));
-      problem.apply_preconditioner(prepared_vector, applied_or_residual);
+      PreparedProblemAccess::apply_linear(problem, applied_or_residual, basis(column));
+      PreparedProblemAccess::apply_preconditioner(problem, prepared_vector, applied_or_residual);
       for (int row = 0; row <= column; ++row) {
         workspace.h(row, column) = PreparedFieldAlgebra::dot(prepared_vector, basis(row));
         PreparedFieldAlgebra::axpy(prepared_vector, -workspace.h(row, column), basis(row));

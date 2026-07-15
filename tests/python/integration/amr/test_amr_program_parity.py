@@ -6,6 +6,10 @@ type ``ProgramContext``). The SAME generated body therefore compiles against ``A
 duck-typed structural mirror that drives the body recursively over the AMR hierarchy. The
 ``{amr_install}`` codegen slot passes the identical body to ``advance_hierarchy``.
 
+This is deliberately an internal native-facade parity test: it imports ``_system`` and
+``_engine_descriptors`` to compare the two C++ contexts directly. It is not presented as public DSL
+lifecycle coverage.
+
 This test asserts:
 
   1) (host-side, no compiler) the codegen emits a recursive install wrapper for ``target='amr_system'``

@@ -17,6 +17,30 @@
 
 namespace pops {
 
+namespace detail {
+
+/// Device-clean fill over valid cells. Stencil applications overwrite their ghosts through the
+/// authenticated boundary/halo plan before reading them, so prepared iterations do not need a host
+/// fill of allocated ghost storage.
+struct FillValidKernel {
+  Array4 values;
+  Real value;
+  int component;
+  POPS_HD void operator()(int i, int j) const { values(i, j, component) = value; }
+};
+
+inline void fill_valid(MultiFab& field, Real value) {
+  field.sync_device();
+  for (int local = 0; local < field.local_size(); ++local) {
+    const Array4 values = field.fab(local).array();
+    const Box2D valid = field.box(local);
+    for (int component = 0; component < field.ncomp(); ++component)
+      for_each_cell(valid, FillValidKernel{values, value, component});
+  }
+}
+
+}  // namespace detail
+
 struct PureFieldAlgebra {
   static bool same_vector_space(const MultiFab& left, const MultiFab& right) {
     return left.box_array().boxes() == right.box_array().boxes() &&
@@ -31,6 +55,10 @@ struct PureFieldAlgebra {
   }
 
   static void zero(MultiFab& value) { value.set_val(Real(0)); }
+
+  /// Zero valid cells on the active Kokkos execution space. Ghosts are deliberately left for the
+  /// next typed halo/boundary fill; this is the cold-start primitive for prepared hot paths.
+  static void zero_valid(MultiFab& value) { detail::fill_valid(value, Real(0)); }
 
   static void copy(MultiFab& destination, const MultiFab& source) {
     require_same_vector_space(destination, source, "PureFieldAlgebra::copy");
@@ -90,7 +118,7 @@ namespace detail {
 /// vector space once when the problem/workspace are bound and must not rescan every box/rank vector
 /// for each recurrence primitive.
 struct PreparedFieldAlgebra {
-  static void zero(MultiFab& value) { value.set_val(Real(0)); }
+  static void zero(MultiFab& value) { fill_valid(value, Real(0)); }
 
   static void copy(MultiFab& destination, const MultiFab& source) {
     pops::lincomb(destination, Real(1), source, Real(0), source);

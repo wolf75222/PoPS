@@ -637,6 +637,7 @@ labels = ["unit", "elliptic", "fast"]
 name = "test_generic_krylov"
 sources = ["tests/cpp/unit/elliptic/test_generic_krylov.cpp"]
 labels = ["unit", "elliptic", "fast"]
+mpi_variants = [2]
 
 [[cpp.suite]]
 name = "test_geometric_mg"

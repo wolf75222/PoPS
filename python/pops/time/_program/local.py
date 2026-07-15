@@ -16,6 +16,7 @@ from pops.time._program.value_validation import (
 )
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import block_name
+from pops.time.stencil import StencilAccess
 from pops.time.value_metadata import positive_scalar_literal
 from pops._ir.literals import scalar_literal
 from pops.time.values import (
@@ -219,7 +220,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "operator_properties": {"symmetric": False, "positive_definite": False},
             "krylov_footprint": {
                 "components": 1,
-                "input_ghosts": 1,
+                "input_ghosts": operator.attrs["stencil_access"].required_ghost_depth,
                 "restart": 0,
                 "preconditioned": False,
             },
@@ -531,17 +532,23 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         gradient field consumed by ``P.divergence``). Lowered to ``ctx.alloc_scalar_field(ncomp, 1)``."""
         if isinstance(ncomp, bool) or not isinstance(ncomp, int) or ncomp < 1:
             raise ValueError("scalar_field: ncomp must be a positive integer (got %r)" % (ncomp,))
-        return self._new("scalar_field", "scalar_field", (), {"ncomp": int(ncomp)}, name, None)
+        return self._new(
+            "scalar_field", "scalar_field", (),
+            {"ncomp": int(ncomp), "stencil_access": StencilAccess.pointwise()}, name, None)
 
     def matrix_free_operator(self, name: Any, domain: Any = "scalar", range_: Any = "scalar",
-                             ncomp: Any = None, *, scope: Any = None) -> Any:
+                             ncomp: Any = None, *, scope: Any = None,
+                             stencil_depth: Any = None) -> Any:
         """Declare a matrix-free operator ``A : domain -> range_``. @p domain / @p range_ are the field
         kind on each side and MUST match (a square operator: the Krylov iterate, residual and solution
         share one layout): ``"scalar"`` (a 1-component scalar field, the default), or ``"vector"`` /
         ``"state"`` (a multi-component field, e.g. a coupled block unknown). For a
         ``vector`` / ``state`` operator @p ncomp (an int >= 1) is REQUIRED -- the component count of the
         apply's in/out buffers and of the solution; for a ``scalar`` operator @p ncomp must be omitted
-        (or 1). Supply the apply via ``P.set_apply(A, body_fn)`` before using it in
+        (or 1). ``stencil_depth`` is the exact non-negative halo width required by a custom apply.
+        When omitted, :meth:`set_apply` derives the minimum from PoPS' typed stencil operations;
+        an explicit value may be larger (for an external/custom stencil) but never smaller than
+        the derived minimum. Supply the apply via ``P.set_apply(A, body_fn)`` before using it in
         ``P.solve(LinearProblem(A, rhs), solver=...)``."""
         if domain not in self._OPERATOR_KINDS or range_ not in self._OPERATOR_KINDS:
             raise ValueError(
@@ -562,6 +569,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 raise ValueError(
                     "matrix_free_operator: a %r operator requires ncomp (an int >= 1); got ncomp=%r"
                     % (domain, ncomp))
+        if (stencil_depth is not None
+                and (isinstance(stencil_depth, bool) or not isinstance(stencil_depth, int)
+                     or stencil_depth < 0)):
+            raise ValueError(
+                "matrix_free_operator: stencil_depth must be a non-negative integer or None; "
+                "got %r" % (stencil_depth,))
         from pops.solvers.scopes import solve_scope_id
         scope_id = solve_scope_id(scope)
         if scope_id == "hierarchy" and (domain != "scalar" or int(ncomp) != 1):
@@ -569,7 +582,10 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
                 "matrix_free_operator: the direct CompositeTensorFAC Hierarchy() route supports "
                 "only a scalar operator with ncomp=1")
         attrs = {"domain": domain, "range": range_, "ncomp": int(ncomp), "apply_block": None,
-                 "apply_result": None, "apply_in": None, "apply_out": None}
+                 "apply_result": None, "apply_in": None, "apply_out": None,
+                 "declared_stencil_access": (
+                     None if stencil_depth is None else StencilAccess(stencil_depth)),
+                 "stencil_access": None}
         if scope_id != "level":
             attrs["scope"] = scope_id
         return self._new("matrix_free_op", "matrix_free_operator", (), attrs, name, None)
@@ -643,8 +659,13 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         # an ncomp buffer (scalar -> ncomp == 1). The apply body sees ncomp-component in / out fields.
         op_ncomp = int(operator.attrs["ncomp"])
         try:
-            out_sf = self._new("scalar_field", "apply_out", (), {"ncomp": op_ncomp}, "apply_out", None)
-            in_sf = self._new("scalar_field", "apply_in", (), {"ncomp": op_ncomp}, "apply_in", None)
+            pointwise = StencilAccess.pointwise()
+            out_sf = self._new(
+                "scalar_field", "apply_out", (),
+                {"ncomp": op_ncomp, "stencil_access": pointwise}, "apply_out", None)
+            in_sf = self._new(
+                "scalar_field", "apply_in", (),
+                {"ncomp": op_ncomp, "stencil_access": pointwise}, "apply_in", None)
             result = body_fn(self, out_sf, in_sf)
         finally:
             self._recording.pop()
@@ -655,6 +676,25 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         apply_region = self._region_for_block(sub)
         require_affine_region(self, result, apply_region, "set_apply")
         attrs = dict(operator.attrs)
+        inferred_stencil_access = StencilAccess.compose(
+            (node.attrs.get("stencil_access") for node in block),
+            where="set_apply(%s)" % operator.name,
+        )
+        declared_stencil_access = attrs.get("declared_stencil_access")
+        if (declared_stencil_access is not None
+                and declared_stencil_access.required_ghost_depth
+                < inferred_stencil_access.required_ghost_depth):
+            raise ValueError(
+                "set_apply: matrix_free_operator stencil_depth=%d is smaller than the typed "
+                "apply's required depth %d" %
+                (declared_stencil_access.required_ghost_depth,
+                 inferred_stencil_access.required_ghost_depth))
+        attrs["stencil_access"] = (
+            inferred_stencil_access if declared_stencil_access is None
+            else StencilAccess.compose(
+                (inferred_stencil_access, declared_stencil_access),
+                where="set_apply(%s) declaration" % operator.name,
+            ))
         captured_scopes = {
             item.attrs.get("scope", "level")
             for node in block for item in node.inputs
@@ -687,7 +727,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("laplacian: out must be a scalar_field value")
         if not (isinstance(in_, ProgramValue) and in_.vtype == "scalar_field"):
             raise ValueError("laplacian: in must be a scalar_field value")
-        return self._new("scalar_field", "laplacian", (out, in_), {}, out.name, None)
+        return self._new(
+            "scalar_field", "laplacian", (out, in_),
+            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
     def gradient(self, out: Any, phi: Any) -> Any:
         """Record ``out = grad(phi)`` (centered differences; @p out has >= 2 components). @p out and
@@ -696,7 +738,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             raise ValueError("gradient: out must be a scalar_field value")
         if not (isinstance(phi, ProgramValue) and phi.vtype == "scalar_field"):
             raise ValueError("gradient: phi must be a scalar_field value")
-        return self._new("scalar_field", "gradient", (out, phi), {}, out.name, None)
+        return self._new(
+            "scalar_field", "gradient", (out, phi),
+            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
     def divergence(self, out: Any, fx: Any, fy: Any) -> Any:
         """Record ``out = div(fx, fy)`` (centered FV divergence d fx/dx + d fy/dy, component 0). @p out,
@@ -707,7 +751,9 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         for nm, val in (("out", out), ("fx", fx), ("fy", fy)):
             if not (isinstance(val, ProgramValue) and val.vtype == "scalar_field"):
                 raise ValueError("divergence: %s must be a scalar_field value" % nm)
-        return self._new("scalar_field", "divergence", (out, fx, fy), {}, out.name, None)
+        return self._new(
+            "scalar_field", "divergence", (out, fx, fy),
+            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name, None)
 
     # --- finite-difference Jacobian-vector product (ADC-431: implicit-flux BDF Newton-Krylov) --------
     def rhs_jacvec(self, out: Any, in_: Any, *, iterate: Any, r0: Any, c_dt: Any, eps: Any = 1e-7,
@@ -805,7 +851,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         c_d = c_dt.to_polynomial()
         return self._new("scalar_field", "rhs_jacvec", (out, in_, iterate, r0),
                          {"c_dt": c_d, "eps": eps_literal, "flux": True, "sources": src,
-                          "field_coupled": field_coupled},
+                          "field_coupled": field_coupled,
+                          "stencil_access": StencilAccess.nearest_neighbour()},
                          out.name, iterate.block, state_ref=iterate.state_ref)
 
     # --- tensor-coefficient matrix-free apply of the generic condensed-implicit route (ADC-637) --------
@@ -832,5 +879,6 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         # that provenance on the result instead of letting ``_new`` infer only ``state_ref`` while
         # leaving ``block=None`` (an impossible half-qualified ProgramValue).
         return self._new(
-            "scalar_field", "apply_laplacian_coeff", (out, in_, coeffs), {}, out.name,
+            "scalar_field", "apply_laplacian_coeff", (out, in_, coeffs),
+            {"stencil_access": StencilAccess.nearest_neighbour()}, out.name,
             coeffs.block, state_ref=coeffs.state_ref)

@@ -203,13 +203,21 @@ function(pops_add_test name)
 endfunction()
 
 function(pops_add_mpi_rank_test name nproc)
+  set(options)
+  set(oneValueArgs GTEST_FILTER)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "" ${ARGN})
   if(NOT TARGET ${name})
     message(FATAL_ERROR "MPI CTest entry ${name}_np${nproc} needs target ${name}")
+  endif()
+  set(_gtest_filter_arg)
+  if(ARG_GTEST_FILTER)
+    list(APPEND _gtest_filter_arg "--gtest_filter=${ARG_GTEST_FILTER}")
   endif()
   add_test(NAME ${name}_np${nproc}
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${nproc}
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}>
                    --gtest_output=xml:${_pops_gtest_xml_dir}/${name}_np${nproc}.xml
+                   ${_gtest_filter_arg}
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(${name}_np${nproc} PROPERTIES
     LABELS "backend;mpi;medium"
@@ -681,6 +689,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
   set(POPS_MPI_RANKS_test_krylov_solver 1 2 4)
+  set(POPS_MPI_RANKS_test_generic_krylov 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
@@ -755,6 +764,7 @@ if(POPS_HAS_MPI)
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
     test_krylov_solver
+    test_generic_krylov
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
@@ -762,7 +772,14 @@ if(POPS_HAS_MPI)
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
-      pops_add_mpi_rank_test(${_test} ${_np})
+      if(_test STREQUAL "test_generic_krylov")
+        pops_add_mpi_rank_test(
+          ${_test} ${_np}
+          GTEST_FILTER
+            "GenericKrylov.cg_converges_on_spd_operator:GenericKrylov.bicgstab_converges_with_identity_preconditioner:GenericKrylov.gmres_converges_on_spd_operator:GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:GenericKrylov.mpi_variant_distributes_real_work_to_every_rank")
+      else()
+        pops_add_mpi_rank_test(${_test} ${_np})
+      endif()
     endforeach()
   endforeach()
 endif()

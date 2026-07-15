@@ -276,6 +276,7 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
         "test_amr_system_bz_multibox": (2, 4),
         "test_copy_schedule_cache": (1, 2, 4),
         "test_fill_boundary_cache": (1, 2, 4),
+        "test_generic_krylov": (2,),
         "test_krylov_solver": (1, 2, 4),
         "test_world_communicator": (1, 2),
     }

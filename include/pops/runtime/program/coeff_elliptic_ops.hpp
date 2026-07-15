@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <stdexcept>
 
 #include <pops/core/foundation/types.hpp>      // Real
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
@@ -71,6 +72,10 @@ struct GeometricMgPreconditioner {
   /// vector space is a no-op; changing topology requires a new preconditioner object.
   template <class Ctx>
   void prepare(const Ctx& ctx, const MultiFab& prototype) {
+    if (prototype.ncomp() != 1)
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner supports exactly one component; a multi-component "
+          "operator requires a genuinely block-aware preconditioner");
     if (ctx.is_polar_geometry())
       throw std::invalid_argument(
           "GeometricMgPreconditioner is Cartesian-only; polar operators require an explicit "
@@ -86,11 +91,11 @@ struct GeometricMgPreconditioner {
                /*replicated=*/false, min_coarse_, nu1_, nu2_, nbottom_);
     // Materialize halo schedules, MPI buffer capacities and every lazy V-cycle resource now. The
     // zero probe is mathematically neutral and happens once, before a Krylov iteration can begin.
-    mg->rhs().set_val(Real(0));
-    mg->phi().set_val(Real(0));
+    PureFieldAlgebra::zero_valid(mg->rhs());
+    PureFieldAlgebra::zero_valid(mg->phi());
     mg->vcycle();
-    mg->rhs().set_val(Real(0));
-    mg->phi().set_val(Real(0));
+    PureFieldAlgebra::zero_valid(mg->rhs());
+    PureFieldAlgebra::zero_valid(mg->phi());
   }
 
   /// out <- M^{-1}(in): ONE geometric-multigrid V-cycle of the bare 5-point Laplacian, used as a
@@ -119,7 +124,7 @@ struct GeometricMgPreconditioner {
     GeometricMG& m = *mg;
     // rhs <- in (the vector to precondition); phi <- 0 (a fixed-linear cycle starts cold).
     PureFieldAlgebra::copy(m.rhs(), in);
-    m.phi().set_val(Real(0));
+    PureFieldAlgebra::zero_valid(m.phi());
     // n_vcycles_ composed V-cycles (default 1): still a FIXED linear map M^{-1}. phi carries forward
     // across the loop so N cycles compose the same stationary iteration.
     for (int i = 0; i < n_vcycles_; ++i)

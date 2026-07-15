@@ -12,8 +12,10 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
     validation errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a
     non-gmres method).
 
-(B) End-to-end parity (skips unless the full toolchain is present): two solves through the REAL compiled
-    engine.
+(B) Internal native-ABI parity (skips unless the full toolchain is present): two solves through the
+    private ``_system`` installation seam. It protects the low-level loader but is not counted as a
+    public DSL acceptance test; the public ``Case -> resolve -> bind -> run`` Krylov witness lives in
+    ``tests/python/integration/runtime/test_public_krylov_lifecycle.py``.
       (a) SPD: (I - alpha*Lap) phi = U via gmres (tol 1e-9) matches an OFFLINE numpy CG on the same
           discrete periodic 5-point system (~1e-6).
       (b) NON-symmetric (the gmres-specific guard): A(in) = in - alpha*Lap(in) + beta*d(in)/dx adds a
@@ -141,7 +143,8 @@ def test_gmres_codegen(t):
     src = emit_cpp_program(_spd_program(t, method="gmres"))
     for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_prepared_linear",
                  "pops::PreparedAffineLinearProblem",
-                 "pops::PreparedLinearPreconditioner::identity()"):
+                 "pops::PreparedLinearPreconditioner::identity()",
+                 "pops::OperatorApplyPurity::kAuthenticatedProgram"):
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
@@ -196,6 +199,77 @@ def test_codegen_rejects_tampered_krylov_footprints(t):
             raise AssertionError(
                 "tampered Krylov footprint %s=%r must be rejected"
                 % (key, bad_value))
+
+
+def test_arbitrary_stencil_depth_is_authenticated_and_lowered(t):
+    program = t.Program("deep_stencil")
+    state = typed_state(program, "blk")
+    operator = program.matrix_free_operator("A", stencil_depth=3)
+    program.set_apply(operator, lambda _program, _out, value: value)
+    solution = program.solve(
+        LinearProblem(
+            operator, state,
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=_krylov("cg", max_iter=10, rel_tol=1e-9),
+    ).consume(action=FailRun())
+    endpoint = typed_state(program, "blk", state_name="U").next
+    program.commit(endpoint, program.value("next", solution, at=endpoint.point))
+    solve = next(value for value in program._values if value.op == "solve_linear")
+    assert solve.attrs["krylov_footprint"]["input_ghosts"] == 3
+    source = emit_cpp_program(program)
+    assert "ctx.alloc_scalar_field(1, 3)" in source
+    assert "const pops::KrylovFootprint" in source and "{1, 3, 0, false}" in source
+
+
+def test_stencil_depth_validation_and_inferred_minimum(t):
+    for bad in (True, -1, 1.5, "2"):
+        try:
+            t.Program("bad_stencil").matrix_free_operator("A", stencil_depth=bad)
+        except ValueError as exc:
+            assert "stencil_depth" in str(exc), str(exc)
+        else:
+            raise AssertionError("stencil_depth=%r must be rejected" % (bad,))
+
+    program = t.Program("too_shallow")
+    operator = program.matrix_free_operator("A", stencil_depth=0)
+
+    def laplacian_apply(P, _out, value):
+        scratch = P.scalar_field("lap")
+        P.laplacian(scratch, value)
+        return scratch
+
+    try:
+        program.set_apply(operator, laplacian_apply)
+    except ValueError as exc:
+        assert "required depth 1" in str(exc), str(exc)
+    else:
+        raise AssertionError("an explicitly undersized stencil footprint must be rejected")
+
+    inferred = t.Program("inferred")
+    inferred_operator = inferred.matrix_free_operator("A")
+    inferred.set_apply(inferred_operator, laplacian_apply)
+    canonical = inferred._canonical_value(inferred_operator)
+    assert canonical.attrs["stencil_access"].required_ghost_depth == 1
+
+
+def test_stencil_capabilities_compose_without_opcode_dispatch(t):
+    from pops.time import StencilAccess
+
+    program = t.Program("capability_composition")
+    operator = program.matrix_free_operator("A")
+
+    def apply(P, _out, value):
+        scratch = P.scalar_field("scratch")
+        produced = P.laplacian(scratch, value)
+        assert type(produced.attrs["stencil_access"]) is StencilAccess
+        return produced
+
+    program.set_apply(operator, apply)
+    canonical = program._canonical_value(operator)
+    assert canonical.attrs["stencil_access"] == StencilAccess.nearest_neighbour()
+    assert StencilAccess.compose(
+        (StencilAccess.pointwise(), StencilAccess(3)), where="extension"
+    ) == StencilAccess(3)
 
 
 def test_gmres_now_valid_method(t):

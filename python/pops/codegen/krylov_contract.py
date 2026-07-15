@@ -60,8 +60,6 @@ def validated_krylov_footprint(attrs: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("solve_linear Krylov footprint component count is unauthenticated")
     input_ghosts = _exact_int(
         footprint["input_ghosts"], label="input_ghosts", minimum=0)
-    if input_ghosts not in (0, 1):
-        raise ValueError("solve_linear Krylov footprint has an unsupported input ghost width")
     footprint_restart = _exact_int(
         footprint["restart"], label="restart", minimum=0)
     if footprint_restart != restart:
