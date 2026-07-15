@@ -2,20 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass
 import re
 from types import MappingProxyType
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
-from pops.identity import Identity, canonical_bytes, make_identity
+from pops.identity import canonical_bytes
 
 from ._generated_component_schema import (
-    COMPONENT_DIGEST_FIELDS,
     COMPONENT_EXTENSION_KINDS,
     COMPONENT_INTERFACE_SPECS,
-    COMPONENT_MANIFEST_SCHEMA_VERSION,
-    COMPONENT_MANIFEST_TOP_LEVEL_FIELDS,
     COMPONENT_TARGET_FIELDS,
 )
 
