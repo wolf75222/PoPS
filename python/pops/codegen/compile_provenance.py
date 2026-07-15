@@ -83,6 +83,36 @@ def write_artifact_sidecar(
     return binary, artifact
 
 
+def publish_staged_artifact(
+    staging_path: Any,
+    destination_path: Any,
+    *,
+    semantic_identity: Any,
+    spec_identity: Any,
+) -> tuple[Any, Any]:
+    """Authenticate and publish a staged binary, committing its sidecar last.
+
+    The caller owns the destination's identity-specific inter-process lock.  Both replacements are
+    same-directory atomic operations: readers can never observe compiler writes at the final binary
+    path, and the final sidecar is the commit record published only after the complete binary.
+    """
+    staging_path = os.path.abspath(os.fspath(staging_path))
+    destination_path = os.path.abspath(os.fspath(destination_path))
+    if os.path.dirname(staging_path) != os.path.dirname(destination_path):
+        raise ValueError("staged artifact publication requires one filesystem directory")
+    binary, artifact = write_artifact_sidecar(
+        staging_path,
+        semantic_identity=semantic_identity,
+        spec_identity=spec_identity,
+    )
+    os.replace(staging_path, destination_path)
+    os.replace(
+        artifact_sidecar_path(staging_path),
+        artifact_sidecar_path(destination_path),
+    )
+    return binary, artifact
+
+
 def read_artifact_sidecar(so_path: Any) -> Any:
     """Read the exact current artifact sidecar schema, or ``None`` when absent."""
     path = artifact_sidecar_path(so_path)

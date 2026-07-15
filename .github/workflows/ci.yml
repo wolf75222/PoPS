@@ -647,9 +647,9 @@ jobs:
       # exactement l'un des deux tourne et le module existe toujours pour l'artefact.
       - name: Build module Python `pops` (Kokkos Serial)
         if: ${{ !(github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true') }}
-        # The inner 14-minute watchdog leaves bounded room inside the 20-minute job for the
+        # The inner 18-minute watchdog leaves bounded room inside the 20-minute job for the
         # `always()` ccache save.  The step timeout is a second guard for configure/reporting.
-        timeout-minutes: 16
+        timeout-minutes: 19
         run: |
           pip install --upgrade pip numpy pytest
           SECONDS=0
@@ -660,13 +660,13 @@ jobs:
           # POPS_HEAVY_MODULE_TU_POOL=4 (ADC-621): use the public Linux runner's four compile slots.
           # Keeping the old value 2 serialized half of the generated-seam leaves and exceeded this
           # job's 20-minute contract even with useful ccache hits. This override remains guarded by the
-          # 14-minute build watchdog and the attempt cache below; the CMake default stays the conservative
+          # 18-minute build watchdog and the attempt cache below; the CMake default stays the conservative
           # size-1 OOM guard and wheel builders keep their platform-specific bounded pools.
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           set +e
-          timeout --signal=TERM --kill-after=30s 14m \
+          timeout --signal=TERM --kill-after=30s 18m \
             cmake --build --preset ci-kokkos-python
           build_status=$?
           set -e
@@ -684,7 +684,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ $build_status -eq 124 ]]; then
-            echo "::error::Python native build exceeded its 14-minute cache-safe watchdog"
+            echo "::error::Python native build exceeded its 18-minute cache-safe watchdog"
           fi
           exit "$build_status"
 

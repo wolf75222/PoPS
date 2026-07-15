@@ -5,8 +5,12 @@ Public API re-exported from pops.codegen.__init__.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+import errno
 import os
 from threading import Lock
+import tempfile
+import time
 from typing import Any
 
 from .toolchain import _pops_module  # noqa: F401 -- used by _native_mpi_flags
@@ -87,6 +91,77 @@ def _identity_cache_so_path(spec_identity: Any) -> str:
     if not isinstance(spec_identity, Identity) or spec_identity.domain != "artifact-spec":
         raise TypeError("cache path requires a pops.artifact-spec Identity")
     return os.path.join(pops_cache_dir(), spec_identity.hexdigest + ".so")
+
+
+@contextmanager
+def _artifact_cache_lock(so_path: Any):
+    """Serialize publication of one content-addressed native artifact across processes.
+
+    MPI ranks and independent Python workers share the out-of-source cache.  The binary and its
+    identity sidecar form one authenticated cache entry, so checking, compiling and publishing them
+    must be one critical section.  The lock file is deliberately persistent: unlinking it would let
+    a late opener lock a different inode while the current publisher still owns the old one.
+
+    POSIX uses ``flock``.  Windows uses a one-byte non-blocking ``msvcrt`` lock with an explicit
+    retry loop because ``LK_LOCK`` has a bounded implementation-defined retry count.  Both locks are
+    released by the operating system if a compiler process exits unexpectedly.
+    """
+    path = os.path.abspath(os.fspath(so_path)) + ".pops-cache.lock"
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    handle = open(path, "a+b")
+    windows_locked = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            while True:
+                try:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    windows_locked = True
+                    break
+                except OSError as exc:
+                    if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    time.sleep(0.05)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if os.name == "nt":
+                if windows_locked:
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def _artifact_cache_staging_path(so_path: Any) -> str:
+    """Reserve a unique same-directory compiler output file for one cache publication."""
+    destination = os.path.abspath(os.fspath(so_path))
+    directory = os.path.dirname(destination) or "."
+    os.makedirs(directory, exist_ok=True)
+    stem, suffix = os.path.splitext(os.path.basename(destination))
+    descriptor, staging = tempfile.mkstemp(
+        prefix=".%s.pops-stage-" % stem,
+        suffix=suffix or ".so",
+        dir=directory,
+    )
+    os.close(descriptor)
+    return staging
 
 
 def _precision_cache_key() -> str:

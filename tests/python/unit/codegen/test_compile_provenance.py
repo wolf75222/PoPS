@@ -9,6 +9,7 @@ no compiler and no ``.so`` (the real-compiler integration lives in the gated int
 
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
+import os
 import sys
 
 import pytest
@@ -16,7 +17,8 @@ import pytest
 pytest.importorskip("pops")
 from pops.codegen.compile_provenance import (  # noqa: E402
     artifact_sidecar_path, build_debug_banner, read_artifact_sidecar,
-    verify_cached_artifact, write_artifact_sidecar, StaleArtifactError)
+    publish_staged_artifact, verify_cached_artifact, write_artifact_sidecar,
+    StaleArtifactError)
 from pops.identity import make_identity  # noqa: E402
 
 
@@ -91,6 +93,37 @@ def test_sidecar_round_trip(tmp_path):
         "binary_identity": binary.token,
         "artifact_identity": artifact.token,
     }
+
+
+def test_staged_publication_commits_the_identity_sidecar_last(tmp_path, monkeypatch):
+    staging = str(tmp_path / ".problem.stage.so")
+    destination = str(tmp_path / "problem.so")
+    (tmp_path / ".problem.stage.so").write_bytes(b"complete-binary")
+    semantic = make_identity("semantic", {"program": "p"})
+    spec = make_identity("artifact-spec", {"target": "system"})
+    replacements = []
+    real_replace = os.replace
+
+    def recorded_replace(source, target):
+        replacements.append((source, target))
+        real_replace(source, target)
+
+    monkeypatch.setattr("pops.codegen.compile_provenance.os.replace", recorded_replace)
+    expected = publish_staged_artifact(
+        staging,
+        destination,
+        semantic_identity=semantic,
+        spec_identity=spec,
+    )
+
+    assert replacements[-2:] == [
+        (staging, destination),
+        (artifact_sidecar_path(staging), artifact_sidecar_path(destination)),
+    ]
+    assert not (tmp_path / ".problem.stage.so").exists()
+    assert verify_cached_artifact(
+        destination, semantic_identity=semantic, spec_identity=spec
+    ) == expected
 
 
 def test_read_sidecar_absent_is_none(tmp_path):

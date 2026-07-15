@@ -21,6 +21,8 @@ from pops.codegen.toolchain import (
     pops_loader_build_flags,
 )
 from pops.codegen.cache import (
+    _artifact_cache_lock,
+    _artifact_cache_staging_path,
     _identity_cache_so_path,
     _artifact_distinct_so_path,
     _record_artifact_identity,
@@ -29,7 +31,9 @@ from pops.codegen.cache import (
     _dsl_optflags,
 )
 from pops.codegen.compile_provenance import (
+    artifact_sidecar_path,
     build_debug_banner,
+    publish_staged_artifact,
     verify_cached_artifact,
     write_artifact_sidecar,
 )
@@ -137,22 +141,46 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
         standard=std, abi_key=str(abi_key),
         hoist_reciprocals=hoist_reciprocals)
 
-    # Out-of-source CACHE when so_path is omitted.
+    def _compile_and_authenticate(path: Any, destination: Any = None) -> Any:
+        out_path = compile_native(m, path, include, name=name, cxx=cxx, std=std,
+                                  target=target, hoist_reciprocals=hoist_reciprocals)
+        if destination is None:
+            write_artifact_sidecar(
+                out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+            published = out_path
+        else:
+            publish_staged_artifact(
+                out_path,
+                destination,
+                semantic_identity=semantic_identity,
+                spec_identity=spec_identity,
+            )
+            published = destination
+        _record_artifact_identity(published, spec_identity)
+        return published
+
+    # Out-of-source CACHE when so_path is omitted.  The check and publication share one
+    # cross-process critical section: MPI ranks must never compile over the same content-addressed
+    # binary after another rank has sealed it into a CompiledSimulationArtifact.
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
-        if os.path.exists(so_path):
-            verify_cached_artifact(
-                so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
-            return so_path
+        with _artifact_cache_lock(so_path):
+            if os.path.exists(so_path):
+                verify_cached_artifact(
+                    so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
+                return so_path
+            staging = _artifact_cache_staging_path(so_path)
+            try:
+                return _compile_and_authenticate(staging, so_path)
+            finally:
+                for leftover in (staging, artifact_sidecar_path(staging)):
+                    try:
+                        os.remove(leftover)
+                    except FileNotFoundError:
+                        pass
     else:
         so_path = _artifact_distinct_so_path(so_path, spec_identity)
-
-    out_path = compile_native(m, so_path, include, name=name, cxx=cxx, std=std,
-                              target=target, hoist_reciprocals=hoist_reciprocals)
-    write_artifact_sidecar(
-        out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
-    _record_artifact_identity(out_path, spec_identity)
-    return out_path
+    return _compile_and_authenticate(so_path)
 
 
 # compile_problem -- compile a pops.time.Program into a problem.so
@@ -265,112 +293,139 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
     from pops.codegen.program_emit_params import program_param_entries
     program_param_routes = tuple(program_param_entries(time, compile_authority))
 
+    def _compiled_handle(binary, artifact, *, compile_command=None, generated_source=None):
+        compiled = CompiledProblem(
+            so_path,
+            time,
+            compile_authority,
+            abi_key,
+            cc,
+            eff_std,
+            libraries=library_manifests,
+            problem_hash=program_hash,
+            cache_key=cache_key,
+            compile_command=compile_command,
+            generated_sources=[generated_source] if generated_source else [],
+            codegen_env=cenv,
+            module_manifest=module_manifest,
+            module_hash=module_hash,
+            external_bricks=external_brick_records,
+            problem_snapshot=problem_snapshot,
+            program_param_routes=program_param_routes,
+            generated_cpp=src,
+            lowering_coverage=lowering_coverage,
+            program_graph=program_graph,
+        )
+        compiled.semantic_identity = semantic
+        compiled.artifact_spec_identity = spec_identity
+        compiled.binary_identity = binary
+        compiled.artifact_identity = artifact
+        cenv.run_dumps(compiled)
+        return compiled
+
+    def _compile_fresh(*, staged: bool):
+        # Compiler writes never target a shared content-addressed path.  Only a fully compiled and
+        # authenticated staging pair is atomically promoted while the identity lock is held.
+        compile_path = _artifact_cache_staging_path(so_path) if staged else so_path
+        gen_src_path = os.path.splitext(so_path)[0] + ".cpp" if cenv.keep_generated else None
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                cpp = os.path.join(tmp, "problem.cpp")
+                # The compiler ALWAYS reads the banner-free src. The retained source and failure
+                # diagnostics use the logical final path, never the private staging name.
+                with open(cpp, "w") as f:
+                    f.write(src)
+                flags = [
+                    "-shared", "-fPIC", "-std=" + eff_std, *optflags,
+                    "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags,
+                ]
+                cmd = [cc, *flags, "-I", include, cpp, "-o", compile_path, *lflags]
+                reported_cmd = [so_path if item == compile_path else item for item in cmd]
+                compile_command = _redact_compile_command(
+                    reported_cmd,
+                    tmp_cpp=cpp,
+                    gen_src=gen_src_path or "<generated>",
+                )
+                if gen_src_path:
+                    banner = build_debug_banner(
+                        time,
+                        compile_authority,
+                        program_hash=program_hash,
+                        abi_key=abi_key,
+                        cache_key=cache_key,
+                        cflags=cflags,
+                        lflags=lflags,
+                        cxx=cc,
+                        std=eff_std,
+                        command=compile_command,
+                        registry=_registry_cache_key(),
+                    )
+                    try:
+                        with open(gen_src_path, "w") as f:
+                            f.write(banner + src)
+                    except OSError:
+                        gen_src_path = None
+                cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
+                try:
+                    _run_compile(cmd, "compile_problem (backend production)")
+                except RuntimeError as exc:
+                    failed_src = os.path.splitext(so_path)[0] + ".failed.cpp"
+                    try:
+                        with open(failed_src, "w") as f:
+                            f.write(src)
+                    except OSError:
+                        failed_src = "<generated (not persisted: write failed)>"
+                    raise RuntimeError(
+                        "%s\nThis is GENERATED code emitted by pops.time.Program %r; the failing "
+                        "source was written to %s. Re-run pops.compile(..., debug=True) to keep "
+                        "the .cpp with a full provenance banner (IR + hashes + flags + command)."
+                        % (exc, getattr(time, "name", "problem"), failed_src)
+                    ) from exc
+            if staged:
+                binary, artifact = publish_staged_artifact(
+                    compile_path,
+                    so_path,
+                    semantic_identity=semantic,
+                    spec_identity=spec_identity,
+                )
+            else:
+                binary, artifact = write_artifact_sidecar(
+                    so_path,
+                    semantic_identity=semantic,
+                    spec_identity=spec_identity,
+                )
+            _record_artifact_identity(so_path, spec_identity)
+            cenv.log("compile_problem: compiled -> %s" % so_path)
+            return _compiled_handle(
+                binary,
+                artifact,
+                compile_command=compile_command,
+                generated_source=gen_src_path,
+            )
+        finally:
+            if staged:
+                for leftover in (compile_path, artifact_sidecar_path(compile_path)):
+                    try:
+                        os.remove(leftover)
+                    except FileNotFoundError:
+                        pass
+
     if so_path is None:
         so_path = _identity_cache_so_path(spec_identity)
-        # POPS_CODEGEN_DIR (sec.12.4, #47): redirect the out-of-source .so (and any kept source /
-        # dump) into the requested directory, keeping the collision-free cache file name. An explicit
-        # so_path bypasses this -- the caller pinned the path. Created on demand, never inside the repo.
+        # POPS_CODEGEN_DIR redirects the logical final artifact, not the private staging output.
         if cenv.codegen_dir:
             os.makedirs(cenv.codegen_dir, exist_ok=True)
             so_path = os.path.join(cenv.codegen_dir, os.path.basename(so_path))
-        if not force and os.path.isfile(so_path):
-            # STALE / ABI GUARD (ADC-536, CONTRACTS6 decision 1): a cache HIT reuses the .so WITHOUT
-            # recompiling, so nothing else re-checks it against the current keys. verify the sidecar
-            # final sidecar matches the freshly computed semantic/spec/binary identities; a missing
-            # or mismatching sidecar RAISES (never a silent warn-and-reuse).
-            binary, artifact = verify_cached_artifact(
-                so_path, semantic_identity=semantic, spec_identity=spec_identity)
-            cenv.log("compile_problem: cache HIT -> %s" % so_path)
-            compiled = CompiledProblem(so_path, time, compile_authority, abi_key, cc, eff_std,
-                                       libraries=library_manifests, problem_hash=program_hash,
-                                       cache_key=cache_key, codegen_env=cenv,
-                                       module_manifest=module_manifest, module_hash=module_hash,
-                                       external_bricks=external_brick_records,
-                                       problem_snapshot=problem_snapshot,
-                                       program_param_routes=program_param_routes,
-                                       generated_cpp=src,
-                                       lowering_coverage=lowering_coverage,
-                                       program_graph=program_graph)
-            compiled.semantic_identity = semantic
-            compiled.artifact_spec_identity = spec_identity
-            compiled.binary_identity = binary
-            compiled.artifact_identity = artifact
-            cenv.run_dumps(compiled)
-            return compiled
-    else:
-        so_path = _artifact_distinct_so_path(so_path, spec_identity)
+        with _artifact_cache_lock(so_path):
+            if not force and os.path.isfile(so_path):
+                binary, artifact = verify_cached_artifact(
+                    so_path,
+                    semantic_identity=semantic,
+                    spec_identity=spec_identity,
+                )
+                cenv.log("compile_problem: cache HIT -> %s" % so_path)
+                return _compiled_handle(binary, artifact)
+            return _compile_fresh(staged=True)
 
-    # POPS_KEEP_GENERATED (sec.12.4, #47): keep the emitted .cpp next to the .so -- the same effect
-    # debug=True has (debug=True already set keep_generated in cenv, explicit-arg-wins). When neither
-    # is set the source lives only in the TemporaryDirectory below and is discarded.
-    gen_src_path = os.path.splitext(so_path)[0] + ".cpp" if cenv.keep_generated else None
-    with tempfile.TemporaryDirectory() as tmp:
-        cpp = os.path.join(tmp, "problem.cpp")
-        # The compiler ALWAYS reads the banner-free src (the temp .cpp). The debug banner rides ONLY
-        # the persisted sidecar below, so the .so bytes and the cache key are byte-identical whether
-        # debug is on or off (ADC-536 R5).
-        with open(cpp, "w") as f:
-            f.write(src)
-        flags = ["-shared", "-fPIC", "-std=" + eff_std, *optflags,
-                 "-DPOPS_HEADER_SIG=\"%s\"" % sig, *cflags]
-        cmd = [cc, *flags, "-I", include, cpp, "-o", so_path, *lflags]
-        # Record the compile command for introspection (Spec 5 sec.12.4, #49). The temporary .cpp is
-        # in a TemporaryDirectory that is gone after this block, so report the persistent debug .cpp
-        # (or "<generated>") rather than the vanished temp path; redact secrets/env in the tokens.
-        compile_command = _redact_compile_command(cmd, tmp_cpp=cpp,
-                                                  gen_src=gen_src_path or "<generated>")
-        # Persist the sidecar .cpp with a leading provenance banner (ADC-536): serialized IR, hashes,
-        # flags, toolchain and the redacted command. Written to gen_src_path ONLY, never to cpp -- so
-        # the compiled bytes stay banner-free. Now that compile_command is known the banner is complete.
-        if gen_src_path:
-            banner = build_debug_banner(
-                time, compile_authority, program_hash=program_hash, abi_key=abi_key,
-                cache_key=cache_key,
-                cflags=cflags, lflags=lflags, cxx=cc, std=eff_std, command=compile_command,
-                registry=_registry_cache_key())
-            try:
-                with open(gen_src_path, "w") as f:
-                    f.write(banner + src)
-            except OSError:
-                gen_src_path = None
-        cenv.log("compile_problem: invoking %s" % compile_command, level="debug")
-        # C++ ERROR CONTEXT (ADC-536): _run_compile raises a self-contained RuntimeError with the
-        # compiler output, but the ephemeral temp .cpp it names is gone after this block. On failure
-        # persist the GENERATED source next to the .so (unless debug already did) and re-raise citing
-        # it, so a compiler error in the emitted code is always inspectable and clearly flagged as
-        # generated (re-run with debug=True for the full provenance banner).
-        try:
-            _run_compile(cmd, "compile_problem (backend production)")
-        except RuntimeError as exc:
-            failed_src = os.path.splitext(so_path)[0] + ".failed.cpp"
-            try:
-                with open(failed_src, "w") as f:
-                    f.write(src)
-            except OSError:
-                failed_src = "<generated (not persisted: write failed)>"
-            raise RuntimeError(
-                "%s\nThis is GENERATED code emitted by pops.time.Program %r; the failing source was "
-                "written to %s. Re-run pops.compile(..., debug=True) to keep the .cpp with a full "
-                "provenance banner (IR + hashes + flags + command)."
-                % (exc, getattr(time, "name", "problem"), failed_src)) from exc
-    binary, artifact = write_artifact_sidecar(
-        so_path, semantic_identity=semantic, spec_identity=spec_identity)
-    _record_artifact_identity(so_path, spec_identity)
-    cenv.log("compile_problem: compiled -> %s" % so_path)
-    compiled = CompiledProblem(so_path, time, compile_authority, abi_key, cc, eff_std,
-                               libraries=library_manifests, problem_hash=program_hash,
-                               cache_key=cache_key, compile_command=compile_command,
-                               generated_sources=[gen_src_path] if gen_src_path else [],
-                               codegen_env=cenv, module_manifest=module_manifest,
-                               module_hash=module_hash, external_bricks=external_brick_records,
-                               problem_snapshot=problem_snapshot,
-                               program_param_routes=program_param_routes,
-                               generated_cpp=src,
-                               lowering_coverage=lowering_coverage,
-                               program_graph=program_graph)
-    compiled.semantic_identity = semantic
-    compiled.artifact_spec_identity = spec_identity
-    compiled.binary_identity = binary
-    compiled.artifact_identity = artifact
-    cenv.run_dumps(compiled)
-    return compiled
+    so_path = _artifact_distinct_so_path(so_path, spec_identity)
+    return _compile_fresh(staged=False)

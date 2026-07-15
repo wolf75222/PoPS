@@ -30,8 +30,12 @@ from pops.layouts import Uniform
 from pops.model import ComponentManifest, Handle, OwnerPath
 from pops.model.bind_schema import BindSchema
 from pops.problem._snapshot import AuthoringSnapshot
-from pops.runtime._runtime_plan_contracts import RuntimePlanBundle, RuntimePlanningError
-from pops.runtime._runtime_planning import build_runtime_plans
+from pops.runtime._runtime_plan_contracts import (
+    CommunicationPlan,
+    RuntimePlanBundle,
+    RuntimePlanningError,
+)
+from pops.runtime._runtime_planning import _assumption, build_runtime_plans
 from tests.python.support.layout_plan import cartesian_grid
 from tests.python.unit.codegen._typed_artifact_fixture import CanonicalValue, CompiledComponent
 
@@ -282,6 +286,50 @@ def test_values_are_deeply_immutable_and_assumptions_fail_closed():
     with pytest.raises(RuntimePlanningError) as error:
         bundle.determinism.require_assumptions(changed)
     assert error.value.code == "determinism_assumption_mismatch"
+
+
+class _ExplicitCommunicator:
+    def __init__(self, size):
+        self._size = size
+
+    def Get_size(self):
+        return self._size
+
+
+def _mpi_assumption_context(size):
+    artifact = _artifact()
+    proof = CapabilityProof.proven
+    backend = proven_serial_manifest(
+        backend="production",
+        target="system",
+        abi=artifact.platform_manifest.abi.require("artifact.abi"),
+        runtime=True,
+    )
+    backend = replace(
+        backend,
+        communicator=proof("MPI_COMM_WORLD", "test.explicit-communicator.v1"),
+    )
+    return ExecutionContext(
+        backend=backend,
+        communicator=ExecutionResource(
+            "communicator", "MPI_COMM_WORLD", _ExplicitCommunicator(size)
+        ),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+
+
+def test_rank_count_uses_the_explicit_communicator_runtime_proof():
+    communication = CommunicationPlan("test-layout", "MPI_COMM_WORLD")
+    assert _assumption("rank_count", _mpi_assumption_context(4), communication) == 4
+
+
+@pytest.mark.parametrize("invalid", (True, 0, -1, "4"))
+def test_rank_count_refuses_invalid_explicit_communicator_evidence(invalid):
+    communication = CommunicationPlan("test-layout", "MPI_COMM_WORLD")
+    with pytest.raises(RuntimePlanningError) as error:
+        _assumption("rank_count", _mpi_assumption_context(invalid), communication)
+    assert error.value.code == "unknown_determinism_assumption"
 
 
 def test_heterogeneous_layouts_emit_only_authenticated_directional_transfers():

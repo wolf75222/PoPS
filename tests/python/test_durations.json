@@ -79,6 +79,7 @@
   "tests/python/unit/codegen/test_cache_key_completeness.py": 2.0,
   "tests/python/unit/codegen/test_cache_key_routes.py": 0.5,
   "tests/python/unit/codegen/test_codegen_dead_prims.py": 3.1,
+  "tests/python/unit/codegen/test_compile_cache_lock.py": 1.2,
   "tests/python/unit/codegen/test_compile_link_flags.py": 2.0,
   "tests/python/unit/codegen/test_compile_provenance.py": 60.0,
   "tests/python/unit/codegen/test_compiled_artifact_protocol.py": 2.0,
@@ -560,6 +561,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 358
+    "total_files": 359
   }
 }
