@@ -60,6 +60,7 @@
   "tests/python/integration/runtime/test_polar_system.py": 0.5,
   "tests/python/integration/runtime/test_print_readability_runtime.py": 0.5,
   "tests/python/integration/runtime/test_program_runtime_params.py": 0.5,
+  "tests/python/integration/runtime/test_public_krylov_lifecycle.py": 16.4,
   "tests/python/integration/runtime/test_runtime_environment.py": 0.5,
   "tests/python/integration/runtime/test_runtime_inspection_reports.py": 0.5,
   "tests/python/integration/runtime/test_shared_interface_runtime.py": 60.0,
@@ -559,6 +560,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 357
+    "total_files": 358
   }
 }

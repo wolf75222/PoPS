@@ -101,5 +101,6 @@ def test_public_case_resolve_bind_run_executes_prepared_gmres(
 
     assert report.accepted_steps == 1
     actual = np.asarray(runtime.state_global("tracer"), dtype=np.float64).reshape(1, 4, 4)
-    np.testing.assert_array_equal(actual, initial)
-
+    # GMRES exercises real floating-point reductions even for the identity operator.  Preserve the
+    # physical identity to one ULP rather than requiring a fictitious bitwise no-op.
+    np.testing.assert_array_max_ulp(actual, initial, maxulp=1)
