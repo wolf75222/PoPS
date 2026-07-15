@@ -56,7 +56,8 @@ def test_manifest_constructors_do_not_coerce_identity_fields(bad_id):
             name=bad_id, owner_path=model.OwnerPath.model("valid"),
             state_spaces={}, field_spaces={}, params={}, aux={},
             provider_pack={"schema_version": 1, "capacity": None, "entries": []},
-            has_eigenvalues={}, operators=valid.operators, capabilities={},
+            has_eigenvalues={}, wave_speed_provider=None,
+            operators=valid.operators, capabilities={},
             native_routes={}, native_catalog={}, abi_requirements={})
 
 
@@ -296,7 +297,7 @@ def test_manifest_is_structured_deeply_frozen_json_and_copy_out():
 
     manifest = module.manifest()
     entry = manifest.operators.describe("fields_from_state")
-    assert manifest.schema_version == 6
+    assert manifest.schema_version == 7
     assert entry.to_dict()["signature"] == model.Signature((state,), fields).to_data()
     assert json.loads(manifest.to_json()) == manifest.to_dict()
 

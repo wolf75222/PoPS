@@ -295,11 +295,15 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     def primitive(self, name: Any, expr: Any) -> Any:
         """Define a primitive quantity by its formula; returns a usable expression."""
-        return self._dsl.primitive(require_name(name, "primitive name"), expr)
+        value = self._dsl.primitive(require_name(name, "primitive name"), expr)
+        self._invalidate_authoring_views()
+        return value
 
     def scalar(self, name: Any, expr: Any) -> Any:
         """Define a named derived scalar (e.g. pressure, sound speed)."""
-        return self._dsl.primitive(require_name(name, "scalar name"), expr)
+        value = self._dsl.primitive(require_name(name, "scalar name"), expr)
+        self._invalidate_authoring_views()
+        return value
 
     def param(self, declaration: Any) -> Any:
         """Register a typed parameter declaration and return its ParamHandle."""
@@ -579,6 +583,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         hyp = self._dsl._m
         with atomic_attrs((hyp, "_wave_speeds")):
             self._dsl.wave_speeds(x=converted["x"], y=converted["y"])
+        self._invalidate_authoring_views()
 
     def wave_speeds_from_jacobian(
         self,
@@ -600,6 +605,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             eig_max_iter=eig_max_iter,
             im_tol=im_tol,
         )
+        self._invalidate_authoring_views()
 
     def roe_from_jacobian(self) -> None:
         """Install the generic matrix-sign Roe provider from the flux Jacobian."""

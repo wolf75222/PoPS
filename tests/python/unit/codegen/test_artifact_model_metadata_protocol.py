@@ -10,7 +10,7 @@ from pops.codegen.loader import CompiledProblem
 class ExternalMetadataProvider:
     def __pops_artifact_model_metadata__(self):
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "state_spaces": ("electrons",),
             "cons_names": ("density", "momentum"),
             "n_vars": 2,
@@ -18,6 +18,7 @@ class ExternalMetadataProvider:
             "aux_names": ("electric_field",),
             "n_aux": 3,
             "capabilities": {"cpu": True, "amr": False},
+            "wave_speed_provider": "jacobian",
         }
 
 
@@ -40,6 +41,7 @@ def test_external_metadata_provider_is_consumed_without_concrete_class_dispatch(
     assert row.state_space == "electrons"
     assert row.cons_names == ("density", "momentum")
     assert row.capabilities == {"cpu": True, "amr": False}
+    assert row.wave_speed_provider == "jacobian"
 
 
 def test_metadata_provider_refuses_state_route_drift_and_fabricated_counts():
@@ -55,6 +57,18 @@ def test_metadata_provider_refuses_state_route_drift_and_fabricated_counts():
             return data
 
     with pytest.raises(ValueError, match="exactly match"):
+        _metadata("plasma", Invalid(), expected_state_spaces=("electrons",))
+
+
+def test_metadata_provider_refuses_unknown_wave_speed_provenance():
+    data = ExternalMetadataProvider().__pops_artifact_model_metadata__()
+    data["wave_speed_provider"] = "inferred_somehow"
+
+    class Invalid:
+        def __pops_artifact_model_metadata__(self):
+            return data
+
+    with pytest.raises(ValueError, match="wave_speed_provider"):
         _metadata("plasma", Invalid(), expected_state_spaces=("electrons",))
 
 

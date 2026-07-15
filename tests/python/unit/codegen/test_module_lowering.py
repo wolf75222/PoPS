@@ -241,7 +241,7 @@ def _final_trace_artifact(compiled):
         @staticmethod
         def __pops_artifact_model_metadata__():
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "state_spaces": ("U",),
                 "cons_names": ("rho", "mx", "my"),
                 "n_vars": 3,
@@ -249,6 +249,7 @@ def _final_trace_artifact(compiled):
                 "aux_names": (),
                 "n_aux": 0,
                 "capabilities": {"mpi": False},
+                "wave_speed_provider": None,
             }
 
     layout = {"kind": "uniform"}

@@ -7,8 +7,8 @@ descriptor (options / requirements), is exposed through the ``capabilities`` han
 authoring / compiled model, and is cross-checked by the shared install guard.
 
 Pure authoring / descriptor level -- no .so compiled. The install guard is exercised with a REAL
-authoring model carried on a REAL CompiledModel (the accepted pattern of test_euler_riemann_routes;
-never a fake/mock pops object). Runs under pytest and as ``python tests/...``.
+detached CompiledModel carrying the same authenticated source-kind metadata as a public artifact;
+it never retains a hidden authoring model. Runs under pytest and as ``python tests/...``.
 """
 import pytest
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
@@ -57,17 +57,15 @@ def _model_pressure():
     return m
 
 
-def _compiled(model=None, *, wave_speeds=True, n_vars=2):
-    """A REAL CompiledModel (no .so) with the flags under test; optionally carrying an authoring
-    model (the source-kind derivation reads it)."""
+def _compiled(*, wave_speeds=True, wave_speed_provider="explicit_pair", n_vars=2):
+    """A REAL detached CompiledModel (no .so) with authenticated provider metadata."""
     cons = ["w1", "w2", "w3"][:n_vars]
     c = CompiledModel(
         so_path="/no/such/pops-ws-provider.so", backend="production",
         cons_names=cons, cons_roles=["custom"] * n_vars, prim_names=[], n_vars=n_vars, gamma=1.4,
         n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="mh",
-        cxx="c++", std="c++23", wave_speeds=wave_speeds, target="system")
-    if model is not None:
-        c.model = model
+        cxx="c++", std="c++23", wave_speeds=wave_speeds,
+        wave_speed_provider=(wave_speed_provider if wave_speeds else None), target="system")
     return c
 
 
@@ -160,28 +158,35 @@ def test_authoring_handle_none_raises_precise():
         _ = m.capabilities.wave_speeds
 
 
-def test_compiled_handle_derives_from_carried_model():
-    c = _compiled(_model_jacobian())
+def test_compiled_handle_uses_detached_authenticated_provider():
+    c = _compiled(wave_speed_provider="jacobian")
     assert c.capabilities.wave_speeds.kind == "jacobian"
     assert provider_of(c).kind == "jacobian"
 
 
-def test_bare_compiled_generic_provider_and_none():
-    assert provider_of(_compiled()).kind == "explicit_pair"   # has_wave_speeds True, generic
+def test_compiled_pressure_provider_and_none():
+    assert provider_of(_compiled(wave_speed_provider="pressure_derived")).kind == "pressure_derived"
     assert provider_of(_compiled(wave_speeds=False)) is None
+
+
+def test_compiled_model_refuses_ambiguous_wave_speed_provenance():
+    with pytest.raises(ValueError, match="exact detached wave_speed_provider"):
+        _compiled(wave_speed_provider=None)
 
 
 # --- 4. install-time guard: the shared check_hll_waves the add_equation guard calls ---------------
 # The real add_equation guard derives the model's actual source (routes.py stays pops-import-free)
 # and delegates to check_hll_waves(provider_kind, model, ctx). Exercised directly on a REAL
-# authoring model carried by a REAL CompiledModel (no .so dlopen, no ABI match needed).
+# detached provider metadata on a REAL CompiledModel (no .so dlopen, no ABI match needed).
 def test_guard_accepts_matching_provider():
-    check_hll_waves("jacobian", _compiled(_model_jacobian()), "add_equation")  # must not raise
+    check_hll_waves("jacobian", _compiled(wave_speed_provider="jacobian"), "add_equation")
 
 
 def test_guard_refuses_mismatched_provider():
     with pytest.raises(ValueError, match="actual wave-speed source is"):
-        check_hll_waves("explicit_pair", _compiled(_model_jacobian()), "add_equation")
+        check_hll_waves(
+            "explicit_pair", _compiled(wave_speed_provider="jacobian"), "add_equation"
+        )
 
 
 def test_guard_refuses_provider_when_model_emits_no_wave_speeds():
@@ -198,8 +203,10 @@ def test_guard_accepts_estimate_provider_on_bare_handle():
 def test_check_wave_speed_provider_actual_kind_arg():
     # The low-level shared checker takes the caller-derived actual kind (routes.py import-free).
     with pytest.raises(ValueError, match="actual wave-speed source is"):
-        check_wave_speed_provider("explicit_pair", _compiled(_model_jacobian()), "add_equation",
-                                  actual_provider="jacobian")
+        check_wave_speed_provider(
+            "explicit_pair", _compiled(wave_speed_provider="jacobian"), "add_equation",
+            actual_provider="jacobian"
+        )
 
 
 def test_spatial_records_waves_provider():

@@ -143,16 +143,20 @@ def provider_of(model_or_compiled: Any) -> Any:
     ``set_wave_speeds_from_jacobian`` raise on the second); we assert it and raise a clear error
     naming both if a foreign object ever set both.
 
-    On a bare :class:`pops.codegen.loader.CompiledModel` the SOURCE kind is not recorded (the ``.so``
-    metadata carries only ``has_wave_speeds``): when the handle also exposes ``model`` (the carried
-    authoring model) that model is consulted; otherwise a generic signed-pair provider is returned
-    when ``has_wave_speeds`` is True, else ``None`` (an honest, documented limitation)."""
+    On a :class:`pops.codegen.loader.CompiledModel`, the exact detached SOURCE kind carried by the
+    artifact is used. Compiled artifacts never retain the authoring model and never guess that an
+    unknown signed source was an explicit pair."""
     from pops.codegen.loader import CompiledModel  # lazy: codegen <-> numerics edge
     if isinstance(model_or_compiled, CompiledModel):
-        carried = getattr(model_or_compiled, "model", None)
-        if carried is not None:
-            return provider_of(carried)
-        return ExplicitPair() if getattr(model_or_compiled, "has_wave_speeds", False) else None
+        kind = getattr(model_or_compiled, "wave_speed_provider", None)
+        if kind is None:
+            if getattr(model_or_compiled, "has_wave_speeds", False):
+                raise ValueError(
+                    "provider_of: compiled model advertises wave speeds without an authenticated "
+                    "wave_speed_provider source"
+                )
+            return None
+        return WaveSpeedProvider(kind)
 
     inner = _authoring_model(model_or_compiled)
     if inner is None:

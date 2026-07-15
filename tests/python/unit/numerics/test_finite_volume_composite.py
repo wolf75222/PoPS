@@ -34,7 +34,8 @@ def _model(*, hllc=False, roe=False, wave_speeds=True, n_vars=3,
         cons_names=["rho", "mx", "my"], cons_roles=["density", "momentum_x", "momentum_y"],
         prim_names=list(prim_names), n_vars=n_vars, gamma=None, n_aux=3, params={},
         caps={}, abi_key="", model_hash="", cxx="c++", std="23",
-        hllc=hllc, roe=roe, wave_speeds=wave_speeds)
+        hllc=hllc, roe=roe, wave_speeds=wave_speeds,
+        wave_speed_provider=("explicit_pair" if wave_speeds else None))
 
 
 # --- NEGATIVE: HLL refuses a model without signed wave speeds (via context) --------------------

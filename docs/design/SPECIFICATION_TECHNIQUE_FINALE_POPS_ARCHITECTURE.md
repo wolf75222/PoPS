@@ -303,6 +303,12 @@ comme une expression. Un paramètre est lu explicitement avec `model.value(handl
 générée depuis le Jacobien reste `model.wave_speeds_from_jacobian(eig=..., blocks=...)` et se lie à
 `riemann.HLL(waves=riemann.waves.FromJacobian(...))`.
 
+La source signée est une provenance de modèle, pas une heuristique d'installation. Son kind canonique
+(`explicit_pair`, `jacobian` ou `pressure_derived`) entre dans le hash du module, son manifest versionné,
+les métadonnées et l'évidence binaire de l'artifact. `CompiledModel` le conserve sous forme de donnée
+détachée et le bind le confronte au provider demandé par HLL. Un artifact qui annonce des vitesses
+d'onde sans cette provenance est invalide ; aucune source inconnue n'est reclassée en paire explicite.
+
 La validation prouve que le flux demandé par la réalisation numérique est celui référencé par le taux.
 Un ordre formel, une profondeur de halo ou une propriété CFL déjà définis par les composants ne sont
 pas répétés dans l'API de haut niveau ; ils sont dérivés de leurs manifests et rapportés.

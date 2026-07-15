@@ -16,7 +16,6 @@ import pytest
 
 pytest.importorskip("pops")
 
-import pops
 from pops import model
 from pops._ir.expr import Var
 from pops.math import Real
@@ -57,7 +56,7 @@ def _two_fluid_module():
 def test_manifest_schema_and_spaces():
     module = _small_module()
     manifest = module.manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 6
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 7
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
@@ -75,6 +74,7 @@ def test_manifest_schema_and_spaces():
     assert manifest.provider_pack["schema_version"] == 1
     assert len(manifest.provider_pack["entries"]) == 7
     assert manifest.has_eigenvalues == {"x": False, "y": False}
+    assert manifest.wave_speed_provider is None
 
     data = manifest.to_dict()
     declarations = (
@@ -99,6 +99,38 @@ def test_manifest_does_not_mutate_module():
     mod.manifest()
     assert mod.module_hash() == before
     print("OK  build_module_manifest is read-only (module hash unchanged)")
+
+
+@pytest.mark.parametrize(
+    "kind", ("explicit_pair", "jacobian", "pressure_derived")
+)
+def test_manifest_round_trips_detached_wave_speed_provider(kind):
+    module = _small_module()
+    baseline_hash = module.module_hash()
+
+    assert module.set_wave_speed_provider(kind) == kind
+    manifest = module.manifest()
+
+    assert manifest.wave_speed_provider == kind
+    assert manifest.to_dict()["wave_speed_provider"] == kind
+    assert model.ModuleManifest.from_dict(manifest.to_dict()).wave_speed_provider == kind
+    assert module.module_hash() != baseline_hash
+
+
+def test_module_refuses_unknown_or_competing_wave_speed_providers():
+    module = _small_module()
+    with pytest.raises(ValueError, match="must be one of"):
+        module.set_wave_speed_provider("einfeldt")
+
+    module.set_wave_speed_provider("jacobian")
+    assert module.set_wave_speed_provider("jacobian") == "jacobian"
+    with pytest.raises(ValueError, match="already declares"):
+        module.set_wave_speed_provider("explicit_pair")
+
+    forged = module.manifest().to_dict()
+    forged["wave_speed_provider"] = "unknown"
+    with pytest.raises(ValueError, match="wave_speed_provider"):
+        model.ModuleManifest.from_dict(forged)
 
 
 def test_operator_entries_in_registration_order_with_ids():
@@ -144,7 +176,7 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 6
+    assert restored["schema_version"] == 7
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()
@@ -178,7 +210,7 @@ def test_strict_json_round_trip_rejects_schema_and_identity_tampering():
         model.ModuleManifest.from_dict(forged_qid)
 
     with pytest.raises(ValueError, match="duplicate object key"):
-        model.ModuleManifest.from_json('{"schema_version":6,"schema_version":6}')
+        model.ModuleManifest.from_json('{"schema_version":7,"schema_version":7}')
     with pytest.raises(ValueError, match="non-finite"):
         model.ModuleManifest.from_json('{"schema_version":NaN}')
 

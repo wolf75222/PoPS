@@ -287,6 +287,11 @@ def _binary_evidence(value: Any, *, where: str) -> dict[str, Any]:
         item = getattr(value, name, None)
         if item is not None:
             metadata[name] = _evidence(item, where="%s.%s" % (where, name))
+    if hasattr(value, "wave_speed_provider"):
+        metadata["wave_speed_provider"] = _evidence(
+            value.wave_speed_provider,
+            where="%s.wave_speed_provider" % where,
+        )
     return {
         "component": _evidence(value, where=where),
         "binary_sha256": digest,

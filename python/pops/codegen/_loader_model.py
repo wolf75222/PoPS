@@ -30,10 +30,23 @@ class CompiledModel:
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
-                 state_spaces: Any = ("U",)) -> None:
+                 state_spaces: Any = ("U",), wave_speed_provider: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
+        allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
+        if self.has_wave_speeds:
+            if wave_speed_provider not in allowed_wave_speed_providers:
+                raise ValueError(
+                    "CompiledModel with wave speeds requires an exact detached "
+                    "wave_speed_provider: explicit_pair, jacobian, or pressure_derived"
+                )
+        elif wave_speed_provider is not None:
+            raise ValueError(
+                "CompiledModel without wave speeds cannot declare wave_speed_provider %r"
+                % (wave_speed_provider,)
+            )
+        self.wave_speed_provider = wave_speed_provider
         self.so_path = so_path
         if backend != "production":
             raise ValueError("CompiledModel backend must be the native production route")
@@ -107,16 +120,16 @@ class CompiledModel:
     def capabilities(self) -> Any:
         """Typed capability handles of this compiled model (ADC-552): ``compiled.capabilities.
         wave_speeds`` returns the artifact's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`.
-        Derived from the carried authoring model when present, else from ``has_wave_speeds`` (a
-        generic signed-pair provider); raises a precise error when the artifact declares no wave
-        speeds (no silent None)."""
+        Reconstructed from the detached ``wave_speed_provider`` source kind authenticated by the
+        compiled artifact; raises a precise error when the artifact declares no wave speeds (no
+        authoring pointer and no guessed fallback)."""
         from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: loader <-> numerics edge
         return _CapabilityHandles(self)
 
     def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
         """Exact report data; consumers never probe optional model attributes."""
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "state_spaces": tuple(self.state_spaces),
             "cons_names": tuple(self.cons_names),
             "n_vars": self.n_vars,
@@ -124,6 +137,7 @@ class CompiledModel:
             "aux_names": tuple(self.aux_extra_names),
             "n_aux": self.n_aux,
             "capabilities": dict(self.caps),
+            "wave_speed_provider": self.wave_speed_provider,
         }
 
     @property
@@ -251,6 +265,7 @@ class CompiledModel:
 
     def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
-                "runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
+                "wave_speed_provider=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
                 % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
-                   self.runtime_param_names, self.abi_key or "", self.model_hash or ""))
+                   self.wave_speed_provider, self.runtime_param_names,
+                   self.abi_key or "", self.model_hash or ""))

@@ -15,7 +15,10 @@ _METADATA_KEYS = frozenset({
     "aux_names",
     "n_aux",
     "capabilities",
+    "wave_speed_provider",
 })
+
+_WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
 
 @runtime_checkable
@@ -38,6 +41,7 @@ class ArtifactModelMetadata:
     n_aux: int
     state_space: str
     capabilities: dict[str, bool]
+    wave_speed_provider: str | None
 
 
 def artifact_model_metadata(compiled: Any) -> tuple[ArtifactModelMetadata, ...]:
@@ -138,7 +142,7 @@ def _metadata(
     data = model.__pops_artifact_model_metadata__()
     if not isinstance(data, dict) or set(data) != _METADATA_KEYS:
         raise TypeError("artifact model metadata provider returned an unknown schema")
-    if data["schema_version"] != 1:
+    if data["schema_version"] != 2:
         raise ValueError("artifact model metadata provider uses an unsupported schema")
     state_spaces = _strings(data["state_spaces"], where="state_spaces")
     if len(state_spaces) != 1:
@@ -164,6 +168,12 @@ def _metadata(
     if any(not isinstance(key, str) or not key or not isinstance(value, bool)
            for key, value in capabilities.items()):
         raise TypeError("compiled model capabilities must map non-empty strings to bool")
+    wave_speed_provider = data["wave_speed_provider"]
+    if wave_speed_provider is not None and wave_speed_provider not in _WAVE_SPEED_PROVIDERS:
+        raise ValueError(
+            "compiled model wave_speed_provider %r must be None or one of %s"
+            % (wave_speed_provider, ", ".join(sorted(_WAVE_SPEED_PROVIDERS)))
+        )
     return ArtifactModelMetadata(
         block_name=block_name,
         model=model,
@@ -174,6 +184,7 @@ def _metadata(
         n_aux=n_aux,
         state_space=state_spaces[0],
         capabilities=capabilities,
+        wave_speed_provider=wave_speed_provider,
     )
 
 

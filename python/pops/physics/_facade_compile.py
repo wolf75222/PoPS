@@ -95,11 +95,13 @@ class _FacadeCompileMixin(_FacadeModel):
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen._backends import lower_backend
+        from pops.numerics.riemann.waves import provider_of
         backend = lower_backend(backend)
         if target not in ("system", "amr_system"):
             raise ValueError("compile: target 'system' | 'amr_system' (got %r)" % (target,))
 
         m = self._m
+        wave_speed_provider = provider_of(self)
         eff_std = std if std is not None else loader_cxx_std()
         eff_cxx = _native_kokkos_compiler(cxx)
         if include is None:  # ergonomics: auto-detection of the pops headers folder
@@ -126,7 +128,13 @@ class _FacadeCompileMixin(_FacadeModel):
             abi=abi_key,
             toolchain="%s|%s" % (eff_cxx, eff_std),
             routes={"registry": _registry_cache_key(), "features": feature_key},
-            components={"model_hash": str(model_hash), "emitted_name": str(name or "")},
+            components={
+                "model_hash": str(model_hash),
+                "emitted_name": str(name or ""),
+                "wave_speed_provider": (
+                    "none" if wave_speed_provider is None else wave_speed_provider.kind
+                ),
+            },
             flags=[_platform_cache_key(), *_dsl_optflags(),
                    "hoist_reciprocals=%d" % bool(hoist_reciprocals)],
             libraries=(),
@@ -163,8 +171,10 @@ class _FacadeCompileMixin(_FacadeModel):
             roe=(m._roe or getattr(m, '_roe_rows', None) is not None
                  or getattr(m, '_roe_jacobian', None) is not None),
             aux_extra_names=m.aux_extra_names,
-            wave_speeds=(m._wave_speeds is not None or m._ws_jacobian is not None
-                         or "p" in m.prim_defs),
+            wave_speeds=wave_speed_provider is not None,
+            wave_speed_provider=(
+                None if wave_speed_provider is None else wave_speed_provider.kind
+            ),
             # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
             # detached model preserves the declaration inventory while the resolved simulation plan
             # owns the field discretization and provider. Empty for the default-Poisson-only model.

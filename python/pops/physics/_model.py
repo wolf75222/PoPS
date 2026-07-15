@@ -69,8 +69,15 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
                 "declare typed parameters through Model.param"
             )
         params = {node.name: node.handle for node in runtime_params}
+        wave_speed_provider = None
+        if self._wave_speeds is not None:
+            wave_speed_provider = "explicit_pair"
+        elif self._ws_jacobian is not None:
+            wave_speed_provider = "jacobian"
+        elif "p" in self.prim_defs:
+            wave_speed_provider = "pressure_derived"
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "state_spaces": ("U",),
             "cons_names": tuple(self.cons_names),
             "n_vars": self.n_vars,
@@ -78,6 +85,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
             "aux_names": tuple(self.aux_extra_names),
             "n_aux": aux_total_n_aux(self.aux_names, self.aux_extra_names),
             "capabilities": {},
+            "wave_speed_provider": wave_speed_provider,
         }
 
     def __init__(self, name: Any) -> None:

@@ -155,6 +155,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         "x": bool(eigenvalues and eigenvalues.get("x")),
         "y": bool(eigenvalues and eigenvalues.get("y")),
     }
+    wave_speed_provider = getattr(module, "wave_speed_provider_kind", None)
     capabilities_provider = getattr(module, "capabilities", None)
     raw_capabilities = capabilities_provider() if callable(capabilities_provider) else {}
     if not isinstance(raw_capabilities, Mapping):
@@ -172,6 +173,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         aux=aux,
         provider_pack=provider_pack,
         has_eigenvalues=has_eigenvalues,
+        wave_speed_provider=wave_speed_provider,
         operators=operators,
         capabilities=capabilities,
         native_routes=routes,

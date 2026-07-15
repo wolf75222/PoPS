@@ -23,7 +23,9 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+_WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
 _PARAM_ROW_KEYS = {
     "schema_version",
@@ -118,6 +120,7 @@ class ModuleManifest:
         "aux",
         "provider_pack",
         "has_eigenvalues",
+        "wave_speed_provider",
         "operators",
         "capabilities",
         "native_routes",
@@ -137,6 +140,7 @@ class ModuleManifest:
         aux: Any,
         provider_pack: Any,
         has_eigenvalues: Any,
+        wave_speed_provider: Any,
         operators: Any,
         capabilities: Any,
         native_routes: Any,
@@ -163,6 +167,11 @@ class ModuleManifest:
         _validate_declaration_rows(params, owner=owner, kind="parameter", where="module params")
         _validate_declaration_rows(aux, owner=owner, kind="aux", where="module aux")
         provider_pack = ProviderPack.from_data(provider_pack).to_data()
+        if wave_speed_provider is not None and wave_speed_provider not in _WAVE_SPEED_PROVIDERS:
+            raise ValueError(
+                "ModuleManifest wave_speed_provider %r must be None or one of %s"
+                % (wave_speed_provider, ", ".join(sorted(_WAVE_SPEED_PROVIDERS)))
+            )
         object.__setattr__(self, "schema_version", SCHEMA_VERSION)
         object.__setattr__(self, "name", name)
         object.__setattr__(
@@ -175,6 +184,7 @@ class ModuleManifest:
             ("aux", aux),
             ("provider_pack", provider_pack),
             ("has_eigenvalues", has_eigenvalues),
+            ("wave_speed_provider", wave_speed_provider),
             ("capabilities", capabilities),
             ("native_routes", native_routes),
             ("native_catalog", native_catalog),
@@ -209,6 +219,7 @@ class ModuleManifest:
             aux=_thaw_json(self.aux),
             provider_pack=_thaw_json(self.provider_pack),
             has_eigenvalues=_thaw_json(self.has_eigenvalues),
+            wave_speed_provider=_thaw_json(self.wave_speed_provider),
             operators=self.operators,
             capabilities=_thaw_json(self.capabilities),
             native_routes=_thaw_json(self.native_routes),
@@ -229,6 +240,7 @@ class ModuleManifest:
             "aux": _thaw_json(self.aux),
             "provider_pack": _thaw_json(self.provider_pack),
             "has_eigenvalues": _thaw_json(self.has_eigenvalues),
+            "wave_speed_provider": _thaw_json(self.wave_speed_provider),
             "operators": self.operators.to_dict(),
             "operator_aliases": self.operators.aliases(),
             "capabilities": _thaw_json(self.capabilities),
@@ -250,6 +262,7 @@ class ModuleManifest:
             "aux",
             "provider_pack",
             "has_eigenvalues",
+            "wave_speed_provider",
             "operators",
             "operator_aliases",
             "capabilities",
@@ -279,6 +292,7 @@ class ModuleManifest:
             aux=row["aux"],
             provider_pack=row["provider_pack"],
             has_eigenvalues=row["has_eigenvalues"],
+            wave_speed_provider=row["wave_speed_provider"],
             operators=operators,
             capabilities=row["capabilities"],
             native_routes=row["native_routes"],

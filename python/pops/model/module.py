@@ -46,6 +46,10 @@ class Module(ModuleFreezable):
         # eigenvalues, or None (set via eigenvalues()). Carried so a pure Module is self-contained;
         # lowered to dsl.Model.eigenvalues by compile_problem.
         self._eigenvalues = None
+        # Canonical detached source of the signed pair consumed by HLL.  This is metadata, not a
+        # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
+        # deliberately absent from this model-source vocabulary.
+        self._wave_speed_provider = None
         # The canonical model owner is content-addressed by the complete definition. module_hash()
         # deliberately excludes OwnerPath/Handle identities, so this provider cannot recurse into
         # the identity it stabilizes. It supersedes OperatorRegistry's standalone fallback.
@@ -273,6 +277,34 @@ class Module(ModuleFreezable):
         # An inspection result is deliberately detached.  Mutating a value returned during
         # authoring must never rewrite the Module behind its public setter.
         return {"x": list(x_values), "y": list(y_values)}
+
+    def set_wave_speed_provider(self, kind: Any) -> str:
+        """Record the one detached source kind that emits signed wave speeds.
+
+        The operator-first manifest must retain this provenance after the physics facade and its
+        live authoring graph have been discarded.  Only model sources belong here; Riemann-side
+        estimates such as Einfeldt and Davis are numerical descriptors.
+        """
+        self._guard_mutable("declare the wave-speed provider")
+        allowed = ("explicit_pair", "jacobian", "pressure_derived")
+        if kind not in allowed:
+            raise ValueError(
+                "wave-speed provider kind %r must be one of %s"
+                % (kind, ", ".join(allowed))
+            )
+        current = self._wave_speed_provider
+        if current is not None and current != kind:
+            raise ValueError(
+                "Module %r already declares wave-speed provider %r; a model has one source"
+                % (self.name, current)
+            )
+        self._wave_speed_provider = kind
+        return kind
+
+    @property
+    def wave_speed_provider_kind(self) -> str | None:
+        """Detached signed-wave source recorded by this module, if any."""
+        return self._wave_speed_provider
 
     def adopt_registry(self, registry: Any) -> Any:
         """Use ``registry`` as this Module's operator registry (the dsl.Model facade adopts

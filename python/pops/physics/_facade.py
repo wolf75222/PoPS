@@ -61,7 +61,9 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
 
     def primitive(self, name: Any, expr: Any) -> Any:
         """Defines a primitive by its formula (as a function of the cons / preceding primitives)."""
-        return self._m.primitive(name, expr)
+        value = self._m.primitive(name, expr)
+        self._invalidate_authoring_views()
+        return value
 
     def primitive_vars(self, *vars: Any, roles: Any = None, **named: Any) -> Any:
         """Declare primitives and their order, from expressions in kwargs or positional names.
@@ -146,6 +148,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         eigenvalues is not declared, max_wave_speed (Rusanov / CFL) derives from ``max(|smin|, |smax|)``.
         Delegates to set_wave_speeds; cf. HyperbolicModel.set_wave_speeds."""
         self._m.set_wave_speeds(x, y)
+        self._invalidate_authoring_views()
 
     def wave_speeds_from_jacobian(self, x: Any = None, y: Any = None, eig: str = "numeric",
                                   blocks: Any = None, fd_eps: Any = None,
@@ -162,6 +165,7 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         participate in the compile cache key when set)."""
         self._m.set_wave_speeds_from_jacobian(x=x, y=y, eig=eig, blocks=blocks, fd_eps=fd_eps,
                                               eig_max_iter=eig_max_iter, im_tol=im_tol)
+        self._invalidate_authoring_views()
 
     def eval_wave_speeds(self, U: Any, aux: Any, dir: Any) -> Any:
         """numpy EVALUATOR of the emitted signed speeds (smin, smax) (delegates to
@@ -482,6 +486,12 @@ class Model(PhysicsFreezable, _FacadeCompileMixin):
         # parallel authority with merely equal-looking IDs.
         mod._param_registry = self._param_registry
         mod.adopt_registry(self._m.operator_registry())
+        if self._m._wave_speeds is not None:
+            mod.set_wave_speed_provider("explicit_pair")
+        elif self._m._ws_jacobian is not None:
+            mod.set_wave_speed_provider("jacobian")
+        elif "p" in self._m.prim_defs:
+            mod.set_wave_speed_provider("pressure_derived")
         self._module_cache = mod
         return mod
     # --- operator introspection (Spec 2, S2-5) ---

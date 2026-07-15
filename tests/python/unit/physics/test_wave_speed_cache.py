@@ -151,13 +151,13 @@ chk("wave_speed_cache" in msg and ("cutcell" in msg or "staircase" in msg),
 print("== (6) garde backend compile : cache + add_equation(modele .so) -> erreur ==")
 # Le cache n'est cable que sur le chemin natif compose (add_block). Le package de production ne
 # transporte pas le flag : il serait ignore en silence. On verifie le rejet avant le dlopen.
-from pops.codegen.loader import CompiledModel
+from pops.codegen.loader import CompiledModel  # noqa: E402
 
 fake = CompiledModel(so_path="/inexistant.so", backend="production",
                      cons_names=["rho"], cons_roles=["Density"], prim_names=["rho"],
                      n_vars=1, gamma=None, n_aux=0, params={}, caps={}, abi_key="k",
-                     model_hash="h", cxx="c++", std="c++20")
-fake.has_wave_speeds = True
+                     model_hash="h", cxx="c++", std="c++20", wave_speeds=True,
+                     wave_speed_provider="explicit_pair")
 
 def add_eq_cache():
     s = System(n=16, L=1.0, periodic=True)

@@ -17,6 +17,7 @@ _SEQUENCE_FIELDS = (
 _SCALAR_FIELDS = (
     "has_hllc", "has_roe", "has_wave_speeds", "so_path", "backend", "target",
     "n_vars", "gamma", "n_aux", "abi_key", "model_hash", "cxx", "std",
+    "wave_speed_provider",
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",
@@ -62,6 +63,17 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
                 "CompiledModel.%s contains non-data value %s" % (name, type(value).__name__))
     for name in _SEQUENCE_FIELDS:
         _string_tuple(_core_value(compiled, name), name)
+    has_wave_speeds = _core_value(compiled, "has_wave_speeds")
+    wave_speed_provider = _core_value(compiled, "wave_speed_provider")
+    allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
+    if has_wave_speeds and wave_speed_provider not in allowed_wave_speed_providers:
+        raise ValueError(
+            "CompiledModel with wave speeds requires an exact detached wave_speed_provider"
+        )
+    if not has_wave_speeds and wave_speed_provider is not None:
+        raise ValueError(
+            "CompiledModel without wave speeds cannot retain wave_speed_provider"
+        )
     _data_mapping(_core_value(compiled, "caps"), where="caps")
     identity = _core_value(compiled, "definition_identity")
     if identity is not None:

@@ -240,7 +240,7 @@ def test_derived_contract_is_explicit_and_manifest_is_lossless():
 
     manifest = module.manifest()
     row = manifest.to_dict()["params"]["alpha2"]
-    assert manifest.schema_version == 6
+    assert manifest.schema_version == 7
     assert row["kind"] == "derived"
     assert row["depends_on"] == [{"name": "alpha", "param_kind": "runtime"}]
     assert row["phase"] == "per_block"
