@@ -77,7 +77,7 @@ testable = false
 [docs."docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md"]
 owner = "Romain"
 mode = "warning"
-reviewed = "bab1466186ecc81d3e57f5ebc1caffa43ea28387"
+reviewed = "a3e5c91658ee22712212f22c735d38d9b37d325a"
 depends_on = [
   "python/pops/__init__.py",
   "python/pops/_api.py",
