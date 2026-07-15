@@ -321,7 +321,9 @@ jobs:
       # Cle exacte unique par tentative : cache/save peut persister le travail partiel d'un shard
       # apres echec/annulation. Les restore prefixes restent limites au MEME shard (PR puis master) ;
       # aucun fallback vers l'ancien cache monolithique de 1.3 Go, qui serait duplique six fois.
-      CCACHE_CACHE_KEY: ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # `runner.*` is unavailable in job-level env expressions. Keep the portable suffix here and
+      # add the runner OS only at the cache steps, where that context is authenticated by Actions.
+      CCACHE_CACHE_KEY: kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Prefixe FIXE ou Kokkos est installe par l'action composite (meme chemin que kokkos-prefix) ;
       # mis en cache (le gros gain : pas de reconstruction de Kokkos a chaque run). Serial, PIC.
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
@@ -392,7 +394,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_CACHE_KEY }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
             ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-
             ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-refs/heads/master-
@@ -455,7 +457,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ env.CCACHE_CACHE_KEY }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
   # Check historique stable pour la branch protection et l'agregateur global. Le resultat d'un
   # job matrix est agrege par GitHub : un seul shard en echec/timeout/annulation fait echouer ce
@@ -924,7 +926,9 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale,time_macros
       COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
-      COMPILE_CACHE_TMP: ${{ runner.temp }}/pops-compile-cache-test
+      # `runner.temp` is likewise a step-only context. A workspace-local, ignored test temporary is
+      # deterministic and remains available to the failure-artifact upload steps.
+      COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test
 
     steps:
       - uses: actions/checkout@v7
@@ -1119,7 +1123,7 @@ jobs:
       - name: Build + install Kokkos (Serial, PIC)
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos
+          git clone --depth 1 -b "${KOKKOS_VERSION}" https://github.com/kokkos/kokkos.git /tmp/kokkos
           test "$(git -C /tmp/kokkos rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos -B /tmp/kbuild -G Ninja -DKokkos_ENABLE_SERIAL=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
@@ -1274,7 +1278,7 @@ jobs:
         # Kokkos_ENABLE_OPENMP=ON : l'exec space par defaut devient OpenMP.
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
+          git clone --depth 1 -b "${KOKKOS_VERSION}" https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
           test "$(git -C /tmp/kokkos-omp rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos-omp -B /tmp/kbuild-omp -G Ninja -DKokkos_ENABLE_OPENMP=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \

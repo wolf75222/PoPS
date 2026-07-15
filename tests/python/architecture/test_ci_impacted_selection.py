@@ -460,6 +460,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     for block in (python_build_block, python_shards_block, python_cache_block):
         assert "if: needs.set-mode.outputs.python_required == 'true'" in block
 
+    # GitHub rejects `runner.*` in a job-level `env` mapping before creating any job.  Keep the
+    # runner-specific cache prefix at step scope and the compile-cache temporary workspace-owned.
+    assert "CCACHE_CACHE_KEY: ccache-${{ runner.os }}" not in workflow
+    assert "COMPILE_CACHE_TMP: ${{ runner.temp }}" not in workflow
+    assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in workflow
+    assert "COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test" in workflow
+
 
 def test_ci_control_plane_inputs_force_full_functional_selection():
     selector = _load("ci_select_tests")
