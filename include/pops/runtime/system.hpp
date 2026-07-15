@@ -326,10 +326,12 @@ class System {
                    int bottom_sweeps = kMGDefaultBottomSweeps,
                    int coarse_threshold = kMGDefaultCoarseThreshold);
 
-  /// Install one fully resolved field solver route keyed by the digest of its complete
-  /// block-qualified provider identity. The canonical identity is carried alongside the digest
-  /// so collisions are rejected and manifests/restarts remain auditable.
+  /// Install one fully resolved field solver route keyed by the digest of its block-qualified
+  /// provider identity. ``plan_identity`` independently commits the complete resolved semantics.
+  /// Before any named backend is materialized, the canonical ordered (slot, plan_identity) registry
+  /// must agree exactly on every MPI rank. Duplicate slots are refused, including exact repeats.
   void set_field_solver_plan(const std::string& provider_slot,
+                             const std::string& plan_identity,
                              const std::string& provider_identity,
                              const std::string& output_owner_identity,
                              const std::string& output_block,

@@ -274,6 +274,7 @@ class SystemFieldSolver {
   // exactly like assemble_poisson_rhs but reading the named closures.
   struct FieldSolveConfig {
     std::string provider_identity;
+    std::string plan_identity;
     std::string output_owner_identity;
     std::string output_block;
     std::string output_key;
@@ -469,6 +470,27 @@ class SystemFieldSolver {
   std::map<std::string, std::shared_ptr<runtime::field::PreparedFieldSolverComponent>>
       external_field_components_;
 
+  /// Invalidate the collective witness after a new plan is added while the low-level C++ facade is
+  /// still assembling.  Python normally validates once in System::mark_bound; the lazy-backend guard
+  /// below also covers direct C++ users that intentionally never bind.
+  void invalidate_field_plan_consensus() { field_plan_consensus_verified_ = false; }
+
+  /// Require exact rank agreement over the complete canonical field-plan registry.  std::map gives
+  /// insertion-order-independent ordering, and the collective helper agrees every pair/component
+  /// length before touching bytes, so missing plans cannot strand another rank in a payload call.
+  void require_field_plan_consensus() {
+    if (field_plan_consensus_verified_)
+      return;
+    std::vector<std::pair<std::string_view, std::string_view>> identities;
+    identities.reserve(named_field_plans_.size());
+    for (const auto& [slot, plan] : named_field_plans_)
+      identities.emplace_back(slot, plan.plan_identity);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(identities))
+      throw std::runtime_error(
+          "System: ordered resolved field plans differ across MPI ranks");
+    field_plan_consensus_verified_ = true;
+  }
+
   std::vector<std::string> provider_slots() const {
     std::vector<std::string> result;
     result.reserve(named_fields_.size());
@@ -478,6 +500,7 @@ class SystemFieldSolver {
   }
 
   MultiFab& provider_potential(const std::string& slot) {
+    require_field_plan_consensus();
     auto found = named_fields_.find(slot);
     if (found == named_fields_.end())
       throw std::runtime_error("System: unknown qualified field provider slot '" + slot + "'");
@@ -1380,6 +1403,7 @@ class SystemFieldSolver {
   /// only on GeometricMG. Built lazily; no-op if already built.
   void ensure_named_backend(NamedField& nf, const std::string& slot) {
     if (nf.backend) return;
+    require_field_plan_consensus();
     if (nf.plan.solver == "external_component_v1") {
       if (nf.plan.has_reaction)
         throw std::runtime_error(
@@ -1485,6 +1509,7 @@ class SystemFieldSolver {
   /// a future extension); @throws on the polar geometry or an unknown field.
   SolveReport solve_named_field_from_state(const std::string& field, int block_idx,
                                            const MultiFab& U_stage) {
+    require_field_plan_consensus();
     if (block_idx < 0 || block_idx >= static_cast<int>(owner_->sp.size()))
       throw std::out_of_range("solve_fields_from_state (named): block index " +
                               std::to_string(block_idx) + " out of range (" +
@@ -1570,6 +1595,7 @@ class SystemFieldSolver {
 
  private:
   Impl* owner_;
+  bool field_plan_consensus_verified_ = false;
 };
 
 }  // namespace field_solver

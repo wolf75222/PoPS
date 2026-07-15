@@ -313,8 +313,8 @@ class AMR(MeshDescriptor):
         hierarchy = data["hierarchy"]
         levels = hierarchy.get("max_levels")
         ratios = hierarchy.get("ratios")
-        if isinstance(levels, bool) or not isinstance(levels, int) or levels < 2:
-            raise ValueError("AMR hierarchy requires at least one coarse/fine transition")
+        if isinstance(levels, bool) or not isinstance(levels, int) or levels < 1:
+            raise ValueError("AMR hierarchy requires at least one level")
         if not isinstance(ratios, list) or len(ratios) != levels - 1 or any(
                 isinstance(ratio, bool) or not isinstance(ratio, int) or ratio < 2
                 for ratio in ratios):

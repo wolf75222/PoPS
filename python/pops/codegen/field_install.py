@@ -4,9 +4,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import math
-from types import MappingProxyType
 from typing import Any
 
+from pops.codegen._artifact_freeze import freeze_artifact_value
 from pops.codegen.lowering_coverage import (
     LoweringCoverageReport,
     LoweringCoverageRow,
@@ -41,6 +41,17 @@ def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: st
 
 def _zero(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+
+
+def _native_plain_data(value: Any) -> Any:
+    """Detach a recursively frozen native carrier into canonical ordinary containers."""
+    if isinstance(value, Mapping):
+        return {key: _native_plain_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_native_plain_data(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted((_native_plain_data(item) for item in value), key=repr)
+    return value
 
 
 def _validate_reaction_manifest(reaction: Any) -> None:
@@ -78,6 +89,129 @@ def _validate_reaction_manifest(reaction: Any) -> None:
     raise ValueError("field reaction plan carries unknown kind %r" % kind)
 
 
+_MG_OPTION_KEYS = {
+    "schema_version", "kind", "rel_tol", "abs_tol", "max_cycles", "min_coarse",
+    "pre_smooth", "post_smooth", "bottom_sweeps", "coarse_threshold",
+}
+_MG_OPTION_KINDS = frozenset(("geometric_mg_options", "external_field_solver_options"))
+_BUILTIN_FIELD_SOLVER_ROUTES = {
+    "system": frozenset(("geometric_mg", "fft", "fft_spectral")),
+    "amr_system": frozenset(("geometric_mg",)),
+}
+
+
+def _validate_mg_options(options: Any) -> None:
+    """Validate the closed native solver-control POD captured once at field resolve."""
+    if not isinstance(options, Mapping) or set(options) != _MG_OPTION_KEYS \
+            or type(options.get("schema_version")) is not int \
+            or options["schema_version"] != 1 \
+            or type(options.get("kind")) is not str \
+            or options["kind"] not in _MG_OPTION_KINDS:
+        raise TypeError("field MG options must be one closed schema-v1 native carrier")
+    from pops.solvers._numeric import native_float
+    rel_tol = native_float(options["rel_tol"], where="field MG relative tolerance")
+    if options["kind"] == "geometric_mg_options":
+        if rel_tol <= 0.0:
+            raise ValueError("field MG relative tolerance must be strictly positive")
+    elif rel_tol < 0.0:
+        raise ValueError("external field solver relative tolerance must be nonnegative")
+    if native_float(options["abs_tol"], where="field MG absolute tolerance") < 0.0:
+        raise ValueError("field MG absolute tolerance must be nonnegative")
+    for name in ("max_cycles", "min_coarse"):
+        value = options[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("field MG option %s must be a positive int" % name)
+    for name in ("pre_smooth", "post_smooth", "bottom_sweeps", "coarse_threshold"):
+        value = options[name]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("field MG option %s must be a nonnegative int" % name)
+
+
+def _external_solver_native_options(request: Any) -> dict[str, Any]:
+    """Resolve ExternalFieldSolver controls into the complete native setter POD once."""
+    expected = {"relative_tolerance", "absolute_tolerance", "max_iterations"}
+    if not isinstance(request, Mapping) or set(request) != expected:
+        raise TypeError("external field solver request has an invalid schema")
+    from pops.solvers.elliptic._descriptor import native_geometric_mg_defaults
+    options = native_geometric_mg_defaults()
+    options.update({
+        "kind": "external_field_solver_options",
+        "rel_tol": request["relative_tolerance"],
+        "abs_tol": request["absolute_tolerance"],
+        "max_cycles": request["max_iterations"],
+    })
+    _validate_mg_options(options)
+    return options
+
+
+_FAC_OPTION_KEYS = {
+    "schema_version", "kind", "max_iters", "fine_sweeps", "rel_tol", "abs_tol",
+    "coarse_rel_tol", "coarse_abs_tol", "coarse_cycles", "verbose",
+}
+
+
+def _validate_fac_options(options: Any) -> None:
+    """Validate the closed optional CompositeFAC carrier retained through compile/bind."""
+    if options is None:
+        return
+    if not isinstance(options, Mapping) or set(options) != _FAC_OPTION_KEYS \
+            or type(options.get("schema_version")) is not int \
+            or options["schema_version"] != 1 \
+            or type(options.get("kind")) is not str \
+            or options["kind"] != "composite_fac":
+        raise TypeError("field FAC options must be one schema-v1 composite_fac mapping or None")
+    for name in ("max_iters", "fine_sweeps", "coarse_cycles"):
+        value = options[name]
+        if value is not None and (
+                isinstance(value, bool) or not isinstance(value, int) or value < 1):
+            raise ValueError("field FAC option %s must be a positive int or None" % name)
+    from pops.solvers._numeric import native_float
+    for name in ("rel_tol", "coarse_rel_tol"):
+        value = options[name]
+        if value is not None:
+            lowered = native_float(value, where="field FAC option %s" % name)
+            if not 0.0 < lowered < 1.0:
+                raise ValueError("field FAC option %s must be in (0, 1)" % name)
+    for name in ("abs_tol", "coarse_abs_tol"):
+        value = options[name]
+        if value is not None and native_float(
+                value, where="field FAC option %s" % name) < 0.0:
+            raise ValueError("field FAC option %s must be nonnegative" % name)
+    if not isinstance(options["verbose"], bool):
+        raise TypeError("field FAC option verbose must be bool")
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedNativeHierarchy:
+    """Small result of the open ``FieldHierarchyPolicy.resolve`` protocol."""
+
+    mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeFieldSolveCapabilities:
+    """Backend evidence consumed through ``FieldHierarchyPolicy.resolve``.
+
+    The richer public ``FieldSolveCapabilities`` also owns a model Handle.  Field installation has
+    no such authoring handle, so this adapter deliberately implements only its open
+    ``resolve_hierarchy`` protocol instead of decoding policy strings itself.
+    """
+
+    layout_mode: str
+    hierarchy_modes: tuple[str, ...]
+
+    def resolve_hierarchy(self, requested: str) -> _ResolvedNativeHierarchy:
+        if not isinstance(requested, str):
+            raise TypeError("field hierarchy policy must resolve from a string identity")
+        mode = self.layout_mode if requested == "infer_from_layout" else requested
+        if mode not in ("composite", "level_local"):
+            raise ValueError("unknown field hierarchy policy %r" % requested)
+        if mode not in self.hierarchy_modes:
+            raise ValueError(
+                "field hierarchy %r is unsupported by this native target" % mode)
+        return _ResolvedNativeHierarchy(mode)
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedFieldInstallPlan:
     """Complete field semantics plus their exact native lowering."""
@@ -108,6 +242,39 @@ class ResolvedFieldInstallPlan:
             raise TypeError("field install requires canonical field-operator RHS providers")
         if not isinstance(self.coverage, LoweringCoverageReport):
             raise TypeError("field install requires exact lowering coverage")
+        if not isinstance(self.native_options, Mapping):
+            raise TypeError("resolved field install native_options must be a mapping")
+        _validate_mg_options(self.native_options.get("mg_options"))
+        provider = self.native_options.get("solver_provider")
+        if not isinstance(provider, Mapping):
+            raise TypeError("resolved field install requires a typed solver provider")
+        provider_kind = provider.get("provider_kind")
+        if provider_kind == "builtin_v1":
+            solver = provider.get("solver")
+            route = solver.get("route") if isinstance(solver, Mapping) else None
+            if route not in _BUILTIN_FIELD_SOLVER_ROUTES[self.target]:
+                raise ValueError(
+                    "resolved field install carries a builtin solver route unsupported by %s"
+                    % self.target)
+            if self.native_options["mg_options"]["kind"] != "geometric_mg_options":
+                raise ValueError("builtin field solver requires geometric_mg_options carrier")
+        elif provider_kind == "external_component_v1":
+            route = "external_component_v1"
+            if self.target != "system":
+                raise ValueError("external field solver is unavailable on AMR")
+            if self.native_options["mg_options"]["kind"] != "external_field_solver_options":
+                raise ValueError("external field solver requires its exact native controls")
+        else:
+            raise ValueError("resolved field install carries an unknown solver provider kind")
+        fac_options = self.native_options.get("fac_options")
+        _validate_fac_options(fac_options)
+        if fac_options is not None and (
+                self.target != "amr_system"
+                or provider_kind != "builtin_v1"
+                or route != "geometric_mg"
+                or self.native_options.get("hierarchy") != "composite"):
+            raise ValueError(
+                "CompositeFAC requires builtin geometric_mg on a composite AMR hierarchy")
         nonlinear_manifest = self.native_options.get("nonlinear")
         if nonlinear_manifest is None:
             if self.nonlinear_provider is not None:
@@ -122,7 +289,8 @@ class ResolvedFieldInstallPlan:
             if to_data() != nonlinear_manifest:
                 raise ValueError("field nonlinear provider disagrees with its canonical manifest")
         _validate_reaction_manifest(self.native_options.get("reaction"))
-        object.__setattr__(self, "native_options", MappingProxyType(dict(self.native_options)))
+        object.__setattr__(
+            self, "native_options", freeze_artifact_value(dict(self.native_options)))
         expected = field_identity("resolved-field-install", self.to_data(include_identity=False))
         if self.identity != expected:
             raise ValueError("resolved field install identity is not canonical")
@@ -137,11 +305,18 @@ class ResolvedFieldInstallPlan:
             "target": self.target,
             "rhs_providers": [provider.canonical_identity()
                               for provider in self.rhs_providers],
-            "native_options": dict(self.native_options),
+            "native_options": self.native_install_data(),
             "coverage": self.coverage.to_data(),
         }
         if include_identity:
             data["identity"] = self.identity.token
+        return data
+
+    def native_install_data(self) -> dict[str, Any]:
+        """Return one detached ordinary-container copy for the Python/native ABI boundary."""
+        data = _native_plain_data(self.native_options)
+        if not isinstance(data, dict):  # defensive: the frozen root is validated as a Mapping.
+            raise TypeError("resolved field native install data must be a dict")
         return data
 
     def boundary_parameter_handles(self) -> tuple[Any, ...]:
@@ -467,6 +642,7 @@ def resolve_field_install_plan(
     boundary_iterate_dependent = boundary_faces is not None and any(
         face["iterate_dependent"] for face in boundary_faces)
     solver_source = "field:%s:solver" % name
+    fac_source = "field:%s:fac-options" % name
     solver_adapter = getattr(plan.solver, "lower_field_solver", None)
     if not callable(solver_adapter):
         _reject(rows, solver_source, "field.solver.not_native",
@@ -479,6 +655,16 @@ def resolve_field_install_plan(
     if not isinstance(solver_options, dict):
         _reject(rows, solver_source, "field.solver.invalid_adapter",
                 "field %r solver returned an invalid native lowering" % name)
+    solver_options = dict(solver_options)
+    mg_options = solver_options.pop("mg_options", None)
+    fac_options = solver_options.pop("fac_options", None)
+    try:
+        _validate_fac_options(fac_options)
+    except (TypeError, ValueError) as exc:
+        _reject(rows, fac_source, "field.solver.invalid_fac_options", str(exc))
+    if target != "amr_system" and fac_options is not None:
+        _reject(rows, fac_source, "field.solver.fac_requires_amr",
+                "field %r configures CompositeFAC outside an AMR target" % name)
     provider_kind = solver_options.get("provider_kind")
     topology_identity = field_identity(
         "resolved-field-topology", resolved_topology_recipe).token
@@ -489,6 +675,17 @@ def resolve_field_install_plan(
         if set(solver_options) != expected_keys:
             _reject(rows, solver_source, "field.solver.invalid_external_provider",
                     "field %r external solver returned an incomplete provider pack" % name)
+        try:
+            expected_mg_options = _external_solver_native_options(solver_options["request"])
+            if mg_options is None:
+                mg_options = expected_mg_options
+            else:
+                _validate_mg_options(mg_options)
+                if dict(mg_options) != expected_mg_options:
+                    raise ValueError(
+                        "external field solver native controls disagree with its request")
+        except (TypeError, ValueError) as exc:
+            _reject(rows, solver_source, "field.solver.invalid_mg_options", str(exc))
         solver_provider = {
             **solver_options,
             "topology_recipe_identity": topology_identity,
@@ -506,6 +703,19 @@ def resolve_field_install_plan(
         if not isinstance(solver_token, str) or not solver_token:
             _reject(rows, solver_source, "field.solver.invalid_adapter",
                     "field %r solver returned an invalid builtin provider" % name)
+        if solver_token not in _BUILTIN_FIELD_SOLVER_ROUTES[target]:
+            _reject(
+                rows, solver_source, "field.solver.route_unavailable",
+                "field %r selects builtin solver %r, but target %s can install only %s"
+                % (name, solver_token, target,
+                   sorted(_BUILTIN_FIELD_SOLVER_ROUTES[target])),
+            )
+        try:
+            _validate_mg_options(mg_options)
+            if mg_options["kind"] != "geometric_mg_options":
+                raise ValueError("builtin field solver requires geometric_mg_options carrier")
+        except (TypeError, ValueError) as exc:
+            _reject(rows, solver_source, "field.solver.invalid_mg_options", str(exc))
         solver_provider = {
             "schema_version": 1,
             "provider_kind": "builtin_v1",
@@ -522,6 +732,9 @@ def resolve_field_install_plan(
             "topology_recipe_identity": topology_identity,
         }
         solver_label = solver_token
+    rows.append(LoweringCoverageRow(
+        "field:%s:mg-options" % name, "lowered",
+        ("field-install:%s:mg-options" % name,)))
     if reaction_options is not None:
         if provider_kind == "external_component_v1":
             _reject(rows, solver_source, "field.solver.external_screened_protocol_unavailable",
@@ -632,24 +845,60 @@ def resolve_field_install_plan(
         "field:%s:gauge" % name, "lowered" if gauge != "none" else "documentary",
         (() if gauge == "none" else ("field-install:%s:gauge:mean-zero" % name,))))
 
-    policy = plan.hierarchy_policy.options()["policy"]
-    if target == "system":
-        if policy == "composite":
-            _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.unsupported",
-                    "uniform System cannot lower CompositeHierarchySolve")
-        hierarchy = "level_local"
+    if target == "amr_system":
+        hierarchy_modes = (
+            ("composite", "level_local")
+            if layout_contract.levels == 1
+            else ("composite",)
+        )
+        layout_mode = "composite"
     else:
-        hierarchy = "composite" if policy in ("infer_from_layout", "composite") else "level_local"
-    if target == "amr_system" and hierarchy == "level_local" \
-            and layout_contract.levels > 1:
-        _reject(rows, "field:%s:hierarchy" % name,
-                "field.hierarchy.level_local_partial_topology_not_native",
-                "field %r requests level-local solves on a refined partial BoxArray; the native "
-                "field residual has no coarse/fine boundary closure or per-patch connected-component "
-                "basis for that route (use CompositeHierarchySolve)" % name)
+        hierarchy_modes = ("level_local",)
+        layout_mode = "level_local"
+    hierarchy_capabilities = _NativeFieldSolveCapabilities(
+        layout_mode=layout_mode,
+        hierarchy_modes=hierarchy_modes,
+    )
+    hierarchy_resolver = getattr(plan.hierarchy_policy, "resolve", None)
+    if not callable(hierarchy_resolver):
+        _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.invalid_policy",
+                "field %r hierarchy policy does not implement resolve(capabilities)" % name)
+    try:
+        resolved_hierarchy = hierarchy_resolver(hierarchy_capabilities)
+    except (TypeError, ValueError) as exc:
+        _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.unsupported", str(exc))
+    if type(resolved_hierarchy) is not _ResolvedNativeHierarchy:
+        _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.invalid_resolution",
+                "field %r hierarchy policy returned a foreign resolution" % name)
+    hierarchy = resolved_hierarchy.mode
+    policy_options = plan.hierarchy_policy.options()
+    policy = policy_options.get("policy") if isinstance(policy_options, Mapping) else None
+    if not isinstance(policy, str):
+        _reject(rows, "field:%s:hierarchy" % name, "field.hierarchy.invalid_policy",
+                "field %r hierarchy policy has no typed policy identity" % name)
+    if fac_options is not None and (
+            target != "amr_system"
+            or solver_provider["provider_kind"] != "builtin_v1"
+            or solver_provider["solver"]["route"] != "geometric_mg"
+            or hierarchy != "composite"
+            or layout_contract.levels < 2):
+        _reject(
+            rows, fac_source, "field.solver.fac_backend_unavailable",
+            "field %r configures CompositeFAC without a builtin geometric_mg composite "
+            "multi-level AMR backend" % name,
+        )
     rows.append(LoweringCoverageRow(
         "field:%s:hierarchy" % name, "derived", rule=(
             "%s + target=%s resolves to %s" % (policy, target, hierarchy))))
+    if target == "amr_system":
+        if fac_options is None:
+            rows.append(LoweringCoverageRow(
+                fac_source, "derived",
+                rule="None resolves to native CompositeFacOptions defaults"))
+        else:
+            rows.append(LoweringCoverageRow(
+                fac_source, "lowered",
+                ("field-install:%s:fac-options" % name,)))
 
     output_owner = operator.unknown.block_ref.local_id
     rows.append(LoweringCoverageRow(
@@ -680,6 +929,8 @@ def resolve_field_install_plan(
         "solver_provider": solver_provider,
         "method": method_options,
         "solver_capabilities": solver_options,
+        "mg_options": mg_options,
+        "fac_options": fac_options,
         "reaction": reaction_options,
         "nonlinear": nonlinear_options,
         "bc": bc,

@@ -105,6 +105,17 @@ def _removed_amr_authorities() -> tuple[str, ...]:
     )
 
 
+def _retired_bind_patterns() -> tuple[tuple[str, re.Pattern[str]], ...]:
+    # Compose retired public spellings so this fence cannot itself become a search hit.
+    bind = "pops" + r"\.bind"
+    return (
+        ("solver bind input", re.compile(bind + r"\s*\([^)]*\bsolvers\s*=", re.DOTALL)),
+        ("state bind alias", re.compile(bind + r"\s*\([^)]*\bstate\s*=", re.DOTALL)),
+        ("uniform install API", re.compile("Sys" + r"tem\.install\s*\(")),
+        ("AMR install API", re.compile("Amr" + r"System\.install\s*\(")),
+    )
+
+
 def test_retired_root_and_runtime_exports_are_absent() -> None:
     from pops import runtime
 
@@ -128,6 +139,66 @@ def test_removed_public_modules_do_not_exist() -> None:
         assert not (PACKAGE / relative).exists()
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("pops.mesh.cartesian")
+
+
+def test_final_bind_surface_has_no_retired_solver_or_install_contract() -> None:
+    from pops.codegen.inspect_compiled import Arguments
+    from pops.runtime._amr_system_install import _AmrSystemInstall
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from pops.runtime._system_unified_install import _SystemUnifiedInstall
+
+    public_parameters = inspect.signature(pops.bind).parameters
+    assert "initial_state" in public_parameters
+    assert "state" not in public_parameters
+    assert "solvers" not in public_parameters
+
+    for callable_ in (
+        Arguments.__init__, BoundSnapshot.__init__,
+        _SystemUnifiedInstall._install_compiled, _AmrSystemInstall._install_compiled,
+    ):
+        parameters = inspect.signature(callable_).parameters
+        assert "solvers" not in parameters
+    assert "field_plans" in inspect.signature(BoundSnapshot.__init__).parameters
+    assert not hasattr(_SystemUnifiedInstall, "_install_solver")
+    assert not hasattr(_AmrSystemInstall, "_install_solver")
+
+    arguments = Arguments(
+        instances={}, params={}, aux={}, outputs={}, layout_runtime={})
+    assert "solvers" not in arguments.to_dict()
+
+    for path in (
+        PACKAGE / "codegen" / "_inspect_compiled_report.py",
+        PACKAGE / "external" / "artifact_manifest.py",
+    ):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        assert any(
+            (isinstance(node, ast.Attribute) and node.attr == "field_plans")
+            or (isinstance(node, ast.Constant) and node.value == "field_plans")
+            for node in ast.walk(tree)
+        ), "%s must inspect resolved field plans" % path.relative_to(ROOT)
+
+    boundary_files = (
+        PACKAGE / "codegen" / "inspect_compiled.py",
+        PACKAGE / "codegen" / "inspect_report.py",
+        PACKAGE / "codegen" / "_inspect_compiled_report.py",
+        PACKAGE / "codegen" / "loader.py",
+        PACKAGE / "codegen" / "_loader_model.py",
+        PACKAGE / "external" / "artifact_manifest.py",
+        PACKAGE / "physics" / "_facade_compile.py",
+        PACKAGE / "runtime" / "_bind_validation.py",
+        PACKAGE / "runtime" / "_bound_snapshot.py",
+        PACKAGE / "runtime" / "inspection.py",
+        PACKAGE / "runtime" / "_system_unified_install.py",
+        PACKAGE / "runtime" / "_amr_system_install.py",
+    )
+    violations = []
+    for path in boundary_files:
+        source = path.read_text(encoding="utf-8")
+        for label, pattern in _retired_bind_patterns():
+            for match in pattern.finditer(source):
+                line = source.count("\n", 0, match.start()) + 1
+                violations.append("%s:%d: %s" % (path.relative_to(ROOT), line, label))
+    assert not violations, "retired final-bind spellings remain:\n  " + "\n  ".join(violations)
 
 
 def test_case_has_one_registration_spelling_per_authority() -> None:

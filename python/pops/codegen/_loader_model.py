@@ -52,9 +52,9 @@ class CompiledModel:
         self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
         # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
         # second-or-further elliptic solve the native loader wires via register_elliptic_field +
-        # set_block_elliptic_field after the block is installed. The install seam consults this set to
-        # decide whether a bind(solvers={field: ...}) selection names a DECLARED field (route it) or a
-        # typo (reject, naming the declared set). Empty for a model with only the default Poisson field.
+        # set_block_elliptic_field after the block is installed. The names remain detached compiled
+        # model evidence; the resolved simulation plan owns every solver/provider choice. Empty for a
+        # model with only the default Poisson field.
         self.elliptic_field_names = list(elliptic_field_names) if elliptic_field_names else []
         # Compiler-owned declarations remain live until orchestration has finished attaching the
         # bind schema.  ``_seal`` replaces this mapping by registry-free CompiledParameter values;

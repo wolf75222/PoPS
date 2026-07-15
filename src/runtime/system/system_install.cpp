@@ -8,7 +8,6 @@
 #include <pops/runtime/builders/compiled/native_loader.hpp>  // production package + ABI guard
 #include <pops/runtime/config/route_ids.hpp>  // ADC-641: parse_{transport,riemann,time}_route typed switches
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
-
 #include <cmath>
 
 namespace pops {
@@ -727,6 +726,7 @@ void System::set_poisson(const std::string& rhs, const std::string& solver, cons
 }
 
 void System::set_field_solver_plan(const std::string& provider_slot,
+                                   const std::string& plan_identity,
                                    const std::string& provider_identity,
                                    const std::string& output_owner_identity,
                                    const std::string& output_block,
@@ -740,29 +740,39 @@ void System::set_field_solver_plan(const std::string& provider_slot,
                                    int max_cycles, int min_coarse, int pre_smooth,
                                    int post_smooth, int bottom_sweeps, int coarse_threshold) {
   require_assembling(p_->lifecycle_, "set_field_solver_plan");
-  if (provider_slot.empty() || provider_identity.empty() || output_owner_identity.empty() ||
+  if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
+      output_owner_identity.empty() ||
       output_block.empty() ||
       output_key.empty())
-    throw std::runtime_error("System::set_field_solver_plan requires a qualified provider identity");
+    throw std::runtime_error(
+        "System::set_field_solver_plan requires qualified plan/provider identities");
   const std::size_t provider_count = provider_identities.size();
   if (provider_count == 0 || provider_blocks.size() != provider_count ||
       provider_keys.size() != provider_count || provider_coefficients.size() != provider_count)
     throw std::runtime_error("System::set_field_solver_plan invalid provider-pack shape");
+  const auto finite_native_real = [](double value) {
+    if (!std::isfinite(value))
+      return false;
+    return std::isfinite(static_cast<double>(static_cast<Real>(value)));
+  };
   for (std::size_t i = 0; i < provider_count; ++i)
     if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
-        !std::isfinite(provider_coefficients[i]))
+        !finite_native_real(provider_coefficients[i]))
       throw std::runtime_error("System::set_field_solver_plan invalid provider-pack entry");
   const bool external = solver == "external_component_v1";
   if (!external && solver != "geometric_mg" && solver != "fft" && solver != "fft_spectral")
     throw std::runtime_error("System::set_field_solver_plan unknown solver '" + solver + "'");
-  if (abs_tol < 0.0 || (external ? rel_tol < 0.0 : rel_tol <= 0.0) || max_cycles < 1 || min_coarse < 1 ||
+  if (!finite_native_real(abs_tol) || abs_tol < 0.0 ||
+      !finite_native_real(rel_tol) || (external ? rel_tol < 0.0 : rel_tol <= 0.0) ||
+      max_cycles < 1 || min_coarse < 1 ||
       pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
     throw std::runtime_error("System::set_field_solver_plan invalid multigrid options");
   const auto existing = p_->fields_.named_field_plans_.find(provider_slot);
-  if (existing != p_->fields_.named_field_plans_.end() &&
-      existing->second.provider_identity != provider_identity)
-    throw std::runtime_error("System::set_field_solver_plan provider digest collision");
-  auto& plan = p_->fields_.named_field_plans_[provider_slot];
+  if (existing != p_->fields_.named_field_plans_.end())
+    throw std::runtime_error(
+        "System::set_field_solver_plan duplicate provider slot");
+  field_solver::SystemFieldSolver<Impl>::FieldSolveConfig plan;
+  plan.plan_identity = plan_identity;
   plan.provider_identity = provider_identity;
   plan.output_owner_identity = output_owner_identity;
   plan.output_block = output_block;
@@ -781,10 +791,16 @@ void System::set_field_solver_plan(const std::string& provider_slot,
   plan.mg_opts.nu2 = post_smooth;
   plan.mg_opts.nbottom = bottom_sweeps;
   plan.mg_opts.coarse_threshold = coarse_threshold;
+  auto [inserted, unique] =
+      p_->fields_.named_field_plans_.emplace(provider_slot, std::move(plan));
+  if (!unique)
+    throw std::runtime_error(
+        "System::set_field_solver_plan duplicate provider slot");
+  p_->fields_.invalidate_field_plan_consensus();
   auto registered = p_->fields_.named_fields_.find(provider_slot);
   if (registered != p_->fields_.named_fields_.end()) {
     registered->second.has_plan = true;
-    registered->second.plan = plan;
+    registered->second.plan = inserted->second;
     registered->second.prepared_providers.clear();
     registered->second.backend.reset();
   }

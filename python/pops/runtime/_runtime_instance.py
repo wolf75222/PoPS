@@ -81,7 +81,7 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
     if not reports:
         return ()
     normalized = []
-    for index, raw in enumerate(reports[0]):
+    for raw in reports[0]:
         if not isinstance(raw, Mapping):
             raise TypeError("native field topology report rows must be mappings")
         row = dict(raw)
@@ -108,6 +108,53 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
     if len({row["patch_identity"] for row in normalized}) != len(normalized):
         raise RuntimeError("native field topology report contains duplicate patch identities")
     return tuple(normalized)
+
+
+def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | None:
+    """Read the exact installed AMR MG/FAC PODs without exposing the private executor."""
+    engines = getattr(executor, "_engines", None)
+    candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
+    reports = []
+    for candidate in candidates:
+        slots = getattr(candidate, "field_provider_slots", None)
+        if callable(slots) and slot not in tuple(slots()):
+            continue
+        native = getattr(candidate, "_s", candidate)
+        getter = getattr(native, "field_solver_configuration", None)
+        if callable(getter):
+            reports.append(getter(slot))
+    if len(reports) > 1:
+        raise RuntimeError(
+            "one qualified field-provider slot has multiple native solver configurations")
+    if not reports:
+        return None
+    row = reports[0]
+    if not isinstance(row, Mapping):
+        raise TypeError("native field solver configuration must be a mapping")
+    result = copy.deepcopy(dict(row))
+    expected = {
+        "schema_version", "provider_slot", "solver", "hierarchy", "mg", "fac",
+    }
+    if set(result) != expected or result["schema_version"] != 1 \
+            or result["provider_slot"] != slot:
+        raise TypeError("native field solver configuration has an invalid schema")
+    if not isinstance(result["solver"], str) or not isinstance(result["hierarchy"], str):
+        raise TypeError("native field solver configuration requires typed solver identities")
+    nested = {
+        "mg": {
+            "rel_tol", "abs_tol", "max_cycles", "min_coarse", "pre_smooth",
+            "post_smooth", "bottom_sweeps", "coarse_threshold",
+        },
+        "fac": {
+            "max_iters", "fine_sweeps", "rel_tol", "abs_tol", "coarse_rel_tol",
+            "coarse_abs_tol", "coarse_cycles", "verbose",
+        },
+    }
+    for name, keys in nested.items():
+        if not isinstance(result[name], Mapping) or set(result[name]) != keys:
+            raise TypeError("native field solver configuration %s has an invalid schema" % name)
+        result[name] = dict(result[name])
+    return result
 
 
 def _field_provider_evidence(
@@ -163,6 +210,7 @@ def _field_provider_evidence(
             ),
             "topology_digest": next(iter(digests)) if digests else None,
             "provenance": next(iter(provenances)) if provenances else None,
+            "solver_configuration": _field_solver_configuration(executor, slot),
             "patches": list(patches),
         })
     return tuple(result)

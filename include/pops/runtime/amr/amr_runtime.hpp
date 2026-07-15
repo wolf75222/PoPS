@@ -95,12 +95,13 @@
 
 namespace pops {
 
-/// Fully resolved AMR field solve keyed by the digest of the complete block-qualified provider
-/// identity.  The readable canonical identity travels beside the digest so a collision can never
-/// silently alias two providers.  This POD is installed before block loaders run and contains no
-/// authoring object or Python callback.
+/// Fully resolved AMR field solve keyed by the digest of its block-qualified provider identity.
+/// provider_identity retains that exact readable identity while plan_identity independently commits
+/// every resolved field-plan semantic. This POD is installed before block loaders run and contains
+/// no authoring object or Python callback.
 struct AmrFieldSolveConfig {
   std::string provider_identity;
+  std::string plan_identity;
   std::string topology_provider_kind;
   std::string topology_provenance;
   std::string topology_digest;
@@ -128,6 +129,7 @@ struct AmrFieldSolveConfig {
   std::string nullspace_assertion = "none";
   std::string gauge = "none";
   GeometricMgOptions mg_opts{};
+  CompositeFacOptions fac_opts{};
 };
 
 namespace detail {
@@ -1878,19 +1880,43 @@ class AmrRuntime {
   /// components and drops the lazily-built solver so the next solve rebuilds it). The dedicated solver
   /// is built on the first solve, never here.
   void install_field_plan(const std::string& provider_slot, const AmrFieldSolveConfig& plan) {
-    if (provider_slot.empty() || plan.provider_identity.empty() || plan.output_block.empty() ||
+    if (provider_slot.empty() || plan.plan_identity.empty() || plan.provider_identity.empty() ||
+        plan.output_owner_identity.empty() || plan.output_block.empty() ||
         plan.output_key.empty() || plan.providers.empty() ||
         plan.topology_provider_kind.empty() || plan.topology_provenance.empty() ||
         plan.topology_digest.empty())
       throw std::runtime_error("AmrRuntime: incomplete qualified field provider plan");
+    for (const auto& provider : plan.providers)
+      if (provider.identity.empty() || provider.owner_block.empty() ||
+          provider.native_key.empty() ||
+          !std::isfinite(static_cast<double>(provider.coefficient)))
+        throw std::runtime_error("AmrRuntime: invalid field provider-pack entry");
+    const auto& mg = plan.mg_opts;
+    if (!std::isfinite(static_cast<double>(mg.abs_tol)) || mg.abs_tol < Real(0) ||
+        !std::isfinite(static_cast<double>(mg.rel_tol)) || mg.rel_tol <= Real(0) ||
+        mg.max_cycles < 1 || mg.min_coarse < 1 || mg.nu1 < 0 || mg.nu2 < 0 ||
+        mg.nbottom < 0 || mg.coarse_threshold < 0)
+      throw std::runtime_error("AmrRuntime: invalid field multigrid options");
+    const auto& fac = plan.fac_opts;
+    if (fac.max_iters < 1 || fac.fine_sweeps < 1 || fac.coarse_cycles < 1 ||
+        !std::isfinite(static_cast<double>(fac.rel_tol)) || fac.rel_tol <= Real(0) ||
+        fac.rel_tol >= Real(1) || !std::isfinite(static_cast<double>(fac.abs_tol)) ||
+        fac.abs_tol < Real(0) ||
+        !std::isfinite(static_cast<double>(fac.coarse_rel_tol)) ||
+        fac.coarse_rel_tol <= Real(0) || fac.coarse_rel_tol >= Real(1) ||
+        !std::isfinite(static_cast<double>(fac.coarse_abs_tol)) ||
+        fac.coarse_abs_tol < Real(0))
+      throw std::runtime_error("AmrRuntime: invalid field FAC options");
+    if (plan.solver != "geometric_mg" ||
+        (plan.hierarchy != "composite" && plan.hierarchy != "level_local"))
+      throw std::runtime_error("AmrRuntime: unsupported field solver/hierarchy policy");
     auto existing = named_fields_.find(provider_slot);
-    if (existing != named_fields_.end() && existing->second.plan.provider_identity !=
-                                                   plan.provider_identity)
-      throw std::runtime_error("AmrRuntime: qualified field provider digest collision");
+    if (existing != named_fields_.end())
+      throw std::runtime_error("AmrRuntime: duplicate qualified field provider slot");
     NamedField field;
     field.plan = plan;
     field.has_plan = true;
-    named_fields_[provider_slot] = std::move(field);
+    named_fields_.emplace(provider_slot, std::move(field));
   }
 
   void set_field_boundary_kernel(const std::string& provider_slot,
@@ -3902,14 +3928,7 @@ class AmrRuntime {
       for (int k = 1; k < nlev_; ++k)
         fine_boxes.push_back((*blocks_[0].levels)[static_cast<std::size_t>(k)].U.box_array());
       nf.fac = std::make_shared<CompositeFacPoisson>(geom_, hierarchy_.ba[0], boundary, fine_boxes);
-      CompositeFacOptions fac_options;
-      fac_options.max_iters = nf.plan.mg_opts.max_cycles;
-      fac_options.rel_tol = nf.plan.mg_opts.rel_tol;
-      fac_options.abs_tol = nf.plan.mg_opts.abs_tol;
-      fac_options.coarse_rel_tol = nf.plan.mg_opts.rel_tol;
-      fac_options.coarse_abs_tol = nf.plan.mg_opts.abs_tol;
-      fac_options.coarse_cycles = nf.plan.mg_opts.max_cycles;
-      nf.fac->set_options(fac_options);
+      nf.fac->set_options(nf.plan.fac_opts);
       if (nf.plan.has_reaction)
         nf.fac->set_reaction(nf.plan.reaction);
       if (nf.plan.has_boundary_kernel)

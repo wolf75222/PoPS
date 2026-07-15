@@ -330,15 +330,14 @@ class CompiledProblem(CompiledProblemDumpMixin):
     # These read the carried metadata (the lowered Program + the physical model); they do NOT
     # compile, bind, dlopen or read any runtime array.
     def arguments(self) -> Any:
-        """The runtime inputs this artifact expects at ``System.install`` (Spec 5 sec.12.2, #44-45).
+        """The runtime inputs this artifact expects at ``pops.bind`` (Spec 5 sec.12.2, #44-45).
 
         Returns an :class:`pops.codegen.inspect_compiled.Arguments` listing -- WITHOUT any bind or
         runtime data -- the instances (state space / components / required), params (type / kind /
-        required), aux (layout / required), solvers (problem / solver), outputs and the runtime
-        layout the artifact expects. Sourced from the carried Program (the blocks it commits, the
-        field solves it performs) and the physical model (its state / params / aux). It is DISTINCT
-        from :meth:`requirements`-style compile constraints: ``arguments`` lists what you must SUPPLY
-        to bind. It allocates and reads nothing."""
+        required), aux (layout / required), outputs and the resolved runtime layout. Field
+        discretizations and solver providers are compile-time plan evidence, never bind inputs.
+        It is DISTINCT from :meth:`requirements`-style compile constraints: ``arguments`` lists
+        only concrete values you must SUPPLY to bind. It allocates and reads nothing."""
         from pops.codegen.inspect_compiled import build_component_arguments
         return build_component_arguments(self)
 
@@ -383,7 +382,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
         solver buffers. Computed by a liveness analysis over the carried Program IR
         (``Program.scratch_liveness`` / ``buffer_reuse_report``); the step-body reuse is EXACT, the
         persistent solver counts are conservative and labelled so. It NEVER binds, dlopens or
-        allocates -- it is inspectable BEFORE ``System.install``. Raises a clear error if this handle
+        allocates -- it is inspectable BEFORE ``pops.bind``. Raises a clear error if this handle
         carries no Program."""
         from pops.codegen.scratch_plan import build_scratch_plan
         return build_scratch_plan(self._require_program("scratch_plan"), model=self.model)

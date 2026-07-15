@@ -435,25 +435,23 @@ def aggregate_bind_refusals(groups: Any) -> Any:
 
 
 def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: Any,
-                              provided_aux: Any, provided_solvers: Any) -> Any:
+                              provided_aux: Any) -> Any:
     """Pure core of the early bind-input check (Spec 5 sec.10); no engine call -> host-testable.
 
-    Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what an install supplies and
+    Compare an :class:`pops.codegen.inspect_compiled.Arguments` against what ``pops.bind`` supplies and
     return one actionable line per MISSING required argument (empty list when everything required is
     met). Shared by ``System._install_compiled`` and ``AmrSystem._install_compiled`` so both enforce
     the SAME contract.
 
-    Only entries whose ``required`` flag is true are enforced: an input the artifact marks optional
-    (a const param, an unrequired solver -- the default Poisson field has a working default and is
-    NOT flagged required by ``arguments()``) is never demanded, so a previously valid install passes
-    through unchanged. ``provided_*`` are the supplied sets (block names, param names, aux names,
-    solver fields); a block already added on the sim counts as provided. Each line names EXACTLY what
-    is missing and the matching ``pops.bind`` keyword to supply it."""
+    Only entries whose ``required`` flag is true are enforced. ``provided_*`` are the supplied sets
+    (block names, parameter identities and aux names); a block already added on the engine counts as
+    provided. Field solver providers are resolved into ``field_plans`` before bind and therefore are
+    not arguments. Each line names exactly what is missing and the matching ``pops.bind`` keyword."""
     missing = []
     for name, spec in sorted(getattr(args, "instances", {}).items()):
         if spec.get("required") and name not in provided_blocks:
             missing.append("instance %r (a state block the program advances); supply its initial "
-                           "state via pops.bind(state={%r: <array>})" % (name, name))
+                           "state via pops.bind(initial_state={%r: <array>})" % (name, name))
     for name, spec in sorted(getattr(args, "params", {}).items()):
         if spec.get("required") and name not in provided_params:
             missing.append(
@@ -463,15 +461,11 @@ def collect_missing_arguments(args: Any, provided_blocks: Any, provided_params: 
     for name, spec in sorted(getattr(args, "aux", {}).items()):
         if spec.get("required") and name not in provided_aux:
             missing.append("aux field %r; pass pops.bind(aux={%r: <array>})" % (name, name))
-    for name, spec in sorted(getattr(args, "solvers", {}).items()):
-        if spec.get("required") and name not in provided_solvers:
-            missing.append("solver for field %r; pass pops.bind(solvers={%r: <Solver>})"
-                           % (name, name))
     return missing
 
 
-def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any,
-                               solvers: Any, *, field_plans: Any = None) -> Any:
+def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: Any, aux: Any, *,
+                               field_plans: Any = None) -> Any:
     """Reject missing declared inputs and unreadable metadata before native mutation."""
     if compiled is None:
         return
@@ -495,7 +489,7 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
     }
     missing = collect_missing_arguments(
         args, provided_blocks, provided_param_ids,
-        set(aux) | provided_named_aux | set(field_plan_produced_aux(field_plans)), set(solvers))
+        set(aux) | provided_named_aux | set(field_plan_produced_aux(field_plans)))
     if missing:
         raise ValueError("pops.bind: the compiled artifact is missing required argument(s):\n  "
                          + "\n  ".join(missing))

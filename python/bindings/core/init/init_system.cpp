@@ -451,7 +451,8 @@ void bind_system_physics(py::class_<System>& cls) {
            py::arg("bottom_sweeps") = kMGDefaultBottomSweeps,
            py::arg("coarse_threshold") = kMGDefaultCoarseThreshold)
       .def("set_field_solver_plan", &System::set_field_solver_plan,
-           py::arg("provider_slot"), py::arg("provider_identity"),
+           py::arg("provider_slot"), py::arg("plan_identity"),
+           py::arg("provider_identity"),
            py::arg("output_owner_identity"),
            py::arg("output_block"), py::arg("output_key"),
            py::arg("provider_identities"), py::arg("provider_blocks"),

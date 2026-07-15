@@ -27,31 +27,13 @@ if TYPE_CHECKING:
 else:
     _System = object
 
-# ADC-613: the GeometricMG V-cycle kwargs set_poisson accepts, minus abs_tol (routed separately so
-# the historical abs_tol path keeps working when no typed descriptor is present).
-_MG_SET_POISSON_KEYS = ("rel_tol", "max_cycles", "min_coarse", "pre_smooth", "post_smooth",
-                        "bottom_sweeps", "coarse_threshold")
-
-
-def _mg_set_poisson_kwargs(mg_options: Any) -> Any:
-    """Translate a GeometricMG.mg_options() dict into set_poisson keyword args (ADC-613).
-
-    Empty in -> empty out, so a string-token / lib-descriptor solver selection leaves set_poisson at
-    its native V-cycle defaults (bit-identical). Only the keys the resolver produced are forwarded."""
-    from pops.solvers._numeric import native_float
-    result = {k: mg_options[k] for k in _MG_SET_POISSON_KEYS if k in mg_options}
-    if "rel_tol" in result:
-        result["rel_tol"] = native_float(result["rel_tol"], where="GeometricMG relative tolerance")
-    return result
-
-
 class _SystemUnifiedInstall(_System):
     """The internal ``_install_compiled`` lowering seam of System (driven by ``pops.bind``)."""
 
     def _install_compiled(self, compiled=None, *, instances=None, params=None, aux=None,
-                          solvers=None, field_plans=None, install_plan=None):
+                          field_plans=None, install_plan=None):
         """INTERNAL low-level install seam (Spec 5 sec.11): wire a compiled handle + per-instance
-        state/spatial + params + aux + field solvers in ONE call, then install the compiled time
+        state/spatial + params + aux + resolved field plans in one call, then install the compiled time
         Program. NOT the public entry point: author the run with ``pops.bind(artifact,
         initial_state=..., params=..., aux=..., resources=..., initial_values=...)``. Binding
         dispatches to the private System / AmrSystem engine and calls this seam. This
@@ -63,12 +45,11 @@ class _SystemUnifiedInstall(_System):
         available and unchanged; this seam just sequences them in the right order so the
         install-time validation (section 24) sees a fully-configured simulation.
 
-        install() is the ONE entry for BOTH runtime modes (Spec 4 amendment): a COMPILED-program sim
-        (pass the compiled Program handle as ``compiled``) and a per-block native sim
-        (``compiled=None``; each InstallPlan instance still carries a detached CompiledModel).
+        The seam supports a compiled-Program runtime and a per-block native runtime. Both are reached
+        exclusively through the public lifecycle; neither exposes a second authoring entry point.
 
         @param compiled the compiled problem handle (compile_problem(...) result) carrying ``so_path``,
-            installed via install_program after every instance/solver/aux is wired. Pass ``None`` for a
+            installed via install_program after every instance/field-plan/aux route is wired. Pass ``None`` for a
             native per-block sim: no Program is installed; each instance must still supply its own
             InstallPlan ``CompiledModel`` and optional ``"time"`` policy.
         @param instances dict {name: {"initial": array, "spatial": <descriptor>,
@@ -84,11 +65,9 @@ class _SystemUnifiedInstall(_System):
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" -> rejected (it is
             DERIVED, use set_electron_temperature_from), any other -> set_aux_field on the instance
             declaring it. Set BEFORE install_program so the section-24 aux requirement check sees it.
-        @param solvers dict {field: <pops.solvers.GeometricMG(...)>}: lowered to
-            set_poisson(solver=...). The default Poisson field ("phi"/"charge_density"/"poisson") and
-            any NAMED elliptic field a block's model DECLARES (m.elliptic_field) are accepted and route
-            through the shared system elliptic solver; a field name no model declares raises (typo).
-        @throws the verbatim Spec section-24 errors at install (missing aux / solver / block instance /
+        @param field_plans complete resolve-time field installation plans. Solver, boundary,
+            nullspace, hierarchy and output authority are already fixed and authenticated.
+        @throws the verbatim Spec section-24 errors at bind (missing aux / field plan / block instance /
             Riemann capability). A disallowed schedule is rejected earlier, at Program compile.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound engine is refused explicitly.
@@ -97,31 +76,19 @@ class _SystemUnifiedInstall(_System):
         instances = instances or {}
         params = {} if params is None else params
         aux = aux or {}
-        solvers = solvers or {}
         field_plans = field_plans or {}
-        if solvers and field_plans:
-            raise ValueError("install received both legacy solvers and resolved field_plans")
-        validation_solvers = solvers or field_plans
 
         # (0) EARLY VALIDATION (Spec 5 sec.10): in the COMPILED path, read the artifact's DECLARED bind
         # inputs (compiled.arguments()) and reject BEFORE any native call an install missing a REQUIRED
-        # argument (instance / param / aux / solver). Inert (reads metadata); enforces only 'required',
+        # argument (instance / param / aux). Inert (reads metadata); enforces only 'required',
         # so a valid install is unchanged.
         self._validate_install_arguments(
-            compiled, instances, params, aux, validation_solvers, field_plans=field_plans)
+            compiled, instances, params, aux, field_plans=field_plans)
 
-        # (1) FIELD SOLVERS first: set_poisson must run before install_program (the C++ section-24
-        # solver requirement reads poisson_solver()). The DECLARED named elliptic fields (from the
-        # handle + per-instance models) widen the accepted solver-field set beyond the default Poisson
-        # names (C1-System), while a typo is rejected against the declared set.
-        declared_fields = self._declared_elliptic_fields(compiled, instances)
-        if field_plans:
-            for field, field_plan in field_plans.items():
-                self._install_field_plan(
-                    field, field_plan, declared_fields, install_plan=install_plan)
-        else:
-            for field, solver_brick in solvers.items():
-                self._install_solver(field, solver_brick, declared_fields)
+        # (1) Resolved field plans first: native field providers must exist before install_program
+        # authenticates the compiled Program's field requirements.
+        for field, field_plan in field_plans.items():
+            self._install_field_plan(field, field_plan, install_plan=install_plan)
 
         # (2) INSTANCES: add each named block (binds the Program block of that name, criterion 23),
         # lower its spatial brick and set its initial state. Every instance comes from InstallPlan and
@@ -131,19 +98,19 @@ class _SystemUnifiedInstall(_System):
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
                 raise TypeError(
-                    "install: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
+                    "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result, or compiled=None for a native sim (each instance carries its own native "
                     "model)." % type(compiled).__name__)
         resolved_models = {}
         lowered_instances = {}
         for name, spec in instances.items():
             if not isinstance(spec, Mapping):
-                raise TypeError("install: instances[%r] must be a mapping (initial/spatial/time/model); "
+                raise TypeError("pops.bind: instances[%r] must be a mapping (initial/spatial/time/model); "
                                 "got %r" % (name, type(spec).__name__))
             model = spec.get("model")
             if model is None:
                 raise ValueError(
-                    "install: instance %r has no CompiledModel from InstallPlan; resolve and "
+                    "pops.bind: instance %r has no CompiledModel from InstallPlan; resolve and "
                     "compile the Case before binding" % name)
             model = self._resolve_instance_model(model)
             resolved_models[name] = model
@@ -159,7 +126,7 @@ class _SystemUnifiedInstall(_System):
             per_block_params = self._route_block_params(resolved_models, bind_schema, params)
         elif params:
             raise ValueError(
-                "install: parameter values require a compiled artifact carrying BindSchema"
+                "pops.bind: parameter values require a compiled artifact carrying BindSchema"
             )
         else:
             per_block_params = {}
@@ -230,7 +197,7 @@ class _SystemUnifiedInstall(_System):
         # install sequence never trips its own guards).
         from pops.runtime._bound_snapshot import build_uniform_snapshot
         snapshot = build_uniform_snapshot(
-            self, compiled, resolved_models, instances, validation_solvers,
+            self, compiled, resolved_models, instances, field_plans,
             aux, params)
         self._finalize_bind(snapshot)  # _finalize_bind lives on _LifecycleMixin
 
@@ -239,19 +206,19 @@ class _SystemUnifiedInstall(_System):
         (Spec 5 sec.12.1, criterion #15). INERT: reads the artifact's DECLARED bind inputs
         (``compiled.arguments()``) and the blocks / named aux ALREADY wired on this System, then
         reuses the ADC-463 :func:`collect_missing_arguments` to compute, per group
-        (instances / params / aux / solvers), which inputs are PROVIDED vs still REQUIRED. It binds
+        (instances / params / aux), which inputs are PROVIDED vs still REQUIRED. It binds
         nothing and mutates nothing -- the read-only counterpart of the install seam's early
         validation."""
         from pops.codegen.inspect_report import build_bind_report
         return build_bind_report(self, compiled)
 
-    def _validate_install_arguments(self, compiled: Any, instances: Any, params: Any, aux: Any,
-                                    solvers: Any, *, field_plans: Any = None) -> Any:
+    def _validate_install_arguments(self, compiled: Any, instances: Any, params: Any, aux: Any, *,
+                                    field_plans: Any = None) -> Any:
         """Early bind-input validation (Spec 5 sec.10): reject a COMPILED install missing a REQUIRED
         argument the artifact declares, BEFORE any native mutation. Thin wrapper around the shared
         private ``_bind_validation.validate_install_arguments`` implementation."""
         _validate_install_arguments_impl(
-            self, compiled, instances, params, aux, solvers, field_plans=field_plans)
+            self, compiled, instances, params, aux, field_plans=field_plans)
 
     # Host-testable alias of the pure core (mirrors _route_block_params: callable as
     # System._collect_missing_arguments without building a System).
@@ -276,7 +243,7 @@ class _SystemUnifiedInstall(_System):
                 raise ValueError("runtime_spatial() must be deterministic")
             return first
         raise TypeError(
-            "install: spatial must implement the pops.numerics finite-volume lowering protocol; "
+            "pops.bind: spatial must implement the pops.numerics finite-volume lowering protocol; "
             "got %r" % type(spatial).__name__)
 
     def _resolve_instance_model(self, model: Any) -> Any:
@@ -289,7 +256,7 @@ class _SystemUnifiedInstall(_System):
         if isinstance(model, CompiledModel):
             return model
         raise TypeError(
-            "install: instance model must be a detached CompiledModel from InstallPlan, got %s; "
+            "pops.bind: instance model must be a detached CompiledModel from InstallPlan, got %s; "
             "compile the Case before binding"
             % type(model).__name__
         )
@@ -313,15 +280,11 @@ class _SystemUnifiedInstall(_System):
                 check_hll_waves(provider, model, "install")
             if not getattr(model, "has_wave_speeds", True):
                 raise ValueError(
-                    "install: riemann 'hll' requires signed wave speeds: declare "
+                    "pops.bind: riemann 'hll' requires signed wave speeds: declare "
                     "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
                     "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'.")
 
-    # Field names the default native Poisson route already serves (the shared system elliptic solve).
-    _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
-
-    def _install_field_plan(self, field: Any, field_plan: Any,
-                            declared_fields: Any = frozenset(), *,
+    def _install_field_plan(self, field: Any, field_plan: Any, *,
                             install_plan: Any = None) -> None:
         """Consume every resolve-time field-plan property at the native boundary."""
         from pops.codegen.field_install import ResolvedFieldInstallPlan
@@ -331,41 +294,26 @@ class _SystemUnifiedInstall(_System):
             raise ValueError("resolved field install plan identity/target mismatch")
         # Re-run canonical construction verification before touching the native engine.
         field_plan.__post_init__()
-        options = field_plan.native_options
-        solver_brick = field_plan.discretization.solver
+        options = field_plan.native_install_data()
         provider = options["solver_provider"]
         provider_kind = provider["provider_kind"]
         if provider_kind == "builtin_v1":
             token = provider["solver"]["route"]
-            if self._solver_token(solver_brick) != token:
-                raise ValueError("field plan builtin solver provider drifted after resolve")
-            mg = self._solver_mg_options(solver_brick)
         elif provider_kind == "external_component_v1":
             if install_plan is None:
                 raise ValueError(
                     "external field providers require the authenticated InstallPlan")
             token = "external_component_v1"
-            request = provider["request"]
-            mg = {
-                "rel_tol": request["relative_tolerance"],
-                "abs_tol": request["absolute_tolerance"],
-                "max_cycles": request["max_iterations"],
-            }
         else:
             raise ValueError("field plan selected an unknown solver provider kind")
+        mg = options["mg_options"]
         from pops.solvers._numeric import native_float
         slot = options["provider_slot"]
         routes = options["provider_pack"]
         output_route = options["output_route"]
         from pops.identity import canonical_bytes
-        mg_args = _mg_set_poisson_kwargs(mg)
-        mg_args = {
-            "rel_tol": 1.0e-8, "max_cycles": 50, "min_coarse": 2,
-            "pre_smooth": 2, "post_smooth": 2, "bottom_sweeps": 50,
-            "coarse_threshold": 0, **mg_args,
-        }
         self._s.set_field_solver_plan(
-            slot, options["provider_identity_text"],
+            slot, field_plan.identity.token, options["provider_identity_text"],
             canonical_bytes(output_route["owner_identity"]).hex(),
             output_route["owner_block"],
             output_route["key"],
@@ -374,11 +322,11 @@ class _SystemUnifiedInstall(_System):
             [route["owner_block"] for route in routes],
             [route["key"] for route in routes],
             [route["coefficient"] for route in routes], token,
-            native_float(mg.get("abs_tol", 0.0),
+            native_float(mg["abs_tol"],
                          where="field plan absolute tolerance"),
-            mg_args["rel_tol"], mg_args["max_cycles"], mg_args["min_coarse"],
-            mg_args["pre_smooth"], mg_args["post_smooth"],
-            mg_args["bottom_sweeps"], mg_args["coarse_threshold"])
+            native_float(mg["rel_tol"], where="field plan relative tolerance"),
+            mg["max_cycles"], mg["min_coarse"], mg["pre_smooth"],
+            mg["post_smooth"], mg["bottom_sweeps"], mg["coarse_threshold"])
         if provider_kind == "builtin_v1":
             topology = provider["topology"]
             self._s._set_field_topology_authority(
@@ -413,7 +361,8 @@ class _SystemUnifiedInstall(_System):
         self, slot: str, field_plan: Any, install_plan: Any
     ) -> None:
         """Install one exact topology+solver pair before block construction."""
-        provider = field_plan.native_options["solver_provider"]
+        native_options = field_plan.native_install_data()
+        provider = native_options["solver_provider"]
         bindings = (provider["topology"], provider["solver"])
         installed = []
         for binding in bindings:
@@ -440,15 +389,15 @@ class _SystemUnifiedInstall(_System):
                 "field-boundary-contract",
                 {
                     "field": field_plan.identity.token,
-                    "faces": field_plan.native_options["boundary_faces"],
-                    "nullspace": field_plan.native_options["nullspace"],
-                    "gauge": field_plan.native_options["gauge"],
+                    "faces": native_options["boundary_faces"],
+                    "nullspace": native_options["nullspace"],
+                    "gauge": native_options["gauge"],
                     "topology_recipe_identity": provider["topology_recipe_identity"],
                 },
             ).token,
-            "faces": field_plan.native_options["boundary_faces"],
-            "nullspace": field_plan.native_options["nullspace"],
-            "gauge": field_plan.native_options["gauge"],
+            "faces": native_options["boundary_faces"],
+            "nullspace": native_options["nullspace"],
+            "gauge": native_options["gauge"],
             "topology_recipe_identity": provider["topology_recipe_identity"],
         }
         self._s._install_field_solver_components(
@@ -519,102 +468,6 @@ class _SystemUnifiedInstall(_System):
         self._s.register_elliptic_field(
             block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
 
-    def _install_solver(self, field: Any, solver_brick: Any,
-                        declared_fields: Any = frozenset()) -> Any:
-        """Lower a field-solver selection to set_poisson (C1-System).
-
-        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
-        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is
-        wired by the native loader (register_elliptic_field + set_block_elliptic_field), and its solve
-        reuses the shared system elliptic solver, so the solver selection routes through set_poisson
-        for both. A field name that is NEITHER the default Poisson field NOR a declared named field is a
-        TYPO -- rejected LOUD, naming the declared set (never a silent drop)."""
-        if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
-            declared = ", ".join(sorted(declared_fields)) or "(none declared)"
-            raise ValueError(
-                "install: solver selection names field %r, which is neither the default Poisson "
-                "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
-                "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
-                % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
-        token = self._solver_token(solver_brick)
-        opts = self._solver_option_dict(solver_brick)
-        mg = self._solver_mg_options(solver_brick)  # ADC-613: resolved V-cycle scalars (or {})
-        from pops.solvers._numeric import native_float
-        # Solver plans are already resolved and carry native route tokens. Keep that representation
-        # behind the private seam; public set_poisson accepts typed bc/wall descriptors only.
-        self._set_poisson_native(
-            rhs=opts.get("rhs", "charge_density"), solver=token,
-            bc=opts.get("bc", "auto"), wall=opts.get("wall", "none"),
-            wall_radius=float(opts.get("wall_radius", 0.0)),
-            epsilon=float(opts.get("epsilon", 1.0)),
-            abs_tol=native_float(
-                mg.get("abs_tol", opts.get("abs_tol", 0.0)),
-                where="GeometricMG absolute tolerance"),
-            **_mg_set_poisson_kwargs(mg))
-
-    @staticmethod
-    def _solver_option_dict(solver_brick: Any) -> Any:
-        """The plain-dict option bag of a solver selection, or ``{}``.
-
-        A lib BrickDescriptor carries scheme options as a ``.options`` DICT ATTRIBUTE; a typed
-        pops.solvers descriptor exposes ``options`` as a METHOD (a bound method is not a mapping),
-        so only a genuine dict is read here -- never the method object (the pre-613 code read the
-        bound method by mistake, so no typed knob ever flowed)."""
-        opts = getattr(solver_brick, "options", None)
-        return dict(opts) if isinstance(opts, Mapping) else {}
-
-    @staticmethod
-    def _solver_mg_options(solver_brick: Any) -> Any:
-        """The RESOLVED native GeometricMG V-cycle scalars of a typed descriptor (ADC-613), or ``{}``.
-
-        A typed pops.solvers.elliptic.GeometricMG exposes ``mg_options()`` (rel_tol / max_cycles /
-        min_coarse / pre_smooth / post_smooth / bottom_sweeps, tolerance descriptor already mapped).
-        A string token or a lib descriptor has none -> ``{}`` -> set_poisson keeps its native
-        defaults, bit-identical."""
-        mg_fn = getattr(solver_brick, "mg_options", None)
-        if callable(mg_fn):
-            resolved = mg_fn()
-            if isinstance(resolved, Mapping):
-                return dict(resolved)
-        return {}
-
-    @staticmethod
-    def _declared_elliptic_fields(compiled: Any, instances: Any) -> Any:
-        """Collect named elliptic fields exclusively from InstallPlan CompiledModel metadata."""
-        del compiled  # a whole-program handle is never a field-declaration authority
-        from pops.codegen.loader import CompiledModel
-
-        names = set()
-        for block_name, spec in (instances or {}).items():
-            if not isinstance(spec, Mapping):
-                raise TypeError("install: instances[%r] must be a mapping" % block_name)
-            model = spec.get("model")
-            if not isinstance(model, CompiledModel):
-                raise TypeError(
-                    "install: instances[%r] must carry a detached CompiledModel from InstallPlan"
-                    % block_name
-                )
-            declared = getattr(model, "elliptic_field_names", None)
-            if declared is None:
-                raise ValueError(
-                    "install: CompiledModel for block %r lacks elliptic_field_names metadata; "
-                    "re-run pops.resolve(case) and pops.compile(plan)" % block_name
-                )
-            names.update(declared)
-        return names
-
-    @staticmethod
-    def _solver_token(solver_brick: Any) -> Any:
-        """Resolve a field-solver selection to its set_poisson token. Accepts a string, or a
-        descriptor carrying ``scheme`` (pops.solvers.GeometricMG -> 'geometric_mg')."""
-        if isinstance(solver_brick, str):
-            return solver_brick
-        token = getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None)
-        if token is None:
-            raise TypeError("install: solver must be a token string or an pops.solvers.<Solver>(...) "
-                            "descriptor; got %r" % type(solver_brick).__name__)
-        return token
-
     def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any other name
         -> set_aux_field on the block that declares it."""
@@ -623,12 +476,12 @@ class _SystemUnifiedInstall(_System):
             return
         if field_name == "T_e":
             raise ValueError(
-                "install: aux 'T_e' is DERIVED from a fluid block via "
+                "pops.bind: aux 'T_e' is DERIVED from a fluid block via "
                 "set_electron_temperature_from(block), not set as a static aux field.")
         block = self._block_declaring_aux(field_name)
         if block is None:
             raise ValueError(
-                "install: aux field %r is not declared by any installed instance; add the instance "
+                "pops.bind: aux field %r is not declared by any installed instance; add the instance "
                 "with a model declaring m.aux_field(%r)." % (field_name, field_name))
         self.set_aux_field(block, field_name, field)
 

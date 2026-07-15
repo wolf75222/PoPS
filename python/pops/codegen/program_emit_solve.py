@@ -189,8 +189,13 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
     The lambda captures ``[ctx, <scratch shared_ptrs>]``; the step closure captures it by value. @p
-    lines is the step-body line list (for the rhs_jacvec scratch refresh); None when the operator has
-    no jacvec op (the historical matrix-free path, prelude only)."""
+    lines is the mandatory step-body line list: it refreshes the current ``dt`` before every solve,
+    and also carries the rhs_jacvec scratch refresh when that optional operation is present.  A
+    matrix-free operator cannot be lowered in a control-flow-local scope because its install-time
+    ApplyFn would otherwise have no authenticated step-lifetime source for those values."""
+    if lines is None:
+        raise NotImplementedError(
+            "matrix_free_operator is only lowerable at the top level / step body")
     apply_id = v.id
     lam = "apply_A%d" % apply_id
     var[apply_id] = lam
@@ -224,6 +229,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (acc_sp, op_ncomp))
     captures.append(acc_sp)
+    # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
+    # while affine apply bodies evaluate exact dt-polynomial coefficients and pass the current dt
+    # to the conservative axpy/lincomb ledger.  Carry the live step value through one persistent
+    # scalar, exactly like the rhs_jacvec coefficient capture below.  Reusing a single value is safe:
+    # a ProgramContext invokes one matrix-free ApplyFn synchronously within its owning step.
+    apply_dt = "apply_dt%d" % apply_id
+    prelude.append(
+        "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % apply_dt)
+    captures.append(apply_dt)
+    lines.append("*%s = static_cast<pops::Real>(dt);" % apply_dt)
     # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
     # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
@@ -242,10 +257,6 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # exact BoundaryEvaluationPoint is a shared pointee because the ApplyFn itself is constructed
     # before begin_step; rebuilding it from the lambda's captured ctx would observe stale time.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
-    if jac_ops and lines is None:
-        raise NotImplementedError(
-            "rhs_jacvec is only lowerable in a top-level / step-body matrix-free solve, not inside a "
-            "control-flow (if/while/range) body (the Newton outer loop must be a static_range unroll)")
     jac_scratch = {}
     # jacvec op id -> (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
     #                  field_slot, cdt, block_idx) names/provenance
@@ -326,7 +337,7 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         lines.append("}")
         lines.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
-    body = []
+    body = ["const pops::Real dt = *%s;" % apply_dt]
     for w in block:
         if w.op in ("scalar_field", "apply_in", "apply_out"):
             continue  # scratch shared_ptr / lambda params: already bound in `sub`, nothing to emit

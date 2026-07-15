@@ -1,7 +1,7 @@
 """Focused source-emission regressions for the production native loaders."""
 
 from pops.codegen import Production
-from pops.codegen._compile_emit import _BACKEND_CAPS
+from pops.codegen._compile_emit import _BACKEND_CAPS, compiled_capability_flags
 from pops.params import RuntimeParam
 from pops.physics._facade import Model
 
@@ -83,3 +83,9 @@ def test_backend_capabilities_keep_feature_flags_and_route_tier() -> None:
         for name in ("cpu", "mpi", "amr", "gpu")
     )
     assert Production().tier == "production"
+    assert compiled_capability_flags("production") == {
+        "cpu": True,
+        "mpi": True,
+        "amr": True,
+        "gpu": False,
+    }

@@ -35,6 +35,7 @@ jobs:
     name: Validate the exact published wheel
     needs: wheel
     runs-on: macos-14
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
@@ -81,6 +82,7 @@ jobs:
     name: Publish the validated release
     needs: [full-source-matrix, wheel, validate]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

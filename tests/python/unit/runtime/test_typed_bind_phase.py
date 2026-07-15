@@ -102,19 +102,31 @@ def test_loaded_runtime_fact_probe_does_not_swallow_provider_failure(monkeypatch
 def test_install_validation_rejects_degraded_or_unreadable_artifact():
     sim = SimpleNamespace(block_names=lambda: ())
     with pytest.raises(TypeError, match=r"callable arguments\(\)"):
-        validation.validate_install_arguments(sim, SimpleNamespace(), {}, {}, {}, {})
+        validation.validate_install_arguments(sim, SimpleNamespace(), {}, {}, {})
 
     def broken_arguments():
         raise RuntimeError("metadata corruption")
 
     with pytest.raises(RuntimeError, match="metadata corruption"):
         validation.validate_install_arguments(
-            sim, SimpleNamespace(arguments=broken_arguments), {}, {}, {}, {})
+            sim, SimpleNamespace(arguments=broken_arguments), {}, {}, {})
 
 
 def test_install_validation_requires_runtime_block_inventory():
     artifact = SimpleNamespace(arguments=lambda: SimpleNamespace(
-        instances={}, params={}, aux={}, solvers={}))
+        instances={}, params={}, aux={}))
     with pytest.raises(TypeError, match=r"block_names\(\)"):
         validation.validate_install_arguments(
-            SimpleNamespace(), artifact, {}, {}, {}, {})
+            SimpleNamespace(), artifact, {}, {}, {})
+
+
+def test_missing_state_diagnostic_names_the_only_public_bind_keyword():
+    args = SimpleNamespace(
+        instances={"fluid": {"required": True}}, params={}, aux={})
+
+    missing = validation.collect_missing_arguments(args, set(), set(), set())
+
+    assert len(missing) == 1
+    assert "pops.bind(initial_state=" in missing[0]
+    assert "pops.bind(state=" not in missing[0]
+    assert "solvers=" not in missing[0]

@@ -90,15 +90,16 @@ class RuntimeInspectionReport(Report):
         lines.append("  program     : installed=%s hash=%s"
                      % (self.program.get("installed"), self.program.get("hash") or "(none)"))
         # RUNTIME FREEZE LIFECYCLE: the state, canonical bind identity and frozen composition.
-        # block / solver summary of what was frozen.
+        # block / resolved-field-plan summary of what was frozen.
         lines.append("  lifecycle   : %s" % self.lifecycle)
         snap = self.bound_snapshot
         if snap is not None:
             snap_blocks = ", ".join(str(b.get("name")) for b in snap.get("blocks", [])) or "(none)"
-            snap_solvers = ", ".join(sorted(snap.get("solvers", {}))) or "(none)"
+            snap_field_plans = ", ".join(sorted(snap.get("field_plans", {}))) or "(none)"
             identity = snap.get("bind_identity", {})
-            lines.append("  bound       : identity=%s blocks=[%s] solvers=[%s]"
-                         % (identity.get("hexdigest", "(none)"), snap_blocks, snap_solvers))
+            lines.append("  bound       : identity=%s blocks=[%s] field_plans=[%s]"
+                         % (identity.get("hexdigest", "(none)"), snap_blocks,
+                            snap_field_plans))
         lines.append("  profile     : source=%s scopes=%d counters=%d"
                      % (prof.get("source"), len(prof.get("scopes", {})),
                         len(prof.get("counters", {}))))

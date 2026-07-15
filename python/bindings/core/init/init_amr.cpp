@@ -16,6 +16,57 @@
 // name and the .def names are unchanged, so the legacy-name architecture gate still finds them here.
 namespace {
 
+pops::CompositeFacOptions amr_fac_options_from_python(const py::object& value) {
+  pops::CompositeFacOptions options;
+  if (value.is_none())
+    return options;
+  if (!py::isinstance<py::dict>(value))
+    throw std::invalid_argument("AMR field FAC options must be a mapping or None");
+  const py::dict row = py::cast<py::dict>(value);
+  const char* keys[] = {"schema_version", "kind", "max_iters", "fine_sweeps", "rel_tol",
+                        "abs_tol", "coarse_rel_tol", "coarse_abs_tol", "coarse_cycles",
+                        "verbose"};
+  if (row.size() != 10)
+    throw std::invalid_argument("AMR field FAC options have an invalid schema");
+  for (const char* key : keys)
+    if (!row.contains(key))
+      throw std::invalid_argument("AMR field FAC options have an invalid schema");
+  if (PyBool_Check(row["schema_version"].ptr()) ||
+      py::cast<int>(row["schema_version"]) != 1 ||
+      py::cast<std::string>(row["kind"]) != "composite_fac")
+    throw std::invalid_argument("AMR field FAC options require schema-v1 composite_fac");
+
+  const auto optional_int = [&row](const char* key, int& destination) {
+    const py::handle item = row[key];
+    if (item.is_none())
+      return;
+    if (PyBool_Check(item.ptr()) || !PyLong_Check(item.ptr()))
+      throw std::invalid_argument(std::string("AMR field FAC option '") + key +
+                                  "' must be an int or None");
+    destination = py::cast<int>(item);
+  };
+  const auto optional_real = [&row](const char* key, pops::Real& destination) {
+    const py::handle item = row[key];
+    if (item.is_none())
+      return;
+    if (PyBool_Check(item.ptr()))
+      throw std::invalid_argument(std::string("AMR field FAC option '") + key +
+                                  "' must be a real scalar or None");
+    destination = static_cast<pops::Real>(py::cast<double>(item));
+  };
+  optional_int("max_iters", options.max_iters);
+  optional_int("fine_sweeps", options.fine_sweeps);
+  optional_real("rel_tol", options.rel_tol);
+  optional_real("abs_tol", options.abs_tol);
+  optional_real("coarse_rel_tol", options.coarse_rel_tol);
+  optional_real("coarse_abs_tol", options.coarse_abs_tol);
+  optional_int("coarse_cycles", options.coarse_cycles);
+  if (!PyBool_Check(row["verbose"].ptr()))
+    throw std::invalid_argument("AMR field FAC option 'verbose' must be bool");
+  options.verbose = py::cast<bool>(row["verbose"]);
+  return options;
+}
+
 pops::runtime::amr::PreparedTaggerSpec amr_tagger_spec_from_python(
     const py::dict& row, const py::dict& execution) {
   pops::runtime::amr::PreparedTaggerSpec spec;
@@ -368,8 +419,30 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
           py::arg("fac_coarse_rel_tol") = 0.0, py::arg("fac_coarse_abs_tol") = 0.0,
           py::arg("fac_coarse_cycles") = 0,
           py::arg("fac_verbose") = false)
-      .def("set_field_solver_plan", &AmrSystem::set_field_solver_plan,
-           py::arg("provider_slot"), py::arg("provider_identity"),
+      .def("set_field_solver_plan",
+           [](AmrSystem& system, const std::string& provider_slot,
+              const std::string& plan_identity,
+              const std::string& provider_identity,
+              const std::string& output_owner_identity,
+              const std::string& output_block, const std::string& output_key,
+              const std::vector<std::string>& provider_identities,
+              const std::vector<std::string>& provider_blocks,
+              const std::vector<std::string>& provider_keys,
+              const std::vector<double>& provider_coefficients,
+              const std::string& solver, const std::string& hierarchy,
+              double abs_tol, double rel_tol, int max_cycles, int min_coarse,
+              int pre_smooth, int post_smooth, int bottom_sweeps,
+              int coarse_threshold, const py::object& fac_options) {
+             system.set_field_solver_plan(
+                 provider_slot, plan_identity, provider_identity, output_owner_identity,
+                 output_block, output_key, provider_identities, provider_blocks,
+                 provider_keys, provider_coefficients, solver, hierarchy, abs_tol,
+                 rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth,
+                 bottom_sweeps, coarse_threshold,
+                 amr_fac_options_from_python(fac_options));
+           },
+           py::arg("provider_slot"), py::arg("plan_identity"),
+           py::arg("provider_identity"),
            py::arg("output_owner_identity"),
            py::arg("output_block"), py::arg("output_key"),
            py::arg("provider_identities"), py::arg("provider_blocks"),
@@ -377,7 +450,43 @@ void bind_amr_assembly(py::class_<AmrSystem>& cls) {
            py::arg("solver"), py::arg("hierarchy"), py::arg("abs_tol"),
            py::arg("rel_tol"), py::arg("max_cycles"), py::arg("min_coarse"),
            py::arg("pre_smooth"), py::arg("post_smooth"), py::arg("bottom_sweeps"),
-           py::arg("coarse_threshold"))
+           py::arg("coarse_threshold"), py::arg("fac_options"))
+      .def(
+          "field_solver_configuration",
+          [](const AmrSystem& system, const std::string& provider_slot) {
+            const AmrFieldSolverConfiguration config =
+                system.field_solver_configuration(provider_slot);
+            const GeometricMgOptions& mg = config.mg;
+            const CompositeFacOptions& fac = config.fac;
+            py::dict mg_row;
+            mg_row["rel_tol"] = mg.rel_tol;
+            mg_row["abs_tol"] = mg.abs_tol;
+            mg_row["max_cycles"] = mg.max_cycles;
+            mg_row["min_coarse"] = mg.min_coarse;
+            mg_row["pre_smooth"] = mg.nu1;
+            mg_row["post_smooth"] = mg.nu2;
+            mg_row["bottom_sweeps"] = mg.nbottom;
+            mg_row["coarse_threshold"] = mg.coarse_threshold;
+            py::dict fac_row;
+            fac_row["max_iters"] = fac.max_iters;
+            fac_row["fine_sweeps"] = fac.fine_sweeps;
+            fac_row["rel_tol"] = fac.rel_tol;
+            fac_row["abs_tol"] = fac.abs_tol;
+            fac_row["coarse_rel_tol"] = fac.coarse_rel_tol;
+            fac_row["coarse_abs_tol"] = fac.coarse_abs_tol;
+            fac_row["coarse_cycles"] = fac.coarse_cycles;
+            fac_row["verbose"] = fac.verbose;
+            py::dict result;
+            result["schema_version"] = 1;
+            result["provider_slot"] = provider_slot;
+            result["plan_identity"] = config.plan_identity;
+            result["solver"] = config.solver;
+            result["hierarchy"] = config.hierarchy;
+            result["mg"] = std::move(mg_row);
+            result["fac"] = std::move(fac_row);
+            return result;
+          },
+          py::arg("provider_slot"))
       .def("set_field_reaction", &AmrSystem::set_field_reaction,
            py::arg("provider_slot"), py::arg("reaction"))
       .def("_set_field_topology_authority",

@@ -129,6 +129,7 @@ set(POPS_CPP_TEST_SOURCE_test_mpi_composite_fac "tests/cpp/integration/mpi/test_
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupled_source "tests/cpp/integration/mpi/test_mpi_coupled_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_coupler_inject "tests/cpp/integration/mpi/test_mpi_coupler_inject.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_cutcell_multibox "tests/cpp/integration/mpi/test_mpi_cutcell_multibox.cpp")
+set(POPS_CPP_TEST_SOURCE_test_mpi_field_plan_consensus "tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_fft_distributed "tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_fillboundary "tests/cpp/integration/mpi/test_mpi_fillboundary.cpp")
 set(POPS_CPP_TEST_SOURCE_test_mpi_hybrid_mbox_parity "tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp")

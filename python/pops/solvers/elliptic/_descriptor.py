@@ -40,11 +40,34 @@ _TOLERANCES = (Relative, Absolute)
 # so these are literals kept in lockstep with numerical_defaults.hpp by the pin test in
 # tests/python/unit/runtime/test_geometric_mg_options.py (effective report == defaults report).
 _MG_DEFAULT_REL_TOL = 1e-8
+_MG_DEFAULT_ABS_TOL = 0.0
 _MG_DEFAULT_MAX_CYCLES = 50
 _MG_DEFAULT_MIN_COARSE = 2
 _MG_DEFAULT_PRE_SMOOTH = 2
 _MG_DEFAULT_POST_SMOOTH = 2
 _MG_DEFAULT_BOTTOM_SWEEPS = 50
+_MG_DEFAULT_COARSE_THRESHOLD = 0
+
+
+def native_geometric_mg_defaults() -> dict[str, Any]:
+    """Closed native ``GeometricMgOptions`` carrier for routes where MG is ABI-inert.
+
+    The solver module is the Python authoring authority for these pinned native defaults.  Field
+    resolution snapshots this value once; bind/install must never reconstruct it from a live
+    descriptor or from another set of fallback literals.
+    """
+    return {
+        "schema_version": 1,
+        "kind": "geometric_mg_options",
+        "rel_tol": _MG_DEFAULT_REL_TOL,
+        "abs_tol": _MG_DEFAULT_ABS_TOL,
+        "max_cycles": _MG_DEFAULT_MAX_CYCLES,
+        "min_coarse": _MG_DEFAULT_MIN_COARSE,
+        "pre_smooth": _MG_DEFAULT_PRE_SMOOTH,
+        "post_smooth": _MG_DEFAULT_POST_SMOOTH,
+        "bottom_sweeps": _MG_DEFAULT_BOTTOM_SWEEPS,
+        "coarse_threshold": _MG_DEFAULT_COARSE_THRESHOLD,
+    }
 
 
 class GeometricMG(Descriptor):
@@ -73,7 +96,7 @@ class GeometricMG(Descriptor):
                  pre_sweeps: int = _MG_DEFAULT_PRE_SMOOTH,
                  post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
                  bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
-                 amr_composite: Any = None) -> None:
+                 fac: Any = None) -> None:
         # Default smoother is the natively-wired RedBlackGaussSeidel (ADC-613): the native V-cycle
         # uses a Gauss-Seidel smoother, so this keeps GeometricMG() working. Chebyshev stays a
         # selectable descriptor but validate() refuses it (no native Chebyshev smoother yet).
@@ -91,14 +114,14 @@ class GeometricMG(Descriptor):
         self.pre_sweeps = _check_positive_int(pre_sweeps, "pre_sweeps", minimum=0)
         self.post_sweeps = _check_positive_int(post_sweeps, "post_sweeps", minimum=0)
         self.bottom_sweeps = _check_positive_int(bottom_sweeps, "bottom_sweeps", minimum=0)
-        # ADC-645: opt-in composite FAC AMR FIELD solve. None (default) = the Option A coarse solve +
-        # gradient injection, bit-identical; a typed CompositeFAC opts the AMR set_poisson into the
-        # native composite path. A bare bool/string is rejected (typed slot, Spec 5 sec.7).
-        if amr_composite is not None and not isinstance(amr_composite, CompositeFAC):
+        # ADC-645: typed overrides for the AMR composite-FAC backend.  The field hierarchy policy,
+        # not this slot, selects level-local versus composite execution; None leaves every FAC knob
+        # at its native default.  A bare bool/string is rejected (typed slot, Spec 5 sec.7).
+        if fac is not None and not isinstance(fac, CompositeFAC):
             raise TypeError(
-                "GeometricMG(amr_composite=) must be a pops.solvers.options.CompositeFAC "
-                "descriptor or None, not %r; use CompositeFAC()." % (amr_composite,))
-        self.amr_composite = amr_composite
+                "GeometricMG(fac=) must be a pops.solvers.options.CompositeFAC "
+                "descriptor or None, not %r; use CompositeFAC()." % (fac,))
+        self.fac = fac
 
     @property
     def name(self) -> str:
@@ -111,7 +134,36 @@ class GeometricMG(Descriptor):
 
     def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
         del target, layout
-        return {"native_solver": "geometric_mg", "linear": True, "screened": True}
+        return {
+            "native_solver": "geometric_mg",
+            "linear": True,
+            "screened": True,
+            "mg_options": self.native_mg_options(),
+            "fac_options": self.amr_fac_options(),
+        }
+
+    def native_mg_options(self) -> dict[str, Any]:
+        """Closed, identity-bearing POD snapshot consumed by field resolve/install."""
+        return {
+            "schema_version": 1,
+            "kind": "geometric_mg_options",
+            **self.mg_options(),
+        }
+
+    def amr_fac_options(self) -> dict[str, Any] | None:
+        """Canonical optional overrides for the native composite-FAC backend.
+
+        Hierarchy selection is deliberately absent: ``CompositeHierarchySolve`` owns that
+        decision.  ``None`` means the native ``CompositeFacOptions`` defaults, while an explicit
+        :class:`CompositeFAC` carries only authored overrides (unconfigured members stay ``None``).
+        """
+        if self.fac is None:
+            return None
+        return {
+            "schema_version": 1,
+            "kind": "composite_fac",
+            **self.fac.options(),
+        }
 
     def options(self) -> dict:
         view = {
@@ -126,8 +178,8 @@ class GeometricMG(Descriptor):
         }
         # ADC-645: present ONLY when set (omit-when-default), so an unconfigured GeometricMG()
         # options view -- and everything hashed from it -- is unchanged.
-        if self.amr_composite is not None:
-            view["amr_composite"] = self.amr_composite.name
+        if self.fac is not None:
+            view["fac"] = self.fac.name
         return view
 
     def to_data(self) -> dict[str, Any]:
@@ -151,12 +203,12 @@ class GeometricMG(Descriptor):
             "pre_sweeps": self.pre_sweeps,
             "post_sweeps": self.post_sweeps,
             "bottom_sweeps": self.bottom_sweeps,
-            "amr_composite": (
+            "fac": (
                 None
-                if self.amr_composite is None
+                if self.fac is None
                 else {
-                    "type": type(self.amr_composite).__name__,
-                    "options": self.amr_composite.options(),
+                    "type": type(self.fac).__name__,
+                    "options": self.fac.options(),
                 }
             ),
         }
@@ -239,10 +291,10 @@ class GeometricMG(Descriptor):
             extra={"smoother": self.smoother.lower(context),
                    "coarse": self.coarse.lower(context),
                    "tolerance": self.tolerance.lower(context),
-                   "mg_options": self.mg_options(),
-                   # ADC-645: the composite-FAC selection (None = Option A, omitted downstream).
-                   "amr_composite": (self.amr_composite.lower(context)
-                                     if self.amr_composite is not None else None)})
+                   "mg_options": self.native_mg_options(),
+                   # ADC-645: exact authoring identity plus the canonical backend-option carrier.
+                   "fac": (self.fac.lower(context) if self.fac is not None else None),
+                   "fac_options": self.amr_fac_options()})
 
     def inspect(self) -> Any:
         view = super().inspect()
@@ -287,6 +339,9 @@ class FFT(Descriptor):
         return {
             "native_solver": "fft_spectral" if self.spectral else "fft",
             "linear": True,
+            # System::set_field_solver_plan has one closed GeometricMgOptions POD in its ABI even
+            # for direct FFT routes.  Capture the inert values now so bind never invents them.
+            "mg_options": native_geometric_mg_defaults(),
         }
 
     def options(self) -> dict:

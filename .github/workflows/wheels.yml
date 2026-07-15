@@ -24,6 +24,7 @@ jobs:
   macos-arm64:
     name: wheel (macOS arm64, cp312)
     runs-on: macos-14  # Apple Silicon (arm64) runner
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v7
@@ -42,19 +43,31 @@ jobs:
       - name: Install ccache
         run: brew list ccache >/dev/null 2>&1 || brew install ccache
 
+      - name: Resolve Apple toolchain cache identity
+        id: apple-platform
+        shell: bash
+        run: |
+          xcode="$(xcodebuild -version | tr '\n' '-')"
+          clang="$(clang++ --version | head -n 1)"
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          image="$(sw_vers -productVersion)"
+          raw="macos-${image}-${RUNNER_ARCH}-${xcode}-appleclang-${clang}-sdk-${sdk}"
+          key="$(printf '%s' "$raw" | tr -c 'A-Za-z0-9._-' '-')"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
       # Cache the Kokkos install (deterministic for a fixed version + commit + flags), so warm runs SKIP
       # the Serial+static+PIC Kokkos build entirely -- CIBW_BEFORE_ALL no-ops on a cache hit. The key
       # carries the pinned commit (15dc143e = tag 4.4.01) and the build flags, AND hashFiles(this
       # workflow): any edit to a Kokkos flag here rolls the key (no stale-flag reuse) and editing the
-      # file is the escape hatch from a bad cache. macos-14 is pinned, and libc++ ABI is stable across
-      # its image updates, so the runner SDK is not in the key (an archive built on an older image links
-      # fine into a fresh _pops on a newer one).
+      # file is the escape hatch from a bad cache. The exact macOS image, architecture, Xcode,
+      # AppleClang and SDK identity also participate: a static archive is never reused across an
+      # unproven compiler/SDK boundary.
       - name: Cache Kokkos install (macOS arm64, Serial static PIC)
         id: kokkos-cache
         uses: actions/cache@v6
         with:
           path: /tmp/kokkos-install
-          key: kokkos-wheel-macos-arm64-4.4.01-15dc143e-serial-static-pic-cxx20-dt11-${{ hashFiles('.github/workflows/wheels.yml') }}
+          key: kokkos-wheel-${{ steps.apple-platform.outputs.key }}-4.4.01-15dc143e-serial-static-pic-cxx20-dt11-${{ hashFiles('.github/workflows/wheels.yml') }}
 
       # ccache for the heavy -O3 _pops TUs. Rolling key (sha) + restore-keys reuse the most recent cache.
       # cibuildwheel builds in a temp dir, so CCACHE_BASEDIR + CCACHE_NOHASHDIR (set in CIBW_ENVIRONMENT)

@@ -220,6 +220,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_field_plan_consensus"
+sources = ["tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_fft_distributed"
 sources = ["tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp"]
 labels = ["backend", "mpi", "medium"]

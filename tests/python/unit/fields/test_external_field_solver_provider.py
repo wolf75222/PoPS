@@ -114,8 +114,27 @@ def test_external_pair_survives_field_lowering_with_exact_component_authorities(
         "absolute_tolerance": 1.0e-12,
         "max_iterations": 17,
     }
+    assert plan.native_options["mg_options"] == {
+        "schema_version": 1,
+        "kind": "external_field_solver_options",
+        "rel_tol": 1.0e-10,
+        "abs_tol": 1.0e-12,
+        "max_cycles": 17,
+        "min_coarse": 2,
+        "pre_smooth": 2,
+        "post_smooth": 2,
+        "bottom_sweeps": 50,
+        "coarse_threshold": 0,
+    }
     assert plan.component_bindings() == (external["topology"], external["solver"])
     plan.require_component_inputs((topology, solver))
+
+    # Artifact state is recursively immutable, but the Python/native boundary must receive an
+    # ordinary detached carrier: external component parameters are serialized to JSON at install.
+    native = plan.native_install_data()
+    assert type(native) is dict
+    assert type(native["solver_provider"]["topology"]["parameters"]) is dict
+    json.dumps(native["solver_provider"], sort_keys=True, allow_nan=False)
 
 
 def test_external_pair_requires_both_exact_resolve_inputs(tmp_path):

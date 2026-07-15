@@ -93,6 +93,12 @@ int System::macro_step() const {
 // checkpointed / finalized phases (SystemLifecycle) are reachable only through explicit transitions
 // with no current caller, so the observable strings above are preserved bit-for-bit.
 void System::mark_bound() {
+  if (p_->lifecycle_.frozen())
+    p_->lifecycle_.to_bound();  // raises the canonical second-bind refusal before any collective
+  // All resolved field plans have now been installed and no named backend has been
+  // materialized yet. Agree the complete registry before rank-local validation so a
+  // divergent rank cannot throw locally while its peers enter the collective.
+  p_->fields_.require_field_plan_consensus();
   if (!p_->block_state_identities_.empty() &&
       p_->block_state_identities_.size() != p_->sp.size())
     throw std::runtime_error(

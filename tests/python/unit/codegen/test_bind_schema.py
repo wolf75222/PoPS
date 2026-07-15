@@ -361,6 +361,8 @@ def test_compiled_arguments_and_manifest_are_derived_from_attached_schema():
 
     arguments = compiled.arguments()
     assert set(arguments.params) == {slot.qid for slot in schema.slots}
+    assert not hasattr(arguments, "solvers")
+    assert "solvers" not in arguments.to_dict()
     assert all(row["handle"]["handle_type"] == "parameter" for row in arguments.params.values())
     assert [row["required"] for row in arguments.params.values()].count(False) == 4
 
@@ -391,7 +393,7 @@ def test_bound_snapshot_records_effective_values_sources_and_schema_identity():
         return BoundSnapshot(
             semantic_identity=make_identity("semantic", {"problem": "bind-schema"}),
             artifact_identity=make_identity("artifact", {"binary": "bind-schema"}),
-            layout={"kind": "uniform"}, blocks=[], solvers={},
+            layout={"kind": "uniform"}, blocks=[], field_plans={},
             step_transaction=None,
             params=resolved.rows(),
             aux_evidence={}, initial_evidence={},
@@ -425,6 +427,8 @@ def test_amr_bound_snapshot_retains_installed_program_identity_and_bindings():
     ).to_dict()
     assert snapshot["semantic_identity"]["domain"] == "semantic"
     assert snapshot["artifact_identity"]["domain"] == "artifact"
+    assert snapshot["field_plans"] == {}
+    assert "solvers" not in snapshot
     assert snapshot["step_transaction"] is None
     assert snapshot["bind_schema_identity"]["domain"] == "bind-schema"
     assert len(snapshot["params"]) == len(schema.slots)

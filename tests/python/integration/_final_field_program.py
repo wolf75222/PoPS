@@ -223,7 +223,11 @@ def resolve_periodic_field_program(
             conflict_policy=ConflictPolicy.REFINE_WINS,
         )
         layout = AMR(
-            grid=CartesianGrid(frame=model.frame, cells=(n, n)),
+            grid=CartesianGrid(
+                frame=model.frame,
+                cells=(n, n),
+                periodic=PeriodicAxes(model.frame.axes),
+            ),
             hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
             tagging=tagging,
             regrid=AMRRegrid(

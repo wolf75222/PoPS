@@ -1,9 +1,9 @@
 """AmrSystem install/bind mixin (ADC-619 split).
 
 The low-level ``pops.bind`` install seam of :class:`pops.runtime._amr_system.AmrSystem`:
-``_install_compiled`` (the native / compiled install orchestration) plus its field-solver,
-named-elliptic-field and aux helpers (``_install_solver`` / ``_declared_elliptic_fields`` /
-``_install_aux``). Split out of ``amr_system`` for the 500-line cap; mixed into ``AmrSystem``
+``_install_compiled`` (the native / compiled install orchestration) plus its resolved-field-plan
+and aux helpers (``_install_field_plan`` / ``_install_aux``). Split out of ``amr_system`` for the
+500-line cap; mixed into ``AmrSystem``
 via inheritance and operating on ``self._s`` (the native facade), ``self._aux_field_index`` and
 the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`` /
 ``_finish_program_install``).
@@ -26,7 +26,7 @@ class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
-                          aux: Any = None, solvers: Any = None, field_plans: Any = None,
+                          aux: Any = None, field_plans: Any = None,
                           bind_schema: Any = None, initial_values: Any = (),
                           bootstrap_plan: Any = None, amr_transfer: Any = None,
                           install_plan: Any = None) -> Any:
@@ -39,7 +39,7 @@ class _AmrSystemInstall(_AmrSystem):
         clear actionable error), then lowers to the AMR layer:
 
           - NATIVE install (``compiled=None``): wires each InstallPlan ``CompiledModel`` with
-            ``add_equation``, sets the field solvers (``set_poisson``),
+            ``add_equation``, installs each resolved field plan,
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
@@ -59,7 +59,7 @@ class _AmrSystemInstall(_AmrSystem):
             route independently through ``set_program_params``.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
-        @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
+        @param field_plans resolved compile-time field discretizations keyed by field name.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
         # and is refused explicitly -- the compiled artifact is bound exactly once.
@@ -68,14 +68,12 @@ class _AmrSystemInstall(_AmrSystem):
         instances = instances or {}
         params = {} if params is None else params
         aux = aux or {}
-        solvers = solvers or {}
         field_plans = field_plans or {}
 
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
         validate_install_arguments(
-            self, compiled, instances, params, aux, solvers or field_plans,
-            field_plans=field_plans)
+            self, compiled, instances, params, aux, field_plans=field_plans)
         if amr_transfer is not None:
             self._install_bootstrap_routes(amr_transfer)
 
@@ -90,19 +88,11 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
-        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
-        # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
-        # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
-        # solver-field set beyond the default Poisson names: a solver selection for a model-declared named
-        # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
-        # declared set. Mirror of System._install with _declared_elliptic_fields.
-        declared_fields = self._declared_elliptic_fields(instances)
-        if field_plans and solvers:
-            raise ValueError("pops.bind: field_plans and legacy solvers cannot both be installed")
+        # (1) RESOLVED FIELD PLANS first (parity with System: configure native solvers before
+        # adding blocks and before install_program). Field identity, provider and hierarchy policy
+        # were resolved at compile time; bind only materializes that immutable plan.
         for field, field_plan in field_plans.items():
             self._install_field_plan(field, field_plan)
-        for field, solver_brick in solvers.items():
-            self._install_solver(field, solver_brick, declared_fields)
 
         # (2) INSTANCES: resolve every package first, then project complete BindSchema vectors before
         # installing any block. The per-instance detached CompiledModel is mandatory.
@@ -248,7 +238,7 @@ class _AmrSystemInstall(_AmrSystem):
         # program/cache/ABI identity and transaction plan are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
         snapshot = build_amr_snapshot(
-            self, compiled, instances, solvers or field_plans, aux, params
+            self, compiled, instances, field_plans, aux, params
         )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
@@ -310,9 +300,6 @@ class _AmrSystemInstall(_AmrSystem):
         for pair in sorted(face_vectors):
             self._s._register_bootstrap_face_vector(pair)
 
-    # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
-    _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
-
     def _install_field_plan(self, field: Any, field_plan: Any) -> None:
         """Install the complete resolved AMR field route before native block loaders run."""
         from pops.codegen.field_install import ResolvedFieldInstallPlan
@@ -321,7 +308,7 @@ class _AmrSystemInstall(_AmrSystem):
         if field_plan.name != field or field_plan.target != "amr_system":
             raise ValueError("resolved AMR field install plan identity/target mismatch")
         field_plan.__post_init__()
-        options = field_plan.native_options
+        options = field_plan.native_install_data()
         provider = options["solver_provider"]
         if provider["provider_kind"] != "builtin_v1":
             raise RuntimeError(
@@ -329,20 +316,20 @@ class _AmrSystemInstall(_AmrSystem):
         routes = options["provider_pack"]
         output_route = options["output_route"]
         from pops.identity import canonical_bytes
-        solver = field_plan.discretization.solver
         if provider["solver"]["route"] != "geometric_mg":
-            raise ValueError("AMR field plan requires GeometricMG")
-        mg_fn = getattr(solver, "mg_options", None)
-        mg = mg_fn() if callable(mg_fn) else {}
+            raise ValueError("resolved AMR field plan requires builtin geometric_mg")
+        mg = options["mg_options"]
         from pops.solvers._numeric import native_float
-        mg_args = {
-            "rel_tol": 1.0e-8, "max_cycles": 50, "min_coarse": 2,
-            "pre_smooth": 2, "post_smooth": 2, "bottom_sweeps": 50,
-            "coarse_threshold": 0, **dict(mg),
-        }
+        fac = options["fac_options"]
+        native_fac = None if fac is None else dict(fac)
+        if native_fac is not None:
+            for name in ("rel_tol", "abs_tol", "coarse_rel_tol", "coarse_abs_tol"):
+                if native_fac[name] is not None:
+                    native_fac[name] = native_float(
+                        native_fac[name], where="AMR field plan FAC option %s" % name)
         slot = options["provider_slot"]
         self._s.set_field_solver_plan(
-            slot, options["provider_identity_text"],
+            slot, field_plan.identity.token, options["provider_identity_text"],
             canonical_bytes(output_route["owner_identity"]).hex(),
             output_route["owner_block"],
             output_route["key"],
@@ -352,13 +339,13 @@ class _AmrSystemInstall(_AmrSystem):
             [route["key"] for route in routes],
             [route["coefficient"] for route in routes],
             provider["solver"]["route"], options["hierarchy"],
-            native_float(mg.get("abs_tol", 0.0),
+            native_float(mg["abs_tol"],
                          where="AMR field plan absolute tolerance"),
-            native_float(mg_args["rel_tol"],
+            native_float(mg["rel_tol"],
                          where="AMR field plan relative tolerance"),
-            mg_args["max_cycles"], mg_args["min_coarse"], mg_args["pre_smooth"],
-            mg_args["post_smooth"], mg_args["bottom_sweeps"],
-            mg_args["coarse_threshold"])
+            mg["max_cycles"], mg["min_coarse"], mg["pre_smooth"],
+            mg["post_smooth"], mg["bottom_sweeps"],
+            mg["coarse_threshold"], native_fac)
         topology = provider["topology"]
         self._s._set_field_topology_authority(
             slot, topology["provider_kind"], topology["provenance"],
@@ -435,65 +422,6 @@ class _AmrSystemInstall(_AmrSystem):
             raise ValueError("AMR field output route carries a sign without gradient components")
         self._s.register_elliptic_field(
             block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
-
-    def _install_solver(self, field: Any, solver_brick: Any,
-                        declared_fields: Any = frozenset()) -> Any:
-        """Lower a field-solver selection to set_poisson (AMR, ADC-428).
-
-        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
-        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is wired
-        by the native AMR loader (register_elliptic_field + set_block_elliptic_field) and solved by the
-        AmrRuntime engine each solve_fields, while the solver selection routes through set_poisson for
-        both (the AMR solver is always geometric_mg). A field name that is NEITHER the default Poisson
-        field NOR a declared named field is a TYPO -- rejected LOUD, naming the declared set. Mirror of
-        System._install_solver, minus the System-only solver options the AMR set_poisson lacks."""
-        if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
-            declared = ", ".join(sorted(declared_fields)) or "(none declared)"
-            raise ValueError(
-                "pops.bind: solver selection names field %r, which is neither the default Poisson "
-                "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
-                "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
-                % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
-        token = solver_brick if isinstance(solver_brick, str) else (
-            getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
-        if token is None:
-            raise TypeError("pops.bind: solver must be a token string or an "
-                            "pops.solvers.<Solver>(...) descriptor; got %r"
-                            % type(solver_brick).__name__)
-        # ADC-645: GeometricMG(amr_composite=CompositeFAC(...)) opts the AMR FIELD solve into the
-        # native composite FAC path. None (default) forwards NOTHING extra, so the native call is
-        # byte-identical to the historical set_poisson(solver=token) (Option A).
-        composite = getattr(solver_brick, "amr_composite", None)
-        kwargs = {} if composite is None else composite.set_poisson_kwargs()
-        # The resolved plan already owns native tokens. Keep them behind the private seam; the
-        # public AMR method accepts typed bc/wall descriptors only.
-        self._set_poisson_native(
-            rhs="charge_density", solver=token, bc="auto", wall="none", wall_radius=0.0,
-            **kwargs)
-
-    @staticmethod
-    def _declared_elliptic_fields(instances: Any) -> Any:
-        """Collect named fields exclusively from detached per-block CompiledModel metadata."""
-        from pops.codegen.loader import CompiledModel
-
-        names = set()
-        for block_name, spec in (instances or {}).items():
-            if not isinstance(spec, Mapping):
-                raise TypeError("pops.bind: instances[%r] must be a mapping" % block_name)
-            model = spec.get("model")
-            if not isinstance(model, CompiledModel):
-                raise TypeError(
-                    "pops.bind: instances[%r] must carry a detached CompiledModel from InstallPlan"
-                    % block_name
-                )
-            declared = getattr(model, "elliptic_field_names", None)
-            if declared is None:
-                raise ValueError(
-                    "pops.bind: CompiledModel for block %r lacks elliptic_field_names metadata; "
-                    "re-run pops.resolve(case) and pops.compile(plan)" % block_name
-                )
-            names.update(declared)
-        return names
 
     def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any

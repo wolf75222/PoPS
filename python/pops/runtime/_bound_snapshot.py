@@ -17,7 +17,7 @@ from typing import Any
 from pops.identity import Identity, canonical_bytes, make_identity
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _identity(value: Any, domain: str, *, where: str) -> Identity:
@@ -139,12 +139,12 @@ class BoundSnapshot:
 
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
-        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence",
+        "field_plans", "step_transaction", "params", "aux_evidence", "initial_evidence",
         "bind_schema_identity", "execution_context", "bind_identity",
     )
 
     def __init__(self, *, semantic_identity: Any, artifact_identity: Any, layout: Any,
-                 blocks: Any, solvers: Any, step_transaction: Any, params: Any, aux_evidence: Any,
+                 blocks: Any, field_plans: Any, step_transaction: Any, params: Any, aux_evidence: Any,
                  initial_evidence: Any, bind_schema_identity: Any,
                  execution_context: Any = None) -> None:
         semantic = _identity(semantic_identity, "semantic", where="semantic_identity")
@@ -154,7 +154,7 @@ class BoundSnapshot:
         object.__setattr__(self, "semantic_identity", semantic)
         object.__setattr__(self, "artifact_identity", artifact)
         for name, value in (
-            ("layout", layout), ("blocks", list(blocks)), ("solvers", solvers),
+            ("layout", layout), ("blocks", list(blocks)), ("field_plans", field_plans),
             ("step_transaction", step_transaction), ("params", list(params)),
             ("aux_evidence", aux_evidence),
             ("initial_evidence", initial_evidence),
@@ -172,7 +172,7 @@ class BoundSnapshot:
             "artifact_identity": self.artifact_identity.to_data(),
             "layout": _thaw(self.layout),
             "blocks": _thaw(self.blocks),
-            "solvers": _thaw(self.solvers),
+            "field_plans": _thaw(self.field_plans),
             "step_transaction": _thaw(self.step_transaction),
             "params": _thaw(self.params),
             "aux_evidence": _thaw(self.aux_evidence),
@@ -212,7 +212,7 @@ class MultiLayoutBoundSnapshot:
 
     __slots__ = (
         "schema_version", "semantic_identity", "artifact_identity", "layout", "blocks",
-        "solvers", "step_transaction", "params", "aux_evidence", "initial_evidence",
+        "field_plans", "step_transaction", "params", "aux_evidence", "initial_evidence",
         "bind_schema_identity", "execution_context", "bind_identity",
     )
 
@@ -232,7 +232,7 @@ class MultiLayoutBoundSnapshot:
         }
         ordered = tuple(by_name[block.name] for block in artifact.blocks)
         object.__setattr__(self, "blocks", _freeze(ordered, where="blocks"))
-        object.__setattr__(self, "solvers", _freeze({}, where="solvers"))
+        object.__setattr__(self, "field_plans", _freeze({}, where="field_plans"))
         transactions = tuple(snapshot.to_dict()["step_transaction"] for snapshot in snapshots)
         if any(value != transactions[0] for value in transactions[1:]):
             raise ValueError("per-layout Program transaction contracts are not identical")
@@ -260,7 +260,7 @@ class MultiLayoutBoundSnapshot:
             "artifact_identity": self.artifact_identity.to_data(),
             "layout": _thaw(self.layout),
             "blocks": _thaw(self.blocks),
-            "solvers": _thaw(self.solvers),
+            "field_plans": _thaw(self.field_plans),
             "step_transaction": _thaw(self.step_transaction),
             "params": _thaw(self.params),
             "aux_evidence": _thaw(self.aux_evidence),
@@ -327,7 +327,7 @@ def _transaction_data(compiled: Any) -> Any:
     return None if plan is None else plan.to_data()
 
 
-def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
+def _build_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
                     aux: Any, params: Any, *, layout: str) -> BoundSnapshot:
     semantic, artifact = _require_compiled_identities(compiled)
     rows = params.rows()
@@ -336,8 +336,8 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
         artifact_identity=artifact,
         layout={"kind": layout},
         blocks=_block_rows(engine, instances),
-        solvers={name: _data(value, where="solver[%r]" % name)
-                 for name, value in sorted((solvers or {}).items())},
+        field_plans={name: _data(value, where="field_plan[%r]" % name)
+                     for name, value in sorted((field_plans or {}).items())},
         step_transaction=_transaction_data(compiled),
         params=rows,
         aux_evidence=_input_evidence(aux or {}, where="aux"),
@@ -350,18 +350,18 @@ def _build_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
 
 
 def build_uniform_snapshot(engine: Any, compiled: Any, resolved_models: Any, instances: Any,
-                           solvers: Any, aux: Any, params: Any) -> BoundSnapshot:
+                           field_plans: Any, aux: Any, params: Any) -> BoundSnapshot:
     effective = {
         name: dict(spec, model=resolved_models.get(name, spec["model"]))
         for name, spec in (instances or {}).items()
     }
     return _build_snapshot(
-        engine, compiled, effective, solvers, aux, params, layout="uniform")
+        engine, compiled, effective, field_plans, aux, params, layout="uniform")
 
 
-def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, solvers: Any,
+def build_amr_snapshot(engine: Any, compiled: Any, instances: Any, field_plans: Any,
                        aux: Any, params: Any) -> BoundSnapshot:
-    return _build_snapshot(engine, compiled, instances, solvers, aux, params, layout="amr")
+    return _build_snapshot(engine, compiled, instances, field_plans, aux, params, layout="amr")
 
 
 __all__ = [

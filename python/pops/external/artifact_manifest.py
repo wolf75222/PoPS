@@ -430,7 +430,8 @@ def build_compiled_manifest(compiled):
             name for name, slot in args.params.items() if slot.get("kind") == "runtime")
         params_derived = sorted(
             name for name, slot in args.params.items() if slot.get("kind") == "derived")
-        field_outputs = sorted(set(args.solvers) | set(args.outputs))
+        field_plans = getattr(getattr(compiled, "plan", None), "field_plans", {}) or {}
+        field_outputs = sorted(set(field_plans) | set(args.outputs))
         ghost_depth = args.layout_runtime.get("ghost_depth")
         ghost_depth_by_block = dict(
             args.layout_runtime.get("ghost_depth_by_block") or {})

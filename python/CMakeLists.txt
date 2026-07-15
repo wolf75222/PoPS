@@ -120,8 +120,14 @@ endif()
 # Copy the pure-Python package (pops/ and every sub-package) into the build tree next to _pops.
 # GLOB_RECURSE + CONFIGURE_DEPENDS so new modules / sub-packages are picked up automatically (a flat
 # explicit list silently dropped a new module from the build tree -- "partially initialized module"
-# import errors that the source tree did not show). configure_file creates the destination sub-dirs.
-file(GLOB_RECURSE _pops_py_sources CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} pops/*.py)
+# import errors that the source tree did not show). Type stubs and the PEP 561 marker are package
+# sources too: cold builds and CI's cached-module fast path must expose the same tree.
+# configure_file creates the destination sub-dirs.
+file(GLOB_RECURSE _pops_py_sources CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+     pops/*.py pops/*.pyi)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/pops/py.typed")
+  list(APPEND _pops_py_sources pops/py.typed)
+endif()
 foreach(pyf ${_pops_py_sources})
   configure_file(${CMAKE_CURRENT_SOURCE_DIR}/${pyf} ${CMAKE_CURRENT_BINARY_DIR}/${pyf} COPYONLY)
 endforeach()

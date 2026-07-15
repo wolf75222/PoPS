@@ -222,7 +222,8 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   System system(SystemConfig{n, 1.0, true});
   const std::string slot = "signed-gradient-provider";
   system.set_field_solver_plan(
-      slot, "test:signed-gradient-provider", "test:plasma", "plasma", "potential",
+      slot, "test:signed-gradient-plan", "test:signed-gradient-provider",
+      "test:plasma", "plasma", "potential",
       {"test:plasma/potential/rhs"}, {"plasma"}, {"potential"}, {1.0},
       "geometric_mg", 0.0, 1.0e-8, 50, 2, 2, 2, 50, 0);
   system.set_field_topology_authority(

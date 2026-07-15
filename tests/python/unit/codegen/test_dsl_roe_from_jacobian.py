@@ -1,4 +1,4 @@
-"""Compiled generic Roe regression for the final Gaussian-moment preset."""
+"""Compiled generic Roe regression through the final public lifecycle."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,35 +6,32 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import pops.runtime._engine_descriptors as engine
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
 from pops.lib.models.moments import Gaussian
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Roe
-from pops.numerics.riemann.waves import FromJacobian, provider_of
+from pops.lib.time import ForwardEuler
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.riemann import FromJacobian, provider_of
+from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
-from pops.runtime._system import System
-from tests.python.support.requirements import (
-    default_cxx,
-    missing_aot_requirement,
-    repo_include,
-)
+from pops.time import FixedDt
 
 
-INCLUDE = repo_include()
+ROOT = Path(__file__).resolve().parents[4]
+N = 24
+DT = 5.0e-4
+STEPS = 10
 
-pytestmark = (
+pytestmark = [
     pytest.mark.compiler,
     pytest.mark.kokkos,
     pytest.mark.native_loader,
     pytest.mark.regression,
-)
-
-
-def _compile_native(model: Model, path: Path):
-    lowering = model.__pops_compiler_lowering__()
-    assert lowering.facade is model
-    assert lowering.source_module is model.module
-    return lowering.emit_model.compile(str(path), INCLUDE, backend="production")
+]
 
 
 def _smooth_density(n: int) -> np.ndarray:
@@ -43,17 +40,20 @@ def _smooth_density(n: int) -> np.ndarray:
     return 1.0 + 0.4 * np.exp(-60.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
 
 
-def test_final_gaussian_moments_run_generic_roe_from_jacobian(tmp_path: Path) -> None:
-    reason = missing_aot_requirement(INCLUDE, default_cxx())
-    if reason:
-        pytest.skip(reason)
-
+def test_final_gaussian_moments_run_generic_roe_from_jacobian(
+    isolated_native_cache, native_cxx, kokkos_root
+) -> None:
+    del isolated_native_cache, kokkos_root
+    frame = Rectangle(
+        "final-gaussian-roe-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
     model = Gaussian.transport(
         order=2,
         name="final_gaussian_roe",
         robust=True,
         exact_speeds=True,
         roe=True,
+        frame=frame,
     )
     assert isinstance(model, Model)
     provider = provider_of(model)
@@ -61,29 +61,62 @@ def test_final_gaussian_moments_run_generic_roe_from_jacobian(tmp_path: Path) ->
     assert provider.kind == FromJacobian(eig="numeric").kind
 
     # The generic route cannot have accidentally fallen back to the fluid-role implementation.
-    state_space = model.module.state_spaces()["U"]
-    roles = set(state_space.roles.values())
+    state = model.states["U"]
+    roles = set(state.space.roles.values())
     assert "Density" in roles
     assert not roles.intersection({"MomentumX", "MomentumY", "Energy"})
 
-    compiled = _compile_native(model, tmp_path / "gaussian_roe.so")
-    assert compiled.has_roe
-    assert compiled.has_wave_speeds
+    flux = model.fluxes["transport"]
+    rate = model.operators["transport"]
+    case = pops.Case("final_gaussian_roe_case")
+    block = case.block("moments", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Roe(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
 
-    n = 24
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": native_cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    assert len(artifact.blocks) == 1
+    compiled_model = artifact.blocks[0].model
+    assert compiled_model.has_roe
+    assert compiled_model.has_wave_speeds
+
     # Realizable centered Maxwellian moments (u=v=0, covariance=I), modulated by density.
     maxwellian = np.array((1.0, 0.0, 1.0, 0.0, 0.0, 1.0))
-    initial = maxwellian[:, None, None] * _smooth_density(n)[None, :, :]
-    simulation = System(n=n, L=1.0, periodic=True)
-    simulation.add_equation(
-        "moments",
-        model=compiled,
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=Roe()),
-        time=engine.Explicit(),
+    initial = maxwellian[:, None, None] * _smooth_density(N)[None, :, :]
+    simulation = pops.bind(
+        artifact,
+        initial_state={"moments": np.ascontiguousarray(initial)},
     )
-    simulation.set_state("moments", initial)
-    for _ in range(10):
-        simulation.step(5.0e-4)
-    final = np.asarray(simulation.get_state("moments"))
+    report = pops.run(simulation, t_end=STEPS * DT, max_steps=STEPS)
+    assert report.accepted_steps == STEPS
+    final = np.asarray(simulation.get_state("moments"), dtype=np.float64).reshape(
+        initial.shape
+    )
     assert np.isfinite(final).all()
+    assert not np.array_equal(final, initial)
     np.testing.assert_allclose(final[0].sum(), initial[0].sum(), rtol=1.0e-12, atol=1.0e-12)

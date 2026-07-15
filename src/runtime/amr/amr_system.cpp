@@ -7,6 +7,7 @@
 #include <pops/runtime/multiblock/prepared_interface_flux_component.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_registry.hpp>
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
+#include <pops/parallel/comm.hpp>
 #include <pops/runtime/program/profiler.hpp>  // Profiler: AMR / MPI phase timings (Spec 5 criterion 43, ADC-479)
 #include <pops/runtime/program/program_runtime_state.hpp>  // ProgramRuntimeState: the shared compiled-Program subsystem (ADC-594)
 #include <pops/runtime/program/amr_program_checkpoint.hpp>
@@ -357,9 +358,10 @@ struct AmrSystem::Impl {
   std::map<std::string, std::map<std::string, std::function<void(const MultiFab&, MultiFab&)>>>
       ell_field_rhs_;
   // Complete plans are keyed by the digest of the canonical block-qualified provider identity.
-  // The identity string is retained in AmrFieldSolveConfig and checked on duplicate installation,
-  // so hash collisions cannot alias fields.  Installed before loaders register (block,key).
+  // plan_identity independently commits the complete resolved semantics; provider_identity retains
+  // the exact provider identity for collision/audit checks. Duplicate slots are always refused.
   std::map<std::string, AmrFieldSolveConfig> field_plans_;
+  bool field_plan_consensus_verified_ = false;
   // A named elliptic field is solved only by the AmrRuntime engine (not the single-block AmrCouplerMP
   // coupler), so registering one FORCES the runtime engine even for a single block (AmrRuntime accepts >=
   // 1 block). A compiled time Program (ADC-508) likewise forces it: the AmrProgramContext driver needs
@@ -720,11 +722,28 @@ struct AmrSystem::Impl {
 
   bool multi_block() const { return blocks.size() >= 2 || force_runtime_; }
 
+  void require_field_plan_consensus() {
+    if (field_plan_consensus_verified_)
+      return;
+    std::vector<std::pair<std::string_view, std::string_view>> identities;
+    identities.reserve(field_plans_.size());
+    for (const auto& [slot, plan] : field_plans_)
+      identities.emplace_back(slot, plan.plan_identity);
+    if (!all_ranks_agree_exact_ordered_byte_pairs(identities))
+      throw std::runtime_error(
+          "AmrSystem: ordered resolved field plans differ across MPI ranks");
+    field_plan_consensus_verified_ = true;
+  }
+
   // Builds the MULTI-BLOCK runtime engine (AmrRuntime): one common SharedAmrLayout (shared
   // hierarchy, frozen), then EACH block materializes its type-erased AmrRuntimeBlock on it (via its
   // block_builder, which captures the concrete Model/Limiter/Flux). The coarse Poisson is SUMMED and
   // CO-LOCATED (Sum_b elliptic_rhs_b(U_b) read at the same cells of the shared coarse grid).
   void build_multi() {
+    // Direct low-level C++ use may intentionally skip mark_bound(). Keep the same canonical
+    // collective immediately before lazy runtime construction so no field plan can materialize
+    // without the exact ordered-registry witness.
+    require_field_plan_consensus();
     // MULTI-BLOCK set_conservative_state (wave 3 audit): the full state is now THREADED to the
     // NATIVE builder (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state +
     // injection to the fine levels, takes priority over density). The COMPILED (.so) path does not
@@ -2146,7 +2165,8 @@ void AmrSystem::set_poisson(const std::string& rhs, const std::string& solver,
 }
 
 void AmrSystem::set_field_solver_plan(
-    const std::string& provider_slot, const std::string& provider_identity,
+    const std::string& provider_slot, const std::string& plan_identity,
+    const std::string& provider_identity,
     const std::string& output_owner_identity,
     const std::string& output_block, const std::string& output_key,
     const std::vector<std::string>& provider_identities,
@@ -2155,36 +2175,55 @@ void AmrSystem::set_field_solver_plan(
     const std::vector<double>& provider_coefficients, const std::string& solver,
     const std::string& hierarchy, double abs_tol, double rel_tol, int max_cycles,
     int min_coarse, int pre_smooth, int post_smooth, int bottom_sweeps,
-    int coarse_threshold) {
+    int coarse_threshold, const CompositeFacOptions& fac_options) {
   require_assembling_amr(p_->bound_, "set_field_solver_plan");
   if (p_->built)
     throw std::runtime_error("AmrSystem::set_field_solver_plan: system already built");
-  if (provider_slot.empty() || provider_identity.empty() || output_owner_identity.empty() ||
+  if (provider_slot.empty() || plan_identity.empty() || provider_identity.empty() ||
+      output_owner_identity.empty() ||
       output_block.empty() ||
       output_key.empty())
     throw std::runtime_error(
-        "AmrSystem::set_field_solver_plan requires a qualified provider identity");
+        "AmrSystem::set_field_solver_plan requires qualified plan/provider identities");
   const std::size_t provider_count = provider_identities.size();
   if (provider_count == 0 || provider_blocks.size() != provider_count ||
       provider_keys.size() != provider_count || provider_coefficients.size() != provider_count)
     throw std::runtime_error("AmrSystem::set_field_solver_plan invalid provider-pack shape");
+  const auto finite_native_real = [](double value) {
+    if (!std::isfinite(value))
+      return false;
+    return std::isfinite(static_cast<double>(static_cast<Real>(value)));
+  };
   for (std::size_t i = 0; i < provider_count; ++i)
     if (provider_identities[i].empty() || provider_blocks[i].empty() || provider_keys[i].empty() ||
-        !std::isfinite(provider_coefficients[i]))
+        !finite_native_real(provider_coefficients[i]))
       throw std::runtime_error("AmrSystem::set_field_solver_plan invalid provider-pack entry");
   if (solver != "geometric_mg")
     throw std::runtime_error(
         "AmrSystem::set_field_solver_plan requires geometric_mg on AMR");
   if (hierarchy != "composite" && hierarchy != "level_local")
     throw std::runtime_error("AmrSystem::set_field_solver_plan invalid hierarchy policy");
-  if (abs_tol < 0.0 || rel_tol <= 0.0 || max_cycles < 1 || min_coarse < 1 ||
+  if (!finite_native_real(abs_tol) || abs_tol < 0.0 ||
+      !finite_native_real(rel_tol) || rel_tol <= 0.0 || max_cycles < 1 || min_coarse < 1 ||
       pre_smooth < 0 || post_smooth < 0 || bottom_sweeps < 0 || coarse_threshold < 0)
     throw std::runtime_error("AmrSystem::set_field_solver_plan invalid multigrid options");
+  if (fac_options.max_iters < 1 || fac_options.fine_sweeps < 1 ||
+      fac_options.coarse_cycles < 1 ||
+      !std::isfinite(static_cast<double>(fac_options.rel_tol)) ||
+      fac_options.rel_tol <= Real(0) || fac_options.rel_tol >= Real(1) ||
+      !std::isfinite(static_cast<double>(fac_options.abs_tol)) ||
+      fac_options.abs_tol < Real(0) ||
+      !std::isfinite(static_cast<double>(fac_options.coarse_rel_tol)) ||
+      fac_options.coarse_rel_tol <= Real(0) || fac_options.coarse_rel_tol >= Real(1) ||
+      !std::isfinite(static_cast<double>(fac_options.coarse_abs_tol)) ||
+      fac_options.coarse_abs_tol < Real(0))
+    throw std::runtime_error("AmrSystem::set_field_solver_plan invalid FAC options");
   const auto existing = p_->field_plans_.find(provider_slot);
-  if (existing != p_->field_plans_.end() &&
-      existing->second.provider_identity != provider_identity)
-    throw std::runtime_error("AmrSystem::set_field_solver_plan provider digest collision");
-  auto& plan = p_->field_plans_[provider_slot];
+  if (existing != p_->field_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem::set_field_solver_plan duplicate provider slot");
+  AmrFieldSolveConfig plan;
+  plan.plan_identity = plan_identity;
   plan.provider_identity = provider_identity;
   plan.output_owner_identity = output_owner_identity;
   plan.output_block = output_block;
@@ -2204,7 +2243,23 @@ void AmrSystem::set_field_solver_plan(
   plan.mg_opts.nu2 = post_smooth;
   plan.mg_opts.nbottom = bottom_sweeps;
   plan.mg_opts.coarse_threshold = coarse_threshold;
+  plan.fac_opts = fac_options;
+  const bool unique = p_->field_plans_.emplace(provider_slot, std::move(plan)).second;
+  if (!unique)
+    throw std::runtime_error(
+        "AmrSystem::set_field_solver_plan duplicate provider slot");
+  p_->field_plan_consensus_verified_ = false;
   p_->force_runtime_ = true;
+}
+
+AmrFieldSolverConfiguration AmrSystem::field_solver_configuration(
+    const std::string& provider_slot) const {
+  const auto found = p_->field_plans_.find(provider_slot);
+  if (found == p_->field_plans_.end())
+    throw std::runtime_error(
+        "AmrSystem::field_solver_configuration: unknown field provider slot");
+  const auto& plan = found->second;
+  return {plan.plan_identity, plan.solver, plan.hierarchy, plan.mg_opts, plan.fac_opts};
 }
 
 void AmrSystem::set_field_reaction(const std::string& provider_slot, double reaction) {
@@ -3332,6 +3387,11 @@ void AmrSystem::mark_bound() {
     throw std::runtime_error(
         "AmrSystem::mark_bound: the composition is already bound (pops.bind binds a compiled Case "
         "exactly once; a fresh run needs a fresh pops.bind)");
+  // Run the only field-plan collective before every rank-local validation of the first bind. The
+  // ordered registry witness is cached and reused by build_multi; a direct unbound build performs
+  // the same check there. The already-bound guard must stay first so a stray second call on one rank
+  // cannot enter a collective alone.
+  p_->require_field_plan_consensus();
   if (!p_->block_state_identities_.empty() &&
       p_->block_state_identities_.size() != p_->blocks.size())
     throw std::runtime_error(

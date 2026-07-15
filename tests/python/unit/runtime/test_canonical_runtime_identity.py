@@ -31,7 +31,7 @@ def _bound_snapshot():
         layout={"kind": "uniform"},
         blocks=[{"name": "tracer", "definition_identity": {"model": "m"},
                  "spatial": {"flux": "hll"}, "evolve": True}],
-        solvers={},
+        field_plans={},
         step_transaction=StepTransactionPlan(FixedDt(0.1)).to_data(),
         params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
@@ -42,7 +42,9 @@ def test_bound_snapshot_has_domain_separated_bind_identity_and_json_view():
     snapshot = _bound_snapshot()
     assert snapshot.bind_identity.domain == "bind"
     payload = snapshot.to_dict()
-    assert payload["schema_version"] == 6
+    assert payload["schema_version"] == 7
+    assert payload["field_plans"] == {}
+    assert "solvers" not in payload and not hasattr(snapshot, "solvers")
     assert payload["bind_identity"]["hexdigest"] == snapshot.bind_identity.hexdigest
     assert "outputs" not in payload and "diagnostics" not in payload
     assert not hasattr(snapshot, "outputs") and not hasattr(snapshot, "diagnostics")
@@ -54,7 +56,7 @@ def test_bound_snapshot_projects_execution_context_identity_digest_without_loss(
     snapshot = BoundSnapshot(
         semantic_identity=make_identity("semantic", {}),
         artifact_identity=make_identity("artifact", {}),
-        layout={"kind": "uniform"}, blocks=[], solvers={}, step_transaction={}, params=[],
+        layout={"kind": "uniform"}, blocks=[], field_plans={}, step_transaction={}, params=[],
         aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {}),
         execution_context={"backend_identity": identity.to_data()},
@@ -69,7 +71,7 @@ def test_bound_snapshot_refuses_repr_based_extension():
         BoundSnapshot(
             semantic_identity=make_identity("semantic", {}),
             artifact_identity=make_identity("artifact", {}),
-            layout={"kind": "uniform"}, blocks=[], solvers={"phi": object()},
+            layout={"kind": "uniform"}, blocks=[], field_plans={"phi": object()},
             step_transaction={}, params=[], aux_evidence={}, initial_evidence={},
             bind_schema_identity=make_identity("bind-schema", {}),
         )

@@ -26,6 +26,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 namespace pops {
 
@@ -246,5 +249,47 @@ inline void all_reduce_min_inplace(long*, std::size_t) {}  // serial: identity
 inline void all_reduce_max_inplace(long*, std::size_t) {}  // serial: identity
 
 #endif
+
+/// Exact collective consensus for an already-canonical ordered sequence of byte pairs.
+///
+/// The sequence length and every component length are agreed with integral reductions before any
+/// byte collective.  Ranks with a missing/extra pair or a differently-sized slot/identity therefore
+/// return uniformly without entering incompatible payload collectives.  Once those structural
+/// lengths agree, concatenation is unambiguous and element-wise minima/maxima provide an exact (not
+/// hashed) equality witness.  Callers own canonical ordering; field-plan registries pass std::map
+/// iteration order over (provider_slot, plan_identity).
+inline bool all_ranks_agree_exact_ordered_byte_pairs(
+    const std::vector<std::pair<std::string_view, std::string_view>>& values) {
+  const long local_count = static_cast<long>(values.size());
+  const long minimum_count = all_reduce_min(local_count);
+  const long maximum_count = all_reduce_max(local_count);
+  if (minimum_count != maximum_count)
+    return false;
+
+  std::vector<long> minimum_lengths;
+  minimum_lengths.reserve(values.size() * 2);
+  std::size_t payload_size = 0;
+  for (const auto& value : values) {
+    minimum_lengths.push_back(static_cast<long>(value.first.size()));
+    minimum_lengths.push_back(static_cast<long>(value.second.size()));
+    payload_size += value.first.size() + value.second.size();
+  }
+  std::vector<long> maximum_lengths(minimum_lengths);
+  all_reduce_min_inplace(minimum_lengths.data(), minimum_lengths.size());
+  all_reduce_max_inplace(maximum_lengths.data(), maximum_lengths.size());
+  if (minimum_lengths != maximum_lengths)
+    return false;
+
+  std::vector<char> minimum;
+  minimum.reserve(payload_size);
+  for (const auto& value : values) {
+    minimum.insert(minimum.end(), value.first.begin(), value.first.end());
+    minimum.insert(minimum.end(), value.second.begin(), value.second.end());
+  }
+  std::vector<char> maximum(minimum);
+  all_reduce_min_inplace(minimum.data(), minimum.size());
+  all_reduce_max_inplace(maximum.data(), maximum.size());
+  return minimum == maximum;
+}
 
 }  // namespace pops

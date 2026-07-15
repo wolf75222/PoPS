@@ -15,6 +15,7 @@
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params on AMR, ADC-508)
 #include <pops/runtime/numerical_defaults.hpp>
 #include <pops/runtime/amr/prepared_component_providers.hpp>
+#include <pops/runtime/system/system_poisson_options.hpp>
 #include <pops/runtime/system/prepared_field_solver_component.hpp>
 
 #include <functional>
@@ -50,6 +51,15 @@
 /// two-level. Temporal treatment is explicit or IMEX per block.
 
 namespace pops {
+
+/// Exact read-only backend configuration retained for one resolved AMR field solver.
+struct AmrFieldSolverConfiguration {
+  std::string plan_identity;
+  std::string solver;
+  std::string hierarchy;
+  GeometricMgOptions mg{};
+  CompositeFacOptions fac{};
+};
 
 // Forward declarations of the runtime multi-block engine (definitions in amr_runtime.hpp /
 // amr_dsl_block.hpp). set_compiled_block stores a DEFERRED runtime-block BUILDER which, given the
@@ -565,10 +575,13 @@ class AmrSystem {
                    double fac_coarse_rel_tol = 0.0, double fac_coarse_abs_tol = 0.0,
                    int fac_coarse_cycles = 0, bool fac_verbose = false);
 
-  /// Install one fully resolved AMR field route.  The native registry key is the digest of the
-  /// complete block-qualified provider identity; the canonical identity is retained for collision
-  /// detection, manifests and restart validation.
+  /// Install one fully resolved AMR field route. The registry key is the digest of its
+  /// block-qualified provider identity. ``plan_identity`` independently commits the complete
+  /// resolved semantics. Before lazy runtime materialization, the canonical ordered
+  /// (slot, plan_identity) registry must agree exactly on every MPI rank. Duplicate slots are
+  /// refused, including exact repeats.
   void set_field_solver_plan(const std::string& provider_slot,
+                             const std::string& plan_identity,
                              const std::string& provider_identity,
                              const std::string& output_owner_identity,
                              const std::string& output_block,
@@ -580,7 +593,11 @@ class AmrSystem {
                              const std::string& solver,
                              const std::string& hierarchy, double abs_tol, double rel_tol,
                              int max_cycles, int min_coarse, int pre_smooth,
-                             int post_smooth, int bottom_sweeps, int coarse_threshold);
+                             int post_smooth, int bottom_sweeps, int coarse_threshold,
+                             const CompositeFacOptions& fac_options);
+  /// Exact read-only backend configuration retained by one resolved field plan.
+  AmrFieldSolverConfiguration field_solver_configuration(
+      const std::string& provider_slot) const;
   /// Install the resolved scalar reaction coefficient of one named screened field.
   void set_field_reaction(const std::string& provider_slot, double reaction);
   void set_field_topology_authority(const std::string& provider_slot,

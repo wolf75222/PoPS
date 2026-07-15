@@ -63,7 +63,7 @@ def field_layout_contract(layout: Any) -> FieldLayoutContract:
     kind = data.get("layout")
     if kind == "amr":
         levels = _exact_positive_int(
-            data.get("max_levels"), where="AMR field layout max_levels", minimum=2)
+            data.get("max_levels"), where="AMR field layout max_levels", minimum=1)
         raw_ratios = data.get("transition_ratios")
         if not isinstance(raw_ratios, (list, tuple)):
             raise TypeError(

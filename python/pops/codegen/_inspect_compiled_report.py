@@ -54,7 +54,7 @@ class CompiledReport(Report):
         self.platform = platform
         self.layout = layout
         self.blocks = list(blocks)        # [{name, state, components, spatial}]
-        self.fields = list(fields)        # [{name, solver}]
+        self.fields = list(fields)        # resolved field-plan summaries
         self.program = dict(program)      # {name, commits, ops, hash}
         self.inputs = dict(inputs)        # {states, params, aux} -> [names]
         self.artifacts = dict(artifacts)  # {so_path, abi_key, cache_key}
@@ -98,7 +98,9 @@ class CompiledReport(Report):
         lines.append("  fields   :")
         if self.fields:
             for field in self.fields:
-                lines.append("    %-14s solver=%s" % (field.get("name"), field.get("solver")))
+                lines.append("    %-14s solver=%s provider=%s plan=%s"
+                             % (field.get("name"), field.get("solver"),
+                                field.get("provider_kind"), field.get("identity")))
         else:
             lines.append("    (none)")
         prog = self.program
@@ -193,7 +195,8 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
       - platform / layout: read from :meth:`CompiledProblem.arguments` (the layout the artifact
         targets and whether it supports MPI);
       - blocks: the committed blocks, each with the model's state space + component count;
-      - fields: the elliptic / Krylov field solves in the IR (the solver brick is a bind input);
+      - fields: resolved field-install plans retained by the compiled artifact, including the
+        provider kind, native solver route and canonical plan identity;
       - required runtime inputs: the REQUIRED ``arguments()`` entries (states / runtime params /
         aux), the human counterpart of the machine-readable :meth:`CompiledProblem.arguments`;
       - artifacts: ``so_path`` + short ``abi_key`` / ``cache_key``;
@@ -201,15 +204,27 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     """
     args = compiled.arguments()
     instances = getattr(args, "instances", {})
-    solvers = getattr(args, "solvers", {})
     layout_runtime = getattr(args, "layout_runtime", {})
 
     blocks = [{"name": name, "state": spec.get("state"),
-               "components": spec.get("components"), "spatial": "bind-time"}
+               "components": spec.get("components"), "spatial": "resolved"}
               for name, spec in sorted(instances.items())]
 
-    fields = [{"name": name, "solver": spec.get("solver")}
-              for name, spec in sorted(solvers.items())]
+    fields = []
+    field_plans = getattr(getattr(compiled, "plan", None), "field_plans", {}) or {}
+    for name, field_plan in sorted(field_plans.items()):
+        native = field_plan.native_install_data()
+        provider = native["solver_provider"]
+        provider_kind = provider["provider_kind"]
+        solver = provider["solver"]
+        solver_label = (solver["route"] if provider_kind == "builtin_v1"
+                        else solver["component_id"])
+        fields.append({
+            "name": name,
+            "solver": solver_label,
+            "provider_kind": provider_kind,
+            "identity": field_plan.identity.token,
+        })
 
     states = [name for name, spec in sorted(instances.items()) if spec.get("required")]
     req_params = [name for name, spec in sorted(getattr(args, "params", {}).items())

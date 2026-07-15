@@ -564,6 +564,7 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
@@ -587,6 +588,7 @@ if(POPS_HAS_MPI)
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_coupled_source
+    test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
     test_mpi_array_reduce
@@ -605,13 +607,16 @@ if(POPS_HAS_MPI)
     # a `$`-anchored pattern would only match the bare prefix and leave e.g.
     # test_mpi_amr_twoblock_parity / test_mpi_system_solve_fields without their runtime object
     # lib, so the link fails with undefined AmrSystem/System symbols.
-    if(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
+    if(_test STREQUAL "test_mpi_field_plan_consensus")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
     pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
   endforeach()
+  set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
 
   foreach(_np 1 2 4)
     pops_add_mpi_rank_test(test_krylov_solver ${_np})

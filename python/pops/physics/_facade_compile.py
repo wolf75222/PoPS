@@ -11,8 +11,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .aux import aux_total_n_aux, roles_for
-from ._model import HyperbolicModel
-
 if TYPE_CHECKING:
     from ._model_contract import _FacadeModel
 else:
@@ -93,7 +91,7 @@ class _FacadeCompileMixin(_FacadeModel):
             verify_cached_artifact, write_artifact_sidecar,
         )
         from pops.codegen.abi import _abi_key_python
-        from pops.codegen._compile import _BACKEND_CAPS
+        from pops.codegen._compile_emit import compiled_capability_flags
         from pops.codegen.loader import CompiledModel
         from pops.codegen._compiled_model_identity import model_compile_identity
         from pops.codegen._backends import lower_backend
@@ -162,7 +160,7 @@ class _FacadeCompileMixin(_FacadeModel):
             so_path=out_path, backend=backend, target=target,
             cons_names=m.cons_names, cons_roles=cons_roles, prim_names=m.prim_state,
             n_vars=m.n_vars, gamma=m.gamma, n_aux=aux_total_n_aux(m.aux_names, m.aux_extra_names),
-            params=self.params, caps=_BACKEND_CAPS[backend],
+            params=self.params, caps=compiled_capability_flags(backend),
             abi_key=abi_key, model_hash=model_hash,
             definition_identity=model_compile_identity(self),
             cxx=eff_cxx, std=eff_std, hllc=m._hllc,
@@ -172,8 +170,8 @@ class _FacadeCompileMixin(_FacadeModel):
             wave_speeds=(m._wave_speeds is not None or m._ws_jacobian is not None
                          or "p" in m.prim_defs),
             # NAMED elliptic fields the model declares (m.elliptic_field, ADC-419 / ADC-428): the
-            # install seam routes a bind(solvers={field: ...}) selection for a DECLARED field and
-            # rejects a typo against this set. Empty for the default-Poisson-only model.
+            # detached model preserves the declaration inventory while the resolved simulation plan
+            # owns the field discretization and provider. Empty for the default-Poisson-only model.
             elliptic_field_names=list(m._elliptic_fields))
         cm.semantic_identity = semantic_identity
         cm.artifact_spec_identity = spec_identity

@@ -13,6 +13,18 @@ _BACKEND_CAPS = {
 }
 
 
+def compiled_capability_flags(backend: str) -> dict[str, bool]:
+    """Project backend report metadata onto the bool-only compiled-model ABI contract."""
+    try:
+        row = _BACKEND_CAPS[backend]
+    except KeyError:
+        raise ValueError("unknown native backend %r" % backend) from None
+    flags = {name: value for name, value in row.items() if type(value) is bool}
+    if not flags:
+        raise ValueError("native backend %r declares no compiled capability flags" % backend)
+    return flags
+
+
 # ---------------------------------------------------------------------------
 # model_hash -- stable hash of a HyperbolicModel
 # ---------------------------------------------------------------------------

@@ -407,9 +407,6 @@ def capabilities() -> Any:
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs target='amr_system'; the "
-                         "opt-in single-block composite-FAC Poisson path (facade-reachable via "
-                         "GeometricMG(amr_composite=CompositeFAC(...)), ADC-645) does not yet carry "
-                         "named aux to the fine level",
+                         "AMR path needs target='amr_system'",
         },
     }

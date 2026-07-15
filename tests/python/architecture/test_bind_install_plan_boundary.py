@@ -143,14 +143,14 @@ def test_complete_bind_install_path_has_no_live_authoring_fallback():
             "runtime/_system_unified_install.py", "_SystemUnifiedInstall._install_compiled"),
         "System._resolve_instance_model": (
             "runtime/_system_unified_install.py", "_SystemUnifiedInstall._resolve_instance_model"),
-        "System._declared_elliptic_fields": (
-            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._declared_elliptic_fields"),
+        "System._install_field_plan": (
+            "runtime/_system_unified_install.py", "_SystemUnifiedInstall._install_field_plan"),
         "System._install_program_params": (
             "runtime/_system_unified_install.py", "_SystemUnifiedInstall._install_program_params"),
         "AmrSystem._install_compiled": (
             "runtime/_amr_system_install.py", "_AmrSystemInstall._install_compiled"),
-        "AmrSystem._declared_elliptic_fields": (
-            "runtime/_amr_system_install.py", "_AmrSystemInstall._declared_elliptic_fields"),
+        "AmrSystem._install_field_plan": (
+            "runtime/_amr_system_install.py", "_AmrSystemInstall._install_field_plan"),
         "_require_schema": ("runtime/_install_param_routing.py", "_require_schema"),
         "_slot_for_block": ("runtime/_install_param_routing.py", "_slot_for_block"),
         "_resolved_value": ("runtime/_install_param_routing.py", "_resolved_value"),

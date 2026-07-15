@@ -44,6 +44,7 @@ def _author(
     robust: Any,
     exact_speeds: Any,
     roe: Any,
+    frame: Any = None,
     q_over_m: Any = None,
     poisson_scale: Any = None,
 ) -> Model:
@@ -54,8 +55,12 @@ def _author(
     if not isinstance(name, str) or not name:
         raise TypeError("Gaussian name must be a non-empty string")
 
-    frame = Cartesian2D()
-    model = Model(name, frame=frame)
+    selected_frame = Cartesian2D() if frame is None else frame
+    axes = getattr(selected_frame, "axes", None)
+    if not isinstance(axes, tuple) or len(axes) != 2:
+        raise TypeError("Gaussian frame must expose exactly two typed axes")
+    x_axis, y_axis = axes
+    model = Model(name, frame=selected_frame)
     state = model.state(
         "U", components=tuple(moment_names(order)), roles={"M00": Density()})
     projection = RealizabilityProjection(robust=robust)
@@ -70,9 +75,9 @@ def _author(
     )
     flux = model.flux(
         "transport",
-        frame=frame,
+        frame=selected_frame,
         state=state,
-        components={frame.x: expressions.x, frame.y: expressions.y},
+        components={x_axis: expressions.x, y_axis: expressions.y},
     )
     if exact_speeds:
         model.wave_speeds_from_jacobian()
@@ -130,6 +135,7 @@ class Gaussian:
         robust: Any = True,
         exact_speeds: Any = True,
         roe: Any = False,
+        frame: Any = None,
     ) -> Model:
         """Return a transport-only Gaussian moment Model of arbitrary order."""
         return _author(
@@ -138,6 +144,7 @@ class Gaussian:
             robust=robust,
             exact_speeds=exact_speeds,
             roe=roe,
+            frame=frame,
         )
 
     @staticmethod
@@ -150,6 +157,7 @@ class Gaussian:
         roe: Any = False,
         q_over_m: Any = None,
         eps: Any = 1.0,
+        frame: Any = None,
     ) -> Model:
         """Return a Vlasov-Poisson Gaussian moment Model with typed parameter storage."""
         return _author(
@@ -158,6 +166,7 @@ class Gaussian:
             robust=robust,
             exact_speeds=exact_speeds,
             roe=roe,
+            frame=frame,
             q_over_m=_parameter(q_over_m, name="q_over_m", default=-1.0),
             poisson_scale=eps,
         )

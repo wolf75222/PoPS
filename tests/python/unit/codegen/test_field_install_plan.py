@@ -3,13 +3,16 @@ from __future__ import annotations
 import pytest
 
 from pops.codegen._orchestration_compile import capture_field_plans
+from pops.codegen.lowering_coverage import LoweringRejection
 from pops.descriptors import Descriptor
 from pops.fields import (
     CellCenteredSecondOrder,
+    CompositeHierarchySolve,
     ConstantNullspace,
     FieldDiscretization,
     FieldOutput,
     GradientOutput,
+    LevelByLevelSolve,
     MeanValueGauge,
     boundary_value,
     logical_time,
@@ -27,10 +30,13 @@ from pops.layouts import Uniform
 from pops.physics import Model
 from pops.problem import Case
 from pops.solvers.elliptic import GeometricMG
-from tests.python.support.layout_plan import cartesian_grid
+from pops.solvers.options import CompositeFAC
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
 
 
 _LAYOUT = Uniform(cartesian_grid(n=16, periodic=False))
+_ONE_LEVEL_AMR_LAYOUT = final_amr_layout(
+    cartesian_grid(n=16, periodic=False), max_levels=1)
 
 
 class ExternalFieldPlan(Descriptor):
@@ -133,6 +139,38 @@ def _case(*conditions: object):
             _disc(condition, singular=isinstance(condition, Neumann)),
         ))
     return problem, handles
+
+
+def _one_level_amr_plan(*, hierarchy_policy, solver):
+    model = Model("one-level-amr-field-model")
+    (rho,) = model.state("U", components=["rho"])
+    operator = _field(model, "potential", rho)
+    problem = Case(name="one-level-amr-field-case")
+    problem.block("material", model)
+    problem.field(operator, FieldDiscretization(
+        method=CellCenteredSecondOrder(),
+        boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Dirichlet(0.0)),),
+        solver=solver,
+        hierarchy_policy=hierarchy_policy,
+    ))
+    return capture_field_plans(
+        problem, lambda value: value, target="amr_system", layout=_ONE_LEVEL_AMR_LAYOUT,
+    )["potential"]
+
+
+def test_one_level_amr_resolve_preserves_level_by_level_capability() -> None:
+    plan = _one_level_amr_plan(
+        hierarchy_policy=LevelByLevelSolve(), solver=GeometricMG())
+
+    assert plan.native_options["hierarchy"] == "level_local"
+
+
+def test_composite_fac_refuses_a_single_level_amr_backend() -> None:
+    with pytest.raises(LoweringRejection, match="multi-level AMR backend"):
+        _one_level_amr_plan(
+            hierarchy_policy=CompositeHierarchySolve(),
+            solver=GeometricMG(fac=CompositeFAC()),
+        )
 
 
 @pytest.mark.parametrize(
@@ -354,7 +392,7 @@ def test_boundary_state_component_and_logical_time_lower_to_direct_provider_pack
     dependencies = plan.native_options["boundary_dependencies"]
     assert [(row["owner_block"], row["component"])
             for row in dependencies["states"]] == [("material", 0)]
-    assert dependencies["logical_time"] == ["time"]
+    assert dependencies["logical_time"] == ("time",)
 
     from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
     source = emit_field_boundaries(None, None, plans, "system")

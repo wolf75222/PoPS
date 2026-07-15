@@ -105,22 +105,24 @@ def _native_memory_context() -> _MemoryRuntimeContext:
 # ---------------------------------------------------------------------------
 
 class Arguments(Report):
-    """The runtime inputs a compiled artifact expects at ``System.install`` (Spec 5 sec.12.2).
+    """The concrete runtime values a compiled artifact expects at :func:`pops.bind`.
 
     A plain, inert value describing what a caller must SUPPLY to bind the artifact -- distinct
     from ``CompiledProblem.requirements`` (the compile-time constraints). It lists, per group:
 
       - ``instances``: the physics blocks the Program commits (name -> state space / component
-        count / required), the ``instances=`` dict ``install`` consumes;
-      - ``params``: the model's declared parameters (name -> type / kind / required), routed to
-        ``install(params=...)`` (only ``kind == "runtime"`` is settable at bind);
-      - ``aux``: the static aux inputs the model declares (name -> layout / required), the
-        ``install(aux=...)`` dict;
-      - ``solvers``: the elliptic field solves the Program performs (field -> problem / solver),
-        the ``install(solvers=...)`` dict;
+        count / required), supplied through ``initial_state=``;
+      - ``params``: the model's declared parameters (name -> type / kind / required), supplied
+        through ``params=`` (only ``kind == "runtime"`` is settable at bind);
+      - ``aux``: the static aux inputs the model declares (name -> layout / required), supplied
+        through ``aux=``;
       - ``outputs``: the field outputs / diagnostics the Program records (informational);
       - ``layout_runtime``: the mesh layout the artifact targets (layout / requires_mpi /
         ghost_depth).
+
+    Resolved field discretizations and their solver providers are compile-time plan evidence, not
+    bind inputs. They remain available from the resolved plan and compiled-artifact inspection and
+    are deliberately absent here.
 
     It is built by :func:`build_arguments` from the carried Program + model; it neither compiles,
     binds nor reads any runtime array. ``str(args)`` is a readable table; :meth:`to_dict` /
@@ -129,14 +131,13 @@ class Arguments(Report):
     """
 
     report_type = "arguments"
-    schema_version = 1
+    schema_version = 2
 
-    def __init__(self, *, instances: Any, params: Any, aux: Any, solvers: Any, outputs: Any,
+    def __init__(self, *, instances: Any, params: Any, aux: Any, outputs: Any,
                  layout_runtime: Any, program_name: Any = None) -> None:
         self.instances = dict(instances)
         self.params = dict(params)
         self.aux = dict(aux)
-        self.solvers = dict(solvers)
         self.outputs = dict(outputs)
         self.layout_runtime = dict(layout_runtime)
         self.program_name = program_name
@@ -147,61 +148,36 @@ class Arguments(Report):
                 "instances": {k: dict(v) for k, v in self.instances.items()},
                 "params": {k: dict(v) for k, v in self.params.items()},
                 "aux": {k: dict(v) for k, v in self.aux.items()},
-                "solvers": {k: dict(v) for k, v in self.solvers.items()},
                 "outputs": {k: dict(v) for k, v in self.outputs.items()},
                 "layout_runtime": dict(self.layout_runtime)}
 
     def __str__(self) -> str:
         lines = ["arguments for compiled artifact %r (bind inputs)"
                  % (self.program_name or "problem")]
-        lines.append("  instances (install instances=):")
+        lines.append("  instances (bind initial_state=):")
         for name, spec in sorted(self.instances.items()):
             lines.append("    %-14s state=%s comps=%s required=%s"
                          % (name, spec.get("state"), spec.get("components"),
                             spec.get("required")))
-        lines.append("  params (install params=):")
+        lines.append("  params (bind params=):")
         for name, spec in sorted(self.params.items()):
             lines.append("    %-14s type=%s kind=%s required=%s"
                          % (name, spec.get("type"), spec.get("kind"), spec.get("required")))
-        lines.append("  aux (install aux=):")
+        lines.append("  aux (bind aux=):")
         for name, spec in sorted(self.aux.items()):
             lines.append("    %-14s layout=%s required=%s"
                          % (name, spec.get("layout"), spec.get("required")))
-        lines.append("  solvers (install solvers=):")
-        for name, spec in sorted(self.solvers.items()):
-            lines.append("    %-14s problem=%s solver=%s"
-                         % (name, spec.get("problem"), spec.get("solver")))
-        lines.append("  outputs:")
+        lines.append("  outputs (resolved artifact metadata, not bind inputs):")
         for name, spec in sorted(self.outputs.items()):
             lines.append("    %-14s kind=%s" % (name, spec.get("kind")))
         lr = self.layout_runtime
-        lines.append("  layout_runtime : layout=%s requires_mpi=%s ghost_depth=%s"
+        lines.append("  resolved runtime target : layout=%s requires_mpi=%s ghost_depth=%s"
                      % (lr.get("layout"), lr.get("requires_mpi"), lr.get("ghost_depth")))
         return "\n".join(lines)
 
     def __repr__(self) -> str:
-        return ("Arguments(instances=%d, params=%d, aux=%d, solvers=%d)"
-                % (len(self.instances), len(self.params), len(self.aux), len(self.solvers)))
-
-
-def _solver_arguments(program: Any) -> dict:
-    """Elliptic field solves the Program performs (field name -> {problem, solver}).
-
-    Read from the lowered IR: every ``solve_fields`` / ``solve_fields_from_blocks`` node names an
-    elliptic field; ``solve_linear`` is a Krylov solve. The runtime serves these via
-    ``install(solvers={field: <GeometricMG/...>})`` (today only the default Poisson field is wired;
-    cf. ``System._install_solver``). We do not know the chosen solver brick at compile time -- it is
-    a BIND input -- so ``solver`` is reported as ``None`` ("to be supplied")."""
-    solvers = {}
-    for value in getattr(program, "_values", []):
-        op = value.op
-        if op in ("solve_fields", "solve_fields_from_blocks"):
-            field = value.name or "phi"
-            solvers[field] = {"problem": "elliptic", "solver": None}
-        elif op == "solve_linear":
-            field = value.name or "krylov"
-            solvers[field] = {"problem": "linear_system", "solver": None}
-    return solvers
+        return ("Arguments(instances=%d, params=%d, aux=%d)"
+                % (len(self.instances), len(self.params), len(self.aux)))
 
 
 def build_arguments(compiled: Any) -> Arguments:
@@ -214,7 +190,6 @@ def build_arguments(compiled: Any) -> Arguments:
       - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
       - aux: the model's named aux inputs (``model.aux_extra_names``), each required;
-      - solvers: the elliptic / Krylov solves in the Program IR (:func:`_solver_arguments`);
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
       - layout_runtime: every exact compiled layout partition, its target, MPI optionality and
         per-block ghost depth. A multi-layout artifact is reported as an aggregate of qualified
@@ -239,7 +214,6 @@ def build_arguments(compiled: Any) -> Arguments:
     )
     instances = {}
     aux = {}
-    solvers = {}
     outputs = {}
     ghost_depth_by_block = {}
     layout_rows = {}
@@ -248,9 +222,7 @@ def build_arguments(compiled: Any) -> Arguments:
         if overlap:
             raise ValueError("layout Program partitions share block(s) %s" % sorted(overlap))
         instances.update(arguments.instances)
-        for target, source in (
-                (aux, arguments.aux), (solvers, arguments.solvers),
-                (outputs, arguments.outputs)):
+        for target, source in ((aux, arguments.aux), (outputs, arguments.outputs)):
             target.update({"%s::%s" % (layout_id, name): value
                            for name, value in source.items()})
         depths = dict(arguments.layout_runtime.get("ghost_depth_by_block") or {})
@@ -267,7 +239,6 @@ def build_arguments(compiled: Any) -> Arguments:
         instances=instances,
         params=params,
         aux=aux,
-        solvers=solvers,
         outputs=outputs,
         layout_runtime={
             "layout": "multi",
@@ -379,8 +350,6 @@ def _build_arguments(
     aux_names = dict.fromkeys(name for row in model_rows for name in row.aux_names)
     aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
 
-    solver_args = _solver_arguments(program) if program is not None else {}
-
     outputs = {}
     if program is not None:
         for value in getattr(program, "_values", []):
@@ -409,7 +378,7 @@ def _build_arguments(
                       "supports_mpi": supports_mpi}
 
     return Arguments(instances=instances, params=param_args, aux=aux_args,
-                     solvers=solver_args, outputs=outputs, layout_runtime=layout_runtime,
+                     outputs=outputs, layout_runtime=layout_runtime,
                      program_name=(getattr(compiled, "program_name", None)
                                    if program_name is None else program_name))
 

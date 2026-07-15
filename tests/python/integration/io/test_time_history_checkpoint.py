@@ -62,7 +62,7 @@ def _authorize_identity_runtime(sim, compiled):
     snapshot = BoundSnapshot(
         semantic_identity=compiled.semantic_identity,
         artifact_identity=compiled.artifact_identity,
-        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], field_plans={},
         step_transaction=sim._step_transaction_plan.to_data(),
         params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),
@@ -92,7 +92,7 @@ def test_current_checkpoint_envelope_roundtrips(_t):
     snapshot = BoundSnapshot(
         semantic_identity=make_identity("semantic", {"test": "npz-envelope"}),
         artifact_identity=make_identity("artifact", {"binary": "npz-envelope"}),
-        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], solvers={},
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], field_plans={},
         step_transaction={},
         params=[], aux_evidence={}, initial_evidence={},
         bind_schema_identity=make_identity("bind-schema", {"slots": []}),

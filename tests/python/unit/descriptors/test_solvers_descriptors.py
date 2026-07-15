@@ -188,6 +188,8 @@ def test_geometric_mg_inspect_and_lower():
     assert rec["smoother"] == {"kind": "red_black_gauss_seidel"}
     assert rec["coarse"]["kind"] == "direct_small_grid"
     assert rec["tolerance"]["kind"] == "relative"
+    assert rec["mg_options"]["schema_version"] == 1
+    assert rec["mg_options"]["kind"] == "geometric_mg_options"
     assert rec["mg_options"]["max_cycles"] == 50
     assert rec["mg_options"]["rel_tol"] == 1e-8
 
@@ -326,12 +328,12 @@ def test_lib_solvers_shim_is_removed():
     assert callable(ns.registered)
 
 
-def test_install_path_token_resolution_for_rich_descriptor():
-    # The unified-install solver-token resolver reads .scheme; the new rich GeometricMG
-    # resolves to the same 'geometric_mg' token as the brick-catalog pops.fields.catalog descriptor.
+def test_install_path_has_no_bind_time_solver_token_adapter():
+    # Solver descriptors are lowered into resolved field plans before bind; the runtime install
+    # seam must not reinterpret descriptor classes or tokens.
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
-    assert _SystemUnifiedInstall._solver_token(elliptic.GeometricMG()) == "geometric_mg"
-    assert _SystemUnifiedInstall._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
+    assert not hasattr(_SystemUnifiedInstall, "_solver_token")
+    assert not hasattr(_SystemUnifiedInstall, "_install_solver")
 
 
 # --- ADC-644: the wired GeometricMG preconditioner option surface -----------------------------
@@ -394,22 +396,20 @@ def test_direct_small_grid_refuses_non_positive(bad):
 def test_composite_fac_defaults_and_domain():
     from pops.solvers.options import CompositeFAC
     d = CompositeFAC()
-    # None -> the 0 wire sentinels used by the composite tensor FAC provider.
+    # None remains authored omission until the final field resolver snapshots the native POD.
     assert d.options() == {"max_iters": None, "fine_sweeps": None, "rel_tol": None,
                            "abs_tol": None,
                            "coarse_rel_tol": None, "coarse_abs_tol": None,
                            "coarse_cycles": None, "verbose": False}
-    kw = d.set_poisson_kwargs()
-    assert kw["composite"] is True and kw["fac_max_iters"] == 0
     cfg = CompositeFAC(max_iters=10, fine_sweeps=200, rel_tol=1e-8, abs_tol=1e-14,
                        coarse_rel_tol=1e-11, coarse_abs_tol=1e-15, coarse_cycles=50,
                        verbose=True)
-    assert cfg.set_poisson_kwargs() == {"composite": True, "fac_max_iters": 10,
-                                        "fac_fine_sweeps": 200, "fac_rel_tol": 1e-8,
-                                        "fac_abs_tol": 1e-14,
-                                        "fac_coarse_rel_tol": 1e-11,
-                                        "fac_coarse_abs_tol": 1e-15, "fac_coarse_cycles": 50,
-                                        "fac_verbose": True}
+    assert cfg.options() == {
+        "max_iters": 10, "fine_sweeps": 200, "rel_tol": 1e-8, "abs_tol": 1e-14,
+        "coarse_rel_tol": 1e-11, "coarse_abs_tol": 1e-15, "coarse_cycles": 50,
+        "verbose": True,
+    }
+    assert not hasattr(cfg, "set_poisson_kwargs")
     assert CompositeFAC(abs_tol=0.0).abs_tol == 0.0
     assert CompositeFAC(coarse_abs_tol=0.0).coarse_abs_tol == 0.0
     for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"rel_tol": 1.5}, {"abs_tol": -1.0},
@@ -442,17 +442,17 @@ def test_solver_tolerances_reject_bool_nonpositive_and_nonfinite(factory, bad):
         factory(bad)
 
 
-def test_geometric_mg_amr_composite_slot():
+def test_geometric_mg_fac_slot():
     from pops.solvers.options import CompositeFAC
     # Default None: the options view is UNCHANGED (omit-when-default, byte-identity).
     g = elliptic.GeometricMG()
-    assert g.amr_composite is None
-    assert "amr_composite" not in g.options()
+    assert g.fac is None
+    assert "fac" not in g.options()
     # Typed slot: a CompositeFAC is carried; a bare bool/string refuses.
-    g2 = elliptic.GeometricMG(amr_composite=CompositeFAC())
-    assert g2.options()["amr_composite"] == "composite_fac"
+    g2 = elliptic.GeometricMG(fac=CompositeFAC())
+    assert g2.options()["fac"] == "composite_fac"
     with pytest.raises(TypeError, match="CompositeFAC"):
-        elliptic.GeometricMG(amr_composite=True)
+        elliptic.GeometricMG(fac=True)
 
 
 def test_richardson_omega_and_krylov_rel_tol():
