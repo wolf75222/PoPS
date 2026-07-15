@@ -739,22 +739,25 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
                 if isinstance(value, str):
                     encoded_labels = (value,)
                 elif isinstance(value, list):
-                    encoded_labels = (
+                    encoded_labels = tuple(
                         item for item in value if isinstance(item, str)
                     )
                 else:
                     encoded_labels = ()
-                # CTest's JSON representation is platform/version dependent:
-                # LABELS may be one semicolon-delimited string, a list of
-                # individual labels, or a list whose items are themselves
-                # semicolon-delimited.  Split only on CTest's delimiter, then
-                # retain exact set membership below; never match substrings.
-                labels.update(
-                    label
-                    for encoded in encoded_labels
-                    for label in encoded.split(";")
-                    if label
-                )
+                # CTest's JSON inventory is the selection authority: each
+                # LABELS entry is one atomic label.  A semicolon here is not a
+                # second serialization layer; it proves CMake overescaped the
+                # LABELS property and CTest will treat the complete string as
+                # one label.  Fail closed instead of inventing labels which an
+                # exact ``ctest -L`` expression cannot select.
+                malformed = [label for label in encoded_labels if ";" in label]
+                if malformed:
+                    raise SystemExit(
+                        "CTest target-label contract failed; test "
+                        f"{test_name!r} has non-atomic LABELS entries: "
+                        + ", ".join(repr(label) for label in malformed)
+                    )
+                labels.update(label for label in encoded_labels if label)
         for label in labels & expected.keys():
             hits[expected[label]].append(test_name)
 

@@ -305,7 +305,7 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
             {
                 "name": "Suite.Two",
                 "properties": [
-                    {"name": "LABELS", "value": "fast;cpp-target:test_two"},
+                    {"name": "LABELS", "value": "cpp-target:test_two"},
                 ],
             },
             {
@@ -314,7 +314,7 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
                     {
                         "name": "LABELS",
                         "value": [
-                            "integration;amr;medium;cpp-target:test_three"
+                            "integration", "amr", "medium", "cpp-target:test_three"
                         ],
                     },
                 ],
@@ -333,6 +333,37 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
         with pytest.raises(SystemExit, match=rf"cpp-target:{missing}"):
             sel.verify_cpp_target_labels(args)
         args.targets.pop()
+
+
+@pytest.mark.parametrize("encoded_labels", [
+    "integration;amr;medium;cpp-target:test_three",
+    ["integration;amr;medium;cpp-target:test_three"],
+])
+def test_cpp_target_label_fence_rejects_overescaped_ctest_labels(
+    tmp_path, encoded_labels,
+):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest-overescaped.json"
+    inventory.write_text(json.dumps({
+        "tests": [
+            {
+                "name": "Suite.Three",
+                "properties": [
+                    {
+                        "name": "LABELS",
+                        "value": encoded_labels,
+                    },
+                ],
+            },
+        ],
+    }))
+
+    args = SimpleNamespace(
+        ctest_json=str(inventory),
+        targets=["test_three"],
+    )
+    with pytest.raises(SystemExit, match="non-atomic LABELS"):
+        sel.verify_cpp_target_labels(args)
 
 
 def test_manifest_projects_exact_python_mpi_entrypoints():
