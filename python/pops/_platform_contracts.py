@@ -251,6 +251,51 @@ class ExecutionContext:
                 "communicator": self.communicator.to_data(),
                 "datatype": self.datatype.to_data(), "device": self.device.to_data()}
 
+    @classmethod
+    def mpi_world(cls, artifact: Any, communicator: Any) -> ExecutionContext:
+        """Build the exact native ``MPI_COMM_WORLD`` launch context for one artifact.
+
+        The compiled artifact must itself have been authenticated for the world-communicator
+        route.  A duplicated, split or otherwise custom communicator is intentionally rejected:
+        the current native engines consume ``MPI_COMM_WORLD`` and do not expose a communicator
+        injection ABI.
+        """
+        from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+        if type(artifact) is not CompiledSimulationArtifact:
+            raise TypeError(
+                "ExecutionContext.mpi_world requires the exact artifact returned by pops.compile"
+            )
+        try:
+            from mpi4py import MPI
+        except ImportError as exc:
+            raise RuntimeError(
+                "ExecutionContext.mpi_world requires mpi4py and an MPI-enabled PoPS module"
+            ) from exc
+        if not isinstance(communicator, MPI.Comm) or MPI.Comm.Compare(
+                communicator, MPI.COMM_WORLD) != MPI.IDENT:
+            raise ValueError(
+                "ExecutionContext.mpi_world accepts only mpi4py.MPI.COMM_WORLD; custom MPI "
+                "communicators are not consumed by the native provider"
+            )
+        from pops.runtime._platform_manifest import native_runtime_backend
+
+        backend = native_runtime_backend(artifact.platform_manifest)
+        expected = backend.communicator.require("runtime.communicator")
+        if expected != "MPI_COMM_WORLD":
+            raise PlatformContractError(
+                "the compiled artifact/runtime pair does not prove MPI_COMM_WORLD",
+                field="communicator", expected="MPI_COMM_WORLD", actual=expected,
+            )
+        return cls(
+            backend=backend,
+            communicator=ExecutionResource(
+                "communicator", "MPI_COMM_WORLD", handle=communicator
+            ),
+            datatype=ExecutionResource("datatype", "float64", handle=MPI.DOUBLE),
+            device=ExecutionResource("device", "host"),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class FieldViewDescriptor:
@@ -438,7 +483,9 @@ def proven_serial_manifest(*, backend: str, target: str, abi: str,
                })
 
 
-def artifact_platform_manifest(*, backend: str, target: str, component: Any) -> PlatformManifest:
+def artifact_platform_manifest(
+    *, backend: str, target: str, component: Any, communicator: str | None = None
+) -> PlatformManifest:
     """Build the selected platform identity from emitted component facts, preserving unknowns."""
     evidence = "pops.compiled-component-metadata.v1"
     proof = lambda value: CapabilityProof.proven(value, evidence)  # noqa: E731
@@ -452,7 +499,13 @@ def artifact_platform_manifest(*, backend: str, target: str, component: Any) -> 
     # This is the SELECTED baseline route, not a claim that the component lacks MPI/GPU variants.
     # A non-host/non-serial selection must name itself on the compiled component explicitly.
     device_value = getattr(component, "platform_device", None) or "host"
-    communicator_value = getattr(component, "communicator", None) or "serial"
+    component_communicator = getattr(component, "communicator", None)
+    if communicator is not None and component_communicator not in (None, communicator):
+        raise PlatformContractError(
+            "compiled component communicator differs from the selected artifact route",
+            field="communicator", expected=communicator, actual=component_communicator,
+        )
+    communicator_value = communicator or component_communicator or "serial"
     spaces = getattr(component, "memory_spaces", None)
     if spaces is None and device_value == "host":
         spaces = ("host",)

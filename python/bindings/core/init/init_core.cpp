@@ -79,10 +79,31 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   return d;
 }
 
-py::dict serial_runtime_backend_manifest_to_dict(const std::string& backend,
-                                                 const std::string& target) {
-  const auto manifest = pops::platform::proven_serial_backend(
-      backend, target, pops::abi_key());
+py::dict runtime_backend_manifest_to_dict(const std::string& backend,
+                                          const std::string& target,
+                                          const std::string& communicator) {
+  const auto runtime = pops::runtime_environment_report();
+  std::string evidence;
+  if (communicator == "serial") {
+    if (runtime.mpi_active) {
+      throw std::runtime_error(
+          "serial RuntimeBackendManifest requested while native MPI_COMM_WORLD is active");
+    }
+    evidence = "pops.native.2d-float64-host.v1";
+  } else if (communicator == "MPI_COMM_WORLD") {
+    if (!runtime.mpi_compiled || !runtime.mpi_active ||
+        runtime.communicator != "MPI_COMM_WORLD") {
+      throw std::runtime_error(
+          "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
+          "MPI world launch");
+    }
+    evidence = "pops.native.2d-float64-host-mpi-world.v1";
+  } else {
+    throw std::invalid_argument(
+        "runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
+  }
+  const auto manifest = pops::platform::proven_host_backend(
+      backend, target, pops::abi_key(), communicator, evidence);
   py::dict precision;
   precision["storage"] = pops::platform::require_text(
       manifest.precision.storage, "precision.storage");
@@ -116,7 +137,7 @@ py::dict serial_runtime_backend_manifest_to_dict(const std::string& backend,
   result["communicator"] = pops::platform::require_text(
       manifest.communicator, "communicator");
   result["capabilities"] = std::move(capabilities);
-  result["evidence"] = "pops.native.2d-float64-host.v1";
+  result["evidence"] = evidence;
   result["identity"] = pops::platform::identity_token(
       "runtime-backend-manifest", manifest);
   return result;
@@ -304,10 +325,10 @@ void init_core(py::module_& m) {
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
   m.def(
-      "runtime_backend_manifest", &serial_runtime_backend_manifest_to_dict,
-      py::arg("backend"), py::arg("target"),
-      "Explicit 2D/float64/host RuntimeBackendManifest. It captures no global MPI/device state; "
-      "non-serial/non-host routes must supply their own ExecutionContext.");
+      "runtime_backend_manifest", &runtime_backend_manifest_to_dict,
+      py::arg("backend"), py::arg("target"), py::arg("communicator"),
+      "Explicit 2D/float64/host RuntimeBackendManifest for serial or the active exact "
+      "MPI_COMM_WORLD route. Custom communicators are rejected.");
 
   m.def(
       "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },

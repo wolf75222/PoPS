@@ -573,6 +573,10 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
+  set(POPS_MPI_RANKS_test_krylov_solver 1 2 4)
+  set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
+  set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
+  set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
 
   set(POPS_CPP_MPI_ONLY_TESTS
     test_mpi_polar_schur
@@ -617,17 +621,19 @@ if(POPS_HAS_MPI)
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
 
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_krylov_solver ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_fill_boundary_cache ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_copy_schedule_cache ${_np})
-  endforeach()
-  foreach(_np 2 4)
-    pops_add_mpi_rank_test(test_amr_system_bz_multibox ${_np})
+  # These are ordinary serial suites with additional MPI launch variants. Their rank sets are
+  # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
+  # architecture gate compares this projection and these CMake registrations exactly.
+  set(POPS_CPP_MPI_VARIANT_TESTS
+    test_krylov_solver
+    test_fill_boundary_cache
+    test_copy_schedule_cache
+    test_amr_system_bz_multibox
+  )
+  foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
+    foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
+      pops_add_mpi_rank_test(${_test} ${_np})
+    endforeach()
   endforeach()
 endif()
 

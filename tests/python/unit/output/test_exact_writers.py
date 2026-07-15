@@ -1,6 +1,7 @@
 """ADC-686 exact scientific formats, selection, metadata and transaction protocol."""
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 
 import numpy as np
@@ -17,6 +18,8 @@ from pops.output import (
     read_npz, read_paraview,
 )
 from pops.output._consumer_contracts import FailRun, ParallelMode, ScheduleCursor
+from pops.output._writers import hdf5 as hdf5_backend
+from pops.output._writers.hdf5 import _parallel_snapshot_data
 from pops.runtime._consumer import (
     AcceptedSideEffect, ConsumerPayload, PreparedPublication, PublicationReceipt, PublicationTarget,
 )
@@ -276,6 +279,118 @@ def test_parallel_contract_fails_before_run_without_supported_backend(tmp_path, 
     with pytest.raises(ValueError, match="no collective writer"):
         NPZWriter().prepare(snapshot, parallel, tmp_path / "parallel.npz")
     assert not list(tmp_path.iterdir())
+
+
+def _fake_parallel_h5py(monkeypatch):
+    class Version:
+        hdf5_version = "test-hdf5"
+
+    class H5py:
+        __version__ = "test-h5py"
+        version = Version()
+
+    monkeypatch.setattr(hdf5_backend, "_require_h5py", lambda parallel: H5py())
+
+
+def test_collective_hdf5_snapshot_metadata_requires_exact_rank_consensus(monkeypatch):
+    _fake_parallel_h5py(monkeypatch)
+    snapshot, request, _ = _snapshot()
+    request = replace(request, parallel=True)
+
+    class MetadataMismatch:
+        @staticmethod
+        def Get_rank():
+            return 0
+
+        @staticmethod
+        def bcast(value, root=0):
+            return value
+
+        @staticmethod
+        def Barrier():
+            return None
+
+        @staticmethod
+        def allgather(envelope):
+            peer = deepcopy(envelope)
+            peer["snapshot"]["metadata"]["rank-local"] = 1
+            return [envelope, peer]
+
+    with pytest.raises(ValueError, match="metadata differs across ranks"):
+        _parallel_snapshot_data(snapshot, request, "collective.h5", MetadataMismatch())
+
+
+def test_collective_hdf5_rank_local_selection_error_enters_consensus(monkeypatch):
+    _fake_parallel_h5py(monkeypatch)
+    snapshot, request, _ = _snapshot()
+    request = replace(request, parallel=True)
+
+    class BrokenLocalSnapshot:
+        @staticmethod
+        def to_data(output_request):
+            return snapshot.to_data(output_request)
+
+        @staticmethod
+        def select(_output_request):
+            raise ValueError("rank-local field selection is malformed")
+
+    class ErrorConsensus:
+        called = False
+
+        @staticmethod
+        def Get_rank():
+            return 0
+
+        @staticmethod
+        def bcast(value, root=0):
+            return value
+
+        @staticmethod
+        def Barrier():
+            return None
+
+        @classmethod
+        def allgather(cls, envelope):
+            cls.called = True
+            assert envelope["snapshot"] is None
+            assert "rank-local field selection is malformed" in envelope["error"]
+            return [envelope, deepcopy(envelope)]
+
+    with pytest.raises(ValueError, match="snapshot preparation failed across ranks"):
+        _parallel_snapshot_data(
+            BrokenLocalSnapshot(), request, "collective.h5", ErrorConsensus()
+        )
+    assert ErrorConsensus.called, "the local error escaped before the collective envelope"
+
+
+def test_collective_hdf5_refuses_divergent_target_identity(monkeypatch, tmp_path):
+    _fake_parallel_h5py(monkeypatch)
+    snapshot, request, _ = _snapshot()
+    request = replace(request, parallel=True)
+
+    class TargetMismatch:
+        @staticmethod
+        def Get_rank():
+            return 0
+
+        @staticmethod
+        def bcast(value, root=0):
+            return value
+
+        @staticmethod
+        def Barrier():
+            return None
+
+        @staticmethod
+        def allgather(envelope):
+            peer = deepcopy(envelope)
+            peer["preflight"]["target"] += ".rank-one"
+            return [envelope, peer]
+
+    with pytest.raises(ValueError, match="preflight differs across ranks"):
+        _parallel_snapshot_data(
+            snapshot, request, tmp_path / "collective.h5", TargetMismatch()
+        )
 
 
 def test_composite_reduction_uses_metrics_and_excludes_covered_coarse_cells():

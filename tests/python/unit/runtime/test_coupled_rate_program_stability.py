@@ -239,10 +239,14 @@ def test_coupled_rate_bound_drives_a_conservative_native_amr_step(
 
     requested_end = 2.0 * PROGRAM_DT_BOUND
     assert requested_end > PROGRAM_DT_BOUND
-    report = pops.run(simulation, t_end=requested_end, max_steps=1)
+    # The Program bound intentionally prevents reaching requested_end in one step. ``pops.run``
+    # reports that incomplete run as an error; the accepted native transaction remains observable
+    # and must have advanced by exactly the constrained macro-step.
+    with pytest.raises(RuntimeError, match="max_steps exhausted before t_end"):
+        pops.run(simulation, t_end=requested_end, max_steps=1)
 
-    assert report.accepted_steps == 1
-    step = float(report.final_time)
+    assert simulation.macro_step() == 1
+    step = simulation.time()
     assert 0.0 < step <= PROGRAM_DT_BOUND
     assert simulation.time() == step
     assert simulation.n_levels() == level_count

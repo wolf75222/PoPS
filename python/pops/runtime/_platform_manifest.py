@@ -17,10 +17,10 @@ from pops._platform_contracts import (
 
 
 def execution_context_for_bind(platform, resources):
-    """Resolve the one explicit context carried into InstallPlan; never inspect global MPI/device."""
+    """Resolve the sole explicit context against authenticated native runtime facts."""
     exact = dict(resources or {})
     supplied = exact.pop("execution_context", None)
-    runtime = _native_runtime_backend(platform)
+    runtime = native_runtime_backend(platform)
     if supplied is not None:
         if exact:
             raise TypeError(
@@ -39,6 +39,12 @@ def execution_context_for_bind(platform, resources):
         raise TypeError(
             "communicator/device/datatype must be carried by resources['execution_context']; "
             "standalone runtime resource keys are not a launch contract: %s" % sorted(exact))
+    if runtime.communicator.require("runtime.communicator") != "serial":
+        raise PlatformContractError(
+            "a non-serial compiled artifact requires an explicit ExecutionContext at pops.bind",
+            field="communicator", expected=runtime.communicator.require("runtime.communicator"),
+            actual=None,
+        )
     context = ExecutionContext(
         backend=runtime,
         communicator=ExecutionResource("communicator", "serial"),
@@ -48,14 +54,17 @@ def execution_context_for_bind(platform, resources):
     return context
 
 
-def _native_runtime_backend(platform):
+def native_runtime_backend(platform):
     from pops import _pops
     fn = getattr(_pops, "runtime_backend_manifest", None)
     if not callable(fn):
         raise RuntimeError(
             "loaded _pops exposes no runtime_backend_manifest; rebuild/install this exact PoPS tree")
-    data = dict(fn(platform.backend.require("platform.backend"),
-                   platform.target.require("platform.target")))
+    data = dict(fn(
+        platform.backend.require("platform.backend"),
+        platform.target.require("platform.target"),
+        platform.communicator.require("platform.communicator"),
+    ))
     expected = {"schema_version", "backend", "target", "abi", "precision", "device",
                 "memory_spaces", "communicator", "capabilities", "evidence", "identity"}
     if set(data) != expected or data["schema_version"] != PLATFORM_CONTRACT_SCHEMA_VERSION:
@@ -81,4 +90,5 @@ __all__ = [
     "PlatformManifest", "RuntimeBackendManifest", "ExecutionResource", "ExecutionContext",
     "FieldViewDescriptor", "PlatformContractError", "validate_launch", "launch_checked",
     "proven_serial_manifest", "serial_execution_context", "execution_context_for_bind",
+    "native_runtime_backend",
 ]

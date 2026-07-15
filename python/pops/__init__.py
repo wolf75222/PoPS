@@ -10,6 +10,7 @@ from ._api import bind, compile, resolve, run, validate
 from ._inspect import explain, inspect
 from ._version import __version__
 from .physics.board import Model
+from ._platform_contracts import ExecutionContext
 from .problem import Case
 from .runtime.run_report import RunReport, RunStopReason
 from .time._program.api import Program
@@ -21,6 +22,7 @@ __all__ = [
     "Case",
     "RunReport",
     "RunStopReason",
+    "ExecutionContext",
     "validate",
     "inspect",
     "explain",

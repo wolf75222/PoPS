@@ -306,6 +306,7 @@ TEST(test_amr_named_field, Runs) {
   // (1) PARITY: named field "psi" with RHS = q*rho (the SAME as the default Poisson). gradient comps
   // declared. The closure mirrors make_poisson_rhs of a charge brick: rhs += q * U[0].
   AmrFieldSolveConfig psi_plan;
+  psi_plan.plan_identity = "test:plasma/psi:plan:v1";
   psi_plan.provider_identity = "test:plasma/psi";
   psi_plan.topology_provider_kind = "structured";
   psi_plan.topology_provenance = "test:periodic-cartesian";
@@ -360,6 +361,7 @@ TEST(test_amr_named_field, Runs) {
   // (2) DISTINCT RHS (linearity): named field "chi" with RHS = 2*q*rho -> chi = 2*psi (Poisson linear).
   // A genuinely different, correctly scaled second field (not an alias of the default phi).
   AmrFieldSolveConfig chi_plan;
+  chi_plan.plan_identity = "test:plasma/chi:plan:v1";
   chi_plan.provider_identity = "test:plasma/chi";
   chi_plan.topology_provider_kind = "structured";
   chi_plan.topology_provenance = "test:periodic-cartesian";
@@ -467,6 +469,7 @@ TEST(test_amr_named_field, Runs) {
     aux_before.push_back(rt.aux(level));
 
   AmrFieldSolveConfig fail_plan;
+  fail_plan.plan_identity = "test:plasma/zeta:plan:v1";
   fail_plan.provider_identity = "test:plasma/zeta";
   fail_plan.topology_provider_kind = "structured";
   fail_plan.topology_provenance = "test:periodic-cartesian";
@@ -474,6 +477,7 @@ TEST(test_amr_named_field, Runs) {
   fail_plan.output_owner_identity = "test:plasma";
   fail_plan.output_block = "plasma";
   fail_plan.output_key = "zeta";
+  fail_plan.hierarchy = "level_local";
   fail_plan.nullspace_assertion = "constant";
   fail_plan.gauge = "mean_zero";
   fail_plan.mg_opts.rel_tol = Real(1e-30);
@@ -525,13 +529,13 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   constexpr int phi_component = kAuxNamedBase;
   constexpr int gx_component = kAuxNamedBase + 1;
   constexpr int gy_component = kAuxNamedBase + 2;
-  constexpr int coarse_component = kAuxNamedBase + 3;
-  blocks[0].aux_ncomp = coarse_component + 1;
+  blocks[0].aux_ncomp = gy_component + 1;
 
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse,
                      layout.wall);
   AmrFieldSolveConfig plan;
+  plan.plan_identity = "test:plasma/screened:plan:v1";
   plan.provider_identity = "test:plasma/screened";
   plan.topology_provider_kind = "structured";
   plan.topology_provenance = "test:periodic-cartesian";
@@ -570,29 +574,4 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   ASSERT_GT(ghosts.reference, Real(1e-8)) << "the ghost oracle is nontrivial";
   EXPECT_EQ(ghosts.error, Real(0))
       << "coarse/fine ghosts must come from the freshly published coarse solution";
-
-  // The direct runtime also supports a coarse-only field on a refined hierarchy. Unlike the
-  // composite field above, it has no fine valid-cell authority: publication must inject the coarse
-  // solution across fine valid cells as well as ghosts, rather than preserving stale aux values.
-  AmrFieldSolveConfig coarse_plan = plan;
-  coarse_plan.provider_identity = "test:plasma/coarse";
-  coarse_plan.output_key = "coarse";
-  coarse_plan.hierarchy = "coarse";
-  coarse_plan.providers.clear();
-  coarse_plan.providers.push_back(
-      FieldProviderBinding{"test:plasma/coarse/rhs", "plasma", "coarse", Real(1)});
-  runtime.install_field_plan("coarse", coarse_plan);
-  runtime.register_named_field("plasma", "coarse", coarse_component,
-                               /*gx=*/-1, /*gy=*/-1, /*gradient_sign=*/1);
-  runtime.set_block_named_elliptic_rhs(
-      0, "coarse", [charge](const MultiFab& state, MultiFab& rhs) {
-        add_scaled_component(state, Real(charge), 0, rhs);
-      });
-  const std::string coarse_field = "coarse";
-  ASSERT_TRUE(runtime.solve_named_fields(&coarse_field).solved());
-  ASSERT_GT(norm_inf(runtime.provider_potential(coarse_field)), Real(1e-8));
-  EXPECT_EQ(max_valid_coarse_injection_gap(
-                runtime.aux(0), runtime.aux(1), coarse_component),
-            Real(0))
-      << "coarse-only named fields must publish into fine valid cells";
 }

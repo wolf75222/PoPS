@@ -261,6 +261,8 @@ def test_hierarchy_and_native_contracts_resolve_by_capabilities_before_codegen()
         residual, LevelByLevelSolve(), _layout()).hierarchy.mode == "level_local"
     assert resolver.resolve(
         residual, InferHierarchyFromLayout(), _layout()).hierarchy.mode == "composite"
+    with pytest.raises(ValueError, match="unknown hierarchy policy"):
+        capabilities.resolve_hierarchy("coarse")
 
     unsupported_hierarchy = FieldSolveResolver(_capabilities(hierarchy=("level_local",)))
     with pytest.raises(FieldArtifactUnavailable) as hierarchy_error:

@@ -522,7 +522,7 @@ class PreparedFieldSolverComponent final {
     const auto execution = spec_.execution->view();
     component::validate_execution_context(execution);
     if (execution.memory_space != POPS_MEMORY_SPACE_HOST_V1 ||
-        execution.communicator_f_handle != 0)
+        std::string(execution.communicator_identity) != "serial")
       throw std::invalid_argument(
           "external FieldSolver v2 System adapter currently proves host/serial execution only");
     const auto& topology_api = topology_component_->api();

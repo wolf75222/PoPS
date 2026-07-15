@@ -308,10 +308,22 @@ def _common_platform_manifest(
     from pops._platform_contracts import (
         artifact_platform_manifest, serial_execution_context, validate_launch)
 
+    from pops.runtime_environment import runtime_environment_report
+
+    runtime = runtime_environment_report()
+    communicator = (
+        "MPI_COMM_WORLD"
+        if runtime.get("mpi_active") is True
+        and runtime.get("communicator") == "MPI_COMM_WORLD"
+        else "serial"
+    )
     components = tuple(block.model for block in blocks)
     components += tuple(programs)
     manifests = tuple(
-        artifact_platform_manifest(backend=backend, target=target, component=component)
+        artifact_platform_manifest(
+            backend=backend, target=target, component=component,
+            communicator=communicator,
+        )
         for component in components
     )
     baseline = manifests[0]
@@ -321,9 +333,15 @@ def _common_platform_manifest(
         raise ValueError(
             "compiled executable components do not prove one common PlatformManifest; "
             "mismatching component indices=%s" % mismatch)
-    context = serial_execution_context(baseline)
-    for component in external:
-        validate_launch(component.platform_manifest, context, ())
+    if external:
+        if communicator != "serial":
+            raise NotImplementedError(
+                "external native components do not yet authenticate MPI_COMM_WORLD execution; "
+                "compile this Case for the serial route or provide an MPI-aware component ABI"
+            )
+        context = serial_execution_context(baseline)
+        for component in external:
+            validate_launch(component.platform_manifest, context, ())
     return baseline
 
 

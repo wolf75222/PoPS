@@ -221,7 +221,8 @@ def emit_cpp_program(
         amr_install=_emit_amr_install(
             program, target, prelude, body,
             _emit_amr_hierarchy_bodies(
-                program, authority, field_plans or {}) if target == "amr_system" else None))
+                program, authority, field_plans or {}) if target == "amr_system" else None,
+            dt_bound_body if target == "amr_system" else None))
 
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):

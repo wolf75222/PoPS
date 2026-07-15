@@ -14,9 +14,8 @@
 // it. The two runtimes use DIFFERENT SUBSETS of the fields, documented per member below:
 //   - step_ / substeps_ / stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ /
 //     profiler_ : used by BOTH runtimes (identical semantics).
-//   - dt_bound_ : UNIFORM ONLY. The uniform SystemStepper tightens the CFL dt with the Program's
-//     exported dt bound; the AMR runtime has no dt-bound seam, so this closure stays EMPTY on AMR
-//     (documented divergence, not a second subsystem).
+//   - dt_bound_ : used by BOTH runtimes. Each target loader wraps the generated scalar IR in its
+//     concrete context; both CFL routes tighten the native bound before running the Program.
 //   - hist_ / cache_ : UNIFORM ONLY today. The uniform System serializes the multistep history rings
 //     and the held-node scheduler cache through the checkpoint; the AMR runtime defers both (its
 //     history / cache seams are not wired), so these stay EMPTY on AMR. Keeping the storage here (one
@@ -131,10 +130,10 @@ struct ProgramRuntimeState {
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
   /// Installed macro-step body (ADC-399); empty -> the historical / native step path.
   std::function<void(double)> step_;
-  /// OPTIONAL compiled-Program dt bound (ADC-417), UNIFORM ONLY. When a generated .so exports one, the
-  /// uniform install stores a closure here and SystemStepper::step_cfl tightens dt to
-  /// min(native CFL, program bound). EMPTY on the AMR runtime (no dt-bound seam) and when no Program
-  /// exports a bound -> the native CFL is used UNCHANGED (documented Uniform/AMR divergence).
+  /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
+  /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
+  /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
+  /// unchanged. The closure owns no Python callback and executes entirely in the compiled module.
   std::function<Real(Real)> dt_bound_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n runs step_ n times over eff_dt/n; stride M runs
   /// the program once per M macro-steps with eff_dt = M*dt (hold-then-catch-up). Default 1/1 ->

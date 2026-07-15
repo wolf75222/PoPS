@@ -265,7 +265,7 @@ def add_reason(reasons: dict[str, set[str]], item: str, reason: str) -> None:
     reasons.setdefault(item, set()).add(reason)
 
 
-def manifest_cpp_suites(manifest: dict) -> list[dict]:
+def manifest_cpp_suites(manifest: dict, *, include_mpi: bool = False) -> list[dict]:
     suites: list[dict] = []
     for suite in manifest.get("cpp", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -276,13 +276,80 @@ def manifest_cpp_suites(manifest: dict) -> list[dict]:
         # selection or the gate hits `ninja: unknown target`. The manifest label/mpi_nproc
         # is the primary filter; the `mpi` NAME SEGMENT check is a belt-and-braces guard for
         # a suite that forgets the label (see #435, test_amr_regrid_mpi_parity).
-        if "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_"):
+        if not include_mpi and (
+            "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_")
+        ):
             continue
         sources = [normalize(str(source)) for source in suite.get("sources", [])]
         if not sources:
             raise SystemExit(f"C++ suite {name} has no sources in tests/test_manifest.toml")
-        suites.append({"name": name, "labels": labels, "sources": sources})
+        ranks_by_field: dict[str, tuple[int, ...]] = {}
+        for field in ("mpi_nproc", "mpi_variants"):
+            raw_ranks = suite.get(field, [])
+            if not isinstance(raw_ranks, list):
+                raise SystemExit(f"C++ suite {name} has invalid {field}; expected a TOML array")
+            ranks = tuple(raw_ranks)
+            if any(type(rank) is not int or rank <= 0 for rank in ranks):
+                raise SystemExit(
+                    f"C++ suite {name} has invalid {field}; ranks must be positive integers"
+                )
+            if len(ranks) != len(set(ranks)):
+                raise SystemExit(f"C++ suite {name} has duplicate ranks in {field}")
+            if ranks != tuple(sorted(ranks)):
+                raise SystemExit(f"C++ suite {name} must sort {field} in ascending order")
+            ranks_by_field[field] = ranks
+        mpi_nproc = ranks_by_field["mpi_nproc"]
+        mpi_variants = ranks_by_field["mpi_variants"]
+        if ("mpi" in labels) != bool(mpi_nproc):
+            raise SystemExit(
+                f"C++ suite {name} must pair its mpi label with an exact mpi_nproc rank set"
+            )
+        if mpi_variants and ("mpi" in labels or mpi_nproc):
+            raise SystemExit(
+                f"C++ suite {name} cannot mix mpi_variants with an MPI-only label/mpi_nproc"
+            )
+        suites.append(
+            {
+                "name": name,
+                "labels": labels,
+                "sources": sources,
+                "mpi_nproc": mpi_nproc,
+                "mpi_variants": mpi_variants,
+            }
+        )
     return sorted(suites, key=lambda item: item["name"])
+
+
+def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
+    """Return the exact manifest-owned C++ targets required by ``label``.
+
+    Dedicated backend jobs use this instead of duplicating target names in workflow YAML. MPI
+    targets are intentionally excluded from the ordinary serial selector but remain first-class
+    manifest suites for this label projection.  The MPI projection additionally includes ordinary
+    serial executables declaring ``mpi_variants``: CTest launches those same binaries under MPI,
+    so the dedicated job must build them even though their primary suite is not MPI-only.
+    """
+    if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", label):
+        raise SystemExit("C++ suite label must contain only letters, digits, '.', '_' or '-'")
+    targets = sorted(
+        suite["name"]
+        for suite in manifest_cpp_suites(manifest, include_mpi=True)
+        if label in suite["labels"] or (label == "mpi" and suite["mpi_variants"])
+    )
+    if not targets:
+        raise SystemExit(
+            f"no C++ suites carry label {label!r} in tests/test_manifest.toml"
+        )
+    return targets
+
+
+def cpp_mpi_ctest_count(manifest: dict) -> int:
+    """Return the exact number of manifest-owned ``ctest -L mpi`` launches."""
+    suites = manifest_cpp_suites(manifest, include_mpi=True)
+    return sum(
+        len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
+        for suite in suites
+    )
 
 
 def manifest_python_suites(manifest: dict) -> list[dict]:
@@ -859,6 +926,40 @@ def plan_cpp(args: argparse.Namespace) -> int:
     return 0
 
 
+def plan_cpp_label(args: argparse.Namespace) -> int:
+    """Project one exact C++ manifest label into build targets for a dedicated CI job."""
+    manifest = load_manifest()
+    targets = cpp_targets_with_label(manifest, args.label)
+    mpi_ctest_count = cpp_mpi_ctest_count(manifest) if args.label == "mpi" else 0
+    summary = f"label {args.label}: {len(targets)} C++ targets"
+    if args.label == "mpi":
+        summary += f", {mpi_ctest_count} CTest launches"
+    print(summary)
+    for target in targets:
+        print(target)
+    write_github_outputs(
+        getattr(args, "github_output", None),
+        {
+            "cpp_label": args.label,
+            "cpp_label_targets": " ".join(targets),
+            "cpp_label_count": str(len(targets)),
+            "cpp_label_ctest_count": str(mpi_ctest_count),
+            "cpp_label_summary": summary,
+        },
+    )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "cpp-label",
+            "label": args.label,
+            "selected_count": len(targets),
+            "ctest_count": mpi_ctest_count,
+            "selected": targets,
+        },
+    )
+    return 0
+
+
 def _apply_cross_test_closure(selected: set[str], reasons: dict[str, set[str]]) -> None:
     before = set(selected)
     ci_import_closure._close_cross_test(selected, _test_to_test())
@@ -1103,6 +1204,12 @@ def main() -> int:
     cpp.add_argument("--shard-total", type=int)
     cpp.add_argument("--force-all", action="store_true")
     cpp.set_defaults(func=plan_cpp)
+
+    cpp_label = sub.add_parser("cpp-label")
+    cpp_label.add_argument("--label", required=True)
+    cpp_label.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    cpp_label.add_argument("--explain-file")
+    cpp_label.set_defaults(func=plan_cpp_label)
 
     py = sub.add_parser("python")
     py.add_argument("--changed-files", required=True)

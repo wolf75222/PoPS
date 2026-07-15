@@ -10,7 +10,7 @@ from typing import Any
 
 
 def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
-                      hierarchy_bodies: Any = None) -> str:
+                      hierarchy_bodies: Any = None, dt_bound_body: str | None = None) -> str:
     """C++ source of the AMR install entry the .so exports (epic ADC-511 / ADC-508, Spec 6).
 
     ``target='system'`` emits NOTHING (a System-only .so carries only ``pops_install_program``).
@@ -75,4 +75,12 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
             '    ctx.advance_synchronized_hierarchy(dt, _advance_hierarchy);\n'
         ) +
         '  });\n'
+        '}\n'
+        '// AMR counterpart of pops_program_dt_bound. The generated module owns the concrete\n'
+        '// AmrProgramContext type; the runtime loader passes only its stable AmrSystem facade.\n'
+        '// The body is the identical read-only scalar IR used by the uniform Program ABI.\n'
+        'extern "C" pops::Real pops_program_dt_bound_amr(void* sys, pops::Real cfl) {\n'
+        '  pops::runtime::program::AmrProgramContext ctx(sys);\n'
+        '  (void)ctx; (void)cfl;\n'
+        + (dt_bound_body or '    return std::numeric_limits<pops::Real>::infinity();') + '\n'
         '}\n')

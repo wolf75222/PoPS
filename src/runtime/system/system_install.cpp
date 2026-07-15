@@ -1270,7 +1270,7 @@ void System::set_aux_field_component(int comp, const std::vector<double>& field)
         "System::set_aux_field : the aux channel has only " + std::to_string(P->aux_ncomp_) +
         " components ; no block declares an aux field at index " + std::to_string(comp) +
         " (add the block that reads it before set_aux_field)");
-  std::vector<Real> f(field.begin(), field.end());
+  field_solver::SystemFieldSolver<Impl>::NamedAuxField f(field.begin(), field.end());
   p_->fields_.apply_named_aux_one(comp, f);     // populate right away (channel wide enough)
   p_->fields_.named_aux_[comp] = std::move(f);  // keep for a later reallocation of the channel
 }

@@ -172,8 +172,8 @@ inline void AmrRuntime::publish_aux_components(const std::vector<int>& component
 }
 
 /// Publish components whose valid cells already carry a resolved value on every AMR level.  The
-/// coarse-only publication above deliberately injects the parent across the child's whole grown
-/// box; doing that here would destroy the independently solved fine valid cells.  FillPatch instead
+/// Coarse-authoritative publication above deliberately injects the parent across the child's whole
+/// grown box; doing that here would destroy independently solved fine valid cells. FillPatch instead
 /// materializes parent values only in coarse/fine ghosts, then lets the same-level/physical halo
 /// fill override the regions for which a fine-level authority exists.
 inline void AmrRuntime::publish_refined_aux_components(

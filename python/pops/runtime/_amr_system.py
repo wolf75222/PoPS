@@ -447,7 +447,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """Structured report of the compiled-Program runtime subsystem (ADC-594).
 
         Same value object as ``System.program_report`` -- the SHARED Program subsystem (the AMR runtime
-        uses the common subset: no dt bound, no scheduler cache / history rings wired, so those
+        uses the common dt-bound contract but has no scheduler cache / history rings wired, so those
         sections stay empty). Metadata only; installed=False with empty sections on a runtime with no
         program installed."""
         from pops.runtime.program_report import build_program_report

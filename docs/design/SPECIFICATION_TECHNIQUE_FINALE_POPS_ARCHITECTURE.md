@@ -17,6 +17,7 @@ pops.Program
 pops.Case
 pops.RunReport
 pops.RunStopReason
+pops.ExecutionContext
 pops.validate
 pops.inspect
 pops.explain
@@ -30,6 +31,13 @@ pops.__version__
 Tout autre concept public est importé depuis son module thématique. Les moteurs natifs `System` et
 `AmrSystem`, les enregistrements `BindInputs` et `InstallPlan`, et les fonctions d'installation sont
 des détails internes. Ils ne constituent ni une seconde API, ni une voie de secours.
+
+`pops.ExecutionContext` est l'unique valeur racine supplémentaire parce qu'elle matérialise une
+ressource de lancement, pas un second moteur. La route MPI actuelle se construit par
+`pops.ExecutionContext.mpi_world(artifact, MPI.COMM_WORLD)` après compilation et se transmet à
+`pops.bind(..., resources={"execution_context": context})`. Elle refuse tout communicateur custom,
+toute extension non-MPI et toute divergence de rang/taille ; aucune exécution série de repli n'est
+autorisée.
 
 ### 1.1 Objectifs
 

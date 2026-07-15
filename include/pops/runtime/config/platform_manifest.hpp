@@ -320,15 +320,16 @@ decltype(auto) launch_checked(const PlatformManifest& platform, const ExecutionC
   return std::forward<Kernel>(kernel)(context, fields);
 }
 
-inline PlatformManifest proven_serial_platform(const std::string& backend,
-                                               const std::string& target,
-                                               const std::string& abi) {
-  constexpr const char* evidence = "pops.native.2d-float64-host.v1";
+inline PlatformManifest proven_host_platform(const std::string& backend,
+                                             const std::string& target,
+                                             const std::string& abi,
+                                             const std::string& communicator,
+                                             const std::string& evidence) {
   const auto scalar = prove_text("float64", evidence);
   return {
       prove_text(backend, evidence), prove_text(target, evidence), prove_text(abi, evidence),
       {scalar, scalar, scalar, scalar}, prove_text("host", evidence),
-      prove_text_set({"host"}, evidence), prove_text("serial", evidence),
+      prove_text_set({"host"}, evidence), prove_text(communicator, evidence),
       {{"dimensions", prove_int_set({2}, evidence)},
        {"centerings", prove_text_set({"cell"}, evidence)},
        {"scalars", prove_text_set({"float64"}, evidence)},
@@ -337,12 +338,29 @@ inline PlatformManifest proven_serial_platform(const std::string& backend,
        {"generic_field_view", prove_bool(true, evidence)}}};
 }
 
+inline PlatformManifest proven_serial_platform(const std::string& backend,
+                                               const std::string& target,
+                                               const std::string& abi) {
+  return proven_host_platform(backend, target, abi, "serial",
+                              "pops.native.2d-float64-host.v1");
+}
+
+inline RuntimeBackendManifest proven_host_backend(const std::string& backend,
+                                                  const std::string& target,
+                                                  const std::string& abi,
+                                                  const std::string& communicator,
+                                                  const std::string& evidence) {
+  const auto platform = proven_host_platform(
+      backend, target, abi, communicator, evidence);
+  return {platform.backend, platform.target, platform.abi, platform.precision, platform.device,
+          platform.memory_spaces, platform.communicator, platform.capabilities};
+}
+
 inline RuntimeBackendManifest proven_serial_backend(const std::string& backend,
                                                     const std::string& target,
                                                     const std::string& abi) {
-  const auto platform = proven_serial_platform(backend, target, abi);
-  return {platform.backend, platform.target, platform.abi, platform.precision, platform.device,
-          platform.memory_spaces, platform.communicator, platform.capabilities};
+  return proven_host_backend(backend, target, abi, "serial",
+                             "pops.native.2d-float64-host.v1");
 }
 
 }  // namespace pops::platform

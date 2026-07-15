@@ -188,16 +188,19 @@ jobs:
             # d'un label manuel. Les changements generaux restent couverts par ci-full/nightly.
             mpi:
               - 'include/pops/parallel/**'
-              - 'include/pops/runtime/amr/**'
-              - 'include/pops/runtime/amr_system.hpp'
+              - 'include/pops/runtime/**'
               - 'include/**/*mpi*'
-              - 'src/runtime/amr/**'
+              - 'src/runtime/**'
               - 'src/**/*mpi*'
               - 'python/bindings/**/*mpi*'
               - 'python/bindings/core/init/init_amr.cpp'
+              - 'python/bindings/core/init/init_core.cpp'
+              - 'python/bindings/core/init/init_system.cpp'
               # The collective proof covers the complete publication stack, not only the final
               # hdf5 adapter: snapshot/data/common/runtime-consumer changes must exercise it too.
               - 'python/pops/output/**'
+              - 'python/pops/_platform_contracts.py'
+              - 'python/pops/codegen/_compiled_artifact.py'
               - 'python/pops/runtime/_consumer.py'
               - 'python/pops/runtime/_consumer_effects.py'
               - 'python/pops/runtime/_consumer_planning.py'
@@ -205,10 +208,17 @@ jobs:
               - 'python/pops/runtime/_output_publisher.py'
               - 'python/pops/runtime/_runtime_consumers.py'
               - 'python/pops/runtime/_runtime_instance.py'
+              - 'python/pops/runtime/_component_execution_context.py'
+              - 'python/pops/runtime/_platform_manifest.py'
+              - 'python/pops/runtime/_runtime_authorities.py'
+              - 'python/pops/runtime/_runtime_executor.py'
+              - 'python/pops/runtime/_system_unified_install.py'
+              - 'python/pops/runtime_environment.py'
               - 'tests/**/mpi/**'
               - 'tests/python/integration/io/test_hdf5_parallel.py'
               - 'tests/CMakeLists.txt'
               - 'tests/test_manifest.toml'
+              - 'scripts/ci_select_tests.py'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
@@ -1082,7 +1092,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ccache libeigen3-dev libopenmpi-dev ninja-build openmpi-bin \
-            python3-h5py python3-h5py-mpi python3-mpi4py python3-numpy python3-pytest
+            pybind11-dev python3-dev python3-h5py python3-h5py-mpi python3-mpi4py \
+            python3-numpy python3-pytest
 
       - name: Resolve runner and compiler cache identity
         id: kokkos-platform
@@ -1126,52 +1137,70 @@ jobs:
             ccache-${{ runner.os }}-mpi-refs/heads/master-
             ccache-${{ runner.os }}-mpi-
 
+      - name: Select manifest-owned MPI targets
+        id: mpi-test-plan
+        run: |
+          mkdir -p build-mpi
+          python3 scripts/ci_select_tests.py cpp-label \
+            --label mpi \
+            --github-output "$GITHUB_OUTPUT" \
+            --explain-file build-mpi/mpi-test-plan.json
+
       - name: Configure + build (MPI + Kokkos Serial)
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
-          cmake --preset ci-mpi
-          cmake --build --preset ci-mpi
+          cmake --preset ci-mpi \
+            -DPOPS_BUILD_PYTHON=ON \
+            -DPython_EXECUTABLE=/usr/bin/python3
+          read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
+          cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
 
       - name: Test (bit-identique np=1/2/4)
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
         # OMPI_MCA_* couvre OpenMPI 4.x, PRTE_MCA_* couvre OpenMPI 5.x.
         # `-L mpi` : ne (re)joue QUE le sous-ensemble distribue. Les tests serie tournent deja dans
         # gate-cpp (preset ci-kokkos, SANS filtre -L) ; les rejouer ici (build MPI, mono-rang) etait
-        # redondant. Couverture globale inchangee. Garde anti-regression : si le backfill du label
-        # "mpi" (tests/CMakeLists.txt) cassait, la selection s'effondrerait -> plancher explicite
-        # (60 tests aujourd'hui ; ~8 sans backfill), echec bruyant plutot que perte silencieuse.
+        # redondant. Le manifeste est l'autorite exacte pour les suites MPI-only ET les variantes
+        # MPI de quatre executables serie ; la projection doit concorder avec CTest avant execution.
         run: |
           mpi_n=$(ctest --preset ci-mpi -N -L mpi | awk -F': ' '/Total Tests:/{print $2}')
-          echo "Tests MPI selectionnes (-L mpi) : ${mpi_n:-0}"
-          if [ "${mpi_n:-0}" -lt 50 ]; then
-            echo "::error::Selection MPI effondree (${mpi_n:-0} < 50) : label \"mpi\" probablement absent (cf. backfill tests/CMakeLists.txt, ADC-366)"
+          mpi_expected="${{ steps.mpi-test-plan.outputs.cpp_label_ctest_count }}"
+          echo "Tests MPI selectionnes (-L mpi) : ${mpi_n:-0}/${mpi_expected:-0}"
+          if [ "${mpi_n:-0}" != "${mpi_expected:-0}" ]; then
+            echo "::error::Projection MPI incoherente : CTest=${mpi_n:-0}, manifeste=${mpi_expected:-0}"
             exit 1
           fi
           ctest --preset ci-mpi -L mpi
 
-      - name: Test collective HDF5 writer (Python source, np=2)
-        # This writer is pure Python: reuse the MPI job's existing native build
-        # instead of compiling a second _pops extension. The distro interpreter
-        # is intentional because apt's h5py/mpi4py extensions target it.
+      - name: Test native lifecycle + collective HDF5 writer (np=2)
+        # Assemble the exact source package around the MPI-enabled extension produced above. The
+        # distro interpreter is intentional: apt's Python, mpi4py and h5py-MPI share one ABI.
         env:
-          PYTHONPATH: ${{ github.workspace }}/python
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+          Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
         run: |
+          rm -rf build-mpi/python-package
+          mkdir -p build-mpi/python-package/pops
+          cp -R python/pops/. build-mpi/python-package/pops/
+          cp build-mpi/python/pops/_pops*.so build-mpi/python-package/pops/
           /usr/bin/python3 - <<'PY'
-          import sys
-
           import h5py
           from mpi4py import MPI
-          from pops.output import HDF5Writer, read_hdf5
+          import pops
+          from pops import _pops
 
           if not h5py.get_config().mpi:
               raise SystemExit("h5py was imported without MPI support")
-          if "pops._pops" in sys.modules:
-              raise SystemExit("collective HDF5 source proof unexpectedly loaded _pops")
-          print("python:", sys.executable)
+          if not _pops.__has_mpi__:
+              raise SystemExit("collective HDF5 lifecycle requires an MPI-enabled _pops")
+          if not hasattr(pops.ExecutionContext, "mpi_world"):
+              raise SystemExit("installed package lacks the exact MPI execution context")
           print("h5py:", h5py.__version__, "mpi=", h5py.get_config().mpi)
           print("mpi4py:", MPI.Get_version(), MPI.get_vendor())
-          print("writer:", HDF5Writer.__module__, "reader:", read_hdf5.__module__)
+          print("pops:", pops.__version__, "mpi_module=", _pops.__has_mpi__)
           PY
           mpiexec -n 2 /usr/bin/python3 -m pytest -q \
             tests/python/integration/io/test_hdf5_parallel.py

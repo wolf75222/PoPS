@@ -16,6 +16,7 @@ from pops._platform_contracts import (
 )
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _runtime_executor as executor
+from pops.runtime._component_execution_context import component_execution_data
 from tests.python.unit.runtime.test_runtime_planning import _install
 
 
@@ -46,7 +47,7 @@ def _context(*, communicator="serial", datatype="float64", device="host"):
 @pytest.mark.parametrize(
     "context,match",
     [
-        (_context(communicator="mpi"), "serial communicator"),
+        (_context(communicator="mpi"), "serial or exact MPI_COMM_WORLD"),
         (_context(datatype="float32"), "exact float64"),
         (_context(device="cuda:0"), "host/cpu"),
     ],
@@ -67,7 +68,7 @@ def test_unsupported_execution_context_resources_are_rejected(context, match):
 @pytest.mark.parametrize(
     "facts,match",
     [
-        ({"mpi_active": True, "kokkos_backend": "Serial"}, "MPI inactive"),
+        ({"mpi_active": True, "kokkos_backend": "Serial"}, "MPI to be inactive"),
         ({"mpi_active": False, "kokkos_backend": "Cuda"}, "Kokkos execution space"),
     ],
 )
@@ -87,6 +88,135 @@ def test_process_global_native_state_is_rejected_before_system_constructor(
     with pytest.raises(NotImplementedError, match=match):
         executor.install_runtime_executor(_install())
     assert calls == []
+
+
+class _FakeComm:
+    def __init__(self, *, rank=0, size=2, fortran_handle=0):
+        self._rank = rank
+        self._size = size
+        self._fortran_handle = fortran_handle
+
+    @staticmethod
+    def Compare(left, right):
+        return 0 if left is right else 1
+
+    def Get_rank(self):
+        return self._rank
+
+    def Get_size(self):
+        return self._size
+
+    def py2f(self):
+        return self._fortran_handle
+
+
+class _FakeDatatype:
+    def __init__(self, fortran_handle=0):
+        self._fortran_handle = fortran_handle
+
+    def py2f(self):
+        return self._fortran_handle
+
+
+def _exact_mpi_context(monkeypatch):
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.runtime import _platform_manifest
+
+    world = _FakeComm()
+    double = _FakeDatatype()
+    mpi = SimpleNamespace(
+        Comm=_FakeComm,
+        Datatype=_FakeDatatype,
+        COMM_WORLD=world,
+        DOUBLE=double,
+        IDENT=0,
+    )
+    monkeypatch.setitem(sys.modules, "mpi4py", SimpleNamespace(MPI=mpi))
+    backend = replace(
+        proven_serial_manifest(
+            backend="production", target="system", abi="test|clang++|c++23", runtime=True
+        ),
+        communicator=CapabilityProof.proven(
+            "MPI_COMM_WORLD", "test.explicit-mpi-world"
+        ),
+    )
+    artifact = object.__new__(CompiledSimulationArtifact)
+    object.__setattr__(
+        artifact,
+        "platform_manifest",
+        proven_serial_manifest(
+            backend="production", target="system", abi="test|clang++|c++23"
+        ),
+    )
+    monkeypatch.setattr(_platform_manifest, "native_runtime_backend", lambda _platform: backend)
+    return ExecutionContext.mpi_world(artifact, world), mpi
+
+
+def test_exact_mpi_world_context_projects_zero_valued_fortran_handles(monkeypatch):
+    context, mpi = _exact_mpi_context(monkeypatch)
+
+    assert context.communicator.handle is mpi.COMM_WORLD
+    assert context.datatype.handle is mpi.DOUBLE
+    assert component_execution_data(context) == {
+        "execution_identity": context.identity.token,
+        "context_version": 1,
+        "memory_space": 1,
+        "backend_identity": context.backend.identity.token,
+        "device_identity": "host",
+        "scalar_type": 2,
+        "storage_precision": 4,
+        "compute_precision": 4,
+        "accumulation_precision": 4,
+        "reduction_precision": 4,
+        "stream_handle": 0,
+        "stream_identity": "host::synchronous",
+        "communicator_f_handle": 0,
+        "communicator_datatype_f_handle": 0,
+        "communicator_identity": "MPI_COMM_WORLD",
+        "communicator_datatype_identity": "MPI_DOUBLE",
+    }
+    monkeypatch.setattr(
+        executor,
+        "_native_runtime_facts",
+        lambda: {
+            "mpi_compiled": True,
+            "mpi_active": True,
+            "communicator": "MPI_COMM_WORLD",
+            "mpi_rank": 0,
+            "mpi_ranks": 2,
+            "kokkos_backend": "Serial",
+        },
+    )
+    executor._require_supported_execution_context(
+        SimpleNamespace(execution_context=context)
+    )
+
+
+def test_mpi_world_factory_rejects_equal_looking_or_duplicated_communicators(monkeypatch):
+    context, mpi = _exact_mpi_context(monkeypatch)
+
+    class _EqualLooking:
+        def __eq__(self, _other):
+            return True
+
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    artifact = object.__new__(CompiledSimulationArtifact)
+    object.__setattr__(artifact, "platform_manifest", context.backend)
+    with pytest.raises(ValueError, match="only mpi4py.MPI.COMM_WORLD"):
+        ExecutionContext.mpi_world(artifact, _EqualLooking())
+    with pytest.raises(ValueError, match="only mpi4py.MPI.COMM_WORLD"):
+        ExecutionContext.mpi_world(artifact, _FakeComm())
+
+
+def test_mpi_component_projection_rejects_noncanonical_double(monkeypatch):
+    context, _mpi = _exact_mpi_context(monkeypatch)
+    changed = replace(
+        context,
+        datatype=ExecutionResource("datatype", "float64", handle=_FakeDatatype()),
+    )
+    with pytest.raises(ValueError, match="exact mpi4py.MPI.DOUBLE"):
+        component_execution_data(changed)
 
 
 def test_before_step_transfers_read_one_atomic_source_snapshot():

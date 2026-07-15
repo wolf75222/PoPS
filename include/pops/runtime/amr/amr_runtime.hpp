@@ -283,6 +283,42 @@ struct SetFieldCoverageKernel {
   Real value;
   POPS_HD void operator()(int i, int j) const { mask(i, j, 0) = value; }
 };
+
+/// Publishes one solved named potential and its optional signed centered gradient into the
+/// hierarchy aux channel.  A named functor keeps generated/external nvcc instantiations portable
+/// and routes every valid-cell operation through the common Kokkos execution authority.
+struct AmrNamedFieldPostprocessKernel {
+  Array4 aux;
+  ConstArray4 phi;
+  int phi_component;
+  int gradient_x_component;
+  int gradient_y_component;
+  Real gradient_scale;
+  Real dx;
+  Real dy;
+  bool has_gradient;
+
+  POPS_HD void operator()(int i, int j) const {
+    aux(i, j, phi_component) = phi(i, j);
+    if (has_gradient) {
+      aux(i, j, gradient_x_component) =
+          gradient_scale * (phi(i + 1, j) - phi(i - 1, j)) / (Real(2) * dx);
+      aux(i, j, gradient_y_component) =
+          gradient_scale * (phi(i, j + 1) - phi(i, j - 1)) / (Real(2) * dy);
+    }
+  }
+};
+
+struct AmrNamedAuxCopyKernel {
+  Array4 aux;
+  const Real* field;
+  int component;
+  int row_width;
+
+  POPS_HD void operator()(int i, int j) const {
+    aux(i, j, component) = field[static_cast<std::int64_t>(j) * row_width + i];
+  }
+};
 }  // namespace detail
 
 /// Type-erased closures of ONE AMR block, placed on the shared hierarchy. AMR counterpart of the
@@ -479,6 +515,8 @@ struct AmrRuntimeBlock {
 /// AmrSystemCoupler algorithm (solve_fields + step) over closures rather than a CoupledSystem.
 class AmrRuntime {
  public:
+  using NamedAuxField = std::vector<Real, fab_allocator<Real>>;
+
   struct BootstrapStaggeredField {
     runtime::amr::TransferCentering centering{};
     std::vector<MultiFab> levels;
@@ -1850,10 +1888,23 @@ class AmrRuntime {
   /// (regrid re-solves). AMR counterpart of System::set_aux_field_component. No-op default: without a
   /// named field the map is empty and the path is bit-identical. @p comp must be >= kAuxNamedBase and
   /// within the channel (the facade validates and resolves the name).
-  void set_named_aux(int comp, std::vector<Real> field) {
-    named_aux_[comp] = std::move(field);
-    if (!aux_.empty())
-      apply_named_aux();  // reflect immediately if the hierarchy already exists
+  template <class Allocator>
+  void set_named_aux(int comp, std::vector<Real, Allocator> field) {
+    NamedAuxField stored;
+    if constexpr (std::is_same_v<Allocator, typename NamedAuxField::allocator_type>)
+      stored = std::move(field);
+    else
+      stored.assign(field.begin(), field.end());
+    named_aux_[comp] = std::move(stored);
+    if (!aux_.empty()) {
+      apply_named_aux();
+      // A bound named aux is a hierarchy-wide field, not merely a coarse-level seed.  Program
+      // projections and rate kernels read aux_[level] directly, including before the first elliptic
+      // solve, so publish the newly bound component through the same coarse-to-fine authority used
+      // after solve_fields.  Restricting the publication to this component avoids disturbing any
+      // independently solved aux fields.
+      publish_aux_components({comp});
+    }
   }
 
   /// Registers a per-field aux HALO policy (ADC-369) for the named component @p comp: solve_fields
@@ -1861,7 +1912,15 @@ class AmrRuntime {
   /// physical-face ghosts (periodic faces stay periodic). Coarse-level scope (fine patches touching the
   /// domain boundary inherit the shared BC). No-op default. AMR counterpart of
   /// System::set_aux_field_halo_component.
-  void set_named_aux_bc(int comp, AuxHaloPolicy policy) { named_aux_bc_[comp] = policy; }
+  void set_named_aux_bc(int comp, AuxHaloPolicy policy) {
+    named_aux_bc_[comp] = policy;
+    if (!aux_.empty() && named_aux_.count(comp) != 0) {
+      // A halo policy installed after the value is still part of the same bound field contract.
+      // Re-publish that component so its hierarchy ghosts cannot retain the previous policy.
+      apply_named_aux();
+      publish_aux_components({comp});
+    }
+  }
 
   /// @name Named multi-elliptic fields (ADC-428)
   /// A SECOND elliptic solve (beyond the default coarse Poisson) for a user-named field
@@ -2543,8 +2602,8 @@ class AmrRuntime {
         throw;
       }
       device_fence();  // CRITICAL: the V-cycle must finish before phi is read (same invariant as mg_)
-      if (nf.fac)
-        continue;  // published level-by-level after coarse-only fields have been injected
+      if (nf.fac || nf.level_mg.size() > 1)
+        continue;  // every multilevel field is published level-by-level below
       // Write phi (+ centered grad) into the field's OWN aux components on the coarse valid cells. The
       // default field_postprocess hardcodes comps 0..2, so we write the named comps with a dedicated
       // loop (mirror of SystemFieldSolver::solve_named_field_from_state). Per-local-fab (MPI-safe).
@@ -2559,16 +2618,8 @@ class AmrRuntime {
         const ConstArray4 p = phi_mf.fab(li).const_array();
         Array4 a = aux_[0].fab(li).array();
         const Box2D v = aux_[0].box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-            a(i, j, cphi) = p(i, j);
-            if (grad) {
-              a(i, j, cgx) =
-                  gradient_scale * (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-              a(i, j, cgy) =
-                  gradient_scale * (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-            }
-          }
+        for_each_cell(v, detail::AmrNamedFieldPostprocessKernel{
+                             a, p, cphi, cgx, cgy, gradient_scale, dx, dy, grad});
       }
     }
     if (!has_completed_solve)
@@ -2602,41 +2653,33 @@ class AmrRuntime {
           const ConstArray4 p = phi.fab(li).const_array();
           Array4 a = aux_[static_cast<std::size_t>(k)].fab(li).array();
           const Box2D valid = aux_[static_cast<std::size_t>(k)].box(li);
-          for (int j = valid.lo[1]; j <= valid.hi[1]; ++j)
-            for (int i = valid.lo[0]; i <= valid.hi[0]; ++i) {
-              a(i, j, cphi) = p(i, j);
-              if (grad) {
-                a(i, j, cgx) = gradient_scale *
-                    (p(i + 1, j) - p(i - 1, j)) / (Real(2) * level_dx);
-                a(i, j, cgy) = gradient_scale *
-                    (p(i, j + 1) - p(i, j - 1)) / (Real(2) * level_dy);
-              }
-            }
+          for_each_cell(valid, detail::AmrNamedFieldPostprocessKernel{
+                                   a, p, cphi, cgx, cgy, gradient_scale,
+                                   level_dx, level_dy, grad});
         }
       }
     }
-    // Publish each component according to the solver authority that produced it. A composite or
-    // level-local field owns every refined valid cell, so only its halos may receive parent data.
-    // A coarse-only field has no fine solve and must retain the historical full coarse injection,
-    // including fine valid cells. Grouping disjoint components keeps this to two pack/fill passes
-    // even when several named fields are solved together.
-    std::set<int> coarse_components;
-    std::set<int> refined_components;
-    auto add_component = [&](std::set<int>& destination, int component) {
+    // The final hierarchy policies are exhaustive: a multilevel field is either composite or
+    // level-local, and both own every refined valid cell. A single-level layout has no refined
+    // authority to preserve. Publish the selected components once through the matching authority;
+    // there is deliberately no hidden coarse-on-refined policy.
+    std::set<int> components;
+    auto add_component = [&](int component) {
       if (component >= 0 && component < aux_ncomp_)
-        destination.insert(component);
+        components.insert(component);
     };
     for (const auto& [field, nf] : named_fields_) {
       if (selected != nullptr && field != *selected)
         continue;
-      std::set<int>& destination =
-          (nf.fac || nf.level_mg.size() > 1) ? refined_components : coarse_components;
-      add_component(destination, nf.phi_comp);
-      add_component(destination, nf.gx_comp);
-      add_component(destination, nf.gy_comp);
+      add_component(nf.phi_comp);
+      add_component(nf.gx_comp);
+      add_component(nf.gy_comp);
     }
-    publish_aux_components({coarse_components.begin(), coarse_components.end()});
-    publish_refined_aux_components({refined_components.begin(), refined_components.end()});
+    const std::vector<int> published{components.begin(), components.end()};
+    if (nlev_ > 1)
+      publish_refined_aux_components(published);
+    else
+      publish_aux_components(published);
     return completed;
   }
 
@@ -3006,6 +3049,20 @@ class AmrRuntime {
     for (auto& block : blocks_)
       for (int level = 0; level < nlev_; ++level)
         (*block.levels)[level].aux = &aux_[level];
+    if (!named_aux_.empty()) {
+      // The hierarchy may grow after bind-time aux publication.  A newly bootstrapped level must
+      // therefore receive every static named aux before any following bootstrap materializer or
+      // compiled Program can observe it.  Reuse the single coarse-to-fine publication authority and
+      // restrict it to externally bound components so analytic/elliptic providers keep ownership of
+      // their own aux slots.
+      apply_named_aux();
+      std::vector<int> components;
+      components.reserve(named_aux_.size());
+      for (const auto& [component, _] : named_aux_)
+        if (component >= 0 && component < aux_ncomp_)
+          components.push_back(component);
+      publish_aux_components(components);
+    }
     invalidate_named_field_topology();
     ++topology_epoch_;
   }
@@ -3187,8 +3244,8 @@ class AmrRuntime {
       detail::same_layout_or_throw(ref);
     }
 
-    // A composite field solver owns the fine BoxArrays.  Rebuild it lazily against the new exact
-    // hierarchy; the coarse-only solver and its warm start remain valid.
+    // Composite and level-local solvers both own exact hierarchy topology. Rebuild their native
+    // backends lazily after regrid; no hidden coarse-on-refined solver survives this invalidation.
     invalidate_named_field_topology();
     ++topology_epoch_;
 
@@ -3794,15 +3851,16 @@ class AmrRuntime {
     if (named_aux_.empty() || aux_.empty())
       return;
     const int row = dom_.nx();
+    // NamedAuxField is backed by fab_allocator (Kokkos SharedSpace on native builds). Host writes
+    // completed at set_named_aux; mark device residency before exposing its pointer to kernels.
+    sync_device();
     for (const auto& [comp, field] : named_aux_) {
       if (field.empty() || comp >= aux_ncomp_)
         continue;
       for (int li = 0; li < aux_[0].local_size(); ++li) {
         Array4 a = aux_[0].fab(li).array();
         const Box2D v = aux_[0].box(li);
-        for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-          for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-            a(i, j, comp) = field[static_cast<std::size_t>(j) * row + i];
+        for_each_cell(v, detail::AmrNamedAuxCopyKernel{a, field.data(), comp, row});
       }
     }
   }
@@ -4175,7 +4233,7 @@ class AmrRuntime {
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse base-level field
   // (n*n row-major). STATIC user fields re-applied by solve_fields each macro-step (so they persist
   // across regrid). Empty by default -> bit-identical. cf. set_named_aux / apply_named_aux.
-  std::map<int, std::vector<Real>> named_aux_;
+  std::map<int, NamedAuxField> named_aux_;
   // Per-field aux HALO policy (ADC-369): component -> uniform boundary policy, applied to the coarse aux
   // after the shared fill (apply_named_aux_bc). Empty by default -> bit-identical.
   std::map<int, AuxHaloPolicy> named_aux_bc_;

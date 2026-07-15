@@ -35,8 +35,10 @@
 
 #include "test_harness.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -267,21 +269,44 @@ TEST(test_coupled_fieldsolve, named_gradient_output_applies_the_registered_sign)
   ASSERT_EQ(phi.size(), static_cast<std::size_t>(n) * n);
   ASSERT_EQ(gx.size(), phi.size());
   ASSERT_EQ(gy.size(), phi.size());
-  const double scale = -0.5 * n;
+  const double unsigned_scale = 0.5 * n;
   double error = 0.0;
+  double reference = 0.0;
+  double signed_observed = 0.0;
+  double unsigned_reference = 0.0;
   for (int j = 0; j < n; ++j)
     for (int i = 0; i < n; ++i) {
       const int im = (i + n - 1) % n, ip = (i + 1) % n;
       const int jm = (j + n - 1) % n, jp = (j + 1) % n;
       const std::size_t cell = static_cast<std::size_t>(j) * n + i;
-      const double expected_x = scale *
+      const double unsigned_x = unsigned_scale *
           (phi[static_cast<std::size_t>(j) * n + ip] -
            phi[static_cast<std::size_t>(j) * n + im]);
-      const double expected_y = scale *
+      const double unsigned_y = unsigned_scale *
           (phi[static_cast<std::size_t>(jp) * n + i] -
            phi[static_cast<std::size_t>(jm) * n + i]);
+      const double expected_x = -unsigned_x;
+      const double expected_y = -unsigned_y;
       error = std::fmax(error, std::fabs(gx[cell] - expected_x));
       error = std::fmax(error, std::fabs(gy[cell] - expected_y));
+      if (std::fabs(unsigned_x) > reference) {
+        reference = std::fabs(unsigned_x);
+        signed_observed = gx[cell];
+        unsigned_reference = unsigned_x;
+      }
+      if (std::fabs(unsigned_y) > reference) {
+        reference = std::fabs(unsigned_y);
+        signed_observed = gy[cell];
+        unsigned_reference = unsigned_y;
+      }
     }
-  EXPECT_EQ(error, 0.0) << "GradientOutput(sign=-1) must publish -grad(phi)";
+  const double epsilon = std::numeric_limits<Real>::epsilon();
+  ASSERT_GT(reference, 1024.0 * epsilon) << "the signed-gradient oracle must be nontrivial";
+  EXPECT_LT(signed_observed * unsigned_reference, 0.0)
+      << "GradientOutput(sign=-1) must reverse the physical gradient direction";
+  // Device backends may contract the multiply/divide sequence (or use an FMA), so exact host bits
+  // are not a portable oracle.  Keep the allowance tied to machine precision and field scale: a
+  // missing or inverted sign remains many orders of magnitude outside this bound.
+  const double tolerance = 16.0 * epsilon * std::max(1.0, reference);
+  EXPECT_LE(error, tolerance) << "GradientOutput(sign=-1) must publish -grad(phi)";
 }

@@ -27,6 +27,10 @@ SOURCES_CMAKE = REPO_ROOT / "tests" / "cpp" / "test_sources.cmake"
 
 _SET_BLOCK = re.compile(r"set\(\s*(POPS_CPP_STANDARD_TESTS|POPS_CPP_MPI_ONLY_TESTS)\b(.*?)\)",
                         re.DOTALL)
+_MPI_VARIANT_BLOCK = re.compile(
+    r"set\(\s*POPS_CPP_MPI_VARIANT_TESTS\b(.*?)\)", re.DOTALL
+)
+_MPI_RANKS = re.compile(r"set\(\s*POPS_MPI_RANKS_(test_[A-Za-z0-9_]+)\s+([0-9 ]+)\)")
 _TEST_WORD = re.compile(r"\btest_[A-Za-z0-9_]+\b")
 _ADD_GTEST = re.compile(r"pops_add_gtest_suite\(\s*NAME\s+(test_[A-Za-z0-9_]+)")
 _ADD_MPI_GTEST = re.compile(r"pops_add_mpi_gtest_suite\(\s*(test_[A-Za-z0-9_]+)")
@@ -51,6 +55,29 @@ def _registered_names():
     return registered
 
 
+def _manifest_mpi_variants():
+    rows = tomllib.loads(MANIFEST.read_text()).get("cpp", {}).get("suite", [])
+    return {
+        row["name"]: tuple(row["mpi_variants"])
+        for row in rows
+        if row.get("mpi_variants")
+    }
+
+
+def _cmake_mpi_variants():
+    text = CMAKELISTS.read_text()
+    match = _MPI_VARIANT_BLOCK.search(text)
+    assert match is not None, "tests/CMakeLists.txt must declare POPS_CPP_MPI_VARIANT_TESTS"
+    names = _TEST_WORD.findall(match.group(1))
+    rank_rows = {
+        name: tuple(int(rank) for rank in ranks.split())
+        for name, ranks in _MPI_RANKS.findall(text)
+    }
+    missing_ranks = [name for name in names if name not in rank_rows]
+    assert not missing_ranks, "MPI variant suites lack POPS_MPI_RANKS rows: %r" % missing_ranks
+    return {name: rank_rows[name] for name in names}
+
+
 def _source_of(name):
     """The source path recorded for ``name`` in test_sources.cmake (for an actionable message)."""
     m = re.search(r"POPS_CPP_TEST_SOURCE_%s\s+\"([^\"]+)\"" % re.escape(name),
@@ -71,6 +98,13 @@ def test_every_cpp_suite_is_registered_in_cmake():
         "tests/CMakeLists.txt (STANDARD/MPI list or an explicit pops_add_gtest_suite call), "
         "else it never builds and never runs:\n  "
         + "\n  ".join("%s  (%s)" % (name, _source_of(name)) for name in missing))
+
+
+def test_manifest_mpi_variants_match_cmake_registrations_exactly():
+    assert _cmake_mpi_variants() == _manifest_mpi_variants(), (
+        "tests/test_manifest.toml mpi_variants is the CI build authority and must exactly match "
+        "the CTest MPI launch registrations in tests/CMakeLists.txt"
+    )
 
 
 if __name__ == "__main__":

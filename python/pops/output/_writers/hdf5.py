@@ -31,23 +31,103 @@ def _require_h5py(parallel: bool) -> Any:
 def _parallel_snapshot_data(
     snapshot: OutputSnapshot,
     request: OutputRequest,
+    target: Any,
     communicator: Any,
-) -> dict[str, Any]:
-    local = {
-        field.key.identity.token: [piece.to_data() for piece in field.pieces]
-        for field in snapshot.select(request)
-    }
-    gathered = communicator.allgather(local)
-    data = snapshot.to_data(request)
+) -> tuple[dict[str, Any], tuple[Any, ...], Path, Any]:
+    selected = ()
+    target_path = None
+    h5py = None
+    try:
+        if not request.parallel:
+            raise ValueError("a resolved communicator is valid only for HDF5 parallel output")
+        required = ("Get_rank", "bcast", "Barrier")
+        if any(not callable(getattr(communicator, name, None)) for name in required):
+            raise TypeError("collective HDF5 requires the resolved communicator")
+        h5py = _require_h5py(True)
+        target_path = Path(target)
+        if target_path.suffix not in {".h5", ".hdf5"}:
+            raise ValueError("HDF5 target must end in .h5 or .hdf5")
+        data = snapshot.to_data(request)
+        selected = snapshot.select(request)
+        local_pieces = {
+            field.key.identity.token: [piece.to_data() for piece in field.pieces]
+            for field in selected
+        }
+        # Field ownership is rank-local; every other scientific fact must be identical before any
+        # rank enters HDF5. Keeping the empty ``pieces`` member makes the compared value the exact
+        # canonical snapshot schema rather than a parallel-only approximation of it.
+        canonical = dict(data, fields=[dict(field, pieces=[]) for field in data["fields"]])
+        envelope = {
+            "snapshot": canonical,
+            "pieces": local_pieces,
+            "preflight": {
+                "target": str(target_path.expanduser().resolve()),
+                "h5py_version": str(getattr(h5py, "__version__", "unknown")),
+                "hdf5_version": str(getattr(getattr(h5py, "version", None),
+                                            "hdf5_version", "unknown")),
+                "mpi": True,
+            },
+            "error": None,
+        }
+    except Exception as exc:
+        # Every rank must still enter the collective so one malformed local snapshot cannot leave
+        # its peers blocked in allgather. The detached error is diagnostic only; no output identity
+        # is derived from it.
+        envelope = {
+            "snapshot": None,
+            "pieces": None,
+            "preflight": None,
+            "error": "%s: %s" % (type(exc).__name__, exc),
+        }
+    gathered = communicator.allgather(envelope)
+    failures = [
+        "rank %d: %s" % (rank, item["error"])
+        for rank, item in enumerate(gathered)
+        if item["error"] is not None
+    ]
+    if failures:
+        raise ValueError(
+            "collective HDF5 snapshot preparation failed across ranks: " + "; ".join(failures)
+        )
+    preflight = gathered[0]["preflight"]
+    mismatched_preflight = [
+        rank for rank, item in enumerate(gathered) if item["preflight"] != preflight
+    ]
+    if mismatched_preflight:
+        raise ValueError(
+            "collective HDF5 preflight differs across ranks: "
+            + ", ".join(map(str, mismatched_preflight))
+        )
+    authority = gathered[0]["snapshot"]
+    mismatched = [
+        rank for rank, item in enumerate(gathered) if item["snapshot"] != authority
+    ]
+    if mismatched:
+        raise ValueError(
+            "collective HDF5 snapshot metadata differs across ranks: "
+            + ", ".join(map(str, mismatched))
+        )
+    data = authority
     by_token = {
         field.key.identity.token: field
-        for field in snapshot.select(request)
+        for field in selected
     }
+    expected_tokens = set(by_token)
+    malformed = [
+        rank
+        for rank, item in enumerate(gathered)
+        if set(item["pieces"]) != expected_tokens
+    ]
+    if malformed:
+        raise ValueError(
+            "collective HDF5 field ownership differs across ranks: "
+            + ", ".join(map(str, malformed))
+        )
     rebuilt = []
     for token in sorted(by_token):
         field = by_token[token]
         row = next(item for item in data["fields"] if item["key"] == field.key.to_data())
-        pieces = [piece for rank in gathered for piece in rank[token]]
+        pieces = [piece for rank in gathered for piece in rank["pieces"][token]]
         pieces.sort(key=lambda piece: (
             piece["lower"], piece["upper"], piece["array"]["content_sha256"]))
         active = []
@@ -73,7 +153,32 @@ def _parallel_snapshot_data(
             raise ValueError("parallel field pieces do not cover the global field")
         rebuilt.append(dict(row, pieces=pieces))
     data["fields"] = rebuilt
-    return data
+    return data, selected, target_path, h5py
+
+
+def _parallel_temporary_path(target: Path, communicator: Any) -> Path:
+    """Create one shared temporary on rank zero and broadcast failures without deadlocking."""
+    rank = int(communicator.Get_rank())
+    envelope = {"path": None, "error": None}
+    if rank == 0:
+        try:
+            envelope["path"] = str(temporary_path(target))
+        except Exception as exc:
+            envelope["error"] = "%s: %s" % (type(exc).__name__, exc)
+    gathered = communicator.allgather(envelope)
+    failures = [
+        "rank %d: %s" % (owner, item["error"])
+        for owner, item in enumerate(gathered)
+        if item["error"] is not None
+    ]
+    if failures:
+        raise RuntimeError(
+            "collective HDF5 temporary-file preparation failed: " + "; ".join(failures)
+        )
+    authority = gathered[0]["path"]
+    if not authority or any(item["path"] is not None for item in gathered[1:]):
+        raise RuntimeError("collective HDF5 temporary-file authority is malformed")
+    return Path(authority)
 
 
 class HDF5Writer:
@@ -88,23 +193,24 @@ class HDF5Writer:
         *,
         communicator: Any = None,
     ) -> PreparedOutputFile:
-        h5py = _require_h5py(request.parallel)
-        if request.parallel:
-            required = ("Get_rank", "bcast", "allgather", "Barrier")
-            if communicator is None or any(
-                    not callable(getattr(communicator, name, None)) for name in required):
+        if communicator is not None:
+            # ``allgather`` is the one capability needed to make snapshot/request, h5py capability
+            # and target-identity failures collective. The rest of the communicator protocol is
+            # checked inside that first error envelope, before any rank enters HDF5.
+            if not callable(getattr(communicator, "allgather", None)):
                 raise TypeError("collective HDF5 requires the resolved communicator")
-        elif communicator is not None:
-            raise ValueError("a communicator is valid only for HDF5 parallel output")
-        target = Path(target)
-        if target.suffix not in {".h5", ".hdf5"}:
-            raise ValueError("HDF5 target must end in .h5 or .hdf5")
-        fields = snapshot.select(request)
-        snapshot_data = (
-            _parallel_snapshot_data(snapshot, request, communicator)
-            if request.parallel
-            else snapshot.to_data(request)
-        )
+            snapshot_data, fields, target, h5py = _parallel_snapshot_data(
+                snapshot, request, target, communicator
+            )
+        elif request.parallel:
+            raise TypeError("collective HDF5 requires the resolved communicator")
+        else:
+            fields = snapshot.select(request)
+            snapshot_data = snapshot.to_data(request)
+            h5py = _require_h5py(False)
+            target = Path(target)
+            if target.suffix not in {".h5", ".hdf5"}:
+                raise ValueError("HDF5 target must end in .h5 or .hdf5")
         arrays, datasets, evidence = {}, {"fields": {}, "geometries": {}}, {}
         for index, field in enumerate(fields):
             name = "fields/%04d/values" % index
@@ -137,7 +243,11 @@ class HDF5Writer:
             snapshot_data=snapshot_data,
             datasets=datasets,
         )
-        temporary = temporary_path(target, communicator)
+        temporary = (
+            _parallel_temporary_path(target, communicator)
+            if request.parallel
+            else temporary_path(target)
+        )
         options = {"driver": "mpio", "comm": communicator} if request.parallel else {}
         rank = 0 if communicator is None else int(communicator.Get_rank())
         with h5py.File(temporary, "w", **options) as output:

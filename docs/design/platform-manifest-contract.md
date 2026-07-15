@@ -18,17 +18,19 @@ opaque handles for the communicator, datatype, and device. A non-serial communic
 device requires a handle. The generic launch seam never reads `MPI_COMM_WORLD`, `MPI_DOUBLE`, a
 current device, or a default execution space.
 
-The native route currently proves one generic configuration:
+The native route currently proves two exact host configurations:
 
 - dimension: 2;
 - scalar: `float64` for storage, compute, accumulation, and reduction;
 - centering: cell;
 - device and memory space: host;
-- communicator: serial.
+- communicator: `serial`, or `MPI_COMM_WORLD` when the authenticated module is MPI-enabled and the
+  process is inside an active world launch.
 
-MPI/custom communicators, GPU devices, non-cell centerings, three-dimensional kernels, and
-single/mixed precision are not advertised. They require a real backend manifest and an explicit
-execution context before they can become a route; no fallback or emulation is installed.
+The MPI route requires an explicit `ExecutionContext.mpi_world(artifact, MPI.COMM_WORLD)` at bind;
+the artifact, native backend manifest, Python handle, native rank and native size must all agree.
+Custom communicators, GPU devices, non-cell centerings, three-dimensional kernels, and single/mixed
+precision are not advertised. No fallback or emulation is installed.
 
 ## Field views and pre-launch refusal
 

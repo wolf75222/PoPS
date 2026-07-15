@@ -344,7 +344,7 @@ struct AmrSystem::Impl {
   // Model-NAMED aux fields (ADC-291): component (>= kAuxNamedBase) -> coarse field (n*n row-major).
   // Pending until build: seeded into the single-block coupler (make_build_params -> bp.named_aux) AND
   // pushed to the multi-block runtime (build_multi). Empty -> bit-identical. cf. set_aux_field_component.
-  std::map<int, std::vector<double>> named_aux_;
+  std::map<int, AmrRuntime::NamedAuxField> named_aux_;
   // Per-field aux HALO policies (ADC-369): component -> uniform policy. Pending until build, then seeded
   // into the engine (bp.named_aux.halo_policies for the coupler; runtime->set_named_aux_bc for the runtime).
   std::map<int, AuxHaloPolicy> named_aux_bc_;
@@ -446,9 +446,8 @@ struct AmrSystem::Impl {
   // COMPILED TIME-PROGRAM RUNTIME STATE (ADC-594): the AMR runtime embeds the SAME ProgramRuntimeState
   // struct System::Impl holds (include/pops/runtime/program/program_runtime_state.hpp) -- the SHARED,
   // non-diverging Program subsystem the issue mandates. AMR uses the COMMON subset (step_ / substeps_ /
-  // stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ / profiler_); the dt_bound_ /
-  // cache_ / hist_ fields stay EMPTY here (AMR has no dt-bound seam and defers the history / cache
-  // seams -- the documented Uniform/AMR divergence, not a second subsystem). The multi-block AmrRuntime
+  // stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ / profiler_ / dt_bound_);
+  // cache_ / hist_ stay EMPTY because their hierarchy-aware seams are not wired. The multi-block AmrRuntime
   // engine is wired to &program_.profiler_ at build (parity with System::Impl); the Profiler's Impl
   // address stays stable (program_ is a stable Impl member). AmrSystem::step routes through
   // run_program_cadence_ (reading program_.step_ / substeps_ / stride_) when a program is installed.
@@ -684,7 +683,9 @@ struct AmrSystem::Impl {
     bp.initial.has_state = b.has_state;
     bp.initial.state = b.state;
     // NAMED AUX group: model-named aux fields (ADC-291) + per-field halo policies (ADC-369).
-    bp.named_aux.fields = named_aux_;
+    for (const auto& [component, field] : named_aux_)
+      bp.named_aux.fields.emplace(
+          component, std::vector<double>(field.begin(), field.end()));
     bp.named_aux.halo_policies = named_aux_bc_;
     return bp;
   }
@@ -1005,7 +1006,7 @@ struct AmrSystem::Impl {
     // re-applies them onto the shared aux each solve_fields (so they persist across the union regrid)
     // and injects them to the fine levels. Empty -> no-op (bit-identical).
     for (const auto& kv : named_aux_)
-      runtime->set_named_aux(kv.first, std::vector<Real>(kv.second.begin(), kv.second.end()));
+      runtime->set_named_aux(kv.first, kv.second);
     for (const auto& kv : named_aux_bc_)
       runtime->set_named_aux_bc(kv.first, kv.second);  // ADC-369
     // NAMED multi-elliptic fields (ADC-428): replay the loader's declarations + per-block RHS closures on
@@ -2980,7 +2981,8 @@ void AmrSystem::set_aux_field_component(int comp, const std::vector<double>& fie
     throw std::runtime_error("AmrSystem::set_aux_field : field of size " +
                              std::to_string(field.size()) +
                              " (expected n*n = " + std::to_string(nn) + ", coarse row-major)");
-  p_->named_aux_[comp] = field;  // pending: seeded into the engine at build (single + multi block)
+  p_->named_aux_[comp].assign(
+      field.begin(), field.end());  // pending: seeded into the engine at build (single + multi block)
 }
 
 void AmrSystem::set_aux_field_halo_component(int comp, int bc_type, double value) {
@@ -3122,6 +3124,13 @@ double AmrSystem::step_cfl(double cfl, double speed_floor, double max_dt, double
     if (p_->program_.step_) {
       double dt = static_cast<double>(p_->runtime->cfl_dt(
           static_cast<Real>(cfl), static_cast<Real>(hx), static_cast<Real>(speed_floor)));
+      if (p_->program_.dt_bound_) {
+        const double pb = static_cast<double>(p_->program_.dt_bound_(static_cast<Real>(cfl)));
+        if (std::isfinite(pb) && pb > 0.0 && pb < dt) {
+          dt = pb;
+          p_->runtime->override_last_dt_bound("program:dt_bound");
+        }
+      }
       if (std::isfinite(max_dt) && max_dt < dt) {
         dt = std::min(dt, max_dt);
         p_->runtime->override_last_dt_bound("strategy:max_dt");
@@ -3794,6 +3803,20 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   if (auto install_boundaries = reinterpret_cast<void (*)(void*)>(
           pops::dynlib::sym(h, "pops_install_field_boundaries_amr")))
     install_boundaries(static_cast<void*>(this));
+  // Resolve the optional target-specific dt-bound ABI before installing any closure from the
+  // module. A declared bound without its AMR entry is rejected while unloading is still safe.
+  using has_dt_t = bool (*)();
+  using dt_bound_t = pops::Real (*)(void*, pops::Real);
+  auto has_dt = reinterpret_cast<has_dt_t>(pops::dynlib::sym(h, "pops_program_has_dt_bound"));
+  auto dt_bound =
+      reinterpret_cast<dt_bound_t>(pops::dynlib::sym(h, "pops_program_dt_bound_amr"));
+  const bool program_has_dt_bound = has_dt && has_dt();
+  if (program_has_dt_bound && !dt_bound) {
+    pops::dynlib::close(h);
+    throw std::runtime_error(
+        "AmrSystem::install_program: Program declares a dt bound but "
+        "pops_program_dt_bound_amr is missing; regenerate the AMR artifact");
+  }
   // Install the macro-step body: the .so wraps THIS AmrSystem in an AmrProgramContext and calls
   // install_program_step. The AMR blocks must be materialized first (ensure_built): the per-level
   // macro-step reads the hierarchy. The AmrProgramContext driver needs the AmrRuntime engine (per-level
@@ -3805,6 +3828,17 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
   // Record the program's IR hash (parity System, checkpoint guard). Missing symbol -> empty hash.
   auto hash_fn = reinterpret_cast<const char* (*)()>(pops::dynlib::sym(h, "pops_program_hash"));
   p_->program_.installed_hash_ = hash_fn ? std::string(hash_fn()) : std::string();
+  // OPTIONAL compiled-Program dt bound, parity with System::install_program. The AMR-target module
+  // owns construction of AmrProgramContext and exposes a void*-facade ABI, so this loader never
+  // guesses the target context layout. A declared bound without its target-specific export is an ABI
+  // error, not a silently unconstrained run.
+  if (program_has_dt_bound) {
+    AmrSystem* self = this;
+    p_->program_.dt_bound_ =
+        [self, dt_bound](Real cfl) -> Real { return dt_bound(static_cast<void*>(self), cfl); };
+  } else {
+    p_->program_.dt_bound_ = nullptr;
+  }
   // .so left loaded for the duration of the process (the installed closure points to code in it).
 }
 // --- AMR / MPI profiling (Spec 5 sec.12.5, ADC-479 criterion 43) ---------------------------------

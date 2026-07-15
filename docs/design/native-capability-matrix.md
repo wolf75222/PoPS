@@ -117,10 +117,10 @@ Explicit unsupported rows include:
   history policy that reconstructs omitted slots by replay requires the restart to keep the rank count.
 - `supports_partial_imex_mask`: no native C++ path backs partial IMEX masks.
 - `supports_mpi` and `supports_gpu` when the loaded module/artifact was not built with the corresponding native backend.
-- `runtime:explicit_mpi_context` and `runtime:explicit_gpu_context`: the final `RuntimeInstance`
-  provider is host/float64/serial. It refuses an active MPI process, a non-serial communicator or a
+- `runtime:explicit_gpu_context`: the final native `RuntimeInstance` providers are host/float64 and refuse a
   GPU Kokkos execution space before constructing `System`/`AmrSystem`; build-time availability is
-  not launch authorization.
+  not launch authorization. The native providers do accept an explicit, authenticated
+  `MPI_COMM_WORLD` context; custom communicators remain unavailable.
 - `amr:field_coupled_rhs_jacvec`: AMR level greater than zero is explicitly unavailable because the
   provider ABI does not transport a level-qualified tangent field. The reported error identifies
   the level-0 field-coupled route as the available route; a multi-level request must fail rather
@@ -143,10 +143,11 @@ future validators:
   and load-balance routes are installed.
 - `amr:transfer_contracts`: centering, representation, storage, operation, order and ghost depth
   must match an exact native transfer/materialization provider contract.
-- `parallel:mpi_world_communicator`: legacy native MPI subsystems use `MPI_COMM_WORLD`; this global
-  state is deliberately not an executable route of the final `RuntimeInstance` provider.
-- `parallel:custom_communicator`: caller-provided MPI communicators are representable in the ABI but
-  unavailable until a provider transports the explicit `ExecutionContext` end to end.
+- `parallel:mpi_world_communicator`: the native `RuntimeInstance` providers consume the exact
+  `MPI_COMM_WORLD` carried by its validated `ExecutionContext`; the native module, artifact and
+  mpi4py handle must prove the same rank and size.
+- `parallel:custom_communicator`: caller-provided custom MPI communicators remain representable but
+  unavailable because the native engines expose no communicator-injection ABI.
 - `precision:single_or_mixed`: `pops::Real` is `double`; single or mixed precision is unavailable.
 - `runtime:kokkos_lifecycle`: `runtime_environment_report()` exposes whether PoPS will lazily
   initialize Kokkos, has initialized it, or is attached to an externally initialized runtime.

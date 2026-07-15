@@ -96,18 +96,20 @@ inline void validate_execution_context(const PopsExecutionContextV1& context) {
       !valid_precision(context.reduction_precision))
     throw std::invalid_argument(
         "native component execution context has invalid size, identities or precision policy");
-  if (context.communicator_f_handle == 0) {
+  const bool serial = std::string(context.communicator_identity) == "serial";
+  if (serial) {
+    // MPI_Comm_c2f/MPI_Type_c2f may legally return zero for predefined handles.  The explicit
+    // identities, not a guessed numeric sentinel, therefore distinguish serial from distributed
+    // execution.  Serial retains the canonical all-zero representation.
     if (context.communicator_datatype_f_handle != 0 ||
-        std::string(context.communicator_identity) != "serial" ||
+        context.communicator_f_handle != 0 ||
         std::string(context.communicator_datatype_identity) != "none")
       throw std::invalid_argument(
           "serial component execution context cannot hide MPI handles or identities");
-  } else if (context.communicator_f_handle < 0 ||
-             context.communicator_datatype_f_handle <= 0 ||
-             std::string(context.communicator_identity) == "serial" ||
-             std::string(context.communicator_datatype_identity) == "none") {
+  } else if (std::string(context.communicator_identity) != "MPI_COMM_WORLD" ||
+             std::string(context.communicator_datatype_identity) != "MPI_DOUBLE") {
     throw std::invalid_argument(
-        "distributed component execution context must declare exact Fortran MPI handles");
+        "distributed component execution context supports only exact MPI_COMM_WORLD/MPI_DOUBLE");
   }
 }
 

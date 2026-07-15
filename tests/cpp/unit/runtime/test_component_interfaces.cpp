@@ -226,14 +226,24 @@ TEST(ComponentInterfaces, ExactAbiConsumersExecuteEveryClosedScientificFamily) {
   EXPECT_THROW(pops::component::validate_execution_context(anonymous_execution),
                std::invalid_argument);
   auto packed_distributed = execution;
-  packed_distributed.communicator_f_handle = 1;
-  packed_distributed.communicator_datatype_f_handle = 2;
-  packed_distributed.communicator_identity = "mpi:world";
-  packed_distributed.communicator_datatype_identity = "mpi:byte";
+  // MPI_Comm_c2f/MPI_Type_c2f values are implementation-defined; zero is legal for a predefined
+  // handle.  The exact identities, not the numeric values, select the distributed route.
+  packed_distributed.communicator_f_handle = 0;
+  packed_distributed.communicator_datatype_f_handle = 0;
+  packed_distributed.communicator_identity = "MPI_COMM_WORLD";
+  packed_distributed.communicator_datatype_identity = "MPI_DOUBLE";
   EXPECT_NO_THROW(pops::component::validate_execution_context(packed_distributed));
   auto ambiguous_distributed = packed_distributed;
-  ambiguous_distributed.communicator_datatype_f_handle = 0;
+  ambiguous_distributed.communicator_datatype_identity = "none";
   EXPECT_THROW(pops::component::validate_execution_context(ambiguous_distributed),
+               std::invalid_argument);
+  auto fabricated_distributed = packed_distributed;
+  fabricated_distributed.communicator_identity = "mpi:custom";
+  EXPECT_THROW(pops::component::validate_execution_context(fabricated_distributed),
+               std::invalid_argument);
+  auto hidden_serial_handle = execution;
+  hidden_serial_handle.communicator_f_handle = 7;
+  EXPECT_THROW(pops::component::validate_execution_context(hidden_serial_handle),
                std::invalid_argument);
   auto anonymous_device = execution;
   anonymous_device.device_identity = "";

@@ -54,23 +54,57 @@ def _require_supported_execution_context(plan: Any) -> None:
     context = plan.execution_context
     if type(context) is not ExecutionContext:
         raise TypeError("runtime provider requires an exact ExecutionContext")
-    if context.communicator.identity != "serial" or context.communicator.handle is not None:
+    if context.datatype.identity != "float64":
         raise NotImplementedError(
-            "native RuntimeInstance providers require a serial communicator without a handle"
-        )
-    if context.datatype.identity != "float64" or context.datatype.handle is not None:
-        raise NotImplementedError(
-            "native RuntimeInstance providers require exact float64 without a handle"
+            "native RuntimeInstance providers require exact float64"
         )
     if context.device.identity not in ("host", "cpu") or context.device.handle is not None:
         raise NotImplementedError(
             "native RuntimeInstance providers require host/cpu without a device handle"
         )
     facts = _native_runtime_facts()
-    if facts.get("mpi_active") is not False:
+    communicator = context.communicator
+    if communicator.identity == "serial":
+        if communicator.handle is not None:
+            raise ValueError("the serial ExecutionContext cannot carry a communicator handle")
+        if context.datatype.handle is not None:
+            raise ValueError("the serial ExecutionContext cannot carry an MPI datatype handle")
+        if facts.get("mpi_active") is not False:
+            raise NotImplementedError(
+                "the serial ExecutionContext requires native MPI to be inactive"
+            )
+    elif communicator.identity == "MPI_COMM_WORLD":
+        if facts.get("mpi_compiled") is not True or facts.get("mpi_active") is not True \
+                or facts.get("communicator") != "MPI_COMM_WORLD":
+            raise NotImplementedError(
+                "MPI_COMM_WORLD execution requires an MPI-enabled native module in an active "
+                "MPI world launch"
+            )
+        try:
+            from mpi4py import MPI
+        except ImportError as exc:
+            raise RuntimeError(
+                "MPI_COMM_WORLD execution requires mpi4py for the explicit communicator handle"
+            ) from exc
+        if not isinstance(communicator.handle, MPI.Comm) or MPI.Comm.Compare(
+                communicator.handle, MPI.COMM_WORLD) != MPI.IDENT:
+            raise ValueError(
+                "the native provider consumes only the exact mpi4py.MPI.COMM_WORLD handle; "
+                "custom communicators are unsupported"
+            )
+        if context.datatype.handle is not MPI.DOUBLE:
+            raise ValueError(
+                "MPI_COMM_WORLD execution requires the exact mpi4py.MPI.DOUBLE datatype handle"
+            )
+        if int(communicator.handle.Get_rank()) != int(facts.get("mpi_rank", -1)) or int(
+                communicator.handle.Get_size()) != int(facts.get("mpi_ranks", -1)):
+            raise ValueError(
+                "ExecutionContext MPI_COMM_WORLD does not match the native runtime rank/size"
+            )
+    else:
         raise NotImplementedError(
-            "native runtime cannot prove MPI inactive and would capture process-global "
-            "MPI_COMM_WORLD; refusing before engine construction"
+            "native RuntimeInstance providers support only serial or exact MPI_COMM_WORLD; got %r"
+            % communicator.identity
         )
     backend = str(facts.get("kokkos_backend", "")).lower()
     if any(token in backend for token in ("cuda", "hip", "sycl", "openmptarget")):

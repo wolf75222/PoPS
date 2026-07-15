@@ -357,6 +357,26 @@ class RuntimeInstance:
     def state_global(self, block: str) -> Any:
         return self._executor.state_global(block)
 
+    def local_boxes(self, block: str) -> tuple[tuple[int, int, int, int], ...]:
+        """Return this rank's exact native uniform boxes in global index coordinates."""
+        provider = getattr(self._executor, "local_boxes", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "this runtime provider does not expose rank-owned local boxes"
+            )
+        return tuple(tuple(int(value) for value in box) for box in provider(block))
+
+    def local_state(self, block: str, box_index: int) -> Any:
+        """Return the native state owned by one box from :meth:`local_boxes`."""
+        if isinstance(box_index, bool) or not isinstance(box_index, int) or box_index < 0:
+            raise TypeError("local_state box_index must be a non-negative integer")
+        provider = getattr(self._executor, "local_state", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "this runtime provider does not expose rank-owned local state"
+            )
+        return provider(block, box_index)
+
     def nx(self) -> int:
         return int(self._executor.nx())
 

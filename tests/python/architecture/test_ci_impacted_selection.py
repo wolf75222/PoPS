@@ -254,6 +254,41 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     assert "test_splitting" in names
 
 
+def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    targets = sel.cpp_targets_with_label(manifest, "mpi")
+    all_suites = sel.manifest_cpp_suites(manifest, include_mpi=True)
+    expected = sorted(
+        suite["name"]
+        for suite in all_suites
+        if "mpi" in suite["labels"] or suite["mpi_variants"]
+    )
+    assert targets == expected
+    variant_targets = {
+        suite["name"]: suite["mpi_variants"]
+        for suite in all_suites
+        if suite["mpi_variants"]
+    }
+    assert variant_targets == {
+        "test_amr_system_bz_multibox": (2, 4),
+        "test_copy_schedule_cache": (1, 2, 4),
+        "test_fill_boundary_cache": (1, 2, 4),
+        "test_krylov_solver": (1, 2, 4),
+    }
+    serial_targets = {
+        suite["name"] for suite in sel.manifest_cpp_suites(manifest)
+    }
+    assert set(variant_targets) <= serial_targets
+    assert set(targets) - set(variant_targets) == {
+        suite["name"] for suite in all_suites if "mpi" in suite["labels"]
+    }
+    assert sel.cpp_mpi_ctest_count(manifest) == sum(
+        len(suite["mpi_nproc"]) + len(suite["mpi_variants"])
+        for suite in all_suites
+    ) == 61
+
+
 @pytest.mark.parametrize(
     ("event", "inputs", "expected"),
     (
@@ -308,9 +343,19 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "mpi: ${{ steps.filter.outputs.mpi }}" in workflow
     for mpi_input in (
         "include/pops/parallel/**",
-        "include/pops/runtime/amr/**",
-        "src/runtime/amr/**",
+        "include/pops/runtime/**",
+        "src/runtime/**",
         "python/bindings/core/init/init_amr.cpp",
+        "python/bindings/core/init/init_core.cpp",
+        "python/bindings/core/init/init_system.cpp",
+        "python/pops/_platform_contracts.py",
+        "python/pops/codegen/_compiled_artifact.py",
+        "python/pops/runtime/_component_execution_context.py",
+        "python/pops/runtime/_platform_manifest.py",
+        "python/pops/runtime/_runtime_authorities.py",
+        "python/pops/runtime/_runtime_executor.py",
+        "python/pops/runtime/_system_unified_install.py",
+        "scripts/ci_select_tests.py",
         "tests/**/mpi/**",
     ):
         assert mpi_input in workflow
@@ -371,6 +416,16 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  kokkos-openmp:\n", 1)[0]
     assert "needs: [set-mode, changes]" in mpi_block
     assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
+    assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
+    assert "scripts/ci_select_tests.py cpp-label" in mpi_block
+    assert "--label mpi" in mpi_block
+    assert '--target _pops "${mpi_targets[@]}"' in mpi_block
+    assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
+    assert '"${mpi_n:-0}" != "${mpi_expected:-0}"' in mpi_block
+    assert "cmake --build --preset ci-mpi\n" not in mpi_block
+    assert "build-mpi/python-package" in mpi_block
+    assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block
+    assert "This writer is pure Python" not in mpi_block
 
     set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]

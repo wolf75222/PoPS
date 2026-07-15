@@ -45,13 +45,32 @@ def component_execution_data(context: Any) -> dict[str, Any]:
     if communicator.identity == "serial":
         if communicator.handle is not None:
             raise ValueError("serial ExecutionContext must not hide a communicator handle")
+        if context.datatype.handle is not None:
+            raise ValueError("serial ExecutionContext must not hide an MPI datatype handle")
         communicator_f_handle = 0
         communicator_datatype_f_handle = 0
         communicator_datatype_identity = "none"
+    elif communicator.identity == "MPI_COMM_WORLD":
+        try:
+            from mpi4py import MPI
+        except ImportError as exc:
+            raise RuntimeError(
+                "MPI component execution requires mpi4py for the explicit communicator and "
+                "datatype handles"
+            ) from exc
+        if not isinstance(communicator.handle, MPI.Comm) or MPI.Comm.Compare(
+                communicator.handle, MPI.COMM_WORLD) != MPI.IDENT:
+            raise ValueError(
+                "MPI component execution requires the exact mpi4py.MPI.COMM_WORLD handle")
+        if context.datatype.handle is not MPI.DOUBLE:
+            raise ValueError(
+                "MPI component execution requires the exact mpi4py.MPI.DOUBLE datatype handle")
+        communicator_f_handle = int(communicator.handle.py2f())
+        communicator_datatype_f_handle = int(context.datatype.handle.py2f())
+        communicator_datatype_identity = "MPI_DOUBLE"
     else:
         raise TypeError(
-            "non-serial native component requires owned MPI communicator and datatype "
-            "Fortran handles")
+            "native component execution supports only serial or exact MPI_COMM_WORLD")
     return {
         "execution_identity": context.identity.token,
         "context_version": 1,

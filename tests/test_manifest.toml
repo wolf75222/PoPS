@@ -119,6 +119,7 @@ labels = ["integration", "amr", "medium"]
 name = "test_amr_system_bz_multibox"
 sources = ["tests/cpp/integration/amr/test_amr_system_bz_multibox.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2, 4]
 
 [[cpp.suite]]
 name = "test_amr_system_bz_pop"
@@ -611,6 +612,7 @@ labels = ["unit", "elliptic", "fast"]
 name = "test_krylov_solver"
 sources = ["tests/cpp/unit/elliptic/test_krylov_solver.cpp"]
 labels = ["unit", "elliptic", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_newton_robustness"
@@ -726,11 +728,13 @@ labels = ["unit", "mesh", "fast"]
 name = "test_copy_schedule_cache"
 sources = ["tests/cpp/unit/mesh/test_copy_schedule_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_fill_boundary_cache"
 sources = ["tests/cpp/unit/mesh/test_fill_boundary_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_geometry"

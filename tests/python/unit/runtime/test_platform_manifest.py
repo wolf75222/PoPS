@@ -157,7 +157,7 @@ def test_generic_2d_double_descriptor_launches_once():
     assert len(launched) == 1
 
 
-def test_final_generic_contract_has_no_global_mpi_or_device_capture():
+def test_final_generic_contract_has_no_implicit_device_capture():
     from pathlib import Path
     root = Path(__file__).resolve().parents[4]
     paths = [
@@ -166,5 +166,8 @@ def test_final_generic_contract_has_no_global_mpi_or_device_capture():
         root / "python/pops/runtime/_platform_validation.py",
     ]
     text = "\n".join(path.read_text(encoding="utf-8") for path in paths)
-    for forbidden in ("MPI_COMM_WORLD", "MPI_DOUBLE", "DefaultExecutionSpace", "current_device"):
+    for forbidden in ("DefaultExecutionSpace", "current_device"):
         assert forbidden not in text
+    assert "def mpi_world" in text
+    assert "ExecutionContext.mpi_world accepts only mpi4py.MPI.COMM_WORLD" in text
+    assert 'ExecutionResource("datatype", "float64", handle=MPI.DOUBLE)' in text

@@ -74,6 +74,42 @@ struct SubtractFieldMeanKernel {
   Real mean;
   POPS_HD void operator()(int i, int j) const { field(i, j, 0) -= mean; }
 };
+
+/// Publishes one solved named potential and its optional signed centered gradient into the
+/// block-owned aux components.  Keep this as a named device-callable functor: external generated
+/// translation units instantiate this path, where an extended lambda is not portable under nvcc.
+struct SystemNamedFieldPostprocessKernel {
+  Array4 aux;
+  ConstArray4 phi;
+  int phi_component;
+  int gradient_x_component;
+  int gradient_y_component;
+  Real gradient_scale;
+  Real dx;
+  Real dy;
+  bool has_gradient;
+
+  POPS_HD void operator()(int i, int j) const {
+    aux(i, j, phi_component) = phi(i, j);
+    if (has_gradient) {
+      aux(i, j, gradient_x_component) =
+          gradient_scale * (phi(i + 1, j) - phi(i - 1, j)) / (Real(2) * dx);
+      aux(i, j, gradient_y_component) =
+          gradient_scale * (phi(i, j + 1) - phi(i, j - 1)) / (Real(2) * dy);
+    }
+  }
+};
+
+struct SystemNamedAuxCopyKernel {
+  Array4 aux;
+  const Real* field;
+  int component;
+  int row_width;
+
+  POPS_HD void operator()(int i, int j) const {
+    aux(i, j, component) = field[static_cast<std::int64_t>(j) * row_width + i];
+  }
+};
 }  // namespace detail
 namespace field_solver {
 
@@ -84,6 +120,8 @@ namespace field_solver {
 template <class Impl>
 class SystemFieldSolver {
  public:
+  using NamedAuxField = std::vector<Real, fab_allocator<Real>>;
+
   /// @param owner back-pointer to System::Impl (lifetime subordinate to that of Impl).
   explicit SystemFieldSolver(Impl* owner) : owner_(owner) {}
 
@@ -252,7 +290,7 @@ class SystemFieldSolver {
   // grad) and 4 (T_e via apply_te), so components >= 5 survive from one step to the next; but a
   // REALLOCATION of the aux channel (ensure_aux_width) starts again from a zeroed MultiFab -> we re-apply
   // them then (apply_named_aux), exactly like apply_bz / apply_te.
-  std::map<int, std::vector<Real>> named_aux_;
+  std::map<int, NamedAuxField> named_aux_;
   // Per-field aux HALO policy (ADC-369): key = canonical component (>= kAuxNamedBase), value = the
   // uniform boundary policy declared via pops.AuxHalo. Applied by apply_named_aux_bc() AFTER the shared
   // aux ghost fill, overriding only that component's PHYSICAL-face ghosts (periodic faces -- Cartesian
@@ -741,18 +779,21 @@ class SystemFieldSolver {
   /// provided by the user, never rewritten by solve_fields; its halos are filled by
   /// solve_fields (fill_ghosts/fill_boundary over the whole channel). LOCAL population on the rank (iteration
   /// over the local fabs, no-op on a rank without a box at np>1).
-  void apply_named_aux_one(int comp, const std::vector<Real>& field) {
+  void apply_named_aux_one(int comp, const NamedAuxField& field) {
     if (field.empty() || owner_->aux_ncomp_ <= comp)
       return;
     // ROW WIDTH (fast axis i): n in cartesian (square n x n), nr in polar (ring nr x
     // ntheta). Index flat[j * row + i], identical to apply_bz / set_density.
     const int row = owner_->polar_ ? owner_->aux.box(0).nx() : owner_->cfg.n;
+    // NamedAuxField uses fab_allocator, hence Kokkos SharedSpace on native builds. Host population
+    // completed before this call; declare the device residency before publishing the pointer to a
+    // kernel. The current unified-memory implementation is a no-op, while preserving the explicit
+    // deep-copy seam required by a future split-residency allocator.
+    sync_device();
     for (int li = 0; li < owner_->aux.local_size(); ++li) {
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i)
-          a(i, j, comp) = field[static_cast<std::size_t>(j) * row + i];
+      for_each_cell(v, detail::SystemNamedAuxCopyKernel{a, field.data(), comp, row});
     }
   }
 
@@ -1570,16 +1611,8 @@ class SystemFieldSolver {
       const ConstArray4 p = phi_mf.fab(li).const_array();
       Array4 a = owner_->aux.fab(li).array();
       const Box2D v = owner_->aux.box(li);
-      for (int j = v.lo[1]; j <= v.hi[1]; ++j)
-        for (int i = v.lo[0]; i <= v.hi[0]; ++i) {
-          a(i, j, cphi) = p(i, j);
-          if (grad) {
-            a(i, j, cgx) =
-                gradient_scale * (p(i + 1, j) - p(i - 1, j)) / (2 * dx);
-            a(i, j, cgy) =
-                gradient_scale * (p(i, j + 1) - p(i, j - 1)) / (2 * dy);
-          }
-        }
+      for_each_cell(v, detail::SystemNamedFieldPostprocessKernel{
+                           a, p, cphi, cgx, cgy, gradient_scale, dx, dy, grad});
     }
     // Ghost-fill the named field's aux components: the shared aux fill (same routing as solve_fields)
     // then the per-field halo override (ADC-369). This re-fills ALL components -- the shared phi/grad

@@ -79,10 +79,11 @@ def test_polar_stability_bounds_advertised_wired():
 
 def test_amr_condensed_program_advertised_implemented():
     amr_schur = capabilities()["schur"]["amr"]
-    assert amr_schur and "gather-all-levels" in amr_schur, \
-        "schur.amr should advertise the Program-owned composite hierarchy solve, got: %r" % amr_schur
-    assert "no native source-stage route" in amr_schur
-    assert "the implementation does not" not in amr_schur
+    for fragment in ("CompositeTensorFAC", "gather-all-levels", "reconstruct-all-levels"):
+        assert fragment in amr_schur, \
+            "schur.amr must advertise the implemented hierarchy route, got: %r" % amr_schur
+    for stale_limit in ("no native", "not implemented", "the implementation does not"):
+        assert stale_limit not in amr_schur
 
 
 def test_dimension_invariant_2d():
