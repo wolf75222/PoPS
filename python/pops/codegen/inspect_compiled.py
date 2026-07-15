@@ -117,9 +117,10 @@ class Arguments(Report):
         count / required), supplied through ``initial_state=``;
       - ``params``: the model's declared parameters (name -> type / kind / required), supplied
         through ``params=`` (only ``kind == "runtime"`` is settable at bind);
-      - ``aux``: the static aux inputs the model declares (name -> layout / required), supplied
-        through ``aux=``;
-      - ``outputs``: the field outputs / diagnostics the Program records (informational);
+      - ``aux``: the static external aux inputs the model declares (name -> layout / required),
+        supplied through ``aux=``; channels produced by a resolved field provider are excluded;
+      - ``outputs``: histories and diagnostics the Program records (informational); resolved field
+        provider outputs remain inspectable on the compiled plan and are never duplicated as inputs;
       - ``layout_runtime``: the mesh layout the artifact targets (layout / requires_mpi /
         ghost_depth).
 
@@ -192,7 +193,8 @@ def build_arguments(compiled: Any) -> Arguments:
         each is required and carries the model's conservative state space + component count;
       - params: the model's declared parameters (``model.params``); ``kind`` is the declared kind
         (``runtime`` settable at bind, ``const`` frozen at compile);
-      - aux: the model's named aux inputs (``model.aux_extra_names``), each required;
+      - aux: the model's named external aux inputs (``model.aux_extra_names`` minus the exact,
+        owner-scoped components produced by resolved field plans), each required;
       - outputs: the values the Program records for output (``store_history`` / ``record`` ops);
       - layout_runtime: every exact compiled layout partition, its target, MPI optionality and
         per-block ghost depth. A multi-layout artifact is reported as an aggregate of qualified
@@ -302,6 +304,56 @@ def _merge_parameter_metadata(model_rows: Any) -> dict[str, Any]:
     return params
 
 
+def _field_output_components_by_block(compiled: Any) -> dict[str, tuple[str, ...]]:
+    """Return exact native field-output components, qualified by their owning block.
+
+    A ``GradientOutput`` label is semantic metadata and may lower to two differently named aux
+    channels.  The authenticated ``output_route`` is the one authority shared by System and AMR
+    installers.  Low-level component handles carry no total resolved plan and therefore return an
+    empty mapping; a malformed total plan fails loudly instead of falling back to output labels.
+    """
+    plan = getattr(compiled, "plan", None)
+    if plan is None:
+        return {}
+    field_plans = getattr(plan, "field_plans", None)
+    if field_plans is None:
+        return {}
+    if not isinstance(field_plans, Mapping):
+        raise TypeError("compiled field plans must be an exact mapping")
+
+    produced: dict[str, list[str]] = {}
+    for name, field_plan in field_plans.items():
+        native_options = getattr(field_plan, "native_options", None)
+        route = native_options.get("output_route") if isinstance(native_options, Mapping) else None
+        owner = route.get("owner_block") if isinstance(route, Mapping) else None
+        components = route.get("components") if isinstance(route, Mapping) else None
+        if (not isinstance(owner, str) or not owner
+                or not isinstance(components, (tuple, list)) or not components
+                or any(not isinstance(component, str) or not component
+                       for component in components)):
+            raise TypeError(
+                "compiled field plan %r has no exact owner-scoped output route" % name)
+        bucket = produced.setdefault(owner, [])
+        overlap = set(bucket).intersection(components)
+        if overlap:
+            raise ValueError(
+                "compiled field plans have competing output components on block %r: %s"
+                % (owner, sorted(overlap)))
+        bucket.extend(components)
+    return {owner: tuple(components) for owner, components in produced.items()}
+
+
+def _build_aux_arguments(model_rows: Any, produced_by_block: Any) -> dict[str, dict[str, Any]]:
+    """Build external aux inputs without letting one block exempt another block's homonym."""
+    aux_args: dict[str, dict[str, Any]] = {}
+    for row in model_rows:
+        produced = frozenset(produced_by_block.get(row.block_name, ()))
+        for name in row.aux_names:
+            if name not in produced:
+                aux_args.setdefault(name, {"layout": "cell", "required": True})
+    return aux_args
+
+
 def _build_arguments(
     compiled: Any,
     program: Any,
@@ -350,8 +402,8 @@ def _build_arguments(
     from ._inspect_params import build_parameter_arguments
     param_args = build_parameter_arguments(compiled, params)
 
-    aux_names = dict.fromkeys(name for row in model_rows for name in row.aux_names)
-    aux_args = {name: {"layout": "cell", "required": True} for name in aux_names}
+    produced_by_block = _field_output_components_by_block(compiled)
+    aux_args = _build_aux_arguments(model_rows, produced_by_block)
 
     outputs = {}
     if program is not None:

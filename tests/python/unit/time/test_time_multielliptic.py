@@ -366,6 +366,12 @@ def step_program(
     del model, prog
     compiled = _public_program_artifact(
         artifact_name, selected_field=selected_field, scale=scale, src_scale=src_scale)
+    if selected_field == "phi2":
+        provider_outputs = {"phi2", "g2_x", "g2_y"}
+        chk(
+            provider_outputs.isdisjoint(compiled.arguments().aux),
+            "named field outputs are reported as provider-owned, not external bind aux",
+        )
     simulation = pops.bind(compiled, initial_state={"plasma": _ic()})
     report = pops.run(simulation, t_end=DT, max_steps=1)
     chk(report.accepted_steps == 1, "%s accepted one public runtime step" % artifact_name)

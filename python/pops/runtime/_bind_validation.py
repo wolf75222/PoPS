@@ -418,14 +418,29 @@ def validate_operator_aux(manifest: Any, aux: Any, provided_named_aux: Any = ())
 
 
 def field_plan_produced_aux(field_plans: Any) -> tuple[str, ...]:
-    """Return aux channels materialised by total resolved field install plans."""
+    """Return aux channels materialised by total resolved field install plans.
+
+    ``FieldOutput.name`` and ``GradientOutput.name`` are semantic output-map labels.  They are not
+    necessarily native aux channel names: one ``GradientOutput("g2", ...)`` may materialise the two
+    resolved components ``("g2_x", "g2_y")``.  The authenticated install authority is therefore the
+    exact ``output_route.components`` carried by each field plan, which is also what the native
+    System/AMR installers consume.
+    """
     produced = set()
-    for registration in (field_plans or {}).values():
-        operator = getattr(registration, "operator", None)
-        for output in getattr(operator, "outputs", ()):
-            name = getattr(output, "name", None)
-            if isinstance(name, str) and name:
-                produced.add(name)
+    for name, registration in (field_plans or {}).items():
+        native_options = getattr(registration, "native_options", None)
+        route = (
+            native_options.get("output_route")
+            if isinstance(native_options, Mapping)
+            else None
+        )
+        components = route.get("components") if isinstance(route, Mapping) else None
+        if not isinstance(components, (tuple, list)) or not components or any(
+                not isinstance(component, str) or not component for component in components):
+            raise TypeError(
+                "pops.bind: resolved field plan %r has no exact native output components"
+                % name)
+        produced.update(components)
     return tuple(sorted(produced))
 
 

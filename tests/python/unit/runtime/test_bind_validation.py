@@ -356,14 +356,26 @@ def test_supplied_operator_aux_passes():
 
 
 def test_resolved_field_outputs_are_producers_not_bind_inputs():
-    output = SimpleNamespace(name="relaxation_potential")
-    registration = SimpleNamespace(operator=SimpleNamespace(outputs=(output,)))
+    registration = SimpleNamespace(native_options={
+        "output_route": {
+            # Semantic output labels may be "potential" + "gradient"; bind authority is the
+            # resolved scalar component route installed by the native field provider.
+            "components": ("relaxation_potential", "relaxation_gx", "relaxation_gy"),
+        },
+    })
     artifact = SimpleNamespace(plan=SimpleNamespace(field_plans={"fields": registration}))
 
     produced = bv.field_produced_aux(artifact)
-    assert produced == ("relaxation_potential",)
-    manifest = _Manifest(aux_required=["relaxation_potential"])
+    assert produced == ("relaxation_gx", "relaxation_gy", "relaxation_potential")
+    manifest = _Manifest(aux_required=[
+        "relaxation_potential", "relaxation_gx", "relaxation_gy"])
     assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux=produced) == []
+
+
+def test_resolved_field_output_without_native_component_route_is_refused():
+    registration = SimpleNamespace(native_options={"output_route": {}})
+    with pytest.raises(TypeError, match="no exact native output components"):
+        bv.field_plan_produced_aux({"fields": registration})
 
 
 # ---------------------------------------------------------------------------

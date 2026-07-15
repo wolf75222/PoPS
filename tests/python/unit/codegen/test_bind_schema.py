@@ -26,6 +26,10 @@ from pops.params import (
 from pops.model.bind_schema import BindSchema
 from pops.problem import Case
 from pops.runtime._bound_snapshot import BoundSnapshot, build_amr_snapshot
+from pops.codegen.inspect_compiled import (
+    _build_aux_arguments,
+    _field_output_components_by_block,
+)
 
 
 def _resolve(schema, values=None):
@@ -40,6 +44,35 @@ def _two_instance_schema(*, default: float = 1.0):
     left = problem.block("left", module)
     right = problem.block("right", module)
     return BindSchema.from_problem(problem), left, right, speed, order
+
+
+def test_field_provider_outputs_are_not_external_aux_inputs_across_block_owners():
+    route = SimpleNamespace(native_options={
+        "output_route": {
+            "owner_block": "plasma",
+            "components": ("phi2", "g2_x", "g2_y"),
+        },
+    })
+    compiled = SimpleNamespace(plan=SimpleNamespace(field_plans={"phi2": route}))
+    produced = _field_output_components_by_block(compiled)
+    assert produced == {"plasma": ("phi2", "g2_x", "g2_y")}
+
+    rows = (
+        SimpleNamespace(block_name="plasma", aux_names=("phi2", "g2_x", "g2_y", "B_z")),
+        SimpleNamespace(block_name="other", aux_names=("g2_x",)),
+    )
+    # The provider owns only plasma's channels: an imposed homonym on another block remains a
+    # required external input instead of being globally exempted by name.
+    assert _build_aux_arguments(rows, produced) == {
+        "B_z": {"layout": "cell", "required": True},
+        "g2_x": {"layout": "cell", "required": True},
+    }
+
+    malformed = SimpleNamespace(plan=SimpleNamespace(field_plans={
+        "broken": SimpleNamespace(native_options={"output_route": {}}),
+    }))
+    with pytest.raises(TypeError, match="no exact owner-scoped output route"):
+        _field_output_components_by_block(malformed)
 
 
 def test_same_module_in_two_blocks_has_distinct_qualified_slots_and_defaults():
