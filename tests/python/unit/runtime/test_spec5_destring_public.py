@@ -23,7 +23,7 @@ import pytest
 
 # --- 1. Program.solve with a typed LinearProblem and solver ----------------------------------
 def _solve_program(solver):
-    from pops.linalg import LinearProblem
+    from pops.linalg import LinearOperatorProperties, LinearProblem
     from pops.model import Module
     from pops.problem import Case
     import pops.time as t
@@ -44,7 +44,10 @@ def _solve_program(solver):
 
     P.set_apply(A, apply)
     phi = P.solve(
-        LinearProblem(A, U.n, at=U.next.point), solver=solver,
+        LinearProblem(
+            A, U.n, at=U.next.point,
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=solver,
     ).consume(action=t.FailRun())
     P.commit(U.next, phi)
     return P

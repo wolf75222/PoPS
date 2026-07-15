@@ -1,7 +1,7 @@
-// Generic MATRIX-FREE Krylov layer (generic_krylov.hpp): three solver loops -- Richardson, CG,
-// BiCGStab -- that take the operator as a CALLBACK (ApplyFn), so any matrix-free apply can be
-// plugged in. This is the reusable core that a later slice wires into the compiled time-program
-// (ProgramContext / codegen); this test is PURE C++ and validates the loops in isolation.
+// Generic prepared MATRIX-FREE Krylov layer (generic_krylov.hpp): four solver loops -- Richardson,
+// CG, BiCGStab and GMRES -- consume one snapshot-authenticated affine operator and persistent
+// workspace. ProgramContext/codegen and direct native callers therefore share the same typed core;
+// this test is PURE C++ and validates that core in isolation.
 //
 // OPERATOR: an SPD Helmholtz operator A = I - alpha*Lap (alpha = 0.1), supplied as an ApplyFn that
 //   fills the ghosts of `in` (periodic), applies the SHARED discrete 5-point Laplacian
@@ -15,14 +15,14 @@
 //   rhs = A(phi_exact) by APPLYING the same discrete operator to the sampled phi_exact. Then we
 //   solve A x = rhs from x = 0 and require max|x - phi_exact| < 1e-8 (tight: same discrete A).
 //
-// We validate the four loops:
-//   - cg_solve        (SPD operator),
-//   - bicgstab_solve  (identity preconditioner -- empty ApplyFn),
-//   - richardson_solve(omega = 1/(1 + alpha*8*pi^2) ~ 1/spectral-max, more iters allowed),
-//   - gmres_solve     (restarted GMRES(m), identity preconditioner): on the SPD operator it matches
+// We validate the four typed prepared methods:
+//   - CG              (authenticated SPD operator),
+//   - BiCGStab        (identity prepared preconditioner),
+//   - Richardson      (omega = 1/(1 + alpha*8*pi^2) ~ 1/spectral-max, more iters allowed),
+//   - GMRES           (restarted GMRES(m), identity prepared preconditioner): on the SPD operator it matches
 //                      CG, and on a NON-symmetric operator (Helmholtz + a one-sided advection term,
 //                      where CG STAGNATES) it converges to phi_exact. The non-symmetric case is the
-//                      gmres-specific guard -- cg_solve on the same operator must NOT recover phi_exact.
+//                      GMRES-specific guard -- CG refuses the same uncertified operator.
 // Each must return a solved report (iters > 1, small residual) and recover phi_exact. We also
 // assert that max_iters = 0 throws std::invalid_argument (spec error 13).
 //
@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 using namespace pops;
@@ -239,6 +240,53 @@ MultiFab* GenericKrylov::phi_exact_mf_ = nullptr;
 MultiFab* GenericKrylov::rhs_ = nullptr;
 MultiFab* GenericKrylov::rhs_ns_ = nullptr;
 
+OperatorEvaluationSnapshot snapshot_for(const MultiFab& prototype, std::uint64_t revision = 1) {
+  return {{UINT64_C(1), UINT64_C(2), UINT64_C(3), UINT64_C(4)},
+          revision,
+          0,
+          0,
+          1,
+          0,
+          0,
+          1,
+          detail::layout_fingerprint(prototype),
+          {revision, UINT64_C(5), UINT64_C(6), UINT64_C(7)}};
+}
+
+SolveReport run_prepared_with_preconditioner(
+    const ApplyFn& apply, MultiFab& iterate, const MultiFab& rhs, KrylovMethod method,
+    LinearOperatorProperties properties, PreparedLinearPreconditioner preconditioner,
+    Real rel_tol, Real abs_tol, int max_iterations, int restart, Real relaxation) {
+  KrylovFootprint footprint{
+      iterate.ncomp(), iterate.n_grow(), restart, !preconditioner.is_identity()};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(iterate);
+  PreparedAffineLinearProblem problem(
+      iterate, apply, std::move(preconditioner), properties, footprint,
+      [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(iterate, method, footprint);
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  return solve_prepared_affine(
+      problem, workspace, iterate, rhs,
+      KrylovControls{method, rel_tol, abs_tol, max_iterations, restart, relaxation});
+}
+
+SolveReport run_prepared(const ApplyFn& apply, MultiFab& iterate, const MultiFab& rhs,
+                         KrylovMethod method, LinearOperatorProperties properties,
+                         Real rel_tol = kRelTol, Real abs_tol = Real(0), int max_iterations = 500,
+                         int restart = 0, Real relaxation = Real(1)) {
+  return run_prepared_with_preconditioner(
+      apply, iterate, rhs, method, properties, PreparedLinearPreconditioner::identity(), rel_tol,
+      abs_tol, max_iterations, restart, relaxation);
+}
+
+PreparedLinearPreconditioner scaled_identity_preconditioner(Real scale) {
+  return PreparedLinearPreconditioner(
+      [scale](MultiFab& out, const MultiFab& in) {
+        PureFieldAlgebra::lincomb(out, scale, in, Real(0), in);
+      });
+}
+
 }  // namespace
 
 TEST(test_solve_report, rejects_incoherent_status_action_pairs) {
@@ -253,11 +301,43 @@ TEST(test_solve_report, rejects_incoherent_status_action_pairs) {
                std::invalid_argument);
 }
 
-// --- CG (SPD operator) ---
+TEST_F(GenericKrylov, footprint_authenticates_layout_and_preconditioner_presence) {
+  MultiFab no_ghosts(*ba_, *dm_, 1, 0);
+  MultiFab one_ghost(*ba_, *dm_, 1, 1);
+  EXPECT_NE(detail::layout_fingerprint(no_ghosts), detail::layout_fingerprint(one_ghost));
+
+  ApplyFn identity_apply = [](MultiFab& out, const MultiFab& in) {
+    PureFieldAlgebra::copy(out, in);
+  };
+  OperatorEvaluationSnapshot snapshot = snapshot_for(one_ghost);
+  OperatorSnapshotProbe probe = [&snapshot]() { return snapshot; };
+  const KrylovFootprint claims_preconditioner{1, 1, 0, true};
+  const KrylovFootprint hides_preconditioner{1, 1, 0, false};
+
+  EXPECT_THROW(
+      (void)PreparedAffineLinearProblem(
+          one_ghost, identity_apply, PreparedLinearPreconditioner::identity(),
+          LinearOperatorProperties::general(), claims_preconditioner, probe),
+      std::invalid_argument);
+  EXPECT_THROW(
+      (void)PreparedAffineLinearProblem(
+          one_ghost, identity_apply, PreparedLinearPreconditioner(identity_apply),
+          LinearOperatorProperties::general(), hides_preconditioner, probe),
+      std::invalid_argument);
+  EXPECT_THROW(
+      (void)KrylovWorkspace(one_ghost, KrylovMethod::kCg, claims_preconditioner),
+      std::invalid_argument);
+  EXPECT_THROW(
+      (void)KrylovWorkspace(one_ghost, KrylovMethod::kRichardson, claims_preconditioner),
+      std::invalid_argument);
+}
+
 TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport r = cg_solve(*A_, x, *rhs_, kRelTol, 500);
+  const SolveReport r = run_prepared(
+      *A_, x, *rhs_, KrylovMethod::kCg,
+      LinearOperatorProperties::symmetric_positive_definite());
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("CG        : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -268,11 +348,11 @@ TEST_F(GenericKrylov, cg_converges_on_spd_operator) {
   EXPECT_TRUE(err < kRecoverTol) << "cg_recovers_exact err=" << err;
 }
 
-// --- BiCGStab (identity preconditioner = empty ApplyFn) ---
 TEST_F(GenericKrylov, bicgstab_converges_with_identity_preconditioner) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport r = bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500);
+  const SolveReport r = run_prepared(
+      *A_, x, *rhs_, KrylovMethod::kBicgstab, LinearOperatorProperties::general());
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("BiCGStab  : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -283,7 +363,6 @@ TEST_F(GenericKrylov, bicgstab_converges_with_identity_preconditioner) {
   EXPECT_TRUE(err < kRecoverTol) << "bicgstab_recovers_exact err=" << err;
 }
 
-// --- Richardson (omega ~ 1/spectral-max; needs many more iters) ---
 TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
@@ -295,7 +374,9 @@ TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
   const Real h = geom_->dx();  // = geom.dy() on the unit square (uniform)
   const Real lambda_max = Real(1) + kAlpha * Real(8) / (h * h);
   const Real omega = Real(1) / lambda_max;
-  const SolveReport r = richardson_solve(*A_, x, *rhs_, omega, kRelTol, 200000);
+  const SolveReport r = run_prepared(
+      *A_, x, *rhs_, KrylovMethod::kRichardson, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 200000, 0, omega);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("Richardson: %s in %d iters (rel=%.2e, omega=%.4f) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, omega, err);
@@ -306,11 +387,12 @@ TEST_F(GenericKrylov, richardson_converges_with_spectral_omega) {
   EXPECT_TRUE(err < kRecoverTol) << "richardson_recovers_exact err=" << err;
 }
 
-// --- GMRES on the SPD operator (identity preconditioner): must recover phi_exact like CG ---
 TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport r = gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 30);
+  const SolveReport r = run_prepared(
+      *A_, x, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 500, 30);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(SPD): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -321,22 +403,40 @@ TEST_F(GenericKrylov, gmres_converges_on_spd_operator) {
   EXPECT_TRUE(err < kRecoverTol) << "gmres_spd_recovers_exact err=" << err;
 }
 
-// --- GMRES on the NON-symmetric operator: the gmres-specific guard. CG STAGNATES on A_ns (it is
-//     not self-adjoint), so we first confirm CG fails to recover phi_exact, then GMRES does. ---
-TEST_F(GenericKrylov, gmres_converges_where_cg_stagnates_on_nonsymmetric_operator) {
+TEST_F(GenericKrylov, gmres_restart_decision_is_invariant_to_preconditioner_scale) {
+  MultiFab x_unit(*ba_, *dm_, 1, 1);
+  MultiFab x_scaled(*ba_, *dm_, 1, 1);
+  x_unit.set_val(0.0);
+  x_scaled.set_val(0.0);
+
+  const SolveReport unit = run_prepared_with_preconditioner(
+      *A_, x_unit, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      scaled_identity_preconditioner(Real(1)), kRelTol, Real(0), 500, 30, Real(1));
+  const SolveReport scaled = run_prepared_with_preconditioner(
+      *A_, x_scaled, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      scaled_identity_preconditioner(Real(1e-8)), kRelTol, Real(0), 500, 30, Real(1));
+
+  EXPECT_TRUE(unit.solved()) << "unit-scaled preconditioner failed after " << unit.iters;
+  EXPECT_TRUE(scaled.solved()) << "small-scaled preconditioner failed after " << scaled.iters;
+  EXPECT_LE(scaled.iters, unit.iters + 1);
+  EXPECT_GE(scaled.iters + 1, unit.iters);
+  EXPECT_TRUE(max_abs_diff(x_unit, *phi_exact_mf_) < kRecoverTol);
+  EXPECT_TRUE(max_abs_diff(x_scaled, *phi_exact_mf_) < kRecoverTol);
+}
+
+TEST_F(GenericKrylov, cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator) {
   MultiFab x_cg(*ba_, *dm_, 1, 1);
   x_cg.set_val(0.0);
-  const SolveReport rc = cg_solve(*A_ns_, x_cg, *rhs_ns_, kRelTol, 500);
-  const Real err_cg = max_abs_diff(x_cg, *phi_exact_mf_);
-  std::printf(
-      "CG(nonsym): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e (expected to NOT "
-      "recover)\n",
-      rc.solved() ? "CONVERGED" : "FAILED", rc.iters, rc.rel_residual, err_cg);
-  EXPECT_TRUE(!(rc.solved() && err_cg < kRecoverTol)) << "cg_stagnates_on_nonsymmetric";
+  EXPECT_THROW(
+      (void)run_prepared(*A_ns_, x_cg, *rhs_ns_, KrylovMethod::kCg,
+                         LinearOperatorProperties::general()),
+      std::invalid_argument);
 
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  const SolveReport r = gmres_solve(*A_ns_, ApplyFn{}, x, *rhs_ns_, kRelTol, 500, 30);
+  const SolveReport r = run_prepared(
+      *A_ns_, x, *rhs_ns_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 500, 30);
   const Real err = max_abs_diff(x, *phi_exact_mf_);
   std::printf("GMRES(nsy): %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
               r.solved() ? "CONVERGED" : "FAILED", r.iters, r.rel_residual, err);
@@ -347,38 +447,35 @@ TEST_F(GenericKrylov, gmres_converges_where_cg_stagnates_on_nonsymmetric_operato
   EXPECT_TRUE(err < kRecoverTol) << "gmres_nonsym_recovers_exact err=" << err;
 }
 
-// --- max_iters <= 0 must throw (spec error 13) ---
 TEST_F(GenericKrylov, zero_max_iters_throws_invalid_argument) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  EXPECT_THROW(cg_solve(*A_, x, *rhs_, kRelTol, 0), std::invalid_argument)
-      << "cg_max_iters_0_throws";
-  EXPECT_THROW(richardson_solve(*A_, x, *rhs_, Real(0.1), kRelTol, 0), std::invalid_argument)
-      << "richardson_max_iters_0_throws";
-  EXPECT_THROW(bicgstab_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 0), std::invalid_argument)
-      << "bicgstab_max_iters_0_throws";
-  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 0), std::invalid_argument)
-      << "gmres_max_iters_0_throws";
+  EXPECT_THROW(
+      (void)run_prepared(*A_, x, *rhs_, KrylovMethod::kCg,
+                         LinearOperatorProperties::symmetric_positive_definite(),
+                         kRelTol, Real(0), 0),
+      std::invalid_argument);
 }
 
-TEST_F(GenericKrylov, gmres_restart_is_exact_or_rejected) {
+TEST_F(GenericKrylov, gmres_restart_is_exact_and_dynamically_sized) {
   MultiFab x(*ba_, *dm_, 1, 1);
   x.set_val(0.0);
-  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 0), std::invalid_argument)
-      << "gmres_restart_0_rejected";
-  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, -3), std::invalid_argument)
-      << "gmres_restart_negative_rejected";
-  EXPECT_THROW(gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 51), std::invalid_argument)
-      << "gmres_restart_above_stack_cap_rejected";
-
-  EXPECT_NO_THROW((void)gmres_solve(*A_, ApplyFn{}, x, *rhs_, kRelTol, 500, 1))
-      << "gmres_restart_1_is_valid_and_not_clamped_or_rejected";
+  EXPECT_THROW(
+      (void)run_prepared(*A_, x, *rhs_, KrylovMethod::kGmres,
+                         LinearOperatorProperties::general(), kRelTol, Real(0), 500, 0),
+      std::invalid_argument);
+  const SolveReport dynamic = run_prepared(
+      *A_, x, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 500, 51);
+  EXPECT_TRUE(dynamic.solved());
 }
 
 TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   MultiFab x_limit(*ba_, *dm_, 1, 1);
   x_limit.set_val(0.0);
-  const SolveReport limited = richardson_solve(*A_, x_limit, *rhs_, Real(1e-12), kRelTol, 1);
+  const SolveReport limited = run_prepared(
+      *A_, x_limit, *rhs_, KrylovMethod::kRichardson, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 1, 0, Real(1e-12));
   EXPECT_FALSE(limited.solved_value_available());
   EXPECT_EQ(limited.status, SolveStatus::kIterationLimit);
   EXPECT_EQ(limited.action, SolveAction::kFailRun);
@@ -386,8 +483,83 @@ TEST_F(GenericKrylov, failed_solves_report_no_solved_value) {
   ApplyFn zero_op = [](MultiFab& out, const MultiFab&) { out.set_val(0.0); };
   MultiFab x_break(*ba_, *dm_, 1, 1);
   x_break.set_val(0.0);
-  const SolveReport breakdown = cg_solve(zero_op, x_break, *rhs_, kRelTol, 10);
+  const SolveReport breakdown = run_prepared(
+      zero_op, x_break, *rhs_, KrylovMethod::kCg,
+      LinearOperatorProperties::symmetric_positive_definite(), kRelTol, Real(0), 10);
   EXPECT_FALSE(breakdown.solved_value_available());
   EXPECT_EQ(breakdown.status, SolveStatus::kBreakdown);
   EXPECT_EQ(breakdown.action, SolveAction::kFailRun);
+}
+
+TEST_F(GenericKrylov, affine_constant_is_removed_exactly) {
+  constexpr Real offset = Real(3.25);
+  MultiFab constant(*ba_, *dm_, 1, 0);
+  constant.set_val(offset);
+  ApplyFn affine = [&](MultiFab& out, const MultiFab& in) {
+    (*A_)(out, in);
+    PureFieldAlgebra::axpy(out, Real(1), constant);
+  };
+  MultiFab affine_rhs(*ba_, *dm_, 1, 0);
+  affine(affine_rhs, *phi_exact_mf_);
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  const SolveReport report = run_prepared(
+      affine, x, affine_rhs, KrylovMethod::kCg,
+      LinearOperatorProperties::symmetric_positive_definite());
+  EXPECT_TRUE(report.solved());
+  EXPECT_LT(max_abs_diff(x, *phi_exact_mf_), kRecoverTol);
+}
+
+TEST_F(GenericKrylov, warm_start_and_absolute_floor_use_true_residual) {
+  MultiFab exact(*ba_, *dm_, 1, 1);
+  PureFieldAlgebra::copy(exact, *phi_exact_mf_);
+  const SolveReport warm = run_prepared(
+      *A_, exact, *rhs_, KrylovMethod::kGmres, LinearOperatorProperties::general(),
+      kRelTol, Real(0), 50, 10);
+  EXPECT_TRUE(warm.solved());
+  EXPECT_EQ(warm.iters, 0);
+
+  MultiFab zero(*ba_, *dm_, 1, 1);
+  zero.set_val(0.0);
+  const Real reference = PureFieldAlgebra::norm(*rhs_);
+  const SolveReport absolute = run_prepared(
+      *A_, zero, *rhs_, KrylovMethod::kBicgstab, LinearOperatorProperties::general(),
+      Real(0), reference, 50);
+  EXPECT_TRUE(absolute.solved());
+  EXPECT_EQ(absolute.iters, 0);
+}
+
+TEST_F(GenericKrylov, snapshot_mutation_is_refused_and_workspace_is_reused) {
+  MultiFab x(*ba_, *dm_, 1, 1);
+  x.set_val(0.0);
+  KrylovFootprint footprint{1, 1, 10, false};
+  OperatorEvaluationSnapshot snapshot = snapshot_for(x);
+  PreparedAffineLinearProblem problem(
+      x, *A_, PreparedLinearPreconditioner::identity(), LinearOperatorProperties::general(),
+      footprint, [&snapshot]() { return snapshot; });
+  KrylovWorkspace workspace(x, KrylovMethod::kGmres, footprint);
+  const std::size_t allocations = workspace.allocation_count();
+  const KrylovControls controls{KrylovMethod::kGmres, kRelTol, Real(0), 500, 10, Real(1)};
+
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const std::size_t halo_resources = x.halo_cache().exchange_pool_size();
+  snapshot.revision += 1;
+  EXPECT_THROW(
+      (void)solve_prepared_affine(problem, workspace, x, *rhs_, controls),
+      std::logic_error);
+
+  snapshot.resources[0] += 1;
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const SolveReport first = solve_prepared_affine(problem, workspace, x, *rhs_, controls);
+  EXPECT_TRUE(first.solved());
+  x.set_val(0.0);
+  snapshot.revision += 1;
+  problem.prepare(snapshot);
+  workspace.bind(problem);
+  const SolveReport second = solve_prepared_affine(problem, workspace, x, *rhs_, controls);
+  EXPECT_TRUE(second.solved());
+  EXPECT_EQ(workspace.allocation_count(), allocations);
+  EXPECT_EQ(x.halo_cache().exchange_pool_size(), halo_resources);
 }

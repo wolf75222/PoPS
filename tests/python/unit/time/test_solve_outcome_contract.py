@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.solvers import CG
 from pops.time import Program, RejectAttempt
 
@@ -14,7 +14,10 @@ def _linear_outcome():
     program.set_apply(operator, lambda _program, _out, value: value)
     rhs = program.scalar_field("rhs")
     return program, program.solve(
-        LinearProblem(operator, rhs), solver=CG(max_iter=2))
+        LinearProblem(
+            operator, rhs,
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=CG(max_iter=2))
 
 
 def test_reject_attempt_is_explicit_in_the_canonical_program_graph():

@@ -199,7 +199,7 @@ def test_codegen_emits_amr_install_wrapper():
     )
     chk("pops_install_program_amr" in src, "the AMR .so exports pops_install_program_amr")
     body = src.split("pops_install_program_amr", 1)[1]
-    chk("AmrProgramContext ctx(sys)" in body,
+    chk("make_shared<pops::runtime::program::AmrProgramContext>(sys)" in body,
         "the AMR install constructs an AmrProgramContext over the AmrSystem")
     chk("ctx.advance_hierarchy(dt, _advance_level)" in body,
         "the wrapper delegates to the explicit parent/child clock driver")

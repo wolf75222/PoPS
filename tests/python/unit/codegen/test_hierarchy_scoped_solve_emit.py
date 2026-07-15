@@ -145,10 +145,10 @@ def test_refined_hierarchy_uses_one_direct_solve_and_flat_path_executes_apply():
 
     flat = source[branch:gather]
     refined = source[gather:synchronized]
-    assert flat.count("ctx.solve_linear_matfree(") == 1
+    assert flat.count("ctx.solve_prepared_linear(") == 1
     assert "ctx.solve_composite_tensor_fac(" not in flat
     assert refined.count("ctx.solve_composite_tensor_fac(") == 1
-    assert "ctx.solve_linear_matfree(" not in refined
+    assert "ctx.solve_prepared_linear(" not in refined
     assert 'ctx.history_zero_start("blk.tensor_phi", 1, 1, 1)' in refined[:direct]
     assert "ctx.stage_linear_initial_guess(" in refined[:direct]
     assert "ctx.stage_linear_initial_guess();" not in refined[:direct]

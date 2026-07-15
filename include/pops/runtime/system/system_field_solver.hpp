@@ -11,6 +11,7 @@
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/elliptic/interface/field_nullspace.hpp>
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>
 #include <pops/numerics/elliptic/polar/polar_poisson_solver.hpp>  // PolarPoissonSolver (direct polar Poisson)
 #include <pops/parallel/comm.hpp>                                 // n_ranks() (FFT MPI guard)
@@ -274,6 +275,9 @@ class SystemFieldSolver {
   bool has_kappa_field_ = false;  // REACTION term kappa(x) provided: div(eps grad phi) - kappa phi
   std::vector<double> p_kappa_field_;  // field kappa(x), n*n row-major (if has_kappa_field_)
   std::optional<std::variant<GeometricMG, PoissonFFTSolver, RemappedFFTSolver>> ell_;
+  // Transaction scratch is materialized on the first prepared evaluation (A(0)) and then reused by
+  // every field-coupled Jacobian apply.  No MultiFab construction remains in the Krylov loop.
+  std::optional<MultiFab> published_phi_scratch_;
   // Direct POLAR Poisson solver (FFT-in-theta + tridiag-in-r), built lazily when
   // polar_ (cf. ensure_elliptic_polar). SEPARATE from ell_ (geom() returns a PolarGeometry, not a
   // Geometry): the cartesian path is never touched. INERT (nullopt) in cartesian.
@@ -495,6 +499,8 @@ class SystemFieldSolver {
     FieldSolveConfig plan{};
     std::vector<PreparedProvider> prepared_providers;
     std::unique_ptr<NamedFieldBackend> backend;
+    std::optional<MultiFab> contribution_scratch;
+    std::optional<MultiFab> published_phi_scratch;
   };
   std::map<std::string, NamedField> named_fields_;
   // Field plans are installed before compiled block loaders register their output components.
@@ -1268,9 +1274,9 @@ class SystemFieldSolver {
     trace_mark("solve_fields: start");
     ensure_elliptic();
     MultiFab& phi_before = ell_phi();
-    MultiFab published_phi(phi_before.box_array(), phi_before.dmap(), phi_before.ncomp(),
-                           phi_before.n_grow());
-    lincomb(published_phi, Real(1), phi_before, Real(0), phi_before);
+    MultiFab& published_phi = reusable_scratch_(
+        published_phi_scratch_, phi_before, phi_before.ncomp(), phi_before.n_grow());
+    PureFieldAlgebra::copy(published_phi, phi_before);
     trace_mark("solve_fields: after ensure_elliptic");
     MultiFab& rhs = ell_rhs();
     // f = Sum_s elliptic_rhs_s(U_s). By default the CURRENT state of each block; with a
@@ -1288,7 +1294,7 @@ class SystemFieldSolver {
     trace_mark("solve_fields: before ell_solve");
     SolveReport report = ell_solve();
     if (!report.solved_value_available()) {
-      lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
+      PureFieldAlgebra::copy(phi_before, published_phi);
       return report;
     }
     trace_mark("solve_fields: after ell_solve, before device_fence");
@@ -1383,9 +1389,9 @@ class SystemFieldSolver {
       return solve_fields_polar_from_blocks(U_stages);
     ensure_elliptic();
     MultiFab& phi_before = ell_phi();
-    MultiFab published_phi(phi_before.box_array(), phi_before.dmap(), phi_before.ncomp(),
-                           phi_before.n_grow());
-    lincomb(published_phi, Real(1), phi_before, Real(0), phi_before);
+    MultiFab& published_phi = reusable_scratch_(
+        published_phi_scratch_, phi_before, phi_before.ncomp(), phi_before.n_grow());
+    PureFieldAlgebra::copy(published_phi, phi_before);
     // Coupled multi-block solve always re-solves the Poisson from the requested stage states.
     SolveReport report;
     {
@@ -1396,7 +1402,7 @@ class SystemFieldSolver {
       }
       report = ell_solve();
       if (!report.solved_value_available()) {
-        lincomb(phi_before, Real(1), published_phi, Real(0), published_phi);
+        PureFieldAlgebra::copy(phi_before, published_phi);
         return report;
       }
     }
@@ -1512,7 +1518,8 @@ class SystemFieldSolver {
     if (route == named_fields_.end() || !route->second.has_plan)
       throw std::runtime_error("System: field provider slot '" + field + "' is not installed");
     prepare_field_providers(route->second);
-    MultiFab contribution(rhs.box_array(), rhs.dmap(), 1, 0);
+    MultiFab& contribution = reusable_scratch_(
+        route->second.contribution_scratch, rhs, 1, 0);
     for (const auto& binding : route->second.prepared_providers) {
       const int b = binding.block;
       auto& state = owner_->sp[static_cast<std::size_t>(b)];
@@ -1566,10 +1573,11 @@ class SystemFieldSolver {
     nf.backend->configure_boundary(nf.plan);
     MultiFab& rhs = nf.backend->rhs();
     MultiFab& phi_mf = nf.backend->phi();
-    MultiFab published_phi(phi_mf.box_array(), phi_mf.dmap(), phi_mf.ncomp(), phi_mf.n_grow());
-    lincomb(published_phi, Real(1), phi_mf, Real(0), phi_mf);
+    MultiFab& published_phi = reusable_scratch_(
+        nf.published_phi_scratch, phi_mf, phi_mf.ncomp(), phi_mf.n_grow());
+    PureFieldAlgebra::copy(published_phi, phi_mf);
     auto restore_published = [&]() {
-      lincomb(phi_mf, Real(1), published_phi, Real(0), published_phi);
+      PureFieldAlgebra::copy(phi_mf, published_phi);
     };
     assemble_named_poisson_rhs(field, rhs, block_idx, &U_stage);
     nf.backend->prepare_rhs(*this, rhs, nf.plan);
@@ -1611,6 +1619,17 @@ class SystemFieldSolver {
   }
 
  private:
+  static MultiFab& reusable_scratch_(std::optional<MultiFab>& storage,
+                                     const MultiFab& prototype, int ncomp, int ghosts) {
+    const bool compatible = storage &&
+        storage->box_array().boxes() == prototype.box_array().boxes() &&
+        storage->dmap().ranks() == prototype.dmap().ranks() &&
+        storage->ncomp() == ncomp && storage->n_grow() == ghosts;
+    if (!compatible)
+      storage.emplace(prototype.box_array(), prototype.dmap(), ncomp, ghosts);
+    return *storage;
+  }
+
   Impl* owner_;
   bool field_plan_consensus_verified_ = false;
 };

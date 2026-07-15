@@ -103,7 +103,10 @@ class TensorKrylovSolver {
         phat_(ba_, dm_, 1, 1),
         shat_(ba_, dm_, 1, 1),
         op_offset_(ba_, dm_, 1, 0),
-        bc_offset_(ba_, dm_, 1, 0) {}
+        bc_offset_(ba_, dm_, 1, 0) {
+    phat_.share_halo_cache_from(op_.phi());
+    shat_.share_halo_cache_from(op_.phi());
+  }
 
   // --- EllipticSolver concept ---
   MultiFab& phi() { return op_.phi(); }
@@ -344,6 +347,12 @@ class TensorKrylovSolver {
     if (has_bc_offset_) {
       phat_.set_val(Real(0));
       precond_raw(phat_, bc_offset_);  // bc_offset_ <- precond_raw(0) = d_bc
+      precond_warmed_ = true;
+    } else if (!precond_warmed_) {
+      // Warm every MG level and reusable halo/MPI capacity before BiCGStab enters its recurrence.
+      phat_.set_val(Real(0));
+      precond_raw(phat_, bc_offset_);
+      precond_warmed_ = true;
     }
   }
 
@@ -379,6 +388,7 @@ class TensorKrylovSolver {
   MultiFab bc_offset_;  // d_bc = precond_raw(0): physical-BC offset of the preconditioner
   bool has_op_offset_ = false;  // true if the operator has a nonzero Dirichlet/Robin value
   bool has_bc_offset_ = false;  // true if the preconditioner BC carries a nonzero value
+  bool precond_warmed_ = false;
 };
 
 }  // namespace pops

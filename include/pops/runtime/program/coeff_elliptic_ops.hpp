@@ -4,7 +4,8 @@
 
 #include <pops/core/foundation/types.hpp>      // Real
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
-#include <pops/mesh/storage/multifab.hpp>      // MultiFab
+#include <pops/mesh/storage/multifab.hpp>       // MultiFab
+#include <pops/numerics/elliptic/linear/pure_field_algebra.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>  // GeometricMG (the wired V-cycle, reused as a precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
 #include <pops/runtime/context/grid_context.hpp>                // GridContext (System aux seam)
@@ -51,7 +52,7 @@ inline void apply_laplacian_coeff(const Ctx& ctx, MultiFab& out, MultiFab& in,
 }
 
 /// A geometric-multigrid V-cycle reused as a Krylov preconditioner (ADC-516). Owns the CACHED
-/// GeometricMG the apply builds once and reuses across every Krylov iteration / step. Kept off the
+/// GeometricMG prepared before iteration and reused across every Krylov iteration / step. Kept off the
 /// generic facade so it carries no MG state; the codegen allocates ONE persistent instance (alloc-once,
 /// like the matrix-free scratch) and captures it into the preconditioner ApplyFn lambda alongside the
 /// context.
@@ -66,6 +67,32 @@ struct GeometricMgPreconditioner {
                             int min_coarse = kMGDefaultMinCoarse, int n_vcycles = 1)
       : nu1_(nu1), nu2_(nu2), nbottom_(nbottom), min_coarse_(min_coarse), n_vcycles_(n_vcycles) {}
 
+  /// Build all hierarchy/storage state before the first Krylov iteration. Re-preparing the same
+  /// vector space is a no-op; changing topology requires a new preconditioner object.
+  template <class Ctx>
+  void prepare(const Ctx& ctx, const MultiFab& prototype) {
+    if (ctx.is_polar_geometry())
+      throw std::invalid_argument(
+          "GeometricMgPreconditioner is Cartesian-only; polar operators require an explicit "
+          "metric-aware prepared preconditioner");
+    if (mg) {
+      if (!PureFieldAlgebra::same_vector_space(mg->phi(), prototype) ||
+          mg->phi().n_grow() != prototype.n_grow())
+        throw std::logic_error("GeometricMgPreconditioner topology changed after preparation");
+      return;
+    }
+    const GridContext gc = ctx.grid_context();
+    mg.emplace(gc.geom, prototype.box_array(), gc.bc, std::function<bool(Real, Real)>{},
+               /*replicated=*/false, min_coarse_, nu1_, nu2_, nbottom_);
+    // Materialize halo schedules, MPI buffer capacities and every lazy V-cycle resource now. The
+    // zero probe is mathematically neutral and happens once, before a Krylov iteration can begin.
+    mg->rhs().set_val(Real(0));
+    mg->phi().set_val(Real(0));
+    mg->vcycle();
+    mg->rhs().set_val(Real(0));
+    mg->phi().set_val(Real(0));
+  }
+
   /// out <- M^{-1}(in): ONE geometric-multigrid V-cycle of the bare 5-point Laplacian, used as a
   /// matrix-free Krylov PRECONDITIONER (the ``preconditioner=preconditioners.GeometricMG()`` route of
   /// P.solve_linear for GMRES / BiCGStab, ADC-516). It REUSES the already-wired pops::GeometricMG (the
@@ -79,44 +106,33 @@ struct GeometricMgPreconditioner {
   /// Laplacian is symmetric-positive and history-free, so one cycle from phi=0 is a valid stationary
   /// M^{-1} approximating L^{-1}.
   ///
-  /// The GeometricMG instance is built ONCE (lazily, on the first call) on the System mesh (geometry +
-  /// block-0 BoxArray/DistributionMapping + transport BC) and CACHED in @c mg, co-distributed with the
+  /// The GeometricMG instance is built ONCE by prepare() on the System mesh and CACHED in @c mg,
+  /// co-distributed with the
   /// Krylov scratch so its level-0 phi/rhs pair @p in / @p out by local fab index. @p in is the Krylov
   /// vector (logically read-only); @p out is fully overwritten. The matvec budget is decided C++-side
   /// inside the Krylov loop, so this apply is invisible to the IR.
   template <class Ctx>
   void apply(const Ctx& ctx, MultiFab& out, const MultiFab& in) {
     ctx.count_kernel();
-    if (!mg) {
-      // Build once, on the System mesh: a scratch scalar field exposes block 0's BoxArray /
-      // DistributionMapping (the same the Krylov solve allocates its r/p/Ap from), and grid_context()
-      // gives the geometry + transport BC. The default V-cycle parameters (nu1=nu2=2, nbottom=50) match
-      // the field-solve GeometricMG.
-      const GridContext gc = ctx.grid_context();
-      const MultiFab tmpl = ctx.alloc_scalar_field(1, 1);
-      // ADC-644: build the V-cycle with the configured shape knobs. The defaults reproduce the
-      // pre-644 emplace (min_coarse=2, nu1=nu2=2, nbottom=50), so a default-constructed
-      // GeometricMgPreconditioner is bit-identical.
-      mg.emplace(gc.geom, tmpl.box_array(), gc.bc, std::function<bool(Real, Real)>{},
-                 /*replicated=*/false, min_coarse_, nu1_, nu2_, nbottom_);
-    }
+    if (!mg)
+      throw std::logic_error("GeometricMgPreconditioner::apply called before prepare");
     GeometricMG& m = *mg;
     // rhs <- in (the vector to precondition); phi <- 0 (a fixed-linear cycle starts cold).
-    ctx.lincomb(m.rhs(), Real(1), in, Real(0), in);
+    PureFieldAlgebra::copy(m.rhs(), in);
     m.phi().set_val(Real(0));
     // n_vcycles_ composed V-cycles (default 1): still a FIXED linear map M^{-1}. phi carries forward
     // across the loop so N cycles compose the same stationary iteration.
     for (int i = 0; i < n_vcycles_; ++i)
       m.vcycle();
-    ctx.lincomb(out, Real(1), m.phi(), Real(0), out);  // out <- phi
+    PureFieldAlgebra::copy(out, m.phi());
   }
 
   int nu1_ = kMGDefaultPreSmooth;         ///< ADC-644: pre-smoothing sweeps (V-cycle shape).
   int nu2_ = kMGDefaultPostSmooth;        ///< ADC-644: post-smoothing sweeps.
   int nbottom_ = kMGDefaultBottomSweeps;  ///< ADC-644: coarsest-grid (bottom) sweeps.
   int min_coarse_ = kMGDefaultMinCoarse;  ///< ADC-644: per-axis coarsening floor.
-  int n_vcycles_ = 1;                     ///< ADC-644: composed fixed V-cycles forming the map.
-  std::optional<GeometricMG> mg;          ///< the cached V-cycle (built lazily on the first apply)
+  int n_vcycles_ = 1;                  ///< ADC-644: composed fixed V-cycles forming the map.
+  std::optional<GeometricMG> mg;  ///< the cached V-cycle (built explicitly by prepare)
 };
 
 }  // namespace program

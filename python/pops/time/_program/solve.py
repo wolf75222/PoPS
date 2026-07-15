@@ -49,7 +49,7 @@ def _lower_krylov_method(method: Any) -> Any:
     if "omega" in options and scheme != "richardson":
         raise ValueError(
             "solve_linear: omega only applies to Richardson() (the relaxation factor of "
-            "pops::richardson_solve); got method %r" % (scheme,))
+            "the prepared Richardson controls); got method %r" % (scheme,))
     return scheme, options
 
 
@@ -100,7 +100,7 @@ def _preconditioners() -> Any:
 class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
     """Private Krylov lowering plus histories, commits and records."""
 
-    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any,
+    def _solve_linear(self, *, operator: Any, rhs: Any, prepared: Any, properties: Any,
                       initial_guess: Any = None, name: Any = None,
                       at: Any = None, scope: Any = None) -> Any:
         """Solve the matrix-free linear system ``operator x = rhs`` with the runtime's Krylov loop and
@@ -124,9 +124,10 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             planned ``Jacobi()`` / ``BlockJacobi()`` are rejected (no native kernel yet). A non-identity
             preconditioner with ``CG()`` / ``Richardson()`` is rejected (those loops have no
             preconditioner slot). A bare string is REJECTED; ``None`` defaults to ``Identity()``;
-          - @p tol: relative L2 residual stop (> 0);
+          - @p tol: relative L2 residual stop (>= 0); zero selects absolute-only stopping and
+            requires a positive ``abs_tol`` on the prepared solver;
           - @p max_iter: iteration budget (REQUIRED, > 0: a dynamic solver loop with no budget is a
-            configuration error -- ``pops::*_solve`` itself throws on a non-positive budget);
+            configuration error refused before the prepared native route is entered);
           - @p restart: GMRES restart length m (a positive int; defaults to 30). Ignored by the other
             methods; passing it to a non-gmres solve is rejected."""
         operator = self._canonical_value(operator)
@@ -142,6 +143,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
                 "operators only")
         method = getattr(prepared, "method", None)
         tol = getattr(prepared, "tolerance", None)
+        abs_tol = getattr(prepared, "absolute_tolerance", None)
         max_iter = getattr(prepared, "max_iterations", None)
         restart = getattr(prepared, "restart", None)
         preconditioner_data = getattr(prepared, "preconditioner", None)
@@ -202,15 +204,43 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if method not in self._KRYLOV_METHODS:
             raise ValueError("solve_linear: method must be one of %s; got %r"
                              % (sorted(self._KRYLOV_METHODS), method))
+        from pops.linalg import LinearOperatorProperties
+        if not isinstance(properties, LinearOperatorProperties):
+            raise TypeError(
+                "solve_linear: properties must be pops.linalg.LinearOperatorProperties")
+        if method == "cg" and not properties.certifies_spd:
+            raise ValueError(
+                "solve_linear: CG requires "
+                "LinearOperatorProperties.symmetric_positive_definite(); no property is inferred")
         # A non-identity preconditioner needs the runtime ApplyFn slot, which only the Krylov methods
-        # that take one (BiCGStab / GMRES, generic_krylov.hpp) expose; pops::cg_solve / richardson_solve
-        # have NO preconditioner parameter. This is an honest capability limit of the matrix-free path,
+        # that take one (BiCGStab / GMRES) expose. CG / Richardson have no preconditioner slot. This is
+        # an honest capability limit of the matrix-free path,
         # not a transitional reject.
         if preconditioner != "identity" and method not in ("gmres", "bicgstab"):
             raise ValueError(
                 "solve_linear: preconditioning is not available for CG/Richardson in the matrix-free "
                 "Krylov path; use GMRES() or BiCGStab()")
-        tol_literal = positive_scalar_literal(tol, where="solve_linear: tol")
+        from pops._ir.literals import scalar_literal
+        try:
+            tol_literal = scalar_literal(tol)
+            tol_value = tol_literal.to_python()
+            tol_valid = 0 <= tol_value < 1
+        except (OverflowError, TypeError, ValueError):
+            tol_valid = False
+        if not tol_valid:
+            raise ValueError("solve_linear: rel_tol must be a finite scalar literal in [0, 1)")
+        try:
+            abs_tol_literal = scalar_literal(abs_tol)
+            abs_tol_value = abs_tol_literal.to_python()
+            abs_tol_valid = abs_tol_value >= 0
+        except (OverflowError, TypeError, ValueError):
+            abs_tol_valid = False
+        if not abs_tol_valid:
+            raise ValueError("solve_linear: abs_tol must be a finite scalar literal >= 0")
+        if tol_value == 0 and abs_tol_value == 0:
+            raise ValueError(
+                "solve_linear: rel_tol and abs_tol cannot both be zero; at least one stopping "
+                "threshold must be positive")
         if (max_iter is None or isinstance(max_iter, bool)
                 or not isinstance(max_iter, int) or max_iter <= 0):
             raise ValueError("dynamic solver loops require max_iter")
@@ -222,9 +252,6 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
             elif isinstance(restart, bool) or not isinstance(restart, int) or restart <= 0:
                 raise ValueError("solve_linear: restart must be a positive integer for gmres (got %r)"
                                  % (restart,))
-            if int(restart) > 50:
-                raise ValueError(
-                    "solve_linear: restart must be <= 50 for gmres; got %r" % (restart,))
         elif restart is not None:
             raise ValueError("solve_linear: restart only applies to method='gmres' (got method=%r)"
                              % (method,))
@@ -232,9 +259,23 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         # restart is a positive int on the gmres path (validated above); the None union member the
         # checker infers is from the non-gmres branch, which takes the else arm of the ternary.
         restart_int = int(restart) if method == "gmres" else None  # pyright: ignore[reportArgumentType]
+        footprint_ops = {
+            node.op for node in operator.attrs["apply_block"]
+            if node.op not in ("apply_in", "apply_out", "scalar_field")
+        }
+        input_ghosts = int(bool(footprint_ops & {
+            "laplacian", "gradient", "divergence", "apply_laplacian_coeff", "rhs_jacvec"}))
         attrs = {"method": method, "preconditioner": preconditioner, "tol": tol_literal,
+                 "abs_tol": abs_tol_literal,
                  "max_iter": int(max_iter), "has_guess": initial_guess is not None,
-                 "ncomp": op_ncomp, "restart": restart_int}
+                 "ncomp": op_ncomp, "restart": restart_int,
+                 "operator_properties": properties.canonical_data(),
+                 "krylov_footprint": {
+                     "components": op_ncomp,
+                     "input_ghosts": input_ghosts,
+                     "restart": restart_int or 0,
+                     "preconditioned": preconditioner != "identity",
+                 }}
         # ADC-644: the resolved V-cycle-shape options of a configured GeometricMG preconditioner. Added
         # ONLY when non-None (a default GeometricMG() lowers to None), so an unconfigured program's IR
         # hash / emitted source stays byte-identical (the attr is JSON-dumped into _serialize_node).

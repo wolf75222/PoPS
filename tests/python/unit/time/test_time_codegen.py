@@ -87,7 +87,7 @@ def test_forward_euler_abi(t):
     for tok in ('extern "C"', "POPS_RUNTIME_SHARED_EXCEPTION_ABI", "POPS_ABI_KEY_LITERAL",
                 "pops_program_abi_key", "pops_program_name",
                 "pops_program_hash", "pops_install_program",
-                "pops::runtime::program::ProgramContext ctx(sys)"):
+                "make_shared<pops::runtime::program::ProgramContext>(sys)"):
         assert tok in src, "generated source missing %r" % tok
     assert '"forward_euler_program"' in src, "program name not embedded"
     assert P._ir_hash() in src, "IR hash not embedded (cache/restart key)"

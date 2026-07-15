@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """pops.time GMRES Krylov solver for the compiled time program (epic ADC-399 / ADC-420).
 
-ADC-420 adds restarted GMRES(m) to the matrix-free Krylov core (pops::gmres_solve in
-generic_krylov.hpp) and exposes it through ``P.solve(LinearProblem(...), solver=GMRES(...))``. GMRES is the
+ADC-420 adds restarted GMRES(m) to the prepared matrix-free Krylov core and exposes it through
+``P.solve(LinearProblem(...), solver=GMRES(...))``. GMRES is the
 robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnates on a non-self-adjoint
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
 (A) Codegen + validation (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)``
-    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``ctx.solve_linear_matfree`` with the
+    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``ctx.solve_prepared_linear`` with the
     restart length; the restart default (30) and an override both appear in the generated C++; the
     validation errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a
     non-gmres method).
@@ -27,11 +27,13 @@ The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is als
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
 from tests.python.support.requirements import require_native_or_skip
+from fractions import Fraction
+import sys
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.time import FailRun
@@ -50,12 +52,14 @@ _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD part)
 _BETA = 2.0   # advection strength of the non-symmetric term beta*d/dx (breaks self-adjointness)
 
 
-def _krylov(method, *, max_iter, rel_tol=None, restart=None):
+def _krylov(method, *, max_iter, rel_tol=None, abs_tol=None, restart=None):
     """Build the exact typed Krylov descriptor selected by the test."""
     from pops.solvers import krylov
     options = {"max_iter": max_iter}
     if rel_tol is not None:
         options["rel_tol"] = rel_tol
+    if abs_tol is not None:
+        options["abs_tol"] = abs_tol
     if restart is not None:
         options["restart"] = restart
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
@@ -63,7 +67,7 @@ def _krylov(method, *, max_iter, rel_tol=None, restart=None):
 
 
 def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300, restart=30,
-                 alpha=_ALPHA):
+                 alpha=_ALPHA, abs_tol=None):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
     A pure (SPD) Helmholtz apply; Program.solve drives the runtime GMRES loop. No model needed."""
@@ -78,9 +82,12 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
 
     P.set_apply(A, apply)
     phi = P.solve(
-        LinearProblem(A, U),
+        LinearProblem(
+            A, U,
+            properties=(LinearOperatorProperties.symmetric_positive_definite()
+                        if method == "cg" else LinearOperatorProperties.general())),
         solver=_krylov(
-            method, max_iter=max_iter, rel_tol=tol, restart=restart),
+            method, max_iter=max_iter, rel_tol=tol, abs_tol=abs_tol, restart=restart),
     ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U").next
     final = P.value("phi_next", phi, at=endpoint.point)
@@ -132,21 +139,63 @@ def _helmholtz(P, x):
 # ---- (A) codegen + validation: pure Python, always runs ----
 def test_gmres_codegen(t):
     src = emit_cpp_program(_spd_program(t, method="gmres"))
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
-                 "pops::ApplyFn{}"):  # identity (empty) preconditioner
+    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_prepared_linear",
+                 "pops::PreparedAffineLinearProblem",
+                 "pops::PreparedLinearPreconditioner::identity()"):
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
 def test_gmres_restart_default_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=30))
-    assert ", 30," in src and "ctx.solve_linear_matfree" in src, \
+    assert "kGmres" in src and ", 30," in src and "ctx.solve_prepared_linear" in src, \
         "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
     src = emit_cpp_program(_spd_program(t, restart=12))
-    assert ", 12," in src and "ctx.solve_linear_matfree" in src, \
+    assert "kGmres" in src and ", 12," in src and "ctx.solve_prepared_linear" in src, \
         "an overridden restart must lower\n%s" % src
+
+
+def test_gmres_absolute_only_threshold_lowers_to_typed_controls(t):
+    absolute = Fraction(1, 10**12)
+    program = _spd_program(t, tol=0, abs_tol=absolute)
+    token = next(value for value in program._values if value.op == "solve_linear")
+    assert token.attrs["tol"].to_python() == 0
+    assert token.attrs["abs_tol"].to_python() == absolute
+
+    source = emit_cpp_program(program)
+    controls = next(line for line in source.splitlines()
+                    if "const pops::KrylovControls" in line)
+    assert "pops::Real(0)" in controls
+    assert "pops::Real(1000000000000)" in controls
+
+
+def test_codegen_rejects_tampered_krylov_footprints(t):
+    mutations = (
+        ("components", True, "components"),
+        ("input_ghosts", True, "input_ghosts"),
+        ("restart", 12, "restart"),
+        ("preconditioned", True, "preconditioner"),
+    )
+    for key, bad_value, message_fragment in mutations:
+        program = _spd_program(t, method="gmres", restart=30)
+        solve = next(value for value in program._values if value.op == "solve_linear")
+        attrs = dict(solve.attrs)
+        footprint = dict(attrs["krylov_footprint"])
+        footprint[key] = bad_value
+        attrs["krylov_footprint"] = footprint
+        # ProgramValue freezes attrs at authoring time. Bypass that public immutability only to
+        # model stale/corrupted serialized IR arriving at this codegen trust boundary.
+        object.__setattr__(solve, "attrs", attrs)
+        try:
+            emit_cpp_program(program)
+        except ValueError as exc:
+            assert message_fragment in str(exc), str(exc)
+        else:
+            raise AssertionError(
+                "tampered Krylov footprint %s=%r must be rejected"
+                % (key, bad_value))
 
 
 def test_gmres_now_valid_method(t):
@@ -176,8 +225,8 @@ def test_gmres_restart_validation(t):
     U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
-    for bad in (0, -3, 1.5, True, 51):
-        # a positive int in the native GMRES basis range is required (True is rejected: bool is not allowed)
+    for bad in (0, -3, 1.5, True):
+        # A positive int is required (True is rejected: bool is not allowed).
         try:
             P.solve(
                 LinearProblem(A, U),
@@ -187,12 +236,12 @@ def test_gmres_restart_validation(t):
             assert "restart" in str(exc), str(exc)
         else:
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
-    # a positive int restart is accepted
+    # The basis is dynamically sized at preparation time; it has no algorithmic hard cap.
     P.solve(
-        LinearProblem(A, U), solver=_krylov("gmres", max_iter=10, restart=8),
+        LinearProblem(A, U), solver=_krylov("gmres", max_iter=10, restart=51),
     ).consume(action=FailRun())
     token = next(value for value in P._values if value.op == "solve_linear")
-    assert token.attrs["restart"] == 8, "the restart is stored on the IR node"
+    assert token.attrs["restart"] == 51, "the exact restart is stored on the IR node"
 
 
 def test_restart_rejected_for_non_gmres(t):
@@ -290,7 +339,12 @@ def _passive_model(name):
 def _run_one(t, pops, np, program, name):
     """Compile + install + step @p program on a 1-variable block, return the stepped state and rho0,
     or None if the toolchain is unavailable."""
-    import pops.runtime._engine_descriptors as engine
+    try:
+        import pops.runtime._engine_descriptors as engine
+        from pops.runtime._system import System  # ADC-545 advanced runtime seam
+    except Exception as exc:  # noqa: BLE001 -- pure source tests intentionally lack pops._pops
+        print("-- (B) skipped: native runtime unavailable: %s --" % exc)
+        return None
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)

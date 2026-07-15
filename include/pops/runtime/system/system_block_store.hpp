@@ -304,6 +304,26 @@ class SystemBlockStore {
     interface_scheduler_.apply(point, states, rhs);
   }
 
+  /// Allocation-free scalar core route used by a prepared matrix-free operator. A block taking part
+  /// in a shared interface cannot be linearized independently: the coupled operator must supply every
+  /// participating state/output together, so this seam refuses instead of constructing a sparse
+  /// temporary vector and evaluating an incomplete interface batch.
+  void evaluate_rhs_core(
+      const runtime::multiblock::BoundaryEvaluationPoint& point, std::size_t block,
+      MultiFab& state, MultiFab& rhs, bool flux_only) {
+    if (block >= blocks.size())
+      throw std::out_of_range("SystemBlockStore core RHS block index is out of range");
+    if (interface_scheduler_.participates(block, point.level))
+      throw std::runtime_error(
+          "System implicit core RHS requires a coupled shared-interface solve");
+    auto& closure = flux_only ? blocks[block].rhs_flux_only_core_at_point
+                              : blocks[block].rhs_core_at_point;
+    if (!closure)
+      throw std::runtime_error(
+          "SystemBlockStore block lacks a point-qualified core residual closure");
+    closure(point, state, rhs);
+  }
+
   std::size_t interface_evaluation_count(const std::string& identity, int level) const {
     return interface_scheduler_.evaluation_count(identity, level);
   }

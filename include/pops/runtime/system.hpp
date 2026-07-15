@@ -849,7 +849,7 @@ class System {
   /// A fresh scalar field co-distributed with the System mesh: block 0's BoxArray and
   /// DistributionMapping, @p n_comp components, @p n_ghost ghost layers, zero-initialized. Scratch a
   /// compiled time Program allocates for a matrix-free Krylov solve (the residual / search-direction
-  /// fields that feed cg_solve / bicgstab_solve via ProgramContext::laplacian); shares the block
+  /// fields owned by a KrylovWorkspace and fed through ProgramContext::laplacian); shares the block
   /// (ba, dm) so a per-cell kernel pairs it with the state and aux by local fab index.
   POPS_EXPORT MultiFab alloc_scalar_field(int n_comp, int n_ghost);
   /// @name Multistep history (epic ADC-399 / ADC-406a)

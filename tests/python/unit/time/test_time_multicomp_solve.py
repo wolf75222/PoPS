@@ -4,7 +4,7 @@
 ADC-416 extends ``P.matrix_free_operator`` + typed ``P.solve(LinearProblem(...))`` from scalar-only to vector /
 state-valued (multi-component) fields -- the foundation the full condensed_schur macro builds on. The
 operator declares ``domain="state"`` (or ``"vector"``) with an ``ncomp``; its apply runs on an ncomp
-buffer and the runtime Krylov loop (``pops::cg_solve`` etc.) reduces its inner products over ALL
+buffer and the prepared runtime Krylov loop reduces its inner products over ALL
 components (pops::dot_all), so EVERY component is solved -- a component-0-only norm would converge on
 component 0 alone and leave the rest unsolved.
 
@@ -29,7 +29,7 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.model import StateSpace
 
 from pops.numerics.reconstruction import FirstOrder
@@ -72,7 +72,9 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
         method = CG(max_iter=max_iter, rel_tol=tol)
     P.set_apply(A, apply)
     phi = P.solve(
-        LinearProblem(A, U), solver=method,
+        LinearProblem(
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=method,
     ).consume(action=FailRun())
     endpoint = typed_state(P, "blk", state_name="U", space=space).next
     P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
@@ -97,7 +99,9 @@ def test_state_operator_builds(t):
     space = StateSpace("U", ("c0", "c1"))
     U = typed_state(P, "blk", space=space)
     phi = P.solve(
-        LinearProblem(A, U), solver=CG(max_iter=50, rel_tol=1e-10),
+        LinearProblem(
+            A, U, properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=CG(max_iter=50, rel_tol=1e-10),
     ).consume(action=FailRun())
     assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
@@ -161,7 +165,9 @@ def test_solve_rhs_component_count(t):
         raise AssertionError("a rhs with too few components must raise")
     # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
     outcome = P.solve(
-        LinearProblem(A, P.scalar_field("rhs3", ncomp=3)),
+        LinearProblem(
+            A, P.scalar_field("rhs3", ncomp=3),
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
         solver=krylov.CG(max_iter=10),
     )
     token = next(value for value in P._values if value.op == "solve_linear")
@@ -169,7 +175,9 @@ def test_solve_rhs_component_count(t):
     outcome.consume(action=FailRun())
     state_space = StateSpace("U", ("c0", "c1", "c2"))
     P.solve(
-        LinearProblem(A, typed_state(P, "blk", space=state_space)),
+        LinearProblem(
+            A, typed_state(P, "blk", space=state_space),
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
         solver=krylov.CG(max_iter=10),
     ).consume(action=FailRun())
 
@@ -194,7 +202,7 @@ def test_multicomp_codegen(t):
     src = emit_cpp_program(_mc_program(t, 2))
     n = src.count("ctx.alloc_scalar_field(2, 1)")  # lap scratch + accumulator + solution
     assert n >= 3, "the 2-component solve allocates 2-component scratch/acc/solution\n%s" % src
-    assert "ctx.solve_linear_matfree" in src and "ctx.laplacian" in src, src
+    assert "ctx.solve_prepared_linear" in src and "ctx.laplacian" in src, src
     # the scalar path still allocates 1-component fields only
     src1 = emit_cpp_program(_mc_program(t, 1))
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1

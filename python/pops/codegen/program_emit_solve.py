@@ -9,6 +9,7 @@ dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Mapping
 from fractions import Fraction
 from typing import Any
@@ -21,6 +22,7 @@ from pops.codegen.program_emit_kernels import (
     _coeff_cpp,
     _emit_field_combine,
 )
+from pops.codegen.krylov_contract import validated_krylov_footprint
 
 
 def _program_nodes(program: Any) -> Any:
@@ -149,6 +151,31 @@ def _rhs_stage_fraction(value: Any) -> Fraction:
             "rhs_jacvec r0 carries no exact stage fraction") from exc
 
 
+def _solve_stage_fraction(value: Any) -> Fraction:
+    """Return the exact solve evaluation coordinate, preferring the implicit partition."""
+    point = getattr(value, "point", None)
+    if type(point) is TimePoint:
+        time_point = point
+    elif type(point) is StagePoint:
+        try:
+            time_point = point.time
+        except ValueError:
+            for partition in ("implicit", "explicit"):
+                try:
+                    time_point = point.time_for(partition)
+                    break
+                except (KeyError, TypeError, ValueError):
+                    continue
+            else:
+                raise ValueError("solve_linear carries no exact implicit stage coordinate")
+    else:
+        raise ValueError("solve_linear requires an exact TimePoint or StagePoint")
+    try:
+        return Fraction(time_point.step) + Fraction(time_point.offset.to_python())
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError("solve_linear carries no exact stage fraction") from exc
+
+
 def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
     """Resolve the exact FieldContext captured by r0 to its installed native provider slot."""
     context = getattr(r0, "field_context", None)
@@ -182,20 +209,19 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         which is logically read-only -- the fill only writes ghosts, as in test_generic_krylov);
       - ``rhs_jacvec(out, in, iterate, r0, ...)`` (ADC-431) -> a finite-difference Jacobian-vector
         product over the core residual plus the exact prepared-boundary JVP.  The lambda captures one
-        shared ``BoundaryEvaluationPoint`` refreshed from r0's exact stage in the step body, so its
-        install-time ProgramContext copy can never reconstruct stale time.  Boundary-only scratch is
+        shared ``BoundaryEvaluationPoint`` refreshed from r0's exact stage in the step body, freezing
+        that point even if later operators advance the shared context stage. Boundary-only scratch is
         allocated once and only when that block has an installed boundary linearization;
       - the apply RESULT (the affine the body returned, e.g. ``in - alpha*Lap(in)``) is written into
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
-    The lambda captures ``[ctx, <scratch shared_ptrs>]``; the step closure captures it by value. @p
-    lines is the mandatory step-body line list: it refreshes the current ``dt`` before every solve,
-    and also carries the rhs_jacvec scratch refresh when that optional operation is present.  A
+    The lambda captures ``[ctx_owner, <scratch shared_ptrs>]`` and resolves the one context object
+    shared with the installed step closure.  This is load-bearing for AMR level selection and exact
+    evaluation clocks: copying a context at install time would freeze level 0 / stage 0 forever. @p
+    lines is the mandatory step-body line list: it refreshes the current ``dt`` before every solve
+    and carries the rhs_jacvec scratch refresh when that optional operation is present.  A
     matrix-free operator cannot be lowered in a control-flow-local scope because its install-time
     ApplyFn would otherwise have no authenticated step-lifetime source for those values."""
-    if lines is None:
-        raise NotImplementedError(
-            "matrix_free_operator is only lowerable at the top level / step body")
     apply_id = v.id
     lam = "apply_A%d" % apply_id
     var[apply_id] = lam
@@ -209,7 +235,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # 1) Persistent scratch (the scalar_field ops): one shared_ptr per scratch, declared before the
     #    lambda so it is in scope to capture. Collected first so the capture list is known.
     scratch = [w for w in block if w.op == "scalar_field"]
-    captures = ["ctx"]
+    captures = ["ctx_owner"]
+    if lines is None:
+        raise NotImplementedError(
+            "matrix-free operators require a top-level prepared evaluation scope")
+    operator_dt = "operator_dt%d" % apply_id
+    prelude.append(
+        "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));"
+        % operator_dt)
+    captures.append(operator_dt)
+    lines.append("*%s = static_cast<pops::Real>(dt);" % operator_dt)
     for w in scratch:
         sp = "sf%d_%d" % (apply_id, w.id)
         sub[w.id] = sp
@@ -242,20 +277,42 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
     # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
+    frozen_coefficients = {}
+    freeze_pairs = []
     for w in block:
         if w.op == "apply_laplacian_coeff":
             coeffs = w.inputs[2]
             for sp in var[coeffs.id]:
-                if sp not in captures:
-                    captures.append(sp)
+                if sp in frozen_coefficients:
+                    continue
+                frozen = "frozen_A%d_%d" % (apply_id, len(frozen_coefficients))
+                prelude.append(
+                    "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(1, 1));"
+                    % frozen)
+                frozen_coefficients[sp] = frozen
+                freeze_pairs.append((sp, frozen))
+                captures.append(frozen)
+    freeze_name = "freeze_A%d" % apply_id
+    if freeze_pairs:
+        freeze_captures = []
+        for live, frozen in freeze_pairs:
+            freeze_captures.extend((live, frozen))
+        prelude.append("pops::PreparedResourceFn %s = [%s]() {" %
+                       (freeze_name, ", ".join(freeze_captures)))
+        for live, frozen in freeze_pairs:
+            prelude.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (frozen, live))
+        prelude.append("};")
+        var[("operator_freeze", apply_id)] = freeze_name
+    else:
+        var[("operator_freeze", apply_id)] = "pops::PreparedResourceFn{}"
     # An rhs_jacvec apply (ADC-431, implicit-flux BDF) needs the FROZEN Newton iterate U^k and its
     # precomputed rhs(U^k) inside the lambda. They are step-body locals that CHANGE each Newton
     # iteration, so -- like schur_coeffs -- they become PERSISTENT shared_ptr scratch (jac_uk / jac_r0)
     # captured by value (shared pointee), refreshed from the live iterate / r0 in the step body BEFORE
     # the solve. Plus a perturbed-state scratch (jac_up) and a perturbed-rhs scratch (jac_rp) the
     # lambda fills per matvec. All carry the operator's component count (= the block n_cons).  The
-    # exact BoundaryEvaluationPoint is a shared pointee because the ApplyFn itself is constructed
-    # before begin_step; rebuilding it from the lambda's captured ctx would observe stale time.
+    # exact BoundaryEvaluationPoint is a shared pointee because it must remain frozen at r0's stage
+    # while other operator nodes may advance the shared context to a later stage.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
     jac_scratch = {}
     # jacvec op id -> (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
@@ -322,17 +379,14 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         stage = _rhs_stage_fraction(r0_in)
         lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
         lines.append("*%s = ctx.boundary_evaluation_point(%d);" % (point, int(r0_in.id)))
-        lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
-                     % (uk, uk, var[iterate_in.id]))
-        lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
-                     % (r0, r0, var[r0_in.id]))
+        lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (uk, var[iterate_in.id]))
+        lines.append("pops::PureFieldAlgebra::copy(*%s, %s);" % (r0, var[r0_in.id]))
         lines.append("if (%s) {" % has_boundary)
-        lines.append("  ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, "
-                     "static_cast<pops::Real>(1), *%s);" % (r0_core, r0_core, r0))
+        lines.append("  pops::PureFieldAlgebra::copy(*%s, *%s);" % (r0_core, r0))
         lines.append("  %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
         lines.append("  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
                      % (point, block_idx, uk, boundary_work))
-        lines.append("  ctx.axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+        lines.append("  pops::PureFieldAlgebra::axpy(*%s, static_cast<pops::Real>(-1), *%s);"
                      % (r0_core, boundary_work))
         lines.append("}")
         lines.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
@@ -361,12 +415,11 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             # coefficient floor -- so a generated .so compiles without coupling/schur/** and the operator
             # arithmetic is bit-identical (eps_x/eps_y/a_xy/a_yx are the captured coeff fields).
             o, i, coeffs = w.inputs
-            ex, ey, axy, ayx = var[coeffs.id]
+            ex, ey, axy, ayx = (
+                frozen_coefficients[name] for name in var[coeffs.id])
             sub[w.id] = sub[o.id]
-            body.append("ctx.fill_boundary(%s);" % _apply_in_arg(sub, i))
-            body.append("pops::apply_laplacian(%s, ctx.geom(), *%s, nullptr, %s.get(), "
-                        "nullptr, %s.get(), %s.get(), %s.get());"
-                        % (_apply_in_arg(sub, i), sub[o.id], ex, ey, axy, ayx))
+            body.append("ctx.tensor_laplacian(*%s, %s, *%s, *%s, *%s, *%s);"
+                        % (sub[o.id], _apply_in_arg(sub, i), ex, ey, axy, ayx))
         elif w.op == "rhs_jacvec":
             # out = J(U^k) in = in - (c*dt/h)(rhs(U^k + h*in) - rhs(U^k)), the finite-difference
             # Jacobian-vector product of the implicit-flux BDF residual (ADC-431). h is a relatively
@@ -386,39 +439,41 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("{")
             # FD step norms via krylov_dot (all components when ncomp>1, component 0 otherwise --
             # the SAME reduction the Krylov loop uses for its residual norm).
-            body.append("  const pops::Real jvn = std::sqrt(pops::detail::krylov_dot(%s, %s));"
+            body.append("  const pops::Real jvn = std::sqrt(pops::PureFieldAlgebra::dot(%s, %s));"
                         % (in_arg, in_arg))
-            body.append("  const pops::Real jukn = std::sqrt(pops::detail::krylov_dot(*%s, *%s));"
+            body.append("  const pops::Real jukn = std::sqrt(pops::PureFieldAlgebra::dot(*%s, *%s));"
                         % (uk, uk))
             body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
                         "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
                         ": static_cast<pops::Real>(%s);" % (eps, eps))
             # U^k + h*v -> jac_up; solve fields from that SAME perturbed state before evaluating rhs.
             # This includes elliptic dependence in Jv instead of reusing stale U^n/U^k fields.
-            body.append("  ctx.lincomb(*%s, pops::Real(1), *%s, jh, %s);" % (up, uk, in_arg))
+            body.append("  pops::PureFieldAlgebra::lincomb(*%s, pops::Real(1), *%s, jh, %s);"
+                        % (up, uk, in_arg))
             if w.attrs["field_coupled"]:
-                body.append("  ctx.solve_fields_from_state_at(*%s, %s, %d, *%s);"
-                            % (point, field_slot, block_idx, up))
-            body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
-                        % (point, block_idx, up, rp, flux_only))
-            if w.attrs["field_coupled"]:
-                # The perturbed RHS solve mutates the installed provider.  Restore the exact frozen
-                # iterate before any boundary JVP (and before returning from ApplyFn), so a Krylov
-                # matvec cannot leak U^k+h*v field state into the next callback or outer solve.
-                body.append("  ctx.solve_fields_from_state_at(*%s, %s, %d, *%s);"
-                            % (point, field_slot, block_idx, uk))
+                body.append("  ctx.evaluate_with_field_state_at("
+                            "*%s, %s, %d, *%s, *%s, [&]() {"
+                            % (point, field_slot, block_idx, up, uk))
+                body.append("    ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
+                            % (point, block_idx, up, rp, flux_only))
+                body.append("  });")
+            else:
+                body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
+                            % (point, block_idx, up, rp, flux_only))
             # out = v - (c*dt/h)(Rcore(U^k + h*v) - Rcore(U^k)).  The boundary contribution uses its
             # exact JVP contract below, avoiding an invalid finite difference of ghost/action effects.
             body.append("  const pops::Real jc = *%s / jh;" % cdt)
-            body.append("  ctx.lincomb(%s, pops::Real(1), %s, -jc, *%s);" % (out_tok, in_arg, rp))
+            body.append("  pops::PureFieldAlgebra::lincomb(%s, pops::Real(1), %s, -jc, *%s);"
+                        % (out_tok, in_arg, rp))
             body.append("  if (%s) {" % has_boundary)
-            body.append("    ctx.axpy(%s, jc, *%s);" % (out_tok, r0_core))
+            body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0_core))
             body.append("    %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
             body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s);"
                         % (point, block_idx, uk, in_arg, boundary_work))
-            body.append("    ctx.axpy(%s, -*%s, *%s);" % (out_tok, cdt, boundary_work))
+            body.append("    pops::PureFieldAlgebra::axpy(%s, -*%s, *%s);"
+                        % (out_tok, cdt, boundary_work))
             body.append("  } else {")
-            body.append("    ctx.axpy(%s, jc, *%s);" % (out_tok, r0))
+            body.append("    pops::PureFieldAlgebra::axpy(%s, jc, *%s);" % (out_tok, r0))
             body.append("  }")
             body.append("}")
         else:
@@ -426,17 +481,17 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "emit_cpp_program: op '%s' is not lowerable inside a matrix_free_operator apply "
                 "(supported: scalar_field, laplacian, gradient, divergence, apply_laplacian_coeff, "
                 "rhs_jacvec)" % w.op)
-    body += _emit_field_combine(result, "out", sub, acc_sp)
+    body += _emit_field_combine(
+        result, "out", sub, acc_sp, dt_symbol="(*%s)" % operator_dt)
     prelude.append("pops::ApplyFn %s = [%s](pops::MultiFab& out, const pops::MultiFab& in) {"
                    % (lam, ", ".join(captures)))
+    prelude.append("  auto& ctx = *ctx_owner;")
     prelude += ["  " + ln for ln in body]
     prelude.append("};")
 
 
-def _precond_applyfn(v: Any, prelude: Any) -> str:
-    """Return the C++ expression for the preconditioner ApplyFn of a solve_linear node @p v, emitting any
-    real callback into @p prelude (install-time, captured by the step closure -- alloc-once, like the
-    operator apply lambda).
+def _prepared_preconditioner(v: Any, prelude: Any, prototype: str) -> str:
+    """Emit and return one explicitly prepared native preconditioner expression.
 
       - ``"identity"`` -> ``pops::ApplyFn{}`` (an EMPTY std::function = unpreconditioned; the historical
         path, byte-identical);
@@ -450,7 +505,7 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
     rejects every other preconditioner upstream."""
     scheme = v.attrs.get("preconditioner", "identity")
     if scheme == "identity":
-        return "pops::ApplyFn{}"
+        return "pops::PreparedLinearPreconditioner::identity()"
     if scheme == "geometric_mg":
         name = "precond_mg%d" % v.id
         # The GeometricMG V-cycle cache lives on a PERSISTENT GeometricMgPreconditioner (re-homed to the
@@ -478,11 +533,18 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
             "auto %s = std::make_shared<pops::runtime::program::GeometricMgPreconditioner>(%s);"
             % (pc, ctor_args))
         prelude.append(
-            "pops::ApplyFn %s = [ctx, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
+            "pops::ApplyFn %s = [ctx_owner, %s](pops::MultiFab& out, const pops::MultiFab& in) {"
             % (name, pc))
+        prelude.append("  auto& ctx = *ctx_owner;")
         prelude.append("  %s->apply(ctx, out, in);" % pc)
         prelude.append("};")
-        return name
+        prepare = "prepare_precond_mg%d" % v.id
+        prelude.append("pops::PreparedResourceFn %s = [ctx_owner, %s, %s]() {" %
+                       (prepare, pc, prototype))
+        prelude.append("  auto& ctx = *ctx_owner;")
+        prelude.append("  %s->prepare(ctx, *%s);" % (pc, prototype))
+        prelude.append("};")
+        return "pops::PreparedLinearPreconditioner(%s, %s)" % (name, prepare)
     raise NotImplementedError(
         "emit_cpp_program: preconditioner scheme '%s' is not lowerable (supported: identity, "
         "geometric_mg)" % scheme)
@@ -574,7 +636,7 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
     seeds the initial guess (zero, or a copy of the supplied guess), then calls the runtime context's
-    generic ``solve_linear_matfree`` seam with the operator's apply lambda.
+    typed ``solve_prepared_linear`` seam with its authenticated problem and persistent workspace.
     The SolveReport is checked before the token is published: solved writes may continue,
     while non-converged / singular / breakdown / invalid-evaluation reports fail the run instead of
     letting a partial iterate masquerade as a solved value. The trip count is still decided C++-side,
@@ -600,10 +662,12 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
-    op_ncomp = int(v.attrs.get("ncomp", 1))
+    footprint = validated_krylov_footprint(v.attrs)
+    op_ncomp = footprint["components"]
+    input_ghosts = footprint["input_ghosts"]
     prelude.append(
-        "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
-        % (sol_sp, op_ncomp))
+        "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %d));"
+        % (sol_sp, op_ncomp, input_ghosts))
     if fac_options is not None:
         _, _, _, fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose = fac_options
         prelude.append(
@@ -626,10 +690,8 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
         if guess_in is None:
             lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
         else:
-            lines.append(
-                "ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, "
-                "static_cast<pops::Real>(1), %s);"
-                % (sol_sp, sol_sp, var[guess_in.id]))
+            lines.append("pops::PureFieldAlgebra::copy(*%s, %s);"
+                         % (sol_sp, var[guess_in.id]))
     tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
@@ -648,20 +710,77 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                          "%s.status_name() + \" action=fail_run\");" % kr)
         lines.append("}")
 
-    # The preconditioner ApplyFn passed to bicgstab / gmres: an EMPTY pops::ApplyFn{} for the identity
-    # (unpreconditioned), or a real M^{-1} callback for a non-identity scheme. _precond_applyfn emits the
-    # real callback into the prelude (alloc-once, like the operator apply) and returns the C++ expression
-    # that names it; identity returns the empty-ApplyFn token. (CG / Richardson have no precond parameter;
-    # the Python layer rejects a non-identity precond for them, so they never reach this branch.)
-    precond_arg = _precond_applyfn(v, prelude)
-    restart = int(v.attrs["restart"]) if method == "gmres" else 0
-    # CG / Richardson carry no preconditioner parameter, so pass the empty ApplyFn{}; the context
-    # ignores it. Method id: 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
-    method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
-    precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
+    restart = footprint["restart"]
+    method_expr = {
+        "cg": "pops::KrylovMethod::kCg",
+        "bicgstab": "pops::KrylovMethod::kBicgstab",
+        "gmres": "pops::KrylovMethod::kGmres",
+        "richardson": "pops::KrylovMethod::kRichardson",
+    }[method]
     omega = v.attrs.get("omega")
     omega_tok = ("static_cast<pops::Real>(1)" if omega is None
                  else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
+    abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["abs_tol"])
+
+    properties = v.attrs.get("operator_properties")
+    if properties == {"symmetric": True, "positive_definite": True}:
+        properties_expr = "pops::LinearOperatorProperties::symmetric_positive_definite()"
+    elif properties == {"symmetric": True, "positive_definite": False}:
+        properties_expr = "pops::LinearOperatorProperties::symmetric()"
+    elif properties == {"symmetric": False, "positive_definite": False}:
+        properties_expr = "pops::LinearOperatorProperties::general()"
+    else:
+        raise ValueError("solve_linear operator properties are incoherent or unauthenticated")
+    footprint_name = "krylov_footprint%d" % v.id
+    prelude.append(
+        "const pops::KrylovFootprint %s{%d, %d, %d, %s};"
+        % (footprint_name, op_ncomp, input_ghosts, restart,
+           "true" if footprint["preconditioned"] else "false"))
+
+    authority_material = json.dumps({
+        "program": program._ir_hash(),
+        "operator": op_value.id,
+        "solve": v.id,
+        "solver": v.attrs.get("solver_identity"),
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    authority_digest = hashlib.sha256(authority_material).digest()
+    authority = [
+        int.from_bytes(authority_digest[offset:offset + 8], "big")
+        for offset in range(0, 32, 8)
+    ]
+    resource_digest = hashlib.sha256(
+        b"prepared-resources:" + authority_material).digest()
+    resources = [
+        int.from_bytes(resource_digest[offset:offset + 8], "big")
+        for offset in range(0, 32, 8)
+    ]
+    authority_cpp = ", ".join("UINT64_C(%d)" % word for word in authority)
+    resources_cpp = ", ".join("UINT64_C(%d)" % word for word in resources)
+    snapshot_name = "operator_snapshot%d" % v.id
+    prelude.append(
+        "auto %s = std::make_shared<pops::OperatorEvaluationSnapshot>();" % snapshot_name)
+    preconditioner_expr = _prepared_preconditioner(v, prelude, sol_sp)
+    problem_name = "prepared_problem%d" % v.id
+    freeze_expr = var.get(("operator_freeze", op_value.id))
+    if not isinstance(freeze_expr, str):
+        raise ValueError("matrix-free operator has no prepared resource contract")
+    prelude.append(
+        "auto %s = std::make_shared<pops::PreparedAffineLinearProblem>("
+        "*%s, %s, %s, %s, %s, [ctx_owner, %s]() { "
+        "return ctx_owner->probe_operator_evaluation({%s}, %s->topology, {%s}, %s->revision); }, %s);"
+        % (problem_name, sol_sp, lam, preconditioner_expr, properties_expr, footprint_name,
+           snapshot_name, authority_cpp, snapshot_name, resources_cpp, snapshot_name,
+           freeze_expr))
+    workspace_name = "krylov_workspace%d" % v.id
+    prelude.append(
+        "auto %s = std::make_shared<pops::KrylovWorkspace>("
+        "*%s, %s, %s);"
+        % (workspace_name, sol_sp, method_expr, footprint_name))
+    controls_name = "krylov_controls%d" % v.id
+    prelude.append(
+        "const pops::KrylovControls %s{%s, %s, %s, %d, %d, %s};"
+        % (controls_name, method_expr, tol, abs_tol, max_iter, restart, omega_tok))
+
     if direct_refined:
         if fac_options is None:
             raise ValueError("a direct hierarchy phase requires CompositeTensorFAC")
@@ -670,9 +789,17 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
             "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %s, %d);"
             % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, fac_abs_tol, max_iter))
     else:
+        solve_stage = _solve_stage_fraction(v)
+        lines.append("ctx.set_stage_time(%d, %d);" %
+                     (solve_stage.numerator, solve_stage.denominator))
         lines.append(
-            "pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
-            "%d, %d, %s);"
-            % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,
-               omega_tok))
+            "*%s = ctx.operator_evaluation_snapshot("
+            "{%s}, *%s, {%s});"
+            % (snapshot_name, authority_cpp, sol_sp, resources_cpp))
+        lines.append("%s->prepare(*%s);" % (problem_name, snapshot_name))
+        lines.append("%s->bind(*%s);" % (workspace_name, problem_name))
+        lines.append(
+            "pops::SolveReport %s = ctx.solve_prepared_linear("
+            "*%s, *%s, *%s, %s, %s);"
+            % (kr, problem_name, workspace_name, sol_sp, rhs_tok, controls_name))
     _append_report_guard()

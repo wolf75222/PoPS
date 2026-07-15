@@ -77,18 +77,14 @@ void System::block_rhs_group(
   if (!p_->block_state_identities_.empty()) {
     if (p_->boundary_stage_states_)
       throw std::runtime_error("System boundary stage-state registry is already active");
-    std::map<std::string, MultiFab*> staged;
     for (std::size_t index = 0; index < p_->sp.size(); ++index) {
       const auto& identity = p_->sp[index].state_identity;
       if (identity.empty())
         throw std::runtime_error(
             "System materialized block has no exact qualified state identity");
-      if (states[index] != nullptr && !staged.emplace(identity, states[index]).second)
-        throw std::runtime_error(
-            "System boundary stage-state registry has a duplicate qualified identity");
     }
     p_->boundary_stage_states_.emplace(
-        Impl::BoundaryStageStateView{point, std::move(staged)});
+        Impl::BoundaryStageStateView{point, &states, -1, nullptr});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
   p_->blocks_.evaluate_rhs_with_interfaces(point, states, rhs, flux_only);
@@ -108,13 +104,7 @@ void System::block_rhs_core_into_at(
     int b, MultiFab& U, MultiFab& R, bool flux_only) {
   if (b < 0 || b >= static_cast<int>(p_->sp.size()))
     throw std::out_of_range("System core RHS block index is out of range");
-  std::vector<MultiFab*> states(p_->sp.size(), nullptr);
-  std::vector<MultiFab*> rhs(p_->sp.size(), nullptr);
-  std::vector<int> modes(p_->sp.size(), 0);
   const auto block = static_cast<std::size_t>(b);
-  states[block] = &U;
-  rhs[block] = &R;
-  modes[block] = flux_only ? 1 : 0;
   struct StageStateScope {
     std::optional<Impl::BoundaryStageStateView>* slot = nullptr;
     ~StageStateScope() {
@@ -129,10 +119,10 @@ void System::block_rhs_core_into_at(
       throw std::runtime_error(
           "System core RHS block has no exact qualified state identity");
     p_->boundary_stage_states_.emplace(
-        Impl::BoundaryStageStateView{point, {{identity, &U}}});
+        Impl::BoundaryStageStateView{point, nullptr, b, &U});
     stage_scope.slot = &p_->boundary_stage_states_;
   }
-  p_->blocks_.evaluate_rhs_core_with_interfaces(point, states, rhs, modes);
+  p_->blocks_.evaluate_rhs_core(point, block, U, R, flux_only);
 }
 
 void System::block_boundary_residual_into_at(

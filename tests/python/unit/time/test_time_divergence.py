@@ -13,7 +13,7 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
 (A) Pure Python, always runs:
     - ``P.divergence`` records a 3-input scalar_field op, validates its operands, and serializes;
     - the div(grad) Helmholtz apply (gradient -> divergence) lowers to ``ctx.gradient`` + a
-      ``ctx.divergence`` + ``ctx.solve_linear_matfree``, with the gradient buffer allocated 2-component
+      ``ctx.divergence`` + ``ctx.solve_prepared_linear``, with the gradient buffer allocated 2-component
       (``ctx.alloc_scalar_field(2, 1)``);
     - a standalone divergence-of-a-known-field check: the offline centered FV divergence of
       f = (cos 2pi x, sin 2pi y) matches the analytic div f = -2pi sin 2pi x + 2pi cos 2pi y to the
@@ -146,7 +146,7 @@ def test_scalar_field_ncomp_validates(t):
 def test_divgrad_codegen(t):
     src = emit_cpp_program(_divgrad_program(
         t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)))
-    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_linear_matfree",
+    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_prepared_linear",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
 

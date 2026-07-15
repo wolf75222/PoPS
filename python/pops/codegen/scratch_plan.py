@@ -31,6 +31,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pops.codegen.krylov_contract import validated_krylov_footprint
+
 # Scratch-allocating op families. A scratch buffer is owned by one flat node; we bucket each by the
 # vtype of the buffer it stages so a caller sees the state / rhs / scalar-field split the spec asks
 # for. These mirror Program._SCRATCH_OPS; the bucketing is by the produced vtype, not the op name.
@@ -48,9 +50,6 @@ _OPERATOR_DECL_OPS = ("linear_source",)
 _KRYLOV_OPS = ("solve_linear",)
 _ELLIPTIC_OPS = ("solve_fields", "solve_fields_from_blocks")
 
-# Conservative whole-solve buffer counts (the exact figures are solver-dependent bind inputs; these
-# are the documented rules of thumb the memory estimate already uses, kept consistent here).
-_KRYLOV_WORK_VECTORS = 4          # a generic Krylov loop keeps ~4 work vectors per solve
 _MULTIGRID_LEVELS_NOTE = "~4/3 of the fine grid (geometric V-cycle hierarchy)"
 _MULTIGRID_BUFFER_NOTE = "geometric MG hierarchy " + _MULTIGRID_LEVELS_NOTE
 
@@ -251,12 +250,12 @@ def build_scratch_plan(program: Any, model: Any = None) -> ScratchPlan:
         "the codegen MAY keep more buffers than buffer_count; this plan reports the sound MINIMUM, "
         "so it is a lower bound on the buffers the .so allocates, not a prediction of its choices.",
     ]
-    conservative = bool(persistent)
+    conservative = any(not item.get("exact", False) for item in persistent)
     if persistent:
-        notes.append("persistent Krylov / multigrid buffer counts are CONSERVATIVE rules of thumb "
-                     "(Krylov ~%d work vectors per solve; multigrid hierarchy %s); the exact figure "
-                     "is solver-dependent and a bind input."
-                     % (_KRYLOV_WORK_VECTORS, _MULTIGRID_LEVELS_NOTE))
+        notes.append(
+            "prepared Krylov workspace and affine-problem field counts are EXACT from the typed IR "
+            "footprint; only a geometric multigrid hierarchy remains topology-dependent (%s)."
+            % _MULTIGRID_LEVELS_NOTE)
 
     return ScratchPlan(program_name=getattr(program, "name", None),
                        categories=categories, scratch_count=reuse["scratch_count"],
@@ -326,23 +325,43 @@ def _field_solve_indices(program: Any) -> list:
 
 
 def _persistent_solver_buffers(program: Any) -> list:
-    """The Krylov work vectors + multigrid hierarchies that live for a whole solve (CONSERVATIVE).
+    """The exact prepared Krylov fields plus topology-dependent multigrid hierarchies.
 
-    A ``solve_linear`` node runs a dynamic Krylov loop that keeps ~``_KRYLOV_WORK_VECTORS`` work
-    vectors alive across its iterations; a ``solve_fields`` elliptic solve carries a geometric
-    multigrid hierarchy (~4/3 of the fine grid). Both persist for the solve, NOT the step body, so
-    they are reported here (not in the step-body scratch reuse). The counts are rules of thumb -- the
-    exact Krylov vector count / V-cycle depth is solver-dependent and a bind input."""
+    A ``solve_linear`` node carries an exact typed prepared footprint. A ``solve_fields`` elliptic
+    solve carries a topology-dependent geometric multigrid hierarchy (~4/3 of the fine grid). Both
+    persist for the solve, NOT the step body, so they are reported here (not in the step-body scratch
+    reuse). Only the multigrid hierarchy remains conservative."""
     persistent = []
     for v in getattr(program, "_values", []):
         if v.op in _KRYLOV_OPS:
             method = v.attrs.get("method", "krylov")
-            persistent.append({"kind": "krylov", "name": v.name, "buffers": _KRYLOV_WORK_VECTORS,
-                               "note": "%s work vectors (conservative; ~%d per solve)"
-                               % (method, _KRYLOV_WORK_VECTORS)})
+            footprint = validated_krylov_footprint(v.attrs)
+            restart = footprint["restart"]
+            preconditioned = footprint["preconditioned"]
+            workspace = {
+                "richardson": 2,
+                "cg": 4,
+                "bicgstab": 9 if preconditioned else 7,
+                "gmres": restart + 4,
+            }[method]
+            persistent.append({
+                "kind": "krylov",
+                "name": v.name,
+                "buffers": workspace + 2,
+                "workspace_buffers": workspace,
+                "prepared_problem_buffers": 2,
+                "exact": True,
+                "footprint": dict(footprint),
+                "note": "%s: %d workspace + A(0)/zero fields (exact)"
+                        % (method, workspace),
+            })
+            if v.attrs.get("preconditioner") == "geometric_mg":
+                persistent.append({
+                    "kind": "multigrid_preconditioner", "name": v.name, "buffers": 1,
+                    "exact": False, "note": _MULTIGRID_BUFFER_NOTE})
         elif v.op in _ELLIPTIC_OPS:
             persistent.append({"kind": "multigrid", "name": v.name, "buffers": 1,
-                               "note": _MULTIGRID_BUFFER_NOTE})
+                               "exact": False, "note": _MULTIGRID_BUFFER_NOTE})
     return persistent
 
 

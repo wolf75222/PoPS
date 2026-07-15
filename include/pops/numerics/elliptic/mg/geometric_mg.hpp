@@ -46,7 +46,8 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/parallel/comm.hpp>
 
-#include <chrono>  // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
+#include <bit>
+#include <chrono>   // last_bottom_seconds(): self-time the coarsest (bottom) GS solve (Spec 5, ADC-479)
 #include <cmath>
 #include <cstdlib>  // getenv
 #include <functional>
@@ -747,39 +748,89 @@ class GeometricMG {
       return report;
     }
 
+    ApplyFn jacobian = [&](MultiFab& out, const MultiFab& in) {
+      boundary_failure_.reset();
+      apply_jvp(accepted, in, out);
+      if (boundary_failure_.synchronize_across_ranks())
+        out.set_val(std::numeric_limits<Real>::quiet_NaN());
+    };
+    ApplyFn preconditioner = [&](MultiFab& out, const MultiFab& in) {
+      struct RestorePreconditionerState {
+        bool& boundary_enabled;
+        bool saved_boundary_enabled;
+        MultiFab& phi;
+        MultiFab& rhs;
+        const MultiFab& saved_phi;
+        const MultiFab& saved_rhs;
+        ~RestorePreconditionerState() {
+          lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
+          lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
+          boundary_enabled = saved_boundary_enabled;
+        }
+      } restore{has_boundary_kernel_, has_boundary_kernel_, L.phi, L.rhs, accepted,
+                rhs_snapshot};
+      has_boundary_kernel_ = false;
+      L.phi.set_val(Real(0));
+      lincomb(L.rhs, Real(1), in, Real(0), in);
+      vcycle();
+      lincomb(out, Real(1), L.phi, Real(0), L.phi);
+    };
+    PreparedResourceFn prepare_linear_preconditioner = [&]() {
+      delta.set_val(Real(0));
+      preconditioner(delta, delta);
+      delta.set_val(Real(0));
+    };
+    KrylovFootprint footprint{1, delta.n_grow(), options.restart, true};
+    std::uint64_t linear_revision = 0;
+    OperatorFingerprint linear_topology = detail::layout_fingerprint(delta);
+    detail::fingerprint_geometry(linear_topology, L.geom);
+    detail::fingerprint_boundary(linear_topology, bc_);
+    auto probe_linear_snapshot = [&]() {
+      OperatorFingerprint resources = detail::fingerprint_seed();
+      detail::fingerprint_mix(resources, static_cast<std::uint64_t>(has_boundary_kernel_));
+      detail::fingerprint_mix(
+          resources, static_cast<std::uint64_t>(boundary_context_.point.iteration));
+      detail::fingerprint_mix(resources,
+                              std::bit_cast<std::uint64_t>(boundary_context_.point.time));
+      detail::fingerprint_mix(resources,
+                              std::bit_cast<std::uint64_t>(boundary_context_.point.dt));
+      return OperatorEvaluationSnapshot{
+          {0x504f50534e455754ull, 0x4f4e4a41434f4249ull,
+           0x414e505245504152ull, 0x45444b52594c4f56ull},
+          linear_revision,
+          static_cast<std::int64_t>(boundary_context_.point.step),
+          static_cast<std::int64_t>(boundary_context_.point.stage_slot),
+          1,
+          std::bit_cast<std::uint64_t>(boundary_context_.point.dt),
+          std::bit_cast<std::uint64_t>(boundary_context_.point.time),
+          UINT64_C(1),
+          linear_topology,
+          resources};
+    };
+    PreparedAffineLinearProblem linear_problem(
+        delta, jacobian,
+        PreparedLinearPreconditioner(preconditioner, prepare_linear_preconditioner),
+        LinearOperatorProperties::general(), footprint,
+        probe_linear_snapshot);
+    KrylovWorkspace linear_workspace(delta, KrylovMethod::kGmres, footprint);
+    const KrylovControls linear_controls{KrylovMethod::kGmres,
+                                         options.linear_tolerance,
+                                         Real(0),
+                                         options.linear_max_iterations,
+                                         options.restart,
+                                         Real(1)};
+
     for (int iteration = 0; iteration < options.max_iterations; ++iteration) {
       boundary_context_.point.iteration = iteration;
       delta.set_val(Real(0));
-      ApplyFn jacobian = [&](MultiFab& out, const MultiFab& in) {
-        boundary_failure_.reset();
-        apply_jvp(accepted, in, out);
-        if (boundary_failure_.synchronize_across_ranks())
-          out.set_val(std::numeric_limits<Real>::quiet_NaN());
-      };
-      ApplyFn preconditioner = [&](MultiFab& out, const MultiFab& in) {
-        struct RestorePreconditionerState {
-          bool& boundary_enabled;
-          bool saved_boundary_enabled;
-          MultiFab& phi;
-          MultiFab& rhs;
-          const MultiFab& saved_phi;
-          const MultiFab& saved_rhs;
-          ~RestorePreconditionerState() {
-            boundary_enabled = saved_boundary_enabled;
-            lincomb(phi, Real(1), saved_phi, Real(0), saved_phi);
-            lincomb(rhs, Real(1), saved_rhs, Real(0), saved_rhs);
-          }
-        } restore{has_boundary_kernel_, has_boundary_kernel_, L.phi, L.rhs, accepted, rhs_snapshot};
-        has_boundary_kernel_ = false;
-        L.phi.set_val(Real(0));
-        lincomb(L.rhs, Real(1), in, Real(0), in);
-        vcycle();
-        lincomb(out, Real(1), L.phi, Real(0), L.phi);
-      };
+      linear_revision = static_cast<std::uint64_t>(iteration + 1);
+      const OperatorEvaluationSnapshot linear_snapshot = probe_linear_snapshot();
       SolveReport linear;
       try {
-        linear = gmres_solve(jacobian, preconditioner, delta, residual, options.linear_tolerance,
-                             options.linear_max_iterations, options.restart);
+        linear_problem.prepare(linear_snapshot);
+        linear_workspace.bind(linear_problem);
+        linear = solve_prepared_affine(
+            linear_problem, linear_workspace, delta, residual, linear_controls);
       } catch (...) {
         restore_published();
         throw;

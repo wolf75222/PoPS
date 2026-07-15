@@ -59,9 +59,11 @@ def _emit_amr_install(program: Any, target: Any, prelude: Any, body: Any,
         '// mirror of ProgramContext) and installs the explicit parent/child clock driver: the SAME\n'
         '// lowered body is recursively subcycled, temporally interpolated and conservatively synced.\n'
         'extern "C" void pops_install_program_amr(void* sys) {\n'
-        '  pops::runtime::program::AmrProgramContext ctx(sys);\n'
+        '  auto ctx_owner = std::make_shared<pops::runtime::program::AmrProgramContext>(sys);\n'
+        '  pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
         + prelude +
         '\n  ctx.install([=](double dt) {\n'
+        '    pops::runtime::program::AmrProgramContext& ctx = *ctx_owner;\n'
         + (
             '    auto _advance_level = [&](double dt) {\n'
             + body +

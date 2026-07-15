@@ -210,7 +210,17 @@ struct System::Impl {
   std::map<std::string, std::string> boundary_field_routes_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
-    std::map<std::string, MultiFab*> states;
+    const std::vector<MultiFab*>* states = nullptr;
+    int single_block = -1;
+    MultiFab* single_state = nullptr;
+
+    MultiFab* state(std::size_t block) const {
+      if (states != nullptr)
+        return block < states->size() ? (*states)[block] : nullptr;
+      return single_block >= 0 && block == static_cast<std::size_t>(single_block)
+                 ? single_state
+                 : nullptr;
+    }
   };
   std::optional<BoundaryStageStateView> boundary_stage_states_;
   // Effective numerical/physical block/stage options + OPT-IN IMEX Newton reports, EXTRACTED into
@@ -415,15 +425,15 @@ struct System::Impl {
             if (boundary_stage_states_ && boundary_stage_states_->point != point)
               throw std::runtime_error(
                   "System boundary stage-state registry was used at a different evaluation point");
-            for (const auto& candidate : sp) {
+            for (std::size_t candidate_index = 0; candidate_index < sp.size();
+                 ++candidate_index) {
+              const auto& candidate = sp[candidate_index];
               if (candidate.state_identity.empty())
                 throw std::runtime_error(
                     "System boundary state route has no exact qualified identity");
               const MultiFab* storage = nullptr;
-              if (boundary_stage_states_) {
-                const auto staged = boundary_stage_states_->states.find(candidate.state_identity);
-                if (staged != boundary_stage_states_->states.end()) storage = staged->second;
-              }
+              if (boundary_stage_states_)
+                storage = boundary_stage_states_->state(candidate_index);
               if (storage == nullptr)
                 storage = candidate.name == block_name ? &state : &candidate.U;
               fields.bind_state(candidate.state_identity, *storage);

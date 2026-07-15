@@ -43,13 +43,13 @@ def test_solvers_is_top_level_and_exposed():
 # --- Krylov solvers (moved from pops.lib.solvers) ----------------------------------------
 
 def test_krylov_native_ids_and_schemes():
-    assert krylov.CG(max_iter=200).native_id == "pops::cg_solve"
+    assert krylov.CG(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.CG(max_iter=200).scheme == "cg"
-    assert krylov.BiCGStab(max_iter=200).native_id == "pops::bicgstab_solve"
+    assert krylov.BiCGStab(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.BiCGStab(max_iter=200).scheme == "bicgstab"
-    assert krylov.GMRES(max_iter=200).native_id == "pops::gmres_solve"
+    assert krylov.GMRES(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.GMRES(max_iter=200).scheme == "gmres"
-    assert krylov.Richardson(max_iter=200).native_id == "pops::richardson_solve"
+    assert krylov.Richardson(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert krylov.Richardson(max_iter=200).scheme == "richardson"
     for d in (krylov.CG(max_iter=200), krylov.GMRES(max_iter=200),
               krylov.BiCGStab(max_iter=200), krylov.Richardson(max_iter=200)):
@@ -95,8 +95,26 @@ def test_krylov_descriptors_compute_nothing():
 
 def test_krylov_lower_carries_native_id_and_scheme():
     rec = krylov.CG(max_iter=200).lower().to_dict()
-    assert rec["native_id"] == "pops::cg_solve"
+    assert rec["native_id"] == "pops::solve_prepared_affine"
     assert rec["scheme"] == "cg"
+
+
+@pytest.mark.parametrize("factory", [krylov.CG, krylov.BiCGStab, krylov.GMRES,
+                                      krylov.Richardson])
+def test_krylov_absolute_tolerance_is_exact_and_nonnegative(factory):
+    assert factory(max_iter=10).options["abs_tol"] == 0
+    absolute = Fraction(1, 10**12)
+    assert factory(max_iter=10, abs_tol=absolute).options["abs_tol"] == absolute
+    absolute_only = factory(max_iter=10, rel_tol=0, abs_tol=absolute)
+    assert absolute_only.options["rel_tol"] == 0
+    assert absolute_only.options["abs_tol"] == absolute
+    prepared = absolute_only.prepare_program_solve()
+    assert prepared.tolerance == 0
+    assert prepared.absolute_tolerance == absolute
+    with pytest.raises(ValueError, match="abs_tol"):
+        factory(max_iter=10, abs_tol=-1)
+    with pytest.raises(ValueError, match="at least one stopping threshold"):
+        factory(max_iter=10, rel_tol=0, abs_tol=0)
 
 
 def test_krylov_declare_amr_route_capabilities():
@@ -309,7 +327,7 @@ def test_lib_solvers_shim_is_removed():
     # The one public home resolves the flat factory namespace and the preconditioners.
     ns = solvers.solvers
     assert ns.GMRES(max_iter=200).scheme == "gmres"
-    assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
+    assert ns.CG(max_iter=200).native_id == "pops::solve_prepared_affine"
     assert ns.Newton().available().ok is True
     assert ns.LocalNewton().scheme == "newton"
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"

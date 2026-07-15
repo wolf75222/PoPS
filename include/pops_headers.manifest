@@ -72,6 +72,9 @@ api pops/numerics/elliptic/interface/field_nullspace.hpp
 api pops/numerics/elliptic/interface/field_provider.hpp
 api pops/numerics/elliptic/linear/generic_krylov.hpp
 api pops/numerics/elliptic/linear/krylov_solver.hpp
+api pops/numerics/elliptic/linear/krylov_workspace.hpp
+api pops/numerics/elliptic/linear/prepared_affine_problem.hpp
+api pops/numerics/elliptic/linear/pure_field_algebra.hpp
 api pops/numerics/elliptic/linear/solve_report.hpp
 api pops/numerics/elliptic/mg/composite_fac_nlevel.hpp
 api pops/numerics/elliptic/mg/composite_fac_poisson.hpp

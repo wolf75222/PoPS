@@ -10,7 +10,8 @@ compile, NO .so on disk -- and assert that
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
   - the REJECTED reuse names an inspectable REASON (a still-live occupant, an aux/field barrier);
-  - the PERSISTENT Krylov / multigrid solver buffers appear for a solve and are labelled conservative;
+  - persistent Krylov buffers use the exact typed footprint while multigrid remains explicitly
+    topology-dependent;
   - ``to_dict`` / ``to_json`` / ``str`` / ``repr`` work and round-trip through JSON.
 
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
@@ -82,11 +83,11 @@ def _krylov(name="krylov_demo"):
         return -1.0 * lap
 
     from pops.linalg import LinearProblem
-    from pops.solvers.krylov import CG
+    from pops.solvers.krylov import GMRES
     from pops.time import FailRun
     P.set_apply(A, _apply)
     P.solve(
-        LinearProblem(A, buf), solver=CG(max_iter=10),
+        LinearProblem(A, buf), solver=GMRES(max_iter=10, restart=3),
     ).consume(action=FailRun())
     P.commit(
         temporal.next,
@@ -232,20 +233,48 @@ def test_persistent_multigrid_buffers():
     plan = build_scratch_plan(P)
     mg = [p for p in plan.persistent if p["kind"] == "multigrid"]
     chk(len(mg) == 3, "3 field solves -> 3 multigrid persistent buffers")
-    chk(plan.conservative is True, "the plan declares itself conservative (persistent buffers)")
-    chk(any("conservative" in n.lower() for n in plan.notes),
-        "a note states the persistent counts are conservative")
+    chk(plan.conservative is True,
+        "the plan is conservative while topology-dependent multigrid buffers remain")
+    chk(any("multigrid" in n.lower() and "topology-dependent" in n.lower()
+            for n in plan.notes),
+        "a note scopes the remaining uncertainty to the multigrid hierarchy")
 
 
 def test_persistent_krylov_buffers():
-    """A solve_linear (Krylov) node contributes persistent Krylov work vectors."""
+    """A solve_linear carries its exact prepared footprint into inspection."""
     print("== persistent Krylov work vectors for a solve_linear ==")
     P = _krylov()
     plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
-    chk(krylov[0]["buffers"] >= 1, "the Krylov entry reports >= 1 work vector")
-    chk("conservative" in krylov[0]["note"].lower(), "the Krylov count is labelled conservative")
+    chk(krylov[0]["workspace_buffers"] == 7,
+        "GMRES(3) owns restart+4 persistent workspace fields")
+    chk(krylov[0]["prepared_problem_buffers"] == 2,
+        "the prepared affine problem owns zero and A(0)")
+    chk(krylov[0]["buffers"] == 9 and krylov[0]["exact"] is True,
+        "the complete prepared footprint is exact")
+    chk(plan.conservative is True,
+        "the exact Krylov entry does not hide this Program's separate conservative MG hierarchy")
+
+
+def test_scratch_plan_rejects_tampered_krylov_footprint():
+    """Inspection shares codegen's exact footprint validator; it never coerces fake booleans."""
+    print("== scratch_plan() rejects a tampered Krylov footprint ==")
+    P = _krylov()
+    solve = next(value for value in P._values if value.op == "solve_linear")
+    attrs = dict(solve.attrs)
+    footprint = dict(attrs["krylov_footprint"])
+    footprint["preconditioned"] = "false"
+    attrs["krylov_footprint"] = footprint
+    # Model stale/corrupted serialized IR at the inert inspection trust boundary.
+    object.__setattr__(solve, "attrs", attrs)
+    try:
+        build_scratch_plan(P)
+    except ValueError as exc:
+        chk("preconditioned" in str(exc) and "boolean" in str(exc),
+            "the shared footprint validator rejects string-to-bool coercion")
+    else:
+        chk(False, "a tampered Krylov footprint must not produce an exact scratch plan")
 
 
 def test_no_persistent_without_solve():

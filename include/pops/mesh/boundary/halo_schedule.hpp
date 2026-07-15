@@ -19,6 +19,8 @@
 
 namespace pops {
 
+struct HaloExchangeStorage;
+
 /// One halo copy/transfer: the ghost @p region of box @p dst is filled from the shifted valid region
 /// of box @p src (shift sx, sy in cells for the periodic wrap; 0 for an interior neighbor). @p src and
 /// @p dst are GLOBAL box indices into the BoxArray (resolved to local fabs when the job is replayed).
@@ -75,13 +77,23 @@ class HaloScheduleCache {
   /// Drops every cached schedule, forcing a rebuild on the next fill_boundary. Used by tests to
   /// compare the cached path against a fresh rebuild; not needed in production (regrid drops the
   /// whole cache by reassigning the MultiFab).
-  void clear() { entries_.clear(); }
+  void clear() {
+    entries_.clear();
+    exchange_pool_.clear();
+  }
 
   /// Number of cached schedules (test/instrumentation hook).
   std::size_t size() const { return entries_.size(); }
+  std::size_t exchange_pool_size() const { return exchange_pool_.size(); }
+
+  /// Borrow persistent communication storage for one schedule/component width. Multiple in-flight
+  /// exchanges receive distinct leases; blocking repeated fills reuse capacities without allocating.
+  std::shared_ptr<HaloExchangeStorage> acquire_exchange(
+      const std::shared_ptr<const HaloSchedule>& schedule, int ncomp);
 
  private:
   std::vector<std::shared_ptr<HaloSchedule>> entries_;
+  std::vector<std::shared_ptr<HaloExchangeStorage>> exchange_pool_;
 };
 
 namespace detail {

@@ -106,7 +106,8 @@ def _apply_in_arg(sub: Any, value: Any) -> str:
     return "*%s" % tok
 
 
-def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
+def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any,
+                        *, dt_symbol: str) -> list:
     """Emit C++ writing the affine combination @p result into the field @p target (a C++ MultiFab token,
     e.g. ``out``). Mirrors the linear_combine commit: zero the PERSISTENT accumulator @p acc (a scratch
     shared_ptr allocated once at install time -- no per-call/per-iteration allocation), accumulate the
@@ -126,15 +127,15 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
         if tok == target:
             c_target = coeff
         else:
-            lines.append("ctx.axpy(*%s, %s, %s, dt, %s);"
-                         % (acc, _coeff_cpp(coeff), ref, _coeff_metadata_cpp(coeff)))
+            lines.append("pops::PureFieldAlgebra::axpy(*%s, %s, %s);"
+                         % (acc, _coeff_cpp(coeff, dt_symbol=dt_symbol), ref))
     lines.append(
-        "ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s, dt, %s, {{0, 1, 1}});"
-        % (target, _coeff_cpp(c_target), target, acc, _coeff_metadata_cpp(c_target)))
+        "pops::PureFieldAlgebra::lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s);"
+        % (target, _coeff_cpp(c_target, dt_symbol=dt_symbol), target, acc))
     return lines
 
 
-def _coeff_cpp(powers: Any) -> str:
+def _coeff_cpp(powers: Any, *, dt_symbol: str = "dt") -> str:
     """Render an exact dt-polynomial coefficient as a C++ ``pops::Real`` expression.
 
     Literal kind is preserved until this target-lowering boundary: integer, rational, decimal and
@@ -146,7 +147,7 @@ def _coeff_cpp(powers: Any) -> str:
         return "static_cast<pops::Real>(0)"
     terms = []
     for power, coeff in sorted(powers.items()):
-        factors = ["dt"] * int(power)
+        factors = [dt_symbol] * int(power)
         if coeff != 1 or not factors:
             factors = [scalar_cpp(coeff)] + factors
         terms.append(" * ".join(factors))
@@ -378,7 +379,7 @@ _PROGRAM_CPP_TEMPLATE = '''\
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
 #include <pops/mesh/execution/for_each.hpp>     // for_each_cell (Phase-4b per-cell kernels)
 #include <pops/numerics/linalg/dense_eig.hpp>   // pops::detail::mat_inverse (local dense solve)
-#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // pops::cg_solve / bicgstab_solve / richardson_solve / gmres_solve (matrix-free)
+#include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // prepared affine Krylov route
 #include <pops/core/foundation/types.hpp>
 #include <chrono>                              // std::chrono::steady_clock (per-node profiling pair, ADC-459)
 #include <cmath>                               // std::sqrt / std::fabs / std::pow in lowered formulas
@@ -396,9 +397,11 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 {program_params}
 {field_boundaries}
 extern "C" void pops_install_program(void* sys) {{
-  pops::runtime::program::ProgramContext ctx(sys);
+  auto ctx_owner = std::make_shared<pops::runtime::program::ProgramContext>(sys);
+  pops::runtime::program::ProgramContext& ctx = *ctx_owner;
 {prelude}
   ctx.install([=](double dt) {{
+    pops::runtime::program::ProgramContext& ctx = *ctx_owner;
     (void)dt;
     ctx.begin_step(dt);
 {body}

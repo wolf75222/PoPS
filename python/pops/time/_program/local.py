@@ -17,6 +17,7 @@ from pops.time._program.value_validation import (
 from pops.time.operator_resolution import resolve_operator_handle
 from pops.time.references import block_name
 from pops.time.value_metadata import positive_scalar_literal
+from pops._ir.literals import scalar_literal
 from pops.time.values import (
     ProgramValue, _Affine, _Coeff, _Operator, _exact_number, _residual_wants_guess,
     _resolve_handle)
@@ -210,10 +211,18 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "method": "bicgstab",  # exact flat-topology branch; not a public hierarchy knob
             "preconditioner": "identity",
             "tol": tolerance,
+            "abs_tol": scalar_literal(0),
             "max_iter": int(max_iterations),
             "has_guess": initial_guess is not None,
             "ncomp": 1,
             "restart": None,
+            "operator_properties": {"symmetric": False, "positive_definite": False},
+            "krylov_footprint": {
+                "components": 1,
+                "input_ghosts": 1,
+                "restart": 0,
+                "preconditioned": False,
+            },
             "scope": "hierarchy",
             "hierarchy_solver": "composite_tensor_fac",
             "hierarchy_solver_identity": deepcopy(identity_data),

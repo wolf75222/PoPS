@@ -1494,7 +1494,7 @@ class AmrRuntime {
       if (boundary_stage_states_)
         throw std::runtime_error("AmrRuntime boundary stage-state registry is already active");
       boundary_stage_states_.emplace(
-          BoundaryStageStateView{point, {{blocks_[b].state_identity, &U}}});
+          BoundaryStageStateView{point, nullptr, static_cast<int>(b), &U});
       stage_reset.slot = &boundary_stage_states_;
     }
     fill_level_state_cf_ghosts(b, k, U);
@@ -1592,11 +1592,8 @@ class AmrRuntime {
                   "AmrRuntime boundary stage-state registry was used at a different point");
             for (const auto& [identity, owner] : *states) {
               MultiFab* storage = nullptr;
-              if (boundary_stage_states_) {
-                const auto staged = boundary_stage_states_->states.find(identity);
-                if (staged != boundary_stage_states_->states.end())
-                  storage = staged->second;
-              }
+              if (boundary_stage_states_)
+                storage = boundary_stage_states_->state(owner);
               if (storage == nullptr)
                 storage = owner == current
                               ? &state
@@ -1664,17 +1661,14 @@ class AmrRuntime {
     if (routed) {
       if (boundary_stage_states_)
         throw std::runtime_error("AmrRuntime boundary stage-state registry is already active");
-      std::map<std::string, MultiFab*> staged;
       for (std::size_t block = 0; block < blocks_.size(); ++block) {
         const auto& identity = blocks_[block].state_identity;
         if (identity.empty())
           throw std::runtime_error(
               "AmrRuntime materialized block has no exact qualified state identity");
-        if (states[block] != nullptr && !staged.emplace(identity, states[block]).second)
-          throw std::runtime_error(
-              "AmrRuntime boundary stage-state registry has a duplicate qualified identity");
       }
-      boundary_stage_states_.emplace(BoundaryStageStateView{point, std::move(staged)});
+      boundary_stage_states_.emplace(
+          BoundaryStageStateView{point, &states, -1, nullptr});
       stage_reset.slot = &boundary_stage_states_;
     }
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
@@ -2763,17 +2757,20 @@ class AmrRuntime {
                                                        0.0,
                                                        component_physical_time_};
     if (boundary_stage_states_)
-      throw std::runtime_error("AMR Tagger ghost production overlaps another boundary evaluation");
-    std::map<std::string, MultiFab*> staged;
+      throw std::runtime_error(
+          "AMR Tagger ghost production overlaps another boundary evaluation");
+    std::map<std::string, std::size_t> qualified_routes;
+    std::vector<MultiFab*> staged(blocks_.size(), nullptr);
     for (std::size_t block = 0; block < blocks_.size(); ++block) {
       if (blocks_[block].state_identity.empty() ||
-          !staged
-               .emplace(blocks_[block].state_identity,
-                        &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U)
-               .second)
-        throw std::runtime_error("AMR Tagger requires unique qualified state storage routes");
+          !qualified_routes.emplace(blocks_[block].state_identity, block).second)
+        throw std::runtime_error(
+            "AMR Tagger requires unique qualified state storage routes");
+      staged[block] =
+          &(*blocks_[block].levels)[static_cast<std::size_t>(level)].U;
     }
-    boundary_stage_states_.emplace(BoundaryStageStateView{point, std::move(staged)});
+    boundary_stage_states_.emplace(
+        BoundaryStageStateView{point, &staged, -1, nullptr});
     struct StageStateReset {
       std::optional<BoundaryStageStateView>* slot;
       ~StageStateReset() { slot->reset(); }
@@ -4257,7 +4254,17 @@ class AmrRuntime {
   std::vector<AmrRuntimeBlock> blocks_;
   struct BoundaryStageStateView {
     runtime::multiblock::BoundaryEvaluationPoint point;
-    std::map<std::string, MultiFab*> states;
+    const std::vector<MultiFab*>* states = nullptr;
+    int single_block = -1;
+    MultiFab* single_state = nullptr;
+
+    MultiFab* state(std::size_t block) const {
+      if (states != nullptr)
+        return block < states->size() ? (*states)[block] : nullptr;
+      return single_block >= 0 && block == static_cast<std::size_t>(single_block)
+                 ? single_state
+                 : nullptr;
+    }
   };
   std::optional<BoundaryStageStateView> boundary_stage_states_;
   runtime::multiblock::InterfaceFluxScheduler interface_scheduler_;

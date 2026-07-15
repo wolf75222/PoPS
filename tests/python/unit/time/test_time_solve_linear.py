@@ -4,7 +4,7 @@
 `emit_cpp_program` now lowers a DYNAMIC matrix-free linear solve: a ``matrix_free_operator`` whose
 apply ``out <- A(in)`` is an IR sub-block (``P.set_apply``, built from ``P.laplacian`` + the affine
 algebra) lowered to a C++ ``pops::ApplyFn`` lambda, and ``P.solve(LinearProblem(...), solver=...)``
-lowered to the runtime context's generic ``solve_linear_matfree`` seam. The iteration is DYNAMIC and
+lowered to the runtime context's typed ``solve_prepared_linear`` seam. The iteration is DYNAMIC and
 lives C++-side, inside the loop -- the IR carries
 only the apply, the rhs, the method / tolerance / iteration budget. The persistent scratch (the
 Laplacian output, the solution field) is allocated ONCE at install time (a ``std::shared_ptr``
@@ -12,7 +12,7 @@ captured into the step closure), reused across every step and every Krylov itera
 
 (A) Codegen (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)`` solved by
     cg / bicgstab / richardson lowers to the apply lambda + ``ctx.laplacian`` +
-    ``ctx.solve_linear_matfree``; the spec validation errors fire (max_iter absent /
+    ``ctx.solve_prepared_linear``; the spec validation errors fire (max_iter absent /
     <= 0 -> ValueError "dynamic solver loops require max_iter"; tol <= 0 -> error; unknown method ->
     error; operator not a matrix_free_operator -> error).
 
@@ -29,7 +29,7 @@ from pops.codegen.program_codegen import emit_cpp_program
 from pops.codegen import _compile_drivers as compile_drivers
 from typed_program_support import typed_state
 
-from pops.linalg import LinearProblem
+from pops.linalg import LinearOperatorProperties, LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.time import FailRun, RejectAttempt
 from pops.numerics.riemann import Rusanov
@@ -69,7 +69,7 @@ def _precond(scheme):
 
 
 def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200, alpha=_ALPHA,
-                   preconditioner=None, action=None):
+                   preconditioner=None, action=None, operator_uses_dt=False):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian + the affine algebra; Program.solve
@@ -82,7 +82,8 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     def apply(P, out, x):
         lap = P.scalar_field("lap")
         P.laplacian(lap, x)
-        return x - alpha * lap  # out = in - alpha*Lap(in)
+        coefficient = P.dt if operator_uses_dt else alpha
+        return x - coefficient * lap  # out = in - coefficient*Lap(in)
 
     P.set_apply(A, apply)
     endpoint = typed_state(P, "blk", state_name="U").next
@@ -90,7 +91,11 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
     solver = _krylov(
         method, max_iter=max_iter, rel_tol=tol, preconditioner=preconditioner)
     phi = P.solve(
-        LinearProblem(A, rhs, at=endpoint.point), solver=solver,
+        LinearProblem(
+            A, rhs, at=endpoint.point,
+            properties=(LinearOperatorProperties.symmetric_positive_definite()
+                        if method == "cg" else LinearOperatorProperties.general())),
+        solver=solver,
     ).consume(action=action or FailRun())
     P.commit(endpoint, phi)
     return P
@@ -99,7 +104,8 @@ def _solve_program(t, *, name="solve_lin", method="cg", tol=1e-10, max_iter=200,
 # ---- (A) codegen: pure Python, always runs ----
 def test_apply_lambda_and_cg_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="cg"))
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
+    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_prepared_linear",
+                 "pops::PreparedAffineLinearProblem", "pops::KrylovWorkspace",
                  "std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field"):
         assert frag in src, "the generated cg solve must contain %r\n%s" % (frag, src)
 
@@ -113,19 +119,19 @@ def test_reject_attempt_solve_codegen_throws_step_attempt_signal(t):
 
 def test_bicgstab_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="bicgstab"))
-    assert "ctx.solve_linear_matfree" in src, src
-    assert "pops::ApplyFn{}" in src, "bicgstab uses the identity (empty) preconditioner\n%s" % src
+    assert "ctx.solve_prepared_linear" in src, src
+    assert "PreparedLinearPreconditioner::identity()" in src, src
 
 
 def test_richardson_codegen(t):
     src = emit_cpp_program(_solve_program(t, method="richardson"))
-    assert "ctx.solve_linear_matfree" in src, src
+    assert "ctx.solve_prepared_linear" in src, src
 
 
 # ---- (A') GeometricMG preconditioner (ADC-516): the complete non-identity route ----
 def _solve_call(src):
     """The single generic context solve line of @p src."""
-    return [ln for ln in src.splitlines() if "ctx.solve_linear_matfree(" in ln][0]
+    return [ln for ln in src.splitlines() if "ctx.solve_prepared_linear(" in ln][0]
 
 
 def test_gmres_gmg_precond_codegen(t):
@@ -137,10 +143,9 @@ def test_gmres_gmg_precond_codegen(t):
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, (
         "the MG V-cycle preconditioner state must be emitted\n%s" % src)
     assert "->apply(ctx," in src, "the MG V-cycle apply must be emitted\n%s" % src
+    assert "->prepare(ctx," in src, "MG must be built before the Krylov loop\n%s" % src
     assert "pops::ApplyFn precond_mg" in src, "a named real precond ApplyFn must be emitted\n%s" % src
-    call = _solve_call(src)
-    assert "precond_mg" in call, "gmres_solve must take the real precond, got: %s" % call
-    assert "pops::ApplyFn{}" not in call, "gmres+gmg must NOT pass the empty ApplyFn: %s" % call
+    assert "pops::PreparedLinearPreconditioner(precond_mg" in src, src
 
 
 def test_bicgstab_gmg_precond_codegen(t):
@@ -148,8 +153,7 @@ def test_bicgstab_gmg_precond_codegen(t):
                          preconditioner=_precond("geometric_mg")))
     assert "pops::runtime::program::GeometricMgPreconditioner" in src, src
     assert "->apply(ctx," in src, src
-    call = _solve_call(src)
-    assert "precond_mg" in call and "pops::ApplyFn{}" not in call, call
+    assert "pops::PreparedLinearPreconditioner(precond_mg" in src, src
 
 
 def test_identity_precond_byte_identical(t):
@@ -159,7 +163,7 @@ def test_identity_precond_byte_identical(t):
     src_identity = emit_cpp_program(_solve_program(t, method="gmres",
                                   preconditioner=_precond("identity")))
     assert src_default == src_identity, "explicit Identity() must match the None default byte-for-byte"
-    assert "pops::ApplyFn{}" in _solve_call(src_default), "identity gmres keeps the empty ApplyFn"
+    assert "PreparedLinearPreconditioner::identity()" in src_default
     assert "geometric_mg_precond_apply" not in src_default, "identity emits no MG apply"
 
 
@@ -211,6 +215,18 @@ def test_solve_validates(t):
     P = _solve_program(t)
     assert P.validate() is True, "the typed linear-solve Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
+
+
+def test_prepared_codegen_has_frozen_snapshot_and_no_context_algebra_in_apply(t):
+    src = _solve_program(t, method="cg", operator_uses_dt=True).emit_cpp_program()
+    apply_body = src.split("pops::ApplyFn apply_A", 1)[1].split("};", 1)[0]
+    assert "operator_evaluation_snapshot" in src
+    assert "probe_operator_evaluation" in src
+    assert "->prepare(*operator_snapshot" in src
+    assert "->bind(*prepared_problem" in src
+    assert "pops::PureFieldAlgebra" in apply_body
+    assert "ctx.axpy" not in apply_body and "ctx.lincomb" not in apply_body
+    assert "(*operator_dt" in apply_body
 
 
 def test_max_iter_required(t):

@@ -198,8 +198,10 @@ inline std::shared_ptr<const HaloSchedule> get_halo_schedule(const MultiFab& mf,
 /// Holds a shared handle to the cached schedule (ADC-260) so fill_boundary_end unpacks from the SAME
 /// recv job list begin posted; the handle keeps the plan alive even if a later fill_boundary on the
 /// same MultiFab appends another schedule.
-struct HaloExchange {
+struct HaloExchangeStorage {
   std::shared_ptr<const HaloSchedule> sched;  // replayed plan (null if mf has no ghost)
+  int ncomp = 0;
+  bool in_use = false;
 #ifdef POPS_HAS_MPI
   // Buffers in PINNED HOST memory (comm_allocator = Kokkos::SharedHostPinnedSpace under Kokkos,
   // std::allocator otherwise), NOT managed. The pack/unpack in for_each (device under Kokkos)
@@ -210,8 +212,49 @@ struct HaloExchange {
   // 0, cuIpcOpenMemHandle of the peer's buffer impossible). See core/allocator.hpp (comm_allocator).
   std::vector<std::vector<Real, comm_allocator<Real>>> sbuf, rbuf;  // alive until end
   std::vector<MPI_Request> reqs;
-  int nc = 0;
 #endif
+};
+
+inline std::shared_ptr<HaloExchangeStorage> HaloScheduleCache::acquire_exchange(
+    const std::shared_ptr<const HaloSchedule>& schedule, int ncomp) {
+  for (const auto& candidate : exchange_pool_) {
+    if (!candidate->in_use && candidate->sched.get() == schedule.get() &&
+        candidate->ncomp == ncomp) {
+      candidate->in_use = true;
+      return candidate;
+    }
+  }
+  auto storage = std::make_shared<HaloExchangeStorage>();
+  storage->sched = schedule;
+  storage->ncomp = ncomp;
+  storage->in_use = true;
+  exchange_pool_.push_back(storage);
+  return storage;
+}
+
+struct HaloExchange {
+  std::shared_ptr<HaloExchangeStorage> storage;
+
+  HaloExchange() = default;
+  HaloExchange(const HaloExchange&) = delete;
+  HaloExchange& operator=(const HaloExchange&) = delete;
+  HaloExchange(HaloExchange&& other) noexcept : storage(std::move(other.storage)) {}
+  HaloExchange& operator=(HaloExchange&& other) noexcept {
+    if (this != &other) {
+      release();
+      storage = std::move(other.storage);
+    }
+    return *this;
+  }
+  ~HaloExchange() { release(); }
+
+ private:
+  void release() noexcept {
+    if (storage) {
+      storage->in_use = false;
+      storage.reset();
+    }
+  }
 };
 
 /// Phase 1 (non-blocking): does the LOCAL halo copies and posts the Isend/Irecv of the distant halos.
@@ -225,7 +268,8 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
   const int nc = mf.ncomp();
   // memoized schedule (BoxHash + enumeration) for this (layout, Periodicity, domain).
   const std::shared_ptr<const HaloSchedule> sched = detail::get_halo_schedule(mf, domain, per);
-  h.sched = sched;
+  h.storage = mf.halo_cache().acquire_exchange(sched, nc);
+  HaloExchangeStorage& storage = *h.storage;
 
   // --- local copies (local dst AND local src), replayed from the cached plan ---
   for (const HaloJob& j : sched->local) {
@@ -238,16 +282,20 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
   if (n_ranks() <= 1)
     return h;
   const int np = n_ranks();
-  h.nc = nc;
-
   auto buf_size = [&](const std::vector<HaloJob>& js) {
     std::int64_t n = 0;
     for (const auto& j : js)
       n += j.region.num_cells() * nc;
     return n;
   };
-  h.sbuf.assign(np, {});
-  h.rbuf.assign(np, {});
+  storage.sbuf.resize(static_cast<std::size_t>(np));
+  storage.rbuf.resize(static_cast<std::size_t>(np));
+  storage.reqs.clear();
+  storage.reqs.reserve(static_cast<std::size_t>(2 * np));
+  for (int rank = 0; rank < np; ++rank) {
+    storage.sbuf[static_cast<std::size_t>(rank)].clear();
+    storage.rbuf[static_cast<std::size_t>(rank)].clear();
+  }
   // device PACK (for_each, parallel under Kokkos) into the pinned host buffers. Per-job layout:
   // c-major then (jj, ii), IDENTICAL to the old k++ order -> buffer bit-identical to the host path
   // (the CPU MPI ctests stay bit-identical at np=1/2/4). The peer rank enumerates in the same order,
@@ -256,8 +304,8 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
     const std::vector<HaloJob>& send_r = sched->send[r];
     if (send_r.empty())
       continue;
-    h.sbuf[r].resize(buf_size(send_r));
-    Real* sb = h.sbuf[r].data();
+    storage.sbuf[static_cast<std::size_t>(r)].resize(buf_size(send_r));
+    Real* sb = storage.sbuf[static_cast<std::size_t>(r)].data();
     std::int64_t base = 0;
     for (const auto& jb : send_r) {
       const ConstArray4 s = mf.fab(mf.local_index_of(jb.src)).const_array();
@@ -271,22 +319,26 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
   }
   for (int r = 0; r < np; ++r)  // allocate the receive buffers
     if (!sched->recv[r].empty())
-      h.rbuf[r].resize(buf_size(sched->recv[r]));
+      storage.rbuf[static_cast<std::size_t>(r)].resize(buf_size(sched->recv[r]));
   device_fence();  // the pack kernels (and the local copies) must finish before MPI reads sbuf
   for (
       int r = 0; r < np;
       ++r) {  // non-blocking posting; MPI receives PINNED HOST pointers (seen HOST, no GPUDirect/CUDA IPC)
-    if (!h.sbuf[r].empty()) {
-      h.reqs.emplace_back();
-      detail::require_mpi_success(MPI_Isend(h.sbuf[r].data(), static_cast<int>(h.sbuf[r].size()),
-                                            MPI_DOUBLE, r, 0, MPI_COMM_WORLD, &h.reqs.back()),
-                                  "MPI_Isend(fill_boundary)");
+    if (!storage.sbuf[static_cast<std::size_t>(r)].empty()) {
+      storage.reqs.emplace_back();
+      detail::require_mpi_success(
+          MPI_Isend(storage.sbuf[static_cast<std::size_t>(r)].data(),
+                    static_cast<int>(storage.sbuf[static_cast<std::size_t>(r)].size()), MPI_DOUBLE,
+                    r, 0, MPI_COMM_WORLD, &storage.reqs.back()),
+          "MPI_Isend(fill_boundary)");
     }
-    if (!h.rbuf[r].empty()) {
-      h.reqs.emplace_back();
-      detail::require_mpi_success(MPI_Irecv(h.rbuf[r].data(), static_cast<int>(h.rbuf[r].size()),
-                                            MPI_DOUBLE, r, 0, MPI_COMM_WORLD, &h.reqs.back()),
-                                  "MPI_Irecv(fill_boundary)");
+    if (!storage.rbuf[static_cast<std::size_t>(r)].empty()) {
+      storage.reqs.emplace_back();
+      detail::require_mpi_success(
+          MPI_Irecv(storage.rbuf[static_cast<std::size_t>(r)].data(),
+                    static_cast<int>(storage.rbuf[static_cast<std::size_t>(r)].size()), MPI_DOUBLE,
+                    r, 0, MPI_COMM_WORLD, &storage.reqs.back()),
+          "MPI_Irecv(fill_boundary)");
     }
   }
 #endif
@@ -298,33 +350,33 @@ inline HaloExchange fill_boundary_begin(MultiFab& mf, const Box2D& domain, Perio
 /// in serial (no request).
 inline void fill_boundary_end(MultiFab& mf, HaloExchange& h) {
 #ifdef POPS_HAS_MPI
-  if (h.reqs.empty())
+  if (!h.storage || h.storage->reqs.empty())
     return;
+  HaloExchangeStorage& storage = *h.storage;
   detail::require_mpi_success(
-      MPI_Waitall(static_cast<int>(h.reqs.size()), h.reqs.data(), MPI_STATUSES_IGNORE),
+      MPI_Waitall(static_cast<int>(storage.reqs.size()), storage.reqs.data(), MPI_STATUSES_IGNORE),
       "MPI_Waitall(fill_boundary)");
   // device UNPACK (for_each) from the received PINNED HOST buffers. Waitall guarantees the transfer is
   // complete; the kernel launched next reads the pinned host (device-accessible, coherent). Replayed
-  // from the SAME cached recv list begin used (h.sched), so base offsets match the sender's layout.
-  const HaloSchedule& sched = *h.sched;
+  // from the SAME cached recv list begin leased, so base offsets match the sender's layout.
+  const HaloSchedule& sched = *storage.sched;
   for (std::size_t r = 0; r < sched.recv.size(); ++r) {
-    if (h.rbuf[r].empty())
+    if (storage.rbuf[r].empty())
       continue;
-    const Real* rb = h.rbuf[r].data();
+    const Real* rb = storage.rbuf[r].data();
     std::int64_t base = 0;
     for (const auto& jb : sched.recv[r]) {
       Array4 d = mf.fab(mf.local_index_of(jb.dst)).array();
       const int lo0 = jb.region.lo[0], lo1 = jb.region.lo[1], rnx = jb.region.nx();
       const std::int64_t rsz = static_cast<std::int64_t>(rnx) * jb.region.ny();
-      const int ncl = h.nc;
+      const int ncl = storage.ncomp;
       const std::int64_t b0 = base;
       for_each_cell(jb.region, detail::UnpackKernel{rb, d, b0, rsz, lo0, lo1, rnx, ncl});
       base += rsz * ncl;
     }
   }
-  // The unpack kernels above are ASYNC (device) and read h.rbuf; comm_allocator (pinned host) frees
-  // IMMEDIATELY on destruction of h (no deferred free like the ManagedArena). So we drain the device
-  // BEFORE the pinned buffers are freed -> no use-after-free.
+  // The unpack kernels above are ASYNC and read persistent pinned buffers. Drain the device before
+  // releasing the lease: a later fill may immediately reuse and overwrite the same capacity.
   device_fence();
 #else
   (void)mf;

@@ -866,11 +866,40 @@ sans ce provider est refusé. Tolérance, budget, stratégie et préconditionneu
 jamais au résidu. Il n'existe aucune route publique `Schur` ou `CondensedSchur`, ni dans
 `pops.solvers`, ni dans `pops.lib.time`.
 
+`LinearProblem` porte aussi un certificat mathématique typé, jamais inféré depuis le nom d'un
+stencil ou d'un préconditionneur. La valeur par défaut `LinearOperatorProperties.general()` convient
+aux méthodes générales. `CG` est refusé sans
+`LinearOperatorProperties.symmetric_positive_definite()` ; aucune autre méthode n'est substituée.
+Les solveurs Krylov portent un arrêt mixte exact
+`max(rel_tol * reference_residual_norm, abs_tol)` et leur footprint persistant est dérivé de la
+méthode, du nombre de composantes, de la largeur de halo, du restart et du préconditionneur.
+
+À la frontière C++, un solve global ne reçoit jamais un callback brut plus un entier de méthode. Le
+code généré construit une fois `PreparedAffineLinearProblem`, `PreparedLinearPreconditioner` et
+`KrylovWorkspace`, puis prépare chaque évaluation avec un snapshot exact : identité canonique
+256 bits du Program/opérateur, révision, macro-pas, fraction d'étape, bits IEEE de `dt` et du temps,
+empreintes 256 bits de la topologie native (boxes, distribution, halo, métrique et BC) et des
+ressources figées. Le probe ne relit jamais l'objet snapshot produit par le code généré : il recalcule
+l'identité depuis l'unique `ProgramContext` partagé par le step, l'ApplyFn et le préconditionneur. La
+préparation copie les coefficients variables, matérialise les plans halo/buffers MPI et prépare le
+préconditionneur avant la première itération, puis calcule exactement `c = A(0)`. Les itérations appliquent
+uniquement `A_lin(v) = A(v) - c` et résolvent `A_lin(u) = b - c`. Toute mutation du snapshot après
+préparation est refusée.
+
+Les récurrences utilisent une algèbre de champs pure qui ne touche ni le ledger reflux AMR ni les
+effets temporels de `ProgramContext`. Aucune allocation de champ, de plan halo, de buffer MPI ou de
+scratch de field solve et aucun calcul cellule par cellule n'ont lieu en Python ou dans la boucle
+Krylov ; les capacités sont persistantes et les kernels de champ et réductions collectives restent
+Kokkos/C++. Un résidu préconditionné ou l'estimation de Hessenberg de GMRES peut seulement demander
+une confirmation : seul le résidu scientifique vrai `b - A(u)` peut publier `kSolved`. Le résidu de
+référence est `||b - A(0)||`; un warm start déjà convergé retourne zéro itération.
+
 Un outcome fallible doit être consommé par une action adaptée à sa phase (`RejectAttempt`, `FailRun`,
 etc.) avant que sa valeur puisse contribuer à un commit ou un effet.
 
 À la frontière native, tous les solveurs itératifs retournent le même `SolveReport` : nombre
-d'itérations, résidu relatif et une unique paire `SolveStatus` / `SolveAction`. Il n'existe pas de
+d'itérations, norme de référence, norme finale vraie, rapport déclaré, raison et une unique paire
+`SolveStatus` / `SolveAction`. Il n'existe pas de
 booléen `converged` parallèle. Une valeur n'est résolue que pour `(kSolved, kNone)` ; toute paire
 incohérente est traitée comme un échec et un appel de construction d'échec sans statut/action d'échec
 est refusé. Le runtime ne publie jamais l'itéré ou le champ muté d'un report en échec et la transaction

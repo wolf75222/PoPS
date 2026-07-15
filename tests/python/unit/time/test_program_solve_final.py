@@ -8,8 +8,8 @@ import pytest
 
 import pops
 from pops._ir.literals import scalar_data
-from pops.linalg import LinearProblem
-from pops.solvers import DenseLU, GMRES
+from pops.linalg import LinearOperatorProperties, LinearProblem
+from pops.solvers import CG, DenseLU, GMRES
 from pops.solvers import preconditioners
 from pops.time import FailRun, LocalLinear, Program
 
@@ -64,15 +64,33 @@ def test_typed_linear_problem_lowers_to_the_real_native_krylov_route():
     program.commit(temporal.next, solved)
 
     source = emit_cpp_program(program)
-    assert "ctx.solve_linear_matfree" in source
+    assert "ctx.solve_prepared_linear" in source
+    assert "pops::PreparedAffineLinearProblem" in source
 
 
 def test_problem_is_only_algebra_and_solver_rejects_option_bags():
     assert tuple(inspect.signature(LinearProblem).parameters) == (
-        "operator", "rhs", "initial_guess", "at", "scope")
+        "operator", "rhs", "initial_guess", "at", "scope", "properties")
+    _program, operator, rhs = _matrix_free()
+    assert LinearProblem(operator, rhs).properties == LinearOperatorProperties.general()
     assert "method" not in inspect.signature(LinearProblem).parameters
     with pytest.raises(TypeError):
         GMRES(max_iter=4, undocumented=True)
+
+
+def test_cg_requires_an_explicit_spd_certificate():
+    program, operator, rhs = _matrix_free()
+    with pytest.raises(ValueError, match="CG requires"):
+        program.solve(LinearProblem(operator, rhs), solver=CG(max_iter=4))
+    outcome = program.solve(
+        LinearProblem(
+            operator, rhs,
+            properties=LinearOperatorProperties.symmetric_positive_definite()),
+        solver=CG(max_iter=4))
+    assert outcome.consume(action=FailRun()).op == "solve_outcome_component"
+
+    with pytest.raises(ValueError, match="positive_definite"):
+        LinearOperatorProperties(symmetric=False, positive_definite=True)
 
 
 def test_dense_lu_is_executable_only_for_local_linear_problem():

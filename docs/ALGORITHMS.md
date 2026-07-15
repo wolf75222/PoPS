@@ -1207,7 +1207,10 @@ The method is authored as ordinary Program IR: tensor-coefficient assembly, metr
 side, one typed scalar solve, reconstruction, optional theta extrapolation and optional energy
 update. `LinearProblem` carries the algebra and hierarchy scope; `CompositeTensorFAC` owns the
 complete flat/refined solver identity, tolerance and iteration budget. On a flat hierarchy the
-generated C++ executes the authored apply through `ctx.solve_linear_matfree`. On a refined hierarchy,
+generated C++ freezes the authored apply in a `PreparedAffineLinearProblem`, binds its persistent
+`KrylovWorkspace`, then executes it through `ctx.solve_prepared_linear`. Preparation authenticates the
+exact evaluation snapshot and separates `A(0)` from `A_lin`; the flat branch therefore supports affine
+boundary/source terms without applying them to search directions. On a refined hierarchy,
 every level first assembles and gathers its coefficients, right-hand side and initial guess; exactly
 one `ctx.solve_composite_tensor_fac` then solves the complete hierarchy; only a successful complete
 solution is published to every level. The accepted synchronization subsequently applies reflux and

@@ -125,6 +125,19 @@ class MultiFab {
     return *halo_cache_;
   }
 
+  /// Share the immutable-layout halo plan and its reusable communication-buffer pool. Prepared
+  /// solver work vectors have the same box/distribution/ghost layout and execute exchanges
+  /// sequentially, so one warmed cache removes lazy schedule and MPI-buffer allocation from the
+  /// iteration without introducing a global registry.
+  void share_halo_cache_from(const MultiFab& prototype) const {
+    if (ba_.boxes() != prototype.ba_.boxes() || dm_.ranks() != prototype.dm_.ranks() ||
+        ngrow_ != prototype.ngrow_)
+      throw_validation_error("pops/mesh/storage/multifab.hpp: share_halo_cache_from",
+                             "identical box, distribution, and ghost layout", "layout mismatch");
+    prototype.halo_cache();
+    halo_cache_ = prototype.halo_cache_;
+  }
+
   /// Internal (ADC-607): memoized redistribution schedule used by parallel_copy when THIS MultiFab
   /// is the DESTINATION. Lazily created on first use. Unlike halo_cache_ the schedule depends on the
   /// SRC layout too, so each entry is keyed on a src-layout fingerprint (src BoxArray +
