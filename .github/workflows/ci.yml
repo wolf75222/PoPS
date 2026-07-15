@@ -1143,7 +1143,10 @@ jobs:
     # Fixed distro release: the binary h5py/mpi4py packages and OpenMPI/HDF5
     # runtime come from one ABI-compatible Ubuntu package set.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The native build, the 4-minute CTest watchdog, and the 18-minute Python
+    # MPI contract fence run sequentially.  Keep the job envelope larger than
+    # those fail-fast fences so GitHub never kills a healthy final test step.
+    timeout-minutes: 45
     needs: [set-mode, changes]
     # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
     if: needs.set-mode.outputs.mpi_required == 'true'
