@@ -36,7 +36,7 @@ from pops.numerics.spatial import FiniteVolume
 from typed_program_support import typed_state
 
 from pops.numerics.terms import DefaultSource, Flux
-from pops.math import ddt, div
+from pops.math import ddt, div, sqrt
 from pops.time import FixedDt
 import sys
 from tests.python.support.requirements import (
@@ -344,7 +344,7 @@ def _const_source_model(name, c):
 
 
 def _compile_final_artifact(
-    case, model, state, flux, rate, program, *, block, cells, positivity_floor=None,
+    case, model, state, flux, rate, program, *, block, cells,
 ):
     """Compile one program through the final public Case lifecycle.
 
@@ -359,7 +359,6 @@ def _compile_final_artifact(
             variables=variables.Conservative(state),
             reconstruction=reconstruction.FirstOrder(),
             riemann=riemann.Rusanov(),
-            positivity_floor=positivity_floor,
         ),
     )
     case.numerics(numerics, block=block)
@@ -484,10 +483,13 @@ def _run_section_b2(t):
     n = 8
     dt = 0.01
     model, state, flux, rate = _const_source_model("fp_prog", 0.0)
+    floor = 1.0e-12
+    rho = state[0]
+    model.projection(((rho + floor + sqrt((rho - floor) * (rho - floor))) / 2.0,))
     case = pops.Case("fill-project-runtime-case")
     block = case.block("blk", model)
     program = _fill_project_program(t, block[state], dt)
-    # A positivity floor makes the block carry a real projection closure (else project is a no-op).
+    # The projection is a physical model capability, not a side-effect of the FV discretization.
     artifact = _compile_final_artifact(
         case,
         model,
@@ -497,7 +499,6 @@ def _run_section_b2(t):
         program,
         block=block,
         cells=n,
-        positivity_floor=1e-12,
     )
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
