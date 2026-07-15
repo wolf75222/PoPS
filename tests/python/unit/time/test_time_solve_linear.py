@@ -218,7 +218,7 @@ def test_solve_validates(t):
 
 
 def test_prepared_codegen_has_frozen_snapshot_and_no_context_algebra_in_apply(t):
-    src = _solve_program(t, method="cg", operator_uses_dt=True).emit_cpp_program()
+    src = emit_cpp_program(_solve_program(t, method="cg", operator_uses_dt=True))
     apply_body = src.split("pops::ApplyFn apply_A", 1)[1].split("};", 1)[0]
     assert "operator_evaluation_snapshot" in src
     assert "probe_operator_evaluation" in src
