@@ -286,7 +286,7 @@ def test_production_model_primitive_roundtrip_and_step():
     )
     component = artifact.blocks[0].model
     assert component.backend == "production"
-    assert component.prim_names == ["rho", "u", "v", "p"]
+    assert component.prim_names == ("rho", "u", "v", "p")
 
     simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
     bound = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
