@@ -18,6 +18,7 @@ from pops.lib.time import ForwardEuler
 from pops.math import ddt, div, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.reconstruction import limiters
 from pops.numerics.spatial import FiniteVolume
 from pops.params import ConstParam
 from pops.physics import Density, Energy, Model, Momentum, Pressure, Velocity
@@ -136,7 +137,7 @@ def compile_euler_artifact(
         FiniteVolume(
             flux=flux,
             variables=variables.Conservative(state),
-            reconstruction=reconstruction.Minmod(),
+            reconstruction=reconstruction.MUSCL(limiters.Minmod()),
             riemann=riemann.Rusanov(),
         ),
     )
