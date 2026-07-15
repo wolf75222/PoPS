@@ -25,34 +25,57 @@ per-stage FieldContext buffer is needed.
     re-using phi(U0) for stage 2 (the OLD frozen-aux behavior) gives a DIFFERENT (worse) result, so the
     compiled program is genuinely on the per-stage path, not the frozen one.
 
-Skips cleanly (exit 0) without the install_program binding / numpy / a compiler / a visible Kokkos --
-never fakes the engine.
+Skips cleanly when numpy or a native compiler/Kokkos prerequisite is genuinely unavailable. A stale
+installed extension or any compile/lowering/ABI failure remains a hard test failure.
 """
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.fields import (CellCenteredSecondOrder, ConstantNullspace, FieldDiscretization,
+                         FieldOutput, GradientOutput, MeanValueGauge)
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model as BoardModel
+from pops.solvers.elliptic import GeometricMG
 from typed_program_support import codegen_field_plans, solve_field, typed_state
 
 from pops.params import ConstParam
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import Flux
+from pops.numerics.terms import Flux as FinalFlux, SourceTerm
+from pops.time import FailRun, FixedDt
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    skip_process_test,
+)
+
+
+INCLUDE = repo_include()
+CXX = default_cxx()
 
 
 def _skip(msg):
-    print("skip test_time_solve_fields_from_state (%s)" % msg)
-    sys.exit(0)
+    skip_process_test("test_time_solve_fields_from_state: %s" % msg)
 
 
 try:
     import numpy as np
 
     import pops.runtime._engine_descriptors as engine
-    from pops.math import sqrt
+    from pops.math import ddt, div, laplacian, sqrt
     from pops.physics._facade import Model
     from pops import time as adctime
-except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
+except ImportError as exc:  # numpy or an installed PoPS module is genuinely absent
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
@@ -107,6 +130,74 @@ def default_source_model(name="sffs_default"):
     return m
 
 
+def _public_field_program_artifact(name="sffs_public"):
+    """Compile the field-coupled Heun program through Case-owned FieldHandle resolution."""
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    u, v = mx / rho, my / rho
+    pressure = 0.5 * rho
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (mx, mx * u + pressure, my * u),
+                     y_axis: (my, mx * v, my * v + pressure)},
+        waves={x_axis: (u, u, u), y_axis: (v, v, v)},
+    )
+    potential = model.field("potential")
+    gx, gy = model.aux("grad_x"), model.aux("grad_y")
+    field_operator = model.field_operator(
+        "electrostatic", unknown=potential,
+        equation=-laplacian(potential) == rho - 1.0,
+        outputs=(FieldOutput("potential", potential), GradientOutput("grad", potential)),
+    )
+    electric = model.source("electric", on=state, value=(0.0 * rho, -rho * gx, -rho * gy))
+    electric_operator = model.module.operator_handle("electric")
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + electric)
+    case = pops.Case("%s-case" % name)
+    block = case.block("plasma", model)
+    field = case.field(
+        field_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            nullspace=ConstantNullspace(), gauge=MeanValueGauge(0.0),
+        ),
+    )
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, FiniteVolume(
+        flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    case.numerics(numerics, block=block)
+    program = adctime.Program(name)
+    temporal = program.state(block[state])
+    dt = program.dt
+    fields0 = field(temporal.n, name="fields_0").consume(action=FailRun())
+    r0 = program.rhs(
+        state=temporal.n,
+        fields=fields0,
+        terms=[FinalFlux(), SourceTerm(electric_operator)],
+    )
+    stage = adctime.StagePoint("heun_predictor", {"main": adctime.TimePoint(program.clock, 1)})
+    stage_state = program.value("U1", temporal.n + dt * r0, at=stage)
+    fields1 = field(stage_state, name="fields_1").consume(action=FailRun())
+    r1 = program.rhs(
+        state=stage_state,
+        fields=fields1,
+        terms=[FinalFlux(), SourceTerm(electric_operator)],
+    )
+    program.commit(temporal.next, program.value(
+        "U_np1", temporal.n + 0.5 * dt * r0 + 0.5 * dt * r1, at=temporal.next.point))
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+    layout = Uniform(CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production(),
+                            compile_options={"include": INCLUDE, "cxx": CXX})
+    return pops.compile(resolved)
+
+
 # --- the 2-stage (Heun / RK2) field-coupled Program ---
 def heun_program(name="sffs_heun", model=None):
     """U1 = U0 + dt*R0 ; U_np1 = U0 + 0.5*dt*(R0 + R1) with R0 = rhs(U0; phi(U0)) and
@@ -134,8 +225,8 @@ codegen_model = named_source_model()
 src = _emit(heun_program(model=codegen_model), model=codegen_model)
 
 # Both stages lower to the per-stage solve; the bare current-state form is gone.
-chk(src.count("ctx.solve_fields_from_state(0, ") == 2,
-    "both field solves lower to ctx.solve_fields_from_state(0, <stage state>)")
+chk(src.count('ctx.solve_fields_from_state("potential", 0, ') == 2,
+    "both field solves lower to the qualified potential provider")
 chk("ctx.solve_fields();" not in src,
     "the bare current-state ctx.solve_fields() no longer appears (per-stage solve)")
 
@@ -143,7 +234,7 @@ chk("ctx.solve_fields();" not in src,
 # state var. They must be DISTINCT C++ variables (stage 2 solves from U1, not U0).
 import re  # noqa: E402  -- local to the codegen assertions
 
-solve_args = re.findall(r"ctx\.solve_fields_from_state\(0, (\w+)\);", src)
+solve_args = re.findall(r'ctx\.solve_fields_from_state\("potential", 0, (\w+)\);', src)
 chk(len(solve_args) == 2 and solve_args[0] != solve_args[1],
     "the two field solves read DISTINCT stage-state variables (%r)" % solve_args)
 
@@ -166,38 +257,44 @@ endpoint_fe = typed_state(P_fe, "plasma", state_name="U", model=fe_model).next
 P_fe.commit(endpoint_fe, P_fe.value(
     "U1", U + P_fe.dt * R, at=endpoint_fe.point))
 src_fe = _emit(P_fe, model=fe_model)
-chk(src_fe.count("ctx.solve_fields_from_state(0, ") == 1,
+chk(src_fe.count('ctx.solve_fields_from_state("potential", 0, ') == 1,
     "the single-stage solve_fields(U) on the current state still lowers (per-stage form)")
 
 
 # ============================ (B) field-coupled parity: skip without the toolchain ===========
+missing_native = missing_native_compile_requirement(INCLUDE, CXX)
+if missing_native:
+    if fails:
+        sys.exit(1)
+    _skip(missing_native)
+
 if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-    print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-    print("%s test_time_solve_fields_from_state (A only)" % ("FAIL" if fails else "PASS"))
-    sys.exit(1 if fails else 0)
+    raise AssertionError("the installed _pops lacks the required install_program binding")
 
 N = 16
 DT = 0.02
 
 
-def make_sim(model):
-    """A System with ONE field-coupled block (production backend) + shared Poisson, charged with a
-    non-uniform rho so a stage change shifts phi. Returns (sim, U0)."""
-    sim = System(n=N, L=1.0, periodic=True)
-    try:
-        compiled = model.compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        _skip("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+def _initial_state():
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
     mx = 0.4 * rho
     my = -0.2 * rho
-    U0 = np.stack([rho, mx, my])
+    return np.ascontiguousarray(np.stack([rho, mx, my]))
+
+
+def make_sim(model, *, component=None):
+    """A System with ONE field-coupled block (production backend) + shared Poisson, charged with a
+    non-uniform rho so a stage change shifts phi. Returns (sim, U0)."""
+    sim = System(n=N, L=1.0, periodic=True)
+    if component is None:
+        component = _public_field_program_artifact("sffs_reference_component").blocks[0].model
+    sim.add_equation("plasma", component,
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
+    sim.set_poisson("charge_density", "geometric_mg")
+    U0 = _initial_state()
     sim.set_state("plasma", U0)
     return sim, U0
 
@@ -220,17 +317,13 @@ def offline_rhs_frozen(ref, U, U_fields):
 
 
 print("== (B) field-coupled 2-stage parity (per-stage field solve) ==")
-try:
-    program_model = named_source_model("sffs_prog")
-    compiled = compile_drivers.compile_problem(
-        model=program_model, time=heun_program(model=program_model))
-except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-    _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
+compiled = _public_field_program_artifact()
 
-sim, U0 = make_sim(named_source_model("sffs_block"))
-sim.install_program(compiled.so_path)
-sim.step(DT)
-U_prog = np.array(sim.get_state("plasma"))
+U0 = _initial_state()
+simulation = pops.bind(compiled, initial_state={"plasma": U0})
+program_report = pops.run(simulation, t_end=DT, max_steps=1)
+U_prog = np.asarray(simulation.state_global("plasma"), dtype=np.float64)
+chk(program_report.accepted_steps == 1, "the public field-coupled Program accepted one step")
 
 # Offline replay: BOTH stages re-solve phi from their own state (the ADC-409 per-stage path).
 ref = make_sim(default_source_model("sffs_ref_block"))[0]

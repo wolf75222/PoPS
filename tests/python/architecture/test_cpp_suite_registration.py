@@ -92,12 +92,18 @@ def test_manifest_declares_cpp_suites():
 
 def test_every_cpp_suite_is_registered_in_cmake():
     registered = _registered_names()
-    missing = [name for name in _cpp_suite_names() if name not in registered]
+    manifest = set(_cpp_suite_names())
+    missing = sorted(manifest - registered)
+    unmanifested = sorted(registered - manifest)
     assert not missing, (
         "every [[cpp.suite]] in tests/test_manifest.toml must be registered in "
         "tests/CMakeLists.txt (STANDARD/MPI list or an explicit pops_add_gtest_suite call), "
         "else it never builds and never runs:\n  "
         + "\n  ".join("%s  (%s)" % (name, _source_of(name)) for name in missing))
+    assert not unmanifested, (
+        "every CMake-registered C++ test must have a [[cpp.suite]] row, else the "
+        "manifest-driven shards silently omit it:\n  " + "\n  ".join(unmanifested)
+    )
 
 
 def test_manifest_mpi_variants_match_cmake_registrations_exactly():

@@ -176,7 +176,14 @@ class _ProgramCore(
         require_declared_state_space(self, qualified_state, space)
         return self._time_state(block, qualified_state, space, clock)
 
-    def _solve_field_operator(self, field: Any, states: Any, *, name: Any = None) -> Any:
+    def _solve_field_operator(
+        self,
+        field: Any,
+        states: Any,
+        *,
+        name: Any = None,
+        schedule: Any = None,
+    ) -> Any:
         """Authenticate a callable field handle and build its normalized solve outcome."""
         values = tuple(_resolve_handle(state) for state in states)
         if not values:
@@ -192,7 +199,22 @@ class _ProgramCore(
             raise ValueError(
                 "field operator arguments must share one exact TimePoint; synchronize or "
                 "evaluate every coupled block at the same stage first")
-        field, field_space, outputs = bind_field_reference(self, values[0].block, field)
+        field, field_space, outputs, capabilities = bind_field_reference(
+            self, values[0].block, field, values=values)
+        self._validate_scheduled_reads(
+            values, consumer="field operator %r" % field.name)
+        if schedule is not None:
+            self._validate_schedule_contract(
+                operator_name=field.name,
+                capabilities=capabilities,
+                schedule=schedule,
+                values=values,
+            )
+            schedule.validate_site(
+                clock=values[0].clock,
+                point=values[0].point,
+                where="schedule on field operator %r" % field.name,
+            )
         token = (
             self._solve_fields(
                 name=name, state=values[0], field=field,
@@ -202,6 +224,9 @@ class _ProgramCore(
                 values, field=field, field_space=field_space,
                 outputs=outputs, name=name)
         )
+        if schedule is not None:
+            token = self._replace_value(
+                token, attrs={**token.attrs, "schedule": schedule})
         return self._field_solve_outcome(token)
 
     def _solve_fields(

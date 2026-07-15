@@ -152,6 +152,7 @@ def _exact_mpi_context(monkeypatch):
     return ExecutionContext.mpi_world(artifact, world), mpi
 
 
+@pytest.mark.mpi
 def test_exact_mpi_world_context_projects_zero_valued_fortran_handles(monkeypatch):
     context, mpi = _exact_mpi_context(monkeypatch)
 
@@ -192,6 +193,7 @@ def test_exact_mpi_world_context_projects_zero_valued_fortran_handles(monkeypatc
     )
 
 
+@pytest.mark.mpi
 def test_mpi_world_factory_rejects_equal_looking_or_duplicated_communicators(monkeypatch):
     context, mpi = _exact_mpi_context(monkeypatch)
 
@@ -209,6 +211,7 @@ def test_mpi_world_factory_rejects_equal_looking_or_duplicated_communicators(mon
         ExecutionContext.mpi_world(artifact, _FakeComm())
 
 
+@pytest.mark.mpi
 def test_mpi_component_projection_rejects_noncanonical_double(monkeypatch):
     context, _mpi = _exact_mpi_context(monkeypatch)
     changed = replace(

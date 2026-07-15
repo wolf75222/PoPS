@@ -17,7 +17,16 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 never fakes the engine.
 """
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model
 from typed_program_support import codegen_field_plans, solve_field, typed_state
 
 from pops.numerics.reconstruction import FirstOrder
@@ -25,6 +34,62 @@ from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource, Flux
 import sys
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefaultSource
+
+
+def _final_case_program(name, *, factor=None):
+    """Author one native transport program through Case -> validate -> resolve.
+
+    The System used by the historical dt-bound oracle remains the runtime consumer, but its
+    component is now produced by the public operator-first model and resolved plan.  No legacy
+    ModelSpec/compile_drivers route is involved.
+    """
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (mx, 0.0 * rho, 0.0 * rho),
+                     y_axis: (my, 0.0 * rho, 0.0 * rho)},
+        waves={x_axis: (1.0 + 0.0 * rho,) * 3,
+               y_axis: (1.0 + 0.0 * rho,) * 3},
+    )
+    source = model.source("zero", on=state, value=(0.0 * rho, 0.0 * rho, 0.0 * rho))
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+
+    case = pops.Case("%s-case" % name)
+    block = case.block("ions", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux, variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = adctime.Program(name)
+    temporal = program.state(block[state])
+    current = temporal.n
+    rhs = program.rhs(state=current, terms=[FinalFlux(), FinalDefaultSource()])
+    program.commit(temporal.next, program.value("U1", current + program.dt * rhs,
+                                                  at=temporal.next.point))
+    if factor is not None:
+        program.set_dt_bound(
+            lambda P, cfl, _factor=factor: (
+                _factor * cfl * P.hmin() / P.max_wave_speed(current)
+            )
+        )
+    case.program(program)
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(
+        pops.validate(case), layout=layout, backend=Production(),
+        compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")},
+    )
+    return pops.compile(resolved)
 
 
 def _skip(msg):
@@ -204,18 +269,16 @@ def fe_program(name, *, factor=None):
 
 
 try:
-    prog_none = compile_drivers.compile_problem(model=transport_model(), time=fe_program("fe_none"))
-    prog_tight = compile_drivers.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_tight", factor=0.5))
-    prog_loose = compile_drivers.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_loose", factor=2.0))
+    prog_none = _final_case_program("fe_none")
+    prog_tight = _final_case_program("fe_tight", factor=0.5)
+    prog_loose = _final_case_program("fe_loose", factor=2.0)
 except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 
 def install(prog):
     sim = make_sim()
-    sim.install_program(prog.so_path)
+    sim.install_program(prog.program.so_path)
     return sim
 
 

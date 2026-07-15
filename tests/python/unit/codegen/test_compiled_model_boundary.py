@@ -24,7 +24,7 @@ class _SourceModel:
         self.returned_hash = returned_hash
         self.extra = extra
         self.module = Module("compiled_model_boundary")
-        self.module.state_space("U", ("u",), roles=("Scalar",))
+        self.module.state_space("U", ("u",), roles={"u": "Scalar"})
 
     def _model_hash(self):
         return "structural:%s" % self.name

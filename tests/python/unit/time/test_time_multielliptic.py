@@ -15,13 +15,13 @@ Section A (pure Python, always runs): the named solve_fields op lowers to the na
 default 2-arg one); the default solve_fields lowers byte-identically to before; unknown field / missing
 model / aux-reading rhs / undeclared aux output are rejected with clear errors.
 
-Section B (gated, self-skip): the OFFLINE REFERENCE is the engine's own default Poisson solve.
+Section B (gated, self-skip) compares complete public runtime lifecycles.
 
   - PARITY: a named field "phi2" with rhs = (the SAME RHS as the default Poisson coupling) solves the
     IDENTICAL elliptic problem with the SAME native solver, so its derived gradient (g2x/g2y) equals the
-    default grad_x/grad_y. A program whose source reads phi2's gradient therefore steps the state
-    bit-for-bit like a program whose source reads the default grad -> max|d| ~ round-off. This is a true
-    second INDEPENDENT solve validated against the default one (no offline multigrid reimplementation).
+    default grad_x/grad_y. A Case carrying BOTH providers and whose Program reads phi2 therefore steps
+    like a default-only Case whose Program reads potential. This is a true second independent solve,
+    validated without an offline multigrid reimplementation.
   - DISTINCT RHS (linearity): a named field with rhs = 2 * (default RHS) produces phi2 = 2*phi (Poisson
     is linear), so g2x = 2*grad_x; the source reading 0.5*g2x reproduces the default-grad step -> the
     named field carries a genuinely DIFFERENT, correctly scaled field.
@@ -31,15 +31,36 @@ Section B (gated, self-skip): the OFFLINE REFERENCE is the engine's own default 
 Skips cleanly (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
 """
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.math import ddt, div, laplacian
+from pops.fields import (CellCenteredSecondOrder, ConstantNullspace, FieldDiscretization,
+                         FieldOutput, GradientOutput, MeanValueGauge)
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model as BoardModel
+from pops.solvers.elliptic import GeometricMG
 from typed_program_support import codegen_field_plans, solve_field, typed_field, typed_state
 
 from pops.params import ConstParam
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-from pops.numerics.terms import DefaultSource, Flux
+from pops.numerics.terms import DefaultSource, Flux, Flux as FinalFlux, SourceTerm
+from pops.time import FailRun, FixedDt
 import sys
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    skip_process_test,
+)
+
+
+INCLUDE = repo_include()
+CXX = default_cxx()
 
 
 def _pops_mods():
@@ -47,9 +68,8 @@ def _pops_mods():
         from pops.math import sqrt
         from pops.physics._facade import Model
         from pops import time as adctime
-    except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_multielliptic (pops unavailable: %s)" % exc)
-        sys.exit(0)
+    except ImportError as exc:  # a genuinely absent installed package is an environment skip
+        skip_process_test("test_time_multielliptic: pops unavailable: %s" % exc)
     return Model, sqrt, adctime
 
 
@@ -76,6 +96,94 @@ def raises(exc_types, fn):
 
 
 Q = -1.0  # charge sign (f = q * rho), like pops::ChargeDensity
+
+
+def _public_program_artifact(
+    name, *, selected_field="phi2", scale=1.0, src_scale=1.0,
+):
+    """Compile a default-only or default-plus-named field Case through the public lifecycle."""
+    if selected_field not in {"potential", "phi2"}:
+        raise ValueError("selected_field must be 'potential' or 'phi2'")
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    velocity_x = mx / rho
+    velocity_y = my / rho
+    pressure = 0.5 * rho
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (mx, mx * velocity_x + pressure, my * velocity_x),
+                     y_axis: (my, mx * velocity_y, my * velocity_y + pressure)},
+        waves={x_axis: (velocity_x, velocity_x, velocity_x),
+               y_axis: (velocity_y, velocity_y, velocity_y)},
+    )
+    potential = model.field("potential")
+    default_gx, default_gy = model.aux("grad_x"), model.aux("grad_y")
+    default_operator = model.field_operator(
+        "default_electrostatic", unknown=potential,
+        equation=-laplacian(potential) == Q * (rho - 1.0),
+        outputs=(FieldOutput("phi", potential), GradientOutput("grad", potential)),
+    )
+    if selected_field == "potential":
+        gx, gy = default_gx, default_gy
+    else:
+        phi2 = model.field("phi2")
+        gx, gy = model.aux("g2_x"), model.aux("g2_y")
+        named_operator = model.field_operator(
+            "named_electrostatic", unknown=phi2,
+            equation=-laplacian(phi2) == scale * Q * (rho - 1.0),
+            outputs=(FieldOutput("phi2", phi2), GradientOutput("g2", phi2)),
+        )
+    source = model.source(
+        "electric", on=state,
+        value=(0.0 * rho, -src_scale * rho * gx, -src_scale * rho * gy),
+    )
+    source_operator = model.module.operator_handle("electric")
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+
+    case = pops.Case("%s-case" % name)
+    block = case.block("plasma", model)
+    def discretization():
+        return FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            nullspace=ConstantNullspace(), gauge=MeanValueGauge(0.0),
+        )
+
+    field = case.field(default_operator, discretization())
+    if selected_field == "phi2":
+        field = case.field(named_operator, discretization())
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux, variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = adctime.Program(name)
+    temporal = program.state(block[state])
+    fields = field(temporal.n, name="fields").consume(action=FailRun())
+    rhs = program.rhs(
+        state=temporal.n,
+        fields=fields,
+        terms=[FinalFlux(), SourceTerm(source_operator)],
+    )
+    program.commit(temporal.next, program.value(
+        "U1", temporal.n + program.dt * rhs, at=temporal.next.point))
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(
+        pops.validate(case), layout=layout, backend=Production(),
+        compile_options={"include": INCLUDE, "cxx": CXX},
+    )
+    return pops.compile(resolved)
 
 
 # --- shared isothermal 2D fluid block (rho, mx, my; default Poisson f = q*rho) ---
@@ -146,10 +254,10 @@ def _emit(program, *, model=None):
 default_codegen_model = default_model()
 src_default = _emit(_prog("me_def_prog", model=default_codegen_model),
     model=default_codegen_model)
-chk("ctx.solve_fields_from_state(0, " in src_default,
-    "default solve_fields lowers to ctx.solve_fields_from_state(0, ...)")
-chk('ctx.solve_fields_from_state("' not in src_default,
-    "default solve_fields does NOT use the named (3-arg) overload")
+chk('ctx.solve_fields_from_state("potential", 0, ' in src_default,
+    "default solve_fields lowers to its qualified potential provider")
+chk('ctx.solve_fields_from_state("phi2", 0, ' not in src_default,
+    "default solve_fields does NOT use the named phi2 overload")
 
 named_codegen_model = named_model()
 src_named = _emit(_prog("me_nam_prog", field="phi2", model=named_codegen_model),
@@ -160,17 +268,19 @@ chk('ctx.solve_fields_from_state("phi2", 0, ' in src_named,
 # The named brick + registration land in the native loader (production backend).
 loader = named_model("me_nam_loader")._m.emit_cpp_native_loader(target="system")
 chk("Ell_phi2" in loader, "the named elliptic RHS brick is emitted in the native loader")
-chk('register_elliptic_field("phi2"' in loader, "the named field registers its aux components")
+chk('register_elliptic_field(name, "phi2"' in loader, "the named field registers its aux components")
 chk("set_block_elliptic_field" in loader and "make_poisson_rhs" in loader,
     "the named field attaches its RHS closure (make_poisson_rhs of the brick)")
 
-# Validation: unknown field / missing model / aux-reading rhs / undeclared aux output / amr target.
-unknown_model = named_model("me_unknown_model")
-chk(raises(ValueError, lambda: _emit(_prog(
-    "me_unknown", field="nope", model=unknown_model), model=unknown_model)),
-    "an unknown elliptic_field name in solve_fields raises ValueError")
-chk(raises(NotImplementedError, lambda: _emit(_prog("me_nomodel", field="phi2"))),
-    "a named solve_fields without a model raises NotImplementedError")
+# Validation: a field handle is now a Case-owned solve authority.  The historical string-based
+# "unknown field"/"missing model" cases are not meaningful final authoring errors anymore; any name
+# can be declared in the fixture's Case.  The real invalid contract is a cross-Case field/state owner.
+foreign_program = adctime.Program("me_foreign_field")
+foreign_state = typed_state(foreign_program, "plasma")
+foreign_field = typed_field(adctime.Program("me_foreign_owner"), "phi2")
+chk(raises(ValueError, lambda: solve_field(
+    foreign_program, foreign_state, field=foreign_field)),
+    "a FieldHandle owned by another Case is rejected before lowering")
 
 
 def _bad_rhs_aux():
@@ -197,7 +307,7 @@ chk(raises(ValueError, _bad_aux_out),
 # same register_elliptic_field + set_block_elliptic_field calls as the uniform loader, on the AmrSystem
 # facade. (Previously this raised NotImplementedError -- the AMR path was the one deferral.)
 amr_loader = named_model("me_amr")._m.emit_cpp_native_loader(target="amr_system")
-chk('register_elliptic_field("phi2"' in amr_loader,
+chk('register_elliptic_field(name, "phi2"' in amr_loader,
     "a named elliptic field on target='amr_system' registers its aux components (ADC-428)")
 chk("set_block_elliptic_field" in amr_loader and "make_poisson_rhs" in amr_loader,
     "the AMR named field attaches its RHS closure (make_poisson_rhs of the brick)")
@@ -215,24 +325,25 @@ chk(src_default == src_default2, "the default program lowers deterministically (
 
 
 # =================== Section B: gated end-to-end parity ===================
-print("== (B) named second elliptic solve == default Poisson solve (offline reference) ==")
+print("== (B) named second elliptic solve == default Poisson solve (public runtimes) ==")
 
 
 def _skipB(msg):
     print("-- (B) skipped: %s --" % msg)
     print("%s test_time_multielliptic (A only)" % ("FAIL" if fails else "PASS"))
-    sys.exit(1 if fails else 0)
+    if fails:
+        sys.exit(1)
+    skip_process_test("test_time_multielliptic native section: %s" % msg)
 
 
 try:
     import numpy as np
+except ImportError as exc:
+    _skipB("numpy unavailable: %s" % exc)
 
-    import pops.runtime._engine_descriptors as engine
-except Exception as exc:  # noqa: BLE001
-    _skipB("numpy/_pops unavailable: %s" % exc)
-
-if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-    _skipB("_pops lacks the install_program binding (rebuild _pops)")
+missing_native = missing_native_compile_requirement(INCLUDE, CXX)
+if missing_native:
+    _skipB(missing_native)
 
 N = 16
 DT = 0.005
@@ -247,42 +358,33 @@ def _ic():
     return np.stack([rho, mx, my])
 
 
-def make_sim(model):
-    sim = System(n=N, L=1.0, periodic=True)
-    try:
-        compiled = model.compile(backend="production")
-    except RuntimeError as exc:
-        _skipB("model compile could not build the .so: %s" % str(exc)[:160])
-    sim.add_equation("plasma", compiled,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
-    sim.set_poisson("composite", "geometric_mg")  # f = sum of the per-block elliptic bricks
-    sim.set_state("plasma", _ic())
-    return sim
-
-
-def step_program(model, prog):
-    try:
-        compiled = compile_drivers.compile_problem(model=model, time=prog)
-    except RuntimeError as exc:
-        _skipB("compile_problem could not build the .so: %s" % str(exc)[:160])
-    sim = make_sim(model)
-    sim.install_program(compiled.so_path)
-    sim.step(DT)
-    return np.array(sim.get_state("plasma"))
+def step_program(
+    model, prog, *, artifact_name, selected_field, scale=1.0, src_scale=1.0,
+):
+    # ``model``/``prog`` retain the independent pure-lowering fixture above; the numerical path
+    # is exclusively Case -> validate -> resolve -> compile -> bind -> run.
+    del model, prog
+    compiled = _public_program_artifact(
+        artifact_name, selected_field=selected_field, scale=scale, src_scale=src_scale)
+    simulation = pops.bind(compiled, initial_state={"plasma": _ic()})
+    report = pops.run(simulation, t_end=DT, max_steps=1)
+    chk(report.accepted_steps == 1, "%s accepted one public runtime step" % artifact_name)
+    return np.asarray(simulation.state_global("plasma"), dtype=np.float64)
 
 
 # REFERENCE: the default Poisson coupling, source reads the default grad.
 U0 = _ic()
 reference_model = default_model("me_ref")
-ref = step_program(reference_model, _prog("me_ref_fe", model=reference_model))
+ref = step_program(reference_model, _prog("me_ref_fe", model=reference_model),
+                   artifact_name="me_ref_public", selected_field="potential")
 chk(float(np.abs(ref - U0).max()) > 1e-9, "the default electrostatic source actually moved the state")
 
 # PARITY: a named field with rhs == the default RHS solves the same problem with the same native
 # solver, so g2x/g2y == grad_x/grad_y -> the named-field-driven step matches the default step.
 parity_model = named_model("me_par", scale=1.0, src_scale=1.0)
 got = step_program(
-    parity_model, _prog("me_par_fe", field="phi2", model=parity_model))
+    parity_model, _prog("me_par_fe", field="phi2", model=parity_model),
+    artifact_name="me_par_public", selected_field="phi2", scale=1.0, src_scale=1.0)
 e_par = float(np.abs(got - ref).max())
 print("  named(rhs=default) vs default Poisson: max|d| = %.2e" % e_par)
 chk(e_par < 1e-12,
@@ -293,7 +395,8 @@ chk(e_par < 1e-12,
 # correctly scaled field (not an alias of the shared aux).
 linear_model = named_model("me_lin", scale=2.0, src_scale=0.5)
 got2 = step_program(
-    linear_model, _prog("me_lin_fe", field="phi2", model=linear_model))
+    linear_model, _prog("me_lin_fe", field="phi2", model=linear_model),
+    artifact_name="me_lin_public", selected_field="phi2", scale=2.0, src_scale=0.5)
 e_lin = float(np.abs(got2 - ref).max())
 print("  named(rhs=2*default, src=0.5*g2) vs default: max|d| = %.2e" % e_lin)
 chk(e_lin < 1e-12,

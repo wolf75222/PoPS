@@ -42,7 +42,7 @@ def anisotropic_epsilon_tests():
 
     def solve(eps_xy, solver="geometric_mg"):
         s = System(n=n, L=1.0, periodic=False)
-        s.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
+        s.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
         s.set_poisson(rhs="charge_density", solver=solver, bc=Dirichlet())
         s.set_density("q", f)
         if eps_xy is not None:
@@ -60,7 +60,7 @@ def anisotropic_epsilon_tests():
     # eps = eps_x (set_epsilon_field) : meme rhs f, mais les faces y voient eps_x au lieu de eps_y,
     # donc phi doit differer franchement (eps_x et eps_y sont distincts).
     s_iso = System(n=n, L=1.0, periodic=False)
-    s_iso.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
+    s_iso.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     s_iso.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Dirichlet())
     s_iso.set_density("q", f)
     s_iso.set_epsilon_field(eps_x)
@@ -78,7 +78,7 @@ def anisotropic_epsilon_tests():
 
     # eps anisotrope + solveur 'fft' (coefficient constant) : refus explicite au solve.
     sp = System(n=n, L=1.0, periodic=True)
-    sp.block("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
+    sp.add_equation("q", model=_charge_scalar(), spatial=engine.Spatial(none=True))
     sp.set_poisson(rhs="charge_density", solver="fft")
     sp.set_density("q", f)
     sp.set_epsilon_anisotropic_field(eps_x, eps_y)

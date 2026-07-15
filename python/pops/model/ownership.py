@@ -122,8 +122,16 @@ class _AuthoringAuthority:
             # Providers are weakly backed by their authoritative registries/builders. Retaining
             # older providers lets an unpublished transactional candidate disappear without
             # poisoning the shared owner authority it briefly used.
-            for _, provider in sorted(
-                    self._fingerprint_providers, key=lambda item: item[0], reverse=True):
+            # A later provider at the same priority represents the newer authoritative view.
+            # Keep the insertion index in the ordering so a still-live superseded Module cannot
+            # pin the authority to stale content.  If the newer transactional view disappears and
+            # returns None, iteration naturally falls back to the preceding live provider.
+            ranked = sorted(
+                enumerate(self._fingerprint_providers),
+                key=lambda indexed: (indexed[1][0], indexed[0]),
+                reverse=True,
+            )
+            for _, (_, provider) in ranked:
                 value = provider()
                 if value is not None:
                     return _validate_definition_fingerprint(value)

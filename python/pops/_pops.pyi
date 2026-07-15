@@ -63,6 +63,20 @@ __aux_canonical__: dict[str, int]
 class StepAttemptRejected(RuntimeError): ...
 
 
+class _SolveReport:
+    iters: int
+    rel_residual: float
+    reference_residual_norm: float
+    residual_norm: float
+    status: str
+    action: str
+    reason: str
+    def valid(self) -> bool: ...
+    def solved(self) -> bool: ...
+    def solved_value_available(self) -> bool: ...
+    def failed(self) -> bool: ...
+
+
 # Internal bootstrap seam: these data PODs are re-exported from pops.runtime,
 # not from the private native module's supported direct API.
 class SystemConfig:
@@ -122,6 +136,7 @@ class ModelSpec:
 # dynamic fallback in the stub: a new bootstrap use must be declared explicitly.
 class System:
     def __init__(self, config: SystemConfig) -> None: ...
+    def solve_fields(self) -> _SolveReport: ...
 
 
 class AmrSystem:

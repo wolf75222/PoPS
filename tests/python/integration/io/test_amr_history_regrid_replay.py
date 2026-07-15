@@ -97,7 +97,11 @@ def _state_ring_program(depth, k, name):
     _case, states = program_states(P, module, ("blk",))
     U = states["blk"]
     P.keep_history(U, depth=depth, checkpoint_policy=Interval(k))
-    nxt = P.value("Un", U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1))
+    nxt = P.value(
+        "Un",
+        U.n + P.dt * (_C * U.n) + 0.0 * U.prev(depth - 1),
+        at=U.next.point,
+    )
     P.commit(U.next, nxt)
     P.step_strategy(pops.time.FixedDt(DT))
     return P
@@ -111,6 +115,7 @@ def _blob():
 
 def _build(program, regrid_every):
     amr = AmrSystem(n=N, L=1.0, regrid_every=regrid_every)
+    amr.set_temporal_relations([2], [1], ["integral_only"])
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, "no engine"
     try:

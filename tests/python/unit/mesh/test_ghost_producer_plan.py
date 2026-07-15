@@ -285,7 +285,12 @@ def _physical_provider(boundary, name):
 
 
 def _interface(topology):
-    left_boundary = topology.physical[0]
+    # BoundaryTopology canonicalizes its sets, so tuple position is not geometric meaning.  Select
+    # the authenticated lower face explicitly and pair it with the peer block's upper face.
+    left_boundary = next(
+        boundary for boundary in topology.physical
+        if boundary.orientation.side is BoundarySide.LOWER
+    )
     # A per-block ghost plan owns exactly one endpoint of a shared interface.  The peer boundary
     # belongs to the neighbouring block and therefore must not also appear in this local topology.
     right_boundary = BoundaryHandle(

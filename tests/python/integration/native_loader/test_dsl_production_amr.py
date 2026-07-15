@@ -112,6 +112,51 @@ def _amr(n, L, branch, refine=1.2):
     return s
 
 
+def _install_compiled_amr(system, component, *, weno5=False):
+    """Install a production AMR package through the authenticated runtime facade.
+
+    The historical ``system._s.add_native_block`` call bypassed the final Python contract and was
+    removed from the extension.  ``AmrSystem.add_equation`` is the supported dispatcher for a
+    ``CompiledModel(target='amr_system')``; it still reaches the same native loader boundary.
+    """
+    spatial = engine.Spatial(
+        weno5=True if weno5 else False,
+        minmod=not weno5,
+        flux=Rusanov(),
+        recon=Conservative(),
+    )
+    system.add_equation("gas", component, spatial=spatial, time=engine.Explicit())
+
+
+def _component_at(component, so_path):
+    """Detach valid metadata while substituting a deliberately mismatched ABI package path."""
+    return CompiledModel(
+        so_path=so_path,
+        backend=component.backend,
+        target=component.target,
+        cons_names=component.cons_names,
+        state_spaces=component.state_spaces,
+        cons_roles=component.cons_roles,
+        prim_names=component.prim_names,
+        n_vars=component.n_vars,
+        gamma=component.gamma,
+        n_aux=component.n_aux,
+        params=component.params,
+        caps=component.caps,
+        abi_key=component.abi_key,
+        model_hash=component.model_hash,
+        cxx=component.cxx,
+        std=component.std,
+        hllc=component.has_hllc,
+        roe=component.has_roe,
+        aux_extra_names=component.aux_extra_names,
+        wave_speeds=component.has_wave_speeds,
+        wave_speed_provider=component.wave_speed_provider,
+        elliptic_field_names=component.elliptic_field_names,
+        definition_identity=component.definition_identity,
+    )
+
+
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
@@ -126,7 +171,6 @@ def main():
         et = _build_euler_transport()
         cm_t = et.compile(os.path.join(tmp, "euler_transport_amr.so"), INCLUDE,
                           backend="production", target="amr_system")
-        so_t = cm_t.so_path
         assert isinstance(cm_t, CompiledModel)
         assert cm_t.backend == "production" and cm_t.target == "amr_system"
         assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
@@ -134,10 +178,8 @@ def main():
                            transport=engine.CompressibleFlux(), source=engine.NoSource(),
                            elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
-        A = _amr(n, L, lambda s: s._s.add_native_block(
-            "gas", so_t, limiter="minmod", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1))
-        B = _amr(n, L, lambda s: s.block(
+        A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
+        B = _amr(n, L, lambda s: s.add_equation(
             "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=engine.Explicit()))
         assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
@@ -159,7 +201,6 @@ def main():
         ep = _build_euler_poisson()
         cm_p = ep.compile(os.path.join(tmp, "euler_poisson_amr.so"), INCLUDE,
                           backend="production", target="amr_system")
-        so_p = cm_p.so_path
         spec_p = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
                            transport=engine.CompressibleFlux(), source=engine.GravityForce(),
                            elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
@@ -167,10 +208,8 @@ def main():
         def poisson(s):
             s.set_poisson("charge_density", "geometric_mg")
 
-        C = _amr(n, L, lambda s: (s._s.add_native_block(
-            "gas", so_p, limiter="minmod", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1), poisson(s)))
-        D = _amr(n, L, lambda s: (s.block(
+        C = _amr(n, L, lambda s: (_install_compiled_amr(s, cm_p), poisson(s)))
+        D = _amr(n, L, lambda s: (s.add_equation(
             "gas", spec_p, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
             time=engine.Explicit()), poisson(s)))
         assert C.n_patches() == D.n_patches()
@@ -197,7 +236,7 @@ def main():
             R = _amr(n, L, lambda s: s.add_equation(
                 "gas", cm_t,
                 spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
-            S = _amr(n, L, lambda s: s.block(
+            S = _amr(n, L, lambda s: s.add_equation(
                 "gas", spec_t,
                 spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
                 time=engine.Explicit()))
@@ -249,10 +288,8 @@ def main():
         # --- (3w) WENO5 (3 ghosts) CABLE sur AMR : parite stricte production == add_block + != minmod.
         # Le coupleur alloue ses niveaux a Limiter::n_ghost (3) et le regrid herite n_grow() : le
         # stencil 5 points ne lit pas hors bornes (MEME mecanisme ghost que System, pas de duplication).
-        Aw = _amr(n, L, lambda s: s._s.add_native_block(
-            "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1))
-        Bw = _amr(n, L, lambda s: s.block(
+        Aw = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t, weno5=True))
+        Bw = _amr(n, L, lambda s: s.add_equation(
             "gas", spec_t, spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
             time=engine.Explicit()))
         assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
@@ -309,11 +346,16 @@ def main():
 
         # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
         bad_abi = _compile_wrong_abi(ep, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
+        bad_component = _component_at(cm_p, bad_abi)
         s = AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
-            s._s.add_native_block("gas", bad_abi, limiter="minmod", riemann="rusanov",
-                                  recon="conservative", time="explicit", gamma=GAMMA)
+            s.add_equation(
+                "gas",
+                bad_component,
+                spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+                time=engine.Explicit(),
+            )
         except RuntimeError as ex:
             raised = True
             assert "ABI" in str(ex), "message inattendu : %s" % ex

@@ -158,7 +158,7 @@ def test_partial_rejects_implicit_or_out_of_range_axes(axis):
 
 @pytest.mark.parametrize("name", ["", 3, object()])
 def test_unknown_rejects_implicit_stringification(name):
-    with pytest.raises(TypeError, match="non-empty string"):
+    with pytest.raises(TypeError, match="non-empty name or a declared field Handle"):
         Unknown(name)
 
 

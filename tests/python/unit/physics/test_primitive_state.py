@@ -7,13 +7,15 @@ retired ``System.block`` alias or any public compatibility method.
 """
 import os
 import shutil
-import tempfile
 
 import numpy as np
+import pytest
 
-from pops.codegen import Production
+import pops
 import pops.runtime._engine_descriptors as engine
+from pops.physics import Density, Energy, Model, Momentum, Pressure, Velocity
 from pops.runtime._system import System
+from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import repo_include
 
 
@@ -29,6 +31,100 @@ def _fields(n=N):
     v = -0.1 * np.cos(2 * np.pi * Y)
     p = 0.5 + 0.1 * X
     return rho, u, v, p
+
+
+def _board_primitive_fixture(name):
+    model = Model(name, frame=FRAME)
+    state = model.state(
+        "U",
+        components=("rho", "rho_u", "rho_v", "E"),
+        roles={
+            "rho": Density(),
+            "rho_u": Momentum(axis=X_AXIS),
+            "rho_v": Momentum(axis=Y_AXIS),
+            "E": Energy(),
+        },
+    )
+    rho, rho_u, rho_v, energy = state
+    velocity_x = model.primitive("u", rho_u / rho)
+    velocity_y = model.primitive("v", rho_v / rho)
+    pressure = model.primitive(
+        "p", (1.4 - 1.0) * (
+            energy - 0.5 * rho * (velocity_x * velocity_x + velocity_y * velocity_y)
+        ),
+    )
+    components = (rho, velocity_x, velocity_y, pressure)
+    inverse = (
+        rho,
+        rho * velocity_x,
+        rho * velocity_y,
+        pressure / (1.4 - 1.0)
+        + 0.5 * rho * (velocity_x * velocity_x + velocity_y * velocity_y),
+    )
+    roles = {
+        "rho": Density(),
+        "u": Velocity(axis=X_AXIS),
+        "v": Velocity(axis=Y_AXIS),
+        "p": Pressure(),
+    }
+    return model, components, inverse, roles
+
+
+def _primitive_contract_snapshot(model):
+    hyp = model._dsl._m
+    return (
+        tuple(hyp.prim_state),
+        None if hyp.prim_roles is None else tuple(hyp.prim_roles),
+        None if hyp.cons_from is None else tuple(repr(value) for value in hyp.cons_from),
+        model._primitive_state_authored,
+    )
+
+
+def test_board_primitive_state_declares_one_typed_atomic_coordinate_system():
+    model, components, inverse, roles = _board_primitive_fixture("primitive_board_contract")
+    model.primitive_state(*components, conservative=inverse, roles=roles)
+
+    hyp = model._dsl._m
+    assert hyp.prim_state == ["rho", "u", "v", "p"]
+    assert hyp.prim_roles == ["Density", "VelocityX", "VelocityY", "Pressure"]
+    assert tuple(repr(value) for value in hyp.cons_from) == tuple(
+        repr(value) for value in inverse
+    )
+    assert model._primitive_state_authored is True
+
+
+def test_board_primitive_state_rejects_foreign_arity_and_rolls_back_builder_failure(
+    monkeypatch,
+):
+    model, components, inverse, roles = _board_primitive_fixture("primitive_board_atomic")
+    foreign, foreign_components, _, _ = _board_primitive_fixture("primitive_board_foreign")
+    del foreign
+    before = _primitive_contract_snapshot(model)
+
+    with pytest.raises(ValueError, match="not declared by this physics model"):
+        model.primitive_state(
+            components[0], foreign_components[1], components[2], components[3],
+            conservative=inverse, roles=roles,
+        )
+    assert _primitive_contract_snapshot(model) == before
+
+    with pytest.raises(ValueError, match="matching state"):
+        model.primitive_state(*components[:-1], conservative=inverse, roles=roles)
+    assert _primitive_contract_snapshot(model) == before
+
+    foreign_inverse = (foreign_components[0], *inverse[1:])
+    with pytest.raises(ValueError, match="not an owned selected primitive component"):
+        model.primitive_state(*components, conservative=foreign_inverse, roles=roles)
+    assert _primitive_contract_snapshot(model) == before
+
+    def fail_after_inverse_mutation(expressions):
+        model._dsl._m.cons_from = list(expressions)
+        raise RuntimeError("injected primitive inverse failure")
+
+    monkeypatch.setattr(model._dsl, "conservative_from", fail_after_inverse_mutation)
+    with pytest.raises(RuntimeError, match="injected primitive inverse failure"):
+        model.primitive_state(*components, conservative=inverse, roles=roles)
+    assert _primitive_contract_snapshot(model) == before
 
 
 def _runtime(name, model):
@@ -162,36 +258,51 @@ def test_primitive_input_errors_name_missing_and_extra_components():
 
 
 def test_production_model_primitive_roundtrip_and_step():
-    """A production package forwards its authored conservative/primitive conversion."""
+    """The final artifact preserves primitive metadata and runs the bound conservative state."""
     compiler = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not compiler or not os.path.isdir(INCLUDE):
         return
 
-    from tests.python.unit.codegen.test_dsl_coupled import build_euler_poisson
+    from tests.python.unit.codegen.test_dsl_coupled import (
+        GAMMA,
+        build_euler,
+        compile_euler_artifact,
+    )
 
     rho, u, v, p = _fields()
-    directory = tempfile.mkdtemp()
-    try:
-        compiled = build_euler_poisson().compile(
-            os.path.join(directory, "euler_poisson_native.so"),
-            INCLUDE,
-            backend=Production(),
-        )
-        runtime = System(n=N, L=L, periodic=True)
-        runtime.add_equation(
-            "gas",
-            compiled,
-            spatial=engine.Spatial(minmod=True),
-            time=engine.Explicit(),
-        )
-        assert compiled.backend == "production"
-        assert runtime.variable_names("gas", "primitive") == ["rho", "u", "v", "p"]
-        assert _roundtrip_error(runtime, "gas", rho=rho, u=u, v=v, p=p) < 1e-13
+    initial = np.ascontiguousarray(np.stack((
+        rho,
+        rho * u,
+        rho * v,
+        p / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v),
+    )))
 
-        runtime.set_poisson(rhs="charge_density")
-        for _ in range(5):
-            runtime.step_cfl(0.4)
-        state = np.asarray(runtime.get_state("gas")).reshape(4, N, N)
-        assert np.isfinite(state).all() and state[0].min() > 0.0
-    finally:
-        shutil.rmtree(directory, ignore_errors=True)
+    # compile_euler_artifact owns the explicit public
+    # Case -> validate -> resolve -> compile transaction.  This test then uses
+    # only the final bind/run/read surface; it neither detaches the component
+    # into System nor reconstructs a second numerical plan around the package.
+    artifact = compile_euler_artifact(
+        build_euler("primitive_roundtrip_production"), cells=N, cxx=compiler,
+    )
+    component = artifact.blocks[0].model
+    assert component.backend == "production"
+    assert component.prim_names == ["rho", "u", "v", "p"]
+
+    simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
+    bound = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
+    bound_rho = bound[0]
+    bound_u = bound[1] / bound_rho
+    bound_v = bound[2] / bound_rho
+    bound_p = (GAMMA - 1.0) * (
+        bound[3] - 0.5 * bound_rho * (bound_u * bound_u + bound_v * bound_v)
+    )
+    for actual, expected in zip(
+        (bound_rho, bound_u, bound_v, bound_p), (rho, u, v, p), strict=True,
+    ):
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-13)
+
+    report = pops.run(simulation, t_end=5.0e-4, max_steps=5)
+    state = np.asarray(simulation.state_global("gas"), dtype=np.float64).reshape(initial.shape)
+    assert report.accepted_steps == simulation.macro_step() == 5
+    assert np.isfinite(state).all() and state[0].min() > 0.0
+    assert float(np.max(np.abs(state - initial))) > 1.0e-8

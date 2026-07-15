@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import pytest
 
 import pops
+from pops.boundary import TransportBoundarySet
+from pops.boundary.transport import Outflow
 from pops.math import ddt, div
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
@@ -83,6 +85,7 @@ def test_method_infers_order_ghosts_and_validates_physical_flux() -> None:
 
 
 def test_case_resolves_plan_per_owner_qualified_instance_without_native_import() -> None:
+    native_was_loaded = "pops._pops" in sys.modules
     _, model, state, _, rate, method = _declarations()
     plan = DiscretizationPlan()
     plan.rates.add(rate, method)
@@ -102,7 +105,7 @@ def test_case_resolves_plan_per_owner_qualified_instance_without_native_import()
     assert numerical.block.local_id == "tracer"
     assert numerical.rates[0].rate.is_resolved
     assert resolved.blocks[0].spatial.formal_order == 2
-    assert "pops._pops" not in sys.modules
+    assert ("pops._pops" in sys.modules) is native_was_loaded
 
 
 def test_double_or_inconsistent_authorities_are_rejected() -> None:
@@ -193,14 +196,6 @@ class _ReferenceAuthority:
 
 
 @dataclass(frozen=True)
-class _BoundaryAuthority:
-    reference: object
-
-    def resolve_for_numerics(self, context):
-        return _ReferenceAuthority("boundary", context.resolve(self.reference))
-
-
-@dataclass(frozen=True)
 class _ExternalRateMethod:
     inner: object
 
@@ -238,8 +233,8 @@ def test_rate_family_accepts_a_small_external_method_protocol() -> None:
         == "external-rate-method"
 
 
-def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None:
-    _, model, state, flux, rate, method = _declarations()
+def test_every_block_local_family_resolves_handles_and_has_canonical_data() -> None:
+    frame, model, state, flux, rate, method = _declarations()
     plan = DiscretizationPlan()
     plan.rates.add(rate, method)
     plan.fields.add(
@@ -250,11 +245,12 @@ def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None
         _ReferenceAuthority("source-subject", flux),
         _ReferenceAuthority("source-method", flux),
     )
-    plan.boundaries.add(_BoundaryAuthority(state))
-    plan.interfaces.add(_ReferenceAuthority("interface", flux))
-
     case = pops.Case("all-families")
     block = case.block("tracer", model)
+    plan.boundaries.add(TransportBoundarySet({
+        boundary: Outflow(state=block[state])
+        for boundary in frame.boundaries.all
+    }))
     case.numerics(plan, block=block)
     from pops.lib.time import SSPRK2
 
@@ -263,7 +259,32 @@ def test_every_nonempty_family_resolves_handles_and_has_canonical_data() -> None
         pops.validate(case), layout=Uniform(cartesian_grid(n=8, periodic=True)))
     data = resolved.blocks[0].numerics.to_data()
 
-    assert [len(data[name]) for name in ("fields", "boundaries", "sources", "interfaces")] \
-        == [1, 1, 1, 1]
+    assert [len(data[name]) for name in ("fields", "boundaries", "sources")] == [1, 1, 1]
+    assert data["interfaces"] == []
     assert data["fields"][0]["subject"]["reference"]["kind"] == "state"
     assert data["sources"][0]["subject"]["reference"]["kind"] == "flux"
+
+
+def test_interface_family_rejects_an_extension_without_final_two_sided_protocol() -> None:
+    frame, model, state, flux, rate, method = _declarations()
+    plan = DiscretizationPlan()
+    plan.rates.add(rate, method)
+    plan.interfaces.add(_ReferenceAuthority("interface", flux))
+    case = pops.Case("invalid-interface-extension")
+    block = case.block("tracer", model)
+    plan.boundaries.add(TransportBoundarySet({
+        boundary: Outflow(state=block[state])
+        for boundary in frame.boundaries.all
+    }))
+    case.numerics(plan, block=block)
+    from pops.lib.time import SSPRK2
+
+    case.program(SSPRK2(block[state], rate=rate))
+    with pytest.raises(
+        TypeError,
+        match=r"to_data\(\) and compose_resolved_blocks\(blocks, layout_plan\)",
+    ):
+        pops.resolve(
+            pops.validate(case),
+            layout=Uniform(cartesian_grid(n=8, periodic=True)),
+        )

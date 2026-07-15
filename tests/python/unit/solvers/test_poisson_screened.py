@@ -77,7 +77,7 @@ def test_screened_plan_carries_one_exact_qualified_scalar_and_refuses_fft() -> N
     assert reaction["multiplier"] == 1.0
     assert len(handles) == 1
     assert handles[0].param_kind == "runtime"
-    assert reaction["parameter"] == handles[0].canonical_identity()
+    assert reaction["parameter"]["qualified_id"] == handles[0].qualified_id
     assert plan.native_options["nullspace"] == "none"
 
     fft_case, _ = _screened_registration(solver=FFT(), boundary=Periodic())
@@ -206,6 +206,20 @@ def _resolved_mms_case():
     model = Model("screened-mms-model", frame=frame)
     state = model.state("U", components=("pure_forcing", "screened_forcing"))
     pure_forcing, screened_forcing = state
+    x_axis, y_axis = frame.axes
+    model.flux(
+        "stationary_forcing",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (0.0 * pure_forcing, 0.0 * screened_forcing),
+            y_axis: (0.0 * pure_forcing, 0.0 * screened_forcing),
+        },
+        waves={
+            x_axis: (0.0 * pure_forcing, 0.0 * screened_forcing),
+            y_axis: (0.0 * pure_forcing, 0.0 * screened_forcing),
+        },
+    )
     kappa = model.param(RuntimeParam("kappa", default=KAPPA))
 
     pure_potential = model.field("pure_potential")

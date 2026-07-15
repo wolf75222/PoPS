@@ -4,7 +4,7 @@ Exercises ``AmrSystem.amr`` -- the live, INERT inspection handle
 (:class:`pops.runtime.amr.AmrRuntimeView`) -- and its reports: ``patch_table()`` /
 ``hierarchy_snapshot()`` / ``explain_regrid()`` / ``explain_ghosts()`` / ``explain_reflux()`` /
 ``explain_checkpoint()``. The host-runnable parts build a SMALL real ``AmrSystem`` (Kokkos-Serial
-on this Mac), add one native block, refine on a density bump and take a few steps so a real fine
+on this Mac), add two native blocks, refine on a density bump and take a few steps so a real fine
 patch forms, then read the reports off the LIVE runtime. A full multi-step regrid campaign / MPI
 distribution / GPU run is Kokkos/ROMEO-gated and not asserted here.
 
@@ -29,20 +29,24 @@ from pops.runtime.amr import (  # noqa: E402
 
 
 def _model():
-    """A minimal single-scalar ExB block model (no DSL compile; native bricks)."""
+    """A minimal scalar block whose zero elliptic RHS isolates AMR inspection."""
     return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
-                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
+                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def _built_amr(regrid_every=2, n=32):
-    """A small built AmrSystem with one refined patch (density bump + a few steps)."""
+    """A small shared-hierarchy AmrSystem with one refined patch and live regrid counters."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every, coarse_max_grid=16)
     sim.add_equation(
         "ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    sim.add_equation(
+        "ni", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.set_refinement(threshold=0.5)
     ne = np.ones((n, n))
     ne[n // 3:2 * n // 3, n // 3:2 * n // 3] = 5.0
     sim.set_density("ne", ne)
+    sim.set_density("ni", np.ones((n, n)))
     for _ in range(3):
         sim.step_cfl(0.4)
     return sim
@@ -119,7 +123,7 @@ def test_hierarchy_snapshot_composes_config_envelope_and_live_patches():
     assert snap.config_available == "yes"
     assert any("resource-policy" in note for note in snap.limitations)
     # Live parts: the block registry + the patch table.
-    assert snap.blocks == ["ne"]
+    assert snap.blocks == ["ne", "ni"]
     assert snap.frozen is False and snap.regrid_every == 2
     assert snap.patch_table.built is True and snap.patch_table.n_patches >= 1
     text = str(snap)

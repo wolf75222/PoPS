@@ -34,6 +34,37 @@ def _component_count(state: Any) -> int:
     return len(components)
 
 
+@dataclass(frozen=True, slots=True)
+class BindArray:
+    """A complete state array supplied explicitly to :func:`pops.bind`.
+
+    ``BindArray`` authors ownership and bootstrap semantics without embedding a potentially large
+    runtime array in the immutable Case snapshot.  The concrete value is keyed by the same typed
+    state Handle in ``pops.bind(initial_values=...)``.  Level zero consumes the full conservative
+    vector and finer levels are populated through the resolved AMR transfer provider.
+    """
+
+    native_route = "bound_level_zero"
+    reprojectable = False
+    __pops_ir_immutable__ = True
+
+    def validate_for(self, state: Any) -> bool:
+        _component_count(state)
+        return True
+
+    def initial_source_options(self) -> dict[str, Any]:
+        return {"native_route": self.native_route}
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "profile": "bind_array",
+        }
+
+    canonical_identity = to_data
+    inspect = to_data
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class Constant:
     """One constant per state component; supported by the native AMR bootstrap route."""
@@ -147,4 +178,4 @@ class Gaussian:
     inspect = to_data
 
 
-__all__ = ["Constant", "Gaussian"]
+__all__ = ["BindArray", "Constant", "Gaussian"]

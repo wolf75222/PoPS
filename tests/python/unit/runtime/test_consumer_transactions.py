@@ -18,6 +18,7 @@ from pops.fields import (
 from pops.identity import make_identity
 from pops.model import Handle, OwnerPath
 from pops.output import HDF5, NPZ
+from pops.output._restart_provider import RestartV3
 from pops.output._consumer_contracts import (
     ConsumerCursorSet,
     ConsumerGraph,
@@ -210,6 +211,27 @@ def test_collective_mode_requires_a_nonserial_context_before_planning():
             collective_runtime, ConsumerGraph((manifest,)), _moment(clock))
     assert error.value.code == "collective_consumer_requires_distributed_context"
     assert error.value.evidence == {"communicator": "serial"}
+
+
+def test_singleton_collective_requires_an_explicit_provider_capability():
+    _, serial_runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-singleton"))
+    manifest = ConsumerManifest(
+        handle=Handle(
+            "checkpoint", kind="consumer", owner=OwnerPath.consumer("adc-685-singleton")),
+        kind=ConsumerKind.CHECKPOINT,
+        quantities=(),
+        schedule=Schedule(Every(AcceptedStep(clock), 2)),
+        target_uri="checkpoint/restart",
+        output_format=None,
+        parallel_mode=ParallelMode.COLLECTIVE,
+        operation=RestartV3(bit_identical=True),
+    )
+
+    plan = plan_accepted_side_effects(
+        serial_runtime, ConsumerGraph((manifest,)), _moment(clock))
+    assert len(plan.effects) == 1
+    assert manifest.operation_data["supports_singleton_collective"] is True
 
 
 def test_stale_field_requires_explicit_policy_and_records_recompute_without_solving():

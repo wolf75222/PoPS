@@ -291,13 +291,15 @@ def _run_plan_cpp_shard(tmp_path, changed_lines, shard_index, shard_total=6):
 
 def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
     targets = sorted(suite["name"] for suite in _serial_suites())
-    measured = sel.ci_shard_binpack.load_durations(sel.CPP_DURATIONS_JSON)
-    assert set(measured) == set(targets), "C++ duration catalog must exactly mirror the manifest"
-    weights = {
-        target: sel.CPP_BUILD_CPU_SECONDS_PER_TARGET
-        + sel.CPP_CTEST_PARALLEL_JOBS * measured[target]
-        for target in targets
-    }
+    measured_build = sel.ci_shard_binpack.load_durations(sel.CPP_BUILD_DURATIONS_JSON)
+    measured_test = sel.ci_shard_binpack.load_durations(sel.CPP_DURATIONS_JSON)
+    assert set(measured_build) == set(targets), (
+        "C++ build-duration catalog must exactly mirror the manifest"
+    )
+    assert set(measured_test) == set(targets), (
+        "C++ test-duration catalog must exactly mirror the manifest"
+    )
+    weights = sel.cpp_target_weights(targets)
 
     first = sel.cpp_target_shards(targets, 4)
     assert sel.cpp_target_shards(list(reversed(targets)), 4) == first
@@ -309,6 +311,24 @@ def test_cpp_target_shards_are_deterministic_duration_balanced_exact_cover():
     lower_bound = max(max(weights.values()), sum(weights.values()) / len(first))
     lpt_bound = (4.0 / 3.0 - 1.0 / (3.0 * len(first))) * lower_bound
     assert max(loads) <= lpt_bound + 1.0e-9
+
+
+def test_cpp_cold_build_catalog_separates_five_minute_template_targets():
+    build = sel.ci_shard_binpack.load_durations(sel.CPP_BUILD_DURATIONS_JSON)
+    very_heavy = sorted(target for target, seconds in build.items() if seconds >= 240.0)
+    assert len(very_heavy) >= 7, "cold-CI catalog lost the known five-minute AMR TUs"
+
+    shards = sel.cpp_target_shards(very_heavy, 6)
+    sel.ci_shard_binpack.verify_partition(very_heavy, shards, excluded=())
+    assert max(len(shard) for shard in shards) == 2
+    assert sum(len(shard) == 2 for shard in shards) == len(very_heavy) - 6
+
+    # The unavoidable seventh five-minute TU shares one shard, but LPT must leave enough room
+    # around that pair: <= 650 s of target compilation plus the observed ~6 min shared runtime
+    # build stays comfortably inside the workflow's 23 min watchdog.
+    full_shards = sel.cpp_target_shards(sorted(build), 6)
+    build_loads = [sum(build[target] for target in shard) for shard in full_shards]
+    assert max(build_loads) <= 650.0
 
 
 def test_cpp_ctest_selection_uses_target_labels_not_gtest_suite_names():

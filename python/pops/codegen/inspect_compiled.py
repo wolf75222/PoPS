@@ -624,7 +624,6 @@ def _layout_context(layout: Any, context: _MemoryRuntimeContext) -> _MemoryLayou
                 field="layout.max_levels", actual=max_levels)
         return _MemoryLayoutContext(kind, dimension, max_levels, None)
 
-    ratio = _positive_int(capabilities.get("ratio"), field="layout.ratio")
     ratios = capabilities.get("transition_ratios")
     if not isinstance(ratios, (tuple, list)) or len(ratios) != max_levels - 1:
         raise MemoryEstimateCapabilityError(
@@ -633,6 +632,11 @@ def _layout_context(layout: Any, context: _MemoryRuntimeContext) -> _MemoryLayou
     normalized_ratios = tuple(
         _positive_int(value, field="layout.transition_ratios[%d]" % index)
         for index, value in enumerate(ratios))
+    if max_levels == 1:
+        return _MemoryLayoutContext(kind, dimension, max_levels, None)
+    declared_ratio = capabilities.get("ratio")
+    ratio = (normalized_ratios[0] if declared_ratio is None
+             else _positive_int(declared_ratio, field="layout.ratio"))
     if any(value != ratio for value in normalized_ratios):
         raise MemoryEstimateCapabilityError(
             "estimate_memory requires one normalized AMR ratio; transition_ratios=%r disagree with ratio=%d"
@@ -766,10 +770,10 @@ def _amr_patch_budget(layout: Any, state_field: Any, cell_field: Any, n_elliptic
     if layout_context.kind == "uniform":
         return "uniform", None, []
     max_levels = layout_context.max_levels
-    ratio = layout_context.ratio
-    assert ratio is not None  # established by _layout_context for kind='amr'
     if max_levels <= 1:
         return "amr", 0, ["AMR layout with a single level: no extra patch budget"]
+    ratio = layout_context.ratio
+    assert ratio is not None  # established by _layout_context for a refining AMR hierarchy
     # Sum r^(2k) for k = 1 .. max_levels-1 (each refined level fully covering the domain).
     refine_factor = sum(ratio ** (2 * k) for k in range(1, max_levels))
     # Each refined cell carries the same per-cell footprint as the base (state + one elliptic field).

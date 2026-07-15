@@ -31,7 +31,10 @@ except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_pops_env (pops unavailable: %s)" % exc)
     sys.exit(0)
 
-from tests.python.unit.runtime._typed_program import typed_program_state
+from tests.python.unit.runtime._typed_program import (
+    typed_compiled_artifact,
+    typed_program_state,
+)
 
 
 INCLUDE = str(Path(__file__).resolve().parents[4] / "include")
@@ -62,11 +65,19 @@ def _compiled_model():
 
 
 def _handle(env, program=None):
-    """A synthetic CompiledProblem carrying a resolved CodegenEnv (no .so on disk)."""
+    """A final artifact carrying a synthetic executable and resolved CodegenEnv."""
     P = program if program is not None else _program()
-    return CompiledProblem("/tmp/pops-cache/problem.so", P, _compiled_model(),
-                           "SIG|c++|c++23", "c++", "c++23",
-                           codegen_env=env)
+    model = _compiled_model()
+    component = CompiledProblem(
+        "/tmp/pops-cache/problem.so",
+        P,
+        model,
+        "SIG|c++|c++23",
+        "c++",
+        "c++23",
+        codegen_env=env,
+    )
+    return typed_compiled_artifact(component, model)
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +148,11 @@ def test_env_state_surfaced_in_inspect():
 
 def test_inspect_without_env_is_empty_not_faked():
     # A handle built outside compile_problem carries no env -> {} (documented absence, not a default).
-    bare = CompiledProblem("/tmp/x/problem.so", _program(), _compiled_model(),
-                           "SIG", "c++", "c++23")
+    model = _compiled_model()
+    component = CompiledProblem(
+        "/tmp/x/problem.so", _program(), model, "SIG", "c++", "c++23"
+    )
+    bare = typed_compiled_artifact(component, model)
     assert bare.codegen_env is None
     assert bare.inspect().env == {}
 
@@ -186,7 +200,8 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
         assert compiled.codegen_env.autotune == "basic"
-        assert compiled.inspect().env["autotune"] == "basic"
+        artifact = typed_compiled_artifact(compiled, compiled.model)
+        assert artifact.inspect().env["autotune"] == "basic"
         # The .so landed in POPS_CODEGEN_DIR.
         assert os.path.dirname(compiled.so_path) == tmp
         # POPS_KEEP_GENERATED kept the source next to the .so.

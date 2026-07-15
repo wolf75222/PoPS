@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
 # The runtime env-format abi key: 'compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..'.
@@ -94,8 +94,10 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
                            initial_state: Any) -> Any:
     """Refuse state whose name, shape, dtype, components or ghosts mismatch metadata.
 
-    Uniform consumes full conservative states; AMR consumes coarse density seeds. Missing manifest
-    halo metadata is ABI-incomplete and is refused rather than guessed.
+    Uniform consumes full conservative states.  The compatibility AMR block mapping accepts either
+    a coarse density seed or the complete conservative state; typed AMR InitialCondition values use
+    :func:`validate_bound_initial_values`. Missing manifest halo metadata is ABI-incomplete and is
+    refused rather than guessed.
     """
     lines = []
     if not initial_state:
@@ -106,8 +108,8 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
         lines.append("initial state for unknown block %r; the artifact declares block(s) %s"
                      % (name, sorted(declared) or "(none)"))
     mesh = _layout_mesh(layout)
-    # AMR seeds via set_density, Uniform via set_state.  The decision is the layout capability,
-    # never a concrete class or a historical ``.base`` attribute.
+    # The decision is the open layout capability, never a concrete class or historical ``.base``
+    # attribute.  AMR dispatches density/full state by the authenticated array shape at install.
     amr = _layout_kind(layout) == "amr"
     ghost = getattr(manifest, "ghost_depth", None)
     if ghost is None and initial_state:
@@ -133,11 +135,14 @@ def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh:
     if mesh is not None and ghost is not None:
         if amr:
             expected = {(mesh, mesh), (mesh * mesh,)}
+            if components > 0:
+                expected.add((components, mesh, mesh))
             if shape not in expected:
-                lines.append("initial state for block %r has shape %s; the AMR install seeds the "
-                             "per-block coarse DENSITY via set_density: expected (%d, %d) or the "
-                             "flat (%d,) (the native lift fills the other component(s))"
-                             % (name, shape, mesh, mesh, mesh * mesh))
+                lines.append(
+                    "initial state for block %r has shape %s; AMR expects coarse density (%d, %d) "
+                    "or (%d,), or the complete conservative state (%d, %d, %d)"
+                    % (name, shape, mesh, mesh, mesh * mesh, components, mesh, mesh)
+                )
         else:
             expected = _expected_shapes(components, mesh, ghost)
             if shape not in expected:
@@ -148,6 +153,62 @@ def _check_one_initial_state(lines: Any, name: Any, array: Any, spec: Any, mesh:
     if dtype is not None and dtype not in accepted_dtypes:
         lines.append("initial state for block %r has dtype %r; the artifact's declared precision "
                      "expects %s" % (name, dtype, " or ".join(accepted_dtypes)))
+
+
+def validate_bound_initial_values(
+    manifest: Any,
+    arguments: Any,
+    layout: Any,
+    initial_values: Any,
+) -> list[str]:
+    """Validate typed ``InitialCondition`` payloads before native AMR construction."""
+    lines: list[str] = []
+    if not initial_values:
+        return lines
+    if not isinstance(initial_values, Mapping):
+        return ["typed initial values are not a Handle-keyed mapping"]
+    if _layout_kind(layout) != "amr":
+        return ["typed InitialCondition values require an AMR layout"]
+    mesh = _layout_mesh(layout)
+    if mesh is None:
+        return ["typed InitialCondition values require an explicit square coarse-grid extent"]
+    instances = dict(getattr(arguments, "instances", {}) or {})
+    accepted_dtypes = _precision_dtype_names(getattr(manifest, "precision", None))
+    for subject, array in initial_values.items():
+        block = getattr(subject, "block_ref", None)
+        name = getattr(block, "local_id", None)
+        if not isinstance(name, str) or not name:
+            lines.append(
+                "typed initial value key %r is not a block-qualified state Handle" % subject
+            )
+            continue
+        spec = instances.get(name)
+        if spec is None:
+            lines.append(
+                "typed initial value targets unknown block %r; artifact blocks are %s"
+                % (name, sorted(instances) or "(none)")
+            )
+            continue
+        components = int(spec.get("components", 0) or 0)
+        shape = _shape_of(array)
+        expected = {(components, mesh, mesh)} if components > 0 else set()
+        if shape is None:
+            lines.append(
+                "typed initial value for block %r is not an array (no .shape)" % name
+            )
+        elif shape not in expected:
+            lines.append(
+                "typed initial value for block %r has shape %s; BindArray requires the complete "
+                "state with shape %s"
+                % (name, shape, sorted(expected))
+            )
+        dtype = _dtype_name(array)
+        if dtype is not None and dtype not in accepted_dtypes:
+            lines.append(
+                "typed initial value for block %r has dtype %r; the artifact's declared precision "
+                "expects %s" % (name, dtype, " or ".join(accepted_dtypes))
+            )
+    return lines
 
 
 def _expected_shapes(components: Any, mesh: Any, ghost: Any) -> Any:
@@ -498,7 +559,8 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
 
 
 def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: Any, *,
-                   platform_manifest: Any = None, execution_context: Any = None) -> Any:
+                   initial_values: Any = None, platform_manifest: Any = None,
+                   execution_context: Any = None) -> Any:
     """Run the four ADC-537 bind refusal gates, raising ONE aggregated ``ValueError`` on any violation.
 
     The ``pops.bind`` front-door check (called from :mod:`pops.codegen.orchestration` BEFORE the
@@ -521,22 +583,30 @@ def run_bind_gates(compiled: Any, layout: Any, initial: Any, params: Any, aux: A
     runtime_facts = loaded_runtime_facts()
     from pops.runtime._platform_validation import validate_platform_bind
     groups = []
+    platform_fields = dict(initial or {})
+    platform_fields.update({
+        getattr(handle, "qualified_id", str(handle)): value
+        for handle, value in (initial_values or {}).items()
+    })
     if platform_manifest is not None or execution_context is not None:
         groups.append(("platform-execution-field-view", validate_platform_bind(
-            platform_manifest, execution_context, initial, layout)))
+            platform_manifest, execution_context, platform_fields, layout)))
     groups += [
         ("aux-required-by-operator", validate_operator_aux(
             manifest, aux, provided_named_aux=field_produced_aux(compiled))),
         ("manifest-abi", validate_bind_manifest(manifest, runtime_facts)),
         ("layout-runtime", validate_layout_runtime_requirements(arguments, runtime_facts)),
         ("initial-state", validate_initial_state(manifest, arguments, layout, initial)),
+        ("initial-values", validate_bound_initial_values(
+            manifest, arguments, layout, initial_values)),
     ]
     message = aggregate_bind_refusals(groups)
     if message is not None:
         raise ValueError(message)
 
 
-__all__ = ["validate_initial_state", "validate_runtime_param_domains", "validate_bind_manifest",
+__all__ = ["validate_initial_state", "validate_bound_initial_values",
+           "validate_runtime_param_domains", "validate_bind_manifest",
            "validate_operator_aux", "operator_required_aux", "field_plan_produced_aux",
            "field_produced_aux",
            "loaded_runtime_facts",

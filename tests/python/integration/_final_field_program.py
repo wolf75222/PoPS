@@ -79,7 +79,7 @@ def passive_field_model(name: str, *, coefficient: float) -> Model:
     model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=(-laplacian(potential) == rho),
+        equation=(-laplacian(potential) == rho - 1.0),
         outputs=(
             FieldOutput("phi", potential),
             GradientOutput("grad", potential),
@@ -132,7 +132,7 @@ def scalar_advection_field_model(name: str) -> Model:
     model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=(-laplacian(potential) == rho),
+        equation=(-laplacian(potential) == rho - 1.0),
         outputs=(
             FieldOutput("phi", potential),
             GradientOutput("grad", potential),

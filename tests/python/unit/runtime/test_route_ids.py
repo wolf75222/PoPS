@@ -127,7 +127,8 @@ def test_routes_inspection_surface():
     scheme = engine.Spatial(weno5=True).routes()
     assert set(scheme) == {"limiter", "riemann", "recon"}
     assert scheme["limiter"]["id"] == "limiter.weno5"
-    assert scheme["limiter"]["limitations"], "weno5 declares a native limitation"
+    assert scheme["limiter"]["requirements"] == ["3-cell halo"]
+    assert scheme["limiter"]["limitations"] == []
     assert engine.Explicit().routes()["time"]["id"] == "time.explicit"
 
 

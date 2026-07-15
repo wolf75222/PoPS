@@ -45,9 +45,10 @@ def _build_stride(n=32):
     """AMR multi-blocs : un bloc a stride=2 (cadence hold-then-catch-up) -> la cadence depend du
     compteur de macro-pas, ce que macro_step()/set_clock() exposent et restaurent."""
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    sim.block("ions", _scalar_charge(+1.0),
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.block("slow", _scalar_charge(-1.0),
+    sim.add_equation("slow", _scalar_charge(-1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()),
                   time=engine.Explicit(stride=2))  # bloc lent : cadence stride=2
     sim.set_poisson(bc=Periodic())

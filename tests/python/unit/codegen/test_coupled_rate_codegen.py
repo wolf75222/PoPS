@@ -140,16 +140,17 @@ def test_per_block_out_composes_in_a_forward_step():
                        if "ctx.rhs_scratch_like(u1)" in ln)
     electron_accumulations = [
         line for line in src.splitlines()
-        if "ctx.axpy(acc" in line and electron_scratch in line
+        if "ctx.axpy(" in line and electron_scratch in line
     ]
     ion_accumulations = [
         line for line in src.splitlines()
-        if "ctx.axpy(acc" in line and ion_scratch in line
+        if "ctx.axpy(" in line and ion_scratch in line
     ]
     # The exact-coefficient ABI now carries both dt and its compile-time power metadata.
     # This test owns the scientific routing, not the presentation of that metadata argument.
     assert len(electron_accumulations) == 1 and ", dt," in electron_accumulations[0]
     assert len(ion_accumulations) == 1 and ", dt," in ion_accumulations[0]
+    assert "ctx.commit_many(" in src
 
 
 def test_coupled_rate_with_prim_var_is_deferred():

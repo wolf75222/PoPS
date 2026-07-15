@@ -398,14 +398,13 @@ def _require_abi(required: CapabilityProof, provided: CapabilityProof) -> None:
             expected=expected, actual=actual)
 
 
-def validate_launch(platform: PlatformManifest, context: ExecutionContext,
-                    fields: Sequence[FieldViewDescriptor],
-                    expected_fields: Sequence[FieldViewDescriptor] = ()) -> None:
-    """Validate every platform and field proof before the caller may enter a kernel."""
-    if type(platform) is not PlatformManifest or type(context) is not ExecutionContext:
-        raise TypeError("validate_launch requires exact PlatformManifest and ExecutionContext values")
+def _validate_launch_facts(platform: PlatformManifest, context: ExecutionContext,
+                           fields: Sequence[FieldViewDescriptor],
+                           expected_fields: Sequence[FieldViewDescriptor],
+                           *, compare_route: bool) -> None:
     backend = context.backend
-    for name in ("backend", "target", "device", "communicator"):
+    route_fields = ("backend", "target") if compare_route else ()
+    for name in (*route_fields, "device", "memory_spaces", "communicator"):
         _require_same(name, getattr(platform, name), getattr(backend, name))
     _require_abi(platform.abi, backend.abi)
     for name in ("storage", "compute", "accumulation", "reduction"):
@@ -444,6 +443,40 @@ def validate_launch(platform: PlatformManifest, context: ExecutionContext,
     if missing:
         raise PlatformContractError("required field view(s) are missing: %s" % missing,
                                     field="fields", expected=missing, actual=None)
+
+
+def validate_launch(platform: PlatformManifest, context: ExecutionContext,
+                    fields: Sequence[FieldViewDescriptor],
+                    expected_fields: Sequence[FieldViewDescriptor] = ()) -> None:
+    """Validate every platform and field proof before the caller may enter a kernel."""
+    if type(platform) is not PlatformManifest or type(context) is not ExecutionContext:
+        raise TypeError("validate_launch requires exact PlatformManifest and ExecutionContext values")
+    _validate_launch_facts(platform, context, fields, expected_fields, compare_route=True)
+
+
+def validate_component_launch(platform: PlatformManifest, context: ExecutionContext,
+                              fields: Sequence[FieldViewDescriptor],
+                              expected_fields: Sequence[FieldViewDescriptor] = ()) -> None:
+    """Validate an authenticated AOT component against its host simulation runtime.
+
+    ``aot-component/component`` identifies the component artifact's build role; it is intentionally
+    distinct from the enclosing simulation's ``production/system`` or ``production/amr_system``
+    route.  Only that exact component route receives this comparison rule.  Every execution-bearing
+    fact (ABI, precision, device, memory spaces and communicator) remains fail-closed.
+    """
+    if type(platform) is not PlatformManifest or type(context) is not ExecutionContext:
+        raise TypeError(
+            "validate_component_launch requires exact PlatformManifest and ExecutionContext values")
+    route = (
+        platform.backend.require("component.backend"),
+        platform.target.require("component.target"),
+    )
+    expected_route = ("aot-component", "component")
+    if route != expected_route:
+        raise PlatformContractError(
+            "component artifact route must be exactly %r" % (expected_route,),
+            field="component_route", expected=expected_route, actual=route)
+    _validate_launch_facts(platform, context, fields, expected_fields, compare_route=False)
 
 
 def _require_field_capability(view: FieldViewDescriptor, field_name: str,
@@ -556,6 +589,7 @@ def serial_execution_context(platform: PlatformManifest) -> ExecutionContext:
 __all__ = [
     "PLATFORM_CONTRACT_SCHEMA_VERSION", "CapabilityProof", "PrecisionPolicy",
     "PlatformManifest", "RuntimeBackendManifest", "ExecutionResource", "ExecutionContext",
-    "FieldViewDescriptor", "PlatformContractError", "validate_launch", "launch_checked",
+    "FieldViewDescriptor", "PlatformContractError", "validate_launch",
+    "validate_component_launch", "launch_checked",
     "proven_serial_manifest", "artifact_platform_manifest", "serial_execution_context",
 ]

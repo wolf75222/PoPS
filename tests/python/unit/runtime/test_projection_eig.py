@@ -158,7 +158,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "  return 0;\n"
             "}\n")
     exe = os.path.join(tmp, "eig_main")
-    cp = subprocess.run([cxx, "-std=c++17", "-I", INCLUDE, main, "-o", exe],
+    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
                         capture_output=True, text=True)
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")
@@ -212,9 +212,16 @@ def test_system_end_to_end():
     print("== (4) [_pops] semantique POST-PAS (production) == reference numpy ==")
     try:
         import pops
+        from pops.codegen.loader import CompiledModel
+        from pops.codegen.toolchain import loader_cxx_std
         from pops._ir.expr import Const
         from pops._ir.ops import eig_max_im, sign
+        from pops.numerics.reconstruction import Minmod
+        from pops.numerics.riemann import Rusanov
+        from pops.numerics.variables import Conservative
+        from pops.physics.aux import roles_for
         from pops.physics._model import HyperbolicModel
+        import pops.runtime._engine_descriptors as engine
     except Exception as ex:  # noqa: BLE001
         print("  skip  extension _pops absente (%s) -- (3) couvre deja la numerique compilee"
               % type(ex).__name__)
@@ -247,10 +254,36 @@ def test_system_end_to_end():
         q2 = np.zeros((n, n))
         return np.stack([q0, q1, q2])
 
-    def make_sys(so):
+    def compiled_component(model, so_path):
+        return CompiledModel(
+            so_path=so_path,
+            backend="production",
+            target="system",
+            cons_names=model.cons_names,
+            cons_roles=roles_for(model.cons_names, model.cons_roles),
+            prim_names=model.prim_state,
+            n_vars=model.n_vars,
+            gamma=1.4,
+            n_aux=len(model.aux_names) + len(model.aux_extra_names),
+            params={},
+            caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
+            abi_key=pops._pops.abi_key(),
+            model_hash=model._model_hash(),
+            cxx=cxx,
+            std=loader_cxx_std(),
+            wave_speeds=False,
+            wave_speed_provider=None,
+        )
+
+    def make_sys(component):
         s = System(n=N, L=L, periodic=True)
-        s._s.add_native_block("toy", so, limiter="minmod", riemann="rusanov",
-                              recon="conservative", time="explicit", gamma=1.4, substeps=1)
+        s.add_equation(
+            "toy",
+            component,
+            spatial=engine.Spatial(
+                limiter=Minmod(), flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit(),
+        )
         s.set_state("toy", init(N))
         return s
 
@@ -262,14 +295,16 @@ def test_system_end_to_end():
         so = m_eig.compile(os.path.join(tmp, "eig_production.so"), INCLUDE, backend="production")
         so_n = m_none.compile(os.path.join(tmp, "none_production.so"), INCLUDE,
                               backend="production")
+        eig_component = compiled_component(m_eig, so)
+        plain_component = compiled_component(m_none, so_n)
         # run AVEC hook
-        s = make_sys(so)
+        s = make_sys(eig_component)
         run = []
         for _ in range(NSTEPS):
             s.step(DT)
             run.append(np.array(s.get_state("toy")).reshape(3, N, N))
         # reference : transport SANS hook un pas, puis projection numpy (miroir projection_value)
-        sr = make_sys(so_n)
+        sr = make_sys(plain_component)
         cur, ref = init(N), []
         for _ in range(NSTEPS):
             sr.set_state("toy", cur)

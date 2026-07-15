@@ -34,9 +34,10 @@ def _scalar_charge(q, B0=1.0):
 
 def _build(n=32, regrid_every=0):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.block("ions", _scalar_charge(+1.0),
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.add_equation("ions", _scalar_charge(+1.0),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.block("electrons", _scalar_charge(-1.0),
+    sim.add_equation("electrons", _scalar_charge(-1.0),
                   spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
     sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
@@ -76,7 +77,12 @@ def main():
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-        s.block("ne", _scalar_charge(+1.0), spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
+        s.set_temporal_relations([2], [1], ["integral_only"])
+        s.add_equation(
+            "ne",
+            _scalar_charge(+1.0),
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        )
         s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.001, 10)

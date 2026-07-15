@@ -311,7 +311,7 @@ def _common_platform_manifest(
 ) -> Any:
     """Prove one platform contract from every executable binary, never a representative."""
     from pops._platform_contracts import (
-        artifact_platform_manifest, serial_execution_context, validate_launch)
+        artifact_platform_manifest, serial_execution_context, validate_component_launch)
 
     from pops.runtime_environment import runtime_environment_report
 
@@ -346,7 +346,7 @@ def _common_platform_manifest(
             )
         context = serial_execution_context(baseline)
         for component in external:
-            validate_launch(component.platform_manifest, context, ())
+            validate_component_launch(component.platform_manifest, context, ())
     return baseline
 
 

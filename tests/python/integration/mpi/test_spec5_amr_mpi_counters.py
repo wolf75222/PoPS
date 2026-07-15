@@ -59,6 +59,7 @@ def _built_multiblock(n=64, regrid_every=1):
     corner and the refinement tags on energy (role) so the union regrid forms a real fine patch.
     """
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
+    sim.set_temporal_relations([2], [1], ["integral_only"])
     sim.add_equation("gas0", _comp(), time=engine.Explicit())
     sim.add_equation("gas1", _comp(), time=engine.Explicit())
     sim.set_poisson(bc=Periodic())

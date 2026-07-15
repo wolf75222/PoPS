@@ -40,7 +40,9 @@ def test_amr_system_inspect_composes_amr_snapshot():
     d = rep.to_dict()
     assert d["runtime"] == "amr_system"
     assert d["amr"] is not None
-    assert d["amr"]["max_levels"] == 2
+    # The native runtime does not own the bind-time resource ceiling.  Reporting the
+    # policy authority is exact; manufacturing the common two-level default is not.
+    assert d["amr"]["max_levels"] == "resource_policy"
     assert d["amr"]["ratio"] == 2
     assert d["runtime_environment"]["amr_refinement_ratio"] == 2
     assert d["options"]["defaults"]["amr"]["refinement_ratio"] == 2

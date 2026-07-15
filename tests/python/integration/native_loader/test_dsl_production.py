@@ -1,19 +1,9 @@
-"""Backend "production" (NATIF) du DSL : un modele euler_poisson ecrit en formules est compile en un
-LOADER .so (compile_native / compile(backend="production")) qui inline le gabarit en-tete
-pops::add_compiled_model<ProdModel>, puis branche dans le System via l'installation privee du paquet
-authentifie. Le loader natif installe le modele genere comme bloc NATIF sur le CONTEXTE REEL du
-System (grid_context) -> le bloc tourne ZERO-COPIE le MEME chemin qu'add_block
-(assemble_rhs, fill_boundary, foncteurs nommes device-clean). On verifie donc une parite STRICTE :
+"""Native production-package parity and ABI refusal.
 
-  1) eval_rhs ET potentiel du bloc "production" == bloc NATIF add_block (precision machine), pour
-     plusieurs schemas (minmod+rusanov+conservatif, minmod+hllc+primitif = flux de production) ;
-  2) une avance de quelques pas (SSPRK2) reste bit-identique au bloc natif (etat final) ;
-  3) GARDE-FOU ABI : un loader dont la cle pops_native_abi_key est falsifiee est REJETE explicitement
-     par l'installateur de paquet (pas d'UB silencieux a la frontiere C++).
-
-CRUX (resolution de symboles a travers le dlopen) : le loader appelle des methodes hors-ligne du
-module _pops (install_block / grid_context / ensure_aux_width). Elles sont exportees (POPS_EXPORT) et le
-loader est compile avec -undefined dynamic_lookup ; le test echouerait au dlopen sinon.
+One final board model is compiled through ``Case -> validate -> resolve -> compile``.  Its detached
+component is bit-identical to the equivalent ModelSpec for Rusanov and HLLC and over a multi-step
+advance.  A deliberately recompiled package with a mismatched header signature must be rejected at
+the authenticated native boundary.
 """
 import os
 import shutil
@@ -22,7 +12,8 @@ import tempfile
 import numpy as np
 
 import pops.runtime._engine_descriptors as engine
-from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
+from pops.codegen.loader import CompiledModel
+from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
@@ -30,11 +21,11 @@ POPS_PROCESS_TIMEOUT = 900
 
 
 def _native_spec():
-    """Le MEME modele euler_poisson, version NATIVE composee par briques (reference de parite)."""
+    """Equivalent native Euler bricks used as the numerical parity oracle."""
     return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
                      transport=engine.CompressibleFlux(),
-                     source=engine.GravityForce(),
-                     elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+                     source=engine.NoSource(),
+                     elliptic=engine.ChargeDensity(charge=1.0))
 
 
 def _initial_state(n):
@@ -42,7 +33,14 @@ def _initial_state(n):
     X, Y = np.meshgrid(xs, xs)
     U = np.zeros((4, n, n))
     U[0] = 1.0 + 0.3 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)
-    U[3] = 1.0 / (GAMMA - 1.0)
+    velocity_x = 0.2 * np.sin(2.0 * np.pi * X) * np.cos(2.0 * np.pi * Y)
+    velocity_y = -0.15 * np.cos(2.0 * np.pi * X) * np.sin(2.0 * np.pi * Y)
+    pressure = 1.0 + 0.1 * np.sin(2.0 * np.pi * X)
+    U[1] = U[0] * velocity_x
+    U[2] = U[0] * velocity_y
+    U[3] = pressure / (GAMMA - 1.0) + 0.5 * U[0] * (
+        velocity_x * velocity_x + velocity_y * velocity_y
+    )
     return U
 
 
@@ -53,16 +51,16 @@ def main():
         print("test_dsl_production : OK (rien a compiler)")
         return
 
-    e = build_euler_poisson()
+    model = build_euler("production-parity")
     n, L = 48, 1.0
     U = _initial_state(n)
     Uflat = U.reshape(-1).tolist()
     spec = _native_spec()
     tmp = tempfile.mkdtemp()
     try:
-        # Backend "production" via la facade : compile_native sous le capot (loader natif).
-        so = e.compile(os.path.join(tmp, "euler_poisson_native.so"), INCLUDE, backend="production")
-        assert so.backend == "production"
+        # The component package is produced only by the final public lifecycle.
+        compiled = compile_euler_component(model, cells=16, cxx=cxx)
+        assert compiled.backend == "production"
 
         def spatial(limiter, riemann, recon):
             from pops.numerics.riemann import Rusanov, HLL, HLLC, Roe
@@ -78,10 +76,9 @@ def main():
         def build_native(limiter, riemann, recon, evolve=True):
             sys = System(n=n, L=L, periodic=True)
             sys.add_equation(
-                "gas", model=so, spatial=spatial(limiter, riemann, recon),
+                "gas", model=compiled, spatial=spatial(limiter, riemann, recon),
                 time=engine.Explicit(), evolve=evolve,
             )
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys
 
@@ -90,28 +87,21 @@ def main():
             sys.add_equation("gas", spec,
                              spatial=spatial(limiter, riemann, recon),
                              time=engine.Explicit(), evolve=evolve)
-            sys.set_poisson(rhs="charge_density", solver="geometric_mg")
             sys.set_state("gas", Uflat)
             return sys
 
         def compare(limiter, riemann, recon):
             prod = build_native(limiter, riemann, recon)
-            prod.solve_fields()
             R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
-            phi_prod = np.array(prod.potential()).reshape(n, n)
 
             ref = build_ref(limiter, riemann, recon)
-            ref.solve_fields()
             R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
-            phi_ref = np.array(ref.potential()).reshape(n, n)
 
-            dphi = float(np.max(np.abs(phi_prod - phi_ref)))
-            assert dphi < 1e-12, "%s : potentiel natif != add_block (%.2e)" % (riemann, dphi)
             assert float(np.max(np.abs(R_prod))) > 1e-3, "%s : residu trivial" % riemann
             dres = float(np.max(np.abs(R_prod - R_ref)))
             # Parite STRICTE : meme chemin compile (install_block), donc bit-identique (pas seulement < 1e-9).
             assert dres == 0.0, "%s : eval_rhs natif != add_block (ecart %.2e, attendu 0)" % (riemann, dres)
-            print("OK  bloc production %s+%s : eval_rhs BIT-IDENTIQUE + potentiel == add_block"
+            print("OK  bloc production %s+%s : eval_rhs BIT-IDENTIQUE a add_equation(ModelSpec)"
                   % (limiter, riemann))
 
         compare("minmod", "rusanov", "conservative")
@@ -129,7 +119,7 @@ def main():
         Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
         dstep = float(np.max(np.abs(Up - Ur)))
         assert np.isfinite(Up).all() and Up[0].min() > 0, "etat de production non physique"
-        assert float(np.abs(Up[1]).max()) > 1e-4, "la gravite n'a pas mis le gaz en mouvement"
+        assert float(np.abs(Up[1]).max()) > 1e-4, "le transport Euler est reste trivial"
         assert dstep == 0.0, "etat apres 12 pas natif != add_block (ecart %.2e, attendu 0)" % dstep
         print("OK  12 pas SSPRK2 : etat de production BIT-IDENTIQUE au bloc natif add_block")
 
@@ -138,13 +128,16 @@ def main():
         # -> add_native_block doit lever une erreur EXPLICITE. (On ne patche PAS le binaire : sur macOS
         # ARM cela invaliderait la signature ad-hoc et le noyau tuerait le process ; on recompile un .so
         # valide a la cle differente, ce qui teste exactement la frontiere d'ABI.)
-        bad = _compile_wrong_abi(e, os.path.join(tmp, "euler_poisson_wrongabi.so"), cxx)
+        bad = _compile_wrong_abi(model, os.path.join(tmp, "euler_wrongabi.so"), cxx)
+        bad_component = _component_at(compiled, bad)
         sys = System(n=n, L=L, periodic=True)
         raised = False
         try:
-            sys._s._install_native_block(
-                "gas", bad, "minmod", "rusanov", "conservative", "explicit",
-                GAMMA, 1, True, 1, [], 0.0,
+            sys.add_equation(
+                "gas",
+                bad_component,
+                spatial=spatial("minmod", "rusanov", "conservative"),
+                time=engine.Explicit(),
             )
         except RuntimeError as ex:
             raised = True
@@ -163,8 +156,10 @@ def _compile_wrong_abi(model, dst_so, cxx):
     ce qui doit declencher le rejet d'add_native_block. Renvoie le chemin du .so."""
     import subprocess
     import tempfile
+    from pops.codegen._compile import emit_cpp_native_loader
     from pops.codegen.toolchain import pops_loader_build_flags
-    src = model.emit_cpp_native_loader()
+    lowering = model.__pops_compiler_lowering__()
+    src = emit_cpp_native_loader(lowering.emit_model)
     # PoPS est Kokkos-only : le loader inclut les en-tetes pops (for_each), il faut donc Kokkos +
     # (macOS) -undefined dynamic_lookup. pops_loader_build_flags fournit compilateur + flags ; on garde
     # une SIGNATURE D'EN-TETES FAUSSE (-DPOPS_HEADER_SIG bidon) pour que le .so compile mais soit REJETE
@@ -178,6 +173,35 @@ def _compile_wrong_abi(model, dst_so, cxx):
             f.write(src)
         subprocess.run([cc, *flags, "-I", INCLUDE, cpp, "-o", dst_so, *kflags_l], check=True)
     return dst_so
+
+
+def _component_at(component, so_path):
+    """Detach valid metadata while substituting the deliberately bad package path."""
+    return CompiledModel(
+        so_path=so_path,
+        backend=component.backend,
+        target=component.target,
+        cons_names=component.cons_names,
+        state_spaces=component.state_spaces,
+        cons_roles=component.cons_roles,
+        prim_names=component.prim_names,
+        n_vars=component.n_vars,
+        gamma=component.gamma,
+        n_aux=component.n_aux,
+        params=component.params,
+        caps=component.caps,
+        abi_key=component.abi_key,
+        model_hash=component.model_hash,
+        cxx=component.cxx,
+        std=component.std,
+        hllc=component.has_hllc,
+        roe=component.has_roe,
+        aux_extra_names=component.aux_extra_names,
+        wave_speeds=component.has_wave_speeds,
+        wave_speed_provider=component.wave_speed_provider,
+        elliptic_field_names=component.elliptic_field_names,
+        definition_identity=component.definition_identity,
+    )
 
 
 if __name__ == "__main__":

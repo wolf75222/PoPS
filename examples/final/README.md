@@ -45,7 +45,9 @@ These are requirements of the final public protocols, not invitations to use pri
    lowers the aggregate to the hierarchy/transfer/initial/bootstrap authorities. Transfer
    order and halo depth come from `pops.lib.amr.StateTransfer`; users do not repeat them.
 3. `InitialCondition` and its projection enter the Case through `case.initials.add`, which accepts the
-   qualified state once and lowers analytic data without a Python callback at runtime.
+   qualified state once. `Constant`/`Gaussian` lower analytic data without a Python callback;
+   `BindArray()` instead declares a complete conservative value supplied exactly once through
+   `pops.bind(initial_values={block[U]: array})` and prolonged by the resolved AMR transfer.
 4. `ConsumerGraph.from_consumers` lowers direct `ScientificOutput`, `Checkpoint`, and diagnostic
    descriptors to the exact layout-qualified runtime graph. Parallel I/O is derived from the format
    (`HDF5(parallel=True)`), so no second switch can disagree with it. `case.consumers(graph)` is the

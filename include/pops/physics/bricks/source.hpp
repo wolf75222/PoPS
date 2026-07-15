@@ -45,6 +45,10 @@ struct NoSource {
 /// defaults -> STRICTLY bit-identical. POD integers -> apply stays device-clean (reads u[c_rho],
 /// never resolves on device). No new user parameter: automatic, transparent resolution.
 struct PotentialForce {
+  // Energy is a conditional role: this brick also serves the three-component isothermal state and
+  // touches energy only for a four-component state (see apply).  The host role binder therefore
+  // resolves c_E when present and requires it only for the four-component specialization.
+  static constexpr bool requires_energy_role(int state_size) { return state_size == 4; }
   Real qom = 1;                                // q/m (sign included)
   int c_rho = 0, c_mx = 1, c_my = 2, c_E = 3;  // defaults = canonical fluid layout (bit-identical)
   template <class State>
@@ -71,6 +75,7 @@ struct PotentialForce {
 /// indices == defaults for any native transport -> bit-identical. See PotentialForce for the
 /// full contract.
 struct GravityForce {
+  static constexpr bool requires_energy_role(int state_size) { return state_size == 4; }
   int c_rho = 0, c_mx = 1, c_my = 2, c_E = 3;  // defaults = canonical fluid layout (bit-identical)
   template <class State>
   POPS_HD State apply(const State& u, const Aux& a) const {

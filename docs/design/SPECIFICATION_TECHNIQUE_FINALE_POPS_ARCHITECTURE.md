@@ -259,6 +259,39 @@ de rôle est refusée ; un token natif inconnu ou réservé et deux rôles qui e
 même token ABI sont également refusés. Les rôles décrivent la physique d'une composante : ils ne sont
 ni inférés par position, ni confondus avec des unités, ni consultés par un `Program` générique.
 
+Un état utilise par défaut ses composantes conservatives comme coordonnées primitives identité. Un
+modèle qui possède un vrai changement de coordonnées le déclare en une seule transaction : ordre
+primitif, rôles et inverse conservatif ont une autorité commune.
+
+```python
+rho, rho_u, rho_v, energy = U
+u = model.primitive("u", rho_u / rho)
+v = model.primitive("v", rho_v / rho)
+p = model.primitive("p", pressure_from(rho, rho_u, rho_v, energy))
+
+model.primitive_state(
+    rho, u, v, p,
+    conservative=(
+        rho,
+        rho * u,
+        rho * v,
+        p / (gamma - 1.0) + 0.5 * rho * (u * u + v * v),
+    ),
+    roles={
+        "rho": Density(),
+        "u": Velocity(axis=frame.x),
+        "v": Velocity(axis=frame.y),
+        "p": Pressure(),
+    },
+)
+```
+
+`primitive_state` accepte uniquement les variables exactes émises par ce `Model`, exige la même
+arité que l'état conservatif et refuse un inverse qui lit une variable étrangère ou non sélectionnée.
+La déclaration est atomique : une erreur ne laisse ni layout ni inverse partiellement installé. Cette
+capacité est state-scoped ; le builtin mono-état fournit ce raccourci, tandis qu'un provider
+multi-espèces doit fournir explicitement la même petite interface pour chacun de ses espaces d'état.
+
 Les paramètres ont des kinds fermés (`RuntimeParam`, `ConstParam`, `DerivedParam`), des domaines
 typés et une phase d'utilisation vérifiée. Une valeur structurelle ne peut pas être transformée en
 paramètre runtime pour contourner compilation ou allocation.
@@ -706,8 +739,18 @@ seul un niveau unique avec hiérarchie figée est exécutable tant que le ledger
 n'est pas fourni.
 
 Une condition initiale associe : handle d'état qualifié, donnée, projection et éventuellement preuve
-de reprojection AMR. Pour un bootstrap AMR, la projection analytique, prolongation et restriction sont
-des choix explicites. Le bind refuse deux autorités concurrentes (`initial_state` et plan IC AMR).
+de reprojection AMR. `pops.lib.initial.Constant` et `Gaussian` sont des données analytiques immuables
+réévaluées sur chaque niveau. `pops.lib.initial.BindArray()` déclare au contraire qu'un tableau d'état
+conservatif complet sera fourni à `pops.bind(initial_values={block[U]: array})` : le tableau ne pollue
+ni le snapshot ni la clé de compilation, le niveau zéro en est l'unique consommateur et les niveaux
+fins utilisent le provider de transfert résolu. Le handle d'authoring est authentifié puis remplacé
+par le sujet canonique exact du plan ; une clé homonyme provenant d'un autre `Case` est refusée.
+
+Pour un bootstrap AMR, reprojection analytique et prolongation sont donc des choix explicites portés
+par la brique de donnée. `initial_values` doit couvrir exactement les sources non analytiques et chaque
+`BindArray` doit avoir la forme conservatrice complète `(n_components, ny, nx)` et la précision de
+l'artefact. Le bind refuse deux autorités concurrentes (`initial_state` et plan IC AMR), un tableau de
+densité qui prétend satisfaire `BindArray`, une source analytique surchargée et toute valeur manquante.
 
 ## 7. Programme de temps
 
@@ -981,6 +1024,9 @@ pas de `CompileConfig` public, de `strict=True`, de `sim.run`, ni de `RejectOldM
 
 `pops.bind` accepte exactement cinq familles : `initial_state`, `params`, `aux`, `resources` et
 `initial_values`. L'enregistrement interne qui les authentifie n'est pas importé par l'utilisateur.
+`initial_state` est la table de blocs du layout uniforme (et la route de compatibilité AMR sans plan
+d'initialisation) ; `initial_values` est la table typée par `Handle` du plan `InitialCondition` AMR.
+Elles ne constituent jamais deux autorités pour le même artefact.
 Dans cette release, `resources` est vide ou contient uniquement `execution_context`, valeur typée qui
 porte toute l'autorité de lancement. Les clés libres `communicator`, `device`, `stream` ou `allocator`
 sont refusées ; elles ne constituent pas un second chemin de configuration.

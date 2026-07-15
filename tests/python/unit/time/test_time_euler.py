@@ -30,6 +30,17 @@ import sys
 import tempfile
 
 import numpy as np
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model as BoardModel
+from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefaultSource
 
 import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
@@ -65,7 +76,7 @@ def transport_model():
 def make_sim(method):
     n = 24
     sim = System(n=n, L=1.0, periodic=True)
-    sim.block("ions", transport_model(),
+    sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method=method))
     x = (np.arange(n) + 0.5) / n
@@ -100,9 +111,9 @@ if not bit:
 print("== (3) no-default-change : defaut == ssprk2 ==")
 sd = make_sim("ssprk2")
 s_def = System(n=24, L=1.0, periodic=True)
-s_def.block("ions", transport_model(),
-                spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                time=engine.Explicit())
+s_def.add_equation("ions", transport_model(),
+                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                   time=engine.Explicit())
 s_def.set_state("ions", np.array(sd.get_state("ions")))
 sd.step(dt)
 s_def.step(dt)
@@ -117,12 +128,21 @@ seb.step(dt)
 d = np.abs(np.array(s2b.get_state("ions")) - np.array(seb.get_state("ions"))).max()
 chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
-print("== (5) AMR : rejet explicite ==")
+print("== (5) AMR : Euler explicite avec relation temporelle ==")
 amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-msg = err_msg(lambda: amr.block("ions", transport_model(),
-                                    spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                                    time=engine.Explicit(method="euler")))
-chk("euler" in msg or "explicit" in msg, f"AmrSystem rejette time='euler' ({msg[:60]}...)")
+amr.set_temporal_relations([2], [1], ["integral_only"])
+try:
+    amr.add_equation(
+        "ions",
+        transport_model(),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
+    )
+    amr_euler_ok = True
+except Exception as exc:  # noqa: BLE001 - the script reports the exact failed contract
+    print("AMR Euler install failed:", exc)
+    amr_euler_ok = False
+chk(amr_euler_ok, "AmrSystem accepte Euler avec une relation temporelle explicite")
 
 cxx = _default_cxx(None)
 if not cxx:
@@ -146,9 +166,44 @@ def adv_model():
     return m
 
 
+def _public_adv_artifact(name="eulprod"):
+    """Compile the production component through the final typed Case lifecycle."""
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
+    state = model.state("U", components=("q1", "q2"))
+    q1, q2 = state
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (1.5 * q1, -0.7 * q2),
+                     y_axis: (-0.7 * q1, 1.5 * q2)},
+        waves={x_axis: (1.5 + 0.0 * q1,) * 2,
+               y_axis: (1.5 + 0.0 * q1,) * 2},
+    )
+    source = model.source("zero", on=state, value=(0.0 * q1, 0.0 * q2))
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+    case = pops.Case("%s-case" % name)
+    block = case.block("q", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, FiniteVolume(
+        flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    case.numerics(numerics, block=block)
+    program = __import__("pops").time.Program("%s-program" % name)
+    temporal = program.state(block[state])
+    rhs = program.rhs(state=temporal.n, terms=[FinalFlux(), FinalDefaultSource()])
+    program.commit(temporal.next, program.value(
+        "U1", temporal.n + program.dt * rhs, at=temporal.next.point))
+    case.program(program)
+    layout = Uniform(CartesianGrid(frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production(),
+                            compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")})
+    return pops.compile(resolved).blocks[0].model
+
+
 tmp = tempfile.mkdtemp(prefix="pops_euler_")
 try:
-    prod = adv_model().compile(os.path.join(tmp, "eulprod.so"), INCLUDE, backend="production")
+    prod = _public_adv_artifact()
 except RuntimeError as ex:
     if "Kokkos" in str(ex):
         print("Kokkos introuvable : test (6) saute --", str(ex)[:60])

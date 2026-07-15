@@ -7,7 +7,7 @@ from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.initial import InitialCondition, InitialConditionAuthorities
 from pops.lib.amr import StateTransfer
-from pops.lib.initial import Constant, Gaussian
+from pops.lib.initial import BindArray, Constant, Gaussian
 from pops.mesh import LayoutPlanBuilder
 from pops.mesh._amr import (
     Above,
@@ -36,6 +36,7 @@ from pops.projection import ConservativeCellAverage
 from pops.representations import Conservative
 from pops.spaces import CellState
 from pops.time import Clock
+from pops.codegen._plans import _canonicalize_initial_value_mapping
 
 
 def _case(*, components=("u",)):
@@ -180,6 +181,54 @@ def test_initial_registry_derives_exact_amr_initial_and_bootstrap_plans():
         action.operation == "analytic_reprojection"
         for action in authorities.bootstrap_plan.actions
     )
+
+
+def test_bind_array_authors_full_level_zero_value_and_transfer_bootstrap():
+    case, _, _, state, threshold = _case(components=("rho", "rho_u", "rho_v"))
+    profile = BindArray()
+    case.initials.add(InitialCondition(
+        state=state,
+        value=profile,
+        projection=ConservativeCellAverage(),
+    ))
+    pops.validate(case)
+    layout_plan, transfers, hierarchy, tagging = _resolved_amr_authorities(
+        case, state, threshold)
+
+    authorities = case.initials.resolve_amr(
+        layout_plan=layout_plan,
+        transfers=transfers,
+        hierarchy=hierarchy,
+        tagging=tagging,
+    )
+
+    binding, = authorities.initial_condition_plan.bindings
+    selection, = authorities.bootstrap_plan.selections
+    assert binding.source.options.to_data()["native_route"] == "bound_level_zero"
+    assert selection.method.to_data() == {"method": "prolongation"}
+    assert profile.to_data() == {"schema_version": 1, "profile": "bind_array"}
+
+    canonical = case.resolve(state)
+    authored_payload = object()
+    assert _canonicalize_initial_value_mapping(
+        authorities.initial_condition_plan, {state: authored_payload}
+    ) == {canonical: authored_payload}
+    canonical_payload = object()
+    assert _canonicalize_initial_value_mapping(
+        authorities.initial_condition_plan, {canonical: canonical_payload}
+    ) == {canonical: canonical_payload}
+
+    foreign_case, _, _, foreign_state, _ = _case(
+        components=("rho", "rho_u", "rho_v"))
+    assert foreign_case is not case
+    with pytest.raises(KeyError, match="not an authenticated subject or authoring alias"):
+        _canonicalize_initial_value_mapping(
+            authorities.initial_condition_plan, {foreign_state: object()})
+    with pytest.raises(ValueError, match="multiple aliases"):
+        _canonicalize_initial_value_mapping(
+            authorities.initial_condition_plan,
+            {state: object(), canonical: object()},
+        )
 
 
 def test_gaussian_is_typed_frame_bound_and_scalar():

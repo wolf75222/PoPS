@@ -404,6 +404,52 @@ class ResolvedSimulationPlan:
             raise ValueError("ResolvedSimulationPlan identity verification failed")
 
 
+def _canonicalize_initial_value_mapping(initial_plan: Any, values: Any) -> Mapping[Any, Any]:
+    """Resolve only canonical subjects and aliases captured by the originating Case registry."""
+    from pops.model import Handle
+
+    if not isinstance(values, Mapping):
+        raise TypeError("pops.bind initial_values must be a Handle-keyed mapping")
+    if not values:
+        return {}
+    canonical_subject = getattr(initial_plan, "canonical_subject", None)
+    if not callable(canonical_subject):
+        raise TypeError(
+            "pops.bind initial_values requires an authenticated InitialConditionPlan"
+        )
+    canonical: dict[Handle, Any] = {}
+    for supplied, value in values.items():
+        subject = canonical_subject(supplied)
+        if subject in canonical:
+            raise ValueError(
+                "pops.bind initial_values contains multiple aliases for %s"
+                % subject.qualified_id
+            )
+        canonical[subject] = value
+    return canonical
+
+
+def _canonical_initial_values(artifact: Any, values: Any) -> Mapping[Any, Any]:
+    """Authenticate public authored/resolved initial-value Handles against one artifact.
+
+    ``BindInputs`` remains an internal canonical record.  The public boundary may receive the live
+    block-qualified Handle returned while authoring a Case; resolve it once here and replace it with
+    the exact subject retained by the compiled InitialConditionPlan.  A look-alike Handle from
+    another Case therefore never becomes a bind alias merely because its local name matches.
+    """
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    if type(artifact) is not CompiledSimulationArtifact:
+        raise TypeError("pops.bind requires an exact CompiledSimulationArtifact")
+    if not isinstance(values, Mapping):
+        raise TypeError("pops.bind initial_values must be a Handle-keyed mapping")
+    if not values:
+        return {}
+    initial_plan = artifact.plan.initial_condition_plan
+    if initial_plan is None:
+        raise ValueError("pops.bind initial_values requires a resolved InitialConditionPlan")
+    return _canonicalize_initial_value_mapping(initial_plan, values)
+
+
 @dataclass(frozen=True, slots=True)
 class BindInputs:
     """Concrete values/resources accepted by bind, with reference-preserving evidence."""
@@ -509,7 +555,12 @@ class InstallPlan:
             if installed.native_handle is None:
                 raise ValueError("InstallPlan components must be loaded before runtime installation")
             installed.verify()
-        from pops._platform_contracts import ExecutionContext, serial_execution_context, validate_launch
+        from pops._platform_contracts import (
+            ExecutionContext,
+            serial_execution_context,
+            validate_component_launch,
+            validate_launch,
+        )
         context = self.execution_context
         if context is None:
             context = serial_execution_context(self.artifact.platform_manifest)
@@ -520,6 +571,8 @@ class InstallPlan:
             raise ValueError(
                 "InstallPlan execution_context must be the exact BindInputs resource")
         validate_launch(self.artifact.platform_manifest, context, ())
+        for component in self.artifact.component_artifacts:
+            validate_component_launch(component.platform_manifest, context, ())
         object.__setattr__(self, "execution_context", context)
         expected_names = tuple(block.name for block in self.artifact.blocks)
         if tuple(self.instances) != expected_names:

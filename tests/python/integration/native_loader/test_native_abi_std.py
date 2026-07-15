@@ -12,8 +12,9 @@ pouvait tourner en natif sur GH200. Le fix derive le std du modele natif de la n
 Ce test :
   1) verifie l'INVARIANT de norme : loader_cxx_std() == norme reellement bakee par le module
      (pops._pops.__cxx_std__), avec fallback sur le std encode dans abi_key() ;
-  2) bout-en-bout : un modele trivial compile(backend="production") puis branche par add_native_block
-     se charge SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
+  2) bout-en-bout : un modele trivial compile(backend="production") puis branche par
+     ``System.add_equation`` (le dispatcher public authentifie le package de production) se charge
+     SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
      sous Kokkos avec l'ancien defaut c++23 (mismatch __cplusplus), il passe avec le std aligne.
 
 S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes pops sont absents. Cable au job CI
@@ -28,12 +29,17 @@ import numpy as np
 
 import pops
 from pops.codegen.toolchain import loader_cxx_std
+from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._model import HyperbolicModel
+from pops.physics.aux import roles_for
 
 
 from tests.python.support.requirements import repo_include
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # runtime facade used by the low-level ABI test
+from pops.runtime._engine_descriptors import Explicit, Spatial
+from pops.numerics.reconstruction.limiters import Minmod
+from pops.numerics.riemann import Rusanov
 INCLUDE = repo_include()
 GAMMA = 1.4
 
@@ -85,21 +91,46 @@ def check_std_invariant():
 
 def check_native_loads_without_abi_error(expected_std):
     """Le coeur du fix : compile(backend="production") avec le std PAR DEFAUT (derive du loader) puis
-    add_native_block doit charger SANS "incompatible ABI". Sous Kokkos avec l'ancien defaut c++23 en
+    System.add_equation doit charger SANS "incompatible ABI". Sous Kokkos avec l'ancien defaut c++23 en
     dur, ce chemin levait ; avec le std aligne, il passe."""
     n = 16
     tmp = tempfile.mkdtemp()
     try:
         e = build_trivial_euler()
         # std laisse a None -> defaut par backend : production suit loader_cxx_std() (le fix).
-        so = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend="production")
-        assert os.path.exists(so), "compile(backend='production') n'a pas produit de .so"
+        so_path = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend="production")
+        assert os.path.exists(so_path), "compile(backend='production') n'a pas produit de .so"
+        # HyperbolicModel.compile is the deliberately low-level loader compiler and returns a path;
+        # attach its immutable metadata to the final dispatcher handle explicitly.  This keeps the
+        # test focused on the ABI/loader seam without reintroducing a removed native binding.
+        component = CompiledModel(
+            so_path=so_path,
+            backend="production",
+            target="system",
+            cons_names=e.cons_names,
+            cons_roles=roles_for(e.cons_names, e.cons_roles),
+            prim_names=e.prim_state,
+            n_vars=e.n_vars,
+            gamma=GAMMA,
+            n_aux=len(e.aux_names) + len(e.aux_extra_names),
+            params={},
+            caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
+            abi_key=pops._pops.abi_key(),
+            model_hash=e._model_hash(),
+            cxx="c++",
+            std=expected_std,
+            wave_speeds=True,
+            wave_speed_provider="pressure_derived",
+        )
 
         sys = System(n=n, L=1.0, periodic=True)
-        # Si le std du modele != std du loader, add_native_block leve RuntimeError("incompatible ABI").
+        # Si le std du modele != std du loader, le dispatcher leve RuntimeError("incompatible ABI").
         try:
-            sys._s.add_native_block("gas", so, limiter="minmod", riemann="rusanov",
-                                    recon="conservative", time="explicit", gamma=GAMMA, substeps=1)
+            sys.add_equation(
+                "gas", component,
+                spatial=Spatial(limiter=Minmod(), flux=Rusanov()),
+                time=Explicit(),
+            )
         except RuntimeError as ex:
             if "incompatible ABI" in str(ex):
                 raise AssertionError(
@@ -115,7 +146,7 @@ def check_native_loads_without_abi_error(expected_std):
         sys.set_state("gas", U.reshape(-1).tolist())
         R = np.array(sys.eval_rhs("gas"))
         assert R.size == 4 * n * n and np.all(np.isfinite(R)), "eval_rhs du bloc natif non fini"
-        print("OK  production + add_native_block : charge SANS erreur d'ABI (std modele = loader %s)"
+        print("OK  production + add_equation : charge SANS erreur d'ABI (std modele = loader %s)"
               % expected_std)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

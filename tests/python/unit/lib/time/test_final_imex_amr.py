@@ -191,8 +191,8 @@ def test_field_install_consumes_the_public_amr_layout_contract():
     recipe = resolved.field_plans["fields"].native_options["topology_recipe"]
     assert recipe["connectivity"]["graph"] == "amr-composite-cell-graph"
     assert recipe["levels"] == 2
-    assert recipe["transition_ratios"] == [2]
-    assert recipe["level_refinements"] == [1, 2]
+    assert recipe["transition_ratios"] == (2,)
+    assert recipe["level_refinements"] == (1, 2)
     graph = resolved.bootstrap_plan.tagging.graph
     assert type(graph.refine) is AnyOf
     assert tuple(type(child) for child in graph.refine.children) == (Above, GradientAbove)

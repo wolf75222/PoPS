@@ -115,15 +115,21 @@ class FieldHandle(Handle):
         super().__init__(name, kind="field", owner=owner)
         object.__setattr__(self, "_field_registry", field_registry)
 
-    def __call__(self, *states: Any, name: Any = None) -> Any:
-        """Build this field solve from one or more exact temporal states."""
+    def __call__(
+        self,
+        *states: Any,
+        name: Any = None,
+        schedule: Any = None,
+    ) -> Any:
+        """Build this field solve from exact temporal states at an optional schedule."""
         program = next((getattr(state, "prog", None) for state in states
                         if getattr(state, "prog", None) is not None), None)
         if program is None:
             raise ValueError(
                 "field operator %r must be called with one or more time-Program State values"
                 % self.name)
-        return program._solve_field_operator(self, states, name=name)
+        return program._solve_field_operator(
+            self, states, name=name, schedule=schedule)
 
 
 class OperatorHandle(Handle):

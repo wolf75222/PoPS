@@ -13,6 +13,8 @@ from pops._platform_contracts import (
     PlatformContractError,
     launch_checked,
     proven_serial_manifest,
+    validate_component_launch,
+    validate_launch,
 )
 from pops.identity import make_identity
 from pops.runtime._run_manifest import RunManifest
@@ -155,6 +157,25 @@ def test_generic_2d_double_descriptor_launches_once():
         lambda context, fields: launched.append((context, fields)) or fields[0].extents,
         expected_fields=[_field()]) == (16, 12)
     assert len(launched) == 1
+
+
+def test_aot_component_build_route_is_checked_against_simulation_execution_facts():
+    component = proven_serial_manifest(
+        backend="aot-component", target="component", abi="headers|clang|c++23")
+    context = _context()
+
+    # The generic gate still rejects different execution routes.  Only the typed component gate
+    # recognizes aot-component/component as a build-role namespace.
+    with pytest.raises(PlatformContractError, match="backend mismatch"):
+        validate_launch(component, context, ())
+    validate_component_launch(component, context, ())
+
+    with pytest.raises(PlatformContractError, match="ABI mismatch"):
+        validate_component_launch(replace(component, abi=_proof("other|clang|c++23")), context, ())
+    with pytest.raises(PlatformContractError, match="device mismatch"):
+        validate_component_launch(replace(component, device=_proof("cuda:0")), context, ())
+    with pytest.raises(PlatformContractError, match="component artifact route"):
+        validate_component_launch(_platform(), context, ())
 
 
 def test_final_generic_contract_has_no_implicit_device_capture():

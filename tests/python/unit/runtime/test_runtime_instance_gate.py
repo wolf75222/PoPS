@@ -136,6 +136,22 @@ class _Executor:
         assert block == "fluid"
         return [(0, 0, self._nx - 1, self._ny - 1)]
 
+    def _output_geometry_snapshot(self, origin, spacing, shape, cell_measure):
+        assert tuple(shape) == (self._ny, self._nx)
+        assert cell_measure == "pops://cell-measures/cartesian-area@1"
+        valid = np.ones(shape, dtype=np.bool_)
+        coverage = np.zeros(shape, dtype=np.bool_)
+        volumes = np.full(shape, spacing[0] * spacing[1], dtype=np.float64)
+        for value in (valid, coverage, volumes):
+            value.setflags(write=False)
+        return {
+            "topology_epoch": 0,
+            "boxes": ((0, 0, shape[0], shape[1]),),
+            "valid_cells": valid,
+            "coverage": coverage,
+            "cell_volumes": volumes,
+        }
+
     def local_state(self, block, index):
         assert block == "fluid" and index == 0
         return self.state_global(block).reshape(1, self._ny, self._nx)
@@ -270,6 +286,22 @@ def test_runtime_instance_has_one_authored_execution_route():
     assert not hasattr(runtime, "assembly")
     assert not hasattr(runtime, "profile")
     assert not hasattr(runtime, "an_arbitrary_native_method")
+
+
+def test_runtime_instance_refuses_ambiguous_global_state_without_provider_capability():
+    class _LevelExplicitExecutor(_Executor):
+        state_global = None
+
+        def block_level_state_global(self, block, level):
+            assert (block, level) == ("fluid", 0)
+            return np.full(self._nx * self._ny, 3.0)
+
+    plan = _install()
+    runtime = RuntimeInstance(plan, executor=_LevelExplicitExecutor(plan))
+
+    with pytest.raises(NotImplementedError, match="block_level_state_global"):
+        runtime.state_global("fluid")
+    assert np.all(runtime.block_level_state_global("fluid", 0) == 3.0)
 
 
 @pytest.mark.parametrize(

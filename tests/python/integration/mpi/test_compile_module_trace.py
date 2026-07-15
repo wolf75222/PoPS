@@ -87,12 +87,7 @@ try:
         target="system",
         n=8,
     )
-    compiled = compile_problem(
-        time=resolved.time,
-        model=compiled_model,
-        field_plans=resolved.field_plans,
-        problem_snapshot=resolved.snapshot,
-    )
+    compiled = pops.compile(resolved)
 except (RuntimeError, Exception) as exc:  # noqa: BLE001
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -100,7 +95,10 @@ print("== ADC-557: one lowering, module trace on the handle (final Model) ==")
 report = compiled.inspect().to_dict()
 chk(report.get("module_manifest") is not None,
     "compiled.inspect() carries the lowered-module trace (operator-first Module)")
-chk(bool(compiled.module_hash()), "the handle carries a compile-time module_hash for drift detection")
+chk(
+    all(bool(block.model.module_hash()) for block in compiled.blocks),
+    "every qualified block component carries a compile-time module_hash for drift detection",
+)
 
 # The trace lists the operator-first operators (transport / electrostatic) without the user
 # ever building a Module by hand.

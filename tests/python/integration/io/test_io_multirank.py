@@ -35,7 +35,7 @@ from pops.runtime._system import System  # ADC-545 advanced runtime seam
 def _build(n=16):
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
-    sim.block("ions",
+    sim.add_equation("ions",
                   engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                             transport=engine.IsothermalFlux(),
                             source=engine.PotentialForce(charge=1.0),

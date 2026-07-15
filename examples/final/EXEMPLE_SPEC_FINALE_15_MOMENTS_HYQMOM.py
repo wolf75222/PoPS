@@ -215,7 +215,7 @@ def build_authoring(*, inject_nonrealizable: bool = False) -> HyQMOM15Authoring:
             flux=flux,
             variables=variables.Conservative(state),
             reconstruction=reconstruction.MUSCL(limiters.VanLeer()),
-            riemann=riemann.HLL(waves=riemann.waves.ExplicitPair()),
+            riemann=riemann.HLL(waves=riemann.waves.FromJacobian()),
         ),
     )
 

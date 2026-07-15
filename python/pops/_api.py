@@ -61,7 +61,7 @@ def bind(
     import a phase-internal codegen type or choose between two bind spellings.
     """
     from pops import _bootstrap  # noqa: F401  # intentional native cut line
-    from pops.codegen._plans import BindInputs
+    from pops.codegen._plans import BindInputs, _canonical_initial_values
     from pops.codegen._phases import bind as phase
 
     inputs = BindInputs(
@@ -69,7 +69,8 @@ def bind(
         params={} if params is None else params,
         aux={} if aux is None else aux,
         resources={} if resources is None else resources,
-        initial_values={} if initial_values is None else initial_values,
+        initial_values=_canonical_initial_values(
+            artifact, {} if initial_values is None else initial_values),
     )
     return phase(artifact, inputs)
 

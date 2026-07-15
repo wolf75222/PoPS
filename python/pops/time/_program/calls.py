@@ -89,6 +89,22 @@ class _ProgramCall(_ProgramBase):
     def _validate_schedule(self, op: Any, schedule: Any, values: Any = ()) -> Any:
         """A schedule on an operator handle must be a Schedule; a caching policy (hold / accumulate_dt)
         requires the operator to be cacheable (Spec 3 criterion 27)."""
+        return self._validate_schedule_contract(
+            operator_name=op.name,
+            capabilities=op.capabilities,
+            schedule=schedule,
+            values=values,
+        )
+
+    def _validate_schedule_contract(
+        self,
+        *,
+        operator_name: Any,
+        capabilities: Any,
+        schedule: Any,
+        values: Any = (),
+    ) -> None:
+        """Validate one schedule against a small named-capabilities interface."""
         if not isinstance(schedule, Schedule):
             raise TypeError(
                 "schedule= expects an pops.time Schedule (always()/every(n)/...), got %r"
@@ -105,7 +121,7 @@ class _ProgramCall(_ProgramBase):
                 "schedule clock %r does not match operator evaluation clock %r"
                 % (schedule.clock.name, expected_clock.name))
         due = schedule.trigger.native_schedule_due(
-            where="schedule on operator %r" % op.name)
+            where="schedule on operator %r" % operator_name)
         if type(due) is not ScheduleDueIR:
             raise TypeError(
                 "Trigger.native_schedule_due() must return an exact ScheduleDueIR")
@@ -119,11 +135,11 @@ class _ProgramCall(_ProgramBase):
                 if cond.clock != schedule.clock:
                     raise ValueError(
                         "schedule when(cond): predicate and schedule must use the same clock")
-        if schedule.needs_cache() and not op.capabilities.get("cacheable"):
+        if schedule.needs_cache() and not capabilities.get("cacheable"):
             raise ValueError(
-                "operator %r is not cacheable; cannot use schedule %s -- declare it with "
-                "m.operator_capabilities(%r, cacheable=True)"
-                % (op.name, type(schedule.off).__name__, op.name))
+                "operator %r is not cacheable; cannot use schedule %s -- every authoritative "
+                "provider for this operation must declare cacheable=True"
+                % (operator_name, type(schedule.off).__name__))
 
     @staticmethod
     def _validate_scheduled_reads(values: Any, *, consumer: str) -> None:

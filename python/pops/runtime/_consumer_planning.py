@@ -87,13 +87,19 @@ def _resource_bindings(
     runtime: RuntimePlanBundle,
     manifest: ConsumerManifest,
 ) -> tuple[ConsumerResourceBinding, ...]:
+    supports_singleton_collective = (
+        manifest.operation_data is not None
+        and manifest.operation_data.get("supports_singleton_collective") is True
+    )
     if (manifest.parallel_mode is ParallelMode.COLLECTIVE
-            and runtime.communication.communicator_id == "serial"):
+            and runtime.communication.communicator_id == "serial"
+            and not supports_singleton_collective):
         refuse(
             "collective_consumer_requires_distributed_context",
             "consumer[%s].parallel_mode" % manifest.qualified_id,
             "a collective consumer requires an explicit non-serial ExecutionContext; "
-            "the runtime must not defer this mismatch until publication",
+            "the runtime must not defer this mismatch until publication unless the exact "
+            "consumer provider supports a singleton collective",
             evidence={"communicator": runtime.communication.communicator_id},
         )
     result = []

@@ -311,7 +311,12 @@ def _run_restart_case(
     continuous_rings_at_half = _rings(continuous)
     continuous_regrid_at_half = continuous.amr.explain_regrid()
     _advance(continuous, nsteps - half)
-    reference = np.asarray(continuous.state_global("blk"), dtype=np.float64).copy()
+    # AMR exposes level-qualified global state; the unqualified state_global route is intentionally
+    # rejected because it is ambiguous once several levels exist.  Level 0 is the deterministic
+    # coarse state used for the restart parity witness.
+    reference = np.asarray(
+        continuous.block_level_state_global("blk", 0), dtype=np.float64
+    ).copy()
     continuous_regrid = continuous.amr.explain_regrid()
 
     interrupted = _bind(artifact)
@@ -326,7 +331,9 @@ def _run_restart_case(
         restored_rings = _rings(restored)
         restored_regrid_at_half = restored.amr.explain_regrid()
         _advance(restored, nsteps - half)
-        result = np.asarray(restored.state_global("blk"), dtype=np.float64).copy()
+        result = np.asarray(
+            restored.block_level_state_global("blk", 0), dtype=np.float64
+        ).copy()
         restored_regrid = restored.amr.explain_regrid()
 
     return {

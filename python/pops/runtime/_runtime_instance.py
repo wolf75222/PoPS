@@ -355,7 +355,13 @@ class RuntimeInstance:
         return self._executor.get_state(block)
 
     def state_global(self, block: str) -> Any:
-        return self._executor.state_global(block)
+        provider = getattr(self._executor, "state_global", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "this runtime has no single-resolution global state; AMR callers must choose an "
+                "explicit level with block_level_state_global(block, level)"
+            )
+        return provider(block)
 
     def local_boxes(self, block: str) -> tuple[tuple[int, int, int, int], ...]:
         """Return this rank's exact native uniform boxes in global index coordinates."""

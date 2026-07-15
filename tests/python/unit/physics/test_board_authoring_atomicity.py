@@ -287,6 +287,6 @@ def test_rate_equation_with_foreign_flux_is_atomic():
     before = _snapshot(model)
 
     with pytest.raises(ValueError, match="declared by this physics model"):
-        model.rate("A", ddt(state) == -div(foreign_flux))
+        model.rate("A", equation=ddt(state) == -div(foreign_flux))
 
     assert _snapshot(model) == before

@@ -1,6 +1,7 @@
 #include "../bindings_detail.hpp"
 
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
 #include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
 #include <pops/runtime/dynamic/abi_key.hpp>
@@ -206,6 +207,25 @@ void init_core(py::module_& m) {
   m.doc() =
       "PoPS (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
+
+  // Native iterative solves have one authoritative result contract.  Register it before System so
+  // every method returning SolveReport (notably System::solve_fields) has a concrete Python value
+  // type.  Status/action are exposed as their stable semantic names instead of leaking C++ enum
+  // ordinals into the private bootstrap ABI.
+  py::class_<pops::SolveReport>(m, "_SolveReport")
+      .def_readonly("iters", &pops::SolveReport::iters)
+      .def_readonly("rel_residual", &pops::SolveReport::rel_residual)
+      .def_readonly("reference_residual_norm", &pops::SolveReport::reference_residual_norm)
+      .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
+      .def_property_readonly("status",
+                             [](const pops::SolveReport& report) { return report.status_name(); })
+      .def_property_readonly("action",
+                             [](const pops::SolveReport& report) { return report.action_name(); })
+      .def_readonly("reason", &pops::SolveReport::reason)
+      .def("valid", &pops::SolveReport::valid)
+      .def("solved", &pops::SolveReport::solved)
+      .def("solved_value_available", &pops::SolveReport::solved_value_available)
+      .def("failed", &pops::SolveReport::failed);
 
   // Module ABI key (compiler + C++ standard + signature of the pops headers). The DSL reads it
   // (diagnostic); add_native_block compares it to the key baked into a native loader.

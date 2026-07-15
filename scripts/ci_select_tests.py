@@ -36,10 +36,10 @@ import ci_shard_binpack  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/test_manifest.toml"
 CPP_DURATIONS_JSON = ROOT / "tests/cpp/test_durations.json"
-# Historical cold CI build 29352485297 consumed about 17,300 CPU-seconds for 176
-# targets on four workers. A 100 s/target floor models compilation; multiplying CTest
-# wall time by the preset's four test workers puts both phases on the same CPU-second scale.
-CPP_BUILD_CPU_SECONDS_PER_TARGET = 100.0
+CPP_BUILD_DURATIONS_JSON = ROOT / "tests/cpp/build_durations.json"
+# CTest's catalog is the sum of per-target wall times. The preset can execute four
+# independent tests concurrently, so convert that aggregate to critical-path seconds
+# before combining it with the build catalog's already-normalized shard-wall estimate.
 CPP_CTEST_PARALLEL_JOBS = 4.0
 
 
@@ -52,6 +52,7 @@ CPP_BROAD_FILES = {
     "scripts/ci_select_tests.py",
     "scripts/ci_shard_binpack.py",
     "tests/CMakeLists.txt",
+    "tests/cpp/build_durations.json",
     "tests/cpp/test_durations.json",
     "src/CMakeLists.txt",
     "tests/cpp/test_sources.cmake",
@@ -645,29 +646,39 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
         raise SystemExit(f"shard partition invariant violated: {exc}") from exc
 
 
-def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
-    """Return a deterministic, duration-balanced exact partition of C++ targets.
+def cpp_target_weights(targets: list[str]) -> dict[str, float]:
+    """Return modeled shard-wall seconds for build then CTest of each target.
 
-    The committed timings are aggregate CTest wall times per build target. The shared LPT
-    binpacker prevents a shard from accidentally receiving multiple long-running scientific
-    tests while preserving a stable assignment. Missing timing rows fail closed: every new C++
-    target must be measured or explicitly seeded in the same change that registers it.
+    ``build_durations.json`` is deliberately separate from CTest timings.  Its heavy rows are
+    cold-CI measurements of the Ninja ``pops_heavy_test_tu=1`` serial pool; its light rows are the
+    measured parallel-share floor.  Treating every target as the old constant 100 CPU-seconds hid
+    five-minute template TUs and placed two of them on the same shard.  Both catalogs are exact:
+    adding a manifest target without seeding build and test costs fails before any build starts.
     """
+    measured_build_seconds = ci_shard_binpack.load_durations(CPP_BUILD_DURATIONS_JSON)
+    measured_test_seconds = ci_shard_binpack.load_durations(CPP_DURATIONS_JSON)
+    missing_weights = sorted(
+        set(targets) - (measured_build_seconds.keys() & measured_test_seconds.keys())
+    )
+    if missing_weights:
+        raise SystemExit(
+            "C++ build/test duration catalogs are missing selected targets: "
+            + ", ".join(missing_weights)
+        )
+    return {
+        target: measured_build_seconds[target]
+        + measured_test_seconds[target] / CPP_CTEST_PARALLEL_JOBS
+        for target in targets
+    }
+
+
+def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
+    """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
     if total <= 0:
         raise SystemExit(f"invalid C++ shard total: {total}")
     if len(targets) != len(set(targets)):
         raise SystemExit("C++ shard partition input contains duplicate targets")
-    measured_test_seconds = ci_shard_binpack.load_durations(CPP_DURATIONS_JSON)
-    missing_weights = sorted(set(targets) - measured_test_seconds.keys())
-    if missing_weights:
-        raise SystemExit(
-            "C++ duration catalog is missing selected targets: " + ", ".join(missing_weights)
-        )
-    weights = {
-        target: CPP_BUILD_CPU_SECONDS_PER_TARGET
-        + CPP_CTEST_PARALLEL_JOBS * measured_test_seconds[target]
-        for target in targets
-    }
+    weights = cpp_target_weights(targets)
     try:
         shards = ci_shard_binpack.assign_shards(targets, total, weights)
         ci_shard_binpack.verify_partition(targets, shards, excluded=())

@@ -140,6 +140,15 @@ def _check_amr_flux_weights(program: Any) -> None:
                     for source, coefficient in zip(
                         value.inputs, value.attrs["coeffs"], strict=True)
                 ])
+            elif value.op == "apply":
+                # ``apply`` is a local source-operator evaluation, not a transparent state
+                # transform.  Its native lowering writes a fresh scratch and deliberately does
+                # not copy the input state's effective-flux ledger.  In particular, an IMEX stage
+                # may apply a local relaxation operator to a predictor that contains explicit
+                # flux work; that ancestry must not be mistaken for a second conservative flux
+                # contribution.  The explicit RHS still reaches the commit through its authored
+                # tableau weight and remains proved independently below.
+                current = frozenset()
             elif value.op in alias_first_input and value.inputs:
                 current = powers.get(value.inputs[0].id, frozenset())
             else:

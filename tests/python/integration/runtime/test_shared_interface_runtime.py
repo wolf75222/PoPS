@@ -140,13 +140,18 @@ def _program(left_state, right_state, rate):
     program = pops.Program("shared_interface_forward_euler")
     left = program.state(left_state)
     right = program.state(right_state)
+    # State declarations materialize lazily on first value access.  Materialize both endpoints
+    # before either RHS so the two default-flux evaluations form the one contiguous atomic group
+    # required by the shared NumericalFlux scheduler.
+    left_n = left.n
+    right_n = right.n
     stage = StagePoint("shared_stage", {"main": TimePoint(program.clock, 0)})
-    left_rate = program.value("left_rate", rate(left.n), at=stage)
-    right_rate = program.value("right_rate", rate(right.n), at=stage)
+    left_rate = program.value("left_rate", rate(left_n), at=stage)
+    right_rate = program.value("right_rate", rate(right_n), at=stage)
     left_next = program.value(
-        "left_next", left.n + program.dt * left_rate, at=left.next.point)
+        "left_next", left_n + program.dt * left_rate, at=left.next.point)
     right_next = program.value(
-        "right_next", right.n + program.dt * right_rate, at=right.next.point)
+        "right_next", right_n + program.dt * right_rate, at=right.next.point)
     program.commit(left.next, left_next)
     program.commit(right.next, right_next)
     program.step_strategy(FixedDt(1.0e-3))

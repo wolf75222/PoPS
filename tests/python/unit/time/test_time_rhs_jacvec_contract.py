@@ -129,6 +129,7 @@ def test_recursive_ir_exposes_field_coupled_jacvec_to_the_amr_capability_gate():
     )
     assert amr_program_op_support(program, context=context) == {
         "fine_level_field_perturbation": "pending",
+        "named_field_solve": "green",
     }
 
 

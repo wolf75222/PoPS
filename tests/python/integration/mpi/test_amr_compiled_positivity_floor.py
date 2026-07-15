@@ -111,6 +111,7 @@ def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
     s = AmrSystem(n=N, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
                    spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
@@ -166,6 +167,7 @@ def main():
         band = np.full((N, N), 1e-6)
         band[:, N // 3:2 * N // 3] = 1.0
         sm = AmrSystem(n=N, L=1.0, periodic=True)
+        sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.set_refinement(1e30)
         sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))

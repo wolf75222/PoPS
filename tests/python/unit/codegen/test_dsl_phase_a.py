@@ -1,15 +1,12 @@
-"""DSL Phase A : l'API utilisateur stable (Model facade + Param + CompiledModel + add_equation +
-FiniteVolume + run). PUR-PYTHON au-dessus de HyperbolicModel : aucune numerique nouvelle. cf.
-docs/DSL_MODEL_DESIGN.md.
+"""Final Model/parameter/package contract through the public lifecycle.
 
 Deux niveaux :
 (1) PUR-PYTHON (aucun compilateur requis) : Param nomme + runtime supporte (P7-b), flux vs flux_value distincts,
     etat/roles et axes physiques types,
     FiniteVolume(riemann=), et les erreurs explicites (backend/target inconnus, hllc sans pression,
     remplacement de noms interdit sur un package natif).
-(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) : compile(backend="production") ->
-    CompiledModel -> add_equation -> chemin natif add_native_block. Le seam bas niveau refuse
-    volontairement ``run`` hors ``pops.bind`` ; le test avance donc explicitement par ``step_cfl``.
+(2) BOUT EN BOUT (saute si pas de compilateur / en-tetes) :
+    ``Case -> validate -> resolve -> compile -> bind -> run``.
 """
 from pops.numerics.riemann import HLLC
 from pops.numerics.reconstruction.limiters import Minmod
@@ -17,7 +14,6 @@ from pops.numerics.variables import Primitive
 from pops.numerics.reconstruction import WENO5
 import os
 import shutil
-import tempfile
 
 import numpy as np
 
@@ -31,6 +27,7 @@ from pops.params import ConstParam, RuntimeParam
 from tests.python.support.initial_states import euler_bubble_state
 from tests.python.support.physics_roles import FRAME, X_AXIS, Y_AXIS
 from tests.python.support.requirements import repo_include
+from test_dsl_coupled import compile_euler_artifact
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 INCLUDE = repo_include()
 GAMMA = 1.6667
@@ -53,7 +50,11 @@ def build_euler(name="euler_pa"):
     F = m.flux("transport", frame=FRAME, state=U, components={
         X_AXIS: [rhou, rhou * u + p, rhou * v, rho * H * u],
         Y_AXIS: [rhov, rhov * u, rhov * v + p, rho * H * v],
-    }, waves={X_AXIS: [u - c, u, u + c], Y_AXIS: [v - c, v, v + c]})
+    }, waves={
+        X_AXIS: [u - c, u, u, u + c],
+        Y_AXIS: [v - c, v, v, v + c],
+    })
+    m.riemann(HLLC(), pressure=p, sound_speed=c)
     m.rate("transport", equation=ddt(U) == -div(F))
     return m
 
@@ -74,21 +75,6 @@ def expect_raises(exc, fn, label):
         print("OK  %s : %s levee" % (label, exc.__name__))
         return
     raise AssertionError("%s : %s attendue, non levee" % (label, exc.__name__))
-
-
-def advance_low_level(system, *, t_end, cfl):
-    """Advance an explicitly assembled low-level engine after pinning the public run guard."""
-    expect_raises(
-        RuntimeError,
-        lambda: system.run(
-            t_end=t_end, max_steps=100000, strategy=pops.time.AdaptiveCFL(cfl)),
-        "run bas niveau hors transaction pops.bind refuse",
-    )
-    nsteps = 0
-    while system.time() < t_end:
-        system.step_cfl(cfl)
-        nsteps += 1
-    return nsteps
 
 
 def pure_python_checks():
@@ -120,22 +106,18 @@ def pure_python_checks():
         "FiniteVolume(riemann=) -> Spatial.flux"
     print("OK  FiniteVolume(limiter=, riemann=, variables=) remappe sur Spatial")
 
-    # compile : backend et target inconnus sont rejetes AVANT toute compilation.
-    expect_raises(ValueError, lambda: m.compile("x.so", INCLUDE, backend="bogus"),
-                  "backend inconnu")
-    expect_raises(ValueError,
-                  lambda: m.compile("x.so", INCLUDE, backend="production", target="bogus"),
-                  "target inconnu")
+    # A physics model is an authoring object, never an alternate compiler facade.
+    assert not hasattr(m, "compile")
 
     # add_equation : erreurs sur un CompiledModel FACTICE (pas de .so reel necessaire, les gardes
     # levent AVANT la frontiere C++).
     sys = System(n=16, periodic=True)
-    fake = CompiledModel(so_path="/inexistant.so", backend="production", adder="add_native_block",
+    fake = CompiledModel(so_path="/inexistant.so", backend="production",
                          cons_names=["rho", "rho_u", "rho_v", "E"],
                          cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
                          prim_names=["rho", "u", "v"],  # PAS de 'p' -> hllc/roe doit lever
                          n_vars=4, gamma=GAMMA, n_aux=3, params={}, caps={},
-                         abi_key="k", model_hash="h", cxx="c++", std="c++20")
+                         abi_key="", model_hash="h", cxx="c++", std="c++20")
     # WENO5 est accepte par le package natif : il passe la garde Python et echoue seulement au dlopen
     # du package factice.
     expect_raises(RuntimeError, lambda: sys.add_equation("g", fake,
@@ -150,44 +132,38 @@ def pure_python_checks():
 
 def end_to_end_checks():
     n = 32
-    tmp = tempfile.mkdtemp()
-    try:
-        m = build_euler("euler_production")
-        cm = m.compile(os.path.join(tmp, "m_production.so"), INCLUDE, backend="production")
-        assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
-        assert cm.backend == "production" and cm.adder == "add_native_block"
-        assert cm.n_vars == 4 and abs((cm.gamma or 0) - GAMMA) < 1e-12
-        assert cm.abi_key and cm.model_hash, "abi_key + model_hash presents"
-        assert "gamma" in cm.params, "params porte le Param gamma"
-        print("OK  production : compile -> CompiledModel(add_native_block)")
+    model = build_euler("euler_production")
+    artifact = compile_euler_artifact(model, cells=n)
+    component = artifact.blocks[0].model
+    assert isinstance(component, CompiledModel), "compile -> CompiledModel component"
+    assert component.backend == "production" and component.target == "system"
+    assert component.n_vars == 4 and abs((component.gamma or 0) - GAMMA) < 1e-12
+    assert component.abi_key and component.model_hash, "abi_key + model_hash presents"
+    assert "gamma" in component.params, "params porte le Param gamma"
 
-        s = System(n=n, periodic=True)
-        s.add_equation("gas", cm, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
-                                                           recon=Primitive()))
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", initial_state(n))
-        nsteps = advance_low_level(s, t_end=0.02, cfl=0.4)
-        assert nsteps > 0, "run a avance"
-        final = np.array(s.get_state("gas"))
-        assert np.all(np.isfinite(final)), "production : etat fini"
-        print("OK  production : add_equation + run(%d pas) -> etat fini" % nsteps)
+    initial = np.asarray(initial_state(n), dtype=np.float64).reshape(4, n, n)
+    simulation = pops.bind(artifact, initial_state={"gas": initial.copy()})
+    report = pops.run(simulation, t_end=1.0e-4, max_steps=1)
+    assert report.accepted_steps == 1
+    final = np.asarray(simulation.get_state("gas"), dtype=np.float64)
+    assert np.all(np.isfinite(final)), "production : etat fini"
 
-        # The former alternate primitive-layout spelling now maps to the same typed board model.
-        mp = build_euler_predef("euler_predef")
-        cmp_ = mp.compile(os.path.join(tmp, "m_predef.so"), INCLUDE, backend="production")
-        sp = System(n=n, periodic=True)
-        sp.add_equation("gas", cmp_, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC(),
-                                                              recon=Primitive()))
-        sp.set_poisson(rhs="charge_density", solver="geometric_mg")
-        sp.set_state("gas", initial_state(n))
-        advance_low_level(sp, t_end=0.02, cfl=0.4)
-        pf = np.array(sp.get_state("gas"))
-        assert np.all(np.isfinite(pf)), "modele board equivalent : etat fini, pas de NaN"
-        dp = float(np.max(np.abs(pf - final)))
-        assert dp < 1e-10, "forme board equivalente : meme modele, dmax=%.3e" % dp
-        print("OK  forme board equivalente : == forme de reference (dmax=%.3e)" % dp)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+    # The equivalent board spelling follows the same final transaction and numerical result.
+    equivalent = compile_euler_artifact(build_euler_predef("euler_predef"), cells=n)
+    equivalent_simulation = pops.bind(
+        equivalent, initial_state={"gas": initial.copy()}
+    )
+    equivalent_report = pops.run(
+        equivalent_simulation, t_end=1.0e-4, max_steps=1
+    )
+    assert equivalent_report.accepted_steps == 1
+    equivalent_final = np.asarray(
+        equivalent_simulation.get_state("gas"), dtype=np.float64
+    )
+    assert np.all(np.isfinite(equivalent_final))
+    difference = float(np.max(np.abs(equivalent_final - final)))
+    assert difference < 1e-10
+    print("OK  final lifecycle + equivalent board model (dmax=%.3e)" % difference)
 
 
 def modelspec_substeps_check():

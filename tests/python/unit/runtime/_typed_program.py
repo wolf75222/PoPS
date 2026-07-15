@@ -108,12 +108,25 @@ def typed_field(program: Program, name: str = "potential") -> Any:
 
     field_module = Module("typed_runtime_field_%s" % name)
     field_space = field_module.field_space(name, (name,))
-    provider = field_module.operator(
-        name=name + "_provider",
-        signature=Signature((declaration.space,), field_space),
-        kind="field_operator",
-        expr=name + "_provider",
-    )
+    provider_name = name + "_provider"
+    provider_signature = Signature((declaration.space,), field_space)
+    registry = module.operator_registry()
+    try:
+        registered_provider = registry.get(provider_name)
+    except KeyError:
+        provider = module.operator(
+            name=provider_name,
+            signature=provider_signature,
+            kind="field_operator",
+            expr=provider_name,
+        )
+    else:
+        if (registered_provider.kind != "field_operator"
+                or registered_provider.signature != provider_signature):
+            raise ValueError(
+                "typed runtime field provider %r already has a different contract"
+                % provider_name)
+        provider = module.operator_handle(provider_name)
     field_block = case.block("typed_field_%s" % name, field_module)
     unknown = field_block[field_module.field_handle(field_space)]
     state_block = next(
@@ -171,6 +184,7 @@ def typed_compiled_artifact(
     target: str = "system",
     layout: Any = None,
     has_program: bool = True,
+    spatial: Any = None,
 ):
     """Wrap inert compiled components in the exact compile-phase artifact.
 
@@ -234,6 +248,7 @@ def typed_compiled_artifact(
     layout_value = layout if layout is not None else {"kind": target}
     layout_plan, layout_coverage = resolved_layout_contract(
         layout_value, target=target, block_names=names)
+    resolved_spatial = {"ghost_depth": 1} if spatial is None else spatial
     plan = ResolvedSimulationPlan(
         snapshot=snapshot,
         target=target,
@@ -246,7 +261,7 @@ def typed_compiled_artifact(
         time=program if has_program else None,
         blocks=tuple(
             ResolvedBlock(
-                name, schema_modules[name], None, backend, ("U",),
+                name, schema_modules[name], resolved_spatial, backend, ("U",),
                 (state_identities[name],))
             for name in names
         ),
@@ -267,7 +282,7 @@ def typed_compiled_artifact(
         plan=plan,
         program=compiled if has_program else None,
         blocks=tuple(
-            CompiledBlockArtifact(name, by_name[name], None, ("U",))
+            CompiledBlockArtifact(name, by_name[name], resolved_spatial, ("U",))
             for name in names
         ),
     )

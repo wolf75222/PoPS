@@ -97,6 +97,7 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
 # --- (B) options Newton sur AMR ------------------------------------------------------
 print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
@@ -110,6 +111,7 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+mono.set_temporal_relations([2], [1], ["integral_only"])
 mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 mono.set_refinement(1e30)
 mono.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
@@ -120,6 +122,7 @@ chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
 # newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
 amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amrd.set_temporal_relations([2], [1], ["integral_only"])
 amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amrd.set_refinement(1e30)
 amrd.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
@@ -135,6 +138,7 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
     f"converged {rep['converged']})")
 # newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
 monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+monod.set_temporal_relations([2], [1], ["integral_only"])
 monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 monod.set_refinement(1e30)
 monod.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
@@ -149,6 +153,7 @@ except RuntimeError as e:
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
 amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr3.set_refinement(1e30)
 amr3.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))

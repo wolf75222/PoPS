@@ -57,7 +57,7 @@ class CompiledComponent:
             "params": {},
             "aux_names": (),
             "n_aux": 0,
-            "capabilities": {"mpi": False},
+            "capabilities": dict(self.caps),
             "wave_speed_provider": None,
         }
 

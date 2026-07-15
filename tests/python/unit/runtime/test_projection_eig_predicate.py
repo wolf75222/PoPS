@@ -215,7 +215,7 @@ def test_fallback_conservative(cxx, tmp):
             "  return 0;\n"
             "}\n")
     exe = os.path.join(tmp, "fallback_main")
-    cp = subprocess.run([cxx, "-std=c++17", "-I", INCLUDE, main, "-o", exe],
+    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
                         capture_output=True, text=True)
     if cp.returncode != 0:
         chk(False, "compilation du test de repli (voir stderr)")
@@ -262,7 +262,7 @@ def test_cpp_brick_vs_numpy(cxx, tmp):
             "  return 0;\n"
             "}\n")
     exe = os.path.join(tmp, "pred_main")
-    cp = subprocess.run([cxx, "-std=c++17", "-I", INCLUDE, main, "-o", exe],
+    cp = subprocess.run([cxx, "-std=c++20", "-I", INCLUDE, main, "-o", exe],
                         capture_output=True, text=True)
     if cp.returncode != 0:
         chk(False, "compilation de la brique generee (voir stderr)")

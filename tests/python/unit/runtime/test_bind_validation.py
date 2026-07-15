@@ -69,6 +69,11 @@ class _Array:
         self.dtype = type("D", (), {"name": dtype})()
 
 
+class _BoundSubject:
+    def __init__(self, block):
+        self.block_ref = SimpleNamespace(local_id=block)
+
+
 def _one_block_args(components=1):
     return _Arguments({"ne": {"state": "U", "components": components, "required": True}})
 
@@ -91,20 +96,34 @@ def test_haloed_initial_state_shape_passes():
 
 
 def test_amr_density_initial_state_passes():
-    # The AMR install seeds the per-block coarse DENSITY via set_density (ADC-634): a 2D (n, n)
-    # density (or the flat (n*n,)) is accepted whatever the model's component count.
+    # The compatibility block mapping still accepts a 2D/flat coarse density seed.
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64, 64))}) == []
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64 * 64,))}) == []
 
 
-def test_amr_full_state_is_refused_with_set_density_pointer():
-    # A full (components, n, n) state on AMR is refused: set_density consumes a density, and the
-    # message names the seeding contract.
+def test_amr_full_conservative_state_passes():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))})
+    assert bv.validate_initial_state(
+        manifest, args, layout, {"ne": _Array((4, 64, 64))}) == []
+
+
+def test_amr_full_state_component_mismatch_is_refused():
+    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
+    lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((3, 64, 64))})
     assert len(lines) == 1
-    assert "set_density" in lines[0]
+    assert "complete conservative state (4, 64, 64)" in lines[0]
+
+
+def test_typed_amr_initial_value_requires_complete_state():
+    manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
+    subject = _BoundSubject("ne")
+    assert bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((4, 64, 64))}) == []
+    lines = bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((64, 64))})
+    assert len(lines) == 1
+    assert "BindArray requires the complete state" in lines[0]
 
 
 def test_wrong_shape_is_refused():

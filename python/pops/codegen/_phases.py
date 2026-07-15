@@ -128,6 +128,7 @@ def resolve(
     compile_values = bind_schema.resolve_compile()
 
     resolved_blocks = []
+    block_handles = problem.blocks()
     for name, spec in problem._blocks.items():
         state_spaces = tuple(state.local_id for state in spec["states"])
         if len(state_spaces) != 1:
@@ -142,6 +143,11 @@ def resolve(
             if spatial is not None:
                 raise ValueError("block %r has competing spatial and DiscretizationPlan authorities" % name)
             spatial = numerics.primary_spatial()
+        block = block_handles[name]
+        state_identities = tuple(
+            problem.resolve(state, block=block).qualified_id
+            for state in spec["states"]
+        )
         resolved_blocks.append(ResolvedBlock(
             name=name,
             model=_resolve_problem_model(spec["model"]),
@@ -150,7 +156,11 @@ def resolve(
             # closures are built. A RuntimeParam never selects a second host-marshalled backend.
             backend=backend_token,
             state_spaces=state_spaces,
-            state_identities=tuple(state.qualified_id for state in spec["states"]),
+            # Native storage belongs to this exact Case block, not to the reusable model
+            # declaration.  Use the registry-authenticated canonical instance identity so the
+            # compiled route agrees with Program, boundary and component authorities and never
+            # contains a process-local authoring serial.
+            state_identities=state_identities,
             numerics=numerics,
         ))
     blocks = tuple(resolved_blocks)

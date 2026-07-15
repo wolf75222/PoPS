@@ -144,14 +144,19 @@ class _AmrSystemInstall(_AmrSystem):
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) INITIAL state: legacy density or the canonical full conservative-state manifest.
+        # (4) INITIAL state: compatibility block values dispatch by validated shape; typed
+        # InitialCondition values below always carry the canonical full conservative state.
         initial_rows = tuple(initial_values)
         if initial_rows and any(spec.get("initial") is not None for spec in instances.values()):
             raise ValueError("pops.bind: duplicate legacy and InitialConditionPlan state authorities")
         for name, spec in instances.items():
             initial = spec.get("initial")
             if initial is not None:
-                self.set_density(name, initial)
+                shape = tuple(int(value) for value in getattr(initial, "shape", ()) or ())
+                if len(shape) == 3:
+                    self.set_conservative_state(name, initial)
+                else:
+                    self.set_density(name, initial)
         seen_initial = set()
         for subject_id, name, initial, space, centering, method, source in initial_rows:
             if method == "analytic":

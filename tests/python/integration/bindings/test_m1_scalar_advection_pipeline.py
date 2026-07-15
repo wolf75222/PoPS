@@ -55,6 +55,9 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     boundary_plan = resolved.blocks[0].numerics.boundaries[0]
     assert isinstance(boundary_plan, GhostProducerPlan)
     assert len(boundary_plan.productions) == len(boundary_plan.regions) == 6
+    assert resolved.blocks[0].state_identities == (
+        boundary_plan.compile_boundary_data()["state"]["qualified_id"],
+    )
     extension = _ThirdPartyBoundaryComposer(boundary_plan)
     extension_numerics = replace(
         resolved.blocks[0].numerics, boundaries=(extension,))

@@ -1011,6 +1011,53 @@ name = "test_variable_user_role"
 sources = ["tests/cpp/unit/runtime/test_variable_user_role.cpp"]
 labels = ["unit", "runtime", "fast"]
 
+# Exact-cover fence: these CMake-registered targets predate the manifest-driven sharder.
+# They remain real CTest coverage and therefore must be selected, built, and run by one shard.
+[[cpp.suite]]
+name = "test_amr_transfer_properties"
+sources = ["tests/cpp/integration/amr/test_amr_transfer_properties.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_component_interfaces"
+sources = ["tests/cpp/unit/runtime/test_component_interfaces.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_field_nullspace"
+sources = ["tests/cpp/unit/elliptic/test_field_nullspace.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_flux_interfaces"
+sources = ["tests/cpp/unit/numerics/test_flux_interfaces.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_multiblock_interface_scheduler"
+sources = ["tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_prepared_boundary_plan"
+sources = ["tests/cpp/unit/mesh/test_prepared_boundary_plan.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_program_reflux_ledger"
+sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_residual_operator"
+sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_system_registries"
+sources = ["tests/cpp/unit/runtime/test_system_registries.cpp"]
+labels = ["unit", "runtime", "fast"]
+
 [[python.suite]]
 name = "pops_python_examples_final"
 path = "tests/python/examples/final"

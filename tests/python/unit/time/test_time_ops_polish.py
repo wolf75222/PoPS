@@ -15,20 +15,38 @@ validation errors #18/#19.
 
 (A) Pure Python (IR + codegen), always runs: the builders produce typed IR and emit_cpp_program lowers
     each to the right ProgramContext / pops:: call. No compile, no engine.
-(B) End-to-end (reductions + record_scalar): a 1-variable model whose sum / max / min / sum_component of
-    a known field match the analytic values; record_scalar stores a norm retrievable after the step.
-    Self-skips (exit 0) without numpy / _pops / a compiler / a visible Kokkos -- never fakes the engine.
+(B) End-to-end through the public Case lifecycle: a 1-variable model whose sum / max / min /
+    sum_component of a known field match the analytic values; record_scalar stores the values in the
+    public Program report after ``Case -> resolve -> compile -> bind -> run``.  Missing native
+    prerequisites produce an explicit process-test skip before compilation; contract/lowering/ABI
+    failures propagate.
 (C) Validation #18 (pure Python, mocked System) + #19 (skips without the engine).
 """
 from pops.codegen.program_codegen import emit_cpp_program
-from pops.codegen import _compile_drivers as compile_drivers
+from pathlib import Path
+
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
 from typed_program_support import typed_state
 
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 from pops.numerics.terms import DefaultSource, Flux
+from pops.math import ddt, div
+from pops.time import FixedDt
 import sys
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    skip_process_test,
+)
+
+
+ROOT = Path(__file__).resolve().parents[4]
 
 
 def _pops_time():
@@ -50,7 +68,7 @@ def test_solve_local_nonlinear_validates_inputs(t):
     try:  # a State (not a callable) is no longer accepted -- the residual builds r(U)
         LocalResidual(U, U)
     except TypeError as exc:
-        assert "operator must be" in str(exc), str(exc)
+        assert "IR-building callable" in str(exc), str(exc)
     else:
         raise AssertionError("solve_local_nonlinear must reject a non-callable residual")
 
@@ -222,7 +240,8 @@ def test_project_ir_and_codegen(t):
     R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     endpoint = typed_state(P, "blk", state_name="U").next
     U1 = P.value("project_input", U + P.dt * R, at=endpoint.point)
-    Up = P.project(state=U1)
+    from pops.time import BlockProjection
+    Up = P.project(state=U1, projection=BlockProjection())
     assert Up.op == "project" and Up.vtype == "state", (Up.op, Up.vtype)
     P.commit(endpoint, Up)
     src = emit_cpp_program(P)
@@ -240,10 +259,10 @@ def test_project_rejects_non_state_and_custom_projection(t):
         raise AssertionError("project must reject a non-State value")
     try:
         P.project(state=U, projection="custom")
-    except NotImplementedError as exc:
+    except TypeError as exc:
         assert "projection" in str(exc), str(exc)
     else:
-        raise AssertionError("project must reject a non-'block' projection")
+        raise AssertionError("project must reject an untyped projection")
 
 
 # ---- (A.4) record_scalar (op 23): IR + codegen ----
@@ -298,79 +317,123 @@ def test_ir_hash_distinguishes_new_ops(t):
 
 # ---- shared engine setup for (B) ----
 def _const_source_model(name, c):
-    """A 1-variable model (rho), ZERO flux, default source S(rho) = c (a CONSTANT source, so R = c is
-    spatially uniform and analytic). A complete compilable block (flux + primitive + eigenvalue + src)."""
-    from pops.physics._facade import Model
-    m = Model(name)
-    (rho,) = m.conservative_vars("rho")
-    u = m.primitive("u", 0.0 * rho)
-    m.primitive_vars(rho=rho, u=u)
-    m.conservative_from([rho])
-    m.flux(x=[0.0 * rho], y=[0.0 * rho])
-    m.eigenvalues(x=[0.0 * rho], y=[0.0 * rho])
-    m.source([c + 0.0 * rho])
-    return m
+    """Build one final public ``Model`` with zero transport and constant source ``c``.
+
+    The returned model is the exact instance used both by the typed Program and by the
+    ``Case -> validate -> resolve -> pops.compile`` lifecycle below.  Keeping one owner avoids
+    the historical proxy/model split that silently skipped the native sections of this test.
+    """
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    from pops.physics import Model
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    model.source("default", on=state, value=(c + 0.0 * rho,))
+    rate = model.rate("transport", equation=ddt(state) == -div(flux))
+    return model, state, flux, rate
 
 
-def _reductions_program(t):
+def _compile_final_artifact(
+    case, model, state, flux, rate, program, *, block, cells, positivity_floor=None,
+):
+    """Compile one program through the final public Case lifecycle.
+
+    Only a missing native toolchain is converted into the test's documented self-skip.  Contract,
+    validation, or code-generation failures propagate so CI cannot hide a broken public API.
+    """
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+            positivity_floor=positivity_floor,
+        ),
+    )
+    case.numerics(numerics, block=block)
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(cells, cells),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": default_cxx()},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    return artifact
+
+
+def _reductions_program(t, block_state, dt):
     """Forward Euler that also records sum / max / min / sum_component of the CURRENT state (component 0)
     each step, so the diagnostics can be checked against the analytic state."""
     P = t.Program("reductions_step")
-    U = typed_state(P, "blk")
+    temporal = P.state(block_state)
+    U = temporal.n
     R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
     P.record_scalar("state_sum", P.sum(U))
     P.record_scalar("state_max", P.max(U))
     P.record_scalar("state_min", P.min(U))
     P.record_scalar("state_sum_c0", P.sum_component(U, 0))
-    endpoint = typed_state(P, "blk", state_name="U").next
-    P.commit(endpoint, P.value("reductions_next", U + P.dt * R, at=endpoint.point))
+    P.commit(
+        temporal.next,
+        P.value("reductions_next", U + P.dt * R, at=temporal.next.point),
+    )
+    P.step_strategy(FixedDt(dt))
     return P
 
 
 def _run_section_b(t):
     try:
         import numpy as np
+    except ImportError as exc:
+        skip_process_test("test_time_ops_polish native section: numpy unavailable: %s" % exc)
 
-        import pops.runtime._engine_descriptors as engine
-    except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+    missing_native = missing_native_compile_requirement(ROOT / "include", default_cxx())
+    if missing_native:
+        skip_process_test("test_time_ops_polish native section: %s" % missing_native)
 
     n = 8
-    sim = System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program") or not hasattr(sim, "program_diagnostics"):
-        print("-- (B) skipped: _pops lacks the install_program/program_diagnostics bindings "
-              "(rebuild _pops) --")
-        return None
-
-
+    dt = 0.01
     c = 0.5
-    P = _reductions_program(t)
-    try:
-        compiled = compile_drivers.compile_problem(model=_const_source_model("red_prog", c), time=P)
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
-        return None
-    try:
-        compiled_model = _const_source_model("red_block", c).compile(backend="production")
-    except RuntimeError as exc:
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
-        return None
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
+    model, state, flux, rate = _const_source_model("red_prog", c)
+    case = pops.Case("reductions-runtime-case")
+    block = case.block("blk", model)
+    program = _reductions_program(t, block[state], dt)
+    artifact = _compile_final_artifact(
+        case, model, state, flux, rate, program, block=block, cells=n)
 
     # A KNOWN field with distinct min / max / sum: rho(i,j) = 1 + (linear ramp in [0, 1]).
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.25 * X + 0.25 * Y  # in [1, 1.5), all distinct
-    sim.set_state("blk", np.stack([rho0]))
+    initial = np.ascontiguousarray(np.stack([rho0]))
+    runtime = pops.bind(artifact, initial_state={"blk": initial})
+    report = pops.run(runtime, t_end=dt, max_steps=1)
+    assert report.accepted_steps == 1, "the public reductions Program must accept one step"
 
-    sim.install_program(compiled.so_path)
-    dt = 0.01
-    sim.step(dt)  # the diagnostics are recorded from U^n (the state at the START of the step)
-
-    diags = sim.program_diagnostics()
+    # ProgramRuntimeReport is the public, array-free diagnostic surface.
+    program_report = runtime.program_report()
+    assert program_report.installed is True
+    diags = program_report.diagnostics
     for key in ("state_sum", "state_max", "state_min", "state_sum_c0"):
         assert key in diags, "program_diagnostics must contain %r (got %r)" % (key, sorted(diags))
     # The reductions are over U^n = rho0 (record_scalar reads U before the commit).
@@ -381,76 +444,69 @@ def _run_section_b(t):
     err_max = abs(diags["state_max"] - exp_max)
     err_min = abs(diags["state_min"] - exp_min)
     err_c0 = abs(diags["state_sum_c0"] - exp_sum)
-    # program_diagnostic(name) reads one value (same as the dict).
-    assert abs(sim.program_diagnostic("state_sum") - diags["state_sum"]) == 0.0
     print("  reductions: |sum-%.4f|=%.2e |max-%.4f|=%.2e |min-%.4f|=%.2e |sum_c0|err=%.2e" %
           (exp_sum, err_sum, exp_max, err_max, exp_min, err_min, err_c0))
     assert err_sum <= 1e-9 * max(1.0, abs(exp_sum)), "P.sum must match the analytic sum"
     assert err_max <= 1e-12, "P.max must match the analytic max"
     assert err_min <= 1e-12, "P.min must match the analytic min"
     assert err_c0 <= 1e-9 * max(1.0, abs(exp_sum)), "P.sum_component(.,0) must match the analytic sum"
+    advanced = np.asarray(runtime.state_global("blk"), dtype=np.float64).reshape(initial.shape)[0]
+    np.testing.assert_allclose(advanced, rho0 + dt * c, rtol=0.0, atol=2.0e-13)
     # An unrecorded diagnostic name must fail loud (not return 0).
     try:
-        sim.program_diagnostic("never_recorded")
-    except Exception as exc:  # noqa: BLE001 -- C++ std::out_of_range -> a Python exception
-        assert "never_recorded" in str(exc), str(exc)
+        diags["never_recorded"]
+    except KeyError as exc:
+        assert exc.args == ("never_recorded",)
     else:
-        raise AssertionError("program_diagnostic must raise on an unrecorded name")
+        raise AssertionError("the public Program report must not invent an unrecorded diagnostic")
     return err_max
 
 
 # ---- shared engine setup for (B.2) fill_boundary + project ----
-def _fill_project_program(t):
+def _fill_project_program(t, block_state, dt):
     """A program exercising fill_boundary (on the state) + project (positivity) end to end. The model is
     flux-only (zero source) so the state is unchanged by the RHS; the program just commits U after a
     ghost fill and a projection (both no-ops on a smooth positive state, but they must lower + run)."""
     P = t.Program("fill_project_step")
-    U = typed_state(P, "blk")
+    temporal = P.state(block_state)
+    U = temporal.n
     Uf = P.fill_boundary(U)
     R = P.rhs(state=Uf, terms=[Flux(), DefaultSource()])
-    endpoint = typed_state(P, "blk", state_name="U").next
-    U1 = P.value("project_input", Uf + P.dt * R, at=endpoint.point)
-    P.commit(endpoint, P.project(state=U1))
+    U1 = P.value("project_input", Uf + P.dt * R, at=temporal.next.point)
+    P.commit(temporal.next, P.project(state=U1))
+    P.step_strategy(FixedDt(dt))
     return P
 
 
 def _run_section_b2(t):
-    try:
-        import numpy as np
-
-        import pops.runtime._engine_descriptors as engine
-    except Exception as exc:  # noqa: BLE001
-        print("-- (B.2) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+    import numpy as np
 
     n = 8
-    sim = System(n=n, L=1.0, periodic=True)
-    if not hasattr(sim, "install_program"):
-        print("-- (B.2) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
-    P = _fill_project_program(t)
-    try:
-        compiled = compile_drivers.compile_problem(model=_const_source_model("fp_prog", 0.0), time=P)
-    except RuntimeError as exc:
-        print("-- (B.2) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
-        return None
-    try:
-        compiled_model = _const_source_model("fp_block", 0.0).compile(backend="production")
-    except RuntimeError as exc:
-        print("-- (B.2) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
-        return None
+    dt = 0.01
+    model, state, flux, rate = _const_source_model("fp_prog", 0.0)
+    case = pops.Case("fill-project-runtime-case")
+    block = case.block("blk", model)
+    program = _fill_project_program(t, block[state], dt)
     # A positivity floor makes the block carry a real projection closure (else project is a no-op).
-    sim.add_equation("blk", compiled_model,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov(),
-                                              positivity_floor=1e-12),
-                     time=engine.Explicit(method="euler"))
+    artifact = _compile_final_artifact(
+        case,
+        model,
+        state,
+        flux,
+        rate,
+        program,
+        block=block,
+        cells=n,
+        positivity_floor=1e-12,
+    )
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("blk", np.stack([rho0]))
-    sim.install_program(compiled.so_path)
-    sim.step(0.01)
-    out = np.array(sim.get_state("blk"))[0]
+    initial = np.ascontiguousarray(np.stack([rho0]))
+    runtime = pops.bind(artifact, initial_state={"blk": initial})
+    report = pops.run(runtime, t_end=dt, max_steps=1)
+    assert report.accepted_steps == 1, "the public fill/project Program must accept one step"
+    out = np.asarray(runtime.state_global("blk"), dtype=np.float64).reshape(initial.shape)[0]
     # Zero source + flux-only on a periodic smooth field -> the state is unchanged to machine precision
     # (fill_boundary writes only ghosts; project leaves a positive state untouched).
     err = float(np.abs(out - rho0).max())
@@ -507,6 +563,7 @@ def test_restart_missing_history_fails_loud(t):
         return
     import os
     import tempfile
+    from pops.runtime._system import System  # validation-only legacy checkpoint seam
 
     # A legacy checkpoint cannot be authenticated, so it is rejected at the canonical manifest
     # boundary before any payload or Program-history mutation is attempted.
@@ -542,6 +599,8 @@ def _run_section_c2(t):
     except Exception as exc:  # noqa: BLE001
         print("-- (C.2) skipped: pops unavailable: %s --" % exc)
         return None
+
+    from pops.runtime._system import System  # validation-only bad-ABI install seam
 
     n = 4
     sim = System(n=n, L=1.0, periodic=True)

@@ -65,6 +65,7 @@ def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
     s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     s.set_refinement(1e30)
     s.block("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()), time=time)
@@ -93,6 +94,7 @@ chk(np.all(np.isfinite(d_a)),
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
+amr.set_temporal_relations([2], [1], ["integral_only"])
 amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
 amr.block("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
@@ -137,6 +139,7 @@ chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identiq
 # ---- (d) LOADER .so + OPTIONS/DIAGNOSTICS : rejet explicite -------------------------------------
 print("== (d) production AMR (.so) : options/diagnostics Newton rejetes explicitement ==")
 sim_opt = AmrSystem(n=16, periodic=True)
+sim_opt.set_temporal_relations([2], [1], ["integral_only"])
 try:
     sim_opt.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
                          time=engine.IMEX(newton_max_iters=5))
@@ -145,6 +148,7 @@ except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
         "options Newton sur .so production AMR : ValueError claire (Newton/production)")
 sim_diag = AmrSystem(n=16, periodic=True)
+sim_diag.set_temporal_relations([2], [1], ["integral_only"])
 try:
     sim_diag.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
                           time=engine.IMEX(newton_diagnostics=True))

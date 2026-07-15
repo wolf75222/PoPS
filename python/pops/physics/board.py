@@ -43,7 +43,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     """A blackboard-style physical model that lowers to the operator-first IR."""
 
     _physics_mutators = frozenset({
-        "state", "species", "primitive", "scalar", "param", "aux", "field",
+        "state", "species", "primitive", "primitive_state", "scalar", "param", "aux", "field",
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
@@ -64,6 +64,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self.name = self._dsl.name
         self._frame = frame
         self._states = {}
+        # Exact Var objects returned by ``primitive``.  Primitive-coordinate authoring accepts
+        # these registry-issued values (or this model's conservative state variables), never a
+        # same-named Var from another model.
+        self._primitive_vars = {}
+        self._primitive_state_authored = False
         self._fields = {}
         self._field_operators = {}
         self._fluxes = {}
@@ -295,9 +300,104 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     def primitive(self, name: Any, expr: Any) -> Any:
         """Define a primitive quantity by its formula; returns a usable expression."""
-        value = self._dsl.primitive(require_name(name, "primitive name"), expr)
+        name = require_name(name, "primitive name")
+        value = self._dsl.primitive(name, expr)
+        self._primitive_vars[name] = value
         self._invalidate_authoring_views()
         return value
+
+    def primitive_state(
+        self, *components: Any, conservative: Any, roles: Any = None,
+    ) -> None:
+        """Declare one explicit primitive coordinate system and its conservative inverse.
+
+        ``components`` is the ordered primitive layout returned by native diagnostics and accepted
+        by primitive-to-conservative conversion.  Every component must be either an exact variable
+        from this model's sole conservative state or the exact value returned by
+        :meth:`primitive`; a same-named value from another model is rejected.  ``conservative``
+        supplies one inverse expression per conservative component.  Its variable leaves may only
+        reference the selected primitive coordinates (typed parameters and constants remain valid).
+
+        The primitive layout, optional typed roles, and inverse are one atomic declaration: arity,
+        ownership, and all expressions are validated before the lower-level model is mutated, and a
+        builder failure restores the previous identity coordinate system installed by
+        :meth:`state`.
+        """
+        if not self._states:
+            raise ValueError("primitive_state requires one state() declaration first")
+        if len(self._states) != 1 or self._species or self._multi_module is not None:
+            raise ValueError(
+                "primitive_state currently applies to one state() coordinate system; "
+                "multi-species coordinates must be declared by their model provider"
+            )
+        if self._primitive_state_authored:
+            raise ValueError("primitive_state is already declared for this physics model")
+
+        from .._ir import Expr, Var, _children
+
+        values = normalize_sequence(components, "primitive_state components", nonempty=True)
+        state = next(iter(self._states.values()))
+        expected = len(state.components)
+        if len(values) != expected:
+            raise ValueError(
+                "primitive_state requires %d primitive component(s), matching state %r; got %d"
+                % (expected, state.name, len(values))
+            )
+        if any(not isinstance(value, Var) for value in values):
+            raise TypeError(
+                "primitive_state components must be exact variables returned by state() or "
+                "primitive()"
+            )
+        names = tuple(value.name for value in values)
+        if len(set(names)) != len(names):
+            raise ValueError("primitive_state component names must be unique")
+
+        owned = tuple(state.vars) + tuple(self._primitive_vars.values())
+        foreign = [value.name for value in values
+                   if not any(value is candidate for candidate in owned)]
+        if foreign:
+            raise ValueError(
+                "primitive_state component(s) %r were not declared by this physics model"
+                % foreign
+            )
+
+        inverse_values = normalize_sequence(
+            conservative, "primitive_state conservative inverse", nonempty=True)
+        if len(inverse_values) != expected:
+            raise ValueError(
+                "primitive_state conservative inverse requires %d expression(s); got %d"
+                % (expected, len(inverse_values))
+            )
+        inverse = tuple(_wrap(value) for value in inverse_values)
+        selected_ids = {id(value) for value in values}
+        for index, expression in enumerate(inverse):
+            if not isinstance(expression, Expr):  # defensive: _wrap is the sole coercion authority
+                raise TypeError(
+                    "primitive_state conservative inverse %d is not symbolic" % index)
+            stack = [expression]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, Var) and id(node) not in selected_ids:
+                    raise ValueError(
+                        "primitive_state conservative inverse %d references variable %r that is "
+                        "not an owned selected primitive component" % (index, node.name)
+                    )
+                stack.extend(_children(node))
+
+        role_map = normalize_roles(roles, names, "primitive_state")
+        role_list = None if roles is None else [
+            _canon_role(role_map.get(name)) for name in names
+        ]
+        hyp = self._dsl._m
+        with atomic_attrs(
+            (hyp, "prim_state"), (hyp, "prim_roles"), (hyp, "cons_from"),
+            (self, "_primitive_state_authored"),
+        ):
+            self._dsl.primitive_vars(*values, roles=role_list)
+            self._dsl.conservative_from(inverse)
+            self._primitive_state_authored = True
+        self._dsl._invalidate_authoring_views()
+        self._invalidate_authoring_views()
 
     def scalar(self, name: Any, expr: Any) -> Any:
         """Define a named derived scalar (e.g. pressure, sound speed)."""

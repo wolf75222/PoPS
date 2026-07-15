@@ -209,6 +209,72 @@ def fresh_state_refs(
     return state_refs(holder, block_name, state_name=state_name, space=space)
 
 
+def _register_test_field_provider(model: Any, *, name: str, signature: Any) -> Any:
+    """Register a field provider on the exact model owning the consumed state.
+
+    A field unknown may live in its own Module, but its provider consumes a block state and must
+    therefore be authenticated by that state model's operator registry.  Registering the provider
+    on the unknown's Module would forge a cross-owner call and correctly fails final Program
+    validation.
+    """
+    module = getattr(model, "module", model)
+    registry_getter = getattr(module, "operator_registry", None)
+    if not callable(registry_getter):
+        registry_getter = getattr(model, "operator_registry", None)
+    registry = registry_getter() if callable(registry_getter) else None
+    if registry is not None:
+        try:
+            existing = registry.get(name)
+        except KeyError:
+            existing = None
+        if existing is not None:
+            if existing.kind != "field_operator" or existing.signature != signature:
+                raise ValueError(
+                    "test field provider %r is already registered with a different contract"
+                    % name
+                )
+            handle_for = getattr(module, "operator_handle", None)
+            if callable(handle_for):
+                return handle_for(name)
+            from pops.model import OperatorHandle
+
+            return OperatorHandle(
+                name,
+                kind=existing.kind,
+                owner=registry.owner_path,
+                signature=existing.signature,
+                registered_operator_name=name,
+            )
+    declare = getattr(module, "operator", None)
+    if callable(declare):
+        return declare(
+            name=name,
+            signature=signature,
+            kind="field_operator",
+            expr=name,
+        )
+
+    from pops.model import Operator, OperatorHandle
+
+    if registry is None:
+        registry = model.operator_registry()
+    operator = Operator(
+        name,
+        "field_operator",
+        signature,
+        lowering={"field_provider": {"key": name}},
+        body=name,
+    )
+    registry.register(operator)
+    return OperatorHandle(
+        name,
+        kind=operator.kind,
+        owner=registry.owner_path,
+        signature=operator.signature,
+        registered_operator_name=name,
+    )
+
+
 def fresh_field_refs(
     model: Any,
     *,
@@ -239,11 +305,10 @@ def fresh_field_refs(
     field_module = Module("typed_factory_field_%s" % field_name)
     field_space = field_module.field_space(field_name, components)
     if provider is None:
-        provider = field_module.operator(
+        provider = _register_test_field_provider(
+            model,
             name=field_name + "_provider",
             signature=Signature((state.space,), field_space),
-            kind="field_operator",
-            expr=field_name + "_provider",
         )
     field_block = case.block("typed_field_%s" % field_name, field_module)
     unknown = field_block[field_module.field_handle(field_space)]
@@ -299,11 +364,15 @@ def typed_field(program: Program, name: str, *, provider: Any = None) -> Any:
     )
     field_space = field_module.field_space(name, components)
     if provider is None:
-        provider = field_module.operator(
+        instance_registry = getattr(state_block, "_instance_registry", None)
+        spec = None if instance_registry is None else instance_registry.spec(state_block.local_id)
+        state_model = None if spec is None else spec.get("model")
+        if state_model is None:
+            raise ValueError("typed field fixture cannot resolve its state model")
+        provider = _register_test_field_provider(
+            state_model,
             name=name + "_provider",
             signature=Signature((state_declaration.space,), field_space),
-            kind="field_operator",
-            expr=name + "_provider",
         )
     field_block = context.case.block("typed_field_%s" % name, field_module)
     unknown = field_block[field_module.field_handle(field_space)]

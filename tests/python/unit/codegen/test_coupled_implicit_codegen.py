@@ -74,18 +74,19 @@ def test_coupled_implicit_is_one_native_newton_kernel_with_explicit_action():
     assert "pops::reduce_max(ci_status_" in source
     assert "SolveStatus::kSingular" in source
     assert "StepAttemptRejected" in source
-    assert source.count("ctx.lincomb(") >= 2
+    assert source.count("ctx.commit_many(") == 1
+    assert "{&u0, &ci2_electrons}" in source
+    assert "{&u1, &ci2_ions}" in source
 
 
-def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_problem_identity():
+def test_coupled_implicit_euler_carries_exact_stage_coefficient_and_typed_problem_kind():
     _module, program, _solved = _program(coefficient=0.5)
     token = next(value for value in program._values
                  if value.op == "solve_coupled_implicit")
     source = emit_cpp_program(program, model=None)
 
     assert token.attrs["problem_kind"] == "coupled_implicit_euler"
-    assert token.attrs["problem_identity"].startswith(
-        "pops.program-solve-problem.v1:sha256:")
+    assert "problem_identity" not in token.attrs
     assert token.attrs["coefficient"] == 0.5
     assert "static_cast<pops::Real>(0.5) * dt *" in source
 
@@ -104,10 +105,11 @@ def test_failed_coupled_implicit_never_aliases_live_state_before_guard():
     _module, program, _solved = _program()
     source = emit_cpp_program(program, model=None)
     guard = source.index("if (!ci_report_")
-    first_commit = source.index("ctx.lincomb(", guard)
+    first_commit = source.index("ctx.commit_many(", guard)
 
     assert "ctx.scratch_state_like(u0)" in source
     assert "ctx.scratch_state_like(u1)" in source
+    assert "ctx.commit_many(" not in source[:guard]
     assert guard < first_commit
 
 

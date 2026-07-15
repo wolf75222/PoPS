@@ -147,6 +147,8 @@ extern "C" const PopsComponentApiV1* pops_component_interface_v1() {{
 
 
 def _solver_source(manifest, *, solution_expression="7.0"):
+    expected_parameters_json = json.dumps(
+        {"answer": 7}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return f'''#include <pops/runtime/config/generated_component_abi.hpp>
 #include <cstddef>
 #include <cstring>
@@ -163,7 +165,8 @@ int prepare(const PopsComponentPrepareRequestV1* request, void** output,
             PopsComponentStatusV1* status) {{
   if (!request || !output || !status || request->execution.context_version != 1 ||
       !request->parameters_json ||
-      std::strcmp(request->parameters_json, "{{\"answer\":7}}") != 0) return 2;
+      std::strcmp(request->parameters_json,
+                  {json.dumps(expected_parameters_json)}) != 0) return 2;
   *output = new State{{1, 0}};
   *status = ok();
   return 0;
@@ -291,7 +294,10 @@ def test_external_field_pair_executes_and_reports_materialized_topology(tmp_path
         components=(topology, solver))
 
     artifact = pops.compile(resolved)
-    simulation = pops.bind(artifact)
+    simulation = pops.bind(
+        artifact,
+        initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+    )
     slot, = simulation.field_provider_slots()
     before = simulation.inspect().to_dict()["instance"]["field_providers"]
     assert len(before) == 1
@@ -351,7 +357,10 @@ def test_external_field_solver_rejects_converged_nonfinite_solution_without_publ
         target="system", n=8, field_solver=provider,
         components=(topology, solver))
 
-    simulation = pops.bind(pops.compile(resolved))
+    simulation = pops.bind(
+        pops.compile(resolved),
+        initial_state={"material": np.ones((1, 8, 8), dtype=np.float64)},
+    )
     slot, = simulation.field_provider_slots()
     before = np.asarray(simulation.field_potential_global(slot)).copy()
     assert before.size == 64 and np.all(before == 0.0)

@@ -30,6 +30,38 @@ def _abi_token(abi_key: Any, name: str) -> Any:
     return None
 
 
+def _qualified_executable_values(compiled: Any, name: str) -> tuple[Any, dict[str, Any]]:
+    """Return a scalar value only when every executable agrees, plus qualified evidence.
+
+    A multi-block AMR artifact has one model binary per block and a multi-layout system artifact
+    has one Program binary per layout.  Inspection must never select the first component merely to
+    preserve a scalar presentation field: callers get the common value when it is truly common and
+    the complete owner-qualified mapping in every case.
+    """
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    if type(compiled) is CompiledSimulationArtifact:
+        if compiled.layout_programs:
+            components = tuple(
+                ("layout:%s" % row.layout_id, row.program)
+                for row in compiled.layout_programs
+            )
+        else:
+            components = tuple(
+                ("block:%s" % block.name, block.model)
+                for block in compiled.blocks
+            )
+    else:
+        components = (("artifact", compiled),)
+    qualified = {
+        owner: getattr(component, name, None)
+        for owner, component in components
+    }
+    values = tuple(qualified.values())
+    common = values[0] if values and all(value == values[0] for value in values[1:]) else None
+    return common, qualified
+
+
 class CompiledReport(Report):
     """The printable ``print(compiled)`` summary of a compiled artifact (Spec 5 sec.12.1).
 
@@ -57,7 +89,7 @@ class CompiledReport(Report):
         self.fields = list(fields)        # resolved field-plan summaries
         self.program = dict(program)      # {name, commits, ops, hash}
         self.inputs = dict(inputs)        # {states, params, aux} -> [names]
-        self.artifacts = dict(artifacts)  # {so_path, abi_key, cache_key}
+        self.artifacts = dict(artifacts)  # scalar common values + owner-qualified evidence
         self.status = status
         # Active codegen POPS_* environment (Spec 5 sec.12.4, #47-48): the resolved CodegenEnv as a
         # plain dict (log_level / codegen_dir / keep_generated / dump_ir / dump_cpp / cache_dir /
@@ -113,6 +145,8 @@ class CompiledReport(Report):
         art = self.artifacts
         lines.append("  artifacts:")
         lines.append("    so_path  : %s" % art.get("so_path"))
+        for owner, path in sorted(art.get("so_paths", {}).items()):
+            lines.append("    %-9s: %s" % (owner, path))
         lines.append("    abi_key  : %s" % art.get("abi_key"))
         lines.append("    cache_key: %s" % art.get("cache_key"))
         if self.runtime:
@@ -258,12 +292,17 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
 
-    abi_key = getattr(compiled, "abi_key", None)
-    artifacts = {"so_path": getattr(compiled, "so_path", None),
+    so_path, so_paths = _qualified_executable_values(compiled, "so_path")
+    abi_key, abi_keys = _qualified_executable_values(compiled, "abi_key")
+    cache_key, cache_keys = _qualified_executable_values(compiled, "cache_key")
+    artifacts = {"so_path": so_path,
+                 "so_paths": so_paths,
                  "abi_key": _short(abi_key),
                  "abi_key_full": abi_key,
+                 "abi_keys": abi_keys,
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
-                 "cache_key": _short(getattr(compiled, "cache_key", None))}
+                 "cache_key": _short(cache_key),
+                 "cache_keys": cache_keys}
     from pops._capabilities import native_capability_report
     try:
         capability_report = native_capability_report(

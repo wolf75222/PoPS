@@ -1,14 +1,30 @@
 """Runtime-parameter identity for standalone named elliptic RHS bricks."""
 
 from pops.fields import FieldOutput
+from pops.frames import Cartesian2D
 from pops.math import laplacian
 from pops.params import RuntimeParam
 from pops.physics import Model
+from pops.domain import Rectangle
 
 
 def test_named_field_only_runtime_param_uses_the_shared_bind_carrier() -> None:
-    model = Model("named_field_runtime_param")
-    (density,) = model.state("U", components=("density",))
+    frame = Rectangle(
+        "named-field-runtime-param-domain",
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+    ).frame(Cartesian2D())
+    model = Model("named_field_runtime_param", frame=frame)
+    state = model.state("U", components=("density",))
+    (density,) = state
+    x_axis, y_axis = frame.axes
+    model.flux(
+        "stationary_density",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * density,), y_axis: (0.0 * density,)},
+        waves={x_axis: (0.0 * density,), y_axis: (0.0 * density,)},
+    )
     coefficient = model.value(
         model.param(RuntimeParam("named_rhs_scale", default=2.5)))
     potential = model.field("potential")

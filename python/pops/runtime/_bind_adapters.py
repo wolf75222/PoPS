@@ -25,6 +25,7 @@ def install_plan(install_plan: Any) -> Any:
         inputs.initial_state,
         plan.params,
         plan.aux,
+        initial_values=plan.initial_values,
         platform_manifest=artifact.platform_manifest,
         execution_context=plan.execution_context,
     )

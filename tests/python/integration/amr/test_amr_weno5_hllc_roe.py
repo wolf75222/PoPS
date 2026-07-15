@@ -66,8 +66,9 @@ rho = bump(n)
 for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
     s = AmrSystem(n=n, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
-    s.block("gas", euler_spec(),
+    s.add_equation("gas", euler_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=riem), time=engine.Explicit())
     s.set_density("gas", rho.copy())
     for _ in range(3):
@@ -78,9 +79,10 @@ for riem in (HLLC(), Roe()):
 # --- 2. MULTI-BLOCS (dispatch_amr_block) : deux blocs Euler weno5 + hllc -----------------------------
 print("== multi-blocs Euler : 2 blocs weno5 + hllc (dispatch_amr_block) ==")
 s = AmrSystem(n=n, L=1.0, periodic=True)
+s.set_temporal_relations([2], [1], ["integral_only"])
 s.set_refinement(1e30)
-s.block("a", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
-s.block("b", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
+s.add_equation("a", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
+s.add_equation("b", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
 s.set_density("a", rho.copy())
 s.set_density("b", rho.copy())
 for _ in range(3):
@@ -92,8 +94,9 @@ chk(np.all(np.isfinite(np.asarray(s.density("b")))), "multi-blocs weno5 + hllc :
 print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le limiteur) ==")
 try:
     s = AmrSystem(n=n, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
-    s.block("iso", iso_spec(),
+    s.add_equation("iso", iso_spec(),
                 spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
     s.set_density("iso", rho.copy())
     s.step(1e-4)

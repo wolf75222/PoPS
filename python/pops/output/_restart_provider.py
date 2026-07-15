@@ -31,6 +31,10 @@ class RestartV3:
             "provider_id": "pops.restart.accepted-state-v3",
             "extension": ".npz",
             "bit_identical": self.bit_identical,
+            # A serial runtime is the one-member case of this collective operation.  Providers
+            # without this explicit capability (notably parallel HDF5) remain fail-closed when no
+            # distributed communicator is present.
+            "supports_singleton_collective": True,
         }
 
     def snapshot(self, runtime: Any, directory: Any) -> Path:

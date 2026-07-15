@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -98,6 +98,11 @@ class InitialConditionPlan:
     layout_plan_id: str
     transfer_identity: Identity
     bindings: tuple[InitialConditionBinding, ...]
+    authoring_aliases: Mapping[str, Any] = field(
+        default_factory=dict,
+        repr=False,
+        compare=False,
+    )
     __pops_ir_immutable__ = True
 
     def __post_init__(self) -> None:
@@ -113,6 +118,27 @@ class InitialConditionPlan:
         if len(subjects) != len(set(subjects)):
             raise ValueError("InitialConditionPlan contains duplicate subjects")
         object.__setattr__(self, "bindings", bindings)
+        by_id = {row.subject.qualified_id: row.subject for row in bindings}
+        if not isinstance(self.authoring_aliases, Mapping):
+            raise TypeError("InitialConditionPlan authoring_aliases must be a mapping")
+        aliases = {}
+        for alias_qid, target in self.authoring_aliases.items():
+            if not isinstance(alias_qid, str) or not alias_qid:
+                raise TypeError(
+                    "InitialConditionPlan authoring alias keys must be non-empty strings"
+                )
+            expected = by_id.get(getattr(target, "qualified_id", None))
+            if expected is None or target.canonical_identity() != expected.canonical_identity():
+                raise ValueError(
+                    "InitialConditionPlan authoring alias targets an unknown canonical subject"
+                )
+            previous = aliases.get(alias_qid)
+            if previous is not None and previous != expected:
+                raise ValueError(
+                    "InitialConditionPlan authoring alias resolves to multiple subjects"
+                )
+            aliases[alias_qid] = expected
+        object.__setattr__(self, "authoring_aliases", MappingProxyType(aliases))
 
     @property
     def identity(self) -> Identity:
@@ -125,6 +151,29 @@ class InitialConditionPlan:
             "transfer_identity": self.transfer_identity.to_data(),
             "bindings": [row.to_data() for row in self.bindings],
         }
+
+    def canonical_subject(self, handle: Any) -> Any:
+        """Authenticate a canonical subject or a live alias issued by the originating Case."""
+        from pops.model import Handle
+
+        if not isinstance(handle, Handle) or not handle.is_instance:
+            raise TypeError(
+                "InitialConditionPlan values require block-qualified Handle keys"
+            )
+        if handle.is_resolved:
+            by_id = {row.subject.qualified_id: row.subject for row in self.bindings}
+            subject = by_id.get(handle.qualified_id)
+            if subject is not None \
+                    and handle.canonical_identity() == subject.canonical_identity():
+                return subject
+        else:
+            subject = self.authoring_aliases.get(handle.qualified_id)
+            if subject is not None:
+                return subject
+        raise KeyError(
+            "Handle %s is not an authenticated subject or authoring alias of this "
+            "InitialConditionPlan" % handle.qualified_id
+        )
 
 
 class InitialConditionPlanBuilder:
@@ -145,6 +194,7 @@ class InitialConditionPlanBuilder:
         if not self._expected:
             raise ValueError("InitialConditionPlan requires physical transfer requirements")
         self._bindings: dict[str, InitialConditionBinding] = {}
+        self._aliases: dict[str, Any] = {}
 
     def add(
         self,
@@ -152,6 +202,7 @@ class InitialConditionPlanBuilder:
         source: InitialConditionSource,
         *,
         layout: LayoutHandle | None = None,
+        authoring_alias: Any = None,
     ) -> InitialConditionBinding:
         subject = _handle(subject, where="InitialConditionPlanBuilder.add subject")
         if subject.kind not in {"state", "particle"}:
@@ -172,6 +223,22 @@ class InitialConditionPlanBuilder:
         if subject.qualified_id in self._bindings:
             raise ValueError("duplicate initial condition for %s" % subject.qualified_id)
         self._bindings[subject.qualified_id] = binding
+        if authoring_alias is not None:
+            from pops.model import Handle
+
+            if not isinstance(authoring_alias, Handle) or not authoring_alias.is_instance \
+                    or authoring_alias.is_resolved:
+                raise TypeError(
+                    "InitialConditionPlan authoring alias must be an unresolved "
+                    "block-qualified Handle"
+                )
+            alias_qid = authoring_alias.qualified_id
+            previous = self._aliases.get(alias_qid)
+            if previous is not None and previous != subject:
+                raise ValueError(
+                    "InitialConditionPlan authoring alias resolves to multiple subjects"
+                )
+            self._aliases[alias_qid] = subject
         return binding
 
     def resolve(self) -> InitialConditionPlan:
@@ -182,6 +249,7 @@ class InitialConditionPlanBuilder:
             self._layout_plan.qualified_id,
             self._transfers.identity,
             tuple(self._bindings[key] for key in sorted(self._bindings)),
+            self._aliases,
         )
 
 

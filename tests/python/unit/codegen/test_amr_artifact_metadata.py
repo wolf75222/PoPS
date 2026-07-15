@@ -31,14 +31,20 @@ def test_amr_artifact_reports_aggregate_every_declared_block():
         "ions": "/tmp/ions.so",
         "electrons": "/tmp/electrons.so",
     }
-    assert {row["name"] for row in artifact.inspect().blocks} == {"ions", "electrons"}
+    report = artifact.inspect()
+    assert {row["name"] for row in report.blocks} == {"ions", "electrons"}
+    assert report.artifacts["so_path"] is None
+    assert report.artifacts["so_paths"] == {
+        "block:ions": "/tmp/ions.so",
+        "block:electrons": "/tmp/electrons.so",
+    }
     assert artifact.requirements().constraints["layout"] == "amr"
     assert set(artifact.manifest().blocks) == {"ions", "electrons"}
     assert set(artifact.arguments().instances) == {"ions", "electrons"}
     manifest = artifact.manifest()
     assert manifest.supports_uniform is True and manifest.supports_amr is True
     assert not hasattr(artifact, "capability_matrix")
-    report_rows = artifact.inspect().capabilities["routes"]
+    report_rows = report.capabilities["routes"]
     manifest_rows = [row.to_dict() for row in manifest.capability_matrix().rows]
     assert report_rows == manifest_rows
 

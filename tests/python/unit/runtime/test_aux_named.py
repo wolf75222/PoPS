@@ -242,6 +242,7 @@ def test_amr_named_aux_single_block_regrid():
         lo, hi = n // 3, 2 * n // 3
 
         reference = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        reference.set_temporal_relations([2], [1], ["integral_only"])
         reference.add_equation(
             "decay",
             model=_compile_decay(directory, "amr0.so", target="amr_system"),
@@ -257,6 +258,7 @@ def test_amr_named_aux_single_block_regrid():
         assert abs(reference.mass("decay") - initial_mass) < 1e-10
 
         runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime.set_temporal_relations([2], [1], ["integral_only"])
         runtime.add_equation(
             "decay",
             model=_compile_decay(directory, "amr1.so", target="amr_system"),
@@ -313,6 +315,7 @@ def test_amr_named_aux_multiblock_regrid():
         )
 
         runtime = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=1)
+        runtime.set_temporal_relations([2], [1], ["integral_only"])
         runtime.add_equation(
             "decay", model=decay, spatial=_spatial(), time=engine.Explicit())
         runtime.add_equation(

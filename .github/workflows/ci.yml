@@ -131,6 +131,7 @@ jobs:
               - 'tests/**/*.hpp'
               - 'tests/CMakeLists.txt'
               - 'tests/cpp/test_sources.cmake'
+              - 'tests/cpp/build_durations.json'
               - 'tests/cpp/test_durations.json'
               - 'tests/test_manifest.toml'
               - 'cmake/**'
@@ -169,6 +170,7 @@ jobs:
               - 'CHANGELOG.md'
               - 'README.md'
               - 'docs/VERSIONING.md'
+              - 'tests/cpp/build_durations.json'
               - 'tests/cpp/test_durations.json'
               - 'tests/test_manifest.toml'
               - 'scripts/generate_component_catalog.py'
@@ -298,7 +300,10 @@ jobs:
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 23 min build + 7 min tests + setup/cache margin.  The inner watchdogs keep a
+    # wedged compiler/test explicit while this outer bound still leaves time for
+    # the always() ccache save.
+    timeout-minutes: 35
     needs: [changes, set-mode]
     strategy:
       fail-fast: false
@@ -417,8 +422,41 @@ jobs:
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Configure + build + test (Kokkos Serial)
+        timeout-minutes: 32
         run: |
           SECONDS=0
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # -ffile-prefix-map (ADC-366): codegen-neutral path rewrite for ccache cross-checkout hits (see
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
@@ -428,7 +466,8 @@ jobs:
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi
-          cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 23m \
+            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
           # GTest exposes CTest names such as BrickCatalog.EntryRoundTrips, which do not
@@ -441,7 +480,8 @@ jobs:
           python3 scripts/ci_select_tests.py verify-cpp-target-labels \
             --ctest-json "$ctest_inventory" \
             --targets "${cpp_targets[@]}"
-          ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" 7m \
+            ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
           {
             echo "### gate-cpp (Kokkos Serial, C++)"
@@ -1198,13 +1238,21 @@ jobs:
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
+          mpi_cmake_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            # FindMPI propagates these preflags to every manifest-owned CTest launch.
+            # Non-OpenMPI launchers never receive an implementation-specific option.
+            mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
+          fi
           cmake --preset ci-mpi \
             -DPOPS_BUILD_PYTHON=ON \
-            -DPython_EXECUTABLE=/usr/bin/python3
+            -DPython_EXECUTABLE=/usr/bin/python3 \
+            "${mpi_cmake_args[@]}"
           read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
           cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
 
       - name: Test (bit-identique np=1/2/4)
+        timeout-minutes: 5
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
         # OMPI_MCA_* couvre OpenMPI 4.x, PRTE_MCA_* couvre OpenMPI 5.x.
         # Les filtres sont ancres : CTest traite -L/-LE comme des regex, donc `-L mpi` attrapait
@@ -1220,9 +1268,18 @@ jobs:
             echo "::error::Projection MPI incoherente : CTest=${mpi_n:-0}, manifeste=${mpi_expected:-0}"
             exit 1
           fi
-          ctest --preset ci-mpi -L '^mpi$' -LE '^python$'
+          set +e
+          timeout --signal=TERM --kill-after=30s 4m \
+            ctest --preset ci-mpi -L '^mpi$' -LE '^python$'
+          ctest_status=$?
+          set -e
+          if [ "$ctest_status" -eq 124 ]; then
+            echo "::error::C++ MPI CTest exceeded its 4-minute watchdog"
+          fi
+          exit "$ctest_status"
 
       - name: Test Python MPI contracts + native lifecycle + collective HDF5 writer
+        timeout-minutes: 18
         # Assemble the exact source package around the MPI-enabled extension produced above. The
         # distro interpreter is intentional: apt's Python, mpi4py and h5py-MPI share one ABI.
         env:
@@ -1254,23 +1311,55 @@ jobs:
           print("mpi4py:", MPI.Get_version(), MPI.get_vendor())
           print("pops:", pops.__version__, "mpi_module=", _pops.__has_mpi__)
           PY
+          mpi_failfast_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)
+            echo "OpenMPI detected: aborting the complete MPI job on the first non-zero rank"
+          else
+            echo "Non-OpenMPI launcher detected: using its portable command line"
+          fi
+          run_mpi() {
+            local label="$1"
+            shift
+            echo "::notice::${label}: watchdog=7m"
+            set +e
+            timeout --signal=TERM --kill-after=30s 7m \
+              mpiexec "${mpi_failfast_args[@]}" "$@"
+            local status=$?
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its 7-minute MPI watchdog"
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::${label} failed (mpiexec status=${status})"
+            fi
+            return "$status"
+          }
           while IFS=$'\t' read -r mpi_ranks mpi_test; do
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
-            mpiexec -n "$mpi_ranks" /usr/bin/python3 "$mpi_test"
+            run_mpi "Python MPI contract ${mpi_test}" \
+              -n "$mpi_ranks" /usr/bin/python3 "$mpi_test"
           done < build-mpi/python-mpi-plan.tsv
-          mpiexec -n 2 /usr/bin/python3 -m pytest -q \
-            tests/python/integration/io/test_hdf5_parallel.py
+          run_mpi "collective HDF5 writer" \
+            -n 2 /usr/bin/python3 -m pytest -q \
+              tests/python/integration/io/test_hdf5_parallel.py
 
       - name: ccache stats (MPI)
         if: always()
         run: ccache -s
 
   kokkos-openmp:
-    name: ubuntu-latest / Kokkos (OpenMP)
+    # The C++ backend proof and the Python/native-ABI proof are independent native
+    # builds.  Running them as two matrix lanes preserves every test while bounding
+    # the wall clock instead of serializing two ~20 minute compilations.
+    name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     needs: set-mode
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [cpp, python]
     # Teste le backend KOKKOS avec l'espace d'execution OpenMP (CPU multi-thread). Le gate
     # build-and-test couvre deja Kokkos Serial (mono-thread) ; ce job ferme le multi-thread.
     # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
@@ -1284,6 +1373,9 @@ jobs:
       KOKKOS_VERSION: 4.4.01
       KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-openmp-install
+      # Attempt-qualified, lane-specific publication lets an always() save retain
+      # valid objects from a failed bounded build without cpp/python cache races.
+      CCACHE_CACHE_KEY: kokkos-openmp-${{ matrix.lane }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v7
@@ -1316,12 +1408,14 @@ jobs:
           path: ${{ env.KOKKOS_PREFIX }}
           key: kokkos-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-openmp-cxx20-pic
 
-      - name: Cache ccache (Kokkos OpenMP)
-        uses: actions/cache@v6
+      - name: Restore ccache (Kokkos OpenMP, ${{ matrix.lane }})
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
+            ccache-${{ runner.os }}-kokkos-openmp-${{ matrix.lane }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-kokkos-openmp-${{ matrix.lane }}-refs/heads/master-
             ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-
             ccache-${{ runner.os }}-kokkos-openmp-refs/heads/master-
             ccache-${{ runner.os }}-kokkos-openmp-
@@ -1339,14 +1433,54 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build /tmp/kbuild-omp --parallel 4 --target install
 
+      - name: Reset ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
+        run: ccache --zero-stats
+
       - name: Configure + build (backend Kokkos OpenMP)
+        if: matrix.lane == 'cpp'
+        timeout-minutes: 29
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
         run: |
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos
-          cmake --build --preset ci-kokkos
+          run_with_heartbeat "Kokkos OpenMP C++ build" 27m \
+            cmake --build --preset ci-kokkos
 
       - name: Test (ctest, backend Kokkos OpenMP)
+        if: matrix.lane == 'cpp'
+        timeout-minutes: 9
         # OMP_NUM_THREADS=2 : le runner GitHub est petit (2 vCPU) ; sans borne,
         # Kokkos detecte le nombre de coeurs logiques et lance N threads qui se
         # battent, ce qui provoque des suites-tests lentes ou tues (OOM/timeout).
@@ -1356,9 +1490,18 @@ jobs:
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
-        run: ctest --preset ci-kokkos
+        run: |
+          set +e
+          timeout --signal=TERM --kill-after=30s 8m ctest --preset ci-kokkos
+          ctest_status=$?
+          set -e
+          if [ "$ctest_status" -eq 124 ]; then
+            echo "::error::Kokkos OpenMP CTest exceeded its 8-minute watchdog"
+          fi
+          exit "$ctest_status"
 
       - uses: actions/setup-python@v6
+        if: matrix.lane == 'python'
         with:
           python-version: '3.12'
           cache: pip
@@ -1371,19 +1514,56 @@ jobs:
       # les tests qui compilent un modele production et appellent add_native_block : ils echoueraient
       # avec l'ancien defaut c++23, ils passent avec le std aligne sur le loader.
       - name: Build module Python `pops` (backend Kokkos OpenMP)
+        if: matrix.lane == 'python'
+        timeout-minutes: 20
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
         run: |
           pip install --upgrade pip numpy pytest
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos-python
-          cmake --build --preset ci-kokkos-python
+          run_with_heartbeat "Kokkos OpenMP Python module build" 18m \
+            cmake --build --preset ci-kokkos-python
 
       # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via
       # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
       # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
       - name: Test ABI natif (production -> add_native_block, std aligne sur le loader c++20)
+        if: matrix.lane == 'python'
+        timeout-minutes: 15
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
@@ -1415,6 +1595,13 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: ccache stats (Kokkos OpenMP)
+      - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
         if: always()
         run: ccache -s
+
+      - name: Save ccache (Kokkos OpenMP, ${{ matrix.lane }})
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}

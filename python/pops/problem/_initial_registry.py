@@ -101,15 +101,28 @@ class InitialConditionRegistry(FreezableRegistry):
             resolve_bootstrap,
         )
 
-        resolved = self.resolved()
+        authored = tuple(
+            self._conditions[key] for key in sorted(self._conditions)
+        )
+        resolved = tuple(
+            initial.resolve_references(self._resolver) for initial in authored
+        )
         phase_orders = {initial.bootstrap_phases for initial in resolved}
         if len(phase_orders) != 1:
             raise ValueError(
                 "initial projections require incompatible bootstrap phase orderings")
         builder = InitialConditionPlanBuilder(layout_plan, transfers)
         selections = []
-        for initial in resolved:
-            builder.add(initial.state, initial.source(self.owner_path))
+        for authored_initial, initial in zip(authored, resolved, strict=True):
+            builder.add(
+                initial.state,
+                initial.source(self.owner_path),
+                authoring_alias=(
+                    authored_initial.state
+                    if not authored_initial.state.is_resolved
+                    else None
+                ),
+            )
             selections.append(BootstrapSelection(initial.state, initial.bootstrap_method()))
         initial_plan = builder.resolve()
         bootstrap_plan = resolve_bootstrap(

@@ -100,13 +100,22 @@ def bind_state_reference(program: Any, declaration: StateHandle) -> tuple[Any, S
     return block, qualified
 
 
-def bind_field_reference(program: Any, block: Any, field: Any) -> tuple[Any, Any, tuple[str, ...]]:
+def bind_field_reference(
+    program: Any,
+    block: Any,
+    field: Any,
+    *,
+    values: Any = (),
+) -> tuple[Any, Any, tuple[str, ...], dict[str, bool]]:
     """Authenticate one Case field and return its exact Program contract.
 
-    The returned tuple is ``(handle, FieldSpace, output_components)``.  Both
-    the value type consumed by rates and the output names come from the
-    registered physical ``FieldOperator``; Program authoring never guesses a
-    default field layout from a model or from the handle's display name.
+    The returned tuple is ``(handle, FieldSpace, output_components,
+    schedule_capabilities)``.  Both the value type consumed by rates and the
+    output names come from the registered physical ``FieldOperator``; Program
+    authoring never guesses a default field layout from a model or from the
+    handle's display name.  Schedule capabilities are the intersection of the
+    exact model providers authenticated by the Program, so a composed field is
+    cacheable only when every physical contribution declares that property.
     """
     from pops.problem.handles import FieldHandle
 
@@ -183,7 +192,23 @@ def bind_field_reference(program: Any, block: Any, field: Any) -> tuple[Any, Any
         raise ValueError(
             "field operator %r provider components %r disagree with field outputs %r"
             % (field.local_id, tuple(program_space.components), outputs))
-    return field, program_space, outputs
+    from pops.time.operator_resolution import resolve_operator_handle
+
+    providers = tuple(
+        resolve_operator_handle(
+            program,
+            contribution.provider,
+            where="field operator %r provider" % field.local_id,
+            expected_kinds="field_operator",
+            values=values,
+        )
+        for contribution in registration.operator.providers
+    )
+    capabilities = {
+        "cacheable": all(bool(provider.capabilities.get("cacheable"))
+                         for provider in providers),
+    }
+    return field, program_space, outputs, capabilities
 
 
 def block_name(block: Any) -> str:

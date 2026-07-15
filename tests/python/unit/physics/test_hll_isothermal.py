@@ -69,7 +69,7 @@ def smooth_rho(n):
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
     s = System(n=n, L=1.0, periodic=True)
-    s.block("gas", model=gas(), spatial=engine.Spatial(weno5=True, flux=riemann),
+    s.add_equation("gas", model=gas(), spatial=engine.Spatial(weno5=True, flux=riemann),
                 time=engine.Explicit())
     s.set_poisson()
     s.set_density("gas", smooth_rho(n))

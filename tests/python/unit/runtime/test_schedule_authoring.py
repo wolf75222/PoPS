@@ -9,8 +9,11 @@ from pops.codegen.program_codegen import _check_schedules_lowerable
 import pytest
 
 from pops import model
+from pops.descriptors import Descriptor
+from pops.fields import FieldDiscretization, FieldOperator
 from pops._ir.expr import Var
-from tests.python.unit.runtime._typed_program import typed_program_state
+from pops.math import ValueExpr, laplacian
+from pops.problem import Case
 
 adctime = pytest.importorskip("pops.time")
 
@@ -43,10 +46,43 @@ def _module(cacheable=True):
     return mod, u, fields, fields_from_state
 
 
+class _FieldMethod(Descriptor):
+    category = "field_method"
+
+    def to_data(self):
+        return {"type": "schedule-authoring-second-order"}
+
+
+class _FieldSolver(Descriptor):
+    category = "elliptic_solver"
+
+    def to_data(self):
+        return {"type": "schedule-authoring-krylov"}
+
+
 def _program_state(mod, state, name="p"):
-    program, _, _, _, _, temporal = typed_program_state(
-        name, model=mod, state=state)
-    return program, temporal.n, temporal
+    """Return one Program state and its final Case-owned field solve authority."""
+    state_handle = mod.state_handle(state)
+    field_space = mod.field_spaces()["fields"]
+    provider = mod.operator_handle("fields_from_state")
+    case = Case(name="%s_case" % name)
+    block = case.block("plasma", mod, states=(state_handle,))
+    unknown = block[mod.field_handle(field_space)]
+    operator = FieldOperator(
+        "fields",
+        unknown=unknown,
+        equation=-laplacian(ValueExpr(unknown)) == ValueExpr(block[state_handle]),
+        providers=provider,
+    )
+    field = case.field(
+        operator,
+        FieldDiscretization(
+            method=_FieldMethod(), boundaries=(), solver=_FieldSolver()
+        ),
+    )
+    program = adctime.Program(name)
+    temporal = program.state(block[state_handle])
+    return program, temporal.n, temporal, field
 
 
 # --- schedule vocabulary -----------------------------------------------------
@@ -104,7 +140,7 @@ def test_operator_capabilities_setter_then_getter():
 # --- recording a schedule on a node ------------------------------------------
 def test_call_records_schedule_on_value():
     mod, u, _, fields_from_state = _module()
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     f = fields_from_state(U, schedule=_every(P.clock, 10, adctime.Hold()))
     assert isinstance(f._token.attrs["schedule"].off, adctime.Hold)
     assert "schedule" in P.dump_operator_ir()       # inspectable: recorded, not dropped
@@ -112,7 +148,7 @@ def test_call_records_schedule_on_value():
 
 def test_call_without_schedule_is_unchanged():
     mod, u, _, fields_from_state = _module()
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     f = fields_from_state(U)
     assert "schedule" not in f._token.attrs
 
@@ -120,28 +156,28 @@ def test_call_without_schedule_is_unchanged():
 # --- cacheable validation (criterion 27) -------------------------------------
 def test_hold_on_non_cacheable_operator_raises():
     mod, u, _, fields_from_state = _module(cacheable=False)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     with pytest.raises(ValueError, match="not cacheable"):
         fields_from_state(U, schedule=_every(P.clock, 10, adctime.Hold()))
 
 
 def test_accumulate_dt_on_non_cacheable_raises():
     mod, u, _, fields_from_state = _module(cacheable=False)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     with pytest.raises(ValueError, match="not cacheable"):
         fields_from_state(U, schedule=_every(P.clock, 4, adctime.AccumulateDt()))
 
 
 def test_hold_on_cacheable_operator_ok():
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Hold()))
 
 
 def test_skip_does_not_require_cacheable():
     # skip / recompute / zero produce nothing cached, so they do not require cacheable
     mod, u, _, fields_from_state = _module(cacheable=False)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Skip()))
 
 
@@ -150,7 +186,7 @@ def test_skip_does_not_require_cacheable():
 # loop -- and a when() over a Python callable. The full policy/kind matrix is in test_scheduler_codegen.)
 def test_on_end_schedule_refuses_to_lower():
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=_at_end(P.clock, adctime.Hold()))
     with pytest.raises(NotImplementedError, match="AtEnd"):
         _check_schedules_lowerable(P)
@@ -158,7 +194,7 @@ def test_on_end_schedule_refuses_to_lower():
 
 def test_when_python_callable_refuses_to_lower():
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     # a when() over a bare Python callable is not a Program value -> cannot lower
     fields_from_state(U, schedule=_when(P.clock, lambda: True, adctime.Hold()))
     serialized = P._serialize()
@@ -174,7 +210,7 @@ def test_held_solve_fields_now_lowers():
     # ADC-458 codegen: a held field solve lowers to the cache branch -- it must NOT raise (the runtime
     # cadence is exercised in the compiled .so / ROMEO).
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Hold()))
     _check_schedules_lowerable(P)   # no raise
 
@@ -182,14 +218,14 @@ def test_held_solve_fields_now_lowers():
 def test_skip_now_lowers():
     # ADC-458: skip on a field solve lowers (the op runs only when due; the aux is stale off-cadence).
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=_every(P.clock, 10, adctime.Skip()))
     _check_schedules_lowerable(P)   # no raise
 
 
 def test_always_schedule_lowers_fine():
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=adctime.Schedule(
         adctime.Always(adctime.AcceptedStep(P.clock))))
     _check_schedules_lowerable(P)   # no raise: always() == the default cadence
@@ -199,14 +235,14 @@ def test_scheduled_node_serializes_for_codegen():
     # a Schedule object is not JSON-serializable; it must be reduced to its repr in the IR hash
     # (regression: an always()-scheduled node passed the gate then crashed _ir_hash with a TypeError).
     mod, u, _, fields_from_state = _module(cacheable=True)
-    P, U, _ = _program_state(mod, u)
+    P, U, _, fields_from_state = _program_state(mod, u)
     fields_from_state(U, schedule=adctime.Schedule(
         adctime.Always(adctime.AcceptedStep(P.clock))))
     h = P._ir_hash()                 # must not raise
     assert isinstance(h, str) and h
     # the schedule is part of the IR identity: a different cadence yields a different hash
-    P2, U2, _ = _program_state(mod, u)
-    fields_from_state(U2, schedule=_every(P2.clock, 10, adctime.Skip()))
+    P2, U2, _, second_field = _program_state(mod, u)
+    second_field(U2, schedule=_every(P2.clock, 10, adctime.Skip()))
     assert P2._ir_hash() != h
 
 
@@ -214,8 +250,8 @@ def test_schedule_parameters_that_change_lowering_change_ir_identity():
     mod, u, _, fields_from_state = _module(cacheable=True)
 
     def build(domain_factory):
-        program, state, temporal = _program_state(mod, u)
-        fields_from_state(state, schedule=adctime.Schedule(
+        program, state, temporal, field = _program_state(mod, u)
+        field(state, schedule=adctime.Schedule(
             adctime.Always(domain_factory(program.clock))))
         final = program.value("final", state, at=temporal.next.point)
         program.commit(temporal.next, final)
@@ -225,22 +261,22 @@ def test_schedule_parameters_that_change_lowering_change_ir_identity():
     long = build(lambda clock: adctime.AMRLevel(clock, level=1))
     assert short._ir_hash() != long._ir_hash()
 
-    first, first_state, _ = _program_state(mod, u, "when_identity")
+    first, first_state, _, first_field = _program_state(mod, u, "when_identity")
     first_cond = first.norm2(first_state) < 1
     _first_other = first.norm2(first_state) < 2
-    fields_from_state(first_state, schedule=_when(first.clock, first_cond))
-    second, second_state, _ = _program_state(mod, u, "when_identity")
+    first_field(first_state, schedule=_when(first.clock, first_cond))
+    second, second_state, _, second_field = _program_state(mod, u, "when_identity")
     _second_other = second.norm2(second_state) < 1
     second_cond = second.norm2(second_state) < 2
-    fields_from_state(second_state, schedule=_when(second.clock, second_cond))
+    second_field(second_state, schedule=_when(second.clock, second_cond))
     assert first._ir_hash() != second._ir_hash()
 
 
 def test_when_rejects_bool_value_from_another_program_even_with_colliding_ssa_id():
     mod, u, _, fields_from_state = _module(cacheable=True)
-    owner, owner_state, _ = _program_state(mod, u, "owner")
-    foreign, foreign_state, _ = _program_state(mod, u, "foreign")
+    owner, owner_state, _, owner_field = _program_state(mod, u, "owner")
+    foreign, foreign_state, _, _ = _program_state(mod, u, "foreign")
     foreign_cond = foreign.norm2(foreign_state) > 0
 
     with pytest.raises(ValueError, match="different Program"):
-        fields_from_state(owner_state, schedule=_when(owner.clock, foreign_cond))
+        owner_field(owner_state, schedule=_when(owner.clock, foreign_cond))

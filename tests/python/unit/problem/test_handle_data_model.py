@@ -92,6 +92,28 @@ def test_module_definition_fingerprint_is_reproducible_and_content_addressed():
     assert different.declaration_index().authenticate(different_state) is different_state
 
 
+def test_definition_fingerprint_prefers_newest_live_provider_at_equal_priority():
+    owner = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, "transactional")
+    older = "pops.test:sha256:" + "1" * 64
+    newer = "pops.test:sha256:" + "2" * 64
+    lower_priority = "pops.test:sha256:" + "3" * 64
+    candidate = {"fingerprint": newer}
+
+    owner._bind_definition_fingerprint_provider(lambda: older, priority=100)
+    owner._bind_definition_fingerprint_provider(
+        lambda: candidate["fingerprint"], priority=100
+    )
+    owner._bind_definition_fingerprint_provider(lambda: lower_priority, priority=20)
+
+    assert owner.definition_fingerprint == newer
+
+    # An unpublished transactional candidate is weakly represented by returning None.  The same
+    # authority must then recover the preceding live provider, without falling through to a newer
+    # but lower-priority fallback.
+    candidate["fingerprint"] = None
+    assert owner.definition_fingerprint == older
+
+
 def test_same_local_name_in_different_canonical_owners_or_kinds_is_distinct():
     model_a = OwnerPath.model("a")
     model_b = OwnerPath.model("b")

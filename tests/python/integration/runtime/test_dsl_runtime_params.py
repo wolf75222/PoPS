@@ -31,10 +31,8 @@ from pops.domain import Rectangle
 from pops.fields import (
     CellCenteredSecondOrder,
     CompositeHierarchySolve,
-    ConstantNullspace,
     FieldDiscretization,
     FieldOutput,
-    MeanValueGauge,
 )
 from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
 from pops.frames import Cartesian2D
@@ -158,7 +156,7 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
     field_operator = model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=-laplacian(potential) == scale * rho,
+        equation=-laplacian(potential) + potential == scale * rho,
         outputs=(FieldOutput("phi", potential),),
     )
 
@@ -182,8 +180,6 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
             solver=GeometricMG(),
-            nullspace=ConstantNullspace(),
-            gauge=MeanValueGauge(0.0),
             hierarchy_policy=(
                 CompositeHierarchySolve() if target == "amr_system" else None
             ),

@@ -149,9 +149,10 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// brick (c_rho / c_mx / c_my / c_E) from the conservative descriptor @p cons of the TRANSPORT.
 /// This is a TRANSPARENT resolution, with no new user parameter: the native bricks adapt to the
 /// transport layout (density/momentum/energy located by their ROLE and not by a hard-coded index).
-/// Every index required by the selected brick is resolved exactly. Missing/partial role metadata or
-/// an absent required role raises during assembly; canonical component defaults are never executable
-/// authority.
+/// Every index required by the selected brick is resolved exactly. A brick may expose the small
+/// `requires_energy_role(state_size)` protocol when energy is conditional on its state specialization;
+/// the factory contains no brick-name/type branch. Missing/partial role metadata or an absent active
+/// required role raises during assembly; canonical component defaults are never executable authority.
 ///
 /// Member detection via `requires` (if constexpr): the bricks have HETEROGENEOUS index sets
 /// (PotentialForce/GravityForce: rho/mx/my/E; MagneticLorentzForce: mx/my only;
@@ -176,8 +177,18 @@ POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
                                   "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
-    brk.c_E = require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
-                                 "model conservative state");
+    if constexpr (requires { Brick::requires_energy_role(cons.size); }) {
+      // A conditional brick owns the state-width rule that also guards its device apply().  When
+      // inactive we keep -1 (or the declared energy role when one exists); the device specialization
+      // never indexes the sentinel.  When active, absence/duplication stays a hard assembly error.
+      brk.c_E = Brick::requires_energy_role(cons.size)
+                    ? require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
+                                         "model conservative state")
+                    : cons.index_of(VariableRole::Energy);
+    } else {
+      brk.c_E = require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
+                                   "model conservative state");
+    }
   }
   if constexpr (requires {
                   brk.a;

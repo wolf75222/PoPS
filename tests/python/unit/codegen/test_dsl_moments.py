@@ -26,23 +26,27 @@ On verifie ici, sans dependance externe :
      source BGK nulle a l'equilibre, invariants collisionnels (M00/M10/M01) identiquement 0,
      gaussianisation d'un etat asymetrique (ordres <= 2 conserves, ordres >= 3 modifies) ;
  (8) gardes : order < 2 ; fermeture aux cles incompletes ;
- (9) [compilateur] compile AOT + System riemann='hll' : 10 pas finis, masse conservee.
+ (9) [compilateur] lifecycle public Case -> compile -> bind -> run avec HLL : 10 pas finis,
+     masse conservee.
 S'auto-saute (exit 0) pour (9) sans compilateur C++ ou sans Kokkos (coeur Kokkos-only).
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import HLL
-import os
+import pops
+from pops.codegen import Production
+from pops.lib.time import ForwardEuler
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, variables
+from pops.numerics.riemann import FromJacobian, HLL, provider_of
+from pops.numerics.spatial import FiniteVolume
+from pops.time import FixedDt
 import sys
-import tempfile
 
 import numpy as np
 
-import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.moments import (CartesianVelocityMoments, ExactSpeeds, bgk_source,
                           gaussian_closure, lorentz_sources, maxwellian_moments,
                           moment_indices, moment_names)
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import repo_include
 
 fails = 0
@@ -283,7 +287,7 @@ chk(all(float(sne[k]) == 0.0 for k, pq in enumerate(idx4)
 
 print("== (8) gardes ==")
 msg = err_msg(lambda: CartesianVelocityMoments(1, closure=gaussian_closure(1)))
-chk("order >= 2" in msg, f"order=1 refuse ({msg[:42]}...)")
+chk("must be an int >= 2" in msg, f"order=1 refuse avec le contrat exact ({msg[:42]}...)")
 msg = err_msg(lambda: moment_model("bad2", 2, lambda S: {"S30": 0.0}))
 chk("S30" in msg, f"fermeture incomplete refusee ({msg[:42]}...)")
 
@@ -293,11 +297,55 @@ if not cxx:
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)
 
-print("== (9) compile production + System riemann='hll' ==")
-tmp = tempfile.mkdtemp(prefix="pops_moments_")
+print("== (9) Case -> validate -> resolve -> compile -> bind -> run (HLL) ==")
 try:
-    compiled = moment_model("g2sys", 2, gaussian_closure(2)).compile(
-        os.path.join(tmp, "g2sys.so"), INCLUDE, backend="production")
+    model = moment_model("g2sys", 2, gaussian_closure(2))
+    state = model.states["U"]
+    flux = model.fluxes["transport"]
+    rate = model.operators["transport"]
+
+    # The model emits signed speeds from the exact Jacobian eigenvalue route.  Pin the
+    # discretization to that same typed provider so HLL cannot silently fall back to a
+    # Rusanov majorant or another speed source.
+    provider = provider_of(model)
+    chk(provider is not None and provider.kind == "jacobian",
+        "le modele declare des vitesses signees derivees du jacobien")
+    requested_speeds = FromJacobian(eig=provider.options()["eig"])
+    chk(requested_speeds.options() == provider.options(),
+        "HLL consomme exactement le fournisseur de vitesses du modele")
+
+    case = pops.Case("g2sys-native-case")
+    block = case.block("mom", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=HLL(waves=requested_speeds),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(5.0e-4))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(16, 16),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": INCLUDE, "cxx": cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    chk(len(artifact.blocks) == 1, "lifecycle final : un composant de bloc compile")
 except RuntimeError as ex:
     if "Kokkos" in str(ex):
         print("Kokkos introuvable (POPS_KOKKOS_ROOT) : test (9) saute --", str(ex)[:60])
@@ -305,18 +353,14 @@ except RuntimeError as ex:
         sys.exit(1 if fails else 0)
     raise
 n = 16
-sim = System(n=n, L=1.0, periodic=True)
-sim.add_equation("mom", model=compiled,
-                 spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
-                 time=engine.Explicit())
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="ij")
 pert = 1.0 + 0.1 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 U0 = gauss_state(2)[:, None, None] * pert[None, :, :]
-sim.set_state("mom", U0)
-for _ in range(10):
-    sim.step(5e-4)
-out = np.array(sim.get_state("mom"))
+sim = pops.bind(artifact, initial_state={"mom": U0})
+report = pops.run(sim, t_end=5.0e-3, max_steps=10)
+chk(report.accepted_steps == 10, "lifecycle final : exactement 10 pas acceptes")
+out = np.array(sim.state_global("mom"))
 chk(np.isfinite(out).all(), "10 pas HLL : etat fini")
 dm = abs(out[0].sum() - U0[0].sum()) / abs(U0[0].sum())
 chk(dm < 1e-12, f"masse conservee ({dm:.2e})")

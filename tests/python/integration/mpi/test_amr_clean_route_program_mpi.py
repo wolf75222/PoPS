@@ -223,9 +223,15 @@ def _execute(
     )
     context = pops.ExecutionContext.mpi_world(artifact, _COMM)
     runtime = pops.bind(artifact, resources={"execution_context": context})
-    initial = np.asarray(runtime.state_global("tracer"), dtype=np.float64).copy()
+    # AMR global state is level-qualified in the final contract; the old unqualified accessor is
+    # deliberately rejected because it cannot identify a level on a refined hierarchy.
+    initial = np.asarray(
+        runtime.block_level_state_global("tracer", 0), dtype=np.float64
+    ).copy()
     report = pops.run(runtime, t_end=NSTEPS * DT, max_steps=NSTEPS)
-    result = np.asarray(runtime.state_global("tracer"), dtype=np.float64).copy()
+    result = np.asarray(
+        runtime.block_level_state_global("tracer", 0), dtype=np.float64
+    ).copy()
     return (
         initial,
         result,

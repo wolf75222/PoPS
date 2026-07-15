@@ -431,6 +431,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert mpi_input in workflow
     for selector_input in (
         "schemas/**",
+        "tests/cpp/build_durations.json",
         "tests/cpp/test_durations.json",
         "tests/test_manifest.toml",
         "scripts/generate_component_catalog.py",
@@ -448,6 +449,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n            python_arch:\n", 1)[0]
     for cpp_control in (
         "tests/cpp/test_sources.cmake",
+        "tests/cpp/build_durations.json",
         "tests/cpp/test_durations.json",
         "tests/test_manifest.toml",
         "scripts/ci_select_tests.py",
@@ -479,6 +481,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"
     )
+    assert "timeout-minutes: 35" in cpp_shards_block
+    assert "timeout-minutes: 32" in cpp_shards_block
+    assert cpp_shards_block.count("run_with_heartbeat() {") == 1
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 23m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" 7m' in cpp_shards_block
+    assert "timeout --signal=TERM --kill-after=30s" in cpp_shards_block
+    assert "mem_available=" in cpp_shards_block
+    assert "NINJA_STATUS='[%f/%t elapsed=%es active=%r] '" in cpp_shards_block
 
     gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
     assert "needs: [changes, set-mode," in gate_block
@@ -505,13 +515,37 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert '"${mpi_n:-0}" != "${mpi_expected:-0}"' in mpi_block
     assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 2
     assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
-    assert "mpiexec -n \"$mpi_ranks\" /usr/bin/python3 \"$mpi_test\"" in mpi_block
+    assert "MPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1" in mpi_block
+    assert "grep -Eqi 'Open MPI|OpenRTE'" in mpi_block
+    assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
+    assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
+    assert 'run_mpi "collective HDF5 writer"' in mpi_block
+    assert "timeout --signal=TERM --kill-after=30s 7m" in mpi_block
+    assert "timeout --signal=TERM --kill-after=30s 4m" in mpi_block
+    assert "timeout-minutes: 18" in mpi_block
+    assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
     assert "cmake --build --preset ci-mpi\n" not in mpi_block
     assert "build-mpi/python-package" in mpi_block
     assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block
     assert "This writer is pure Python" not in mpi_block
+
+    openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
+    assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
+    assert "timeout-minutes: 40" in openmp_block
+    assert "fail-fast: false" in openmp_block
+    assert "lane: [cpp, python]" in openmp_block
+    assert openmp_block.count("if: matrix.lane == 'cpp'") == 2
+    assert openmp_block.count("if: matrix.lane == 'python'") == 3
+    assert "uses: actions/cache/restore@v6" in openmp_block
+    assert "uses: actions/cache/save@v6" in openmp_block
+    assert "github.run_attempt" in openmp_block
+    assert openmp_block.count("run_with_heartbeat() {") == 2
+    assert 'run_with_heartbeat "Kokkos OpenMP C++ build" 27m' in openmp_block
+    assert 'run_with_heartbeat "Kokkos OpenMP Python module build" 18m' in openmp_block
+    assert "timeout --signal=TERM --kill-after=30s 8m ctest" in openmp_block
+    assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
 
     set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]
