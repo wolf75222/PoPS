@@ -125,5 +125,5 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
 
     configure_presets = {preset["name"]: preset for preset in PRESETS["configurePresets"]}
     for name in ("ci-kokkos", "ci-mpi"):
-        assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "2"
+        assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "1"
         assert "POPS_HEAVY_MODULE_TU_POOL" not in configure_presets[name]["cacheVariables"]

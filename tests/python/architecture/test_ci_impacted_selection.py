@@ -561,6 +561,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "COMPILE_CACHE_TMP: ${{ runner.temp }}" not in workflow
     assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in workflow
     assert "COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test" in workflow
+    assert 'mkdir -p "$COMPILE_CACHE_TMP"' in python_cache_block
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():

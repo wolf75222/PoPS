@@ -408,8 +408,11 @@ jobs:
       # POPS_TESTS_FAST_O0=ON : sous Kokkos, l'inlining -O3 des foncteurs device dans les ~242
       # cibles de test rendait le build du gate enorme. Les tests sont des controles de correction
       # sur grilles minuscules -> compiles a -O0 (build rapide ; la lib de production et _pops restent
-      # a -O3) ; le pool Ninja pops_heavy_test_tu=2 borne explicitement les TU runtime/tests -O0 sans
-      # relever la concurrence du pool pops_heavy_module_tu=1 reserve au module de production
+      # a -O3) ; le pool Ninja pops_heavy_test_tu=1 serialise explicitement les TU runtime/tests -O0
+      # les plus gourmands sans reduire le parallelisme des autres cibles. Deux de ces TU en parallele
+      # depassent la marge memoire des runners publics et peuvent faire arreter le runner entier ;
+      # le pool de taille 1 est donc le garde anti-OOM commun aux presets CI et au defaut CMake.
+      # Le pool pops_heavy_module_tu=1 reste reserve au module de production
       # (cf. tests/CMakeLists.txt). Parallelisme jobs: 4 (runner public = 4 vCPU) dans les presets.
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
@@ -1015,6 +1018,7 @@ jobs:
           pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
+          mkdir -p "$COMPILE_CACHE_TMP"
           SECONDS=0
           set +e
           python3 -m pytest -q -ra --basetemp="$COMPILE_CACHE_TMP" "$COMPILE_CACHE_TEST"
