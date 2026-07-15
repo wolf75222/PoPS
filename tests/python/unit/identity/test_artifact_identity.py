@@ -49,4 +49,3 @@ def test_final_artifact_authenticates_exact_binary_bytes(tmp_path):
 
     assert first_binary != second_binary
     assert first != second
-

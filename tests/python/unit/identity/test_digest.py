@@ -88,4 +88,3 @@ def test_from_data_requires_the_exact_current_shape():
         Identity.from_data({key: value for key, value in data.items() if key != "digest"})
     with pytest.raises(TypeError, match="exactly"):
         Identity.from_data(identity.token)
-

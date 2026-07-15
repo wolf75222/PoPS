@@ -64,4 +64,3 @@ def test_offline_migration_never_overwrites_legacy_source(tmp_path):
     source.write_text(json.dumps(_v2()), encoding="utf-8")
     with pytest.raises(ValueError, match="refuses to overwrite"):
         migrate_external_brick_manifest(source, source)
-

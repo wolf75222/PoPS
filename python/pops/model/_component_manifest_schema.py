@@ -425,4 +425,3 @@ def _default_restart() -> dict[str, Any]:
 
 def _default_precision() -> dict[str, Any]:
     return {"inputs": [], "accumulation": "unspecified", "outputs": []}
-

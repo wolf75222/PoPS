@@ -102,4 +102,3 @@ def test_canonical_sha256_hashes_the_exact_canonical_bytes():
     expected = hashlib.sha256(canonical_bytes(value)).hexdigest()
     assert canonical_sha256(value) == expected
     assert len(expected) == 64
-
