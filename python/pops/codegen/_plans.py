@@ -420,6 +420,11 @@ def _canonicalize_initial_value_mapping(initial_plan: Any, values: Any) -> Mappi
     canonical: dict[Handle, Any] = {}
     for supplied, value in values.items():
         subject = canonical_subject(supplied)
+        if not isinstance(subject, Handle) or not subject.is_resolved:
+            raise TypeError(
+                "InitialConditionPlan.canonical_subject must return a canonical "
+                "owner-qualified Handle"
+            )
         if subject in canonical:
             raise ValueError(
                 "pops.bind initial_values contains multiple aliases for %s"
