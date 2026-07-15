@@ -66,6 +66,9 @@ class Signature:
     keyword form is used.
     """
 
+    inputs: tuple[Any, ...]
+    output: Any
+
     def __init__(self, inputs: Any, output: Any) -> None:
         normalized = tuple(inputs)
         for index, value in enumerate(normalized):

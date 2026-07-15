@@ -9,7 +9,8 @@ provider selection and the single-layout native installation seams.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+import importlib
+from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
 
@@ -81,7 +82,7 @@ def _require_supported_execution_context(plan: Any) -> None:
                 "MPI world launch"
             )
         try:
-            from mpi4py import MPI
+            MPI = importlib.import_module("mpi4py.MPI")
         except ImportError as exc:
             raise RuntimeError(
                 "MPI_COMM_WORLD execution requires mpi4py for the explicit communicator handle"
@@ -137,7 +138,7 @@ class _UniformNativeProvider(RuntimeExecutorProvider):
             # leave unrelated native storage periodic through the legacy mesh flag.
             config.periodic = False
         engine = System(config)
-        engine._execution_context = plan.execution_context
+        cast(Any, engine)._execution_context = plan.execution_context
         from pops.runtime._runtime_authorities import install_runtime_authorities
 
         install_runtime_authorities(engine, plan)

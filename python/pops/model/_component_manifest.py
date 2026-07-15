@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import InitVar, dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, canonical_bytes, make_identity
 
@@ -129,7 +129,7 @@ class ComponentManifest:
             "schema_version": self.schema_version,
             "uri": self.uri,
             "component_type": self.component_type,
-            "version": self.version.to_data(),
+            "version": cast(ComponentVersion, self.version).to_data(),
             "facets": list(self.facets),
             "signature": _thaw(self.signature),
             "reads": _thaw(self.reads),

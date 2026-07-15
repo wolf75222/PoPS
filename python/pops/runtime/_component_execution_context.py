@@ -1,6 +1,7 @@
 """Exact Python projection of the generated PopsExecutionContextV1 resource identity."""
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
 
@@ -52,7 +53,7 @@ def component_execution_data(context: Any) -> dict[str, Any]:
         communicator_datatype_identity = "none"
     elif communicator.identity == "MPI_COMM_WORLD":
         try:
-            from mpi4py import MPI
+            MPI = importlib.import_module("mpi4py.MPI")
         except ImportError as exc:
             raise RuntimeError(
                 "MPI component execution requires mpi4py for the explicit communicator and "

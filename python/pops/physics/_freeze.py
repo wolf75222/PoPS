@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import wraps
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops.problem._freeze_transaction import (
     _FREEZE_CAPABILITY, _require_freeze_capability)
@@ -262,7 +262,7 @@ class PhysicsFreezable:
                     invalidate()
                 return result
 
-            guarded._pops_freeze_guarded = True
+            cast(Any, guarded)._pops_freeze_guarded = True
             setattr(cls, method_name, guarded)
 
     def _init_physics_freeze(self) -> None:

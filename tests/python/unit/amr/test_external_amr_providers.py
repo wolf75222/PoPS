@@ -72,8 +72,9 @@ def test_tagging_opcode_catalog_is_the_single_python_cpp_authority():
 
 def _component(
     tmp_path: Path, *, name: str, interface, tagger_capability=TAGGER_CAPABILITY,
-    dimension: int = 2,
+    dimension: int = 2, alias: str | None = None,
 ):
+    export_alias = name if alias is None else alias
     root = tmp_path / name
     root.mkdir()
     manifest = ComponentManifest(
@@ -101,15 +102,16 @@ def _component(
     source_name = name + ".cpp"
     (root / source_name).write_bytes(source)
     package_data = build_source_package_manifest(
-        components={name: manifest}, payloads={source_name: ("source", source)})
+        components={export_alias: manifest}, payloads={source_name: ("source", source)})
     package_path = root / (name + ".pops.json")
     package_path.write_text(json.dumps(package_data), encoding="utf-8")
-    return load(package_path).require(name, interface=interface)()
+    return load(package_path).require(export_alias, interface=interface)()
 
 
 def test_external_amr_provider_refuses_a_3d_only_native_target(tmp_path):
     component = _component(
-        tmp_path, name="tagger-3d", interface=interfaces.Tagger, dimension=3)
+        tmp_path, name="tagger-3d", alias="tagger_3d",
+        interface=interfaces.Tagger, dimension=3)
 
     with pytest.raises(ValueError, match="2D float64 CPU"):
         TaggerProvider(component)
@@ -186,7 +188,6 @@ def test_external_amr_providers_require_exact_resolve_inputs(tmp_path):
 
 
 def test_external_amr_provider_roles_are_not_interchangeable(tmp_path):
-    target = _example().build_final_case()
     tagger_component = _component(
         tmp_path, name="tagger", interface=interfaces.Tagger)
     clustering_component = _component(

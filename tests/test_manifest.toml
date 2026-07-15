@@ -1035,6 +1035,10 @@ labels = ["integration", "python", "io", "medium"]
 name = "pops_python_integration_mpi"
 path = "tests/python/integration/mpi"
 labels = ["integration", "python", "mpi", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_integration_native_loader"

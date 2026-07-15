@@ -311,23 +311,6 @@ class FrozenRegrid(MeshDescriptor):
         return {"frozen": True}
 
 
-class PatchLayout(MeshDescriptor):
-    """Patch-clustering policy: coarse distribution + max grid size."""
-
-    category = "patch_layout"
-
-    def __init__(self, distribute_coarse: Any = False, coarse_max_grid: Any = 32) -> None:
-        self.distribute_coarse = bool(resolve_param_use(
-            distribute_coarse, ParamUse.MESH_TOPOLOGY,
-            where="PatchLayout(distribute_coarse=)"))
-        self.coarse_max_grid = int(resolve_param_use(
-            coarse_max_grid, ParamUse.SHAPE, where="PatchLayout(coarse_max_grid=)"))
-
-    def options(self) -> dict:
-        return {"distribute_coarse": self.distribute_coarse,
-                "coarse_max_grid": self.coarse_max_grid}
-
-
 class PatchClustering(MeshDescriptor):
     """Berger-Rigoutsos clustering controls (ADC-615/616).
 
@@ -416,7 +399,7 @@ class IgnoreAMRCriteria(MeshDescriptor):
 
 
 __all__ = [
-    "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchLayout", "PatchClustering",
+    "Refine", "TagUnion", "RegridEvery", "FrozenRegrid", "PatchClustering",
     "ProperNesting", "BufferCells", "IgnoreAMRCriteria",
     "NATIVE_RATIOS",
 ] + _tagging_graph.__all__ + _tagging_resolution.__all__ \

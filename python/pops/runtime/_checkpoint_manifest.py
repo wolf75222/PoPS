@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, canonical_bytes, make_identity
 from pops._manifest_protocol import strict_json_loads
@@ -49,7 +49,7 @@ def _array_evidence(value: Any) -> dict[str, Any]:
     })
     digest = hashlib.sha256()
     digest.update(header)
-    digest.update(memoryview(array).cast("B"))
+    digest.update(memoryview(cast(Any, array)).cast("B"))
     return {
         "dtype": array.dtype.str,
         "shape": list(array.shape),

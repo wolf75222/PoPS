@@ -135,7 +135,7 @@ def slice_program(program: Any, block_names: Any) -> Any:
     if actual != selected:
         raise ValueError(
             "sliced Program block routes differ from requested partition: requested=%s actual=%s"
-            % (sorted(selected), sorted(actual)))
+            % (sorted(selected), sorted(actual, key=repr)))
     clone.freeze()
     return clone
 

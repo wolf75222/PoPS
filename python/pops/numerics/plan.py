@@ -99,12 +99,15 @@ class _RateFamily:
     def add(self, rate: Any, method: Any) -> None:
         if self._frozen:
             raise RuntimeError("DiscretizationPlan.rates is frozen")
+        rows = self._rows
+        if not isinstance(rows, list):
+            raise RuntimeError("DiscretizationPlan.rates has an inconsistent frozen state")
         if not isinstance(rate, OperatorHandle) or rate.kind not in {"local_rate", "coupled_rate"}:
             raise TypeError("rates.add requires a typed rate OperatorHandle")
         _require_rate_method(method, "rates.add method")
-        if any(existing == rate for existing, _ in self._rows):
+        if any(existing == rate for existing, _ in rows):
             raise ValueError("rate %s already has a numerical method" % rate.qualified_id)
-        self._rows.append((rate, method))
+        rows.append((rate, method))
 
     def items(self) -> tuple[tuple[OperatorHandle, Any], ...]:
         return tuple(self._rows)
@@ -129,15 +132,19 @@ class _PairFamily:
     def add(self, subject: Any, method: Any) -> None:
         if self._frozen:
             raise RuntimeError("DiscretizationPlan.%s is frozen" % self.family)
+        rows = self._rows
+        if not isinstance(rows, list):
+            raise RuntimeError(
+                "DiscretizationPlan.%s has an inconsistent frozen state" % self.family)
         if not _is_typed_authority(subject) or not _is_typed_authority(method):
             raise TypeError(
                 "%s.add requires typed subject/method authorities with canonical projections"
                 % self.family)
         subject_key = _authority_key(subject)
         if any(_authority_key(existing) == subject_key
-               for existing, _ in self._rows):
+               for existing, _ in rows):
             raise ValueError("%s subject already has a numerical method" % self.family)
-        self._rows.append((subject, method))
+        rows.append((subject, method))
 
     def items(self) -> tuple[tuple[Any, Any], ...]:
         return tuple(self._rows)
@@ -181,7 +188,11 @@ class _ValueFamily:
 
     def add(self, value: Any) -> None:
         self.preflight_add(value)
-        self._rows.append(value)
+        rows = self._rows
+        if not isinstance(rows, list):
+            raise RuntimeError(
+                "DiscretizationPlan.%s has an inconsistent frozen state" % self.family)
+        rows.append(value)
 
     def values(self) -> tuple[Any, ...]:
         return tuple(self._rows)

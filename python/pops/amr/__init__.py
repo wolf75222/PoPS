@@ -13,6 +13,7 @@ from .authoring import (
     AMRRemainderPolicy,
     Buffer,
     Coarsen,
+    PatchLayout,
     Tag,
 )
 from pops.mesh._amr.transfer import AMRTransfer
@@ -49,6 +50,7 @@ __all__ = [
     "NativeAMRMaterializationCapabilities",
     "NativeAMRMaterializationDescriptor",
     "NativeAMRMaterializationKind",
+    "PatchLayout",
     "Tag",
     "TaggerProvider",
     "TransferCapabilities",

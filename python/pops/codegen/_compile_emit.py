@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 # ---------------------------------------------------------------------------
 # Backend / capability tables (single source of truth in this module)
@@ -143,7 +144,9 @@ def model_hash(model: Any, params: Any = None) -> str:
         parts.append("wave_speeds=%s" % ";".join(repr(e) for k in ("x", "y")
                                                  for e in m._wave_speeds[k]))
     if getattr(m, "_ws_jacobian", None) is not None:
-        ws = m._ws_jacobian
+        # Model validation guarantees the closed Jacobian carrier shape.  Keep that runtime
+        # authority intact while making the mapping contract explicit to the type checker.
+        ws = cast(Mapping[str, Any], m._ws_jacobian)
         parts.append("ws_jac=%s|%s|%s" % (
             ws["eig"],
             "//".join(";".join(",".join(str(i) for i in b) for b in ws["blocks"][k])
@@ -181,6 +184,11 @@ def model_hash(model: Any, params: Any = None) -> str:
                 "declarations; %r has no artifact_data()" % type(declaration).__name__
             )
         row = artifact_data()
+        if not isinstance(row, Mapping):
+            raise TypeError(
+                "model parameter artifact_data() must return a mapping; got %s"
+                % type(row).__name__
+            )
         if row.get("name") != key:
             raise ValueError(
                 "parameter registry key %r does not match declaration name %r"

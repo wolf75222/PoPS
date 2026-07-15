@@ -93,6 +93,8 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
     ``(e_r, e_theta)`` basis). Limits: scalar ExB transport, single-rank, no cartesian/polar
     coupling."""
 
+    _execution_context: Any
+
     def __init__(self, config: Any = None, mesh: Any = None, **cfg_kw: Any) -> None:
         if config is None:
             config = SystemConfig()

@@ -123,18 +123,26 @@ class ConsumerAuthoringNode:
     def canonical_data(self, resolver: Any) -> dict[str, Any]:
         if not callable(resolver):
             raise TypeError("ConsumerAuthoringNode resolver must be callable")
-        references = tuple(resolver(reference) for reference in self.references)
-        if any(not isinstance(reference, Handle) or not reference.is_resolved
-               for reference in references):
-            raise TypeError("consumer resolver must return canonical Handles")
+        references: list[Handle] = []
+        for reference in self.references:
+            resolved_reference = resolver(reference)
+            if not isinstance(resolved_reference, Handle) or not resolved_reference.is_resolved:
+                raise TypeError("consumer resolver must return canonical Handles")
+            references.append(resolved_reference)
         diagnostics = []
         for index, diagnostic in enumerate(self.diagnostics):
             where = "consumer diagnostic %d" % index
             resolved = _protocol(diagnostic, "resolve_references", where=where)(resolver)
+            diagnostic_references = []
+            for reference in _references(resolved, where=where):
+                resolved_reference = resolver(reference)
+                if not isinstance(resolved_reference, Handle) \
+                        or not resolved_reference.is_resolved:
+                    raise TypeError("consumer resolver must return canonical Handles")
+                diagnostic_references.append(resolved_reference.canonical_identity())
             diagnostics.append({
                 "descriptor": _protocol(resolved, "consumer_data", where=where)(),
-                "references": [resolver(reference).canonical_identity()
-                               for reference in _references(resolved, where=where)],
+                "references": diagnostic_references,
             })
         output_data = None if self.output_format is None else self.output_format.consumer_data()
         operation_data = None if self.operation is None else self.operation.consumer_data()

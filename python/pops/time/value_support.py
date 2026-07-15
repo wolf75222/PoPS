@@ -8,6 +8,8 @@ class _ProgramValueBase:
     """Private nominal marker shared by value validators without reverse imports."""
 
     __slots__ = ()
+    vtype: str
+    block: Any
 
 
 def resolve_temporal_handle(value: Any) -> Any:

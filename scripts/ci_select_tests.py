@@ -352,6 +352,66 @@ def cpp_mpi_ctest_count(manifest: dict) -> int:
     )
 
 
+def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
+    """Return the exact Python scripts that must run under a real MPI launcher.
+
+    Ordinary ``[[python.suite]]`` rows remain pytest collection units.  A suite may additionally
+    declare ``mpi_entrypoints`` for script-style contracts whose ``__main__`` path turns internal
+    check failures into a non-zero process status.  Keeping ranks and paths beside the owning suite
+    makes the manifest -- not workflow YAML -- the single authority for distributed Python tests.
+    """
+    entries: list[dict] = []
+    seen_paths: set[str] = set()
+    for suite in manifest.get("python", {}).get("suite", []):
+        name = str(suite.get("name", ""))
+        suite_path = normalize(str(suite.get("path", ""))).rstrip("/")
+        labels = {str(label) for label in suite.get("labels", [])}
+        raw_entries = suite.get("mpi_entrypoints", [])
+        if not isinstance(raw_entries, list):
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} has invalid mpi_entrypoints; "
+                "expected a TOML array"
+            )
+        if raw_entries and "mpi" not in labels:
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} declares mpi_entrypoints without an mpi label"
+            )
+        for raw in raw_entries:
+            if not isinstance(raw, dict):
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has a non-table mpi_entrypoint"
+                )
+            path = normalize(str(raw.get("path", "")))
+            nproc = raw.get("nproc")
+            candidate = Path(path)
+            if (
+                not path
+                or candidate.is_absolute()
+                or ".." in candidate.parts
+                or "\t" in path
+                or "\n" in path
+                or candidate.suffix != ".py"
+            ):
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has invalid MPI entrypoint path {path!r}"
+                )
+            if not suite_path or not path.startswith(suite_path + "/"):
+                raise SystemExit(
+                    f"Python MPI entrypoint {path!r} is outside owning suite {suite_path!r}"
+                )
+            if type(nproc) is not int or nproc < 2:
+                raise SystemExit(
+                    f"Python MPI entrypoint {path!r} needs an exact nproc integer >= 2"
+                )
+            if not (ROOT / path).is_file():
+                raise SystemExit(f"Python MPI entrypoint does not exist: {path}")
+            if path in seen_paths:
+                raise SystemExit(f"duplicate Python MPI entrypoint: {path}")
+            seen_paths.add(path)
+            entries.append({"suite": name, "path": path, "nproc": nproc})
+    return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
+
+
 def manifest_python_suites(manifest: dict) -> list[dict]:
     # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
     # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
@@ -626,6 +686,67 @@ def cpp_target_label_regex(names: Iterable[str]) -> str:
     """Match the per-build-target CTest labels installed by pops_add_gtest_suite."""
     escaped = [re.escape(f"cpp-target:{name}") for name in names]
     return "^(" + "|".join(escaped) + ")$" if escaped else "$^"
+
+
+def verify_cpp_target_labels(args: argparse.Namespace) -> int:
+    """Fail unless every selected build target owns discovered CTest cases.
+
+    ``gtest_discover_tests`` names cases after their GTest suite rather than their
+    CMake executable, so the C++ shards execute through exact ``cpp-target:*``
+    labels.  Verifying the labels from CTest's JSON model before execution keeps
+    a malformed CMake property list from turning a shard into a false-green
+    ``No tests were found`` run.
+    """
+    targets = list(dict.fromkeys(args.targets))
+    if not targets:
+        raise SystemExit("C++ target-label verification requires at least one target")
+
+    try:
+        payload = json.loads(Path(args.ctest_json).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read CTest JSON inventory {args.ctest_json}: {exc}") from exc
+
+    tests = payload.get("tests")
+    if not isinstance(tests, list):
+        raise SystemExit("CTest JSON inventory has no tests array")
+
+    expected = {f"cpp-target:{target}": target for target in targets}
+    hits: dict[str, list[str]] = {target: [] for target in targets}
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        test_name = test.get("name")
+        if not isinstance(test_name, str):
+            continue
+        labels: set[str] = set()
+        properties = test.get("properties", [])
+        if isinstance(properties, list):
+            for prop in properties:
+                if not isinstance(prop, dict) or prop.get("name") != "LABELS":
+                    continue
+                value = prop.get("value", [])
+                if isinstance(value, str):
+                    labels.update(part for part in value.split(";") if part)
+                elif isinstance(value, list):
+                    labels.update(part for part in value if isinstance(part, str))
+        for label in labels & expected.keys():
+            hits[expected[label]].append(test_name)
+
+    missing = [target for target in targets if not hits[target]]
+    if missing:
+        details = ", ".join(
+            f"{target} (expected cpp-target:{target})" for target in missing
+        )
+        raise SystemExit(
+            "CTest target-label contract failed; selected targets without discovered cases: "
+            + details
+        )
+
+    print(
+        f"verified {len(targets)} C++ target labels across "
+        f"{sum(len(names) for names in hits.values())} discovered cases"
+    )
+    return 0
 
 
 def write_explain_file(path: str | None, payload: dict) -> None:
@@ -960,6 +1081,40 @@ def plan_cpp_label(args: argparse.Namespace) -> int:
     return 0
 
 
+def plan_python_mpi(args: argparse.Namespace) -> int:
+    """Write the manifest-owned real-MPI Python launch plan for the dedicated CI job."""
+    entries = manifest_python_mpi_entrypoints(load_manifest())
+    if not entries:
+        raise SystemExit("no Python MPI entrypoints declared in tests/test_manifest.toml")
+    plan_path = Path(args.plan_file)
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in entries),
+        encoding="utf-8",
+    )
+    summary = f"{len(entries)} manifest-owned Python MPI entrypoints"
+    print(summary)
+    for entry in entries:
+        print(f"np={entry['nproc']} {entry['path']}")
+    write_github_outputs(
+        getattr(args, "github_output", None),
+        {
+            "python_mpi_count": str(len(entries)),
+            "python_mpi_plan_file": str(plan_path),
+            "python_mpi_summary": summary,
+        },
+    )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "python-mpi",
+            "selected_count": len(entries),
+            "selected": entries,
+        },
+    )
+    return 0
+
+
 def _apply_cross_test_closure(selected: set[str], reasons: dict[str, set[str]]) -> None:
     before = set(selected)
     ci_import_closure._close_cross_test(selected, _test_to_test())
@@ -1210,6 +1365,17 @@ def main() -> int:
     cpp_label.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     cpp_label.add_argument("--explain-file")
     cpp_label.set_defaults(func=plan_cpp_label)
+
+    cpp_target_labels = sub.add_parser("verify-cpp-target-labels")
+    cpp_target_labels.add_argument("--ctest-json", required=True)
+    cpp_target_labels.add_argument("--targets", nargs="+", required=True)
+    cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
+
+    py_mpi = sub.add_parser("python-mpi")
+    py_mpi.add_argument("--plan-file", required=True)
+    py_mpi.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    py_mpi.add_argument("--explain-file")
+    py_mpi.set_defaults(func=plan_python_mpi)
 
     py = sub.add_parser("python")
     py.add_argument("--changed-files", required=True)

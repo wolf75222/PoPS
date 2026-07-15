@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from pops.model.ownership import OwnerPath
 from pops.time.points import Clock, StagePoint, TimePoint, point_clock
@@ -124,12 +124,14 @@ class Attempt(Domain):
 
 
 @stable_component_identity("pops://time/schedule/domains/stage")
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class Stage(Domain):
     """Cadence at one exact named stage point."""
 
-    at: StagePoint
     manifest_tag: ClassVar[str | None] = "stage"
+
+    def __init__(self, clock: Clock, at: StagePoint) -> None:
+        Domain.__init__(self, clock, at)
 
     def __post_init__(self) -> None:
         super(Stage, self).__post_init__()
@@ -145,7 +147,11 @@ class Stage(Domain):
             ScheduleTimeline.STAGE,
             self.clock.qualified_id,
             stage_identity=json.dumps(
-                self.at.to_data(), sort_keys=True, separators=(",", ":"), allow_nan=False),
+                cast(StagePoint, self.at).to_data(),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ),
         )
 
     def consumer_occurrence_evidence(self, moment: Any) -> dict[str, Any]:
@@ -224,14 +230,14 @@ class Event(Domain):
             raise TypeError("Event event must be an exact EventHandle")
 
     def schedule_payload(self) -> dict[str, Any]:
-        return {"event": self.event.to_data()}
+        return {"event": cast(EventHandle, self.event).to_data()}
 
     def consumer_coordinate(self, moment: Any) -> int | None:
         return moment.accepted_step if self.event in moment.events else None
 
     def consumer_occurrence_evidence(self, moment: Any) -> dict[str, Any]:
         del moment
-        return {"event": self.event.to_data()}
+        return {"event": cast(EventHandle, self.event).to_data()}
 
 
 @stable_component_identity("pops://time/schedule/domains/wall-output")

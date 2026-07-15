@@ -208,11 +208,13 @@ class ConservativeInterface:
     @staticmethod
     def _boundary(side: BlockInterfaceSide) -> Any:
         from pops.domain import BoundarySide as DomainSide
+        from pops.problem.handles import BlockHandle
         from .topology import BoundaryHandle, BoundaryOrientation, BoundarySide
 
         block = side.state.block_ref
-        if block is None:
-            raise TypeError("ConservativeInterface endpoint state has no block owner")
+        if not isinstance(block, BlockHandle):
+            raise TypeError(
+                "ConservativeInterface endpoint state has no typed BlockHandle owner")
         boundary_side = (
             BoundarySide.LOWER if side.boundary.side is DomainSide.LOWER
             else BoundarySide.UPPER)
@@ -226,7 +228,7 @@ class ConservativeInterface:
         """Consume this authority into both exact endpoint GhostProducerPlans."""
         from .component_binding import BoundaryComponentBinding
         from .ghost_plan import (
-            GhostProducerPlan, GhostProduction, InterfaceGhost, PhysicalGhost,
+            GhostProducerPlan, GhostProduction, InterfaceGhost,
         )
         from .ghost_plan_types import (
             InterfaceAffineMapping, InterfacePermutation, InterfaceSide, MultiBlockInterface,
@@ -300,7 +302,13 @@ class ConservativeInterface:
                     % side_name)
             selected = matches[0]
             production = plan.productions[selected]
-            if not isinstance(production.producer, PhysicalGhost):
+            physical_provider = production.producer
+            if (
+                len(physical_provider.boundary_providers) != 1
+                or physical_provider.periodic
+                or physical_provider.interfaces
+                or physical_provider.operators
+            ):
                 raise ValueError(
                     "ConservativeInterface %s endpoint face is already consumed" % side_name)
             producer = InterfaceGhost(

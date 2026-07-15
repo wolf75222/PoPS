@@ -119,6 +119,11 @@ def validate_amr_authorities(plan: Any) -> None:
         "indicator_stencil_routes", "maximum_stencil_terms",
         "maximum_instruction_count", "non_finite_policy", "persistent_hysteresis",
     }
+    maximum_stencil_terms = (
+        capability.get("maximum_stencil_terms")
+        if isinstance(capability, Mapping)
+        else None
+    )
     if not isinstance(capability, Mapping) or set(capability) != expected_capability_keys \
             or capability.get("schema_version") != 1 \
             or capability.get("capability_type") != "amr_tagging_program" \
@@ -127,10 +132,10 @@ def validate_amr_authorities(plan: Any) -> None:
             or not set(capability.get("indicator_stencil_routes", ())) <= set(
                 NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
             or not capability.get("indicator_stencil_routes") \
-            or isinstance(capability.get("maximum_stencil_terms"), bool) \
-            or not isinstance(capability.get("maximum_stencil_terms"), int) \
-            or capability.get("maximum_stencil_terms") < 1 \
-            or capability.get("maximum_stencil_terms") \
+            or isinstance(maximum_stencil_terms, bool) \
+            or not isinstance(maximum_stencil_terms, int) \
+            or maximum_stencil_terms < 1 \
+            or maximum_stencil_terms \
             > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"] \
             or capability.get("non_finite_policy") \
             != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] \
@@ -175,15 +180,27 @@ def validate_amr_authorities(plan: Any) -> None:
         dict(providers["clustering"]), where="AMR clustering provider")
     if cluster_options != {"provider": expected_clustering}:
         raise ValueError("resolved hierarchy clustering differs from the AMR provider authority")
-    policy_routes = (
-        (hierarchy.plan.patch_generation.options, "box_array", "patch generation"),
-        (hierarchy.plan.load_balance.options, "round_robin", "load balance"),
-    )
-    for options, route, label in policy_routes:
-        if options.to_data().get("native_route") != route:
-            raise NotImplementedError(
-                "native AMR %s requires native_route=%r" % (label, route)
-            )
+    patch_options = hierarchy.plan.patch_generation.options.to_data()
+    expected_patch_options = {
+        "native_route", "distribute_coarse", "coarse_max_grid",
+    }
+    if set(patch_options) != expected_patch_options \
+            or type(patch_options.get("distribute_coarse")) is not bool:
+        raise TypeError("native AMR patch generation requires the exact box_array option schema")
+    coarse_max_grid = patch_options["coarse_max_grid"]
+    if coarse_max_grid is not None:
+        if type(coarse_max_grid) is not int:
+            raise TypeError("native AMR coarse_max_grid must be None or an exact integer")
+        if coarse_max_grid < 1:
+            raise ValueError("native AMR coarse_max_grid must be positive when provided")
+    if patch_options["native_route"] != "box_array":
+        raise NotImplementedError(
+            "native AMR patch generation requires native_route='box_array'"
+        )
+    if hierarchy.plan.load_balance.options.to_data() != {"native_route": "round_robin"}:
+        raise NotImplementedError(
+            "native AMR load balance requires native_route='round_robin'"
+        )
     state_blocks = []
     for binding in plan.initial_condition_plan.bindings:
         subject = binding.subject

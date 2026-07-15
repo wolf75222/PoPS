@@ -93,6 +93,15 @@ class Space(_ImmutableTypeValue):
 
     kind = "space"
 
+    name: str
+    components: tuple[str, ...]
+    layout: str
+    representation: str
+    centering: str
+    units: tuple[None, ...]
+    frame: str
+    clock: str
+
     def __init__(
         self,
         name: Any,
@@ -189,6 +198,9 @@ class StateSpace(Space):
 
     kind = "state"
 
+    roles: Mapping[str, Any]
+    storage: str
+
     def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
                  storage: str = "multifab", *, representation: Any = "conservative",
                  centering: Any = None, units: Any = None, frame: Any = "model",
@@ -238,6 +250,9 @@ class RateSpace(Space):
 
     kind = "rate"
 
+    base_name: str
+    base_space: StateSpace
+
     def __init__(self, base: Any) -> None:
         if not isinstance(base, StateSpace):
             raise TypeError("Rate expects a StateSpace, got %r" % (base,))
@@ -280,6 +295,14 @@ class AuxSpace(_ImmutableTypeValue):
     """A named auxiliary field provided or updated by the Simulation (e.g. an externally
     imposed magnetic field, a mask). Distinct from a FieldSpace, which an operator
     produces; an AuxSpace is imposed runtime data the operators may read."""
+
+    name: str
+    kind: str
+    representation: str
+    centering: str
+    unit: str | None
+    frame: str
+    clock: str
 
     def __init__(self, name: Any, kind: str = "cell_scalar", *, representation: Any = "auxiliary",
                  centering: Any = "cell", unit: Any = None, frame: Any = "model",

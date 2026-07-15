@@ -14,7 +14,7 @@ import json
 import math
 import re
 from types import MappingProxyType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 
 class ReportPhase(str, Enum):
@@ -119,14 +119,14 @@ class ReportTree:
         """Return a new tree with one appended child."""
         if not isinstance(child, ReportTree):
             raise TypeError("ReportTree child must be a ReportTree")
-        return replace(self, children=self.children + (child,))
+        return replace(self, children=tuple(self.children) + (child,))
 
     def with_children(self, children: Sequence[ReportTree]) -> ReportTree:
         """Return a new tree with @p children appended in their supplied order."""
         additions = tuple(children)
         if not all(isinstance(child, ReportTree) for child in additions):
             raise TypeError("ReportTree children must contain only ReportTree nodes")
-        return replace(self, children=self.children + additions)
+        return replace(self, children=tuple(self.children) + additions)
 
     def error(self, source: str, code: str, message: str, *,
               context: Mapping[str, Any] | None = None,
@@ -185,8 +185,8 @@ class ReportTree:
         return {
             "report_type": self.report_type,
             "schema_version": self.schema_version,
-            "phase": self.phase.value,
-            "severity": self.severity.value,
+            "phase": cast(ReportPhase, self.phase).value,
+            "severity": cast(ReportSeverity, self.severity).value,
             "code": self.code,
             "message": self.message,
             "source": self.source,
@@ -260,7 +260,7 @@ class ReportTree:
         for depth, node in _walk_with_depth(self):
             message = ": %s" % node.message if node.message else ""
             lines.append("%s[%s] %s%s" % (
-                "  " * depth, node.severity.value, node.code, message))
+                "  " * depth, cast(ReportSeverity, node.severity).value, node.code, message))
         return "\n".join(lines)
 
 

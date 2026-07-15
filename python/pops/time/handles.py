@@ -42,6 +42,7 @@ class _ReadableTemporalHandle:
     """Affine proxy whose resolution is exclusively owned by its Program table."""
 
     __slots__ = ()
+    _program: Any
 
     @property
     def value(self) -> Any:

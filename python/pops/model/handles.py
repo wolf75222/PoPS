@@ -25,10 +25,13 @@ methods) so it stays codegen-free and ``_pops``-free and keeps the ``pops.time``
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 from .ownership import OwnerPath, UnresolvedOwnershipError
+
+if TYPE_CHECKING:
+    from .spaces import StateSpace
 
 
 _KEEP_REFERENCE = object()
@@ -93,6 +96,13 @@ class Handle:
         """Block declaration selecting this instance, when qualified."""
         return self._block_ref
 
+    def _instance_refs(self) -> tuple[Handle, Handle]:
+        declaration = self.declaration_ref
+        block = self.block_ref
+        if declaration is None or block is None:
+            raise RuntimeError("instance Handle is missing its declaration/block references")
+        return declaration, block
+
     @property
     def qualified_id(self) -> str:
         return self._qualified_id(self.owner_path)
@@ -119,8 +129,9 @@ class Handle:
             "schema_version": self.schema_version,
         }
         if self.is_instance:
-            result["declaration_ref"] = self.declaration_ref.inspect()
-            result["block_ref"] = self.block_ref.inspect()
+            declaration, block = self._instance_refs()
+            result["declaration_ref"] = declaration.inspect()
+            result["block_ref"] = block.inspect()
         return result
 
     def canonical_identity(self) -> dict[str, Any]:
@@ -138,12 +149,13 @@ class Handle:
             "schema_version": self.schema_version,
         }
         if self.is_instance:
-            if not self.declaration_ref.is_resolved or not self.block_ref.is_resolved:
+            declaration, block = self._instance_refs()
+            if not declaration.is_resolved or not block.is_resolved:
                 raise UnresolvedOwnershipError(
                     "instance handle %s retains unresolved declaration/block references"
                     % self.qualified_id)
-            result["declaration_ref"] = self.declaration_ref.canonical_identity()
-            result["block_ref"] = self.block_ref.canonical_identity()
+            result["declaration_ref"] = declaration.canonical_identity()
+            result["block_ref"] = block.canonical_identity()
         return result
 
     @classmethod
@@ -286,6 +298,8 @@ class StateHandle(Handle):
     """
 
     __slots__ = ("space",)
+
+    space: StateSpace
 
     def __init__(self, name: Any, *, owner: Any, space: Any, schema_version: int = 1) -> None:
         from .spaces import StateSpace

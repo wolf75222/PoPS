@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, NoReturn
 
 
 class LayoutCapabilityError(ValueError):
@@ -113,7 +113,10 @@ def materialized_layout_subjects(problem: Any) -> dict[str, tuple[Any, ...]]:
     project = getattr(snapshot, "to_dict", None)
     if not callable(project):
         raise TypeError("Case.layout_subjects() must return a typed LayoutSubjects snapshot")
-    return project()
+    subjects = project()
+    if not isinstance(subjects, dict):
+        raise TypeError("LayoutSubjects.to_dict() must return a dict")
+    return subjects
 
 
 def validate_layout(problem: Any, layout: Any) -> None:
@@ -369,7 +372,7 @@ def layout_lowering_coverage(plan: Any, *, rejected_gate: str | None = None) -> 
     return LoweringCoverageReport(rows)
 
 
-def _refuse_runtime(plan: Any, *, gate: str, message: str) -> None:
+def _refuse_runtime(plan: Any, *, gate: str, message: str) -> NoReturn:
     coverage = layout_lowering_coverage(plan, rejected_gate=gate)
     evidence = {
         "gate": gate,

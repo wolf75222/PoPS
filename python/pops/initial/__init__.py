@@ -48,7 +48,10 @@ class InitialCondition:
     def resolve_references(self, resolver: Any) -> InitialCondition:
         if not callable(resolver):
             raise TypeError("InitialCondition resolver must be callable")
-        return type(self)(resolver(self.state), self.value, self.projection)
+        state = resolver(self.state)
+        if not isinstance(state, Handle):
+            raise TypeError("InitialCondition resolver must return a state Handle")
+        return type(self)(state, self.value, self.projection)
 
     def canonical_identity(self) -> dict[str, Any]:
         if not self.state.is_resolved:

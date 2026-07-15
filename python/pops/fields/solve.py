@@ -233,6 +233,10 @@ class FieldSolveResolver:
         if not callable(resolver):
             raise TypeError("field solve requires a typed FieldHierarchyPolicy")
         hierarchy = resolver(self.capabilities)
+        if not isinstance(hierarchy, ResolvedHierarchyPolicy):
+            raise TypeError(
+                "FieldHierarchyPolicy.resolve() must return ResolvedHierarchyPolicy"
+            )
         domain = FieldOperatorDomain(residual.identity, residual.unknown, layout)
         if preconditioner is not None and preconditioner.domain != domain:
             raise ValueError("preconditioner domain does not authenticate the residual domain")

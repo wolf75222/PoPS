@@ -1,6 +1,7 @@
 """Small protocol adapters between Case assembly and descriptor/LayoutPlan authorities."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -15,7 +16,10 @@ def layout_requirements(layout: Any) -> dict[str, Any]:
         return {}
     resources = getattr(layout, "resource_requirements", None)
     if callable(resources):
-        return {"layout_resources": list(resources())}
+        rows = resources()
+        if isinstance(rows, (str, bytes)) or not isinstance(rows, Iterable):
+            raise TypeError("layout resource_requirements() must return an iterable")
+        return {"layout_resources": list(rows)}
     return layout.requirements().to_dict()
 
 

@@ -21,7 +21,8 @@ facade handles the user actually wrote via ``remap_lowering_error``.
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 from .lowering_coverage import (
     LoweringCoverageReport,
@@ -264,7 +265,8 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
         m.linear_source(op.name, _body_for_state(op.body))
 
     def _b_field_operator(op: Any) -> None:
-        outputs = tuple(getattr(op.signature.output, "components", ()))
+        outputs: tuple[Any, ...] = tuple(cast(
+            Iterable[Any], getattr(op.signature.output, "components", ())))
         if len(outputs) == 2 or len(outputs) > 3:
             raise ValueError(
                 "compile_problem: field_operator %r outputs must have length 1 or 3; the runtime "

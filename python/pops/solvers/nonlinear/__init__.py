@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -19,8 +20,13 @@ def _scalar_data(value: Any) -> dict[str, Any]:
 
 
 def _runtime_number(value: Any) -> float:
-    if isinstance(value, dict) and value.get("kind") == "binary64":
-        return float.fromhex(value["value"])
+    if isinstance(value, Mapping):
+        encoded = value.get("value")
+        if value.get("kind") != "binary64" or not isinstance(encoded, str):
+            raise TypeError("nonlinear runtime scalars require canonical binary64 data")
+        return float.fromhex(encoded)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("nonlinear runtime scalars must be numeric or canonical binary64 data")
     return float(value)
 
 
@@ -190,7 +196,7 @@ class Newton(Descriptor):
         del context
         return Availability.yes("native damped Newton-Krylov field outer solve")
 
-    def lower_field_nonlinear(self, *, target: str, layout: Any) -> dict[str, Any]:
+    def lower_field_nonlinear(self, *, target: str, layout: Any) -> PreparedFieldNonlinear:
         del layout
         if target not in ("system", "amr_system"):
             raise ValueError("Newton field outer solve requires a uniform or AMR system")

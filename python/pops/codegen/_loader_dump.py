@@ -7,6 +7,11 @@ from typing import Any
 class CompiledProblemDumpMixin:
     """Inert debug exports kept separate from compiled-artifact metadata."""
 
+    _generated_cpp: str | None
+    model: Any
+    program_name: str | None
+    program: Any | None
+
     def dump_ir(self, path: Any = None) -> Any:
         """Return or write the exact serialized Program IR."""
         import json

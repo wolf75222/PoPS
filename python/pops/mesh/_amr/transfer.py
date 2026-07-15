@@ -67,11 +67,16 @@ class AMRTransfer:
 
     def __init__(self) -> None:
         self._frozen = False
-        self._states: list[tuple[Any, Any, LayoutHandle | None]] = []
-        self._faces: list[tuple[tuple[Any, ...], Any, LayoutHandle | None]] = []
-        self._nodes: list[tuple[Any, Any, LayoutHandle | None]] = []
-        self._fields: list[tuple[Any, Any, LayoutHandle | None]] = []
-        self._caches: list[tuple[Any, Any, LayoutHandle]] = []
+        self._states: list[tuple[Any, Any, LayoutHandle | None]] \
+            | tuple[tuple[Any, Any, LayoutHandle | None], ...] = []
+        self._faces: list[tuple[tuple[Any, ...], Any, LayoutHandle | None]] \
+            | tuple[tuple[tuple[Any, ...], Any, LayoutHandle | None], ...] = []
+        self._nodes: list[tuple[Any, Any, LayoutHandle | None]] \
+            | tuple[tuple[Any, Any, LayoutHandle | None], ...] = []
+        self._fields: list[tuple[Any, Any, LayoutHandle | None]] \
+            | tuple[tuple[Any, Any, LayoutHandle | None], ...] = []
+        self._caches: list[tuple[Any, Any, LayoutHandle]] \
+            | tuple[tuple[Any, Any, LayoutHandle], ...] = []
 
     def state(self, subject: Any, policy: Any, *, layout: LayoutHandle | None = None) -> None:
         if self._frozen:
@@ -82,6 +87,8 @@ class AMRTransfer:
                 getattr(policy, route, None), where="AMRTransfer.state.%s" % route)
             if data.get("routes", {}).get(route) != kernel:
                 raise ValueError("AMRTransfer.state identity does not authenticate %s" % route)
+        if not isinstance(self._states, list):
+            raise RuntimeError("AMRTransfer is frozen")
         self._states.append((
             _authoring_handle(subject, where="AMRTransfer.state", kind="state"), policy, layout
         ))
@@ -109,6 +116,8 @@ class AMRTransfer:
             ) from exc
         if not values:
             raise ValueError("AMRTransfer.face requires at least one face subject")
+        if not isinstance(self._faces, list):
+            raise RuntimeError("AMRTransfer is frozen")
         self._faces.append((tuple(
             _authoring_handle(value, where="AMRTransfer.face", kind="state") for value in values
         ), policy, layout))
@@ -121,6 +130,8 @@ class AMRTransfer:
             getattr(policy, "prolongation", None), where="AMRTransfer.node.prolongation")
         if data.get("routes", {}).get("prolongation") != kernel:
             raise ValueError("AMRTransfer.node identity does not authenticate prolongation")
+        if not isinstance(self._nodes, list):
+            raise RuntimeError("AMRTransfer is frozen")
         self._nodes.append((
             _authoring_handle(subject, where="AMRTransfer.node", kind="state"), policy, layout
         ))
@@ -133,6 +144,8 @@ class AMRTransfer:
             raise ValueError("AMRTransfer.field policy must authenticate native_route")
         if data["native_route"] != getattr(policy, "native_route", None):
             raise ValueError("AMRTransfer.field identity disagrees with native_route")
+        if not isinstance(self._fields, list):
+            raise RuntimeError("AMRTransfer is frozen")
         self._fields.append((
             _authoring_handle(subject, where="AMRTransfer.field", kind="field"), policy, layout
         ))
@@ -147,6 +160,8 @@ class AMRTransfer:
             raise TypeError(
                 "AMRTransfer.cache requires an explicit LayoutHandle"
             )
+        if not isinstance(self._caches, list):
+            raise RuntimeError("AMRTransfer is frozen")
         self._caches.append((
             _authoring_handle(subject, where="AMRTransfer.cache", kind="cache"), policy, layout
         ))
@@ -584,11 +599,17 @@ class AMRTransferBuilder:
             token = requirement.key.identity.token
             keys[token] = requirement.key
             if requirement.materialization == DERIVED_FIELD:
-                group = (token, requirement.materializer.qualified_id)
-                action: Any = Recompute(requirement.materializer)
+                materializer = requirement.materializer
+                if materializer is None:
+                    raise RuntimeError("derived-field transfer lost its materialization provider")
+                group = (token, materializer.qualified_id)
+                action: Any = Recompute(materializer)
             elif requirement.materialization == CACHE:
-                group = (token, requirement.materializer.qualified_id)
-                action = InvalidateThenRebuild(requirement.materializer)
+                materializer = requirement.materializer
+                if materializer is None:
+                    raise RuntimeError("cache transfer lost its materialization provider")
+                group = (token, materializer.qualified_id)
+                action = InvalidateThenRebuild(materializer)
             else:
                 candidates = []
                 incompatible = []

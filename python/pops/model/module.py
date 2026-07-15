@@ -553,6 +553,8 @@ class Module(ModuleFreezable):
                 "rate_operator %s references must be OperatorHandle values, not %r"
                 % (label, type(reference).__name__))
         registered = self._registry.declaration_index().authenticate(reference)
+        if not isinstance(registered, OperatorHandle):
+            raise RuntimeError("operator registry returned a non-OperatorHandle declaration")
         if registered.kind != expected_kind:
             raise TypeError(
                 "rate_operator %s reference %s has kind %r; expected %r"

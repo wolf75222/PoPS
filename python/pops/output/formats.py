@@ -42,6 +42,9 @@ class ExternalWriter(FormatInterface):
     """
 
     format_name = "external-writer"
+    component_id: str
+    component_manifest_identity: Any
+    native_interface: Any
 
     def __init__(self, component: Any, *, extension: str) -> None:
         from pops.external import CompiledComponentArtifact, ExternalComponent
@@ -91,6 +94,7 @@ class HDF5(FormatInterface):
     category = "output_format"
     format_name = "hdf5"
     extension = ".h5"
+    parallel: bool
 
     def __init__(self, parallel: bool = False) -> None:
         if type(parallel) is not bool:

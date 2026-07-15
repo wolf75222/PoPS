@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 
@@ -68,7 +68,13 @@ def collect_references(value: Any) -> tuple[Any, ...]:
             return
         protocol = getattr(item, "declaration_references", None)
         if callable(protocol):
-            for reference in protocol():
+            declared = protocol()
+            if not isinstance(declared, Iterable):
+                raise TypeError(
+                    "%s.declaration_references() must return an iterable of Handle values"
+                    % type(item).__name__
+                )
+            for reference in declared:
                 if not isinstance(reference, Handle):
                     raise TypeError(
                         "%s.declaration_references() must return only Handle values"

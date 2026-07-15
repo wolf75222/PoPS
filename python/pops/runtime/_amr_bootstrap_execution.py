@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, make_identity
 
@@ -127,7 +127,7 @@ class NativeAMRBootstrapConsumer:
     def _number(value: Any) -> float:
         if isinstance(value, Mapping) and set(value) == {"binary64"}:
             return float.fromhex(value["binary64"])
-        return float(value)
+        return float(cast(Any, value))
 
     def consume_bootstrap_action(self, action: Any) -> BootstrapReceipt:
         operation = action.operation

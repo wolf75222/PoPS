@@ -116,14 +116,23 @@ function(pops_add_gtest_suite)
     target_compile_definitions(${ARG_NAME} PRIVATE ${ARG_COMPILE_DEFINITIONS})
   endif()
 
+  # ``gtest_discover_tests(PROPERTIES ...)`` expects alternating property/value
+  # arguments.  A raw CMake list here is flattened before GoogleTest.cmake sees
+  # it, so only the first label remains a LABELS value and the following labels
+  # are silently interpreted as unrelated property names.  Preserve the whole
+  # label set as one property value across the function boundary.
+  set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
+  string(REPLACE ";" "\\\\;" _pops_test_labels "${_pops_test_labels}")
   set(_pops_test_properties
-    LABELS "${ARG_LABELS};cpp-target:${ARG_NAME}"
+    LABELS "${_pops_test_labels}"
     TIMEOUT ${ARG_TIMEOUT})
   if(ARG_RESOURCE_LOCK)
     list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
   endif()
   if(ARG_RESOURCE_GROUPS)
-    list(APPEND _pops_test_properties RESOURCE_GROUPS "${ARG_RESOURCE_GROUPS}")
+    set(_pops_resource_groups "${ARG_RESOURCE_GROUPS}")
+    string(REPLACE ";" "\\\\;" _pops_resource_groups "${_pops_resource_groups}")
+    list(APPEND _pops_test_properties RESOURCE_GROUPS "${_pops_resource_groups}")
   endif()
 
   if(NOT ARG_NO_DISCOVER)
@@ -186,7 +195,7 @@ endfunction()
 function(pops_cap_opt_for_kokkos_ram target)
   target_compile_options(${target} PRIVATE
     $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
-  set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
+  set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE pops_heavy_test_tu)
 endfunction()
 
 # The central object targets are defined, configured and populated exclusively by src/CMakeLists.txt.
@@ -647,4 +656,4 @@ foreach(_t ${_pops_dir_targets})
     math(EXPR _pops_capped "${_pops_capped}+1")
   endif()
 endforeach()
-message(STATUS "pops tests: ${_pops_capped} heavy runtime targets capped (-O0 + pops_heavy_tu pool)")
+message(STATUS "pops tests: ${_pops_capped} heavy runtime targets capped (-O0 + pops_heavy_test_tu pool)")

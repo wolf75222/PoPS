@@ -7,7 +7,7 @@ from enum import Enum
 import hashlib
 import inspect
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .tagging_graph import (
     Above, AllOf, AnyOf, Below, GradientAbove, GradientBelow, MagnitudeAbove, Not, TagExpr,
@@ -80,14 +80,14 @@ def _audit_node_storage(node: TagExpr) -> None:
     params = getattr(type(node), "__dataclass_params__", None)
     if not is_dataclass(node) or params is None or params.frozen is not True:
         raise TypeError("registered TagExpr %s must be a frozen dataclass" % type(node).__name__)
-    for field in fields(node):
+    for field in fields(cast(Any, node)):
         _audit_storage(getattr(node, field.name), where="TagExpr.%s" % field.name)
     _strict_data(node.canonical_identity(), where="TagExpr.canonical_identity()")
 
 
 def _stored_operands(node: TagExpr) -> tuple[TagExpr, ...]:
     result = []
-    for field in fields(node):
+    for field in fields(cast(Any, node)):
         value = getattr(node, field.name)
         if isinstance(value, TagExpr):
             result.append(value)

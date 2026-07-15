@@ -1,9 +1,9 @@
 """Structural Handle collection and canonical resolution for immutable Expr graphs."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 
 def resolve_expr_references(
@@ -85,7 +85,13 @@ def collect_reference_value(value: Any, references: list[Any], seen: set[int]) -
         return
     protocol = getattr(value, "declaration_references", None)
     if callable(protocol):
-        for reference in protocol():
+        resolved = protocol()
+        if not isinstance(resolved, Iterable):
+            raise TypeError(
+                "%s.declaration_references() must return an iterable of Handle values"
+                % type(value).__name__
+            )
+        for reference in cast(Iterable[Any], resolved):
             if not isinstance(reference, Handle):
                 raise TypeError(
                     "%s.declaration_references() must return only Handle values"

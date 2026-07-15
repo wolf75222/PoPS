@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from pops.output.data import OutputRequest, OutputSnapshot, array_evidence
 
 def _require_h5py(parallel: bool) -> Any:
     try:
-        import h5py
+        h5py = import_module("h5py")
     except ImportError:
         raise RuntimeError("HDF5 output requires the optional h5py dependency") from None
     if parallel and not h5py.get_config().mpi:
@@ -153,13 +154,17 @@ def _parallel_snapshot_data(
             raise ValueError("parallel field pieces do not cover the global field")
         rebuilt.append(dict(row, pieces=pieces))
     data["fields"] = rebuilt
+    if target_path is None or h5py is None:
+        raise RuntimeError("collective HDF5 preflight completed without local authorities")
+    if not isinstance(data, dict):
+        raise RuntimeError("collective HDF5 snapshot authority is not canonical data")
     return data, selected, target_path, h5py
 
 
 def _parallel_temporary_path(target: Path, communicator: Any) -> Path:
     """Create one shared temporary on rank zero and broadcast failures without deadlocking."""
     rank = int(communicator.Get_rank())
-    envelope = {"path": None, "error": None}
+    envelope: dict[str, str | None] = {"path": None, "error": None}
     if rank == 0:
         try:
             envelope["path"] = str(temporary_path(target))

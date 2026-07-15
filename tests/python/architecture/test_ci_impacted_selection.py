@@ -16,8 +16,10 @@ Ground-truth edges asserted below were verified by reading the source:
   reaches the orchestration-dependent tests.
 """
 import importlib.util
+import json
 import pathlib
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -289,6 +291,74 @@ def test_manifest_projects_exact_mpi_targets_for_dedicated_job():
     ) == 61
 
 
+def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
+    sel = _load("ci_select_tests")
+    inventory = tmp_path / "ctest.json"
+    inventory.write_text(json.dumps({
+        "tests": [
+            {
+                "name": "Suite.One",
+                "properties": [
+                    {"name": "LABELS", "value": ["unit", "cpp-target:test_one"]},
+                ],
+            },
+            {
+                "name": "Suite.Two",
+                "properties": [
+                    {"name": "LABELS", "value": ["fast", "cpp-target:test_two"]},
+                ],
+            },
+        ],
+    }))
+
+    args = SimpleNamespace(
+        ctest_json=str(inventory),
+        targets=["test_one", "test_two"],
+    )
+    assert sel.verify_cpp_target_labels(args) == 0
+
+    args.targets.append("test_missing")
+    with pytest.raises(SystemExit, match="test_missing"):
+        sel.verify_cpp_target_labels(args)
+
+
+def test_manifest_projects_exact_python_mpi_entrypoints():
+    """Script-style MPI contracts carry their launcher ranks in the manifest, not CI YAML."""
+    sel = _load("ci_select_tests")
+    assert sel.manifest_python_mpi_entrypoints(sel.load_manifest()) == [
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
+            "nproc": 2,
+        },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_amr_history_mpi.py",
+            "nproc": 2,
+        },
+    ]
+
+
+def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
+    sel = _load("ci_select_tests")
+
+    class Args:
+        plan_file = str(tmp_path / "python-mpi-plan.tsv")
+        github_output = str(tmp_path / "github-output.txt")
+        explain_file = str(tmp_path / "python-mpi-plan.json")
+
+    assert sel.plan_python_mpi(Args()) == 0
+    assert (tmp_path / "python-mpi-plan.tsv").read_text().splitlines() == [
+        "2\ttests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
+        "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
+    ]
+    outputs = dict(
+        line.partition("=")[::2]
+        for line in (tmp_path / "github-output.txt").read_text().splitlines()
+    )
+    assert outputs["python_mpi_count"] == "2"
+
+
 @pytest.mark.parametrize(
     ("event", "inputs", "expected"),
     (
@@ -401,6 +471,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     ):
         assert python_control in python_filter
 
+    cpp_shards_block = workflow.split("\n  gate-cpp-shards:\n", 1)[1].split(
+        "\n  # Check historique", 1)[0]
+    assert "ctest --preset ci-kokkos -N --show-only=json-v1" in cpp_shards_block
+    assert "scripts/ci_select_tests.py verify-cpp-target-labels" in cpp_shards_block
+    assert '--targets "${cpp_targets[@]}"' in cpp_shards_block
+    assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
+        "ctest --preset ci-kokkos -L"
+    )
+
     gate_block = workflow.split("\n  gate:\n", 1)[1].split("\n  mpi:\n", 1)[0]
     assert "needs: [changes, set-mode," in gate_block
     assert "mpi, kokkos-openmp" in gate_block
@@ -419,9 +498,16 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_BUILD_PYTHON=ON" in mpi_block
     assert "scripts/ci_select_tests.py cpp-label" in mpi_block
     assert "--label mpi" in mpi_block
+    assert "scripts/ci_select_tests.py python-mpi" in mpi_block
+    assert "build-mpi/python-mpi-plan.tsv" in mpi_block
     assert '--target _pops "${mpi_targets[@]}"' in mpi_block
     assert "steps.mpi-test-plan.outputs.cpp_label_ctest_count" in mpi_block
     assert '"${mpi_n:-0}" != "${mpi_expected:-0}"' in mpi_block
+    assert mpi_block.count("-L '^mpi$' -LE '^python$'") == 2
+    assert "POPS_REQUIRE_MPI_TESTS: \"1\"" in mpi_block
+    assert "mpiexec -n \"$mpi_ranks\" /usr/bin/python3 \"$mpi_test\"" in mpi_block
+    assert "test_amr_clean_route_program_mpi.py" not in mpi_block
+    assert "test_amr_history_mpi.py" not in mpi_block
     assert "cmake --build --preset ci-mpi\n" not in mpi_block
     assert "build-mpi/python-package" in mpi_block
     assert "collective HDF5 lifecycle requires an MPI-enabled _pops" in mpi_block

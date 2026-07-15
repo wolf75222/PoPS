@@ -369,10 +369,13 @@ class InstalledComponent:
             return self
         try:
             from pops import _pops
-            loader = _pops._load_component
-        except (ImportError, AttributeError) as exc:
+        except ImportError as exc:
             raise RuntimeError(
                 "installed component loading requires the matching PoPS native module") from exc
+        loader = getattr(_pops, "_load_component", None)
+        if not callable(loader):
+            raise RuntimeError(
+                "installed component loading requires a native _load_component provider")
         handle = loader(
             str(self.path), self.component_id,
             self.runtime_contract.manifest_data["digests"]["semantic"],

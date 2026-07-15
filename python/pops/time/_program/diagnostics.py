@@ -1,15 +1,20 @@
 """Program stage grouping and scalar diagnostic authoring."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time.value_collections import StageStateSet
 from pops.time.value_metadata import positive_scalar_literal
 from pops.time._authoring import atomic_authoring
 from pops.time.values import ProgramValue
 
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramDiagnostics:
+
+class _ProgramDiagnostics(_ProgramBase):
     def state_set(self, name: Any, mapping: Any) -> StageStateSet:
         return StageStateSet(name, mapping)
 

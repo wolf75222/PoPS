@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from .handles import ParamHandle
 
@@ -38,17 +38,25 @@ class ResolvedBindings(Mapping[ParamHandle, Any]):
         object.__setattr__(self, "values", MappingProxyType(checked_values))
         object.__setattr__(self, "sources", MappingProxyType(checked_sources))
 
+    def _value_map(self) -> Mapping[ParamHandle, Any]:
+        """Typed view of the deliberately published immutable ``values`` table."""
+        return cast(Mapping[ParamHandle, Any], object.__getattribute__(self, "values"))
+
+    def _source_map(self) -> Mapping[ParamHandle, str]:
+        """Typed view of the immutable materialization-source table."""
+        return cast(Mapping[ParamHandle, str], object.__getattribute__(self, "sources"))
+
     def __getitem__(self, handle: ParamHandle) -> Any:
-        return self.values[handle]
+        return self._value_map()[handle]
 
     def __iter__(self) -> Iterator[ParamHandle]:
-        return iter(self.values)
+        return iter(self._value_map())
 
     def __len__(self) -> int:
-        return len(self.values)
+        return len(self._value_map())
 
     def source(self, handle: ParamHandle) -> str:
-        return self.sources[handle]
+        return self._source_map()[handle]
 
     def rows(self) -> tuple[dict[str, Any], ...]:
         """JSON-ready effective-value rows in stable schema slot order."""
@@ -65,9 +73,9 @@ class ResolvedBindings(Mapping[ParamHandle, Any]):
                 "kind": slot.kind,
                 "dtype": slot.dtype,
                 "unit": declaration["unit"],
-                "source": self.sources[slot.handle],
+                "source": self._source_map()[slot.handle],
                 "value": value_data(
-                    self.values[slot.handle],
+                    self._value_map()[slot.handle],
                     dtype=dtype_object(slot.dtype),
                     unit=declaration["unit"],
                     where="resolved binding %s" % slot.qid,

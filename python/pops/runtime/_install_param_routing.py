@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 
 def _require_schema(schema: Any) -> Any:
@@ -146,7 +146,7 @@ def route_program_params(
                 "compiled Program parameter vector for block index %d has an ABI hole"
                 % block_index
             )
-        result[block_index] = [float(value) for value in vector]
+        result[block_index] = [float(cast(float, value)) for value in vector]
     return result
 
 

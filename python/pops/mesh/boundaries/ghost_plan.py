@@ -257,9 +257,14 @@ def _authenticate_cases(
                 _require_topology_case(
                     constraint.datum, topology, where="CornerConstraint.datum")
     for contribution in residuals + linearizations:
+        operation = (
+            contribution.residual
+            if isinstance(contribution, BoundaryResidualContribution)
+            else contribution.linearization
+        )
         for handle in (
                 contribution.handle, contribution.producer,
-                getattr(contribution, "residual", None) or contribution.linearization):
+                operation):
             _require_topology_case(handle, topology, where="boundary contribution")
 
 

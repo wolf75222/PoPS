@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypeVar
 
 from pops._ir.literals import scalar_data
 
@@ -108,7 +108,11 @@ class StepStrategy:
                 "%s does not accept runtime control(s): %s"
                 % (self.kind, ", ".join(sorted(values))))
 
-def register_step_strategy_type(cls: type[StepStrategy]) -> type[StepStrategy]:
+
+_StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
+
+
+def register_step_strategy_type(cls: type[_StepStrategyT]) -> type[_StepStrategyT]:
     """Register one immutable strategy provider, rejecting kind collisions deterministically."""
     if not isinstance(cls, type) or not issubclass(cls, StepStrategy) or cls is StepStrategy:
         raise TypeError("registered step strategy must subclass StepStrategy")

@@ -1,8 +1,9 @@
 """Detached operator/type introspection retained by a compiled artifact."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops.model.manifest_data import freeze_json, thaw_json
 
@@ -13,7 +14,7 @@ class CompiledModuleView:
     __slots__ = ("state_spaces", "field_spaces", "_operators")
 
     def __init__(self, model: Any, manifest: Any = None) -> None:
-        registry = None
+        registry: Any = None
         registry_of = getattr(model, "operator_registry", None)
         if callable(registry_of):
             registry = registry_of()
@@ -21,7 +22,7 @@ class CompiledModuleView:
         if manifest is not None:
             state_spaces = tuple(manifest.state_spaces)
             field_spaces = tuple(manifest.field_spaces)
-            entries = tuple(manifest.operators)
+            entries: tuple[Any, ...] = tuple(manifest.operators)
         elif registry is not None:
             state_spaces = _space_names(model, "list_state_spaces")
             field_spaces = _space_names(model, "list_field_spaces")
@@ -88,5 +89,4 @@ class CompiledModuleView:
 
 def _space_names(model: Any, method_name: str) -> tuple[str, ...]:
     method = getattr(model, method_name, None)
-    return tuple(method() or ()) if callable(method) else ()
-
+    return tuple(cast(Iterable[str], method()) or ()) if callable(method) else ()

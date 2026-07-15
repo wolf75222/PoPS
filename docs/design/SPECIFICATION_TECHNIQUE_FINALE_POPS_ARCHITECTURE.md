@@ -474,17 +474,22 @@ exactes, pas une normalisation vers un layout représentatif.
 
 ### 6.2 Autorité AMR
 
-Un layout AMR agrège cinq facettes scientifiques et deux providers d'exécution :
+Un layout AMR agrège six autorités d'authoring : cinq facettes scientifiques, une autorité de
+disposition des patches et deux providers d'exécution :
 
 - `AMRHierarchy` : niveaux et ratios par transition ;
 - `AMRTagging` : graphe de prédicats, décisions, hystérésis et conflits ;
 - `AMRRegrid` : cadence et règle de reconstruction ;
 - `AMRTransfer` : politique par espace/état ;
 - `AMRExecution` : relation temporelle entre niveaux ;
+- `PatchLayout` : distribution du niveau grossier et, seulement lorsqu'elle est imposée, taille
+  maximale de ses patches ;
 - un provider `Tagger` qui matérialise le graphe de tagging ;
 - un provider `Clustering` qui transforme les tags en boîtes parentes.
 
 ```python
+from pops.amr import PatchLayout
+
 layout = AMR(
     grid=grid,
     hierarchy=AMRHierarchy(max_levels=..., ratios=(...)),
@@ -497,8 +502,16 @@ layout = AMR(
         AMRClockRelation(0, 1, temporal_ratio=2),
         AMRClockRelation(1, 2, temporal_ratio=2),
     )),
+    patch_layout=PatchLayout(distribute_coarse=True),
 )
 ```
+
+`PatchLayout` est une autorité de configuration, pas un troisième provider de clustering. Le choix
+`distribute_coarse` est explicite et participe à l'identité résolue. `coarse_max_grid=None`, sa valeur
+par défaut, demande au provider natif sélectionné de dériver la taille des patches grossiers. Aucun
+entier sentinelle n'appartient au contrat public ; une éventuelle représentation sentinelle reste un
+détail de lowering privé. Une taille positive n'est écrite dans `coarse_max_grid` que lorsque
+l'utilisateur veut réellement contraindre ce choix.
 
 Les builtins de `pops.lib.amr` et les composants externes implémentent le même petit protocole de
 provider. Un composant externe est sélectionné sans callback Python :

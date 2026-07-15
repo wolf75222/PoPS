@@ -112,7 +112,8 @@
         "POPS_USE_MPI": "ON",
         "POPS_USE_KOKKOS": "ON",
         "Kokkos_ROOT": "$env{KOKKOS_PREFIX}",
-        "POPS_TESTS_FAST_O0": "ON"
+        "POPS_TESTS_FAST_O0": "ON",
+        "POPS_HEAVY_TEST_TU_POOL": "2"
       },
       "description": "MPI distribue + Kokkos Serial on-node (PoPS est Kokkos-only). Kokkos pointe par $KOKKOS_PREFIX, comme ci-kokkos.",
       "condition": {
@@ -136,7 +137,8 @@
         "POPS_BUILD_TESTS": "ON",
         "POPS_USE_KOKKOS": "ON",
         "Kokkos_ROOT": "$env{KOKKOS_PREFIX}",
-        "POPS_TESTS_FAST_O0": "ON"
+        "POPS_TESTS_FAST_O0": "ON",
+        "POPS_HEAVY_TEST_TU_POOL": "2"
       }
     },
     {

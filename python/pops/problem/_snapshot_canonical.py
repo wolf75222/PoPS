@@ -424,9 +424,10 @@ def _call_projection(
     try:
         result = fn()
     except Exception as exc:
-        if hasattr(exc, "add_note"):
-            exc.add_note("while AuthoringSnapshot called %s.%s() at %s" %
-                         (_qualified_type(value), name, path))
+        add_note = getattr(exc, "add_note", None)
+        if callable(add_note):
+            add_note("while AuthoringSnapshot called %s.%s() at %s" %
+                     (_qualified_type(value), name, path))
         raise
     # Keep the projected object alive with its result.  Snapshot payload builders may create
     # short-lived canonical Handle copies; caching by a bare id lets CPython reuse that id for the

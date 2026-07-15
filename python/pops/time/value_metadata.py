@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from fractions import Fraction
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops._ir.literals import (
     ScalarLiteral,
@@ -92,7 +92,9 @@ def _exact_divide(numerator: Any, denominator: Any) -> Any:
     if isinstance(numerator, (int, Fraction)) and isinstance(denominator, (int, Fraction)):
         return Fraction(numerator) / Fraction(denominator)
     if isinstance(numerator, Decimal) or isinstance(denominator, Decimal):
-        result = exact_decimal_divide(numerator, denominator)
+        result = exact_decimal_divide(
+            cast(Decimal | int, numerator), cast(Decimal | int, denominator)
+        )
         if result is None:
             raise CoefficientLiteralError(
                 "an exact Decimal quotient must terminate; use Fraction for a repeating ratio")

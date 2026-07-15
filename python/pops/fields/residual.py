@@ -345,7 +345,13 @@ class FieldResidualContract:
             raise ValueError("field residual contract contains foreign Case handles: %s" % foreign)
         from pops.model import OwnerKind
 
-        point_case = next((node for node in expected.point.clock.owner.nodes
+        point_clock = expected.point.clock
+        if point_clock is None:
+            raise ValueError("field residual TimePoint must carry its owning clock")
+        point_owner = point_clock.owner
+        if point_owner is None:
+            raise ValueError("field residual TimePoint clock must carry its owner")
+        point_case = next((node for node in point_owner.nodes
                            if node.kind is OwnerKind.CASE), None)
         if point_case is not None and point_case != self.topology.owner.nodes[0]:
             raise ValueError("field residual TimePoint belongs to a foreign Case")

@@ -6,11 +6,12 @@ an explicit :class:`CapabilityProof`; ``CapabilityProof.unknown()`` means absenc
 """
 from __future__ import annotations
 
+import importlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal, overload
 
 from pops.identity import Identity, make_identity
 from pops._platform_manifest_io import (
@@ -267,7 +268,7 @@ class ExecutionContext:
                 "ExecutionContext.mpi_world requires the exact artifact returned by pops.compile"
             )
         try:
-            from mpi4py import MPI
+            MPI = importlib.import_module("mpi4py.MPI")
         except ImportError as exc:
             raise RuntimeError(
                 "ExecutionContext.mpi_world requires mpi4py and an MPI-enabled PoPS module"
@@ -462,6 +463,21 @@ def launch_checked(platform: PlatformManifest, context: ExecutionContext,
         raise TypeError("kernel must be callable")
     validate_launch(platform, context, fields, expected_fields)
     return kernel(context, tuple(fields))
+
+
+@overload
+def proven_serial_manifest(*, backend: str, target: str, abi: str,
+                           runtime: Literal[False] = False) -> PlatformManifest: ...
+
+
+@overload
+def proven_serial_manifest(*, backend: str, target: str, abi: str,
+                           runtime: Literal[True]) -> RuntimeBackendManifest: ...
+
+
+@overload
+def proven_serial_manifest(*, backend: str, target: str, abi: str,
+                           runtime: bool) -> PlatformManifest | RuntimeBackendManifest: ...
 
 
 def proven_serial_manifest(*, backend: str, target: str, abi: str,

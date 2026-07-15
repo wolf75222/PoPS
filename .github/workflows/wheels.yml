@@ -83,7 +83,7 @@ jobs:
       # cibuildwheel builds cp312-macosx_arm64 in an isolated env. CIBW_BEFORE_ALL runs ONCE on the
       # runner (macOS builds are native, not containerized), installing a Serial+static+PIC Kokkos that
       # find_package(Kokkos) then links INTO _pops -> the wheel carries no external Kokkos dylib.
-      # POPS_HEAVY_TU_POOL=2: post-split (ADC-335/342/359) the heavy module TUs are SMALL sub-TUs, so two
+      # POPS_HEAVY_MODULE_TU_POOL=2: post-split (ADC-335/342/359) the heavy module TUs are SMALL sub-TUs, so two
       # -O3 compiles fit the ~7 GB / 3-vCPU runner; the original pool=1 OOM guard (for the old monolithic
       # system.cpp / amr_system.cpp) made the serial build ~1 h here. MACOSX_DEPLOYMENT_TARGET=11.0 keeps
       # the wheel installable on older macOS than the runner SDK.
@@ -91,7 +91,7 @@ jobs:
         env:
           CIBW_BUILD: cp312-macosx_arm64
           CIBW_ARCHS_MACOS: arm64
-          CIBW_CONFIG_SETTINGS: cmake.define.POPS_HEAVY_TU_POOL=2
+          CIBW_CONFIG_SETTINGS: cmake.define.POPS_HEAVY_MODULE_TU_POOL=2
           MACOSX_DEPLOYMENT_TARGET: '11.0'
           # Builds Kokkos ONLY on a cache miss (the install dir is restored above otherwise). The clone
           # is retried (a transient network blip must not waste a multi-hour build) and its checkout is

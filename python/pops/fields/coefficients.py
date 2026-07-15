@@ -10,7 +10,10 @@ Inert descriptors; they compute nothing.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.model import Handle
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
@@ -24,6 +27,7 @@ class _ImmutableCoefficient(Descriptor):
     __pops_ir_immutable__ = True
     category = "coefficient"
     _role = ""
+    _field: Handle
 
     def __init__(self, field: Any) -> None:
         from pops.model import Handle

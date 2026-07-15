@@ -118,7 +118,7 @@ class _ImmutableSymbolicMeta(type):
         # Mirror ``type.__call__`` closely enough for extension nodes that define a
         # parameterized ``__new__``.  Calling every ``__new__`` with no arguments made
         # otherwise-valid third-party Expr subclasses impossible to construct.
-        constructor = cls.__new__
+        constructor: Any = cls.__new__
         instance = (constructor(cls) if constructor is object.__new__
                     else constructor(cls, *args, **kwargs))
         if not isinstance(instance, cls):
@@ -138,6 +138,7 @@ class ImmutableSymbolic(metaclass=_ImmutableSymbolicMeta):
 
     __slots__ = ("_pops_symbolic_initializing",)
     __pops_ir_immutable__ = True
+    __hash__: Any
     __hash__ = None
 
     def __setattr__(self, name: str, value: Any) -> None:

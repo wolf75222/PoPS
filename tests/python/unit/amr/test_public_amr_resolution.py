@@ -23,28 +23,37 @@ def _example():
     return module
 
 
-def _resolved_target(*, hysteresis=None, conflict_policy=None):
+def _resolved_target(*, hysteresis=None, conflict_policy=None, patch_layout=None):
     from pops.amr._resolution import AMRResolutionContext
     from pops.mesh import normalize_layout_plan
 
     target = _example().build_final_case()
     authored_layout = target.layout
-    if hysteresis is not None or conflict_policy is not None:
+    if hysteresis is not None or conflict_policy is not None or patch_layout is not None:
         if hysteresis is None or conflict_policy is None:
-            raise ValueError("custom tagging requires both hysteresis and conflict_policy")
-        from pops.amr import AMRTagging
+            if hysteresis is not None or conflict_policy is not None:
+                raise ValueError("custom tagging requires both hysteresis and conflict_policy")
+            tagging = authored_layout.tagging
+        else:
+            from pops.amr import AMRTagging
 
-        authored_layout = type(authored_layout)(
-            grid=authored_layout.grid,
-            hierarchy=authored_layout.hierarchy,
-            tagging=AMRTagging(
+            tagging = AMRTagging(
                 rules=authored_layout.tagging.rules,
                 hysteresis=hysteresis,
                 conflict_policy=conflict_policy,
-            ),
+            )
+        authored_layout = type(authored_layout)(
+            grid=authored_layout.grid,
+            hierarchy=authored_layout.hierarchy,
+            tagging=tagging,
             regrid=authored_layout.regrid,
             transfer=authored_layout.transfer,
             execution=authored_layout.execution,
+            patch_layout=(
+                authored_layout.patch_layout if patch_layout is None else patch_layout
+            ),
+            tagger=authored_layout.tagger,
+            clustering=authored_layout.clustering,
         )
     case = pops.validate(target.authoring.case)
     layout = authored_layout.resolve_for_case(case.resolve)
@@ -69,6 +78,135 @@ def _resolved_target(*, hysteresis=None, conflict_policy=None):
         resolve=lambda value: value if value.is_resolved else case.resolve(value),
     )
     return target, layout, layout_plan, layout.resolve_amr_authorities(context)
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", None, object()])
+def test_patch_layout_requires_an_exact_bool(value):
+    from pops.amr import PatchLayout
+
+    with pytest.raises(TypeError, match="exact bool"):
+        PatchLayout(distribute_coarse=value)
+
+
+@pytest.mark.parametrize("value", [True, False, 1.0, "8", object()])
+def test_patch_layout_rejects_non_exact_integer_tile_sizes(value):
+    from pops.amr import PatchLayout
+
+    with pytest.raises(TypeError, match="exact non-bool integer"):
+        PatchLayout(coarse_max_grid=value)
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_patch_layout_requires_a_positive_explicit_tile_size(value):
+    from pops.amr import PatchLayout
+
+    with pytest.raises(ValueError, match="positive"):
+        PatchLayout(coarse_max_grid=value)
+
+
+def test_public_patch_layout_roundtrips_through_resolution_and_native_lowering(monkeypatch):
+    from pops.amr import PatchLayout
+    from pops.runtime._amr_bind_lowering import amr_config_from_layout
+
+    class NativeConfigProbe:
+        pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pops._bootstrap",
+        SimpleNamespace(AmrSystemConfig=NativeConfigProbe),
+    )
+
+    authored = PatchLayout(distribute_coarse=True, coarse_max_grid=7)
+    _, layout, _, authorities = _resolved_target(patch_layout=authored)
+    public_data = {
+        "schema_version": 1,
+        "authority_type": "amr_patch_layout",
+        "distribute_coarse": True,
+        "coarse_max_grid": 7,
+    }
+    assert authored.to_data() == public_data
+    assert layout.patch_layout is authored
+    assert layout.options()["patch_layout"] == public_data
+    assert layout.semantic_data()["patch_layout"] == public_data
+    assert layout.inspect()["options"]["patch_layout"] == public_data
+    assert authorities.hierarchy.plan.patch_generation.options.to_data() == {
+        "native_route": "box_array",
+        "distribute_coarse": True,
+        "coarse_max_grid": 7,
+    }
+    config = amr_config_from_layout(layout, hierarchy=authorities.hierarchy)
+    assert config.distribute_coarse is True
+    assert config.coarse_max_grid == 7
+
+    _, automatic_layout, _, automatic = _resolved_target(
+        patch_layout=PatchLayout(distribute_coarse=True)
+    )
+    automatic_config = amr_config_from_layout(
+        automatic_layout, hierarchy=automatic.hierarchy
+    )
+    assert automatic_config.distribute_coarse is True
+    assert automatic_config.coarse_max_grid == 0
+    assert automatic.hierarchy.identity != authorities.hierarchy.identity
+    assert automatic.bootstrap.hierarchy_identity == automatic.hierarchy.identity
+
+
+def test_patch_layout_protocol_refuses_noncanonical_options():
+    class ExtraOption:
+        def to_data(self):
+            return {
+                "schema_version": 1,
+                "authority_type": "amr_patch_layout",
+                "distribute_coarse": False,
+                "coarse_max_grid": None,
+                "implicit_fallback": True,
+            }
+
+    target = _example().build_final_case()
+    authored = target.layout
+    invalid = type(authored)(
+        grid=authored.grid,
+        hierarchy=authored.hierarchy,
+        tagging=authored.tagging,
+        regrid=authored.regrid,
+        transfer=authored.transfer,
+        execution=authored.execution,
+        patch_layout=ExtraOption(),
+        tagger=authored.tagger,
+        clustering=authored.clustering,
+    )
+    with pytest.raises(TypeError, match="exact amr_patch_layout schema-v1"):
+        invalid.options()
+
+
+def test_patch_layout_protocol_refuses_unstable_options():
+    class UnstableOption:
+        calls = 0
+
+        def to_data(self):
+            self.calls += 1
+            return {
+                "schema_version": 1,
+                "authority_type": "amr_patch_layout",
+                "distribute_coarse": bool(self.calls % 2),
+                "coarse_max_grid": None,
+            }
+
+    target = _example().build_final_case()
+    authored = target.layout
+    invalid = type(authored)(
+        grid=authored.grid,
+        hierarchy=authored.hierarchy,
+        tagging=authored.tagging,
+        regrid=authored.regrid,
+        transfer=authored.transfer,
+        execution=authored.execution,
+        patch_layout=UnstableOption(),
+        tagger=authored.tagger,
+        clustering=authored.clustering,
+    )
+    with pytest.raises(TypeError, match="must be deterministic"):
+        invalid.options()
 
 
 def test_final_amr_authorities_derive_discrete_context_and_nesting():

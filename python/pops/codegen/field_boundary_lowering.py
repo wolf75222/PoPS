@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from pops.codegen.lowering_coverage import (
     LoweringCoverageReport,
@@ -18,7 +18,7 @@ from pops.fields.bcs import (
     Neumann,
     Periodic,
 )
-from pops.fields.discretization import FieldDiscretization
+from pops.fields.discretization import FieldDiscretizationProtocol
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,7 +129,9 @@ def _mesh_periodic(mesh: Any) -> bool:
     raise TypeError("field topology requires an exact mesh periodicity contract")
 
 
-def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: str) -> None:
+def _reject(
+    rows: list[LoweringCoverageRow], source: str, gate: str, message: str,
+) -> NoReturn:
     report = LoweringCoverageReport((*rows, LoweringCoverageRow(
         source, "rejected", gate=gate)))
     raise LoweringRejection(
@@ -150,7 +152,8 @@ def _native_scalar(value: Any, *, name: str, source: str,
         from pops.fields._references import collect_references
         references = collect_references(value)
         unsupported = [reference for reference in references
-                       if reference.kind not in {"parameter", "state", "field"} and
+                       if getattr(reference, "kind", None)
+                       not in {"parameter", "state", "field"} and
                        reference.canonical_identity() != unknown.canonical_identity()]
         if unsupported:
             _reject(rows, source, "field.boundary.prepared_dependency_not_native",
@@ -166,7 +169,8 @@ def _native_scalar(value: Any, *, name: str, source: str,
             if isinstance(node, (Const, RuntimeParamRef, BoundaryValue, LogicalTimeValue)):
                 return
             if isinstance(node, ValueExpr):
-                if node.handle.kind in {"state", "field"} and node.handle != unknown:
+                if getattr(node.handle, "kind", None) in {"state", "field"} \
+                        and node.handle != unknown:
                     _reject(rows, source, "field.boundary.ambiguous_value_handle",
                             "%s reads %s without an explicit component/sample contract; use "
                             "pops.fields.boundary_value(handle, component)"
@@ -249,7 +253,7 @@ def _condition_record(condition: Any, *, source: str,
 
 def boundary_plan(
     name: str,
-    plan: FieldDiscretization,
+    plan: FieldDiscretizationProtocol,
     rows: list[LoweringCoverageRow],
     layout: Any,
     unknown: Any,
@@ -294,13 +298,17 @@ def boundary_plan(
     if any(face is None for face in faces):
         _reject(rows, "field:%s:boundaries" % name, "field.boundary.incomplete",
                 "field %r boundary plan does not cover all 2-D physical faces" % name)
+    complete_faces = tuple(face for face in faces if face is not None)
+    if len(complete_faces) != 4:
+        raise RuntimeError("validated field boundary plan lost a physical face")
     for lo, hi, axis in ((0, 1, "x"), (2, 3, "y")):
-        if (faces[lo]["type"] == "periodic") != (faces[hi]["type"] == "periodic"):
+        if (complete_faces[lo]["type"] == "periodic") != (
+                complete_faces[hi]["type"] == "periodic"):
             _reject(rows, "field:%s:boundaries" % name,
                     "field.boundary.periodic_pair_incomplete",
                     "field %r marks only one %s face periodic; periodic topology is paired"
                     % (name, axis))
-    return "explicit", tuple(face for face in faces if face is not None)
+    return "explicit", complete_faces
 
 
 def topology_recipe(layout: Any) -> dict[str, Any]:
@@ -345,7 +353,9 @@ def topology_recipe(layout: Any) -> dict[str, Any]:
     }
 
 
-def boundary_dependency_pack(plan: FieldDiscretization, unknown: Any) -> dict[str, Any]:
+def boundary_dependency_pack(
+    plan: FieldDiscretizationProtocol, unknown: Any,
+) -> dict[str, Any]:
     """Canonical direct-buffer pack required by all dynamic physical-face laws."""
     from pops.fields.boundary_values import BoundaryValue, LogicalTimeValue
     from pops._ir.expr import Expr

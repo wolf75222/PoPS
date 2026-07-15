@@ -36,6 +36,8 @@ class ModuleFreezable:
     """
 
     _frozen = False
+    _registry: Any
+    name: str
 
     @property
     def frozen(self) -> bool:

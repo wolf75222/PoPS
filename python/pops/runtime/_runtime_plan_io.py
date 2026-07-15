@@ -7,7 +7,7 @@ shape, reconstructs every nested value, and authenticates every supplied identit
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NoReturn
 
 from pops._frozen_data import freeze_data, thaw_data
 from pops.identity import Identity, make_identity
@@ -60,7 +60,9 @@ class RuntimePlanningError(ValueError):
                 "evidence": thaw_data(self.evidence)}
 
 
-def refuse(code: str, path: str, message: str, *, evidence: Any = None) -> None:
+def refuse(
+    code: str, path: str, message: str, *, evidence: Any = None,
+) -> NoReturn:
     raise RuntimePlanningError(code, path, message, evidence=evidence)
 
 
@@ -73,6 +75,9 @@ class DataContract:
 
     def to_data(self) -> dict[str, Any]:
         return {**self._payload(), "identity": self.identity.to_data()}
+
+    def _payload(self) -> Mapping[str, Any]:
+        raise NotImplementedError("runtime data contracts must define _payload()")
 
     @classmethod
     def from_data(cls, data: Any) -> Any:
@@ -295,17 +300,29 @@ def decode_runtime_value(cls: type[Any], data: Any) -> Any:
             {
                 "mapping_id",
                 "provider_id",
+                "component_id",
                 "source_layout_id",
                 "target_layout_id",
-                "channel",
+                "source_subject_id",
+                "target_subject_id",
+                "source_representation_uri",
+                "target_representation_uri",
+                "operation_abi",
+                "synchronization_uri",
                 "identity",
             },
             lambda r: LayoutTransfer(
                 r["mapping_id"],
                 r["provider_id"],
+                r["component_id"],
                 r["source_layout_id"],
                 r["target_layout_id"],
-                r["channel"],
+                r["source_subject_id"],
+                r["target_subject_id"],
+                r["source_representation_uri"],
+                r["target_representation_uri"],
+                r["operation_abi"],
+                r["synchronization_uri"],
             ),
         ),
         Collective: (

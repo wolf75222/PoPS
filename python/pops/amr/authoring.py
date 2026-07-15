@@ -42,6 +42,41 @@ def _expression_data(value: Expr) -> dict[str, Any]:
 
 
 @dataclass(frozen=True, slots=True)
+class PatchLayout:
+    """Public authority for the coarse-level patch distribution.
+
+    ``coarse_max_grid=None`` delegates the tile-size choice to the selected native patch
+    provider. The public value deliberately never exposes the provider's integer sentinel.
+    """
+
+    distribute_coarse: bool = False
+    coarse_max_grid: int | None = None
+    __pops_ir_immutable__ = True
+
+    def __post_init__(self) -> None:
+        if type(self.distribute_coarse) is not bool:
+            raise TypeError("PatchLayout.distribute_coarse must be an exact bool")
+        if self.coarse_max_grid is not None:
+            if type(self.coarse_max_grid) is not int:
+                raise TypeError(
+                    "PatchLayout.coarse_max_grid must be None or an exact non-bool integer"
+                )
+            if self.coarse_max_grid < 1:
+                raise ValueError("PatchLayout.coarse_max_grid must be positive when provided")
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "authority_type": "amr_patch_layout",
+            "distribute_coarse": self.distribute_coarse,
+            "coarse_max_grid": self.coarse_max_grid,
+        }
+
+    inspect = to_data
+    canonical_identity = to_data
+
+
+@dataclass(frozen=True, slots=True)
 class AMRHierarchy:
     """Explicit level topology; one ratio is declared per coarse/fine transition."""
 
@@ -313,5 +348,6 @@ __all__ = [
     "AMRRemainderPolicy",
     "Buffer",
     "Coarsen",
+    "PatchLayout",
     "Tag",
 ]

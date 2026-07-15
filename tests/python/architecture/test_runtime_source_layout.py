@@ -7,6 +7,7 @@ implementation files a second time.
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 
@@ -18,6 +19,7 @@ ROOT_CMAKE = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
 SRC_CMAKE = (ROOT / "src" / "CMakeLists.txt").read_text(encoding="utf-8")
 PYTHON_CMAKE = (ROOT / "python" / "CMakeLists.txt").read_text(encoding="utf-8")
 TESTS_CMAKE = (ROOT / "tests" / "CMakeLists.txt").read_text(encoding="utf-8")
+PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
 
 
 def _rel(path: pathlib.Path) -> str:
@@ -97,8 +99,8 @@ def test_python_and_tests_consume_the_central_targets():
 
 def test_central_targets_preserve_consumer_specific_compile_contracts():
     required = (
-        "pops_heavy_tu=${POPS_HEAVY_TU_POOL}",
-        "JOB_POOL_COMPILE pops_heavy_tu",
+        "pops_heavy_test_tu=${POPS_HEAVY_TEST_TU_POOL}",
+        "JOB_POOL_COMPILE pops_heavy_test_tu",
         "JOB_POOL_COMPILE pops_heavy_module_tu",
         "POSITION_INDEPENDENT_CODE ON",
         "CXX_VISIBILITY_PRESET hidden",
@@ -111,3 +113,17 @@ def test_central_targets_preserve_consumer_specific_compile_contracts():
     )
     missing = [fact for fact in required if fact not in SRC_CMAKE]
     assert not missing, "central runtime targets lost compile-contract facts: " + str(missing)
+    assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_test_tu") == 1
+    assert SRC_CMAKE.count("JOB_POOL_COMPILE pops_heavy_module_tu") == 1
+    assert "elseif(POPS_BUILD_PYTHON)" in SRC_CMAKE
+
+    assert "pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL}" in ROOT_CMAKE
+    assert "POPS_HEAVY_MODULE_TU_POOL" not in SRC_CMAKE
+    assert re.search(r"set\(POPS_HEAVY_MODULE_TU_POOL\s+1\s+CACHE STRING", ROOT_CMAKE)
+    assert re.search(r"set\(POPS_HEAVY_TEST_TU_POOL\s+1\s+CACHE STRING", ROOT_CMAKE)
+    assert "POPS_HEAVY_TU_POOL" not in ROOT_CMAKE + SRC_CMAKE
+
+    configure_presets = {preset["name"]: preset for preset in PRESETS["configurePresets"]}
+    for name in ("ci-kokkos", "ci-mpi"):
+        assert configure_presets[name]["cacheVariables"]["POPS_HEAVY_TEST_TU_POOL"] == "2"
+        assert "POPS_HEAVY_MODULE_TU_POOL" not in configure_presets[name]["cacheVariables"]

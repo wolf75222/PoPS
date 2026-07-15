@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import importlib
+from collections.abc import Mapping
 from typing import Any
 
 from pops._capabilities_common import (
@@ -61,7 +62,10 @@ def _module_capabilities(target: str = "module") -> Any:
         raise NativeCapabilityReportError(
             "loaded _pops extension does not expose callable module_capabilities()")
     try:
-        return dict(fn(target))
+        payload = fn(target)
+        if not isinstance(payload, Mapping):
+            raise TypeError("module_capabilities() must return a mapping")
+        return dict(payload)
     except Exception as exc:
         raise NativeCapabilityReportError(
             "_pops.module_capabilities(%r) failed or returned a malformed mapping" % target
@@ -78,7 +82,10 @@ def _native_capability_report_from_extension(target: str = "module") -> Any:
         raise NativeCapabilityReportError(
             "loaded _pops extension does not expose callable capability_report()")
     try:
-        return NativeCapabilityReport.from_dict(dict(fn(target)))
+        payload = fn(target)
+        if not isinstance(payload, Mapping):
+            raise TypeError("capability_report() must return a mapping")
+        return NativeCapabilityReport.from_dict(dict(payload))
     except Exception as exc:
         raise NativeCapabilityReportError(
             "_pops.capability_report(%r) failed or returned a malformed mapping" % target

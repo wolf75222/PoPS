@@ -156,7 +156,10 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         "y": bool(eigenvalues and eigenvalues.get("y")),
     }
     capabilities_provider = getattr(module, "capabilities", None)
-    capabilities = dict(capabilities_provider() if callable(capabilities_provider) else {})
+    raw_capabilities = capabilities_provider() if callable(capabilities_provider) else {}
+    if not isinstance(raw_capabilities, Mapping):
+        raise TypeError("Module capabilities() must return a mapping")
+    capabilities = dict(raw_capabilities)
     routes = _native_routes()
     catalog = _native_catalog()
     provider_pack = build_provider_pack(module).to_data()

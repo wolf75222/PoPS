@@ -78,7 +78,10 @@ def _native_memory_context() -> _MemoryRuntimeContext:
             "estimate_memory requires callable _pops.runtime_environment_report()",
             field="runtime_environment_report")
     try:
-        report = dict(fn())
+        raw_report = fn()
+        if not isinstance(raw_report, Mapping):
+            raise TypeError("runtime environment report is not a mapping")
+        report = dict(raw_report)
     except Exception as exc:
         raise MemoryEstimateCapabilityError(
             "_pops.runtime_environment_report() failed or returned a malformed mapping",

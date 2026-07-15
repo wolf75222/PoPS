@@ -5,7 +5,7 @@ import bisect
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from pops._bootstrap import StepAttemptRejected
 from pops.time._step.strategy import (
@@ -18,7 +18,10 @@ from pops.time._step.strategy import (
 from pops.time._step.transaction import StepTransactionReport
 
 
-ControllerFactory = Callable[[StepStrategy, Mapping[str, Any] | None], "StepController"]
+_StepStrategyT = TypeVar("_StepStrategyT", bound=StepStrategy)
+ControllerFactory = Callable[
+    [StepStrategy, Mapping[str, Any] | None], "StepController[Any]"
+]
 _CONTROLLER_FACTORIES: dict[type[StepStrategy], ControllerFactory] = {}
 
 
@@ -52,7 +55,7 @@ def _phase(error: BaseException) -> str:
     value = getattr(error, "phase", None)
     if callable(value):
         value = value()
-    if value in {
+    if isinstance(value, str) and value in {
         "prepare", "stage", "solve", "synchronize", "guard", "effect", "commit",
     }:
         return value
@@ -105,10 +108,12 @@ def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
     return result
 
 
-class StepController(ABC):
+class StepController(ABC, Generic[_StepStrategyT]):
     """Small runtime protocol; implementations choose dt, native executors advance fields."""
 
-    def __init__(self, strategy: StepStrategy, controls: Mapping[str, Any] | None = None) -> None:
+    def __init__(
+        self, strategy: _StepStrategyT, controls: Mapping[str, Any] | None = None,
+    ) -> None:
         self.strategy = strategy
         self.controls = _control_identity(controls)
         self.attempts = 0
@@ -125,7 +130,7 @@ class StepController(ABC):
         """Execute until one macro-step is accepted and return the number of native attempts."""
 
 
-class FixedDtController(StepController):
+class FixedDtController(StepController[FixedDt]):
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         self.attempts = 1
         dt = min(self.strategy.dt, t_end - float(native.time()))
@@ -135,7 +140,7 @@ class FixedDtController(StepController):
         return 1
 
 
-class AdaptiveCFLController(StepController):
+class AdaptiveCFLController(StepController[AdaptiveCFL]):
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         self.attempts = 1
         remaining = t_end - float(native.time())
@@ -154,8 +159,8 @@ class AdaptiveCFLController(StepController):
         return 1
 
 
-class ErrorControlledDtController(StepController):
-    def __init__(self, strategy: StepStrategy) -> None:
+class ErrorControlledDtController(StepController[ErrorControlledDt]):
+    def __init__(self, strategy: ErrorControlledDt) -> None:
         super().__init__(strategy)
         self.next_dt = strategy.dt_init
 
@@ -167,7 +172,9 @@ class ErrorControlledDtController(StepController):
             raise RuntimeError(
                 "ErrorControlledDt restart lacks the accepted dt needed for the next proposal")
         self.next_dt = min(
-            self.strategy.dt_max, float.fromhex(last_hex) * self.strategy.growth)
+            self.strategy.dt_max,
+            float.fromhex(last_hex) * self.strategy.growth,
+        )
 
     def execute(self, engine: Any, native: Any, *, t_end: float) -> int:
         attempts = 0
@@ -186,12 +193,13 @@ class ErrorControlledDtController(StepController):
                     raise
                 proposal = reduced
                 continue
-            self.next_dt = min(self.strategy.dt_max, proposal * self.strategy.growth)
+            self.next_dt = min(
+                self.strategy.dt_max, proposal * self.strategy.growth)
             return attempts
 
 
-class ExternalTimeGridController(StepController):
-    def __init__(self, strategy: StepStrategy, grid: tuple[float, ...]) -> None:
+class ExternalTimeGridController(StepController[ExternalTimeGrid]):
+    def __init__(self, strategy: ExternalTimeGrid, grid: tuple[float, ...]) -> None:
         super().__init__(strategy, {strategy.grid_id: grid})
         self.grid = grid
 
@@ -221,38 +229,46 @@ class ExternalTimeGridController(StepController):
 @register_step_controller_factory(FixedDt)
 def _fixed_dt_controller(
     strategy: StepStrategy, controls: Mapping[str, Any] | None,
-) -> StepController:
+) -> StepController[Any]:
     del controls
+    if type(strategy) is not FixedDt:
+        raise TypeError("FixedDt controller factory received another strategy type")
     return FixedDtController(strategy)
 
 
 @register_step_controller_factory(AdaptiveCFL)
 def _adaptive_cfl_controller(
     strategy: StepStrategy, controls: Mapping[str, Any] | None,
-) -> StepController:
+) -> StepController[Any]:
+    if type(strategy) is not AdaptiveCFL:
+        raise TypeError("AdaptiveCFL controller factory received another strategy type")
     return AdaptiveCFLController(strategy, controls)
 
 
 @register_step_controller_factory(ErrorControlledDt)
 def _error_controlled_dt_controller(
     strategy: StepStrategy, controls: Mapping[str, Any] | None,
-) -> StepController:
+) -> StepController[Any]:
     del controls
+    if type(strategy) is not ErrorControlledDt:
+        raise TypeError("ErrorControlledDt controller factory received another strategy type")
     return ErrorControlledDtController(strategy)
 
 
 @register_step_controller_factory(ExternalTimeGrid)
 def _external_time_grid_controller(
     strategy: StepStrategy, controls: Mapping[str, Any] | None,
-) -> StepController:
+) -> StepController[Any]:
     values = {} if controls is None else dict(controls)
+    if type(strategy) is not ExternalTimeGrid:
+        raise TypeError("ExternalTimeGrid controller factory received another strategy type")
     return ExternalTimeGridController(
         strategy, tuple(float(value) for value in values[strategy.grid_id]))
 
 
 def materialize_step_controller(
     strategy: StepStrategy, controls: Mapping[str, Any] | None = None,
-) -> StepController:
+) -> StepController[Any]:
     """Materialize a runtime controller through the exact registered adapter only."""
     strategy.validate_runtime_controls(controls)
     factory = _CONTROLLER_FACTORIES.get(type(strategy))
@@ -283,7 +299,9 @@ def resolve_run_strategy(engine: Any) -> StepStrategy:
     return selected
 
 
-def _controller(engine: Any, strategy: StepStrategy, controls: Mapping[str, Any] | None) -> StepController:
+def _controller(
+    engine: Any, strategy: StepStrategy, controls: Mapping[str, Any] | None,
+) -> StepController[Any]:
     strategy.validate_runtime_controls(controls)
     current = getattr(engine, "_step_controller", None)
     if current is None or not current.matches(strategy, controls):
@@ -297,7 +315,7 @@ def prepare_step_controller(
     engine: Any,
     strategy: StepStrategy,
     controls: Mapping[str, Any] | None = None,
-) -> StepController:
+) -> StepController[Any]:
     """Validate the complete execution contract before any attempt or side effect."""
     return _controller(engine, strategy, controls)
 

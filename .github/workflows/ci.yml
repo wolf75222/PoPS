@@ -408,7 +408,8 @@ jobs:
       # POPS_TESTS_FAST_O0=ON : sous Kokkos, l'inlining -O3 des foncteurs device dans les ~242
       # cibles de test rendait le build du gate enorme. Les tests sont des controles de correction
       # sur grilles minuscules -> compiles a -O0 (build rapide ; la lib de production et _pops restent
-      # a -O3) ; le pool Ninja pops_heavy_tu=1 serialise en plus les TU system.cpp et borne la RAM
+      # a -O3) ; le pool Ninja pops_heavy_test_tu=2 borne explicitement les TU runtime/tests -O0 sans
+      # relever la concurrence du pool pops_heavy_module_tu=1 reserve au module de production
       # (cf. tests/CMakeLists.txt). Parallelisme jobs: 4 (runner public = 4 vCPU) dans les presets.
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
@@ -430,6 +431,13 @@ jobs:
           # GTest exposes CTest names such as BrickCatalog.EntryRoundTrips, which do not
           # necessarily start with their build target. Select through the target label installed
           # by pops_add_gtest_suite so every discovered case of every built target runs exactly once.
+          # Inventory CTest once and fail target-by-target before execution: a missing/malformed
+          # target label must never turn this shard into a false-green "No tests were found" run.
+          ctest_inventory="$RUNNER_TEMP/ctest-shard-${{ matrix.shard }}.json"
+          ctest --preset ci-kokkos -N --show-only=json-v1 > "$ctest_inventory"
+          python3 scripts/ci_select_tests.py verify-cpp-target-labels \
+            --ctest-json "$ctest_inventory" \
+            --targets "${cpp_targets[@]}"
           ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
           {
@@ -642,12 +650,12 @@ jobs:
           # bakes into objects to relative, so ccache hits across checkouts/shards. Codegen-neutral (only
           # embedded path strings change; instructions/symbols identical) -> the abi_key (compiler+header
           # content hash) is untouched. CI-only -D, mirroring -DCMAKE_LINKER_TYPE=MOLD (presets stay clean).
-          # POPS_HEAVY_TU_POOL=2 (ADC-621): the heavy module TUs (system.cpp and amr_system.cpp)
+          # POPS_HEAVY_MODULE_TU_POOL=2 (ADC-621): the heavy module TUs (system.cpp and amr_system.cpp)
           # compile ~3-4 GB each at -O3. This Kokkos SERIAL runner can compile two in parallel while
           # retaining memory headroom, which shortens the native-build critical path. wheels.yml uses
           # the same bounded pool.
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
-            -DPOPS_HEAVY_TU_POOL=2 \
+            -DPOPS_HEAVY_MODULE_TU_POOL=2 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           cmake --build --preset ci-kokkos-python
           build_s=$SECONDS
@@ -1141,7 +1149,7 @@ jobs:
             ccache-${{ runner.os }}-mpi-refs/heads/master-
             ccache-${{ runner.os }}-mpi-
 
-      - name: Select manifest-owned MPI targets
+      - name: Select manifest-owned MPI tests
         id: mpi-test-plan
         run: |
           mkdir -p build-mpi
@@ -1149,6 +1157,11 @@ jobs:
             --label mpi \
             --github-output "$GITHUB_OUTPUT" \
             --explain-file build-mpi/mpi-test-plan.json
+          python3 scripts/ci_select_tests.py python-mpi \
+            --plan-file build-mpi/python-mpi-plan.tsv \
+            --github-output "$GITHUB_OUTPUT" \
+            --explain-file build-mpi/python-mpi-plan.json
+          test -s build-mpi/python-mpi-plan.tsv
 
       - name: Configure + build (MPI + Kokkos Serial)
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
@@ -1163,28 +1176,32 @@ jobs:
       - name: Test (bit-identique np=1/2/4)
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
         # OMPI_MCA_* couvre OpenMPI 4.x, PRTE_MCA_* couvre OpenMPI 5.x.
-        # `-L mpi` : ne (re)joue QUE le sous-ensemble distribue. Les tests serie tournent deja dans
-        # gate-cpp (preset ci-kokkos, SANS filtre -L) ; les rejouer ici (build MPI, mono-rang) etait
-        # redondant. Le manifeste est l'autorite exacte pour les suites MPI-only ET les variantes
-        # MPI de quatre executables serie ; la projection doit concorder avec CTest avant execution.
+        # Les filtres sont ancres : CTest traite -L/-LE comme des regex, donc `-L mpi` attrapait
+        # aussi le label `compiler`. La suite Python marquee `mpi` est exclue de ce fence C++ car son
+        # launcher pytest ordinaire n'ouvre aucun monde MPI ; ses vrais entrypoints sont lances sous
+        # mpiexec dans l'etape suivante, depuis le meme manifeste. Les tests serie tournent deja dans
+        # gate-cpp. Le manifeste reste l'autorite exacte du nombre de lancements C++ MPI.
         run: |
-          mpi_n=$(ctest --preset ci-mpi -N -L mpi | awk -F': ' '/Total Tests:/{print $2}')
+          mpi_n=$(ctest --preset ci-mpi -N -L '^mpi$' -LE '^python$' | awk -F': ' '/Total Tests:/{print $2}')
           mpi_expected="${{ steps.mpi-test-plan.outputs.cpp_label_ctest_count }}"
-          echo "Tests MPI selectionnes (-L mpi) : ${mpi_n:-0}/${mpi_expected:-0}"
+          echo "Tests C++ MPI selectionnes : ${mpi_n:-0}/${mpi_expected:-0}"
           if [ "${mpi_n:-0}" != "${mpi_expected:-0}" ]; then
             echo "::error::Projection MPI incoherente : CTest=${mpi_n:-0}, manifeste=${mpi_expected:-0}"
             exit 1
           fi
-          ctest --preset ci-mpi -L mpi
+          ctest --preset ci-mpi -L '^mpi$' -LE '^python$'
 
-      - name: Test native lifecycle + collective HDF5 writer (np=2)
+      - name: Test Python MPI contracts + native lifecycle + collective HDF5 writer
         # Assemble the exact source package around the MPI-enabled extension produced above. The
         # distro interpreter is intentional: apt's Python, mpi4py and h5py-MPI share one ABI.
         env:
-          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
           POPS_INCLUDE: ${{ github.workspace }}/include
           POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
           Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+          # The two script contracts normally self-skip on developer machines without MPI/toolchain.
+          # In this dedicated lane every missing capability is a hard failure, never a green skip.
+          POPS_REQUIRE_MPI_TESTS: "1"
         run: |
           rm -rf build-mpi/python-package
           mkdir -p build-mpi/python-package/pops
@@ -1206,6 +1223,11 @@ jobs:
           print("mpi4py:", MPI.Get_version(), MPI.get_vendor())
           print("pops:", pops.__version__, "mpi_module=", _pops.__has_mpi__)
           PY
+          while IFS=$'\t' read -r mpi_ranks mpi_test; do
+            test -n "$mpi_ranks" && test -f "$mpi_test"
+            echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
+            mpiexec -n "$mpi_ranks" /usr/bin/python3 "$mpi_test"
+          done < build-mpi/python-mpi-plan.tsv
           mpiexec -n 2 /usr/bin/python3 -m pytest -q \
             tests/python/integration/io/test_hdf5_parallel.py
 

@@ -114,6 +114,8 @@ class NonNegative(Constraint):
 
 class Range(Constraint):
     constraint_kind = "range"
+    lo: Any
+    hi: Any
 
     def __init__(self, lo: Any, hi: Any) -> None:
         _literal_data(lo)
@@ -137,6 +139,7 @@ class In(Constraint):
     """Membership in a fixed, serializable set of allowed values."""
 
     constraint_kind = "in"
+    allowed: tuple[Any, ...]
 
     def __init__(self, *allowed: Any) -> None:
         if not allowed:

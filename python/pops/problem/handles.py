@@ -58,6 +58,8 @@ class BlockHandle(Handle):
     def _resolved(self, owner: Any = None) -> BlockHandle:
         """Detach a canonical block while preserving canonical model provenance."""
         result = super()._resolved(owner)
+        if not isinstance(result, BlockHandle):
+            raise RuntimeError("BlockHandle resolution did not preserve its concrete type")
         object.__setattr__(result, "model_owner_path", self.model_owner_path.canonical())
         object.__setattr__(result, "_instance_registry", None)
         return result

@@ -12,7 +12,7 @@ from enum import Enum
 from fractions import Fraction
 import hashlib
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, canonical_bytes, make_identity
 
@@ -115,7 +115,7 @@ def _array_evidence(value: Any, *, where: str) -> dict[str, Any]:
     })
     digest = hashlib.sha256()
     digest.update(header)
-    digest.update(memoryview(contiguous).cast("B"))
+    digest.update(memoryview(cast(Any, contiguous)).cast("B"))
     return {
         "dtype": contiguous.dtype.str,
         "shape": list(contiguous.shape),

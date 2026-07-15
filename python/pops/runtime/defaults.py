@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -188,7 +189,10 @@ def numerical_defaults_report() -> dict:
         raise NativeDefaultsReportError(
             "loaded _pops extension does not expose callable numerical_defaults_report()")
     try:
-        return dict(fn())
+        raw = fn()
+        if not isinstance(raw, Mapping):
+            raise TypeError("native defaults report is not a mapping")
+        return dict(raw)
     except Exception as exc:
         raise NativeDefaultsReportError(
             "_pops.numerical_defaults_report() failed or returned a malformed mapping"

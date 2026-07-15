@@ -118,6 +118,8 @@ class Var(Expr):
 class _Bin(Expr):
     op = "?"
     semantic_operation = None
+    a: Any
+    b: Any
     def __init__(self, a: Any, b: Any) -> None:
         if self.semantic_operation is not None and isinstance(a, Const) and isinstance(b, Const):
             # Local import avoids the expr <-> lowering cycle; both paths preserve annotations.
@@ -196,10 +198,13 @@ class Compare(_Bin):
         return protocol(self, action=action)
 
 
-def _boolean_operand(value: Any, *, where: str) -> Expr:
+def _boolean_operand(value: Any, *, where: str) -> Any:
     if not isinstance(value, Expr) or not callable(
             getattr(value, "resolve_for_amr_predicate", None)):
         raise TypeError("%s requires a typed symbolic Boolean expression" % where)
+    # The runtime protocol check above is the authority.  Its concrete implementers are
+    # heterogeneous Expr subclasses, so retain the checked object without pretending every
+    # Expr implements the predicate protocol.
     return value
 
 
@@ -400,7 +405,8 @@ class Partial(_BoardNode):
             self.field, self.axis,
             multiply_exact_scalars(self.scale, k, where="Partial scale"))
 
-    __rmul__ = __mul__
+    def __rmul__(self, o: Any) -> Any:
+        return self.__mul__(o)
 
     def __repr__(self) -> str:
         d = "x" if self.axis == 0 else "y"
@@ -430,7 +436,8 @@ class Gradient(_BoardNode):
         from .elliptic import CoeffGradient
         return CoeffGradient(self.field, coeff, self.scale)
 
-    __rmul__ = __mul__
+    def __rmul__(self, o: Any) -> Any:
+        return self.__mul__(o)
 
     def __repr__(self) -> str:
         return "Gradient(%r)" % (self.field,)
@@ -629,7 +636,8 @@ class Unknown(_BoardNode):
         from .elliptic import Reaction
         return Reaction(self, coeff)
 
-    __rmul__ = __mul__
+    def __rmul__(self, o: Any) -> Any:
+        return self.__mul__(o)
 
     def __repr__(self) -> str:
         return "unknown(%r)" % (self.name,)

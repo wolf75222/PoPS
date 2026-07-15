@@ -4,8 +4,8 @@ from __future__ import annotations
 import copy
 import json
 import os
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
 from pops.fields import LayoutBinding
@@ -65,10 +65,10 @@ def _field_topology_rows(executor: Any, slot: str) -> tuple[dict[str, Any], ...]
     """
     engines = getattr(executor, "_engines", None)
     candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
-    reports = []
+    reports: list[Any] = []
     for candidate in candidates:
         slots = getattr(candidate, "field_provider_slots", None)
-        if callable(slots) and slot not in tuple(slots()):
+        if callable(slots) and slot not in tuple(cast(Iterable[Any], slots())):
             continue
         native = getattr(candidate, "_s", candidate)
         inspect_topology = getattr(native, "_field_topology_report", None)
@@ -114,10 +114,10 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
     """Read the exact installed AMR MG/FAC PODs without exposing the private executor."""
     engines = getattr(executor, "_engines", None)
     candidates = tuple(engines.values()) if isinstance(engines, Mapping) else (executor,)
-    reports = []
+    reports: list[Any] = []
     for candidate in candidates:
         slots = getattr(candidate, "field_provider_slots", None)
-        if callable(slots) and slot not in tuple(slots()):
+        if callable(slots) and slot not in tuple(cast(Iterable[Any], slots())):
             continue
         native = getattr(candidate, "_s", candidate)
         getter = getattr(native, "field_solver_configuration", None)
@@ -364,7 +364,13 @@ class RuntimeInstance:
             raise NotImplementedError(
                 "this runtime provider does not expose rank-owned local boxes"
             )
-        return tuple(tuple(int(value) for value in box) for box in provider(block))
+        result: list[tuple[int, int, int, int]] = []
+        for raw_box in cast(Iterable[Iterable[Any]], provider(block)):
+            box = tuple(int(value) for value in raw_box)
+            if len(box) != 4:
+                raise TypeError("native local box rows must contain exactly four indices")
+            result.append(cast(tuple[int, int, int, int], box))
+        return tuple(result)
 
     def local_state(self, block: str, box_index: int) -> Any:
         """Return the native state owned by one box from :meth:`local_boxes`."""
@@ -469,7 +475,7 @@ class RuntimeInstance:
         generation = 0
         counter = getattr(self._executor, "checkpoint_topology_epoch", None)
         if callable(counter):
-            generation = int(counter())
+            generation = int(cast(Any, counter()))
         return tuple(LayoutBinding(row.handle, generation) for row in self._layout_plan.layouts)
 
     def _moments(self, *, at_start: bool = False, at_end: bool = False) -> tuple[ConsumerMoment, ...]:
@@ -479,10 +485,11 @@ class RuntimeInstance:
         if clocks and temporal is None:
             raise RuntimeError(
                 "RuntimeInstance consumers require accepted qualified temporal clock state")
+        temporal_state = cast(Any, temporal)
         accepted_step = int(native.macro_step())
         moments = []
         for clock in sorted(clocks, key=lambda value: value.qualified_id):
-            cursor = temporal.cursor_for_clock(clock)
+            cursor = temporal_state.cursor_for_clock(clock)
             moments.append(ConsumerMoment(
                 TimePoint(clock, step=int(cursor["tick"])),
                 accepted_step=accepted_step,
@@ -587,7 +594,7 @@ class RuntimeInstance:
             raise TypeError(
                 "RuntimeInstance executor must implement the native step-transaction protocol"
             )
-        return methods
+        return cast(tuple[Any, Any, Any, Any], methods)
 
     def _step_envelope_snapshot(self) -> dict[str, Any]:
         native = self._executor
@@ -674,17 +681,20 @@ class RuntimeInstance:
                         # to make rollback safe after entering begin; surfacing
                         # that secondary contract violation as a note avoids
                         # replacing the actionable root cause.
-                        if hasattr(error, "add_note"):
-                            error.add_note(
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note(
                                 "step-transaction rollback also failed: "
                                 f"{rollback_error}")
             finally:
                 self._restore_step_envelope(snapshot)
             if phase in {"effect", "commit"}:
+                transaction_plan = getattr(native, "_step_transaction_plan", None)
                 stores = tuple(
-                    store.value for store in getattr(
-                        native, "_step_transaction_plan", ()).stores
-                ) if getattr(native, "_step_transaction_plan", None) is not None else ()
+                    store.value
+                    for store in cast(
+                        Iterable[Any], getattr(transaction_plan, "stores", ()))
+                ) if transaction_plan is not None else ()
                 failure_report = StepTransactionReport(
                     status="failed",
                     phase=phase,

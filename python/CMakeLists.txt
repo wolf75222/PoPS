@@ -44,8 +44,8 @@ target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 # (OpenMP)", step build du module) : bindings/core/bindings.cpp sort du ccache en ~20 s, puis les
 # cibles src/runtime System et AMR partent ENSEMBLE (jobs: 2, miss ccache) --
 # la veille, la meme paire concurrente passait encore (runs verts a 15-23 min) : la vague a fait
-# deborder le pic cumule. On serialise donc les compiles DU MODULE par un pool Ninja taille 1
-# (declare dans le CMakeLists racine, bloc Kokkos), pattern pops_heavy_tu de tests/CMakeLists.txt.
+# deborder le pic cumule. On serialise donc les compiles DU MODULE par le pool Ninja production
+# pops_heavy_module_tu (declare dans le CMakeLists racine), distinct du pool -O0 des tests.
 # -O3 est CONSERVE : c'est le module de production, seule la CONCURRENCE change (binaire
 # identique). Scope POPS_HAS_KOKKOS : hors Kokkos les TU sont bien plus legeres, on garde le build
 # local parallele. Sans effet hors generateur Ninja (JOB_POOL_COMPILE y est ignore).

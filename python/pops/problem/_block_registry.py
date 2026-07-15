@@ -274,7 +274,13 @@ class BlockRegistry(_FreezableRegistry):
         live_block: BlockHandle,
     ) -> Handle:
         canonical_block = self._canonical_block(live_block)
-        canonical_declaration = qualified.declaration_ref._resolved(
+        declaration_ref = qualified.declaration_ref
+        if declaration_ref is None:
+            raise MissingOwnershipError(
+                "qualified declaration %s is missing declaration provenance"
+                % qualified.qualified_id
+            )
+        canonical_declaration = declaration_ref._resolved(
             live_block.model_owner_path.canonical()
         )
         return qualified._with_owner(

@@ -1,6 +1,7 @@
 """Small builder helpers for immutable module manifests."""
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -15,7 +16,13 @@ def space_name(item: Any) -> Any:
         return "%s->%s" % (domain, range_)
     keys = getattr(item, "keys", None)
     if callable(keys):
-        return "RateBundle{%s}" % ", ".join(keys())
+        raw_keys = keys()
+        if isinstance(raw_keys, (str, bytes)) or not isinstance(raw_keys, Iterable):
+            raise TypeError("signature bundle keys() must return an iterable of strings")
+        bundle_keys = tuple(raw_keys)
+        if any(not isinstance(key, str) for key in bundle_keys):
+            raise TypeError("signature bundle keys() must return only strings")
+        return "RateBundle{%s}" % ", ".join(bundle_keys)
     raise TypeError(
         "signature item %s has no stable manifest name; provide name, "
         "domain_name/range_name, or a bundle keys() protocol" % type(item).__name__)

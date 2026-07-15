@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import fields, is_dataclass, replace
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
 
@@ -25,11 +25,16 @@ def _identity(uri: Any, version: Any, *, where: str) -> tuple[str, int]:
     return uri, version
 
 
-def stable_component_identity(uri: str, version: int = 1) -> Callable[[type], type]:
+_ComponentType = TypeVar("_ComponentType", bound=type[Any])
+
+
+def stable_component_identity(
+    uri: str, version: int = 1
+) -> Callable[[_ComponentType], _ComponentType]:
     """Pin a builtin schedule component to a versioned semantic URI."""
     declared = _identity(uri, version, where="stable schedule component")
 
-    def decorate(component_type: type) -> type:
+    def decorate(component_type: _ComponentType) -> _ComponentType:
         component_type.__pops_component_identity__ = declared
         return component_type
 

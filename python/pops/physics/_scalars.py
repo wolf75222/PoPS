@@ -114,6 +114,8 @@ def subtract_exact_integer(value: Any, integer: int, *, where: str) -> Any:
     if not isinstance(exact, Decimal):
         return exact - integer
     sign, digits, exponent = exact.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("%s must be a finite exact scalar" % where)
     coefficient = int("".join(map(str, digits)))
     if sign:
         coefficient = -coefficient

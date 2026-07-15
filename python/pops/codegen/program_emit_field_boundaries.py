@@ -102,14 +102,15 @@ class _ExprCpp:
             if value.handle == self.unknown:
                 return "u"
             key = (value.handle.qualified_id, value.component)
-            indices = self.state_indices if value.handle.kind == "state" else self.field_indices
+            handle_kind = getattr(value.handle, "kind", None)
+            indices = self.state_indices if handle_kind == "state" else self.field_indices
             try:
                 index = indices[key]
             except KeyError:
                 raise ValueError(
                     "boundary value %s[%d] is absent from its resolved direct-buffer pack"
                     % key) from None
-            if value.handle.kind == "state":
+            if handle_kind == "state":
                 self.used_states.add(index)
                 return "state%d(i, j, %d)" % (index, value.component)
             self.used_fields.add(index)
@@ -119,7 +120,7 @@ class _ExprCpp:
             self.used_times.add(coordinate)
             return "logical_%s" % coordinate
         if isinstance(value, ValueExpr):
-            if value.handle.kind == "parameter":
+            if getattr(value.handle, "kind", None) == "parameter":
                 proxy = type("BoundaryParamRef", (), {
                     "handle": value.handle,
                     "name": value.handle.local_id,

@@ -78,6 +78,8 @@ def resolve(
         raise ValueError("a resolved whole-system Program requires backend=Production()")
     validate_program_layout_reads(problem, layout_plan, time=resolved_time)
     if len(layout_plan.layouts) > 1:
+        if resolved_time is None:
+            raise RuntimeError("multi-layout Uniform resolution lost its required Program")
         co_layout_ops = {
             "coupled_rate", "solve_coupled_implicit", "solve_fields_from_blocks",
             "field_solve_from_blocks",
@@ -260,6 +262,9 @@ def resolve(
     amr_requirements = None
     amr_capabilities = None
     if bootstrap_plan is not None:
+        if resolved_hierarchy is None or amr_transfer is None \
+                or initial_condition_plan is None:
+            raise RuntimeError("resolved AMR bootstrap lost an authenticated authority")
         amr_requirements = {
             "hierarchy": resolved_hierarchy.identity.to_data(),
             "transfer": amr_transfer.identity.to_data(),

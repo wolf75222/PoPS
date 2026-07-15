@@ -12,7 +12,7 @@ the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from pops.runtime._bind_validation import validate_install_arguments
 
@@ -159,7 +159,8 @@ class _AmrSystemInstall(_AmrSystem):
                 if route == "constant_field":
                     components = [
                         float.fromhex(value["binary64"])
-                        if isinstance(value, Mapping) and "binary64" in value else float(value)
+                        if isinstance(value, Mapping) and "binary64" in value
+                        else float(cast(Any, value))
                         for value in source.get("components", ())
                     ]
                     self._s._register_analytic_constant(
@@ -174,7 +175,7 @@ class _AmrSystemInstall(_AmrSystem):
                     def native_float(value: Any) -> float:
                         return float.fromhex(value["binary64"]) \
                             if isinstance(value, Mapping) and "binary64" in value \
-                            else float(value)
+                            else float(cast(Any, value))
 
                     self._s._register_analytic_gaussian(
                         subject_id, name or "", native_float(center["x"]),

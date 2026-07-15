@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 from pops.codegen.program_models import ProgramModelGraph
 
@@ -12,8 +13,9 @@ def _declared_spaces(authority: Any, plural: str, singular: str) -> tuple[Any, .
     accessor = getattr(authority, plural, None)
     if callable(accessor):
         declared = accessor()
-        values = declared.values() if hasattr(declared, "values") else declared
-        return tuple(values)
+        values_accessor = getattr(declared, "values", None)
+        values = values_accessor() if callable(values_accessor) else declared
+        return tuple(cast(Iterable[Any], values))
     accessor = getattr(authority, singular, None)
     return (accessor(),) if callable(accessor) else ()
 
@@ -51,7 +53,8 @@ def emit_module_metadata(program: Any, model: Any = None) -> str:
     else:
         items = []
     for owner, emit_model, declared_module in items:
-        canonical_owner = owner.canonical() if hasattr(owner, "canonical") else owner
+        canonical = getattr(owner, "canonical", None)
+        canonical_owner = canonical() if callable(canonical) else owner
         owner_name = str(canonical_owner)
         if hasattr(emit_model, "operator_registry"):
             registry = emit_model.operator_registry()

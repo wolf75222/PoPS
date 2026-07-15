@@ -48,12 +48,20 @@ endforeach()
 
 if(POPS_BUILD_TESTS)
   # Preserve the historical test-runtime compilation contract: the heavy implementation objects and
-  # their consumers use -O0 in optimized configurations, and only heavy objects occupy this Ninja pool.
-  set_property(GLOBAL APPEND PROPERTY JOB_POOLS pops_heavy_tu=${POPS_HEAVY_TU_POOL})
+  # their consumers use -O0 in optimized configurations, and only heavy objects occupy this Ninja
+  # pool. This test-only pool is intentionally independent from the production module's -O3 pool.
+  set_property(GLOBAL APPEND PROPERTY
+    JOB_POOLS pops_heavy_test_tu=${POPS_HEAVY_TEST_TU_POOL})
   foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
     target_compile_options(${_runtime_target} PUBLIC
       $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
-    set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
+    set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_test_tu)
+  endforeach()
+elseif(POPS_BUILD_PYTHON)
+  # A Python-only build compiles these production objects at -O3. When tests are enabled they stay
+  # on the independent -O0 test pool above, even if the same objects also feed the Python module.
+  foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
+    set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_module_tu)
   endforeach()
 endif()
 
@@ -65,8 +73,7 @@ if(POPS_BUILD_PYTHON)
     set_target_properties(${_runtime_target} PROPERTIES
       POSITION_INDEPENDENT_CODE ON
       CXX_VISIBILITY_PRESET hidden
-      VISIBILITY_INLINES_HIDDEN ON
-      JOB_POOL_COMPILE pops_heavy_module_tu)
+      VISIBILITY_INLINES_HIDDEN ON)
   endforeach()
 
   pops_compute_header_signature(POPS_NATIVE_HEADER_SIGNATURE)

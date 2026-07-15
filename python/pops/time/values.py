@@ -358,7 +358,7 @@ class ProgramValue(ImmutableSymbolic, _ProgramValueBase):
         layout = None
         space_name = getattr(space, "name", None)
         components = getattr(space, "components", None)
-        if getattr(space, "kind", None) == "rate":
+        if space is not None and getattr(space, "kind", None) == "rate":
             components = space.base_space.components
         if components is not None:
             n_comp = len(components)

@@ -48,6 +48,7 @@ class CanonicalDescriptor:
     """Mixin for immutable JSON-ready descriptor data."""
 
     __pops_ir_immutable__: ClassVar[bool] = True
+    __dataclass_fields__: ClassVar[dict[str, Any]]
     kind: ClassVar[str]
 
     def to_data(self) -> dict[str, Any]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from typing import Any
+from typing import Any, cast
 
 from pops.runtime._component_execution_context import component_execution_data
 
@@ -594,8 +594,9 @@ class _MultiLayoutUniformExecutor:
                     self._rebuild_composite_temporal_state()
                 except BaseException as caught:
                     rollback_error = rollback_error or caught
-                if rollback_error is not None and hasattr(error, "add_note"):
-                    error.add_note("multi-layout restart rollback failed: %s" % rollback_error)
+                add_note = getattr(error, "add_note", None)
+                if rollback_error is not None and callable(add_note):
+                    add_note("multi-layout restart rollback failed: %s" % rollback_error)
                 raise
         return target
 
@@ -669,7 +670,7 @@ def install_multi_layout_uniform(plan: Any, runtime_plan: Any) -> Any:
     for row in layouts.rows:
         layout_id = row.handle.qualified_id
         engine = System(configs[layout_id])
-        engine._execution_context = plan.execution_context
+        cast(Any, engine)._execution_context = plan.execution_context
         selected = {
             name: spec for name, spec in plan.instances.items() if blocks[name] == layout_id
         }

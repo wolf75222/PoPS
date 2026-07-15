@@ -1,109 +1,342 @@
 #!/usr/bin/env python3
-"""ADC-634: MPI parity of the clean pops.compile(layout=AMR) + pops.bind Program route.
+"""MPI parity of the final public AMR lifecycle and the generic SSPRK2 spelling.
 
-The clean AMR Program route (ADC-634) must be MPI-correct: the DISTRIBUTED run (np > 1) must produce
-the BIT-IDENTICAL globally-gathered coarse density as the direct AmrSystem.install_program route on
-the same ranks -- the clean route only adds the Case authoring + config derivation, so the
-distributed arithmetic is identical. Under MPI the AMR density() accessor is COLLECTIVE (every rank
-calls it and it returns the global coarse array), so the comparison is a whole-domain bit-identity.
+Both legs execute the exact public route
 
-This is the MPI analogue of test_amr_clean_route_program's acceptance (a): at a fixed np it asserts
-   clean route (distributed) == direct install_program route (distributed),   bit-for-bit,
-plus coarse-mass conservation. Both routes run at the SAME np, so this is a dist==dist parity at
-fixed np (the AMR MPI parity gate), NOT a cross-np comparison.
+``Case -> validate -> resolve -> compile -> ExecutionContext.mpi_world -> bind -> run``.
 
-WHAT NEEDS WHICH RUNNER. Needs an MPI _pops build (pops.n_ranks() > 1) AND a compiler + a visible
-Kokkos (POPS_KOKKOS_ROOT) to build the .so. Self-skips (exit 0) when pops.n_ranks() == 1 (a
-single-rank / non-MPI build -- run it under `mpirun -np 2 python3 <file>`), when the .so cannot
-build, and when pops / numpy is unavailable. Runs in the CI MPI lane. No fake pops -- a leg that
-cannot build the .so skips, never fakes the engine.
+One leg authors SSPRK2 with generic :class:`pops.Program` operations; the other uses the
+``pops.lib.time.SSPRK2`` preset.  Under ``mpiexec -n 2`` their collectively gathered conservative
+states must be bit-identical and each route must conserve global mass across real AMR regrids.
+No native carrier, codegen driver, deleted test helper, or private runtime state is used.
 """
+from __future__ import annotations
+
+from collections.abc import Callable
+from fractions import Fraction
+import hashlib
 import os
+from pathlib import Path
 import sys
+from typing import Any
+
+
+_REQUIRE_MPI = os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
 
 try:
     import numpy as np
+    from mpi4py import MPI
 
     import pops
-except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
-    print("skip test_amr_clean_route_program_mpi (pops/numpy unavailable: %s)" % exc)
+    from pops.amr import (
+        AMRExecution,
+        AMRHierarchy,
+        AMRRegrid,
+        AMRTagging,
+        AMRTransfer,
+        Buffer,
+        ConflictPolicy,
+        EqualityPolicy,
+        Hysteresis,
+        PatchLayout,
+        Tag,
+    )
+    from pops.codegen import Production
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.initial import InitialCondition
+    from pops.layouts import AMR
+    from pops.lib.amr import StateTransfer
+    from pops.lib.initial import Gaussian
+    from pops.math import ValueExpr, ddt, div
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.params import RuntimeParam
+    from pops.physics import Model
+    from pops.projection import ConservativeCellAverage
+    from pops.time import FixedDt, StagePoint, TimePoint, every
+except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
+    if _REQUIRE_MPI:
+        raise RuntimeError("required Python MPI contract could not import its runtime") from exc
+    print("skip test_amr_clean_route_program_mpi (MPI runtime unavailable: %s)" % exc)
     sys.exit(0)
 
-# Reuse the DIRECT-route helpers and the CLEAN-route helpers already validated single-rank.
-_AMR_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "amr")
-_AMR_DIR = os.path.abspath(_AMR_DIR)
-if _AMR_DIR not in sys.path:
-    sys.path.insert(0, _AMR_DIR)
-import test_amr_program_parity as parity  # noqa: E402
-import test_amr_clean_route_program as clean  # noqa: E402
 
-N = parity.N
-NSTEPS = parity.NSTEPS
-DT = parity.DT
-
+ROOT = Path(__file__).resolve().parents[4]
+N = 16
+NSTEPS = 4
+DT = 1.0e-3
 _fails = 0
+_COMM = MPI.COMM_WORLD
 
 
-def chk(cond, label):
+def chk(cond: Any, label: str) -> None:
     global _fails
-    print("  [%s] %s" % ("OK " if cond else "XX ", label))
+    if _COMM.Get_rank() == 0:
+        print("  [%s] %s" % ("OK " if cond else "XX ", label))
     if not cond:
         _fails += 1
 
 
-def _n_ranks():
-    """The MPI world size the built _pops reports (1 on a serial / non-MPI build)."""
-    fn = getattr(pops, "n_ranks", None)
-    try:
-        return int(fn()) if callable(fn) else 1
-    except Exception:  # noqa: BLE001 -- a non-MPI build may not expose it
-        return 1
+def _require_world() -> bool:
+    size = int(_COMM.Get_size())
+    if size >= 2:
+        return True
+    if _REQUIRE_MPI:
+        raise RuntimeError("required Python MPI contract did not enter MPI_COMM_WORLD size >= 2")
+    if _COMM.Get_rank() == 0:
+        print("skip (needs mpiexec -n 2; MPI_COMM_WORLD size=%d)" % size)
+    return False
 
 
-def test_clean_route_distributed_equals_direct_distributed():
-    """At np > 1 the clean pops.compile(layout=AMR)+pops.bind SSPRK2 route produces the BIT-IDENTICAL
-    globally-gathered coarse density as the direct install_program route on the same ranks, and
-    conserves the coarse mass. Skips single-rank (run under mpirun -np 2)."""
-    nr = _n_ranks()
-    print("== ADC-634 MPI clean-route parity (np=%d) ==" % nr)
-    if nr < 2:
-        print("skip (single rank: pops.n_ranks()=%d; run under `mpirun -np 2 python3 <file>` with an "
-              "MPI _pops build)" % nr)
+def _world_identical(array: np.ndarray) -> bool:
+    contiguous = np.ascontiguousarray(array)
+    witness = (
+        tuple(contiguous.shape),
+        contiguous.dtype.str,
+        hashlib.sha256(contiguous.tobytes(order="C")).hexdigest(),
+    )
+    return len(set(_COMM.allgather(witness))) == 1
+
+
+def _explicit_ssprk2(state: Any, rate: Any) -> pops.Program:
+    """Normative two-stage SSPRK2 built only from generic Program operations."""
+    program = pops.Program("SSPRK2")
+    q = program.state(state)
+    stage_0 = StagePoint("ssprk2_stage_0", {"main": TimePoint(program.clock, 0)})
+    k0 = program.value("ssprk2_k_0", rate(q.n), at=stage_0)
+    stage_1 = StagePoint("ssprk2_stage_1", {"main": TimePoint(program.clock, 1)})
+    q_stage = program.value(
+        "ssprk2_U1", q.n + program.dt * k0, at=stage_1
+    )
+    k1 = program.value("ssprk2_k_1", rate(q_stage), at=stage_1)
+    half = Fraction(1, 2)
+    q_next = program.value(
+        "ssprk2_step",
+        q.n + program.dt * half * k0 + program.dt * half * k1,
+        at=q.next.point,
+    )
+    program.commit(q.next, q_next)
+    return program
+
+
+def _preset_ssprk2(state: Any, rate: Any) -> pops.Program:
+    from pops.lib.time import SSPRK2
+
+    return SSPRK2(state, rate=rate)
+
+
+def _resolved(
+    program_builder: Callable[[Any, Any], pops.Program],
+    *,
+    distribute_coarse: bool,
+) -> Any:
+    frame = Rectangle(
+        "mpi-public-amr-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("mpi-public-amr-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (rho,), y_axis: (Fraction(1, 4) * rho,)},
+        waves={x_axis: (1.0 + 0.0 * rho,), y_axis: (0.25 + 0.0 * rho,)},
+    )
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("mpi-public-amr-case")
+    block = case.block("tracer", model)
+    state_instance = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = program_builder(state_instance, rate)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+
+    case.initials.add(
+        InitialCondition(
+            state=state_instance,
+            value=Gaussian(
+                frame=frame,
+                center={x_axis: 0.35, y_axis: 0.55},
+                background=1.0,
+                amplitude=0.3,
+                inverse_width=90.0,
+            ),
+            projection=ConservativeCellAverage(),
+        )
+    )
+    threshold = case.param(RuntimeParam("refine_threshold", default=1.05))
+    transfer = AMRTransfer()
+    transfer.state(state_instance, StateTransfer())
+    layout = AMR(
+        grid=CartesianGrid(
+            frame=frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(frame.axes),
+        ),
+        hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+        tagging=AMRTagging(
+            rules=(
+                Tag(ValueExpr(state_instance) > case.value(threshold)),
+                Buffer(cells=1),
+            ),
+            hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+            conflict_policy=ConflictPolicy.REFINE_WINS,
+        ),
+        regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
+        transfer=transfer,
+        execution=AMRExecution.synchronous(),
+        patch_layout=PatchLayout(
+            distribute_coarse=distribute_coarse,
+            coarse_max_grid=max(4, N // 2),
+        ),
+    )
+    return pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
+
+
+def _execute(
+    program_builder: Callable[[Any, Any], pops.Program],
+    *,
+    distribute_coarse: bool,
+) -> tuple[np.ndarray, np.ndarray, Any, Any, Any]:
+    artifact = pops.compile(
+        _resolved(program_builder, distribute_coarse=distribute_coarse)
+    )
+    context = pops.ExecutionContext.mpi_world(artifact, _COMM)
+    runtime = pops.bind(artifact, resources={"execution_context": context})
+    initial = np.asarray(runtime.state_global("tracer"), dtype=np.float64).copy()
+    report = pops.run(runtime, t_end=NSTEPS * DT, max_steps=NSTEPS)
+    result = np.asarray(runtime.state_global("tracer"), dtype=np.float64).copy()
+    return (
+        initial,
+        result,
+        report,
+        runtime.amr.explain_regrid(),
+        runtime.amr.patch_table(),
+    )
+
+
+def test_public_mpi_explicit_and_preset_ssprk2_are_bit_identical() -> None:
+    if not _require_world():
         return
+    if _COMM.Get_rank() == 0:
+        print("== final public AMR lifecycle under MPI: explicit SSPRK2 == preset SSPRK2 ==")
 
-    u0 = parity._init_density()
-    direct, derr = parity._amr_run(parity._ssprk2_program(), parity._euler_model("adc634_mpi"), u0)
-    if direct is None:
-        print("skip (%s)" % derr)
+    manual_initial, manual, manual_report, manual_regrid, manual_patches = _execute(
+        _explicit_ssprk2, distribute_coarse=True
+    )
+    preset_initial, preset, preset_report, preset_regrid, preset_patches = _execute(
+        _preset_ssprk2, distribute_coarse=True
+    )
+    chk(
+        np.array_equal(manual_initial, preset_initial),
+        "both public routes bootstrap the identical global conservative state",
+    )
+    chk(
+        np.array_equal(manual, preset),
+        "np=%d: explicit and preset SSPRK2 global states are BIT-IDENTICAL (max|d|=%.3e)"
+        % (int(_COMM.Get_size()), float(np.max(np.abs(manual - preset)))),
+    )
+    chk(
+        _world_identical(manual) and _world_identical(preset),
+        "both collective state_global results are byte-identical on every rank",
+    )
+    chk(
+        manual_report.accepted_steps == preset_report.accepted_steps == NSTEPS,
+        "both public runs accept exactly %d macro steps" % NSTEPS,
+    )
+    chk(
+        manual_regrid.regrid_count > 0
+        and preset_regrid.regrid_count > 0
+        and manual_patches.n_levels == preset_patches.n_levels == 2
+        and manual_patches.n_patches > 0
+        and preset_patches.n_patches > 0,
+        "both public routes complete a real regrid on a populated two-level hierarchy",
+    )
+    initial_mass = float(np.mean(manual_initial))
+    manual_mass = float(np.mean(manual))
+    preset_mass = float(np.mean(preset))
+    chk(
+        abs(manual_mass - initial_mass) < 1.0e-12
+        and abs(preset_mass - initial_mass) < 1.0e-12,
+        "both distributed public routes conserve global mass to round-off",
+    )
+
+
+def test_public_mpi_distributed_equals_replicated_coarse() -> None:
+    """The public PatchLayout authority must preserve the historical MPI layout oracle."""
+    if not _require_world():
         return
-    result, cerr = clean._clean_amr_run(parity._ssprk2_program(),
-                                        parity._euler_model("adc634_mpi"), u0)
-    if result is None:
-        print("skip (%s)" % cerr)
-        return
+    replicated_initial, replicated, _, replicated_regrid, replicated_patches = _execute(
+        _explicit_ssprk2, distribute_coarse=False
+    )
+    distributed_initial, distributed, _, distributed_regrid, distributed_patches = _execute(
+        _explicit_ssprk2, distribute_coarse=True
+    )
+    chk(
+        np.array_equal(replicated_initial, distributed_initial),
+        "replicated and distributed coarse layouts start bit-identically",
+    )
+    chk(
+        np.array_equal(replicated, distributed),
+        "np=%d: distributed coarse == replicated coarse BIT-IDENTICALLY (max|d|=%.3e)"
+        % (int(_COMM.Get_size()), float(np.max(np.abs(replicated - distributed)))),
+    )
+    chk(
+        _world_identical(replicated) and _world_identical(distributed),
+        "both coarse policies gather one byte-identical global array on every rank",
+    )
+    chk(
+        replicated_regrid.regrid_count == distributed_regrid.regrid_count > 0,
+        "both coarse-layout policies complete the same nonzero number of regrids",
+    )
+    chk(
+        not bool(
+            _COMM.allreduce(
+                bool(replicated_patches.coarse_is_distributed), op=MPI.LOR
+            )
+        )
+        and bool(
+            _COMM.allreduce(
+                bool(distributed_patches.coarse_is_distributed), op=MPI.LAND
+            )
+        ),
+        "public PatchLayout selects replicated versus genuinely distributed coarse ownership",
+    )
 
-    direct_rho, _direct_phi, direct_mass = direct
-    clean_rho, _clean_phi, clean_mass = result
-    chk(np.array_equal(direct_rho, clean_rho),
-        "np=%d: clean-route gathered coarse density is BIT-IDENTICAL to the direct route "
-        "(max|diff| = %.3e)" % (nr, float(np.abs(direct_rho - clean_rho).max())))
-    chk(np.array_equal(np.array([direct_mass]), np.array([clean_mass])),
-        "np=%d: clean-route coarse mass is bit-identical (%.17g vs %.17g)"
-        % (nr, direct_mass, clean_mass))
-    # Mass conservation (periodic, no boundary flux): the coarse mass equals the seed to round-off.
-    m0 = float(u0.mean())  # mean density == coarse mass / area (L=1)
-    chk(abs(clean_mass - m0) < 1e-9,
-        "np=%d: the clean route conserves the coarse mass (|m - m0| = %.2e)"
-        % (nr, abs(clean_mass - m0)))
 
-
-def _run_all():
-    fns = [v for k, v in sorted(globals().items())
-           if k.startswith("test_") and callable(v)]
-    for fn in fns:
-        fn()
-    print("\n%s test_amr_clean_route_program_mpi (%d check failures)"
-          % ("FAIL" if _fails else "PASS", _fails))
+def _run_all() -> int:
+    functions = [
+        value
+        for name, value in sorted(globals().items())
+        if name.startswith("test_") and callable(value)
+    ]
+    for function in functions:
+        function()
+    if _COMM.Get_rank() == 0:
+        print(
+            "\n%s test_amr_clean_route_program_mpi (%d check failures)"
+            % ("FAIL" if _fails else "PASS", _fails)
+        )
     return _fails
 
 

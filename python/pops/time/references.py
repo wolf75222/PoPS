@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.model.handles import Handle
+from pops.model.handles import Handle, StateHandle
 from pops.model.ownership import MissingOwnershipError, OwnerKind, OwnerPath
 
 
@@ -54,7 +54,7 @@ def bind_program_block(program: Any, block: Any, *, where: str) -> Any:
     return block
 
 
-def bind_state_reference(program: Any, declaration: Any) -> tuple[Any, Handle]:
+def bind_state_reference(program: Any, declaration: StateHandle) -> tuple[Any, StateHandle]:
     """Authenticate one already-qualified state and bind its exact model registry.
 
     The sole authoring form is ``Program.state(block[U])``.  The instance handle is the one

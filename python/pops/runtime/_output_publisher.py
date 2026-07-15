@@ -1,7 +1,7 @@
 """Private adapter from accepted consumer effects to exact format writers."""
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,9 +107,11 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             raise TypeError("output effect resolver must return an exact OutputPreparation")
         if preparation.request.consumer_id != effect.consumer_id:
             raise ValueError("output request consumer identity differs from its accepted effect")
+        target_format = effect.target.output_format
+        if not isinstance(target_format, Mapping):
+            raise TypeError("accepted output target must carry a resolved format mapping")
         if consumer_format_data(
-                preparation.format, where="resolved output format") != \
-                dict(effect.target.output_format):
+                preparation.format, where="resolved output format") != dict(target_format):
             raise ValueError("resolved output format differs from its accepted target")
         collective = effect.target.parallel_mode is ParallelMode.COLLECTIVE
         if preparation.request.parallel != collective:

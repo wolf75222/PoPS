@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 # The runtime env-format abi key: 'compiler=..;std=202002L;headers=<sha>;kokkos=..;stdlib=..'.
 _ENV_HEADERS_RE = re.compile(r"(?:^|;)\s*headers=([^;]+)")
@@ -194,7 +195,8 @@ def _layout_kind(layout: Any) -> str | None:
     if not callable(protocol):
         return None
     capabilities = protocol()
-    data = capabilities.to_dict() if callable(getattr(capabilities, "to_dict", None)) else capabilities
+    project = getattr(capabilities, "to_dict", None)
+    data = project() if callable(project) else capabilities
     return data.get("layout") if isinstance(data, dict) else None
 
 
@@ -479,7 +481,7 @@ def validate_install_arguments(sim: Any, compiled: Any, instances: Any, params: 
     block_names = getattr(sim, "block_names", None)
     if not callable(block_names):
         raise TypeError("pops.bind: runtime engine must expose callable block_names()")
-    provided_blocks |= set(block_names())
+    provided_blocks |= set(cast(Iterable[Any], block_names()))
     # Named aux already declared on the sim (B_z has no queryable trace, so it must come via aux=).
     provided_named_aux = set()
     for table in getattr(sim, "_aux_field_index", {}).values():

@@ -288,7 +288,10 @@ class OwnerPath:
         self.require_authoring_root(
             OwnerKind.MODEL_DEFINITION, where="definition fingerprint owner"
         )
-        self._authority.bind_fingerprint(fingerprint, priority=priority)
+        authority = self._authority
+        if authority is None:
+            raise RuntimeError("authoring OwnerPath lost its authority")
+        authority.bind_fingerprint(fingerprint, priority=priority)
 
     def _bind_definition_fingerprint_provider(
         self,
@@ -300,7 +303,10 @@ class OwnerPath:
         self.require_authoring_root(
             OwnerKind.MODEL_DEFINITION, where="definition fingerprint owner"
         )
-        self._authority.bind_provider(provider, priority=priority)
+        authority = self._authority
+        if authority is None:
+            raise RuntimeError("authoring OwnerPath lost its authority")
+        authority.bind_provider(provider, priority=priority)
 
     def contains(self, kind: Any) -> bool:
         if not isinstance(kind, OwnerKind):

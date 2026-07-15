@@ -1,15 +1,20 @@
 """Explicit clock-domain crossing for Program authoring."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time.points import StagePoint, TimePoint, point_clock
 from pops.time._program.value_validation import require_owned
 from pops.time._schedule.synchronization import relation_data
 from pops.time.values import _resolve_handle
 
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramClocks:
+
+class _ProgramClocks(_ProgramBase):
     def synchronize(
         self, value: Any, *, at: Any, relation: Any, name: Any = None
     ) -> Any:

@@ -69,6 +69,30 @@ def _native_binary64(value: Any, *, where: str) -> float:
     return result
 
 
+def _native_patch_generation_values(options: Any) -> tuple[bool, int]:
+    """Lower the exact public patch authority into the current native provider ABI."""
+    expected = {"native_route", "distribute_coarse", "coarse_max_grid"}
+    if type(options) is not dict or set(options) != expected:
+        raise TypeError("native AMR patch generation requires the exact box_array option schema")
+    if options["native_route"] != "box_array":
+        raise NotImplementedError(
+            "native AMR patch generation requires native_route='box_array'"
+        )
+    distribute_coarse = options["distribute_coarse"]
+    if type(distribute_coarse) is not bool:
+        raise TypeError("native AMR distribute_coarse must be an exact bool")
+    authored_max_grid = options["coarse_max_grid"]
+    if authored_max_grid is None:
+        return distribute_coarse, 0
+    if type(authored_max_grid) is not int:
+        raise TypeError("native AMR coarse_max_grid must be None or an exact integer")
+    if authored_max_grid < 1:
+        raise ValueError("native AMR coarse_max_grid must be positive when provided")
+    if authored_max_grid > 2_147_483_647:
+        raise OverflowError("native AMR coarse_max_grid exceeds the signed 32-bit provider ABI")
+    return distribute_coarse, authored_max_grid
+
+
 def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     """Build ``AmrSystemConfig`` without inferring or dropping authored facts."""
     from pops._bootstrap import AmrSystemConfig
@@ -111,10 +135,10 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
     clustering_provider = cluster.get("provider")
     patches = hierarchy.plan.patch_generation.options.to_data()
     balance = hierarchy.plan.load_balance.options.to_data()
+    distribute_coarse, coarse_max_grid = _native_patch_generation_values(patches)
     if not isinstance(clustering_provider, dict) \
             or clustering_provider.get("provider_type") not in {
                 "builtin_amr_clustering", "external_amr_clustering"} \
-            or patches.get("native_route") != "box_array" \
             or balance != {"native_route": "round_robin"}:
         raise NotImplementedError("resolved hierarchy selected an unavailable native provider")
     if clustering_provider["provider_type"] == "builtin_amr_clustering":
@@ -123,8 +147,8 @@ def amr_config_from_layout(layout: Any, *, hierarchy: Any = None) -> Any:
             where="AMR clustering minimum_efficiency")
         cfg.cluster_min_box_size = int(clustering_provider["minimum_box_size"])
         cfg.cluster_max_box_size = int(clustering_provider["maximum_box_size"])
-    cfg.distribute_coarse = bool(patches.get("distribute_coarse", False))
-    cfg.coarse_max_grid = int(patches.get("coarse_max_grid", 0))
+    cfg.distribute_coarse = distribute_coarse
+    cfg.coarse_max_grid = coarse_max_grid
     return cfg
 
 

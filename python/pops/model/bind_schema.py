@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Any
 
@@ -36,7 +36,10 @@ def _resolved_bind_data(declaration: Any, resolver: Any) -> dict[str, Any]:
     bind_data = getattr(declaration, "bind_data", None)
     if not callable(bind_data):
         raise TypeError("parameter declaration must implement canonical bind_data()")
-    row = bind_data()
+    raw_row = bind_data()
+    if not isinstance(raw_row, Mapping):
+        raise TypeError("parameter declaration bind_data() must return a mapping")
+    row = dict(raw_row)
     if row.get("kind") != "derived":
         return row
     expression = getattr(declaration, "expression", None)
@@ -58,6 +61,11 @@ class BindSchema:
     """Canonical immutable table of every qualified parameter slot in a Case."""
 
     __slots__ = ("schema_version", "_slots", "_by_handle", "_aliases")
+
+    schema_version: int
+    _slots: tuple[BindSlot, ...]
+    _by_handle: Mapping[ParamHandle, BindSlot]
+    _aliases: Mapping[str, ParamHandle]
 
     def __init__(
         self, slots: Any = (), *, aliases: Any = None, _serialized_aliases: Any = None,
@@ -96,7 +104,10 @@ class BindSchema:
     @staticmethod
     def _scope_key(handle: ParamHandle) -> Any:
         if handle.is_instance:
-            return ("block", handle.block_ref.qualified_id)
+            block_ref = handle.block_ref
+            if block_ref is None:
+                raise RuntimeError("instance ParamHandle is missing its block reference")
+            return ("block", block_ref.qualified_id)
         if handle.owner_path.nodes[0].kind is OwnerKind.CASE:
             return ("case", str(handle.owner_path))
         return ("shared", str(handle.owner_path))
@@ -241,7 +252,12 @@ class BindSchema:
                 raise TypeError(
                     "block %r model parameter surface must be a pops.model.Module" % block_name
                 )
-            for _, declaration in params().items():
+            declared_params = params()
+            if not isinstance(declared_params, Mapping):
+                raise TypeError(
+                    "block %r model params() must return a mapping" % block_name
+                )
+            for _, declaration in declared_params.items():
                 declaration_handle = param_handle(declaration)
                 live_instance = problem.qualify(declaration_handle, block=block)
                 canonical = problem.resolve(declaration_handle, block=block)
@@ -258,7 +274,11 @@ class BindSchema:
         handles = getattr(case_registry, "handles", None)
         declaration_for = getattr(case_registry, "declaration", None)
         if callable(handles) and callable(declaration_for):
-            for live_handle in handles():
+            raw_handles = handles()
+            if isinstance(raw_handles, (str, bytes)) or not isinstance(raw_handles, Iterable):
+                raise TypeError("Case ParamRegistry handles() must return an iterable") from None
+            live_handles = iter(raw_handles)
+            for live_handle in live_handles:
                 if not isinstance(live_handle, ParamHandle):
                     raise TypeError("Case ParamRegistry handles() must return ParamHandle values")
                 declaration = declaration_for(live_handle)

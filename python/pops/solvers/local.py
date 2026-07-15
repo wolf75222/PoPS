@@ -24,9 +24,12 @@ class DenseLU(Descriptor):
     """Exact per-cell dense factorization for a typed ``LocalLinear`` problem."""
 
     category = "local_linear_solver"
-    name = "dense_lu"
     native_id = "pops::detail::mat_inverse"
     scheme = "dense_lu"
+
+    @property
+    def name(self) -> str:
+        return "dense_lu"
 
     def prepare_program_solve(self) -> _PreparedDenseLU:
         payload = {"schema_version": 1, "scheme": self.scheme}

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from pops.time._graph.base import (
     CanonicalData,
@@ -126,7 +126,11 @@ class Region:
 
     def result_source(self) -> Any:
         for source in (*self.captures, *self.nodes):
-            source_id = source.value.node_id if type(source) is RegionCapture else source.node_id
+            source_id = (
+                cast(RegionCapture, source).value.node_id
+                if type(source) is RegionCapture
+                else cast(_Node, source).node_id
+            )
             if source_id == self.result.node_id:
                 return source
         raise RuntimeError("validated Region lost its result source")

@@ -150,7 +150,8 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         preconditioner, precond_options = preconditioner_data
         omega = getattr(prepared, "omega", None)
         solver_identity = getattr(prepared, "identity", None)
-        if not isinstance(getattr(solver_identity, "token", None), str):
+        solver_identity_token = getattr(solver_identity, "token", None)
+        if not isinstance(solver_identity_token, str):
             raise TypeError("solve: Krylov provider identity is not canonical")
         if not (isinstance(operator, ProgramValue) and operator.vtype == "matrix_free_op"):
             raise ValueError("solve_linear: operator must be a matrix_free_operator value")
@@ -244,7 +245,7 @@ class _ProgramSolve(_ProgramDiagnostics, _ProgramConstants, _ProgramBase):
         if omega is not None:
             attrs["omega"] = positive_scalar_literal(
                 omega, where="solve_linear: Richardson omega")
-        attrs["solver_identity"] = solver_identity.token
+        attrs["solver_identity"] = solver_identity_token
         attrs["problem_kind"] = "matrix_free_linear"
         # A state-domain solve over a State rhs returns a State, preserving the mathematical unknown's
         # block and StateSpace. Scalar/vector scratch solves remain scalar_field values. This keeps a

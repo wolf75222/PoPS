@@ -73,11 +73,12 @@ def _mg_kwargs(rel_tol, max_cycles, min_coarse, pre_smooth, post_smooth, bottom_
     not passed -> the native kMG*-sourced default, bit-identical); coarse_threshold is the ADC-644
     total-cell coarsening ceiling (0 = disabled)."""
     out = {}
-    for key, val, cast in (("rel_tol", rel_tol, native_real), ("max_cycles", max_cycles, int),
-                           ("min_coarse", min_coarse, int), ("pre_smooth", pre_smooth, int),
-                           ("post_smooth", post_smooth, int), ("bottom_sweeps", bottom_sweeps, int),
-                           ("coarse_threshold", coarse_threshold, int)):
+    if rel_tol is not None:
+        out["rel_tol"] = native_real(rel_tol, where="System.set_poisson.rel_tol")
+    for key, val in (("max_cycles", max_cycles), ("min_coarse", min_coarse),
+                     ("pre_smooth", pre_smooth), ("post_smooth", post_smooth),
+                     ("bottom_sweeps", bottom_sweeps),
+                     ("coarse_threshold", coarse_threshold)):
         if val is not None:
-            out[key] = (cast(val, where="System.set_poisson.%s" % key)
-                        if cast is native_real else cast(val))
+            out[key] = int(val)
     return out

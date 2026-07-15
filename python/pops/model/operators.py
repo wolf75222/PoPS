@@ -85,6 +85,9 @@ class LocalLinearOperator:
 
     __pops_ir_immutable__ = True
 
+    domain: Space
+    range: Space
+
     def __init__(self, domain: Any, range_: Any) -> None:
         if not isinstance(domain, Space) or not isinstance(range_, Space):
             raise TypeError(
@@ -136,6 +139,9 @@ class MatrixFreeOperator:
     (``solve_linear``). Domain and range retain their complete typed spaces."""
 
     __pops_ir_immutable__ = True
+
+    domain: Space
+    range: Space
 
     def __init__(self, domain: Any, range_: Any) -> None:
         if not isinstance(domain, Space) or not isinstance(range_, Space):

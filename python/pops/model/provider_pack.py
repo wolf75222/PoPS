@@ -6,7 +6,7 @@ identity and the declaration contract until the native component registry can co
 """
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
@@ -170,7 +170,7 @@ class ProviderPack:
     def __len__(self) -> int:
         return len(self._entries)
 
-    def __iter__(self) -> Iterable[ComponentKey]:
+    def __iter__(self) -> Iterator[ComponentKey]:
         return iter(self._entries)
 
     def keys(self) -> Any:

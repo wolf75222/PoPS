@@ -43,7 +43,7 @@ def _vtk_array(value: Any) -> tuple[str, str]:
     vtk_type = _VTK_TYPES.get(array.dtype.str)
     if vtk_type is None:
         raise TypeError("ParaView writer does not support dtype %s" % array.dtype)
-    raw = memoryview(array).cast("B").tobytes()
+    raw = array.tobytes(order="C")
     encoded = base64.b64encode(struct.pack("<I", len(raw)) + raw).decode("ascii")
     return vtk_type, encoded
 

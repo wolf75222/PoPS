@@ -106,7 +106,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         # loudly (parity with the block-name drift check). None for a model with no backing Module.
         self._module_hash = module_hash
         self.program_name = getattr(self.program, "name", None)
-        self.program_hash = self.program._ir_hash() if hasattr(self.program, "_ir_hash") else None
+        program_ir_hash = getattr(self.program, "_ir_hash", None)
+        self.program_hash = program_ir_hash() if callable(program_ir_hash) else None
         self.program_graph_hash = (
             self.program_graph.graph_hash if self.program_graph is not None else None
         )
@@ -421,7 +422,8 @@ class CompiledProblem(CompiledProblemDumpMixin):
         Prints the program name, a short program-source/IR hash, a short ABI key and the validated
         library count -- never the ``.so`` contents and never a ``<...object at 0x...>`` repr. The
         hash makes two artifacts of the same program look identical run to run (deterministic)."""
-        short_hash = (self._problem_hash or self.program_hash or "")[:12] or "none"
+        hash_value = self._problem_hash or self.program_hash
+        short_hash = hash_value[:12] if isinstance(hash_value, str) and hash_value else "none"
         short_abi = (self.abi_key or "")[:12] or "none"
         return ("CompiledProblem(name=%s, hash=%s, backend=%s, libraries=%d)"
                 % (self.program_name or "problem", short_hash, short_abi, len(self.libraries)))

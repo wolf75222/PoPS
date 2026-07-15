@@ -6,9 +6,9 @@ authority rejects it here, before native blocks freeze their configuration.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 
 def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
@@ -85,10 +85,13 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             first.get("state"), where="prepared boundary state")
         if boundary_state_identity != state_identity:
             raise ValueError("prepared boundary state differs from its owning block route")
+        required_depth = first.get("required_depth")
+        if isinstance(required_depth, bool) or not isinstance(required_depth, int):
+            raise TypeError("prepared boundary required_depth must be an exact integer")
         base_arguments = (
             block.name,
             str(first.get("identity")),
-            int(first.get("required_depth")),
+            required_depth,
             types,
             values,
             ncomp,
@@ -134,6 +137,8 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
                     for value in parameters):
                 raise TypeError("boundary component parameter table is not canonical")
             operation = row.get("operation")
+            if not isinstance(operation, str):
+                raise TypeError("prepared boundary component operation must be text")
             install_component = component_installers.get(operation)
             if not callable(install_component):
                 raise NotImplementedError(
@@ -208,20 +213,20 @@ def _install_boundary_authorities(engine: Any, install_plan: Any) -> None:
             "the selected native provider cannot roll back boundary authority installation")
     try:
         for state_identity, block_name in sorted(state_routes.items()):
-            install_state_route(block_name, state_identity)
+            cast(Callable[..., Any], install_state_route)(block_name, state_identity)
         install_field_route = getattr(native, "_install_boundary_field_route", None)
         if field_routes and not callable(install_field_route):
             raise NotImplementedError(
                 "the selected native provider cannot bind qualified boundary field storage")
         for field_identity, provider_slot in field_routes:
-            install_field_route(field_identity, provider_slot)
+            cast(Callable[..., Any], install_field_route)(field_identity, provider_slot)
         for base_arguments, component_jobs in prepared:
-            install(*base_arguments)
+            cast(Callable[..., Any], install)(*base_arguments)
             for job in component_jobs:
                 installer, *arguments = job
-                installer(*arguments)
+                cast(Callable[..., Any], installer)(*arguments)
     except BaseException:
-        discard()
+        cast(Callable[..., Any], discard)()
         raise
     engine._boundary_authorities = MappingProxyType(reports)
 
@@ -320,7 +325,10 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
         if name in block_layouts:
             raise ValueError("native block has multiple LayoutPlan assignments")
         block_layouts[name] = assignment.layout.qualified_id
-    block_names = tuple(native.block_names())
+    block_names_provider = getattr(native, "block_names", None)
+    if not callable(block_names_provider):
+        raise TypeError("native shared-interface provider must expose block_names()")
+    block_names = tuple(cast(Any, block_names_provider()))
     if len(block_names) != len(set(block_names)):
         raise ValueError("native block registry contains duplicate names")
     block_indices = {name: index for index, name in enumerate(block_names)}
@@ -395,9 +403,9 @@ def finalize_runtime_authorities(engine: Any, install_plan: Any) -> None:
             "the selected native provider cannot roll back shared interface installation")
     try:
         for job in jobs:
-            install(*job)
+            cast(Callable[..., Any], install)(*job)
     except BaseException:
-        discard()
+        cast(Callable[..., Any], discard)()
         raise
     engine._interface_authorities = MappingProxyType(installed_reports)
 
@@ -441,16 +449,21 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
             from pops._generated_component_interfaces import NATIVE_TAGGING_PROGRAM_ABI
 
             capability = binding.get("tagging_capability")
+            maximum_stencil_terms = (
+                capability.get("maximum_stencil_terms")
+                if isinstance(capability, Mapping)
+                else None
+            )
             if not isinstance(capability, Mapping) \
                     or tuple(capability.get("candidate_outputs", ())) != tuple(
                         NATIVE_TAGGING_PROGRAM_ABI["candidate_outputs"]) \
                     or not set(capability.get("indicator_stencil_routes", ())) <= set(
                         NATIVE_TAGGING_PROGRAM_ABI["indicator_stencil_routes"]) \
                     or not capability.get("indicator_stencil_routes") \
-                    or isinstance(capability.get("maximum_stencil_terms"), bool) \
-                    or not isinstance(capability.get("maximum_stencil_terms"), int) \
-                    or capability.get("maximum_stencil_terms") < 1 \
-                    or capability.get("maximum_stencil_terms") \
+                    or isinstance(maximum_stencil_terms, bool) \
+                    or not isinstance(maximum_stencil_terms, int) \
+                    or maximum_stencil_terms < 1 \
+                    or maximum_stencil_terms \
                     > NATIVE_TAGGING_PROGRAM_ABI["maximum_stencil_terms"] \
                     or capability.get("non_finite_policy") \
                     != NATIVE_TAGGING_PROGRAM_ABI["non_finite_policy"] \
@@ -521,9 +534,9 @@ def _install_amr_provider_authorities(engine: Any, install_plan: Any) -> None:
             "the selected native provider cannot roll back AMR provider installation")
     try:
         for installer, handle, binding, execution in jobs:
-            installer(handle, binding, execution)
+            cast(Callable[..., Any], installer)(handle, binding, execution)
     except BaseException:
-        discard()
+        cast(Callable[..., Any], discard)()
         raise
     engine._amr_provider_authorities = MappingProxyType(reports)
 

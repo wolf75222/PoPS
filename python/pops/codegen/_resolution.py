@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import json
-from typing import Any
+from typing import Any, cast
 
 
 CAPABILITY_EVIDENCE_SCHEMA_VERSION = 2
@@ -111,7 +111,7 @@ def _collect_problem_evidence(
         module = getattr(model, "module", None)
         registry = getattr(module if module is not None else model, "operator_registry", None)
         if callable(registry):
-            registry = registry()
+            registry = cast(Any, registry())
             names = registry.names()
             for operator_name in names:
                 operator = registry.get(operator_name)

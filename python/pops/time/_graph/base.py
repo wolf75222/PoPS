@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from fractions import Fraction
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from pops._ir.literals import ScalarLiteral, scalar_data
 from pops.model.ownership import OwnerPath
@@ -108,8 +108,10 @@ def point(value: Any) -> TimePoint | StagePoint:
 
 def point_clocks(value: TimePoint | StagePoint) -> frozenset[Clock]:
     if type(value) is TimePoint:
-        return frozenset((value.clock,))
-    return frozenset(item.clock for item in value.partitions.values())
+        return frozenset((cast(TimePoint, value).clock,))
+    return frozenset(
+        item.clock for item in cast(StagePoint, value).partitions.values()
+    )
 
 
 def node_data(node: Any, **specific: Any) -> dict[str, Any]:
@@ -127,6 +129,7 @@ class Node:
 
     kind: ClassVar[str]
     readable: ClassVar[bool] = True
+    node_id: int
 
     def references(self) -> tuple[ValueRef, ...]:
         return ()

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import Any, cast
 
 
 _CONTROL_BLOCK_KEYS = (
@@ -92,7 +92,9 @@ def _component_pair_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
     )
     if any(not isinstance(value, str) or not value for value in values):
         raise TypeError("prepared boundary residual/JVP row has incomplete qualified identities")
-    return values
+    # The guard above proves every entry is a non-empty string.  Preserve the compact validation
+    # while exposing its exact post-condition to static consumers.
+    return cast(tuple[str, str, str, str], values)
 
 
 def _qualified_table(row: dict[str, Any], name: str) -> tuple[str, ...]:
@@ -126,6 +128,9 @@ def validate_prepared_boundary_jacvec(blocks: tuple[Any, ...], program: Any) -> 
         if getattr(value, "op", None) != "rhs_jacvec":
             continue
         block_name = _block_name(value.inputs[2])
+        if block_name is None:
+            raise ValueError(
+                "%s has no owner-qualified block identity" % _jacvec_location(value, path))
         block = by_name.get(block_name)
         if block is None:
             raise ValueError(
@@ -325,7 +330,10 @@ def validate_shared_interface_program(
         group = values[index:end]
         names = [_block_name(row) for row in group]
         if len(names) != len(set(names)):
-            participating = sorted(set(names) & participant_names)
+            participating = sorted(
+                name for name in set(names)
+                if isinstance(name, str) and name in participant_names
+            )
             if participating:
                 raise ValueError(
                     "one simultaneous shared-interface RHS group contains duplicate block(s) %s"

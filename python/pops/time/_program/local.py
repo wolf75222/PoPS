@@ -66,11 +66,12 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
         a = (-l_coeff).to_polynomial()  # operator = I - a*L, so L carries coefficient -a
         inputs = (rhs, op_value, fields) if fields is not None else (rhs, op_value)
         identity = getattr(prepared, "identity", None)
-        if not isinstance(getattr(identity, "token", None), str):
+        identity_token = getattr(identity, "token", None)
+        if not isinstance(identity_token, str):
             raise TypeError("solve: DenseLU provider identity is not canonical")
         attrs = {
             "linear_source": lname, "a_coeff": a,
-            "solver_identity": identity.token,
+            "solver_identity": identity_token,
             "problem_kind": "local_linear",
         }
         if "operator_handle" in op_value.attrs:
@@ -189,7 +190,8 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
 
         identity = getattr(prepared, "identity", None)
         identity_data = getattr(prepared, "identity_data", None)
-        if not isinstance(getattr(identity, "token", None), str):
+        identity_token = getattr(identity, "token", None)
+        if not isinstance(identity_token, str):
             raise TypeError("CompositeTensorFAC solver identity is not canonical")
         if not isinstance(identity_data, Mapping) or identity_data.get("solver_id") != (
                 "composite_tensor_fac"):
@@ -217,7 +219,7 @@ class _ProgramLocal(_ProgramConstants, _ProgramBase):
             "hierarchy_solver_identity": deepcopy(identity_data),
             "hierarchy_block_index": block_index,
             "hierarchy_tensor_coefficients": coefficients.id,
-            "solver_identity": identity.token,
+            "solver_identity": identity_token,
             "problem_kind": "scalar_tensor_elliptic_hierarchy",
         }
         token = self._new(

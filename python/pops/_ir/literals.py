@@ -177,7 +177,7 @@ class ScalarLiteral:
         *,
         unit: str | None = None,
         target: Any = None,
-    ) -> "ScalarLiteral":
+    ) -> ScalarLiteral:
         if isinstance(value, ScalarLiteral):
             if unit is None and target is None:
                 return value
@@ -241,7 +241,7 @@ class ScalarLiteral:
         cpp: str,
         unit: str | None = None,
         target: Any = None,
-    ) -> "ScalarLiteral":
+    ) -> ScalarLiteral:
         if not isinstance(expression, str) or not expression \
                 or not isinstance(cpp, str) or not cpp:
             raise TypeError("an algebraic literal requires non-empty string symbolic and C++ spellings")
@@ -368,6 +368,8 @@ def _decimal_parts(value: Decimal | int) -> tuple[int, int]:
     if not isinstance(value, Decimal) or not value.is_finite():
         raise TypeError("exact Decimal algebra accepts only finite Decimal and int operands")
     sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise TypeError("finite Decimal values must carry an integral exponent")
     coefficient = int("".join(map(str, digits))) if digits else 0
     return (-coefficient if sign else coefficient), exponent
 
@@ -393,6 +395,8 @@ def exact_decimal_negate(value: Decimal) -> Decimal:
     if not isinstance(value, Decimal) or not value.is_finite():
         raise TypeError("exact Decimal negation requires a finite Decimal")
     sign, digits, exponent = value.as_tuple()
+    if not isinstance(exponent, int):
+        raise TypeError("finite Decimal values must carry an integral exponent")
     return Decimal((1 - sign, digits, exponent))
 
 

@@ -1,7 +1,7 @@
 """Program-owned state and resolution tables for immutable temporal handles."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops.time.handles import (
     HistoryHandle, StageHandle, StateEndpointHandle, TimeState,
@@ -13,8 +13,13 @@ from pops.time._program.value_validation import (
 from pops.time.references import block_name, state_name
 from pops.time.values import ProgramValue, _Affine, _resolve_handle
 
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
-class _ProgramTimeHandles:
+
+class _ProgramTimeHandles(_ProgramBase):
     """Mutable authoring state behind otherwise immutable temporal handles."""
 
     def _init_time_handle_tables(self) -> None:
@@ -208,7 +213,7 @@ class _ProgramTimeHandles:
         state = self._time_states.get(
             self._time_state_key(handle.block, handle.state, handle.clock))
         issued = self._time_history_handles.get((state, handle.lag)) if state is not None else None
-        if issued is not handle:
+        if state is None or issued is not handle:
             raise ValueError("%s: the HistoryHandle was not issued by this Program" % where)
         return handle, state
 

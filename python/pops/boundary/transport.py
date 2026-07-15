@@ -1,7 +1,7 @@
 """Typed transport-boundary authoring and exact low-level port resolution."""
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 import hashlib
 import json
@@ -49,6 +49,15 @@ def _state(value: Any, *, where: str, require_instance: bool = True) -> Handle:
             "ambiguous at a physical boundary" % where
         )
     return value
+
+
+def _state_components(state: Handle, *, where: str) -> tuple[Any, ...]:
+    """Return the authenticated state-space component manifest."""
+    space = getattr(state, "space", None)
+    raw = getattr(space, "components", None)
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Iterable):
+        raise TypeError("%s state has no iterable component manifest" % where)
+    return tuple(raw)
 
 
 def _converter(value: Any) -> Handle | None:
@@ -344,7 +353,7 @@ class Inflow:
         boundary: Any,
         requirement: BoundaryStencilRequirement,
     ) -> ResolvedTransportCondition:
-        components = getattr(self.state.space, "components", ())
+        components = _state_components(self.state, where="Inflow")
         if len(self.values) != len(components):
             raise ValueError(
                 "Inflow for state %s must prescribe exactly %d components, got %d"
@@ -464,7 +473,7 @@ class ResolvedTransportBoundarySet:
                 "the installed native block provider requires one state per boundary plan"
             )
         state = next(iter(states))
-        components = tuple(getattr(state.space, "components", ()))
+        components = _state_components(state, where="resolved transport boundary")
         if not components:
             raise TypeError("resolved transport boundary state has no component manifest")
         ncomp = len(components)

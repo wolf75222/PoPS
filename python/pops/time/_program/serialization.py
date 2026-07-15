@@ -6,13 +6,17 @@ import json
 from collections.abc import Mapping
 from enum import Enum
 from types import FunctionType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pops._ir.literals import scalar_data
 from pops.model.handles import Handle
 from pops.time.references import handle_data
 from pops.time.values import ProgramValue, _Affine, _affine_ids
 
+if TYPE_CHECKING:
+    from pops.time._program.contract import _ProgramBase
+else:
+    _ProgramBase = object
 
 def _schedule_json_ready(value: Any) -> Any:
     """Strict canonical projection for extension-owned schedule payloads."""
@@ -116,7 +120,7 @@ def _serialize_field_context(context: Any) -> dict[str, Any]:
     }
 
 
-class _ProgramSerialization:
+class _ProgramSerialization(_ProgramBase):
     """Mixin owning the canonical external form of a Program graph."""
 
     @staticmethod
@@ -203,7 +207,8 @@ class _ProgramSerialization:
                 for state_ref, value in sorted(
                     self._commits.items(), key=lambda item: item[0].qualified_id)
             ],
-            "block_order": [handle_data(block) for block in sorted(order, key=order.get)],
+            "block_order": [handle_data(block) for block in sorted(
+                order, key=lambda block: order[block])],
         }
         transaction = self.transaction_plan()
         if transaction is not None:

@@ -49,10 +49,11 @@ class _EvalMixin(_HyperbolicModel):
                 raise ValueError(
                     "%s scalar state is valid only for a one-component model" % where)
             state = state.reshape((1,))
-        if state.shape[0] != self.n_vars:
+        component_count = len(state)
+        if component_count != self.n_vars:
             raise ValueError(
                 "%s state has %d component(s); model %r requires %d"
-                % (where, state.shape[0], self.name, self.n_vars))
+                % (where, component_count, self.name, self.n_vars))
         return state
 
     def _env(self, U: Any, aux: Any) -> dict:

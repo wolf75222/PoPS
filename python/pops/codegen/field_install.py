@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 import math
-from typing import Any
+from typing import Any, NoReturn
 
 from pops.codegen._artifact_freeze import freeze_artifact_value
 from pops.codegen.lowering_coverage import (
@@ -32,7 +32,9 @@ from pops.fields.nullspace import ConstantNullspace
 from pops.fields.operator import FieldOperator, _field_targets_unknown
 
 
-def _reject(rows: list[LoweringCoverageRow], source: str, gate: str, message: str) -> None:
+def _reject(
+    rows: list[LoweringCoverageRow], source: str, gate: str, message: str,
+) -> NoReturn:
     report = LoweringCoverageReport((*rows, LoweringCoverageRow(
         source, "rejected", gate=gate)))
     raise LoweringRejection(
@@ -530,6 +532,8 @@ def resolve_field_install_plan(
                 _reject(rows, source, "field.operator.reaction_sign_not_native",
                         "field %r must normalize to -laplacian(phi) + kappa*phi with kappa > 0"
                         % name)
+            if handle is None:
+                raise RuntimeError("validated bind-parameter reaction lost its handle")
             reaction_options = {
                 "schema_version": 1,
                 "kind": "scalar_bind_parameter",
@@ -900,7 +904,10 @@ def resolve_field_install_plan(
                 fac_source, "lowered",
                 ("field-install:%s:fac-options" % name,)))
 
-    output_owner = operator.unknown.block_ref.local_id
+    output_block = operator.unknown.block_ref
+    if output_block is None:
+        raise RuntimeError("resolved field output lost its owner-qualified block")
+    output_owner = output_block.local_id
     rows.append(LoweringCoverageRow(
         "field:%s:output" % name,
         "lowered",
@@ -916,8 +923,8 @@ def resolve_field_install_plan(
             strict_field_data(provider_identity)).hex(),
         "provider_pack": [dict(route) for route in provider_route],
         "output_route": {
-            "owner_identity": operator.unknown.block_ref.canonical_identity(),
-            "owner_block": operator.unknown.block_ref.local_id,
+            "owner_identity": output_block.canonical_identity(),
+            "owner_block": output_block.local_id,
             "key": operator.name,
             "components": output_components,
             "gradient_sign": gradient_sign,

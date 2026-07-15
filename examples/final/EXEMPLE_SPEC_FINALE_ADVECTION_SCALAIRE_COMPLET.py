@@ -314,6 +314,7 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
         ConflictPolicy,
         EqualityPolicy,
         Hysteresis,
+        PatchLayout,
         Tag,
     )
     from pops.layouts import AMR
@@ -357,6 +358,9 @@ def build_amr_layout(core: ScalarAdvectionAuthoring) -> Any:
             AMRClockRelation(0, 1, 2),
             AMRClockRelation(1, 2, 2),
         )),
+        # The distribution choice is explicit. The native provider derives the coarse patch size;
+        # no public integer sentinel or duplicated grid-size policy is authored here.
+        patch_layout=PatchLayout(distribute_coarse=True),
     )
 
 

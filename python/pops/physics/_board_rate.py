@@ -1,14 +1,19 @@
 """Rate-equation authoring for the physics blackboard facade."""
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import math as _bm
 from ._board_contract import atomic_attrs, normalize_sequence, require_name
 from .board_handles import FluxHandle, SourceHandle, StateHandle, _safe_name
 
+if TYPE_CHECKING:
+    from ._model_contract import _BoardModel
+else:
+    _BoardModel = object
 
-class _RateAuthoringMixin:
+
+class _RateAuthoringMixin(_BoardModel):
     """Build and validate explicit finite-volume/rate equations."""
 
     def rate(self, name: Any, *, equation: Any) -> Any:
@@ -28,8 +33,12 @@ class _RateAuthoringMixin:
             state = self._species_handle("rate", name, state)
         flux, sources = self._destructure_rate(equation.rhs)
         if self._multi_module is not None:
-            fluxes = () if flux is None else (
-                self._multi_module.operator_handle(flux.name),)
+            if flux is None:
+                fluxes = ()
+                default_flux = None
+            else:
+                fluxes = (self._multi_module.operator_handle(flux.name),)
+                default_flux = fluxes[0] if flux.is_default else None
             source_refs = tuple(
                 self._multi_module.operator_handle(source.reg_name) for source in sources)
             result = self._multi_module.rate_operator(
@@ -37,9 +46,7 @@ class _RateAuthoringMixin:
                 state_space=state.space,
                 flux=flux is not None,
                 fluxes=fluxes,
-                default_flux=(
-                    fluxes[0] if flux is not None and flux.is_default else None
-                ),
+                default_flux=default_flux,
                 sources=source_refs,
             )
             self._rate_contracts[result] = {

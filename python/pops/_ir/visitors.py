@@ -9,7 +9,8 @@ Originally in pops.dsl.
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 from .expr import Const, Expr, Var, _Bin, Neg, Sqrt, Abs, Sign
 from .values import EigWitness, StateRef, RuntimeParamRef
@@ -20,7 +21,11 @@ def _children(e: Any) -> Any:
     if callable(protocol):
         children = protocol()
         if children is not NotImplemented:
-            children = tuple(children)
+            if not isinstance(children, Iterable):
+                raise TypeError(
+                    "%s.__pops_ir_children__() must return an iterable of Expr nodes"
+                    % type(e).__name__)
+            children = tuple(cast(Iterable[Any], children))
             if any(not isinstance(child, Expr) for child in children):
                 raise TypeError(
                     "%s.__pops_ir_children__() must return only Expr nodes"

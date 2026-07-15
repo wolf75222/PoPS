@@ -235,22 +235,23 @@ endif()
 target_link_libraries(pops INTERFACE Kokkos::kokkos)
 target_compile_definitions(pops INTERFACE POPS_HAS_KOKKOS)
 set(POPS_HAS_KOKKOS ON)
-# Pool Ninja taille 1 partage par les cibles a TU geante du module (python/_pops) :
-# serialisation anti-OOM de leurs compiles sous Kokkos, cf. python/CMakeLists.txt.
-# Declare ICI et UNE SEULE fois : un nom de pool duplique dans la
-# propriete GLOBALE JOB_POOLS rend build.ninja invalide ("ninja: error: duplicate pool").
-# Les consommateurs ne posent que JOB_POOL_COMPILE. (tests/ garde son pool distinct
-# pops_heavy_tu, declare dans tests/CMakeLists.txt.)
-# ADC-335 : profondeur du pool de compile des TU lourdes (module _pops ET tests/). Defaut 1 =
-# anti-OOM historique (deux TU geantes -O3 sous nvcc/Kokkos depassent les ~7 Go du runner -> exit
-# 143). Depuis le split par transport (ADC-335) chaque sous-TU est bien plus petite : on peut RELEVER
-# ce pool pour que `-j` compile plusieurs sous-TU a la fois (c'est le POOL, pas `-j`, qui borne la
-# concurrence des TU lourdes). A relever UNIQUEMENT apres avoir mesure la RSS par sous-TU sur le
-# runner nvcc (CI ci-kokkos*), sinon on re-OOM. Hors Kokkos / machine a forte RAM : relevable
-# librement (-DPOPS_HEAVY_TU_POOL=$(nproc)).
-set(POPS_HEAVY_TU_POOL 1 CACHE STRING
-    "Profondeur du pool Ninja des TU lourdes (_pops + tests) ; defaut 1 (anti-OOM), relever apres mesure RSS")
-set_property(GLOBAL APPEND PROPERTY JOB_POOLS pops_heavy_module_tu=${POPS_HEAVY_TU_POOL})
+# Pool Ninja taille 1 des TU de production du module Python (_pops) : serialisation anti-OOM de
+# leurs compiles -O3 sous Kokkos, cf. python/CMakeLists.txt. Declare ICI et UNE SEULE fois : un nom
+# de pool duplique dans la propriete GLOBALE JOB_POOLS rend build.ninja invalide
+# ("ninja: error: duplicate pool"). Les consommateurs ne posent que JOB_POOL_COMPILE.
+#
+# La profondeur production reste independante du pool -O0 des tests/runtime declare par src/ quand
+# POPS_BUILD_TESTS=ON. Elle ne doit etre relevee qu'apres mesure de la RSS par TU sur le runner vise.
+# Les builds Python locaux et les wheels peuvent fournir explicitement une valeur mesuree plus haute.
+set(POPS_HEAVY_MODULE_TU_POOL 1 CACHE STRING
+    "Profondeur du pool Ninja des TU lourdes de production _pops (-O3) ; defaut 1 (anti-OOM)")
+set_property(GLOBAL APPEND PROPERTY
+  JOB_POOLS pops_heavy_module_tu=${POPS_HEAVY_MODULE_TU_POOL})
+
+# Pool distinct pour les TU runtime/tests compilees a -O0. Il n'est declare ni consomme lorsque les
+# tests sont desactives, et ne peut donc pas relever implicitement la concurrence du module -O3.
+set(POPS_HEAVY_TEST_TU_POOL 1 CACHE STRING
+    "Profondeur du pool Ninja des TU lourdes runtime/tests (-O0) ; defaut 1 (anti-OOM)")
 
 # MPI : backend distribue, confine au seam comm (parallel/comm.hpp). Optionnel :
 # par defaut OFF, le build et les tests restent serie (comm.hpp = rang unique).

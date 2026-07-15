@@ -12,7 +12,11 @@ Inert descriptors; the runtime assembles the actual density field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from pops.model import Handle
+    from pops.problem.handles import BlockHandle
 
 from pops.descriptors import Descriptor
 from pops.descriptors_report import RequirementSet
@@ -35,6 +39,14 @@ class _RHS(Descriptor):
         """RHS declarations are immutable value nodes and need no freeze-time rewrite."""
         return self
 
+    def resolve_references(self, resolver: Any) -> _RHS:
+        """Resolve every declaration handle carried by this RHS value node."""
+        raise NotImplementedError
+
+    def declaration_references(self) -> tuple[Any, ...]:
+        """Return the declaration handles owned by this RHS value node."""
+        raise NotImplementedError
+
     def __setattr__(self, name: str, value: Any) -> None:
         raise AttributeError("%s is immutable" % type(self).__name__)
 
@@ -48,6 +60,8 @@ class ChargeDensity(_RHS):
     Built with :meth:`from_blocks` from the names of the physics blocks that deposit
     charge; the runtime assembles the density from those blocks' conserved state.
     """
+
+    blocks: tuple[BlockHandle, ...]
 
     def __init__(self, blocks: Any = ()) -> None:
         from pops.problem.handles import BlockHandle
@@ -111,6 +125,8 @@ class FixedSource(_RHS):
     right-hand side alongside the block-deposited charge; the runtime reads its values.
     """
 
+    aux_field: Handle
+
     def __init__(self, aux_field: Any) -> None:
         from pops.model import Handle
 
@@ -150,6 +166,8 @@ class SumRHS(_RHS):
     FixedSource("rho_background")``) or directly (``SumRHS(a, b, c)``). It flattens nested sums
     so the composition stays a single flat list of terms, and unions each term's requirements.
     """
+
+    terms: tuple[_RHS, ...]
 
     def __init__(self, *terms: Any) -> None:
         flat = []

@@ -57,6 +57,9 @@ class FieldReadPolicy:
 
     __pops_ir_immutable__ = True
 
+    def to_data(self) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 def _failure(value: Any) -> FieldFailureAction:
     if not isinstance(value, FieldFailureAction):

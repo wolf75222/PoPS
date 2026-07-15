@@ -42,8 +42,11 @@ class _ImmutableTransferPolicy:
                 routes[name] = protocol()
         if routes:
             data["routes"] = routes
-        if hasattr(self, "native_route"):
-            data["native_route"] = self.native_route
+        native_route = getattr(self, "native_route", None)
+        if native_route is not None:
+            if not isinstance(native_route, str) or not native_route:
+                raise TypeError("AMR transfer native_route must be non-empty text")
+            data["native_route"] = native_route
         return data
 
 

@@ -19,6 +19,8 @@ def resolve_refine_threshold(
         return resolve_handle(threshold, resolver, "Refine threshold")
     if isinstance(threshold, ValueExpr):
         resolved = threshold.resolve_references(resolver)
+        if not isinstance(resolved, ValueExpr):
+            raise TypeError("Refine threshold resolution must preserve ValueExpr")
         if not isinstance(resolved.handle, ParamHandle):
             raise TypeError("Refine threshold ValueExpr must read a ParamHandle")
         return resolved

@@ -9,7 +9,7 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, make_identity
 from pops.model import Handle
@@ -50,7 +50,7 @@ def array_evidence(value: Any) -> dict[str, Any]:
     digest.update(b"\0")
     digest.update(",".join(str(item) for item in array.shape).encode("ascii"))
     digest.update(b"\0")
-    digest.update(memoryview(array).cast("B"))
+    digest.update(memoryview(cast(Any, array)).cast("B"))
     return {
         "dtype": array.dtype.str,
         "shape": list(array.shape),
@@ -371,6 +371,8 @@ class FieldPayload:
 
     @property
     def array_dtype(self) -> str:
+        if self.dtype is None:
+            raise RuntimeError("validated field payload is missing its canonical dtype")
         return self.dtype
 
     def materialize(self) -> Any:

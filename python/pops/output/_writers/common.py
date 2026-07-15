@@ -235,6 +235,8 @@ def temporary_path(target: Path, communicator: Any = None) -> Path:
         path = name
     if communicator is not None:
         path = communicator.bcast(path, root=0)
+    if not isinstance(path, (str, os.PathLike)):
+        raise RuntimeError("output temporary-path authority returned no filesystem path")
     return Path(path)
 
 

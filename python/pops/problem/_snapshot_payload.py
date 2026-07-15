@@ -261,7 +261,11 @@ def _artifact_manifest_data(manifest_owner: Any, manifest_data: Any) -> dict[str
         if not callable(bind_data):
             raise TypeError(
                 "model manifest parameter %r must be a canonical ParameterDeclaration" % name)
-        bind_row = dict(bind_data())
+        raw_bind_row = bind_data()
+        if not isinstance(raw_bind_row, Mapping):
+            raise TypeError(
+                "model manifest parameter %r bind_data() must return a mapping" % name)
+        bind_row = dict(raw_bind_row)
         if {key: value for key, value in row.items() if key not in {"qid", "handle"}} != bind_row:
             raise ValueError(
                 "model manifest parameter %r disagrees with its declaration authority" % name)

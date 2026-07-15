@@ -7,7 +7,7 @@ import math
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pops.identity import Identity, make_identity
 from pops.mesh._layout_plan_contracts import (
@@ -346,9 +346,11 @@ class _PreparedExternalWriter(PreparedPublication):
 
         if preparation.request.consumer_id != effect.consumer_id:
             raise ValueError("native Writer request identity differs from its accepted effect")
+        target_format = effect.target.output_format
+        if not isinstance(target_format, Mapping):
+            raise TypeError("accepted native Writer target must carry a format mapping")
         if consumer_format_data(
-                preparation.format, where="resolved native Writer format") != \
-                dict(effect.target.output_format):
+                preparation.format, where="resolved native Writer format") != dict(target_format):
             raise ValueError("resolved native Writer format differs from its accepted target")
         if effect.target.parallel_mode is not ParallelMode.SERIAL \
                 or preparation.request.parallel:
@@ -577,7 +579,7 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
                 "accepted",
                 reduction,
             )
-            values.append(DiagnosticPayload(key, value, "unspecified", {}))
+            values.append(DiagnosticPayload(key, cast(float, value), "unspecified", {}))
         return tuple(values)
 
     def _publish_diagnostics(self, effect: AcceptedSideEffect,
@@ -608,7 +610,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
             for value in published:
                 token = value.key.identity.token
                 if existed[token]:
-                    self._diagnostics[token] = previous[token]
+                    previous_value = previous[token]
+                    if previous_value is None:
+                        raise RuntimeError("diagnostic rollback lost its prior accepted payload")
+                    self._diagnostics[token] = previous_value
                 else:
                     self._diagnostics.pop(token, None)
             self._pending.pop(_effect.identity.token, None)
@@ -712,10 +717,10 @@ class RuntimeOutputSnapshot:
         volumes = _cell_volumes(geometry, scale)
         return LevelGeometry(
             _layout_identity(layout), "amr" if layout.adaptive else "uniform", level,
-            geometry.lower, spacing, (ny, nx), boxes, coverage, volumes,
+            cast(tuple[float, float], geometry.lower), spacing, (ny, nx), boxes, coverage, volumes,
             coordinate_system=geometry.coordinate_system,
             cell_measure=geometry.cell_measure,
-            axis_names=geometry.axis_names)
+            axis_names=cast(tuple[str, str], geometry.axis_names))
 
     def _state(
         self, block: str, layout: Any, level: int, *, collective: bool

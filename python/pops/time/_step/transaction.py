@@ -183,7 +183,7 @@ def ensure_step_strategy(strategy: Any) -> StepStrategy:
 
     if not isinstance(strategy, StepStrategy):
         raise TypeError("step_strategy expects a registered StepStrategy provider")
-    provider = registered_step_strategy_type(getattr(strategy, "kind", None))
+    provider = registered_step_strategy_type(strategy.kind)
     if provider is not type(strategy):
         raise TypeError("step_strategy provider is not registered for its exact kind")
     required = (

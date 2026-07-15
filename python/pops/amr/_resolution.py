@@ -6,7 +6,7 @@ extension is invoked through a narrow protocol; there is no class-name or string
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -15,10 +15,8 @@ from pops.identity.semantic import semantic_value
 from pops.model import Handle, OwnerPath, ParamHandle
 
 from .authoring import (
-    AMRExecution,
     AMRHierarchy,
     AMRRegrid,
-    AMRTagging,
 )
 
 
@@ -53,7 +51,7 @@ class AMRLayoutResolver(Protocol):
     """Small extension interface implemented by an adaptive layout authority."""
 
     def resolve_amr_authorities(
-        self, context: "AMRResolutionContext",
+        self, context: AMRResolutionContext,
     ) -> ResolvedAMRAuthorities: ...
 
 
@@ -81,6 +79,20 @@ def _protocol(value: Any, name: str, *, where: str) -> Callable[..., Any]:
     if not callable(method):
         raise TypeError("%s must implement %s(...)" % (where, name))
     return method
+
+
+def _declaration_references(value: Any, *, where: str) -> tuple[Handle, ...]:
+    """Read one expression's reference protocol without accepting opaque containers."""
+    provider = getattr(value, "declaration_references", None)
+    if not callable(provider):
+        return ()
+    raw = provider()
+    if isinstance(raw, (str, bytes)) or not isinstance(raw, Iterable):
+        raise TypeError("%s.declaration_references() must return an iterable of Handles" % where)
+    references = tuple(raw)
+    if any(not isinstance(reference, Handle) for reference in references):
+        raise TypeError("%s.declaration_references() must contain only Handles" % where)
+    return references
 
 
 def _handle_token(domain: str, payload: Any) -> str:
@@ -244,10 +256,9 @@ class AMRTaggingResolutionContext:
                 "the installed discrete-gradient provider requires unit gradient scale; "
                 "a scaled indicator needs an explicit provider that preserves that scale"
             )
-        references = getattr(field, "declaration_references", None)
-        refs = references() if callable(references) else ()
+        refs = _declaration_references(field, where="AMR gradient indicator")
         state = getattr(field, "handle", None)
-        if len(refs) != 1 or state is not refs[0]:
+        if len(refs) != 1 or state is not refs[0] or not isinstance(state, Handle):
             raise TypeError(
                 "norm(grad(...)) AMR tagging requires exactly ValueExpr(block[state]); "
                 "compound indicators need their own resolve_for_amr_tagging protocol"
@@ -292,8 +303,7 @@ class AMRTaggingResolutionContext:
 
 
 def _threshold(value: Any) -> ParamHandle:
-    references = getattr(value, "declaration_references", None)
-    refs = references() if callable(references) else ()
+    refs = _declaration_references(value, where="AMR threshold")
     handle = getattr(value, "handle", None)
     if len(refs) != 1 or handle is not refs[0] or not isinstance(handle, ParamHandle):
         raise TypeError(
@@ -305,8 +315,7 @@ def _threshold(value: Any) -> ParamHandle:
 
 
 def _threshold_candidate(value: Any) -> ParamHandle | None:
-    references = getattr(value, "declaration_references", None)
-    refs = references() if callable(references) else ()
+    refs = _declaration_references(value, where="AMR threshold candidate")
     handle = getattr(value, "handle", None)
     if len(refs) == 1 and handle is refs[0] and isinstance(handle, ParamHandle):
         return _threshold(value)
@@ -438,6 +447,7 @@ def _combined_requirement(
 
 def _hierarchy(
     authoring: AMRHierarchy,
+    patch_layout: Any,
     regrid: AMRRegrid,
     transfer: Any,
     tagging: ResolvedTaggingAuthority,
@@ -536,6 +546,11 @@ def _hierarchy(
             "schedule": regrid.schedule.to_data(),
         },
     )
+    clock_owner = regrid.schedule.clock.owner
+    if clock_owner is None:
+        raise TypeError("AMR regrid clocks must carry an explicit owner")
+    patch_layout_data = _protocol(
+        patch_layout, "to_data", where="AMR patch layout authority")()
     plan = HierarchyPlan(
         transitions=transitions,
         nesting=nesting,
@@ -553,7 +568,11 @@ def _hierarchy(
         ),
         patch_generation=PatchGenerationPolicy(
             provider("box_array", "amr_patch_generation_provider"),
-            CanonicalOptions({"native_route": "box_array"}),
+            CanonicalOptions({
+                "native_route": "box_array",
+                "distribute_coarse": patch_layout_data["distribute_coarse"],
+                "coarse_max_grid": patch_layout_data["coarse_max_grid"],
+            }),
         ),
         load_balance=LoadBalancePolicy(
             provider("round_robin", "amr_load_balance_provider"),
@@ -561,7 +580,7 @@ def _hierarchy(
         ),
         regrid=RegridSchedule(
             regrid.schedule,
-            EventHandle(regrid.schedule.clock.owner, "amr.regrid.due.%s" % due_id),
+            EventHandle(clock_owner, "amr.regrid.due.%s" % due_id),
         ),
     )
     capabilities = HierarchyProviderCapabilities(
@@ -587,6 +606,7 @@ def resolve_amr_authorities(
     regrid: Any,
     transfer: Any,
     execution: Any,
+    patch_layout: Any,
     tagger: Any,
     clustering: Any,
     context: AMRResolutionContext,
@@ -598,6 +618,7 @@ def resolve_amr_authorities(
         "regrid": (regrid, ("to_data",)),
         "transfer": (transfer, ("resolve_references", "resolve", "inspect")),
         "execution": (execution, ("to_data", "runtime_execution_data")),
+        "patch_layout": (patch_layout, ("to_data",)),
     }
     for slot, (authority, methods) in protocols.items():
         for method in methods:
@@ -617,7 +638,7 @@ def resolve_amr_authorities(
     resolved_providers = {
         slot: value.resolve_references(context.resolve) for slot, value in providers.items()
     }
-    for slot, value in resolved_providers.items():
+    for value in resolved_providers.values():
         value.require_component_inputs(context.components)
     resolved_transfer = transfer.resolve_references(context.resolve).resolve(context.layout_plan)
     tagging_context = AMRTaggingResolutionContext(
@@ -630,6 +651,7 @@ def resolve_amr_authorities(
     resolved_providers["tagger"].require_tagging_graph(resolved_tagging.graph)
     resolved_hierarchy = _hierarchy(
         hierarchy,
+        patch_layout,
         regrid,
         resolved_transfer,
         resolved_tagging,

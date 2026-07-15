@@ -150,7 +150,7 @@ class LayoutTransfer(_DataContract):
             raise ValueError("LayoutTransfer must cross distinct layouts")
         self._seal(self._payload())
 
-    def _payload(self) -> dict[str, str]:
+    def _payload(self) -> dict[str, Any]:
         return {
             name: getattr(self, name)
             for name in (

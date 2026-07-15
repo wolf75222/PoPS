@@ -4,9 +4,9 @@
 # `pops` env and pins the per-platform toolchain); then this script, on every (re)build:
 #
 #   - activates the conda env `pops` (override: POPS_ENV_NAME), without tripping `set -u`;
-#   - sizes the heavy-TU Ninja pool (POPS_HEAVY_TU_POOL) from cores AND free RAM so the split module TUs
+#   - sizes the production-module heavy-TU Ninja pool (POPS_HEAVY_MODULE_TU_POOL) from cores AND free RAM so the split module TUs
 #     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default is 1, the
-#     CI out-of-memory guard). Pre-set POPS_HEAVY_TU_POOL to pin it by hand.
+#     CI out-of-memory guard). Pre-set POPS_HEAVY_MODULE_TU_POOL to pin it by hand.
 #   - exports the Kokkos / CMake discovery vars (Kokkos_ROOT, POPS_KOKKOS_ROOT, CMAKE_PREFIX_PATH) and a
 #     STABLE, cross-worktree ccache (CCACHE_DIR + CCACHE_BASEDIR -> a file already compiled in another
 #     worktree is reused instead of recompiled);
@@ -20,7 +20,7 @@
 #   bash scripts/build_python.sh --mpi      # also build the distributed MPI backend (POPS_USE_MPI=ON)
 #   bash scripts/build_python.sh --wheel-dir /tmp/wheels
 #                                           # build, retain, then install that exact wheel
-#   POPS_HEAVY_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
+#   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
 #   bash scripts/build_python.sh -- -e      # pass extra args through to pip (here: editable install)
 #
 # NOT `set -u`: `conda activate` references unset variables in its own shell hook.
@@ -77,13 +77,13 @@ else
   mem_bytes=$(( mem_kb * 1024 ))
 fi
 mem_gb=$(( mem_bytes / 1024 / 1024 / 1024 ))
-if [[ -n "${POPS_HEAVY_TU_POOL:-}" ]]; then
-  pool="$POPS_HEAVY_TU_POOL"
-  echo "heavy-TU pool: $pool (from POPS_HEAVY_TU_POOL)"
+if [[ -n "${POPS_HEAVY_MODULE_TU_POOL:-}" ]]; then
+  pool="$POPS_HEAVY_MODULE_TU_POOL"
+  echo "production module heavy-TU pool: $pool (from POPS_HEAVY_MODULE_TU_POOL)"
 else
   ram_cap=$(( mem_gb / 4 )); [[ $ram_cap -lt 1 ]] && ram_cap=1
   pool=$ncpu; [[ $pool -gt $ram_cap ]] && pool=$ram_cap
-  echo "heavy-TU pool: $pool (min of ${ncpu} cores and ${ram_cap} = ${mem_gb}GB/4; export POPS_HEAVY_TU_POOL to override)"
+  echo "production module heavy-TU pool: $pool (min of ${ncpu} cores and ${ram_cap} = ${mem_gb}GB/4; export POPS_HEAVY_MODULE_TU_POOL to override)"
 fi
 
 # --- discovery vars + stable cross-worktree ccache --------------------------------------------------
@@ -132,16 +132,16 @@ if [[ -n "$WHEEL_DIR" ]]; then
     exit 2
   fi
   pip_args=(wheel -v . --no-deps --wheel-dir "$WHEEL_DIR" \
-    -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+    -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
 else
-  pip_args=(install -v . -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+  pip_args=(install -v . -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
 fi
 if python -c "import scikit_build_core, pybind11" >/dev/null 2>&1; then
   if [[ -n "$WHEEL_DIR" ]]; then
     pip_args=(wheel -v . --no-deps --no-build-isolation --wheel-dir "$WHEEL_DIR" \
-      -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+      -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
   else
-    pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+    pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
   fi
 else
   echo "note: scikit-build-core/pybind11 not in '$ENV_NAME'; using pip build isolation"

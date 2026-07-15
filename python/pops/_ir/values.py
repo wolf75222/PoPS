@@ -11,8 +11,8 @@ from .expr import Expr, _wrap
 from .literals import exact_numeric_scalar, scalar_cpp, scalar_literal
 
 
-_RUNTIME_PARAM_INDICES: ContextVar[dict[str, int]] = ContextVar(
-    "pops_runtime_param_indices", default={})
+_RUNTIME_PARAM_INDICES: ContextVar[dict[str, int] | None] = ContextVar(
+    "pops_runtime_param_indices", default=None)
 
 
 def set_runtime_param_indices(indices: Any) -> None:
@@ -145,7 +145,10 @@ class EigWitness(Expr):
             # numpy/LAPACK converge toujours -> PAS de kUnknown cote hote (le miroir definit le spectre
             # comme converge par construction) ; une non-convergence DEVICE rendrait 0.0 (= PAS reel),
             # jamais 1.0 : direction sure, coherente avec all_real (converged && max_im <= im_tol*scale).
-            out = (max_im <= float(self.im_tol) * scale).astype(float)
+            tolerance = self.im_tol
+            if tolerance is None:
+                raise RuntimeError("predicate EigWitness is missing its validated tolerance")
+            out = (max_im <= float(tolerance) * scale).astype(float)
         return out if bshape else float(out)
 
     def deps(self) -> Any:
@@ -245,7 +248,8 @@ class RuntimeParamRef(Expr):
         return set()
 
     def to_cpp(self) -> str:
-        index = _RUNTIME_PARAM_INDICES.get().get(self.name)
+        indices = _RUNTIME_PARAM_INDICES.get()
+        index = None if indices is None else indices.get(self.name)
         if index is None:
             raise RuntimeError(
                 "RuntimeParamRef('%s'): index not assigned at codegen (call the compilation via "

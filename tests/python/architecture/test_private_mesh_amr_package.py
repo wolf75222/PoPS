@@ -22,6 +22,9 @@ def test_mesh_amr_implementation_has_only_the_private_physical_path() -> None:
     implementation = importlib.import_module("pops.mesh._amr")
     assert implementation.AMRTransfer is amr.AMRTransfer
     assert implementation.IgnoreAMRCriteria is amr.IgnoreAMRCriteria
+    assert hasattr(amr, "PatchLayout")
+    assert "PatchLayout" not in implementation.__all__
+    assert not hasattr(implementation, "PatchLayout")
 
 
 def test_availability_has_one_canonical_descriptor_owner() -> None:

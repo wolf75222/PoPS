@@ -31,7 +31,8 @@ def context_is_amr_layout(context: Any) -> bool:
         declared = capabilities()
     except Exception:  # the absence of a readable capability is not a known incompatibility
         return False
-    return hasattr(declared, "get") and declared.get("layout") == "amr"
+    get_capability = getattr(declared, "get", None)
+    return callable(get_capability) and get_capability("layout") == "amr"
 
 
 __all__ = ["context_flag", "context_is_amr_layout", "context_value"]

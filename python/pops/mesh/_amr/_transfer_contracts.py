@@ -27,6 +27,13 @@ def _generic_handle(value: Any, *, where: str, kind: str | None = None) -> Any:
     return canonical_handle(value, where=where, kinds=kind or actual)
 
 
+def _native_route(options: CanonicalOptions, *, where: str) -> str:
+    route = options.to_data().get("native_route")
+    if not isinstance(route, str) or not route:
+        raise ValueError("%s must authenticate a non-empty native_route" % where)
+    return route
+
+
 @dataclass(frozen=True, slots=True)
 class BuiltinTransferAxis:
     """Open built-in axis value; extensions use the same canonical-identity protocol."""
@@ -658,7 +665,7 @@ class ApplyTransferProvider:
             provider_qualified_id=self.provider.qualified_id,
             provider_identity=CanonicalOptions(self.provider.canonical_identity()),
             options=route_options,
-            native_route=route_options.to_data().get("native_route"),
+            native_route=_native_route(route_options, where="transfer provider options"),
             capabilities=NativeAMRMaterializationCapabilities.for_materialization(
                 NativeAMRMaterializationKind.PHYSICAL,
                 key.operation,
@@ -693,7 +700,7 @@ class Recompute:
             provider_qualified_id=self.provider.qualified_id,
             provider_identity=CanonicalOptions(self.provider.canonical_identity()),
             options=options,
-            native_route=options.to_data().get("native_route"),
+            native_route=_native_route(options, where="recompute provider options"),
             capabilities=NativeAMRMaterializationCapabilities.for_materialization(
                 NativeAMRMaterializationKind.DERIVED_FIELD,
                 key.operation,
@@ -730,7 +737,7 @@ class InvalidateThenRebuild:
             provider_qualified_id=self.provider.qualified_id,
             provider_identity=CanonicalOptions(self.provider.canonical_identity()),
             options=options,
-            native_route=options.to_data().get("native_route"),
+            native_route=_native_route(options, where="cache provider options"),
             capabilities=NativeAMRMaterializationCapabilities.for_materialization(
                 NativeAMRMaterializationKind.CACHE,
                 key.operation,

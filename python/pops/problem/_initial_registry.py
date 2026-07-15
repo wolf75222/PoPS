@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.model import OwnerKind, OwnerPath
+from pops.model import Handle, OwnerKind, OwnerPath
 from pops.problem._registry_freeze import FreezableRegistry
 from pops._report import ReportTree
 
@@ -32,6 +32,10 @@ class InitialConditionRegistry(FreezableRegistry):
         if type(initial) is not InitialCondition:
             raise TypeError("case.initials.add requires an exact InitialCondition")
         canonical = self._resolver(initial.state)
+        if not isinstance(canonical, Handle) or canonical.kind != "state" \
+                or not canonical.is_resolved:
+            raise TypeError(
+                "InitialConditionRegistry resolver must return a canonical state Handle")
         key = canonical.qualified_id
         if key in self._conditions:
             raise ValueError("initial condition for %s is already declared" % key)

@@ -92,6 +92,8 @@ def capture_field_plans(
         if not callable(field_spaces):
             field_spaces = getattr(getattr(model, "module", None), "field_spaces", None)
         declared_spaces = field_spaces() if callable(field_spaces) else {}
+        if not isinstance(declared_spaces, Mapping):
+            raise TypeError("compiled model field_spaces() must return a mapping")
         output_space = declared_spaces.get(declaration_ref.local_id)
         output_components = tuple(getattr(output_space, "components", ()))
         if not output_components:

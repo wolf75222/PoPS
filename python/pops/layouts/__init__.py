@@ -12,7 +12,7 @@ from pops.descriptors_report import CapabilitySet, RequirementSet
 from pops.descriptors import Availability
 from pops.mesh._descriptor import MeshDescriptor
 from pops.mesh._layout_plan_contracts import NormalizedGeometry
-from pops.amr import IgnoreAMRCriteria
+from pops.amr import IgnoreAMRCriteria, PatchLayout
 
 
 _LAYOUT_REPORT_SCHEMA_VERSION = 1
@@ -180,6 +180,7 @@ class Uniform(MeshDescriptor):
 
 _AMR_AUTHORITY_PROTOCOLS = {
     "hierarchy": ("to_data",),
+    "patch_layout": ("to_data",),
     "tagging": ("inspect", "resolve_references", "resolve"),
     "regrid": ("to_data",),
     "transfer": ("inspect", "resolve_references", "resolve"),
@@ -228,6 +229,29 @@ def _provider_data(value: Any, slot: str) -> dict[str, Any]:
     return first
 
 
+def _patch_layout_data(value: Any) -> dict[str, Any]:
+    """Authenticate the backend-neutral coarse-patch authority through its data protocol."""
+    data = _authority_data(value, "patch_layout")
+    if data != _authority_data(value, "patch_layout"):
+        raise TypeError("AMR.patch_layout to_data() must be deterministic")
+    expected = {
+        "schema_version", "authority_type", "distribute_coarse", "coarse_max_grid",
+    }
+    if set(data) != expected \
+            or type(data.get("schema_version")) is not int \
+            or data["schema_version"] != 1 \
+            or data.get("authority_type") != "amr_patch_layout" \
+            or type(data.get("distribute_coarse")) is not bool:
+        raise TypeError("AMR.patch_layout must expose the exact amr_patch_layout schema-v1")
+    coarse_max_grid = data["coarse_max_grid"]
+    if coarse_max_grid is not None:
+        if type(coarse_max_grid) is not int:
+            raise TypeError("AMR.patch_layout coarse_max_grid must be None or an exact integer")
+        if coarse_max_grid < 1:
+            raise ValueError("AMR.patch_layout coarse_max_grid must be positive when provided")
+    return data
+
+
 class AMR(MeshDescriptor):
     """One complete adaptive-layout authority.
 
@@ -246,6 +270,7 @@ class AMR(MeshDescriptor):
         regrid: Any,
         transfer: Any,
         execution: Any,
+        patch_layout: Any = None,
         tagger: Any = None,
         clustering: Any = None,
     ) -> None:
@@ -258,6 +283,7 @@ class AMR(MeshDescriptor):
         self._regrid = regrid
         self._transfer = transfer
         self._execution = execution
+        self._patch_layout = PatchLayout() if patch_layout is None else patch_layout
         if tagger is None or clustering is None:
             from pops.lib.amr import BergerRigoutsos, SymbolicTagger
 
@@ -291,6 +317,10 @@ class AMR(MeshDescriptor):
         return self._execution
 
     @property
+    def patch_layout(self) -> Any:
+        return self._patch_layout
+
+    @property
     def tagger(self) -> Any:
         return self._tagger
 
@@ -305,6 +335,7 @@ class AMR(MeshDescriptor):
             "execution": self.execution,
         }
         data = {slot: _authority_data(value, slot) for slot, value in authorities.items()}
+        data["patch_layout"] = _patch_layout_data(self.patch_layout)
         _provider_data(self.tagger, "tagger")
         _provider_data(self.clustering, "clustering")
         for method in ("validate", "capabilities", "requirements", "options", "to_dict"):
@@ -351,6 +382,7 @@ class AMR(MeshDescriptor):
             "regrid": self.regrid.to_data(),
             "transfer": self.transfer.inspect(),
             "execution": self.execution.to_data(),
+            "patch_layout": _patch_layout_data(self.patch_layout),
             "tagger": self.tagger.inspect(),
             "clustering": self.clustering.inspect(),
         }
@@ -400,6 +432,7 @@ class AMR(MeshDescriptor):
             regrid=self.regrid,
             transfer=self.transfer.resolve_references(resolved),
             execution=self.execution,
+            patch_layout=self.patch_layout,
             tagger=self.tagger.resolve_references(resolved),
             clustering=self.clustering.resolve_references(resolved),
         )
@@ -414,6 +447,7 @@ class AMR(MeshDescriptor):
             regrid=self.regrid,
             transfer=self.transfer,
             execution=self.execution,
+            patch_layout=self.patch_layout,
             tagger=self.tagger,
             clustering=self.clustering,
             context=context,
