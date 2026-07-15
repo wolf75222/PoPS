@@ -1027,6 +1027,11 @@ path = "tests/python/integration/bindings"
 labels = ["integration", "python", "bindings", "medium"]
 
 [[python.suite]]
+name = "pops_python_integration_dsl"
+path = "tests/python/integration/dsl"
+labels = ["integration", "python", "physics", "numerics", "codegen", "native_loader", "compiler", "runtime", "medium"]
+
+[[python.suite]]
 name = "pops_python_integration_io"
 path = "tests/python/integration/io"
 labels = ["integration", "python", "io", "medium"]

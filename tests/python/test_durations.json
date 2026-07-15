@@ -24,6 +24,8 @@
   "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py": 60.0,
   "tests/python/integration/bindings/test_name_binding_codegen.py": 0.5,
   "tests/python/integration/bindings/test_name_binding_runtime.py": 0.5,
+  "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py": 160.0,
+  "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py": 160.0,
   "tests/python/integration/io/test_amr_history_checkpoint.py": 60.0,
   "tests/python/integration/io/test_amr_history_regrid_replay.py": 60.0,
   "tests/python/integration/io/test_hdf5_parallel.py": 180.0,
@@ -359,7 +361,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so, local pytest per file (non-compiler tests)",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 192,
+    "estimated_count": 194,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -374,6 +376,8 @@
       "tests/python/integration/amr/test_amr_native_params.py",
       "tests/python/integration/amr/test_amr_program_reflux.py",
       "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
+      "tests/python/integration/dsl/test_dsl_hll_explicit_wave_speeds.py",
+      "tests/python/integration/dsl/test_dsl_jacobian_fd_public.py",
       "tests/python/integration/io/test_amr_history_checkpoint.py",
       "tests/python/integration/io/test_amr_history_regrid_replay.py",
       "tests/python/integration/io/test_hdf5_parallel.py",
@@ -554,6 +558,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 355
+    "total_files": 357
   }
 }

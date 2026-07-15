@@ -19,7 +19,6 @@ from types import MappingProxyType
 from typing import Any
 
 from ._generated_component_routes import (
-    CAPABILITY_VOCAB_VERSION,
     COMPONENT_CATALOG_SEMANTIC_SHA256,
     COMPONENT_CATALOG_SHA256,
     COMPONENT_MANIFEST_SCHEMA_VERSION,
@@ -28,7 +27,6 @@ from ._generated_component_routes import (
     ROUTE_FAMILY_NATIVE_INTERFACES as _GENERATED_FAMILY_NATIVE_INTERFACES,
     ROUTE_METADATA as _GENERATED_ROUTE_METADATA,
     ROUTE_REGISTRY_SIGNATURE,
-    ROUTE_REGISTRY_VERSION,
     ROUTE_TABLES as _GENERATED_ROUTE_TABLES,
 )
 from pops._generated_component_interfaces import NATIVE_COMPONENT_INTERFACE_BY_NAME
