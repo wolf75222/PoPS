@@ -278,7 +278,8 @@ class AmrProgramContext {
   MultiFab& state(int b) const {
     return eng_->level_state(static_cast<std::size_t>(sys_block(b)), level_);
   }
-  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
     if (capturing()) {
       capture_into_(b, u, r, ResidualCapture::FullRate, rate_id);
@@ -318,15 +319,39 @@ class AmrProgramContext {
         static_cast<std::size_t>(sys_block(b)), point.level, point, u, v, j);
   }
   struct RhsGroupRequest {
-    int block = -1;
-    MultiFab* state = nullptr;
-    MultiFab* rhs = nullptr;
-    int rate_id = -1;
-    int flux_only = 0;
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value,
+                    int rate_id_value, int flux_only_value)
+        : block(block_value),
+          state(state_value),
+          rhs(rhs_value),
+          rate_id(rate_id_value),
+          flux_only(flux_only_value) {}
+
+    int block;
+    MultiFab* state;
+    MultiFab* rhs;
+    int rate_id;
+    int flux_only;
   };
-  void rhs_group(std::initializer_list<RhsGroupRequest> requests) const {
+  /// @p group_id identifies the authored atomic evaluation independently of each request's exact
+  /// rate-node identity.  Neither identity may be anonymous or inferred from iteration order.
+  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
+    require_group_identity_(group_id);
     if (requests.size() == 0)
       throw std::invalid_argument("AMR Program RHS group cannot be empty");
+    std::vector<int> rate_ids;
+    rate_ids.reserve(requests.size());
+    for (const auto& request : requests) {
+      require_rate_identity_(request.rate_id);
+      if (request.rate_id == group_id ||
+          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
+        throw std::invalid_argument(
+            "AMR Program RHS group and member rate identities must be distinct");
+      if (request.state == nullptr || request.rhs == nullptr ||
+          (request.flux_only != 0 && request.flux_only != 1))
+        throw std::invalid_argument("AMR Program RHS group contains an invalid request");
+      rate_ids.push_back(request.rate_id);
+    }
     if (capturing()) {
       if (eng_->has_level_interfaces(level_))
         deferred_op(
@@ -334,9 +359,6 @@ class AmrProgramContext {
             "shared block interfaces across a refined hierarchy require a prepared "
             "interface-flux reflux ledger; coarse-only execution is supported");
       for (const auto& request : requests) {
-        if (request.state == nullptr || request.rhs == nullptr ||
-            (request.flux_only != 0 && request.flux_only != 1))
-          throw std::invalid_argument("AMR Program RHS group contains an invalid request");
         count_kernel();
         capture_into_(request.block, *request.state, *request.rhs,
                       request.flux_only ? ResidualCapture::FluxOnly : ResidualCapture::FullRate,
@@ -352,19 +374,18 @@ class AmrProgramContext {
     states.reserve(requests.size());
     rhs.reserve(requests.size());
     flux_only.reserve(requests.size());
-    int stage = -1;
     for (const auto& request : requests) {
       count_kernel();
-      if (stage < 0) stage = request.rate_id;
       blocks.push_back(sys_block(request.block));
       states.push_back(request.state);
       rhs.push_back(request.rhs);
       flux_only.push_back(request.flux_only);
     }
     eng_->level_rhs_group(
-        level_, boundary_point_(stage), blocks, states, rhs, flux_only);
+        level_, boundary_point_(group_id), blocks, states, rhs, flux_only);
   }
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
     if (capturing()) {
       capture_into_(b, u, r, ResidualCapture::FluxOnly, rate_id);
@@ -1569,6 +1590,7 @@ class AmrProgramContext {
   }
 
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+    require_rate_identity_(stage);
     if (primary_clock_.empty() || !current_window_ || !std::isfinite(current_level_dt_) ||
         current_level_dt_ <= 0.0)
       throw std::runtime_error("AMR boundary evaluation has no prepared clock window/dt");
@@ -1579,6 +1601,18 @@ class AmrProgramContext {
       throw std::overflow_error("AMR boundary substep identity exceeds int range");
     return {primary_clock_, stamp.macro_step, level_, static_cast<int>(phase.numerator), stage,
             stage_time_, current_level_dt_, stamp.physical_time};
+  }
+
+  static void require_rate_identity_(int rate_id) {
+    if (rate_id < 0)
+      throw std::invalid_argument(
+          "AMR Program rate evaluation requires a non-negative authored node identity");
+  }
+
+  static void require_group_identity_(int group_id) {
+    if (group_id < 0)
+      throw std::invalid_argument(
+          "AMR Program RHS group requires a non-negative authored group identity");
   }
 
   static std::vector<FluxContribution> scale_contributions_(

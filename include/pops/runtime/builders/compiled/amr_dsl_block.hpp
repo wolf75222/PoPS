@@ -89,6 +89,22 @@ void apply_pointwise_project_amr(const Model& m, std::vector<AmrLevelMP>& levels
   }
 }
 
+/// Shared second half of the runtime IMEX closure.  Keeping this outside the temporal routing makes
+/// both the explicit-clock and low-level compatibility transports feed the exact same implicit
+/// source/cascade implementation.
+template <class Model>
+void apply_amr_implicit_source_and_cascade(const Model& model, std::vector<AmrLevelMP>& levels,
+                                           Real dt, const NewtonOptions& nopts,
+                                           const ImplicitMask<Model::n_vars>& mask,
+                                           NewtonReport* nreport) {
+  const int nlev = static_cast<int>(levels.size());
+  for (int level = 0; level < nlev; ++level)
+    backward_euler_source<Model>(model, *levels[level].aux, levels[level].U, dt, nopts, mask,
+                                 nreport);
+  for (int level = nlev - 1; level >= 1; --level)
+    mf_average_down_mb(levels[level].U, levels[level - 1].U);
+}
+
 /// Builds the AMR coupler for a composite Model + concrete (Limiter, Flux) and fills the type-erased
 /// hooks. Two levels: coarse + one central seed fine patch, reshaped by the regrid. This is the header
 /// counterpart of AmrSystem::Impl::build, instantiated from the calling TU on the Model type. The
@@ -511,6 +527,14 @@ AmrRuntimeBlock build_amr_block(
     advance_amr<Limiter, Flux>(model, L, dom, dt, per, repl, rprim, /*imex=*/false, NewtonOptions{},
                                time_method, static_cast<Real>(pos_floor));
   };
+  b.advance_with_temporal_plan =
+      [model, rprim, time_method, pos_floor](
+          std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt, Periodicity per, bool repl,
+          const detail::PreparedAmrTemporalPlan& temporal_plan) {
+        advance_amr_with_temporal_plan<Limiter, Flux>(
+            model, L, dom, dt, temporal_plan, per, repl, rprim, /*imex=*/false, NewtonOptions{},
+            time_method, static_cast<Real>(pos_floor));
+      };
   // imex_advance (capstone vii): ONE Lie step [source-free transport; implicit source] whose
   // SEMANTICS mirror the IMEX branch of AmrSystemCoupler::step (SourceFreeModel + AmrImplicitSourceStepper),
   // populated ONLY if imex. (1) EXPLICIT transport on the SOURCE-FREE model (SourceFreeModel<Model>:
@@ -564,18 +588,24 @@ AmrRuntimeBlock build_amr_block(
       // nreport (null without diagnostics) AGGREGATES over the levels: backward_euler_source does its own
       // max/sum + MPI all_reduce into *nreport (no reset here -> it also accumulates over the sub-steps,
       // step() having reset at the head of the advance). nreport==nullptr -> fast bit-identical path.
-      const int nlev_l = static_cast<int>(L.size());
-      for (int k = 0; k < nlev_l; ++k)
-        backward_euler_source<Model>(model, *L[k].aux, L[k].U, dt, nopts, mask, nreport);
+      detail::apply_amr_implicit_source_and_cascade(model, L, dt, nopts, mask, nreport);
       // (3) COVERAGE INVARIANT (cf. AmrImplicitSourceStepper): the implicit source was solved
       // level by level, so a COVERED coarse cell would carry a phantom coarse source
       // instead of the 2x2 average of its children. Cascade fine -> coarse for the coherence (the mass,
       // sum of the coarse grid alone, then does not count the patch source twice). Mono-level: empty loop
       // -> bit-identical. The source remaining CELL-LOCAL (not a face flux), it does NOT enter
       // the reflux registers: conservation at the coarse-fine interfaces stays intact.
-      for (int k = nlev_l - 1; k >= 1; --k)
-        mf_average_down_mb(L[k].U, L[k - 1].U);
     };
+    b.imex_advance_with_temporal_plan =
+        [model, mask, nopts, nreport, pos_floor](
+            std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt, Periodicity per, bool repl,
+            const detail::PreparedAmrTemporalPlan& temporal_plan) {
+          advance_amr_with_temporal_plan<Limiter, Flux>(
+              SourceFreeModel<Model>{model}, L, dom, dt, temporal_plan, per, repl,
+              /*recon_prim=*/false, /*imex=*/false, NewtonOptions{},
+              AmrTimeMethod::kEuler, static_cast<Real>(pos_floor));
+          detail::apply_amr_implicit_source_and_cascade(model, L, dt, nopts, mask, nreport);
+        };
   }
   // PROJECTION PONCTUELLE post-pas (ADC-177) : cablee SEULEMENT si le modele declare m.project
   // (HasPointwiseProjection). AmrRuntime::step l'applique PAR NIVEAU a la FIN de l'avance du bloc

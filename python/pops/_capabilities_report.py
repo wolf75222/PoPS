@@ -400,7 +400,7 @@ def _inventory_rows(flags: Any, source: Any) -> list:
         # majorant family is the Rusanov spectral radius (HLL refuses it).
         _row("wave_speeds:explicit_pair", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu,
-             limitation="signed pair from m.wave_speeds(x=, y=); HLL signed-wave source",
+             limitation="signed pair from typed Model.wave_speeds(...); HLL signed-wave source",
              source=source),
         _row("wave_speeds:jacobian", layout="uniform|amr", backend="production",
              platform="host", mpi=mpi, gpu=gpu,

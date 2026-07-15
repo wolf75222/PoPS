@@ -97,6 +97,7 @@ static int pops_run_test_amr_regrid_mpi_parity(int argc, char** argv) {
   // coarse_max_grid = 0 -> n/2 (decoupage 2x2 multi-box, le moins agressif pour le MG geometrique).
 
   AmrSystem sys(cfg);
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
   sys.add_block("a", exb_charge(q0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.add_block("b", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit", 1);
   sys.set_poisson("charge_density", "geometric_mg", "periodic");

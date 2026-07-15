@@ -108,12 +108,15 @@ extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : 
   source += R"CPP(
 extern "C" void pops_install_program(void* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
+  ctx.configure_primary_clock("clock.macro");
   ctx.install([ctx](double dt) {
+    ctx.begin_step(dt);
+    ctx.set_stage_time(0, 1);
     ctx.solve_fields();
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       pops::MultiFab& U = ctx.state(b);
       pops::MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
+      ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, static_cast<pops::Real>(dt), R);
     }
   });

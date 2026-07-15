@@ -101,8 +101,11 @@ static AmrRuntime make_two_block(int N, double L, double B0) {
                                                 blob(N, 0.65, 0.5, 0.8, 1.0, 0.10),
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
   });
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 // Concatenated per-level flat of block 0's live state (the ground truth a stored ring slot mirrors).
@@ -250,6 +253,7 @@ TEST(test_amr_history_ring, AcceptedFacadeTransactionCommitsTopologyStateHistory
   cfg.regrid_every = 1;
 
   AmrSystem sim(cfg);
+  sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");
@@ -304,6 +308,7 @@ TEST(test_amr_history_ring, RejectedFacadeAttemptRestoresTopologyStateHistoryAnd
   cfg.regrid_every = 1;
 
   AmrSystem sim(cfg);
+  sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.add_block("a", exb_charge(+1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("b", exb_charge(-1.0, 1.0), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");

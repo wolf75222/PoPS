@@ -42,12 +42,12 @@
 ///   solve_fields_from_state(b, U) -> System::solve_fields_from_state(b, U) (aux at a stage state)
 ///   n_blocks()           -> System::n_blocks()
 ///   state(b)             -> System::block_state(b)             (the block's live MultiFab, zero-copy)
-///   rhs_into(b, U, R)    -> System::block_rhs_into(b, U, R)    (R <- -div F + S, Poisson frozen)
-///   neg_div_flux_default_into(b, U, R) -> System::block_neg_div_flux_into (R <- -div F, NO source)
+///   rhs_into(b, U, R, rate_id) -> System::block_rhs_into_at(...) (point-qualified -div F + S)
+///   neg_div_flux_default_into(b, U, R, rate_id) -> point-qualified -div F with no source
 ///   axpy(U, a, R)        -> pops::saxpy(U, a, R)                (U <- U + a R, device-dispatched)
 ///
 /// The Program composes the chain (e.g. Forward Euler = solve_fields(); for each block:
-/// rhs_into(b, U, R); axpy(U, dt, R)) and installs it via install(...). The .so NEVER touches
+/// rhs_into(b, U, R, rate_id); axpy(U, dt, R)) and installs it via install(...). The .so NEVER touches
 /// System::Impl / Array4 / fill_boundary / the elliptic solver / Kokkos / MPI / CFL / substeps.
 ///
 /// IDIOM: ProgramContext is a plain (non-template) class holding a System*. A generated .so receives
@@ -279,7 +279,11 @@ class ProgramContext {
     sys_->set_field_boundary_kernel(field, kernel);
   }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
-  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+  /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
+  /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
+  /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
+  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
     sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
@@ -310,19 +314,42 @@ class ProgramContext {
   }
 
   struct RhsGroupRequest {
-    int block = -1;
-    MultiFab* state = nullptr;
-    MultiFab* rhs = nullptr;
-    int rate_id = -1;
-    int flux_only = 0;
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value,
+                    int rate_id_value, int flux_only_value)
+        : block(block_value),
+          state(state_value),
+          rhs(rhs_value),
+          rate_id(rate_id_value),
+          flux_only(flux_only_value) {}
+
+    int block;
+    MultiFab* state;
+    MultiFab* rhs;
+    int rate_id;
+    int flux_only;
   };
 
-  /// Simultaneous multi-block rate evaluation.  The generated Program emits one group only for RHS
-  /// nodes authenticated at the same exact StagePoint; System then executes each installed interface
-  /// once before any group result can be consumed.
-  void rhs_group(std::initializer_list<RhsGroupRequest> requests) const {
+  /// Simultaneous multi-block rate evaluation.  @p group_id is the exact authored identity of this
+  /// atomic evaluation and is deliberately distinct from every request's rate-node identity.  The
+  /// generated Program emits one group only for RHS nodes authenticated at the same exact StagePoint;
+  /// System then executes each installed interface once before any group result can be consumed.
+  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
+    require_group_identity_(group_id);
     if (requests.size() == 0)
       throw std::invalid_argument("Program RHS group cannot be empty");
+    std::vector<int> rate_ids;
+    rate_ids.reserve(requests.size());
+    for (const auto& request : requests) {
+      require_rate_identity_(request.rate_id);
+      if (request.rate_id == group_id ||
+          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
+        throw std::invalid_argument(
+            "Program RHS group and member rate identities must be distinct");
+      if (request.state == nullptr || request.rhs == nullptr ||
+          (request.flux_only != 0 && request.flux_only != 1))
+        throw std::invalid_argument("Program RHS group contains an invalid request");
+      rate_ids.push_back(request.rate_id);
+    }
     std::vector<int> blocks;
     std::vector<MultiFab*> states;
     std::vector<MultiFab*> rhs;
@@ -331,16 +358,14 @@ class ProgramContext {
     states.reserve(requests.size());
     rhs.reserve(requests.size());
     flux_only.reserve(requests.size());
-    int stage = -1;
     for (const auto& request : requests) {
       count_kernel();
-      if (stage < 0) stage = request.rate_id;
       blocks.push_back(sys_block(request.block));
       states.push_back(request.state);
       rhs.push_back(request.rhs);
       flux_only.push_back(request.flux_only);
     }
-    sys_->block_rhs_group(boundary_point_(stage), blocks, states, rhs, flux_only);
+    sys_->block_rhs_group(boundary_point_(group_id), blocks, states, rhs, flux_only);
   }
 
   /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
@@ -350,7 +375,8 @@ class ProgramContext {
   /// incl. the empty list) to this, so a Lie/Strang split assembles "flux but no source" without the
   /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
   /// like @ref rhs_into.
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id = -1) const {
+  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
     sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
@@ -896,7 +922,20 @@ class ProgramContext {
   /// @}
 
  private:
+  static void require_rate_identity_(int rate_id) {
+    if (rate_id < 0)
+      throw std::invalid_argument(
+          "Program rate evaluation requires a non-negative authored node identity");
+  }
+
+  static void require_group_identity_(int group_id) {
+    if (group_id < 0)
+      throw std::invalid_argument(
+          "Program RHS group requires a non-negative authored group identity");
+  }
+
   runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+    require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
     return {primary_clock_, static_cast<std::int64_t>(macro_step()), 0, 0, stage,

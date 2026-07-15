@@ -123,6 +123,40 @@ def test_flux_value_uses_axis_identity_not_frame_iteration_order():
         m.flux_value(("not-a-number",), {}, X_AXIS)
 
 
+def test_explicit_wave_speeds_require_owned_expressions_and_bind_to_the_flux():
+    from pops.numerics.riemann import ExplicitPair, provider_of
+
+    m = physics.Model("explicit_wave_pair", frame=FRAME)
+    state = m.state("U", components=("q1", "q2"))
+    q1, q2 = state
+    flux = m.flux(
+        "transport",
+        frame=FRAME,
+        state=state,
+        components={X_AXIS: (q2, q1), Y_AXIS: (2.0 * q2, 2.0 * q1)},
+    )
+    speed = m.param(ConstParam("speed", 2.0))
+    with pytest.raises(TypeError, match="convert parameter handles with model.value"):
+        m.wave_speeds(
+            flux,
+            frame=FRAME,
+            values={X_AXIS: (-1.0, speed), Y_AXIS: (-2.0, 2.0)},
+        )
+
+    speed_value = m.value(speed)
+    m.wave_speeds(
+        flux,
+        frame=FRAME,
+        values={
+            X_AXIS: (-1.0 * speed_value, speed_value),
+            Y_AXIS: (-2.0 * speed_value, 2.0 * speed_value),
+        },
+    )
+    provider = provider_of(m)
+    assert provider is not None
+    assert provider.kind == ExplicitPair().kind
+
+
 def test_board_model_lowers_to_operator_first_ir():
     m = _euler_poisson_lorentz()
     mod = m.module

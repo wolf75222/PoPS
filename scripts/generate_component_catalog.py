@@ -1347,7 +1347,8 @@ namespace pops::component::generated_pybind {
 namespace py = pybind11;
 
 using DoubleArray = py::array_t<double, py::array::c_style>;
-using ByteArray = py::array_t<std::uint8_t, py::array::c_style>;
+using MaskArray = py::array_t<bool, py::array::c_style>;
+static_assert(sizeof(bool) == sizeof(std::uint8_t));
 
 template <class Array>
 Array required_array(const py::handle value, const char* where) {
@@ -1446,8 +1447,8 @@ struct WriterGeometryStorage {
   std::vector<std::vector<std::int64_t>> lower;
   std::vector<std::vector<std::int64_t>> upper;
   std::vector<PopsWriterBoxV1> boxes;
-  ByteArray valid_cells;
-  ByteArray coverage;
+  MaskArray valid_cells;
+  MaskArray coverage;
   DoubleArray cell_volumes;
   PopsWriterGeometryV1 value{};
 
@@ -1458,8 +1459,8 @@ struct WriterGeometryStorage {
         origin(py::cast<std::vector<double>>(row["origin"])),
         spacing(py::cast<std::vector<double>>(row["spacing"])),
         cell_shape(py::cast<std::vector<std::size_t>>(row["cell_shape"])),
-        valid_cells(required_array<ByteArray>(row["valid_cells"], "Writer valid_cells")),
-        coverage(required_array<ByteArray>(row["coverage"], "Writer coverage")),
+        valid_cells(required_array<MaskArray>(row["valid_cells"], "Writer valid_cells")),
+        coverage(required_array<MaskArray>(row["coverage"], "Writer coverage")),
         cell_volumes(required_array<DoubleArray>(row["cell_volumes"],
                                                  "Writer cell_volumes")) {
     const auto dimension = py::cast<std::int32_t>(row["dimension"]);
@@ -1482,9 +1483,11 @@ struct WriterGeometryStorage {
     value = {sizeof(PopsWriterGeometryV1), layout_identity.c_str(),
              layout_kind.c_str(), py::cast<std::int32_t>(row["level"]), dimension,
              origin.data(), spacing.data(), cell_shape.data(), boxes.size(), boxes.data(),
-             {sizeof(PopsConstByteViewV1), valid_cells.data(),
+             {sizeof(PopsConstByteViewV1),
+              reinterpret_cast<const std::uint8_t*>(valid_cells.data()),
               static_cast<std::size_t>(valid_cells.size())},
-             {sizeof(PopsConstByteViewV1), coverage.data(),
+             {sizeof(PopsConstByteViewV1),
+              reinterpret_cast<const std::uint8_t*>(coverage.data()),
               static_cast<std::size_t>(coverage.size())},
              writer_field_view(cell_volumes, layout_identity, patch_identity,
                                "Writer cell_volumes")};

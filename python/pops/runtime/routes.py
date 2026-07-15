@@ -383,7 +383,8 @@ def check_wave_speed_provider(requested_kind: Any, compiled: Any, ctx: Any,
     if not getattr(compiled, "has_wave_speeds", True):
         raise ValueError(
             "%s: riemann 'hll' with a wave-speed provider %r requires the model to emit signed "
-            "wave speeds, but it emits none; declare m.wave_speeds(x=(smin, smax), y=(smin, smax)) "
+            "wave speeds, but it emits none; declare Model.wave_speeds(...) with one signed pair "
+            "per typed axis, "
             "or m.wave_speeds_from_jacobian(...) or a primitive 'p', or use riemann='rusanov'."
             % (ctx, requested_kind))
     if requested_kind in ("einfeldt", "davis"):

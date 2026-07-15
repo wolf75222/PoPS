@@ -286,6 +286,8 @@ TEST(test_amr_named_field, Runs) {
 
   AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                 S.replicated_coarse, S.wall);
+  rt.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   EXPECT_EQ(rt.n_blocks(), 1) << "named_engine_one_block";
 
   const SolveReport default_report = rt.solve_default_field();
@@ -534,6 +536,8 @@ TEST(test_amr_named_field, RefinedPublicationPreservesValidAndRefreshesGhosts) {
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse,
                      layout.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
   AmrFieldSolveConfig plan;
   plan.plan_identity = "test:plasma/screened:plan:v1";
   plan.provider_identity = "test:plasma/screened";

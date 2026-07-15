@@ -729,7 +729,8 @@ class System {
   /// @name Compiled time-program seam (epic ADC-399 / ADC-401)
   /// Lets a generated problem.so (via pops::runtime::program::ProgramContext) run a time Program during
   /// sim.step(dt): install a macro-step body and reach per-block storage. The .so reimplements nothing
-  /// -- it composes these primitives (solve_fields(); block_rhs_into(b, U, R); saxpy(U, dt, R)).
+  /// -- it composes these primitives (solve_fields(); ProgramContext::rhs_into(b, U, R, rate_id);
+  /// saxpy(U, dt, R)). The authored rate identity is mandatory at the native boundary.
   /// @{
   /// Install the macro-step body. When set, SystemStepper::step calls it instead of the historical
   /// path (and keeps t / macro_step coherent). Pass an empty std::function to clear it.

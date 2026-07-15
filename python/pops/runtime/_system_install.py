@@ -193,7 +193,7 @@ class _SystemInstall(_System):
         if spatial.flux == RIEMANN_HLL and getattr(spatial, "waves_provider", None) is not None:
             from pops.numerics.riemann.waves import check_hll_waves
             check_hll_waves(spatial.waves_provider, compiled, "add_equation")
-        # HLL emits wave_speeds from the EXPLICIT pair m.wave_speeds(x=, y=) (without primitive 'p':
+        # HLL emits wave_speeds from the EXPLICIT typed Model.wave_speeds(...) pair (without 'p':
         # moments / isothermal, cf. has_wave_speeds) OR as soon as a primitive 'p' is declared. EARLY
         # guard (like hllc/roe): the C++ requires-gate of make_block only triggers at first use, so we
         # diagnose at install. getattr default True (CompiledModel ALWAYS sets has_wave_speeds; only a
@@ -201,7 +201,7 @@ class _SystemInstall(_System):
         if spatial.flux == RIEMANN_HLL and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "add_equation: riemann 'hll' requires signed wave speeds: declare "
-                "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
+                "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
                 "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
                 "[requested route %s -> %s]"
                 % (getattr(RIEMANN_HLL, "id", "riemann.hll"), RIEMANN_HLL.native_entry))

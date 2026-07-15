@@ -558,6 +558,9 @@ jobs:
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale,time_macros
+      # Unique per attempt so a bounded build can persist every valid object it produced, even when
+      # a later step fails. Restore prefixes deliberately remain compatible with PR/master history.
+      CCACHE_CACHE_KEY: python-build-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v7
@@ -576,13 +579,14 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      # ccache du module Python. Un seul job ecrit le cache de build ; les restore-keys gardent la
-      # compatibilite avec les anciennes cles sharded et les cles master.
-      - name: Cache ccache (Python module)
-        uses: actions/cache@v6
+      # Separate restore/save mirrors the C++ shards: an immutable, attempt-qualified key lets the
+      # `always()` save retain valid objects from a failed build instead of throwing the work away.
+      - name: Restore ccache (Python module)
+        id: python-ccache-restore
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-python-build-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
             ccache-${{ runner.os }}-python-build-${{ github.ref }}-
             ccache-${{ runner.os }}-python-build-refs/heads/master-
@@ -643,6 +647,9 @@ jobs:
       # exactement l'un des deux tourne et le module existe toujours pour l'artefact.
       - name: Build module Python `pops` (Kokkos Serial)
         if: ${{ !(github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true') }}
+        # The inner 14-minute watchdog leaves bounded room inside the 20-minute job for the
+        # `always()` ccache save.  The step timeout is a second guard for configure/reporting.
+        timeout-minutes: 16
         run: |
           pip install --upgrade pip numpy pytest
           SECONDS=0
@@ -650,14 +657,19 @@ jobs:
           # bakes into objects to relative, so ccache hits across checkouts/shards. Codegen-neutral (only
           # embedded path strings change; instructions/symbols identical) -> the abi_key (compiler+header
           # content hash) is untouched. CI-only -D, mirroring -DCMAKE_LINKER_TYPE=MOLD (presets stay clean).
-          # POPS_HEAVY_MODULE_TU_POOL=2 (ADC-621): the heavy module TUs (system.cpp and amr_system.cpp)
-          # compile ~3-4 GB each at -O3. This Kokkos SERIAL runner can compile two in parallel while
-          # retaining memory headroom, which shortens the native-build critical path. wheels.yml uses
-          # the same bounded pool.
+          # POPS_HEAVY_MODULE_TU_POOL=4 (ADC-621): use the public Linux runner's four compile slots.
+          # Keeping the old value 2 serialized half of the generated-seam leaves and exceeded this
+          # job's 20-minute contract even with useful ccache hits. This override remains guarded by the
+          # 14-minute build watchdog and the attempt cache below; the CMake default stays the conservative
+          # size-1 OOM guard and wheel builders keep their platform-specific bounded pools.
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
-            -DPOPS_HEAVY_MODULE_TU_POOL=2 \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          cmake --build --preset ci-kokkos-python
+          set +e
+          timeout --signal=TERM --kill-after=30s 14m \
+            cmake --build --preset ci-kokkos-python
+          build_status=$?
+          set -e
           build_s=$SECONDS
           {
             echo "### gate-python-build (module _pops, Kokkos Serial)"
@@ -671,6 +683,21 @@ jobs:
             ccache -s | grep -i hits || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [[ $build_status -eq 124 ]]; then
+            echo "::error::Python native build exceeded its 14-minute cache-safe watchdog"
+          fi
+          exit "$build_status"
+
+      - name: ccache stats (Python module)
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        run: ccache -s
+
+      - name: Save ccache (Python module)
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7

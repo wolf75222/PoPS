@@ -79,6 +79,7 @@ static int pops_run_test_mpi_amr_twoblock_parity(int argc, char** argv) {
   cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie FIGEE
 
   AmrSystem sys(cfg);
+  sys.set_temporal_relations({2}, {1}, {"integral_only"});
   sys.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
   sys.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                 1);  // SCHEMA DIFFERENT

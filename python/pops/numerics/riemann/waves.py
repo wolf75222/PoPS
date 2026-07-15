@@ -1,7 +1,7 @@
 """pops.numerics.riemann.waves -- the typed wave-speed provider layer (ADC-552).
 
 A model can obtain its SIGNED wave speeds (the interface bound HLL needs) from several
-sources: an explicit signed pair (``m.wave_speeds(x=, y=)``), the eigenvalues of the flux
+sources: an explicit signed pair (``Model.wave_speeds(...)``), the eigenvalues of the flux
 jacobian (``m.wave_speeds_from_jacobian(...)``), the historical primitive-'p' path, or one of
 the hook-selector estimates (Einfeldt / Davis). Each source is now a TYPED
 :class:`WaveSpeedProvider` (Spec 5 sec.6: a route-choosing object that declares its
@@ -53,7 +53,7 @@ class WaveSpeedProvider(Descriptor):
     def requirements(self) -> Any:
         """What the source NEEDS from the model (documentary; the hard gate stays at install)."""
         needs = {
-            "explicit_pair": "m.wave_speeds(x=(smin, smax), y=(smin, smax))",
+            "explicit_pair": "Model.wave_speeds(...) with one signed pair per typed axis",
             "jacobian": "m.wave_speeds_from_jacobian(...) (flux jacobian eigenvalues)",
             "pressure_derived": "a primitive 'p' + declared eigenvalues (historical path)",
             "einfeldt": "the Einfeldt wave-speed estimate hook",
@@ -82,7 +82,7 @@ class WaveSpeedProvider(Descriptor):
 
 # --- factories (typed handles for each source; the public authoring surface) ------------------
 def ExplicitPair() -> WaveSpeedProvider:
-    """The signed pair declared with ``m.wave_speeds(x=(smin, smax), y=(...))``."""
+    """The signed pair declared with the typed public ``Model.wave_speeds(...)`` route."""
     return WaveSpeedProvider("explicit_pair")
 
 
@@ -202,8 +202,8 @@ class _CapabilityHandles:
         provider = provider_of(self._model)
         if provider is None:
             raise ValueError(
-                "this model declares no wave speeds; declare m.wave_speeds(x=(smin, smax), "
-                "y=(smin, smax)), or m.wave_speeds_from_jacobian(...), or a primitive 'p' "
+                "this model declares no wave speeds; declare Model.wave_speeds(...) with one "
+                "signed pair per typed axis, or m.wave_speeds_from_jacobian(...), or a primitive 'p' "
                 "(m.primitive('p', ...)) before reading .capabilities.wave_speeds.")
         return provider
 

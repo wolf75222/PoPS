@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import Any, cast
 
@@ -16,6 +16,7 @@ from pops.model import Handle
 
 
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y"})
+_NATIVE_GEOMETRY_ARRAYS = object()
 
 
 def _text(value: Any, where: str) -> str:
@@ -30,10 +31,19 @@ def _identity(value: Any, where: str) -> Identity:
     return Identity.from_data(value.to_data())
 
 
-def _array(value: Any, *, dtype: Any = None) -> Any:
+def _array(value: Any, *, dtype: Any = None, borrow: bool = False) -> Any:
     import numpy as np
 
-    result = np.ascontiguousarray(np.asarray(value, dtype=dtype)).copy()
+    array = np.asarray(value)
+    exact_dtype = None if dtype is None else np.dtype(dtype)
+    if borrow:
+        if exact_dtype is not None and array.dtype != exact_dtype:
+            raise TypeError("borrowed output array does not have its exact native dtype")
+        if not array.flags.c_contiguous:
+            raise TypeError("borrowed output array must be C-contiguous")
+        result = array
+    else:
+        result = np.ascontiguousarray(np.asarray(value, dtype=exact_dtype)).copy()
     if result.dtype.hasobject:
         raise TypeError("output arrays cannot use object dtype")
     result.setflags(write=False)
@@ -167,9 +177,15 @@ class LevelGeometry:
     cell_measure: str = "pops://cell-measures/cartesian-area@1"
     axis_names: tuple[str, str] = ("x", "y")
     valid_cells: Any = field(init=False, repr=False, compare=False)
+    _native_valid_cells: InitVar[Any] = None
+    _native_arrays: InitVar[Any] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, _native_valid_cells: Any, _native_arrays: Any) -> None:
         import numpy as np
+
+        native = _native_arrays is _NATIVE_GEOMETRY_ARRAYS
+        if _native_arrays is not None and not native:
+            raise TypeError("LevelGeometry native array authority is private")
 
         object.__setattr__(self, "layout_identity", _identity(
             self.layout_identity, "layout_identity"))
@@ -204,22 +220,41 @@ class LevelGeometry:
         if not boxes:
             raise ValueError("geometry boxes must explicitly cover the represented level")
         ny, nx = shape
-        valid = np.zeros(shape, dtype=np.bool_)
-        for box in boxes:
+        for index, box in enumerate(boxes):
             if len(box) != 4 or any(isinstance(item, bool) or not isinstance(item, int)
                                     for item in box):
                 raise TypeError("geometry boxes use integer (jlo, ilo, jhi, ihi) bounds")
             jlo, ilo, jhi, ihi = box
             if jlo < 0 or ilo < 0 or jhi <= jlo or ihi <= ilo or jhi > ny or ihi > nx:
                 raise ValueError("geometry box %r is outside cell_shape %r" % (box, shape))
-            if np.any(valid[jlo:jhi, ilo:ihi]):
-                raise ValueError("geometry boxes must not overlap")
-            valid[jlo:jhi, ilo:ihi] = True
+            # Native boxes come from the hierarchy and the mask/cardinality check below proves their
+            # represented union without an O(patch_count**2) Python scan.
+            if not native:
+                for prior in boxes[:index]:
+                    if not (jhi <= prior[0] or prior[2] <= jlo
+                            or ihi <= prior[1] or prior[3] <= ilo):
+                        raise ValueError("geometry boxes must not overlap")
         object.__setattr__(self, "boxes", boxes)
-        valid.setflags(write=False)
+        if native:
+            if _native_valid_cells is None:
+                raise ValueError("native geometry requires its native valid-cell mask")
+            valid = _array(_native_valid_cells, dtype=np.bool_, borrow=True)
+            if valid.shape != shape:
+                raise ValueError("native valid_cells must be a binary cell_shape mask")
+            represented = sum(
+                (box[2] - box[0]) * (box[3] - box[1]) for box in boxes)
+            if int(np.count_nonzero(valid)) != represented:
+                raise ValueError("native valid_cells count differs from geometry boxes")
+        else:
+            if _native_valid_cells is not None:
+                raise TypeError("valid_cells is derived from boxes outside the native provider")
+            valid = np.zeros(shape, dtype=np.bool_)
+            for jlo, ilo, jhi, ihi in boxes:
+                valid[jlo:jhi, ilo:ihi] = True
+            valid.setflags(write=False)
         object.__setattr__(self, "valid_cells", valid)
-        coverage = _array(self.coverage, dtype=np.bool_)
-        volumes = _array(self.cell_volumes, dtype=np.float64)
+        coverage = _array(self.coverage, dtype=np.bool_, borrow=native)
+        volumes = _array(self.cell_volumes, dtype=np.float64, borrow=native)
         if coverage.shape != shape or volumes.shape != shape:
             raise ValueError("coverage and cell_volumes must match cell_shape")
         if not np.all(np.isfinite(volumes)) or np.any(volumes <= 0.0):

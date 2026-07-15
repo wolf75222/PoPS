@@ -96,6 +96,7 @@ static std::vector<PatchBox> run_case(int N, double thr, const std::string& vari
   cfg.periodic = true;
   cfg.regrid_every = 1;  // regrid a chaque pas -> le patch suit le champ tague des le 1er pas
   AmrSystem sim(cfg);
+  sim.set_temporal_relations({2}, {1}, {"integral_only"});
   sim.add_block("gas0", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.add_block("gas1", comp_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
   sim.set_poisson("charge_density", "geometric_mg", "periodic");

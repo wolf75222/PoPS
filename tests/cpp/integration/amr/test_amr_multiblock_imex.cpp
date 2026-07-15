@@ -170,8 +170,11 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
   blocks.push_back(detail::build_amr_block<NeutralModel, Minmod, RusanovFlux>(
       make_neutral(), S, "neutral", rho, /*has_density=*/true, kGamma, /*substeps=*/1,
       /*recon_prim=*/false, /*imex=*/false, /*stride=*/1));
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 // Lit DIRECTEMENT le grossier (niveau 0) du bloc @p b et renvoie le max |U(.,.,c)| sur les
@@ -388,6 +391,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     cfg.periodic = true;
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     sim.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1);
     sim.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
@@ -414,6 +418,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     //      inexistant pour le bloc ExB scalaire) leve une erreur claire au build.
     {
       AmrSystem s3(cfg);
+      s3.set_temporal_relations({2}, {1}, {"integral_only"});
       s3.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1,
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x", "momentum_y"});
       s3.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
@@ -434,6 +439,7 @@ TEST(test_amr_multiblock_imex, Runs) {
     // (5d) role ABSENT du bloc -> erreur claire au build (resolution du masque, build_multi).
     {
       AmrSystem s4(cfg);
+      s4.set_temporal_relations({2}, {1}, {"integral_only"});
       // ExB scalaire (1 var, role Scalar) : 'momentum_x' n'existe pas -> resolve_implicit_components leve.
       s4.add_block("A", exb_charge(1.0, 1.0), "none", "rusanov", "conservative", "imex", 1, 1,
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"});
@@ -441,8 +447,15 @@ TEST(test_amr_multiblock_imex, Runs) {
       s4.set_poisson("charge_density", "geometric_mg", "periodic");
       s4.set_density("A", facade_rho_a);
       s4.set_density("B", facade_rho_b);
-      EXPECT_THROW(s4.step(5e-3), std::runtime_error)  // build paresseux : role absent -> leve
-          << "facade_partial_mask_absent_role_throws";
+      std::string diagnostic;
+      try {
+        s4.step(5e-3);  // build paresseux : role absent -> leve
+        FAIL() << "facade_partial_mask_absent_role_throws";
+      } catch (const std::runtime_error& error) {
+        diagnostic = error.what();
+      }
+      EXPECT_NE(diagnostic.find("implicit_roles"), std::string::npos) << diagnostic;
+      EXPECT_NE(diagnostic.find("momentum_x"), std::string::npos) << diagnostic;
     }
   }
 }

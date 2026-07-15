@@ -29,6 +29,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
 #include <pops/mesh/storage/multifab.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -117,8 +118,62 @@ static AmrRuntime make_two_block(int N, double L, double q0, double q1, double B
                                                 /*has_density=*/true, 1.4, sub1, false, false,
                                                 stride1));
   });
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
+}
+
+// Minimal compiled model used to make the native clock partition numerically observable.  Mode 0
+// has a zero flux and du/dt=u, so a 5/2 relation must perform Euler intervals {2/5,2/5,1/5}; the
+// resulting value differs analytically from two equal substeps.  Modes 1..3 isolate the per-level
+// transport, source-frequency and direct-stability CFL authorities respectively.
+struct TemporalContractModel {
+  using State = StateVec<1>;
+  using Aux = pops::Aux;
+  static constexpr int n_vars = 1;
+  int mode = 0;
+
+  POPS_HD State flux(const State&, const Aux&, int) const { return State{Real(0)}; }
+  POPS_HD Real max_wave_speed(const State& u, const Aux&, int) const {
+    return mode == 1 ? (u[0] < Real(0) ? -u[0] : u[0]) : Real(0);
+  }
+  POPS_HD State source(const State& u, const Aux&) const { return State{u[0]}; }
+  POPS_HD Real elliptic_rhs(const State&) const { return Real(0); }
+  POPS_HD Real source_frequency(const State& u, const Aux&) const {
+    return mode == 2 ? (u[0] < Real(0) ? -u[0] : u[0]) : Real(0);
+  }
+  POPS_HD Real stability_dt(const State& u, const Aux&) const {
+    const Real magnitude = u[0] < Real(0) ? -u[0] : u[0];
+    return mode == 3 && magnitude > Real(0) ? Real(1) / magnitude : Real(0);
+  }
+  static VariableSet conservative_vars() {
+    return {VariableKind::Conservative, {"u"}, 1, {VariableRole::Scalar}};
+  }
+  static VariableSet primitive_vars() {
+    return {VariableKind::Primitive, {"u"}, 1, {VariableRole::Scalar}};
+  }
+};
+
+static AmrRuntime make_temporal_contract_runtime(
+    int mode, const amr::ParentChildClockRelation& relation) {
+  constexpr int n = 8;
+  AmrBuildParams bp;
+  bp.mesh.n = n;
+  bp.mesh.L = 1.0;
+  bp.mesh.regrid_every = 0;
+  bp.poisson.bc = BCRec{};
+  const detail::SharedAmrLayout layout = detail::make_shared_amr_layout(bp);
+  const std::vector<double> initial(static_cast<std::size_t>(n) * n, 1.0);
+  std::vector<AmrRuntimeBlock> blocks;
+  blocks.push_back(detail::build_amr_block<TemporalContractModel, NoSlope, RusanovFlux>(
+      TemporalContractModel{mode}, layout, "clocked", initial, /*has_density=*/true, 1.4,
+      /*substeps=*/1, /*recon_prim=*/false, /*imex=*/false));
+  AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc, std::move(blocks),
+                     layout.base_per, layout.replicated_coarse, layout.wall);
+  runtime.set_parent_child_temporal_relations({relation});
+  return runtime;
 }
 
 TEST(test_amr_multiblock_substeps, Runs) {
@@ -289,5 +344,76 @@ TEST(test_amr_multiblock_substeps, Runs) {
     const auto rb = run_cfl();
     EXPECT_EQ(dmax_field(ra.first, rb.first), 0.0) << "monoblock_step_cfl_field_bit_identical";
     EXPECT_EQ(ra.second, rb.second) << "monoblock_step_cfl_dt_bit_identical";
+  }
+
+  // ============================================================================================
+  // (5) EXPLICIT AMR CLOCK CONTRACT. Spatial refinement remains 2 while the temporal relation is
+  //     5/2 with a declared final remainder. The real native runtime must execute 0.4,0.4,0.2 of the
+  //     parent dt; invalid IntegralOnly 5/2 is rejected before relation/state mutation. CFL scans
+  //     the fine state using temporal product 5/2 independently from spatial product 2.
+  // ============================================================================================
+  {
+    const amr::ParentChildClockRelation ratio_five_halves(
+        0, 1, amr::Rational(5, 2), amr::RemainderPolicy::ExplicitFinalSubstep);
+    AmrRuntime rational = make_temporal_contract_runtime(/*mode=*/0, ratio_five_halves);
+    rational.step(Real(0.2));
+    const auto rational_fine = rational.block_level_state_global(0, 1);
+    const Real rational_max = static_cast<Real>(
+        *std::max_element(rational_fine.begin(), rational_fine.end()));
+    const Real expected_rational = Real(1.08) * Real(1.08) * Real(1.04);
+    EXPECT_NEAR(rational_max, expected_rational, 2e-14)
+        << "native 5/2 partition must execute two nominal intervals and the declared remainder";
+
+    const amr::ParentChildClockRelation ratio_two(
+        0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
+    AmrRuntime integral = make_temporal_contract_runtime(/*mode=*/0, ratio_two);
+    integral.step(Real(0.2));
+    const auto integral_fine = integral.block_level_state_global(0, 1);
+    const Real integral_max =
+        static_cast<Real>(*std::max_element(integral_fine.begin(), integral_fine.end()));
+    EXPECT_NEAR(integral_max, Real(1.1) * Real(1.1), 2e-14);
+    EXPECT_GT(std::fabs(rational_max - integral_max), Real(1e-4))
+        << "an installed temporal ratio must change the real native trajectory";
+
+    // Strong preparation guarantee: the rejected candidate neither replaces the accepted chain nor
+    // changes any level state.
+    const auto before_rejected_set = rational.block_level_state_global(0, 1);
+    EXPECT_THROW(
+        rational.set_parent_child_temporal_relations({amr::ParentChildClockRelation(
+            0, 1, amr::Rational(5, 2), amr::RemainderPolicy::IntegralOnly)}),
+        std::runtime_error);
+    EXPECT_EQ(rational.block_level_state_global(0, 1), before_rejected_set);
+    ASSERT_EQ(rational.checkpoint_temporal_relations().size(), 1u);
+    EXPECT_EQ(rational.checkpoint_temporal_relations()[0].temporal_ratio(), amr::Rational(5, 2));
+
+    auto fine_state_spike = [](Real value) {
+      constexpr std::size_t fine_extent = 16;
+      std::vector<double> state(fine_extent * fine_extent, 0.0);
+      state[8 * fine_extent + 8] = static_cast<double>(value);
+      return state;
+    };
+    const Real h = Real(1) / Real(8);
+    const Real cfl = Real(0.4);
+    // A 3/2 temporal ratio on a spatial ratio 2 makes the fine transport interval restrictive.
+    // The single fine spike averages to 1/4 of its value on the coarse, so the fine-local source
+    // frequency and direct admissible-step bounds are restrictive as well.
+    const amr::ParentChildClockRelation ratio_three_halves(
+        0, 1, amr::Rational(3, 2), amr::RemainderPolicy::ExplicitFinalSubstep);
+    constexpr Real spike = Real(16);
+
+    AmrRuntime transport = make_temporal_contract_runtime(/*mode=*/1, ratio_three_halves);
+    transport.set_block_level_state(0, 1, fine_state_spike(spike));
+    EXPECT_NEAR(transport.cfl_dt(cfl, h), cfl * (h / Real(2)) * Real(1.5) / spike, 2e-15);
+    EXPECT_EQ(transport.last_dt_bound(), "transport:clocked");
+
+    AmrRuntime source_bound = make_temporal_contract_runtime(/*mode=*/2, ratio_three_halves);
+    source_bound.set_block_level_state(0, 1, fine_state_spike(spike));
+    EXPECT_NEAR(source_bound.cfl_dt(cfl, h), cfl * Real(1.5) / spike, 2e-15);
+    EXPECT_EQ(source_bound.last_dt_bound(), "source_frequency:clocked");
+
+    AmrRuntime direct_bound = make_temporal_contract_runtime(/*mode=*/3, ratio_three_halves);
+    direct_bound.set_block_level_state(0, 1, fine_state_spike(spike));
+    EXPECT_NEAR(direct_bound.cfl_dt(cfl, h), Real(1.5) / spike, 2e-15);
+    EXPECT_EQ(direct_bound.last_dt_bound(), "stability_dt:clocked");
   }
 }

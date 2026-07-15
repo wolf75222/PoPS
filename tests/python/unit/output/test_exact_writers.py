@@ -436,6 +436,22 @@ def test_rank_without_pieces_keeps_exact_dtype_but_cannot_materialize():
         empty_rank.materialize()
 
 
+def test_native_writer_projection_never_densifies_field_pieces(monkeypatch):
+    from pops.runtime._runtime_consumers import _writer_snapshot_data
+
+    snapshot, request, _ = _snapshot()
+
+    def forbidden_materialize(self):
+        raise AssertionError("native Writer projection must preserve exact pieces")
+
+    monkeypatch.setattr(FieldPayload, "materialize", forbidden_materialize)
+    projected = _writer_snapshot_data(snapshot, request)
+    assert len(projected["fields"]) == 2
+    assert all(row["pieces"] for row in projected["fields"])
+    assert projected["geometries"][0]["coverage"] is snapshot.geometries[0].coverage
+    assert projected["geometries"][0]["cell_volumes"] is snapshot.geometries[0].cell_volumes
+
+
 def test_format_interface_selects_exact_writer():
     assert type(NPZ().writer()) is NPZWriter
     assert type(HDF5().writer()) is HDF5Writer

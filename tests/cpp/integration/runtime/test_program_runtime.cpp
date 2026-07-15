@@ -106,11 +106,12 @@ TEST(ProgramRuntime, ForwardEulerProgramContextMatchesEvalRhsReferenceAndCountsK
   ctx.configure_primary_clock("macro");
   ctx.install([ctx](double h) {
     ctx.begin_step(h);
+    ctx.set_stage_time(0, 1);
     ctx.solve_fields();
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
+      ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h * R  (Forward Euler)
     }
   });

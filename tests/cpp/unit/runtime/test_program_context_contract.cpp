@@ -57,6 +57,12 @@ using GasModel = CompositeModel<Euler, NoSource, NoEll>;
 constexpr double kGamma = 1.4;
 constexpr int kNcomp = 4;
 
+void ensure_kokkos() {
+#if defined(POPS_HAS_KOKKOS)
+  static Kokkos::ScopeGuard guard;
+#endif
+}
+
 void add_gas(System& s) {
   add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
                      "conservative", "explicit", kGamma);
@@ -83,6 +89,11 @@ std::vector<double> ic(int n) {
   return U;
 }
 
+TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
+  ProgramContext context(static_cast<System*>(nullptr));
+  EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+}
+
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {
@@ -97,9 +108,7 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
 // reference U + dt*R computed from solve_fields + eval_rhs. Uses the PER-STAGE solve_fields_from_state
 // seam (the one the codegen lowers every solve_fields to), passing the block's own live state.
 TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -143,9 +152,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
 }
 
 TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageState) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   SystemConfig cfg;
   cfg.n = 2;
   cfg.L = 1.0;
@@ -162,17 +169,23 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
 
   GridContext a_context = sim.grid_context("a");
   ASSERT_TRUE(static_cast<bool>(a_context.boundary_field_registry));
+  constexpr int kGroupIdentity = 37;
+  int observed_a_group = -1;
+  int observed_b_group = -1;
   BlockClosures a_closures;
-  a_closures.rhs_at_point = [factory = a_context.boundary_field_registry, b_state](
+  a_closures.rhs_at_point = [factory = a_context.boundary_field_registry, b_state,
+                             &observed_a_group](
       const runtime::multiblock::BoundaryEvaluationPoint& point,
       MultiFab& U, MultiFab& R) {
+    observed_a_group = point.stage;
     const auto fields = factory(point, U, nullptr, nullptr);
     const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
     R.set_val(observed);
   };
   BlockClosures b_closures;
-  b_closures.rhs_at_point = [](
-      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab& R) {
+  b_closures.rhs_at_point = [&observed_b_group](
+      const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab&, MultiFab& R) {
+    observed_b_group = point.stage;
     R.set_val(Real(0));
   };
   sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0,
@@ -187,12 +200,24 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
   stage_b.set_val(Real(9));
   MultiFab rhs_a(stage_a.box_array(), stage_a.dmap(), 1, 0);
   MultiFab rhs_b(stage_b.box_array(), stage_b.dmap(), 1, 0);
-  const runtime::multiblock::BoundaryEvaluationPoint point{
-      "clock.stage", 3, 0, 0, 2, amr::Rational(1, 2), 0.1, 0.25};
-  sim.block_rhs_group(point, {0, 1}, {&stage_a, &stage_b}, {&rhs_a, &rhs_b}, {0, 0});
+  sim.set_program_block_map({0, 1});
+  ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.stage");
+  ctx.begin_step(0.1);
+  ctx.set_stage_time(1, 2);
+  ctx.rhs_group(kGroupIdentity,
+                {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}});
 
   EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(9));
   EXPECT_EQ(sim.block_state(1).fab(0).const_array()(0, 0, 0), Real(2));
+  EXPECT_EQ(observed_a_group, kGroupIdentity);
+  EXPECT_EQ(observed_b_group, kGroupIdentity);
+  EXPECT_NE(observed_a_group, 11) << "the group point must not borrow the first rate identity";
+  EXPECT_THROW(
+      ctx.rhs_group(11,
+                    {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
+      std::invalid_argument)
+      << "an atomic group identity must never alias one of its member rate nodes";
 }
 
 // A 2-stage SSP-RK2 (Heun) Program through ProgramContext is bit-equal to a hand-written SSPRK2
@@ -202,9 +227,7 @@ TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageSta
 // The reference re-solves the fields at each stage state (solve_fields on a scratch System seeded with
 // the stage state), mirroring the per-stage ctx.solve_fields_from_state in the Program body.
 TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -269,9 +292,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 
 // The remaining host-validatable seams return sane, consistent results.
 TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -375,9 +396,7 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
 }
 
 TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   SystemConfig cfg;
   cfg.n = 8;
   System sim(cfg);

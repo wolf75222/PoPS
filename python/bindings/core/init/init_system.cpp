@@ -1,5 +1,6 @@
 #include "../bindings_detail.hpp"
 #include "boundary_component_install.hpp"
+#include "output_geometry_binding.hpp"
 
 #include <pops/runtime/dynamic/component_loader.hpp>
 
@@ -745,6 +746,19 @@ void bind_system_data(py::class_<System>& cls) {
              return to_2d(s.field_potential_global(slot), s.ny(), s.nx());
            },
            py::arg("provider_slot"))
+      .def(
+          "_output_geometry_snapshot",
+          [](const System& s, const std::array<double, 2>& origin,
+             const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
+             const std::string& cell_measure) {
+            if (cell_shape[0] != s.ny() || cell_shape[1] != s.nx())
+              throw std::invalid_argument(
+                  "System output geometry shape differs from the native domain");
+            return pops::python::detail::native_output_geometry_snapshot(
+                0, 0, origin, spacing, cell_shape, cell_measure, {}, 0, false);
+          },
+          py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"), py::arg("cell_measure"),
+          "Private Writer geometry view: native, immutable, and cacheable by the runtime.")
       // LOCAL per-fab accessors (NOT collective): PARALLEL HDF5 writing by hyperslabs (PR-IO-3,
       // sim.write(format='hdf5', parallel=True)). local_boxes returns the list of local boxes
       // (ilo, jlo, ihi, jhi) in GLOBAL indices; local_state returns the state of fab li reshaped

@@ -541,6 +541,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     python_cache_block = workflow.split(
         "\n  gate-python-compile-cache:\n", 1)[1].split("\n  gate:\n", 1)[0]
     assert "timeout-minutes: 20" in python_build_block
+    assert "timeout-minutes: 16" in python_build_block
+    assert "timeout --signal=TERM --kill-after=30s 14m" in python_build_block
+    assert "exit \"$build_status\"" in python_build_block
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_build_block
+    assert "uses: actions/cache/restore@v6" in python_build_block
+    assert "uses: actions/cache/save@v6" in python_build_block
+    assert "always() && steps.kokkos.outcome == 'success'" in python_build_block
+    assert "github.run_attempt" in python_build_block
     assert "timeout-minutes: 30" in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     for block in (python_build_block, python_shards_block, python_cache_block):

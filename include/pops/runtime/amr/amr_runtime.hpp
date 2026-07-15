@@ -18,6 +18,7 @@
 #include <pops/numerics/elliptic/interface/field_provider.hpp>
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, mf_average_down_mb
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
+#include <pops/numerics/time/amr/advance/amr_advance.hpp>  // PreparedAmrTemporalPlan
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // NewtonReport (OPT-IN IMEX diagnostics, aggregated per block)
 #include <pops/mesh/index/box2d.hpp>
 #include <pops/mesh/layout/box_array.hpp>
@@ -375,6 +376,15 @@ struct AmrRuntimeBlock {
   /// passes the base domain + periodicity + coarse ownership policy, rewired by the engine.
   std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool)> advance;
 
+  /// Explicit-clock counterpart of @ref advance.  It is populated by compiled/native block builders
+  /// that support the final temporal contract and receives the immutable plan prepared from the
+  /// complete contiguous relation chain.
+  /// AmrRuntime selects this closure whenever relations were installed; it never installs a relation
+  /// and then falls back to the spatial-ratio legacy closure above.
+  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
+                     const detail::PreparedAmrTemporalPlan&)>
+      advance_with_temporal_plan;
+
   /// TEMPORAL TREATMENT of the block: false (default) = EXPLICIT (forward-Euler source, in advance);
   /// true = IMEX (stiff source treated IMPLICITLY by backward_euler_source). The facade (AmrSystem)
   /// freezes it from time="imex". Selected EXPLICITLY in AmrRuntime::step (runtime counterpart of the
@@ -392,6 +402,12 @@ struct AmrRuntimeBlock {
   /// cell-local (outside the reflux registers) so C/F conservation holds, and the final cascade restores
   /// each covered coarse cell to the 2x2 average of its children. Empty for an explicit block.
   std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool)> imex_advance;
+
+  /// Explicit-clock counterpart of @ref imex_advance.  The source-free transport consumes the same
+  /// authored clock chain as an explicit block; the following implicit source/cascade is unchanged.
+  std::function<void(std::vector<AmrLevelMP>&, const Box2D&, Real, Periodicity, bool,
+                     const detail::PreparedAmrTemporalPlan&)>
+      imex_advance_with_temporal_plan;
 
   /// POINTWISE PROJECTION post-pas (ADC-177) : U <- project(U, aux) appliquee PAR NIVEAU a la FIN
   /// de l'avance complete du bloc (substeps + reflux/cascade faits). Vide -> aucune projection
@@ -690,14 +706,10 @@ class AmrRuntime {
   }
   void set_parent_child_temporal_relations(
       std::vector<::pops::amr::ParentChildClockRelation> relations) {
-    if (relations.size() != hierarchy_.refinement_ratios.size())
-      throw std::runtime_error(
-          "AMR temporal relations must contain exactly one row per coarse/fine transition");
-    for (std::size_t index = 0; index < relations.size(); ++index)
-      if (relations[index].parent_level() != static_cast<int>(index) ||
-          relations[index].child_level() != static_cast<int>(index + 1))
-        throw std::runtime_error("AMR temporal relations must form the contiguous level chain");
+    auto prepared =
+        detail::PreparedAmrTemporalPlan::prepare(relations, static_cast<int>(hierarchy_.ba.size()));
     temporal_relations_ = std::move(relations);
+    temporal_execution_plan_ = std::move(prepared);
   }
   const ::pops::amr::ParentChildClockRelation& parent_child_temporal_relation(
       int child_level) const {
@@ -3296,6 +3308,10 @@ class AmrRuntime {
   /// backward-Euler stable at any step, stiff relaxation more accurate). imex == false everywhere ->
   /// advance path only -> bit-identical trajectory to the historical one (the IMEX is opt-in).
   void step(Real dt) {
+    // PREPARE before any observable mutation (including regrid, field warm-start and diagnostics).
+    // This rejects an invalid rational IntegralOnly relation or an old block without the explicit
+    // execution closure while the accepted numerical state is still untouched.
+    preflight_native_temporal_step_();
     solve_count_ = 0;
     // UNION-TAGS REGRID (capstone Phase 2, C.6; D2: BEFORE the macro-step's step, consistent with the
     // single-block amr_dsl_block.hpp:108). regrid_every_ cadence in MACRO-STEPS, OUTSIDE the substep
@@ -3339,9 +3355,19 @@ class AmrRuntime {
       // its IMEX only once over bdt (it ignores substeps on its IMEX branch): divergence INTENTIONAL
       // and sound for substeps>1 (cf. IMEX SEMANTICS UNDER substeps in the file header).
       const Real h = bdt / static_cast<Real>(b.substeps);
-      auto& step_block = b.imex ? b.imex_advance : b.advance;
-      for (int s = 0; s < b.substeps; ++s)
-        step_block(*b.levels, dom_, h, base_per_, replicated_coarse_);
+      for (int s = 0; s < b.substeps; ++s) {
+        if (has_explicit_temporal_relations_()) {
+          auto& step_block =
+              b.imex ? b.imex_advance_with_temporal_plan : b.advance_with_temporal_plan;
+          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_,
+                     *temporal_execution_plan_);
+        } else {
+          // Low-level compatibility route: no temporal relation was installed, so the block keeps
+          // the historical spatial-ratio cadence.  This branch is unreachable once a relation exists.
+          auto& step_block = b.imex ? b.imex_advance : b.advance;
+          step_block(*b.levels, dom_, h, base_per_, replicated_coarse_);
+        }
+      }
       // PROJECTION PONCTUELLE post-pas (ADC-177) : par niveau, APRES substeps + reflux/cascade.
       // Cell-local + idempotente -> conservation preservee (flux-registres deja regles). No-op si vide.
       if (b.project_per_level)
@@ -3375,6 +3401,7 @@ class AmrRuntime {
   /// (AmrSystem::step_cfl's Program route, parity SystemStepper::step_cfl) instead of the native step.
   /// The native @ref step_cfl path is byte-identical (it is this body + step(dt)).
   Real cfl_dt(Real cfl, Real h, Real speed_floor = kCflSpeedFloor) {
+    preflight_native_temporal_step_();
     // This pre-solve provides the field required by max_speed. step(dt) keeps its own transaction-level
     // field solve, but the unchanged warm start now exits at zero V-cycles because GeometricMG measures
     // convergence against ||rhs|| rather than demanding another rel_tol factor from its incoming
@@ -3384,31 +3411,46 @@ class AmrRuntime {
     Real dt = std::numeric_limits<Real>::infinity();
     last_dt_reason_ = "degenerate";
     for (auto& b : blocks_) {
-      // ADC-645: caller-facing speed floor (default = the historical kCflSpeedFloor, bit-identical).
-      const Real w = std::max(b.max_speed((*b.levels)[0].U, aux_[0]), speed_floor);
-      Real dt_b = cfl * h * static_cast<Real>(b.substeps) / (static_cast<Real>(b.stride) * w);
+      Real dt_b = std::numeric_limits<Real>::infinity();
       const char* why = "transport";
-      // OPTIONAL block BOUNDS (AMR StabilityPolicy, audit 2026-06): same substeps/stride formulas as
-      // SystemStepper::step_cfl, evaluated on the COARSE. Empty closures (model without the trait) ->
-      // not queried, transport bound only (bit-identical).
-      if (b.source_frequency) {
-        const Real mu = b.source_frequency((*b.levels)[0].U, aux_[0]);
-        if (mu > Real(0)) {
-          const Real dt_src =
-              cfl * static_cast<Real>(b.substeps) / (static_cast<Real>(b.stride) * mu);
-          if (dt_src < dt_b) {
-            dt_b = dt_src;
-            why = "source_frequency";
+      // Every active level contributes a stability bound.  For level l, one block step is divided
+      // by the authored temporal product T_l while its cell width is divided by the independent
+      // spatial product S_l.  Therefore a macro dt is admissible iff
+      //   dt <= cfl*(h/S_l)*substeps*T_l/(stride*w_l).
+      // Rational ExplicitFinalSubstep relations use their nominal ratio: the declared remainder is
+      // shorter than the nominal child interval and cannot be the restrictive interval.
+      for (int level = 0; level < nlev_; ++level) {
+        const auto index = static_cast<std::size_t>(level);
+        const Real temporal_product = temporal_refinement_product_(level);
+        const Real block_scale = static_cast<Real>(b.substeps) * temporal_product /
+                                 static_cast<Real>(b.stride);
+        const Real level_h = h / static_cast<Real>(level_refinement(level));
+        // ADC-645: caller-facing speed floor (default = historical kCflSpeedFloor).
+        const Real w = std::max(b.max_speed((*b.levels)[index].U, aux_[index]), speed_floor);
+        const Real dt_transport = cfl * level_h * block_scale / w;
+        if (dt_transport < dt_b) {
+          dt_b = dt_transport;
+          why = "transport";
+        }
+        // OPTIONAL block bounds use the same per-level temporal product, without a spatial factor.
+        if (b.source_frequency) {
+          const Real mu = b.source_frequency((*b.levels)[index].U, aux_[index]);
+          if (mu > Real(0)) {
+            const Real dt_src = cfl * block_scale / mu;
+            if (dt_src < dt_b) {
+              dt_b = dt_src;
+              why = "source_frequency";
+            }
           }
         }
-      }
-      if (b.stability_dt) {
-        const Real db = b.stability_dt((*b.levels)[0].U, aux_[0]);
-        if (db > Real(0)) {
-          const Real dt_adm = db * static_cast<Real>(b.substeps) / static_cast<Real>(b.stride);
-          if (dt_adm < dt_b) {
-            dt_b = dt_adm;
-            why = "stability_dt";
+        if (b.stability_dt) {
+          const Real db = b.stability_dt((*b.levels)[index].U, aux_[index]);
+          if (db > Real(0)) {
+            const Real dt_adm = db * block_scale;
+            if (dt_adm < dt_b) {
+              dt_b = dt_adm;
+              why = "stability_dt";
+            }
           }
         }
       }
@@ -3791,6 +3833,41 @@ class AmrRuntime {
   }
 
  private:
+  bool has_explicit_temporal_relations_() const { return !temporal_relations_.empty(); }
+
+  /// Completes every check that could reject the explicit native route before solve/regrid/state
+  /// mutation.  A block built by an older low-level consumer can still use the separate legacy route
+  /// when no relations are installed, but it cannot silently ignore an installed relation chain.
+  void preflight_native_temporal_step_() const {
+    if (!has_explicit_temporal_relations_())
+      return;
+    if (!temporal_execution_plan_ || temporal_execution_plan_->nlevels() != nlev_)
+      throw std::runtime_error("AMR explicit temporal relations lack their prepared execution plan");
+    for (const auto& block : blocks_) {
+      const bool prepared = block.imex ? static_cast<bool>(block.imex_advance_with_temporal_plan)
+                                       : static_cast<bool>(block.advance_with_temporal_plan);
+      if (!prepared)
+        throw std::runtime_error("AMR block '" + block.name +
+                                 "' cannot execute its installed explicit temporal relations");
+    }
+  }
+
+  /// Product parent_dt/child_dt from level zero to @p level.  With an explicit clock chain this is
+  /// independent from spatial refinement; the spatial product is retained solely for the separate
+  /// compatibility route that has no authored temporal relations.
+  Real temporal_refinement_product_(int level) const {
+    Real product = Real(1);
+    for (int transition = 0; transition < level; ++transition) {
+      if (has_explicit_temporal_relations_())
+        product *= static_cast<Real>(
+            temporal_relations_[static_cast<std::size_t>(transition)].temporal_ratio().value());
+      else
+        product *= static_cast<Real>(
+            hierarchy_.refinement_ratios[static_cast<std::size_t>(transition)]);
+    }
+    return product;
+  }
+
   // ADC-631 multistep history rings: each owner-qualified name authenticates its block carrier,
   // [slot][level] values, depth, per-level stored-once flag and per-slot dt. Data-only (MockImpl-
   // safe); all logic in detail::AmrHistoryOps (amr_history.hpp), a friend taking the engine by ref.
@@ -4190,6 +4267,7 @@ class AmrRuntime {
   bool replicated_coarse_;
   AmrHierarchyLayout hierarchy_;
   std::vector<::pops::amr::ParentChildClockRelation> temporal_relations_;
+  std::optional<detail::PreparedAmrTemporalPlan> temporal_execution_plan_;
   GeometricMG mg_;
   std::function<bool(Real, Real)> wall_active_;
   FieldNullspacePlan default_field_nullspace_;

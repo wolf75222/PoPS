@@ -164,14 +164,15 @@ echo "Or by hand:"
 echo "    conda activate $ENV_NAME"
 echo "    pip install . -v          # builds the Kokkos module (Kokkos is ON and mandatory)"
 echo ""
-# ADC-338: after the ADC-335 split, the heavy module TUs are small but a size-1 Ninja pool
-# (POPS_HEAVY_MODULE_TU_POOL, the CI 7GB-runner OOM guard) still serializes them. On a high-RAM local box,
-# widen it so -j actually compiles the sub-TUs in parallel (this, not -j alone, bounds the heavy TUs).
+# ADC-338: after the ADC-335 split, a conservative size-1 Ninja pool
+# (POPS_HEAVY_MODULE_TU_POOL, the memory-constrained default) still serializes the module leaves. On a
+# machine with enough RAM, widen it so -j actually compiles the sub-TUs in parallel (this, not -j alone,
+# bounds the heavy TUs).
 # scripts/build_python.sh sizes this automatically (cores capped by RAM); the manual knob:
 _ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 echo "Manual heavy-TU pool (build_python.sh does this for you):"
 echo "    pip install . -v -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=$_ncpu      # or CMake: -DPOPS_HEAVY_MODULE_TU_POOL=$_ncpu"
-echo "    (leave it at the default 1 on memory-constrained machines / CI -- it is the OOM guard.)"
+echo "    (leave it at the default 1 on memory-constrained machines -- it is the OOM guard.)"
 echo ""
 # ADC-647: a previous wheel install may already exist. On Darwin, authenticate the exact extension
 # a clean `import pops` will resolve before the probe below can load it. A missing package is normal

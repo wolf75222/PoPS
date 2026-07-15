@@ -5,8 +5,8 @@
 #
 #   - activates the conda env `pops` (override: POPS_ENV_NAME), without tripping `set -u`;
 #   - sizes the production-module heavy-TU Ninja pool (POPS_HEAVY_MODULE_TU_POOL) from cores AND free RAM so the split module TUs
-#     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default is 1, the
-#     CI out-of-memory guard). Pre-set POPS_HEAVY_MODULE_TU_POOL to pin it by hand.
+#     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default remains the
+#     memory-constrained size-1 guard). Pre-set POPS_HEAVY_MODULE_TU_POOL to pin it by hand.
 #   - exports the Kokkos / CMake discovery vars (Kokkos_ROOT, POPS_KOKKOS_ROOT, CMAKE_PREFIX_PATH) and a
 #     STABLE, cross-worktree ccache (CCACHE_DIR + CCACHE_BASEDIR -> a file already compiled in another
 #     worktree is reused instead of recompiled);

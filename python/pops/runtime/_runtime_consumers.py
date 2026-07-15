@@ -16,6 +16,7 @@ from pops.mesh._layout_plan_contracts import (
     NormalizedGeometry,
 )
 from pops.output.data import (
+    _NATIVE_GEOMETRY_ARRAYS,
     ArrayPiece,
     DiagnosticKey,
     DiagnosticPayload,
@@ -86,40 +87,10 @@ def _layout_identity(layout: Any) -> Identity:
     return make_identity("layout", _identity_payload(layout.to_data()))
 
 
-def _cartesian_cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
-    import numpy as np
-
-    nx, ny = (count * refinement for count in geometry.cells)
-    dx = geometry.lengths[0] / nx
-    dy = geometry.lengths[1] / ny
-    return np.full((ny, nx), dx * dy, dtype=np.float64)
-
-
-def _polar_annulus_cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
-    import numpy as np
-
-    nr, ntheta = (count * refinement for count in geometry.cells)
-    dr = geometry.lengths[0] / nr
-    dtheta = geometry.lengths[1] / ntheta
-    inner = geometry.lower[0] + np.arange(nr, dtype=np.float64) * dr
-    radial_areas = 0.5 * ((inner + dr) ** 2 - inner ** 2) * dtheta
-    return np.broadcast_to(radial_areas, (ntheta, nr)).copy()
-
-
-_CELL_VOLUME_PROJECTORS = {
-    CARTESIAN_CELL_AREA: _cartesian_cell_volumes,
-    POLAR_ANNULUS_CELL_AREA: _polar_annulus_cell_volumes,
-}
-
-
-def _cell_volumes(geometry: NormalizedGeometry, refinement: int) -> Any:
-    projector = _CELL_VOLUME_PROJECTORS.get(geometry.cell_measure)
-    if projector is None:
-        raise NotImplementedError(
-            "scientific output does not implement normalized cell measure %s"
-            % geometry.cell_measure
-        )
-    return projector(geometry, refinement)
+_NATIVE_CELL_MEASURES = frozenset({
+    CARTESIAN_CELL_AREA,
+    POLAR_ANNULUS_CELL_AREA,
+})
 
 
 def _target(uri: str, format_data: Mapping[str, Any], snapshot: OutputSnapshot,
@@ -276,15 +247,17 @@ def _writer_snapshot_data(snapshot: OutputSnapshot, request: OutputRequest) -> d
                 {"lower": tuple(box[:dimension]), "upper": tuple(box[dimension:])}
                 for box in geometry.boxes
             ],
-            "valid_cells": np.ascontiguousarray(geometry.valid_cells, dtype=np.uint8),
-            "coverage": np.ascontiguousarray(geometry.coverage, dtype=np.uint8),
-            "cell_volumes": np.ascontiguousarray(geometry.cell_volumes, dtype=np.float64),
+            # LevelGeometry owns exact, immutable C-contiguous ABI buffers.  Keep the borrowed
+            # arrays intact: the generated native marshaller validates dtype/shape again.
+            "valid_cells": geometry.valid_cells,
+            "coverage": geometry.coverage,
+            "cell_volumes": geometry.cell_volumes,
         })
     field_rows = []
     for field in fields:
-        # Serial Writer v1 receives every piece, but still requires a complete exact selection.
-        # Materialization is validation only; the POD keeps the original piece boundaries.
-        field.materialize()
+        # Serial Writer v1 receives every piece.  FieldPayload has already authenticated bounds,
+        # dtype and non-overlap; the C++ Writer ABI additionally proves exact geometry coverage.
+        # Densifying here only to repeat that proof was an O(N) allocation on every publication.
         pieces = []
         for piece in field.pieces:
             values = np.asarray(piece.values)
@@ -659,10 +632,11 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
 
 
 class RuntimeOutputSnapshot:
-    """Materialize exact output values from one accepted RuntimeInstance snapshot."""
+    """Expose exact output values from one accepted RuntimeInstance snapshot."""
 
     def __init__(self, owner: Any) -> None:
         self._owner = owner
+        self._geometry_cache: dict[tuple[str, int, int], LevelGeometry] = {}
 
     def _layout(self, layout_id: str) -> Any:
         rows = [row for row in self._owner._layout_plan.layouts
@@ -672,9 +646,13 @@ class RuntimeOutputSnapshot:
         return rows[0]
 
     def _geometry(self, layout: Any, level: int) -> LevelGeometry:
-        import numpy as np
-
         engine = self._owner._executor_for_layout(layout.handle.qualified_id)
+        native_engine = getattr(engine, "_s", None)
+        native_geometry = getattr(native_engine, "_output_geometry_snapshot", None)
+        if not callable(native_geometry):
+            raise RuntimeError(
+                "scientific output requires the native output-geometry provider"
+            )
         geometry = layout.geometry
         if type(geometry) is not NormalizedGeometry:
             raise TypeError("runtime output requires an exact normalized layout geometry")
@@ -695,32 +673,56 @@ class RuntimeOutputSnapshot:
                 "runtime y cell count does not match normalized layout geometry")
         scale = layout.levels[level].refinement
         nx, ny = base_nx * scale, base_ny * scale
-        boxes = ((0, 0, ny, nx),)
-        if layout.adaptive and level > 0:
-            native = [row for row in engine.patch_boxes() if int(row[0]) == level]
-            boxes = tuple(sorted((int(jlo), int(ilo), int(jhi) + 1, int(ihi) + 1)
-                                 for _, ilo, jlo, ihi, jhi in native))
-            if not boxes:
-                raise ValueError("selected AMR level has no materialized patches")
-        coverage = np.zeros((ny, nx), dtype=np.bool_)
-        if layout.adaptive:
-            for level_index, ilo, jlo, ihi, jhi in engine.patch_boxes():
-                if int(level_index) != level + 1:
-                    continue
-                ratio = (
-                    layout.levels[level + 1].refinement
-                    // layout.levels[level].refinement
-                )
-                coverage[int(jlo) // ratio:(int(jhi) + 1 + ratio - 1) // ratio,
-                         int(ilo) // ratio:(int(ihi) + 1 + ratio - 1) // ratio] = True
+        if geometry.cell_measure not in _NATIVE_CELL_MEASURES:
+            raise NotImplementedError(
+                "scientific output does not implement normalized cell measure %s"
+                % geometry.cell_measure
+            )
+        epoch_provider = getattr(native_engine, "checkpoint_topology_epoch", None)
+        topology_epoch = int(cast(Any, epoch_provider())) \
+            if layout.adaptive and callable(epoch_provider) else 0
+        layout_identity = _layout_identity(layout)
+        cache_key = (layout_identity.token, level, topology_epoch)
+        cached = self._geometry_cache.get(cache_key)
+        if cached is not None:
+            return cached
         spacing = (geometry.lengths[0] / nx, geometry.lengths[1] / ny)
-        volumes = _cell_volumes(geometry, scale)
-        return LevelGeometry(
-            _layout_identity(layout), "amr" if layout.adaptive else "uniform", level,
-            cast(tuple[float, float], geometry.lower), spacing, (ny, nx), boxes, coverage, volumes,
+        next_ratio = 0
+        if layout.adaptive and level + 1 < len(layout.levels):
+            next_ratio = (
+                layout.levels[level + 1].refinement
+                // layout.levels[level].refinement
+            )
+        if layout.adaptive:
+            native = cast(Mapping[str, Any], native_geometry(
+                level, geometry.lower, spacing, (ny, nx), next_ratio,
+                geometry.cell_measure))
+        else:
+            native = cast(Mapping[str, Any], native_geometry(
+                geometry.lower, spacing, (ny, nx), geometry.cell_measure))
+        if int(native["topology_epoch"]) != topology_epoch:
+            raise RuntimeError("native output geometry changed during snapshot construction")
+        native_boxes = tuple(
+            cast(tuple[int, int, int, int], tuple(int(item) for item in box))
+            for box in native["boxes"]
+        )
+        result = LevelGeometry(
+            layout_identity, "amr" if layout.adaptive else "uniform", level,
+            cast(tuple[float, float], geometry.lower), spacing, (ny, nx),
+            native_boxes,
+            native["coverage"], native["cell_volumes"],
             coordinate_system=geometry.coordinate_system,
             cell_measure=geometry.cell_measure,
-            axis_names=cast(tuple[str, str], geometry.axis_names))
+            axis_names=cast(tuple[str, str], geometry.axis_names),
+            _native_valid_cells=native["valid_cells"],
+            _native_arrays=_NATIVE_GEOMETRY_ARRAYS)
+        # Retain only the current topology for this qualified level.  Regridding therefore cannot
+        # grow the cache indefinitely, while every quantity in one accepted epoch shares buffers.
+        for stale in tuple(self._geometry_cache):
+            if stale[:2] == cache_key[:2] and stale != cache_key:
+                del self._geometry_cache[stale]
+        self._geometry_cache[cache_key] = result
+        return result
 
     def _state(
         self, block: str, layout: Any, level: int, *, collective: bool

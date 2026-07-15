@@ -281,7 +281,7 @@ class _SystemUnifiedInstall(_System):
             if not getattr(model, "has_wave_speeds", True):
                 raise ValueError(
                     "pops.bind: riemann 'hll' requires signed wave speeds: declare "
-                    "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
+                    "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
                     "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov'.")
 
     def _install_field_plan(self, field: Any, field_plan: Any, *,

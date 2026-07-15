@@ -462,6 +462,72 @@ struct RegMP {
 
 namespace detail {  // INTERNAL N-level multi-patch engine; the public facade is advance_amr
 
+/// One child interval of an explicitly authored parent/child clock relation.  The fractions are
+/// exact until this final numerical lowering: @c parent_begin is the interpolation point in the
+/// parent window and @c parent_span is the fraction of the parent dt advanced by this child.
+struct ExplicitTemporalSubstep {
+  Real parent_begin = Real(0);
+  Real parent_span = Real(0);
+};
+
+/// Lowers an authored clock relation to the scalar intervals consumed by the native Berger-Oliger
+/// engine.  In particular, a rational ratio such as 5/2 becomes {2/5, 2/5, 1/5}; the final 1/5
+/// interval exists only when ExplicitFinalSubstep was declared.  Calling ParentChildClockRelation::
+/// partition here preserves the same validation and exact Rational authority as the Program path.
+inline std::vector<ExplicitTemporalSubstep> explicit_temporal_partition(
+    const amr::ParentChildClockRelation& relation) {
+  const amr::ClockWindow unit_parent{
+      {relation.parent_level(), 0, amr::Rational(0, 1), 0.0},
+      {relation.parent_level(), 0, amr::Rational(1, 1), 1.0}};
+  const auto authored = relation.partition(unit_parent);
+  std::vector<ExplicitTemporalSubstep> result;
+  result.reserve(authored.size());
+  for (const auto& child : authored) {
+    const amr::Rational begin = child.window.begin.phase - unit_parent.begin.phase;
+    const amr::Rational span = child.window.end.phase - child.window.begin.phase;
+    result.push_back({static_cast<Real>(begin.value()), static_cast<Real>(span.value())});
+  }
+  return result;
+}
+
+/// Immutable execution plan prepared once from the authored clock chain.  Runtime blocks share this
+/// object across every block/substep, so the hot recursive path performs no clock partition allocation
+/// or Rational lowering.
+class PreparedAmrTemporalPlan {
+ public:
+  static PreparedAmrTemporalPlan prepare(
+      const std::vector<amr::ParentChildClockRelation>& relations, int nlevels) {
+    const std::size_t expected = nlevels > 0 ? static_cast<std::size_t>(nlevels - 1) : 0u;
+    if (relations.size() != expected)
+      throw std::runtime_error(
+          "explicit AMR temporal relations must contain exactly one row per level transition");
+    std::vector<std::vector<ExplicitTemporalSubstep>> transitions;
+    transitions.reserve(relations.size());
+    for (std::size_t transition = 0; transition < relations.size(); ++transition) {
+      const auto& relation = relations[transition];
+      if (relation.parent_level() != static_cast<int>(transition) ||
+          relation.child_level() != static_cast<int>(transition + 1))
+        throw std::runtime_error(
+            "explicit AMR temporal relations must form the contiguous level chain");
+      transitions.push_back(explicit_temporal_partition(relation));
+    }
+    return PreparedAmrTemporalPlan(nlevels, std::move(transitions));
+  }
+
+  int nlevels() const { return nlevels_; }
+  const std::vector<ExplicitTemporalSubstep>& transition(int parent_level) const {
+    return transitions_.at(static_cast<std::size_t>(parent_level));
+  }
+
+ private:
+  PreparedAmrTemporalPlan(int nlevels,
+                          std::vector<std::vector<ExplicitTemporalSubstep>> transitions)
+      : nlevels_(nlevels), transitions_(std::move(transitions)) {}
+
+  int nlevels_ = 0;
+  std::vector<std::vector<ExplicitTemporalSubstep>> transitions_;
+};
+
 // Fills the ghosts of an AMR level: level 0 = base-domain BC (fill_boundary); level > 0 =
 // time-interpolated coarse-fine ghosts from the parent at position frac (mf_fill_fine_ghosts_mb)
 // THEN fine-fine halos (fill_boundary). Factored out of the head of subcycle_level_mp, REUSED by
@@ -547,7 +613,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                        const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
                        bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
                        const NewtonOptions& nopts = {},
-                       AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+                       AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
+                       const PreparedAmrTemporalPlan* temporal_plan = nullptr) {
   // SSPRK3 + IMEX: combination NOT VALIDATED (the per-stage implicit stiff source under SSP has
   // not been verified), rejected EXPLICITLY rather than run silently. The facade cannot produce it
   // (time.kind is a single selector: "ssprk3" XOR "imex"), defense-in-depth guard here.
@@ -556,8 +623,6 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
         "subcycle_level_mp: SSPRK3 + IMEX unsupported (combination not validated); use "
         "time='ssprk3' (explicit source per stage) or time='imex' (forward Euler + implicit "
         "source)");
-  const SubcyclingSchedule sched(
-      lev, lev + 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
   const int nc = L[lev].U.ncomp();
   // Density-role component for the C/F ghost floor (ADC-259), resolved ONCE on the host. pos_floor<=0
   // -> 0 without model introspection (positivity_comp short-circuit) -> bit-identical historical path.
@@ -751,11 +816,24 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
                               nopts);  // explicit or IMEX source (Newton options)
   }
-  for (int s = 0; s < sched.count();
-       ++s)  // each fine substep = one full SSP step (tmethod propagated)
-    subcycle_level_mp<Limiter, NumericalFlux>(
-        m, L, lev + 1, sched.dt_sub(dt), base_dom, base_per, &U_old, &lv.U, sched.frac(s), &regs,
-        coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor);
+  if (temporal_plan != nullptr) {
+    for (const ExplicitTemporalSubstep& child : temporal_plan->transition(lev))
+      subcycle_level_mp<Limiter, NumericalFlux>(
+          m, L, lev + 1, dt * child.parent_span, base_dom, base_per, &U_old, &lv.U,
+          child.parent_begin, &regs, coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor,
+          temporal_plan);
+  } else {
+    // Clearly separated low-level compatibility route.  Callers that have not authored temporal
+    // relations retain the historical ratio-two cadence; an installed explicit relation never
+    // reaches this branch.
+    const SubcyclingSchedule legacy_schedule(
+        lev, lev + 1, amr::Rational(kAmrRefRatio, 1), amr::RemainderPolicy::IntegralOnly);
+    for (int s = 0; s < legacy_schedule.count(); ++s)
+      subcycle_level_mp<Limiter, NumericalFlux>(
+          m, L, lev + 1, legacy_schedule.dt_sub(dt), base_dom, base_per, &U_old, &lv.U,
+          legacy_schedule.frac(s), &regs, coarse_replicated, recon_prim, imex, nopts, tmethod,
+          pos_floor, nullptr);
+  }
   // Distributed point 4: coverage-aware reflux. The bordering coarse cell may belong to a REMOTE
   // parent box. For each LOCAL child, we deposit the correction (cL/fL already local after
   // parallel_copy) into a GLOBAL-indexed coarse buffer, all_reduce -> each rank has the full
@@ -799,7 +877,40 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
                                     Real pos_floor = Real(0)) {
   subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
                                             nullptr, coarse_replicated, recon_prim, imex, nopts,
-                                            tmethod, pos_floor);
+                                            tmethod, pos_floor, nullptr);
+}
+
+/// Explicit-clock production route.  Validation of the full chain is completed before level zero
+/// is touched, then every recursive transition consumes the authored relation (never the spatial
+/// refinement ratio).  The legacy entry above remains available only for direct low-level callers
+/// that have no temporal contract.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void amr_step_multilevel_multipatch_with_temporal_relations(
+    const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations,
+    Periodicity per = Periodicity{true, true}, bool coarse_replicated = true,
+    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+  const PreparedAmrTemporalPlan plan =
+      PreparedAmrTemporalPlan::prepare(temporal_relations, static_cast<int>(L.size()));
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+                                            nullptr, coarse_replicated, recon_prim, imex, nopts,
+                                            tmethod, pos_floor, &plan);
+}
+
+/// Allocation-free execution of a plan prepared by the owning runtime at relation installation.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void amr_step_multilevel_multipatch_with_temporal_plan(
+    const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
+    const PreparedAmrTemporalPlan& temporal_plan, Periodicity per = Periodicity{true, true},
+    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
+    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+    Real pos_floor = Real(0)) {
+  if (temporal_plan.nlevels() != static_cast<int>(L.size()))
+    throw std::runtime_error("prepared AMR temporal plan does not match the level hierarchy");
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+                                            nullptr, coarse_replicated, recon_prim, imex, nopts,
+                                            tmethod, pos_floor, &temporal_plan);
 }
 
 }  // namespace detail

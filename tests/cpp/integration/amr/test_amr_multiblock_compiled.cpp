@@ -244,6 +244,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     // bloc 0 : ions q=+1, schema none/rusanov.
     add_compiled_model(sim, "ions", exb_model(q0, B0), "none", "rusanov", "conservative",
                        "explicit",
@@ -298,6 +299,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     add_compiled_model(sim, "ions", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);
     add_compiled_model(sim, "neutrals", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
@@ -332,6 +334,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     add_compiled_model(sim, "ions", exb_model(q0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);                                   // bloc COMPILE
     sim.add_block("electrons", exb_spec(q1, B0), "none", "rusanov", "conservative",  // bloc NATIF
@@ -432,6 +435,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       cfg.periodic = true;
       cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
       AmrSystem sim(cfg);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       add_compiled_model(sim, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative",
                          imex ? "imex" : "explicit", /*gamma=*/1.4, /*substeps=*/1, stride,
                          /*implicit_vars=*/{}, impl_roles);

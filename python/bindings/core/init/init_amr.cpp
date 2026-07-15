@@ -1,5 +1,6 @@
 #include "../bindings_detail.hpp"
 #include "boundary_component_install.hpp"
+#include "output_geometry_binding.hpp"
 
 #include <pops/runtime/amr/prepared_component_providers.hpp>
 #include <pops/runtime/dynamic/component_loader.hpp>
@@ -940,6 +941,20 @@ void bind_amr_data(py::class_<AmrSystem>& cls) {
            py::arg("provider_slot"))
       .def("field_potential_level_global", &AmrSystem::field_potential_level_global,
            py::arg("provider_slot"), py::arg("level"))
+      .def(
+          "_output_geometry_snapshot",
+          [](AmrSystem& s, int level, const std::array<double, 2>& origin,
+             const std::array<double, 2>& spacing, const std::array<std::int64_t, 2>& cell_shape,
+             int next_refinement_ratio, const std::string& cell_measure) {
+            if (level < 0 || level >= s.n_levels())
+              throw std::out_of_range("AmrSystem output geometry level is out of range");
+            return pops::python::detail::native_output_geometry_snapshot(
+                level, s.checkpoint_topology_epoch(), origin, spacing, cell_shape, cell_measure,
+                s.patch_boxes(), next_refinement_ratio, true);
+          },
+          py::arg("level"), py::arg("origin"), py::arg("spacing"), py::arg("cell_shape"),
+          py::arg("next_refinement_ratio"), py::arg("cell_measure"),
+          "Private Writer geometry view: native, immutable, and topology-versioned.")
       // MULTI-BLOCK per-BLOCK per-level state (ADC-509): the AmrRuntime engine shares the layout +
       // aux, so the per-level STATE is read/restored PER BLOCK (by name) while phi stays shared
       // (level_potential). block_level_state returns a FLAT field (c*nf*nf + j*nf + i); the _global

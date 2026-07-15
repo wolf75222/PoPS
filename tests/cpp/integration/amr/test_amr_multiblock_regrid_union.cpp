@@ -196,8 +196,11 @@ static AmrRuntime make_two_block(int N, double L, double B0, double q0, double q
                                                 /*has_density=*/true, 1.4, 1, false, false,
                                                 stride1));
   });
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& rho) {
@@ -215,8 +218,14 @@ static AmrRuntime make_three_level_two_block(int N, const std::vector<double>& r
     blocks.push_back(detail::dispatch_amr_block(m, "minmod", "rusanov", S, "negative", rho,
                                                 /*has_density=*/true, 1.4, 1, false, false, 1));
   });
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations(
+      {::pops::amr::ParentChildClockRelation(0, 1, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly),
+       ::pops::amr::ParentChildClockRelation(1, 2, ::pops::amr::Rational(2, 1),
+                                             ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 static void check_three_level_bootstrap_step_regrid_and_rollback() {
@@ -479,6 +488,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       cfg.periodic = true;
       cfg.regrid_every = 2;  // AVANT cette PR : ensure_built LEVAIT en multi-blocs
       AmrSystem sim(cfg);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
@@ -500,6 +510,7 @@ TEST(test_amr_multiblock_regrid_union, Runs) {
       cfg.periodic = true;
       cfg.regrid_every = 0;  // hierarchie figee
       AmrSystem sim(cfg);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       sim.add_block("a", exb_spec(+1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.add_block("b", exb_spec(-1.0, B0), "minmod", "rusanov", "conservative", "explicit", 1);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
@@ -539,6 +550,8 @@ TEST(test_amr_multiblock_regrid_union,
   AmrRuntime runtime(layout.geom, layout.runtime_hierarchy(), layout.poisson_bc,
                      std::move(blocks), layout.base_per, layout.replicated_coarse,
                      layout.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
 
   using Program = runtime::amr::PreparedTaggingProgram;
   const std::vector<Program::Stencil> stencils{Program::Stencil{

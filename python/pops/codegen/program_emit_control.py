@@ -164,7 +164,7 @@ def _stage_fraction(value: Any) -> Fraction:
 
 def _emit_contiguous_rhs_group(
         values: list[Any], block_idx: Mapping[Any, int], var: dict[Any, str],
-        lines: list[str]) -> None:
+        lines: list[str], group_identity: int) -> None:
     """Emit one complete same-StagePoint residual group before any result is consumable."""
     from pops.codegen.program_emit_ops import _required_block_index
 
@@ -182,7 +182,7 @@ def _emit_contiguous_rhs_group(
         default_source = requested is None or "default" in requested
         requests.append("{%d, &%s, &%s, %d, %d}" % (
             index, var[state.id], var[value.id], int(value.id), 0 if default_source else 1))
-    lines.append("ctx.rhs_group({%s});" % ", ".join(requests))
+    lines.append("ctx.rhs_group(%d, {%s});" % (group_identity, ", ".join(requests)))
 
 def _emit_body(program: Any, model: Any = None, target: Any = "system",
                field_plans: Any = None) -> tuple:
@@ -259,6 +259,10 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
                         json.dumps(row["clock"]), json.dumps(interpolation)))
     values = list(program._values)
     index = 0
+    # Group identities occupy compiler-reserved slots after the authored SSA namespace.  They are
+    # deterministic, cannot alias a rate node, and keep BoundaryEvaluationPoint.stage faithful to
+    # the atomic group while every RhsGroupRequest retains its own exact rate identity.
+    next_group_identity = int(program._next_id)
     while index < len(values):
         v = values[index]
         if _groupable_default_rhs(v):
@@ -269,7 +273,9 @@ def _emit_body(program: Any, model: Any = None, target: Any = "system",
             group = values[index:end]
             if len(group) > 1 and len({row.block for row in group}) == len(group) \
                     and all(row.inputs[0].id in var for row in group):
-                _emit_contiguous_rhs_group(group, block_idx, var, lines)
+                _emit_contiguous_rhs_group(
+                    group, block_idx, var, lines, next_group_identity)
+                next_group_identity += 1
                 index = end
                 continue
         base = bases.get(v.block)  # the block-state value of THIS op's block (None: a scalar op)

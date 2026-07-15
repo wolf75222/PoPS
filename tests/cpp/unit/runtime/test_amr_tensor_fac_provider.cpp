@@ -17,6 +17,11 @@ using ConfigureSolver = void (AmrProgramContext::*)(int, int, int, Real, Real, i
 static_assert(std::is_same_v<
               decltype(&AmrProgramContext::configure_composite_tensor_fac), ConfigureSolver>);
 
+TEST(AmrProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
+  AmrProgramContext context(nullptr, nullptr);
+  EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+}
+
 TEST(AmrTensorFacSolver, OmittedFacControlsResolveFromNativeOptionsOnly) {
   AmrTensorElliptic driver(nullptr, 0, 1);
   EXPECT_THROW(driver.composite_fac_options(Real(1.0e-8), Real(0), 23), std::logic_error);

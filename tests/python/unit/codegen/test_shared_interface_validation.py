@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 from types import SimpleNamespace
 
 import pytest
 
 from pops.codegen._interface_validation import validate_shared_interface_program
+from pops.codegen.program_emit_control import _emit_contiguous_rhs_group
 from pops.numerics.terms import Flux
 from pops.time import Program, TimePoint
 from typed_program_support import typed_state
@@ -112,3 +114,28 @@ def test_shared_interface_rejects_default_flux_rhs_nested_in_loop() -> None:
             NotImplementedError,
             match=r"nested under control flow range\.body_block.*top-level contiguous RHS group"):
         _validate(program)
+
+
+def test_group_codegen_keeps_atomic_and_per_rate_identities_distinct() -> None:
+    program = Program("group_identity")
+    left_block = object()
+    right_block = object()
+    left_state = SimpleNamespace(id=3)
+    right_state = SimpleNamespace(id=4)
+    point = TimePoint(program.clock, Fraction(1, 2))
+    left_rate = SimpleNamespace(
+        id=11, name="left_rate", point=point, block=left_block,
+        inputs=(left_state,), attrs={"sources": None})
+    right_rate = SimpleNamespace(
+        id=12, name="right_rate", point=point, block=right_block,
+        inputs=(right_state,), attrs={"sources": ()})
+    variables = {3: "u3", 4: "u4"}
+    lines: list[str] = []
+
+    _emit_contiguous_rhs_group(
+        [left_rate, right_rate], {left_block: 0, right_block: 1},
+        variables, lines, group_identity=29)
+
+    assert lines[-1] == (
+        "ctx.rhs_group(29, {{0, &u3, &r11, 11, 0}, "
+        "{1, &u4, &r12, 12, 1}});")

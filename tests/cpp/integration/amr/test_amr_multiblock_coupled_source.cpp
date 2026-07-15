@@ -130,8 +130,11 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
                                                 /*has_density=*/true, 1.4, 1, false, false,
                                                 stride_neut));
   });
-  return AmrRuntime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 // Enregistre une source ionisation-like CONSERVATIVE entre "ions" (gagne) et "neutrals" (perd) sur le

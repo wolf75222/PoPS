@@ -142,6 +142,7 @@ TEST(test_amr_system_contract, Runs) {
     AmrSystemConfig c2 = cfg;
     c2.regrid_every = 5;  // > 0
     AmrSystem s(c2);
+    s.set_temporal_relations({2}, {1}, {"integral_only"});
     s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "explicit", 1);
     s.add_block("ni", exb_spec(), "minmod", "rusanov", "conservative", "explicit", 1);
     (void)s.mass("ne");  // declenche ensure_built -> moteur multi-blocs avec regrid d'union actif

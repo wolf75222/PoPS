@@ -189,11 +189,11 @@ class _AmrSystemEquation(_AmrSystem):
             from pops.numerics.riemann.waves import check_hll_waves
             check_hll_waves(spatial.waves_provider, compiled, "AmrSystem.add_equation")
         # HLL: same early guard as System.add_equation (wave_speeds emitted by the explicit pair
-        # m.wave_speeds(x=, y=) OR primitive 'p'; the C++ gate only triggers at first use).
+        # typed Model.wave_speeds(...) OR primitive 'p'; the C++ gate only triggers at first use).
         if spatial.flux == "hll" and not getattr(compiled, "has_wave_speeds", True):
             raise ValueError(
                 "AmrSystem.add_equation: riemann 'hll' requires signed wave speeds: declare "
-                "m.wave_speeds(x=(smin, smax), y=(smin, smax)) (without pressure), or a primitive "
+                "Model.wave_speeds(...) with one signed pair per typed axis (without pressure), or a primitive "
                 "'p' (m.primitive('p', ...)); otherwise use riemann='rusanov' "
                 "[requested route %s -> %s]"
                 % (getattr(spatial.flux, "id", "riemann.hll"),

@@ -286,6 +286,23 @@ fv = FiniteVolume(
 disc.rates.add(A, fv)
 ```
 
+Un modèle sans primitive de pression peut déclarer directement la paire signée requise par HLL,
+attachée au handle exact du flux et aux axes typés :
+
+```python
+model.wave_speeds(
+    F,
+    frame=frame,
+    values={frame.x: (s_min_x, s_max_x), frame.y: (s_min_y, s_max_y)},
+)
+hll = riemann.HLL(waves=riemann.waves.ExplicitPair())
+```
+
+`wave_speeds` refuse un flux étranger, un axe manquant ou supplémentaire, et un `Handle` utilisé
+comme une expression. Un paramètre est lu explicitement avec `model.value(handle)`. La variante
+générée depuis le Jacobien reste `model.wave_speeds_from_jacobian(eig=..., blocks=...)` et se lie à
+`riemann.HLL(waves=riemann.waves.FromJacobian(...))`.
+
 La validation prouve que le flux demandé par la réalisation numérique est celui référencé par le taux.
 Un ordre formel, une profondeur de halo ou une propriété CFL déjà définis par les composants ne sont
 pas répétés dans l'API de haut niveau ; ils sont dérivés de leurs manifests et rapportés.

@@ -47,7 +47,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
         "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
-        "field_provider", "projection", "wave_speeds_from_jacobian",
+        "field_provider", "projection", "wave_speeds", "wave_speeds_from_jacobian",
         "roe_from_jacobian",
     })
 
@@ -526,6 +526,59 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     def projection_value(self, state: Any, aux: Any = None) -> Any:
         """Evaluate the installed pointwise projection through its public host oracle."""
         return self._dsl.projection_value(state, aux)
+
+    def wave_speeds(self, flux: Any, *, frame: Any, values: Any) -> None:
+        """Declare the explicit signed ``(s_min, s_max)`` pair consumed by HLL.
+
+        ``flux`` is the exact physical-flux handle owned by this model and ``values`` maps every
+        typed frame axis to one signed pair.  Handles are not silently coerced to expressions:
+        parameters must first pass through :meth:`value`, preserving their declaration ownership.
+        """
+        if (not isinstance(flux, FluxHandle)
+                or flux.owner_path != self.owner_path
+                or self._fluxes.get(flux.name) != flux):
+            raise ValueError(
+                "wave_speeds flux must be a FluxHandle declared by this physics model; got %r"
+                % (flux,))
+        if self._multi_module is not None:
+            raise ValueError(
+                "wave_speeds explicit pairs are not installed for multi-species models")
+        if frame != self._frame or not hasattr(frame, "axes"):
+            raise ValueError("wave_speeds frame differs from its Model frame")
+        if not isinstance(values, Mapping) or set(values) != set(frame.axes):
+            raise TypeError(
+                "wave_speeds values must map every typed frame axis exactly once")
+        axes = {axis.name: axis for axis in frame.axes}
+        if set(axes) != {"x", "y"}:
+            raise ValueError(
+                "the installed native wave-speed route requires an exact Cartesian2D frame")
+
+        from pops.model import Handle
+
+        converted = {}
+        for name in ("x", "y"):
+            pair = normalize_sequence(
+                values[axes[name]], "wave_speeds %s signed pair" % name, nonempty=True)
+            if len(pair) != 2:
+                raise ValueError(
+                    "wave_speeds %s axis requires exactly (s_min, s_max); got %d value(s)"
+                    % (name, len(pair)))
+            expressions = []
+            for value in pair:
+                if isinstance(value, Handle):
+                    if value.owner_path != self.owner_path:
+                        raise ValueError(
+                            "wave_speeds %s contains a handle owned by another physics model"
+                            % name)
+                    raise TypeError(
+                        "wave_speeds %s received a Handle; convert parameter handles with "
+                        "model.value(handle) before declaring a symbolic speed" % name)
+                expressions.append(self._to_expr(value))
+            converted[name] = tuple(expressions)
+
+        hyp = self._dsl._m
+        with atomic_attrs((hyp, "_wave_speeds")):
+            self._dsl.wave_speeds(x=converted["x"], y=converted["y"])
 
     def wave_speeds_from_jacobian(
         self,
