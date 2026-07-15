@@ -364,8 +364,8 @@ def capabilities() -> Any:
                                   "CHECKPOINT = follow-up (docs/IO_CHECKPOINT_PLAN.md ; explicit rejections)",
         },
         "amr_layout": {
-            "set_conservative_state": "mono-block AND native multi-block (wave 3 ; .so loaders : "
-                                      "explicit rejection)",
+            "set_conservative_state": "mono-block, native multi-block, and compiled multi-block "
+                                      "(.so loaders ; complete block-qualified conservative state)",
         },
         "regrid": {
             # ADC-296 / ADR-0001 Decision 5. The MULTI-BLOCK AMR regrid variable is selectable PER BLOCK

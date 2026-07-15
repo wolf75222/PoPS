@@ -126,6 +126,23 @@ static std::vector<double> bubble(int n) {
   return rho;
 }
 
+// Etat Euler complet, component-major, dont les QUATRE composantes sont partout non nulles. Le
+// test (G) l'utilise comme oracle exact du transport set_conservative_state -> builder compile.
+static std::vector<double> full_euler_state(int n, double scale) {
+  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  std::vector<double> state(4 * nn);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const std::size_t k = static_cast<std::size_t>(j) * n + i;
+      const double rho = scale * (1.0 + 0.01 * static_cast<double>(1 + i + n * j));
+      state[0 * nn + k] = rho;
+      state[1 * nn + k] = 0.25 * rho;
+      state[2 * nn + k] = -0.125 * rho;
+      state[3 * nn + k] = 2.5 * rho;
+    }
+  return state;
+}
+
 // densite de charge a moyenne nulle (solvable en periodique) : un creneau centre +/- amplitude, n*n.
 static std::vector<double> bump(int n, double base, double amp) {
   std::vector<double> r(static_cast<std::size_t>(n) * n, base);
@@ -498,5 +515,38 @@ TEST(test_amr_multiblock_compiled, Runs) {
     const bool mask_in_explicit_threw =
         raises([&] { (void)run_stiff_compiled(/*imex=*/false, /*stride=*/1, {"momentum_x"}); });
     EXPECT_TRUE(mask_in_explicit_threw) << "F3_compiled_partial_mask_rejected_in_explicit";
+  }
+
+  // ============================================================================================
+  // (G) ETAT CONSERVATIF COMPLET sur DEUX blocs compiles : le builder differe recoit le vecteur
+  //     runtime lie APRES l'enregistrement du modele concret. Les 4 composantes non nulles doivent
+  //     etre reproduites BIT POUR BIT au niveau grossier ; aucun repli implicite vers set_density.
+  // ============================================================================================
+  {
+    const int Ns = 8;
+    AmrSystemConfig cfg;
+    cfg.n = Ns;
+    cfg.L = L;
+    cfg.periodic = true;
+    cfg.regrid_every = 0;
+    AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
+    add_compiled_model(sim, "gas", neutral_cmodel(), "minmod", "rusanov", "conservative",
+                       "explicit", /*gamma=*/1.4);
+    add_compiled_model(sim, "marker", neutral_cmodel(), "minmod", "rusanov", "conservative",
+                       "explicit", /*gamma=*/1.4);
+    const std::vector<double> gas_state = full_euler_state(Ns, 1.0);
+    const std::vector<double> marker_state = full_euler_state(Ns, 0.75);
+    for (double value : gas_state)
+      ASSERT_NE(value, 0.0);
+    for (double value : marker_state)
+      ASSERT_NE(value, 0.0);
+    sim.set_conservative_state("gas", gas_state);
+    sim.set_conservative_state("marker", marker_state);
+
+    EXPECT_EQ(sim.block_level_state_global("gas", 0), gas_state)
+        << "G_compiled_full_state_gas_exact";
+    EXPECT_EQ(sim.block_level_state_global("marker", 0), marker_state)
+        << "G_compiled_full_state_marker_exact";
   }
 }

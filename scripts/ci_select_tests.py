@@ -737,9 +737,24 @@ def verify_cpp_target_labels(args: argparse.Namespace) -> int:
                     continue
                 value = prop.get("value", [])
                 if isinstance(value, str):
-                    labels.update(part for part in value.split(";") if part)
+                    encoded_labels = (value,)
                 elif isinstance(value, list):
-                    labels.update(part for part in value if isinstance(part, str))
+                    encoded_labels = (
+                        item for item in value if isinstance(item, str)
+                    )
+                else:
+                    encoded_labels = ()
+                # CTest's JSON representation is platform/version dependent:
+                # LABELS may be one semicolon-delimited string, a list of
+                # individual labels, or a list whose items are themselves
+                # semicolon-delimited.  Split only on CTest's delimiter, then
+                # retain exact set membership below; never match substrings.
+                labels.update(
+                    label
+                    for encoded in encoded_labels
+                    for label in encoded.split(";")
+                    if label
+                )
         for label in labels & expected.keys():
             hits[expected[label]].append(test_name)
 

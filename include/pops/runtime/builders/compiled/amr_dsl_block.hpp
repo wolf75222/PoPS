@@ -438,8 +438,9 @@ inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool sin
 /// Builds ONE type-erased AMR block (AmrRuntimeBlock) on the SHARED layout @p S, for a composite
 /// Model + concrete (Limiter, Flux). Multi-block counterpart of build_amr_compiled: allocates the level
 /// stack of the block on the SAME BoxArray/dmap as all the others (guarantees same_layout_or_throw),
-/// sets the initial density (component 0) + coarse->fine injection, and CAPTURES the concrete scheme
-/// in the closures (advance via advance_amr<Limiter, Flux>, add_elliptic_rhs via PoissonRhs).
+/// sets the complete initial state when provided (otherwise density component 0) + coarse->fine
+/// injection, and CAPTURES the concrete scheme in the closures (advance via
+/// advance_amr<Limiter, Flux>, add_elliptic_rhs via PoissonRhs).
 /// The kernel stays COMPILED; only the block list is type-erased (AMR analog of make_block /
 /// PoissonRhs on the flat System side). @p density (empty = coarse at zero), @p substeps sub-steps of the
 /// block, @p stride hold-then-catch-up cadence of the block (1 = each macro-step). substeps and stride are
@@ -1254,8 +1255,9 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
   // recipe #64/#97; the outer lambda only orchestrates (no device kernel in its body).
   auto multi_builder = [model, limiter, riemann](
                            const detail::SharedAmrLayout& S, const std::string& bname,
-                           const std::vector<double>& density, bool has_density, double bgamma,
-                           int bsub, bool brecon_prim, bool bimex, int bstride,
+                           const std::vector<double>& density, bool has_density,
+                           const std::vector<double>& state, bool has_state, double bgamma, int bsub,
+                           bool brecon_prim, bool bimex, int bstride,
                            const std::vector<std::string>& ivars,
                            const std::vector<std::string>& iroles, double bpos_floor) {
     const std::vector<int> impl_components =
@@ -1263,13 +1265,14 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
             ? resolve_implicit_components_compiled(bname, Model::conservative_vars(), ivars, iroles)
             : std::vector<int>{};
     // pos_floor (ADC-322): the .so flat ABI now carries the Zhang-Shu floor; forward it to the SAME
-    // dispatch_amr_block -> build_amr_block leaf as a native multi-block. The compiled path transports
-    // NEITHER Newton options/state/diagnostics NOR SSPRK3 (rejected at the facade / add_compiled_model),
-    // so those intermediate arguments stay at their historical defaults (kEuler, no Newton, no state).
+    // dispatch_amr_block -> build_amr_block leaf as a native multi-block. Runtime initial state is
+    // carried by this deferred builder (it is bound after the .so installs the concrete model); Newton
+    // options/diagnostics and SSPRK3 remain outside this compiled path.
     return detail::dispatch_amr_block(
         model, limiter, riemann, S, bname, density, has_density, bgamma, bsub, brecon_prim, bimex,
         bstride, impl_components, NewtonOptions{},
-        /*state=*/nullptr, /*newton_diagnostics=*/false, AmrTimeMethod::kEuler, bpos_floor);
+        has_state ? &state : nullptr, /*newton_diagnostics=*/false, AmrTimeMethod::kEuler,
+        bpos_floor);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(mono_builder),
                          std::move(multi_builder), name, recon_prim, imex, stride, implicit_vars,

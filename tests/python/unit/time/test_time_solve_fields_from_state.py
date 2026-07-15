@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-stage elliptic field solve in the compiled time Program (ADC-409).
+"""Per-stage elliptic field solve in the final public runtime (ADC-409).
 
 Each consumed callable ``FieldHandle(U_stage)`` now lowers to
 ``ctx.solve_fields_from_state(0, <U_stage>)``:
@@ -9,26 +9,25 @@ stage k's RHS reads phi solved from stage k's own state. The compiled Program ru
 sequentially, so stage k's solve overwrites the shared aux before stage k's RHS reads it -- no distinct
 per-stage FieldContext buffer is needed.
 
-(A) Codegen (pure Python, always runs): a consumed field outcome for ``U_stage`` lowers to
-    ``ctx.solve_fields_from_state(0, <U_stage var>)`` in the generated C++ (and the bare
-    ``ctx.solve_fields();`` no longer appears); the first stage solves from the base state, a later
-    stage solves from the intermediate scratch state -- a DISTINCT C++ variable.
+(A) Public IR/provenance: the detached compiled Program records two field solves with distinct
+    state inputs.  The second solve consumes ``U1`` and the second RHS consumes both ``U1`` and the
+    exact field context produced from ``U1``.  This is the public, typed proof that lowering cannot
+    silently substitute the block's current state.
 
 (B) Field-coupled parity (skips unless the full toolchain is present): a 2-stage Heun (RK2) scheme on a
     model whose RHS reads grad phi (a named ``electric`` source = -rho*grad phi, with
-    m.elliptic_rhs(rho) so phi depends on rho). The compiled program does:
+    ``-laplacian(phi) == rho - 1`` so phi depends on rho). The compiled program does:
         stage 1: solve phi(U0); R0 = rhs(U0);  U1 = U0 + dt*R0
         stage 2: solve phi(U1) [via solve_fields_from_state -- the new path]; R1 = rhs(U1)
         commit:  U_np1 = U0 + 0.5*dt*(R0 + R1)
-    It is compared to an OFFLINE reference that re-solves phi PER STAGE (set_state(U1)+solve_fields+
-    eval_rhs for R1). They must match to ~1e-12. The CROSS-CHECK proves the per-stage solve mattered:
-    re-using phi(U0) for stage 2 (the OLD frozen-aux behavior) gives a DIFFERENT (worse) result, so the
-    compiled program is genuinely on the per-stage path, not the frozen one.
+    It is compared to a public Forward-Euler reference compiled through the same
+    ``Case -> validate -> resolve -> compile -> bind -> run`` path.  Running that reference once
+    from U0 and once from U1 obtains R0 and R1 while re-solving phi from each exact initial state.
+    The reconstructed Heun update must match to ~1e-12.
 
 Skips cleanly when numpy or a native compiler/Kokkos prerequisite is genuinely unavailable. A stale
 installed extension or any compile/lowering/ABI failure remains a hard test failure.
 """
-from pops.codegen.program_codegen import emit_cpp_program
 import pops
 from pops.codegen import Production
 from pops.domain import Rectangle
@@ -42,16 +41,11 @@ from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model as BoardModel
 from pops.solvers.elliptic import GeometricMG
-from typed_program_support import codegen_field_plans, solve_field, typed_state
+from pops.solvers.tolerances import Relative
 
-from pops.params import ConstParam
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-from pops.numerics.terms import Flux
 from pops.numerics.terms import Flux as FinalFlux, SourceTerm
 from pops.time import FailRun, FixedDt
 import sys
-from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import (
     default_cxx,
     missing_native_compile_requirement,
@@ -71,19 +65,14 @@ def _skip(msg):
 try:
     import numpy as np
 
-    import pops.runtime._engine_descriptors as engine
     from pops.math import ddt, div, laplacian, sqrt
-    from pops.physics._facade import Model
     from pops import time as adctime
 except ImportError as exc:  # numpy or an installed PoPS module is genuinely absent
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
-
-
-def _emit(program, *, model=None):
-    return emit_cpp_program(
-        program, model=model, field_plans=codegen_field_plans(program))
+N = 16
+DT = 0.02
 
 
 def chk(cond, label):
@@ -93,45 +82,10 @@ def chk(cond, label):
         fails += 1
 
 
-# --- a FIELD-COUPLED isothermal fluid block: the electric force reads grad phi (Poisson feedback) ----
-def _base_block(m):
-    """Shared isothermal 2D fluid block (flux + primitives + eigenvalues + Poisson rhs = rho)."""
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.value(m.param(ConstParam("cs2", 0.5)))
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    m.elliptic_rhs(rho)  # phi depends on rho -> a stage change re-solves a DIFFERENT phi
-    gx = m.aux("grad_x")
-    gy = m.aux("grad_y")
-    return rho, mx, my, gx, gy
-
-
-def named_source_model(name="sffs_named"):
-    """Default source EMPTY; the electric force (-rho*grad phi) is a NAMED source the Program requests.
-    This is the model the compiled Program drives."""
-    m = Model(name)
-    rho, mx, my, gx, gy = _base_block(m)
-    m.source_term("electric", [0.0, -rho * gx, -rho * gy])
-    return m
-
-
-def default_source_model(name="sffs_default"):
-    """Same physics, but the electric force is the model's DEFAULT source, so eval_rhs returns
-    -div F + electric directly -- the offline reference reads it that way."""
-    m = Model(name)
-    rho, mx, my, gx, gy = _base_block(m)
-    m.source([0.0, -rho * gx, -rho * gy])
-    return m
-
-
-def _public_field_program_artifact(name="sffs_public"):
-    """Compile the field-coupled Heun program through Case-owned FieldHandle resolution."""
+def _public_field_program_artifact(name="sffs_public", *, scheme="heun"):
+    """Compile one field-coupled step through the complete final public lifecycle."""
+    if scheme not in ("heun", "forward_euler"):
+        raise ValueError("unknown public reference scheme %r" % scheme)
     frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
     x_axis, y_axis = frame.axes
     model = BoardModel(name, frame=frame)
@@ -139,11 +93,13 @@ def _public_field_program_artifact(name="sffs_public"):
     rho, mx, my = state
     u, v = mx / rho, my / rho
     pressure = 0.5 * rho
+    sound_speed = sqrt(0.5 + 0.0 * rho)
     flux = model.flux(
         "transport", frame=frame, state=state,
         components={x_axis: (mx, mx * u + pressure, my * u),
                      y_axis: (my, mx * v, my * v + pressure)},
-        waves={x_axis: (u, u, u), y_axis: (v, v, v)},
+        waves={x_axis: (u - sound_speed, u, u + sound_speed),
+               y_axis: (v - sound_speed, v, v + sound_speed)},
     )
     potential = model.field("potential")
     gx, gy = model.aux("grad_x"), model.aux("grad_y")
@@ -162,7 +118,9 @@ def _public_field_program_artifact(name="sffs_public"):
         FieldDiscretization(
             method=CellCenteredSecondOrder(),
             boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
-            solver=GeometricMG(),
+            # A strict solve makes the independently-bound FE stages a stable 1e-12 oracle even
+            # though the Heun stage-2 solve may start from a different native MG iterate.
+            solver=GeometricMG(tolerance=Relative(1e-12), max_cycles=100),
             nullspace=ConstantNullspace(), gauge=MeanValueGauge(0.0),
         ),
     )
@@ -176,103 +134,44 @@ def _public_field_program_artifact(name="sffs_public"):
     dt = program.dt
     fields0 = field(temporal.n, name="fields_0").consume(action=FailRun())
     r0 = program.rhs(
+        name="R0",
         state=temporal.n,
         fields=fields0,
         terms=[FinalFlux(), SourceTerm(electric_operator)],
     )
-    stage = adctime.StagePoint("heun_predictor", {"main": adctime.TimePoint(program.clock, 1)})
-    stage_state = program.value("U1", temporal.n + dt * r0, at=stage)
-    fields1 = field(stage_state, name="fields_1").consume(action=FailRun())
-    r1 = program.rhs(
-        state=stage_state,
-        fields=fields1,
-        terms=[FinalFlux(), SourceTerm(electric_operator)],
-    )
-    program.commit(temporal.next, program.value(
-        "U_np1", temporal.n + 0.5 * dt * r0 + 0.5 * dt * r1, at=temporal.next.point))
+    if scheme == "forward_euler":
+        program.commit(temporal.next, program.value(
+            "U_np1", temporal.n + dt * r0, at=temporal.next.point))
+    else:
+        stage = adctime.StagePoint(
+            "heun_predictor", {"main": adctime.TimePoint(program.clock, 1)})
+        stage_state = program.value("U1", temporal.n + dt * r0, at=stage)
+        fields1 = field(stage_state, name="fields_1").consume(action=FailRun())
+        r1 = program.rhs(
+            name="R1",
+            state=stage_state,
+            fields=fields1,
+            terms=[FinalFlux(), SourceTerm(electric_operator)],
+        )
+        program.commit(temporal.next, program.value(
+            "U_np1", temporal.n + 0.5 * dt * r0 + 0.5 * dt * r1,
+            at=temporal.next.point))
     program.step_strategy(FixedDt(DT))
     case.program(program)
     layout = Uniform(CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
     resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production(),
                             compile_options={"include": INCLUDE, "cxx": CXX})
-    return pops.compile(resolved)
+    artifact = pops.compile(resolved)
+    # Keep the public Program inspection value beside the artifact.  The aggregate compiled
+    # artifact intentionally hides its internal executable component, while ``program_hash``
+    # authenticates that this exact inspected Program is the one which was lowered.
+    return artifact, program
 
 
-# --- the 2-stage (Heun / RK2) field-coupled Program ---
-def heun_program(name="sffs_heun", model=None):
-    """U1 = U0 + dt*R0 ; U_np1 = U0 + 0.5*dt*(R0 + R1) with R0 = rhs(U0; phi(U0)) and
-    R1 = rhs(U1; phi(U1)) -- the second field solve is from U1 (solve_fields_from_state)."""
-    P = adctime.Program(name)
-    dt = P.dt
-    U0 = typed_state(P, "plasma", model=model)
-    f0 = solve_field(P, U0, name="fields_0")
-    electric = model.module.operator_handle("electric")
-    R0 = P.rhs(name="R0", state=U0, fields=f0, terms=[Flux(), electric])
-    stage1 = adctime.StagePoint(
-        "heun_predictor", {"main": adctime.TimePoint(P.clock, 1)})
-    U1 = P.value("U1", U0 + dt * R0, at=stage1)
-    f1 = solve_field(P, U1, name="fields_1")       # <-- solved from U1, not U0 (ADC-409)
-    R1 = P.rhs(name="R1", state=U1, fields=f1, terms=[Flux(), electric])
-    endpoint = typed_state(P, "plasma", state_name="U", model=model).next
-    P.commit(endpoint, P.value(
-        "U_np1", U0 + 0.5 * dt * R0 + 0.5 * dt * R1, at=endpoint.point))
-    return P
-
-
-# ============================ (A) codegen: pure Python, always runs ============================
-print("== (A) solve_fields(state) lowers to solve_fields_from_state ==")
-codegen_model = named_source_model()
-src = _emit(heun_program(model=codegen_model), model=codegen_model)
-
-# Both stages lower to the per-stage solve; the bare current-state form is gone.
-chk(src.count('ctx.solve_fields_from_state("potential", 0, ') == 2,
-    "both field solves lower to the qualified potential provider")
-chk("ctx.solve_fields();" not in src,
-    "the bare current-state ctx.solve_fields() no longer appears (per-stage solve)")
-
-# The first solve reads the base state var (ctx.state(0)); the second reads the intermediate scratch
-# state var. They must be DISTINCT C++ variables (stage 2 solves from U1, not U0).
-import re  # noqa: E402  -- local to the codegen assertions
-
-solve_args = re.findall(r'ctx\.solve_fields_from_state\("potential", 0, (\w+)\);', src)
-chk(len(solve_args) == 2 and solve_args[0] != solve_args[1],
-    "the two field solves read DISTINCT stage-state variables (%r)" % solve_args)
-
-# The base state var (= ctx.state(0)) is the first solve's argument.
-base_decl = re.search(r"pops::MultiFab& (\w+) = ctx\.state\(0\);", src)
-chk(base_decl is not None and solve_args and solve_args[0] == base_decl.group(1),
-    "the first field solve reads the base state (ctx.state(0))")
-
-# The OLD form -- a single solve_fields(state=U) on the current state -- still lowers + validates
-# (Forward Euler: one stage, the base state).
-P_fe = adctime.Program("sffs_fe")
-fe_model = named_source_model("sffs_fe_named")
-U = typed_state(P_fe, "plasma", model=fe_model)
-f = solve_field(P_fe, U)
-R = P_fe.rhs(
-    name="R", state=U, fields=f,
-    terms=[Flux(), fe_model.module.operator_handle("electric")],
-)
-endpoint_fe = typed_state(P_fe, "plasma", state_name="U", model=fe_model).next
-P_fe.commit(endpoint_fe, P_fe.value(
-    "U1", U + P_fe.dt * R, at=endpoint_fe.point))
-src_fe = _emit(P_fe, model=fe_model)
-chk(src_fe.count('ctx.solve_fields_from_state("potential", 0, ') == 1,
-    "the single-stage solve_fields(U) on the current state still lowers (per-stage form)")
-
-
-# ============================ (B) field-coupled parity: skip without the toolchain ===========
+# The public lifecycle compiles native code; skip only for an actual missing prerequisite.
 missing_native = missing_native_compile_requirement(INCLUDE, CXX)
 if missing_native:
-    if fails:
-        sys.exit(1)
     _skip(missing_native)
-
-if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-    raise AssertionError("the installed _pops lacks the required install_program binding")
-
-N = 16
-DT = 0.02
 
 
 def _initial_state():
@@ -284,73 +183,76 @@ def _initial_state():
     return np.ascontiguousarray(np.stack([rho, mx, my]))
 
 
-def make_sim(model, *, component=None):
-    """A System with ONE field-coupled block (production backend) + shared Poisson, charged with a
-    non-uniform rho so a stage change shifts phi. Returns (sim, U0)."""
-    sim = System(n=N, L=1.0, periodic=True)
-    if component is None:
-        component = _public_field_program_artifact("sffs_reference_component").blocks[0].model
-    sim.add_equation("plasma", component,
-                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-                     time=engine.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
-    U0 = _initial_state()
-    sim.set_state("plasma", U0)
-    return sim, U0
+def _run_public_step(artifact, initial_state):
+    """Run one already-compiled public Program from one exact bind-owned state."""
+    simulation = pops.bind(artifact, initial_state={"plasma": initial_state})
+    report = pops.run(simulation, t_end=DT, max_steps=1)
+    result = np.asarray(simulation.state_global("plasma"), dtype=np.float64)
+    return report, result
 
 
-def offline_rhs(ref, U):
-    """-div F + electric at U, the fields RE-SOLVED from U. ``ref`` carries the default-source model,
-    so eval_rhs already returns -div F + electric."""
-    ref.set_state("plasma", U)
-    ref.solve_fields()
-    return np.array(ref.eval_rhs("plasma"))
+print("== (A) public IR retains the exact per-stage field provenance ==")
+compiled, heun_program = _public_field_program_artifact()
+nodes = heun_program.ir_nodes()
+chk(compiled.program_hash == heun_program.inspect().hash,
+    "the compiled artifact authenticates the exact publicly-inspected Heun Program")
+field_solves = [node for node in nodes if node["op"] == "solve_fields"]
+fields0 = next((node for node in field_solves if node["name"] == "fields_0"), None)
+fields1 = next((node for node in field_solves if node["name"] == "fields_1"), None)
+rhs1 = next((node for node in nodes if node["op"] == "rhs" and node["name"] == "R1"), None)
+
+chk(len(field_solves) == 2, "the compiled Heun IR contains exactly two field solves")
+chk(fields0 is not None and fields1 is not None and fields0["inputs"] != fields1["inputs"],
+    "the two field solves consume distinct stage states")
+chk(fields1 is not None and fields1["inputs"] == ["U1"],
+    "the second field solve consumes the explicit predictor state U1")
+
+context0 = fields0["field_context"] if fields0 is not None else None
+context1 = fields1["field_context"] if fields1 is not None else None
+sources0 = context0.get("stage_sources", []) if context0 is not None else []
+sources1 = context1.get("stage_sources", []) if context1 is not None else []
+chk(len(sources0) == 1 and len(sources1) == 1 and sources0 != sources1,
+    "field provenance retains two distinct owner-qualified stage-source ids")
+chk(context1 is not None and {"grad_x", "grad_y"}.issubset(context1["outputs"]),
+    "the second solve publishes the gradient outputs consumed by the electric source")
+chk(rhs1 is not None and "U1" in rhs1["inputs"] and "fields_1" in rhs1["inputs"],
+    "R1 consumes both U1 and the fields_1 outcome")
+chk(rhs1 is not None and context1 is not None and rhs1["field_context"] == context1,
+    "R1 carries the exact field provenance produced from U1")
 
 
-def offline_rhs_frozen(ref, U, U_fields):
-    """-div F + electric at U with the fields (grad phi) FROZEN at U_fields -- the OLD current-state
-    behavior, used only for the cross-check (it should NOT match the compiled program)."""
-    ref.set_state("plasma", U_fields)
-    ref.solve_fields()           # aux <- grad(phi(U_fields))
-    ref.set_state("plasma", U)   # state <- U without re-solving (Poisson frozen)
-    return np.array(ref.eval_rhs("plasma"))
-
-
-print("== (B) field-coupled 2-stage parity (per-stage field solve) ==")
-compiled = _public_field_program_artifact()
+print("== (B) field-coupled 2-stage parity through the public runtime ==")
 
 U0 = _initial_state()
-simulation = pops.bind(compiled, initial_state={"plasma": U0})
-program_report = pops.run(simulation, t_end=DT, max_steps=1)
-U_prog = np.asarray(simulation.state_global("plasma"), dtype=np.float64)
+program_report, U_prog = _run_public_step(compiled, U0)
 chk(program_report.accepted_steps == 1, "the public field-coupled Program accepted one step")
 
-# Offline replay: BOTH stages re-solve phi from their own state (the ADC-409 per-stage path).
-ref = make_sim(default_source_model("sffs_ref_block"))[0]
-R0 = offline_rhs(ref, U0)                 # R0 = -div F(U0) + electric(U0; phi(U0))
-U1 = U0 + DT * R0
-R1 = offline_rhs(ref, U1)                 # R1 = -div F(U1) + electric(U1; phi(U1))  <-- per stage
+# Public replay: each Forward-Euler bind starts from the exact requested stage state and its Program
+# solves the field before evaluating the same named flux + electric source.  Therefore
+#   FE(U0) - U0 = dt*R0(U0, phi(U0))
+#   FE(U1) - U1 = dt*R1(U1, phi(U1)).
+forward_euler, forward_euler_program = _public_field_program_artifact(
+    "sffs_forward_euler", scheme="forward_euler")
+fe_nodes = forward_euler_program.ir_nodes()
+chk(forward_euler.program_hash == forward_euler_program.inspect().hash,
+    "the compiled artifact authenticates the exact publicly-inspected Forward-Euler Program")
+fe_solves = [node for node in fe_nodes if node["op"] == "solve_fields"]
+chk(len(fe_solves) == 1,
+    "the public Forward-Euler oracle performs exactly one field solve per bound stage state")
+
+fe0_report, U1 = _run_public_step(forward_euler, U0)
+fe1_report, U2 = _run_public_step(forward_euler, U1)
+chk(fe0_report.accepted_steps == 1 and fe1_report.accepted_steps == 1,
+    "both public Forward-Euler reference stages accepted exactly one step")
+R0 = (U1 - U0) / DT
+R1 = (U2 - U1) / DT
 U_ref_perstage = U0 + 0.5 * DT * R0 + 0.5 * DT * R1
 
 e_perstage = float(np.abs(U_prog - U_ref_perstage).max())
 print("  per-stage parity: max|d| = %.2e" % e_perstage)
 chk(e_perstage < 1e-12,
-    "compiled 2-stage == offline reference re-solving phi PER STAGE (max|d| = %.2e)" % e_perstage)
-
-# CROSS-CHECK: a reference that re-uses phi(U0) for stage 2 (the OLD frozen-aux behavior) gives a
-# DIFFERENT result. If the compiled program were still on the current-state path it would match THIS
-# instead. The per-stage match above + this mismatch together prove the per-stage solve mattered.
-R1_frozen = offline_rhs_frozen(ref, U1, U0)  # R1 with grad phi frozen at U0
-U_ref_frozen = U0 + 0.5 * DT * R0 + 0.5 * DT * R1_frozen
-e_frozen = float(np.abs(U_prog - U_ref_frozen).max())
-d_stage2 = float(np.abs(R1 - R1_frozen).max())
-print("  vs frozen-aux reference: max|d| = %.2e (stage-2 RHS differs by %.2e)" % (e_frozen, d_stage2))
-chk(d_stage2 > 1e-9,
-    "the model is genuinely field-coupled: phi(U1) != phi(U0) shifts the stage-2 RHS (d = %.2e)"
-    % d_stage2)
-chk(e_frozen > 1e3 * e_perstage and e_frozen > 1e-9,
-    "the compiled program is NOT on the frozen-aux path (frozen ref is %.2e, worse than %.2e)"
-    % (e_frozen, e_perstage))
+    "compiled Heun == public per-stage Forward-Euler reconstruction (max|d| = %.2e)"
+    % e_perstage)
 
 # Sanity: the program ran, conserved mass (periodic; the electric source is momentum-only), and moved.
 mass0, mass1 = float(U0[0].sum()), float(U_prog[0].sum())

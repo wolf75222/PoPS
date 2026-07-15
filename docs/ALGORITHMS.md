@@ -2022,7 +2022,8 @@ this one representation, inspectable read-only through `coupled_operators()`. `s
 and `stride` are orthogonal (a slow block on `stride=M` is held M-1 steps then catches up by an effective
 step `M*dt`); between two catch-ups the held block enters the Poisson sum with its stale state.
 In multi-block AMR, `regrid_every > 0` is supported (the union-tag regrid rebuilds the hierarchy from all blocks' tags; `regrid_every == 0` keeps it frozen)
-and `set_conservative_state` is mono-block only. Without an explicit IMEX mask
+and `set_conservative_state` accepts a complete block-qualified conservative state for every native
+or deferred compiled (`.so`) block. Without an explicit IMEX mask
 (`implicit_vars` / `implicit_roles` empty) the model default applies -> bit-identical.
 **Validation.** `test_system_abstraction`, `test_system_coupler`, `test_two_species_minimal`,
 `test_coupled_source` (inter-species source), `test_system_two_explicit`, `test_assembler_driver`

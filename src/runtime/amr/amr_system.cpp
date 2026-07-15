@@ -237,7 +237,7 @@ struct AmrSystem::Impl {
     std::vector<double> density;
     // FULL initial conservative state (all components), ncomp*n*n component-major; set by
     // set_conservative_state(name, U). Takes priority over density at seed (cf. make_build_params /
-    // build_amr_compiled). SINGLE-BLOCK only (build_multi throws if has_state).
+    // build_amr_compiled and the compiled/native multi-block builders).
     bool has_state = false;
     std::vector<double> state;
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
@@ -762,16 +762,9 @@ struct AmrSystem::Impl {
     // collective immediately before lazy runtime construction so no field plan can materialize
     // without the exact ordered-registry witness.
     require_field_plan_consensus();
-    // MULTI-BLOCK set_conservative_state (wave 3 audit): the full state is now THREADED to the
-    // NATIVE builder (dispatch_amr_block -> build_amr_block, seed coupler_write_coarse_state +
-    // injection to the fine levels, takes priority over density). The COMPILED (.so) path does not
-    // transport it (frozen loader ABI) -> explicit rejection, never a silent density fallback.
-    for (const auto& b : blocks)
-      if (b.has_state && b.is_compiled)
-        throw std::runtime_error(
-            "AmrSystem::set_conservative_state : not transported by the compiled .so loader (block "
-            "'" +
-            b.name + "') in multi-block ; use a private native ModelSpec block, or set_density.");
+    // MULTI-BLOCK set_conservative_state: the full state is threaded to both native and compiled
+    // deferred builders (dispatch_amr_block -> build_amr_block), seeds every conservative component
+    // on the coarse level and injects it to the fine levels. It takes priority over density.
     // ADC-645: the composite FAC FIELD solve lives on the single-block coupler (AmrCouplerMP); the
     // multi-block AmrRuntime engine has no composite elliptic path. Refuse loud, never a silent
     // fallback to the Option A solve the caller explicitly opted out of.
@@ -845,8 +838,8 @@ struct AmrSystem::Impl {
         // block (forwarded to dispatch_amr_block -> build_amr_block). b.pos_floor == 0 for an OLDER .so
         // (it never marshals the field) -> inactive, bit-identical. No reject.
         rblocks.push_back(b.compiled_block_builder(
-            S, b.name, b.density, b.has_density, b.gamma, b.substeps, b.recon_prim, b.imex,
-            b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor));
+            S, b.name, b.density, b.has_density, b.state, b.has_state, b.gamma, b.substeps,
+            b.recon_prim, b.imex, b.stride, b.implicit_vars, b.implicit_roles, b.pos_floor));
         continue;
       }
       // Native ModelSpec path: model dispatch -> concrete type, then spatial scheme dispatch

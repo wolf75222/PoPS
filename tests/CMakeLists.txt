@@ -116,31 +116,45 @@ function(pops_add_gtest_suite)
     target_compile_definitions(${ARG_NAME} PRIVATE ${ARG_COMPILE_DEFINITIONS})
   endif()
 
-  # ``gtest_discover_tests(PROPERTIES ...)`` expects alternating property/value
-  # arguments.  A raw CMake list here is flattened before GoogleTest.cmake sees
-  # it, so only the first label remains a LABELS value and the following labels
-  # are silently interpreted as unrelated property names.  Preserve the whole
-  # label set as one property value across the function boundary.
+  # ``gtest_discover_tests(PROPERTIES ...)`` transports an alternating
+  # property/value list through a generated CMake script.  A list-valued
+  # property cannot survive that transport faithfully: unescaped semicolons
+  # become extra property/value arguments, while escaped semicolons reach CTest
+  # as one literal LABELS element.  Keep scalar properties on the normal path,
+  # then assign list-valued LABELS/RESOURCE_GROUPS from a CTest include after
+  # discovery, using the documented TEST_LIST variable.
   set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
-  string(REPLACE ";" "\\\\;" _pops_test_labels "${_pops_test_labels}")
   set(_pops_test_properties
-    LABELS "${_pops_test_labels}"
     TIMEOUT ${ARG_TIMEOUT})
   if(ARG_RESOURCE_LOCK)
     list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
   endif()
-  if(ARG_RESOURCE_GROUPS)
-    set(_pops_resource_groups "${ARG_RESOURCE_GROUPS}")
-    string(REPLACE ";" "\\\\;" _pops_resource_groups "${_pops_resource_groups}")
-    list(APPEND _pops_test_properties RESOURCE_GROUPS "${_pops_resource_groups}")
-  endif()
 
   if(NOT ARG_NO_DISCOVER)
+    set(_pops_test_list "${ARG_NAME}_TESTS")
     gtest_discover_tests(${ARG_NAME}
       DISCOVERY_MODE POST_BUILD
       DISCOVERY_TIMEOUT 60
       XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
+      TEST_LIST "${_pops_test_list}"
       PROPERTIES ${_pops_test_properties})
+
+    set(_pops_list_properties_file
+      "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}_list_properties.cmake")
+    set(_pops_resource_groups_assignment "")
+    if(ARG_RESOURCE_GROUPS)
+      set(_pops_resource_groups_assignment
+        "    RESOURCE_GROUPS [==[${ARG_RESOURCE_GROUPS}]==]\n")
+    endif()
+    file(GENERATE OUTPUT "${_pops_list_properties_file}" CONTENT
+"foreach(_pops_discovered_test IN LISTS ${_pops_test_list})
+  set_tests_properties(\"\${_pops_discovered_test}\" PROPERTIES
+    LABELS [==[${_pops_test_labels}]==]
+${_pops_resource_groups_assignment}  )
+endforeach()
+")
+    set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+      "${_pops_list_properties_file}")
   endif()
 endfunction()
 

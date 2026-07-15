@@ -305,7 +305,18 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
             {
                 "name": "Suite.Two",
                 "properties": [
-                    {"name": "LABELS", "value": ["fast", "cpp-target:test_two"]},
+                    {"name": "LABELS", "value": "fast;cpp-target:test_two"},
+                ],
+            },
+            {
+                "name": "Suite.Three",
+                "properties": [
+                    {
+                        "name": "LABELS",
+                        "value": [
+                            "integration;amr;medium;cpp-target:test_three"
+                        ],
+                    },
                 ],
             },
         ],
@@ -313,13 +324,15 @@ def test_cpp_target_label_fence_requires_each_selected_target(tmp_path):
 
     args = SimpleNamespace(
         ctest_json=str(inventory),
-        targets=["test_one", "test_two"],
+        targets=["test_one", "test_two", "test_three"],
     )
     assert sel.verify_cpp_target_labels(args) == 0
 
-    args.targets.append("test_missing")
-    with pytest.raises(SystemExit, match="test_missing"):
-        sel.verify_cpp_target_labels(args)
+    for missing in ("test", "test_missing"):
+        args.targets.append(missing)
+        with pytest.raises(SystemExit, match=rf"cpp-target:{missing}"):
+            sel.verify_cpp_target_labels(args)
+        args.targets.pop()
 
 
 def test_manifest_projects_exact_python_mpi_entrypoints():

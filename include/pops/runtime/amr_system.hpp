@@ -260,9 +260,10 @@ struct AmrCompiledHooks {
 
 /// DEFERRED builder of a COMPILED block on the multi-block hierarchy: receives the SHARED layout (created
 /// ONCE at lazy build, common to all blocks) plus the block parameters frozen at
-/// add time (name, initial density, gamma, substeps/stride, recon/imex, partial IMEX mask resolved into
-/// component indices), and returns the type-erased AmrRuntimeBlock of the block (captures the CONCRETE
-/// Model/Limiter/Flux via detail::dispatch_amr_block, the kernel stays COMPILED). Symmetric with the
+/// add time (name, initial density/state, gamma, substeps/stride, recon/imex, partial IMEX mask
+/// resolved into component indices), and returns the type-erased AmrRuntimeBlock of the block
+/// (captures the CONCRETE Model/Limiter/Flux via detail::dispatch_amr_block, the kernel stays
+/// COMPILED). Symmetric with the
 /// native add_block path: the (sole) difference is only that the types are known at add time (compiled
 /// model) rather than resolved from a ModelSpec at build. The SIGNATURE mentions FORWARD-DECLARED types:
 /// it is instantiated with a concrete callable only in add_compiled_model(AmrSystem&) (header
@@ -271,7 +272,8 @@ struct AmrCompiledHooks {
 /// dispatch_amr_block -> build_amr_block exactly like a native multi-block.
 using AmrCompiledBlockBuilder = std::function<AmrRuntimeBlock(
     const detail::SharedAmrLayout& layout, const std::string& name,
-    const std::vector<double>& density, bool has_density, double gamma, int substeps,
+    const std::vector<double>& density, bool has_density,
+    const std::vector<double>& state, bool has_state, double gamma, int substeps,
     bool recon_prim, bool imex, int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, double pos_floor)>;
 
@@ -641,10 +643,9 @@ class AmrSystem {
   /// build, where only Model::n_vars is known). Takes priority over set_density: allows starting the AMR
   /// from a full drift state (rho, rho*u, rho*v) instead of m=0. The conversion
   /// primitive -> conservative (rho_u = rho*u) is done on the Python side (the caller already supplies the
-  /// conservative). Wired on the NATIVE blocks (mono-block as well as multi-block: threaded to the native builder,
-  /// seed the coarse then inject to the fine); in multi-block @p name indexes the target block. A
-  /// COMPILED (.so) block carrying a state raises at build in multi-block (the .so loader does not transport
-  /// the state): use a native block pops.Model(...) or set_density.
+  /// conservative). Wired on native and compiled blocks, mono-block as well as multi-block: the full
+  /// state is threaded to the deferred concrete builder, seeds the coarse, then is injected to the
+  /// fine levels. In multi-block @p name indexes the target block.
   /// @throws std::runtime_error if the system is already built, if U is empty, or if its size
   ///         is not a multiple of n*n.
   void set_conservative_state(const std::string& name, const std::vector<double>& U);
