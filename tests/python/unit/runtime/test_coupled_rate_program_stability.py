@@ -37,10 +37,12 @@ from pops.numerics.spatial import FiniteVolume
 from pops.params import RuntimeParam
 from pops.projection import ConservativeCellAverage
 from pops.time import AdaptiveCFL, every
+from tests.python.support.amr_snapshots import composite_active_block_state
 from tests.python.support.requirements import repo_include
 
 
 GRID_CELLS = 8
+REFINEMENT_RATIO = 2
 COLLISION_FREQUENCY = 4.0
 PROGRAM_CFL = 0.25
 PROGRAM_DT_BOUND = PROGRAM_CFL / COLLISION_FREQUENCY
@@ -119,12 +121,18 @@ def _coupled_rate_case() -> tuple[pops.Case, AMR]:
         {
             electron_time.next: program.value(
                 "electrons_next",
-                electron_time.n + program.dt * exchange[electron_block],
+                electron_time.n
+                + program.dt
+                * (
+                    electron_transport(electron_time.n)
+                    + exchange[electron_block]
+                ),
                 at=electron_time.next.point,
             ),
             ion_time.next: program.value(
                 "ions_next",
-                ion_time.n + program.dt * exchange[ion_block],
+                ion_time.n
+                + program.dt * (ion_transport(ion_time.n) + exchange[ion_block]),
                 at=ion_time.next.point,
             ),
         }
@@ -189,7 +197,12 @@ def test_coupled_rate_program_resolves_with_explicit_amr_stability_bound() -> No
 
     assert resolved.target == "amr_system"
     assert resolved.time.has_dt_bound()
-    assert [node["op"] for node in resolved.time.ir_nodes()].count("coupled_rate") == 1
+    nodes = resolved.time.ir_nodes()
+    assert [node["op"] for node in nodes].count("coupled_rate") == 1
+    transport_rates = [node for node in nodes if node["op"] == "rhs"]
+    assert len(transport_rates) == 2
+    assert all(node["attrs"]["flux"] is True for node in transport_rates)
+    assert all(node["attrs"]["fluxes"] is None for node in transport_rates)
     assert resolved.capabilities["resolution"]["amr_program"]["status"] == "proven"
 
 
@@ -203,9 +216,22 @@ def test_coupled_rate_bound_drives_a_conservative_native_amr_step(
     simulation = pops.bind(artifact)
     level_count = simulation.n_levels()
     assert level_count == 2
+    assert simulation.program_report().level_relations == [
+        {
+            "parent_level": 0,
+            "child_level": 1,
+            "temporal_ratio": {"numerator": 1, "denominator": 1},
+            "remainder_policy": "integral_only",
+        }
+    ]
     before = {
         block: tuple(
-            np.asarray(simulation.block_level_state_global(block, level), dtype=np.float64).copy()
+            composite_active_block_state(
+                simulation,
+                block,
+                level,
+                refinement_ratio=REFINEMENT_RATIO,
+            ).copy()
             for level in range(level_count)
         )
         for block in ("electrons", "ions")
@@ -222,7 +248,12 @@ def test_coupled_rate_bound_drives_a_conservative_native_amr_step(
     assert simulation.n_levels() == level_count
     after = {
         block: tuple(
-            np.asarray(simulation.block_level_state_global(block, level), dtype=np.float64).copy()
+            composite_active_block_state(
+                simulation,
+                block,
+                level,
+                refinement_ratio=REFINEMENT_RATIO,
+            ).copy()
             for level in range(level_count)
         )
         for block in ("electrons", "ions")
@@ -242,4 +273,7 @@ def test_coupled_rate_bound_drives_a_conservative_native_amr_step(
         assert np.all(ion_after > ion_before)
         np.testing.assert_array_equal(electron_after, electron_expected)
         np.testing.assert_array_equal(ion_after, ion_expected)
-        np.testing.assert_array_equal(electron_after + ion_after, electron_before + ion_before)
+        np.testing.assert_array_equal(
+            electron_after + ion_after,
+            electron_before + ion_before,
+        )

@@ -179,13 +179,17 @@ class Module(ModuleFreezable):
         return decorator
 
     def rate_operator(self, name: Any, state_space: Any, flux: bool = True,
-                      sources: Any = (), fluxes: Any = None) -> Any:
+                      sources: Any = (), fluxes: Any = None,
+                      default_flux: Any = None) -> Any:
         """Register ``R = -div F + sum(sources)`` from typed declaration references.
 
         ``state_space`` is the declared :class:`StateSpace` (or its registry-issued state
         :class:`Handle`). ``sources`` and ``fluxes`` contain :class:`OperatorHandle` values issued by
-        this Module. Names remain only in the private lowering payload; public semantic references
-        are never looked up from strings.
+        this Module. ``default_flux`` may identify the sole selected grid operator that lowering
+        installs as the native model's default finite-volume flux.  Its physical identity remains in
+        ``fluxes`` while Program calls route through the configured FV/Riemann ``rhs_into`` path.
+        Names remain only in the private lowering payload; public semantic references are never
+        looked up from strings.
         """
         self._guard_mutable("register a rate operator")
         state_ref = self.state_handle(state_space)
@@ -210,6 +214,17 @@ class Module(ModuleFreezable):
                 flux_ref, expected_kind="grid_operator", label="flux")
             flux_names.append(target)
             selected.append(operator)
+        default_flux_name = None
+        if default_flux is not None:
+            default_flux_name, _ = self._operator_reference(
+                default_flux, expected_kind="grid_operator", label="default flux")
+            if not flux:
+                raise ValueError(
+                    "rate_operator(%r): a default flux route requires flux=True" % name)
+            if flux_names != [default_flux_name]:
+                raise ValueError(
+                    "rate_operator(%r): default_flux must be the sole exact operator selected "
+                    "in fluxes" % name)
         field_inputs = []
         for selected_op in selected:
             for input_space in selected_op.signature.inputs:
@@ -229,12 +244,22 @@ class Module(ModuleFreezable):
         provenance = ProvenanceRecord(
             primary=source_span(), owner=self.owner_path,
             authoring_api="pops.model.Module.rate_operator")
-        op = Operator(name, "local_rate", Signature(tuple(inputs), RateSpace(u)),
-                      capabilities={"local": False, "requires_fields": bool(field_inputs),
-                                    "produces_rate": True, "supports_device": True},
-                      lowering={"flux": flux, "sources": source_names,
-                                "fluxes": flux_names or None},
-                      source=provenance)
+        lowering = {"flux": flux, "sources": source_names, "fluxes": flux_names or None}
+        if default_flux_name is not None:
+            lowering["default_flux"] = default_flux_name
+        op = Operator(
+            name,
+            "local_rate",
+            Signature(tuple(inputs), RateSpace(u)),
+            capabilities={
+                "local": False,
+                "requires_fields": bool(field_inputs),
+                "produces_rate": True,
+                "supports_device": True,
+            },
+            lowering=lowering,
+            source=provenance,
+        )
         self._registry.register(op)
         return self.operator_handle(op.name)
 

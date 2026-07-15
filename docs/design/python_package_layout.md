@@ -41,7 +41,6 @@ Each top-level package is a single responsibility. Concrete models and ready-mad
 | `pops.lib` | Ready-to-use implementations only: `lib.time`, `lib.models`, `lib.initial`, `lib.amr`. |
 | `pops.codegen` | Public compiler-provider protocols plus internal lowering/build providers consumed by `pops.compile`. |
 | `pops.runtime` | Internal `RuntimeInstance`, execution, restart publication and diagnostics; the package exports no user symbols. |
-| `pops.experimental` | Tests-only, non-stable host backends (`PythonFlux`); never on the public surface. |
 
 `pops.runtime` is an opaque implementation package, not an author or provider namespace. Its
 execution leaf modules use private names such as `_runtime_instance`, `_consumer` and
@@ -68,7 +67,7 @@ listed as ALLOWED for it (this is the single source in
 `tests/python/architecture/test_import_graph.py`):
 
 ```
-_ir, identity, representations, spaces, projection, params, linalg, experimental -> (nothing)
+_ir, identity, representations, spaces, projection, params, linalg -> (nothing)
 frames      -> identity
 domain      -> frames, identity
 model       -> _ir, identity, params

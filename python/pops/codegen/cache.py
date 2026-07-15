@@ -6,16 +6,16 @@ Public API re-exported from pops.codegen.__init__.
 from __future__ import annotations
 
 import os
+from threading import Lock
 from typing import Any
 
 from .toolchain import _pops_module  # noqa: F401 -- used by _native_mpi_flags
 
 
-# Optimization flags shared by the DSL .so that run the PRODUCTION path (aot and native).
+# Optimization flags shared by generated libraries on the sole production path.
 # Default -O3 -DNDEBUG: hot-loop asserts disarmed + full vectorization -> parity with a native block (at
 # -O2 without -DNDEBUG the generated kernel is ~1.48x). $POPS_DSL_OPTFLAGS overrides; affects NEITHER the
-# ABI NOR portability. The only .so that stays at -O2 is the JIT/prototype (Rusanov host residue, perf
-# out of scope).
+# ABI NOR portability.
 _DSL_OPTFLAGS_DEFAULT = "-O3 -DNDEBUG"
 
 
@@ -117,42 +117,48 @@ def _registry_cache_key() -> str:
                                           CAPABILITY_VOCAB_VERSION)
 
 
-# In-process registry of the backend already written to each resolved .so path (key = absolute path,
-# value = backend). It models a cache that neither the explicit so_path nor the out-of-source cache key
-# represented: the HANDLE cache of the dynamic loader (dlopen / dyld), keyed BY PATH and BLIND to the
-# file content. On macOS notably, dlopen('/x/m.so') already loaded returns the SAME handle even if the
-# file was recompiled in between: recompiling a 'production' .so ON a path where an 'aot' .so was already
-# loaded re-serves the stale aot handle (add_native_block -> 'pops_native_abi_key missing'). The
-# out-of-source cache key already includes the backend (distinct path per backend, so no collision); the
-# EXPLICIT so_path, however, is pinned by the caller -> two backends overwrite each other there. We avoid
-# it by redirecting to a per-backend DISTINCT sibling as soon as another backend already occupies that
-# path in the process. Reset every process (the dlopen state is too); a new process re-reads the current
-# file, so recompiling at the same path across two processes stays safe.
-_process_so_backend = {}
+_process_so_identity: dict[str, str] = {}
+_process_so_identity_lock = Lock()
 
 
-def _backend_distinct_so_path(so_path: Any, backend: Any) -> Any:
-    """Return a .so path safe for @p backend: so_path unchanged when no OTHER backend already occupies it
-    in this process, otherwise a distinct sibling (inserts '.<backend>' before the extension) so dlopen
-    reloads a fresh handle instead of re-serving the stale one (cf. _process_so_backend). Touches neither
-    the disk nor the registry; the caller records the backend of the RETAINED path after compilation."""
+def _artifact_distinct_so_path(so_path: Any, spec_identity: Any) -> Any:
+    """Keep explicit native paths safe from the dynamic loader's path-based handle cache.
+
+    Recompiling a different production artifact over an already used path can make ``dlopen``
+    return the old handle. The first identity retains the requested path; later identities use a
+    deterministic sibling derived from their authenticated artifact identity. Rebuilding the same
+    identity keeps the same path because its native contract is unchanged.
+    """
+    import hashlib
     import os
-    prev = _process_so_backend.get(os.path.abspath(so_path))
-    if prev is not None and prev != backend:
-        root, ext = os.path.splitext(so_path)
-        so_path = "%s.%s%s" % (root, backend, ext or ".so")
-    return so_path
+
+    requested = os.path.abspath(os.fspath(so_path))
+    identity = str(spec_identity)
+    with _process_so_identity_lock:
+        previous = _process_so_identity.get(requested)
+        if previous is None:
+            _process_so_identity[requested] = identity
+            return so_path
+        if previous == identity:
+            return so_path
+
+        digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+        root, ext = os.path.splitext(os.fspath(so_path))
+        alternate = "%s.%s%s" % (root, digest, ext or ".so")
+        _process_so_identity.setdefault(os.path.abspath(alternate), identity)
+        return alternate
 
 
-def _record_so_backend(so_path: Any, backend: Any) -> None:
-    """Record (in process) the backend written to @p so_path: lets the next path resolution detect a
-    cross-backend reuse of the SAME path (cf. _backend_distinct_so_path)."""
+def _record_artifact_identity(so_path: Any, spec_identity: Any) -> None:
+    """Record the authenticated artifact occupying a native loader path in this process."""
     import os
-    _process_so_backend[os.path.abspath(so_path)] = backend
+
+    with _process_so_identity_lock:
+        _process_so_identity[os.path.abspath(os.fspath(so_path))] = str(spec_identity)
 
 
 def _native_mpi_flags() -> list:
-    """Compile flags so the production/AOT DSL loader uses comm.hpp's REAL MPI seam (ADC-319).
+    """Compile flags so the production DSL loader uses comm.hpp's REAL MPI seam (ADC-319).
 
     The loader inlines the runtime templates (System / AmrSystem coupler), which call pops::n_ranks() /
     my_rank() from comm.hpp to lay out the distributed grid (DistributionMapping over n_ranks()).

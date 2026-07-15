@@ -73,7 +73,7 @@ target_compile_definitions(_pops PRIVATE POPS_CXX_COMPILER="${CMAKE_CXX_COMPILER
 
 # ADC-319 : dossier(s) d'include MPI du build, bake dans le module (expose en pops._pops.__mpi_include__).
 # Le module herite deja -DPOPS_HAS_MPI via l'INTERFACE pops (cible MPI::MPI_CXX, racine), mais le DSL
-# backend "production"/"aot" compile ses loaders HORS CMake et n'en herite rien : sans -DPOPS_HAS_MPI +
+# Le backend production compile ses loaders HORS CMake et n'en herite rien : sans -DPOPS_HAS_MPI +
 # l'include MPI, comm.hpp y retombe sur ses stubs serie (n_ranks()=1, my_rank()=0) et toute disposition
 # distribuee construite DANS le loader (p.ex. AmrSystem(distribute_coarse=True)) se replique sur chaque
 # rang (pas de strong-scaling). dsl.py (_native_mpi_flags) lit cet attribut pour recompiler le loader

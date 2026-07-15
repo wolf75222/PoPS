@@ -43,11 +43,12 @@ from pops.codegen.loader import CompiledModel
 from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from tests.python.support.initial_states import bubble_amr as _bubble
+from tests.python.support.requirements import repo_include
 
 GAMMA = 1.4
-from tests.python.support.requirements import repo_include
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 
@@ -96,9 +97,6 @@ def _build_euler_poisson():
     m.source([0.0, -rho * gx, -rho * gy, -(rhou * gx + rhov * gy)])
     m.elliptic_rhs(-1.0 * (rho - 1.0))
     return m
-
-
-from tests.python.support.initial_states import bubble_amr as _bubble
 
 
 def _amr(n, L, branch, refine=1.2):
@@ -296,14 +294,6 @@ def main():
         print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
 
         # --- (4) GARDE-FOUS de compilation / dispatch ---
-        raised = False
-        try:
-            ep.compile(os.path.join(tmp, "bad.so"), INCLUDE, backend="aot", target="amr_system")
-        except ValueError as ex:
-            raised = True
-            assert "amr_system" in str(ex)
-        assert raised, "compile(backend='aot', target='amr_system') aurait du lever"
-
         sys_cm = ep.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
                             backend="production", target="system")  # target System par defaut
         s = AmrSystem(n=n, L=L, periodic=True)

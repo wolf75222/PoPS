@@ -159,7 +159,6 @@ sdk-support pops/runtime/context/wall_predicate.hpp
 abi pops/runtime/dynamic/abi_key.hpp
 sdk-support pops/runtime/dynamic/component_consumers.hpp
 sdk-support pops/runtime/dynamic/component_loader.hpp
-sdk-support pops/runtime/dynamic/dynamic_model.hpp
 sdk-support pops/runtime/dynamic/dynlib.hpp
 sdk-support pops/runtime/dynamic/model_registry.hpp
 sdk-support pops/runtime/dynamic/prepared_execution_context.hpp

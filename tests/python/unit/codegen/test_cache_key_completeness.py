@@ -25,7 +25,14 @@ import sys
 import pytest
 
 pytest.importorskip("pops")
-from pops.codegen.cache import _identity_cache_so_path, _precision_cache_key, _registry_cache_key  # noqa: E402
+from pops.codegen.cache import (  # noqa: E402
+    _artifact_distinct_so_path,
+    _identity_cache_so_path,
+    _precision_cache_key,
+    _process_so_identity,
+    _record_artifact_identity,
+    _registry_cache_key,
+)
 from pops.identity import artifact_spec_identity, make_identity  # noqa: E402
 
 
@@ -93,6 +100,22 @@ def test_identity_cache_path_folds_feature_and_precision(monkeypatch, tmp_path):
     assert _identity_cache_so_path(_program_cache_key(
         "phash", abi, "system", single_backend, "precision=single;real_bytes=4")) != base, \
         "a precision switch changes the .so file name"
+
+
+def test_explicit_path_is_partitioned_by_authenticated_artifact_identity(tmp_path):
+    requested = str(tmp_path / "model.so")
+    _process_so_identity.clear()
+    try:
+        assert _artifact_distinct_so_path(requested, "spec-A") == requested
+        _record_artifact_identity(requested, "spec-A")
+        assert _artifact_distinct_so_path(requested, "spec-A") == requested
+
+        alternate = _artifact_distinct_so_path(requested, "spec-B")
+        assert alternate != requested
+        assert alternate.endswith(".so")
+        assert _artifact_distinct_so_path(requested, "spec-B") == alternate
+    finally:
+        _process_so_identity.clear()
 
 
 # --- 4: the debug flag is NOT in the cache key (source-provenance only) -------------------------

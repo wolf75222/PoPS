@@ -150,6 +150,32 @@ def test_one_typed_named_flux_supplies_the_native_base_flux_without_losing_its_n
     assert lowered._m._rate_operators["advance"]["fluxes"] == ["transport"]
 
 
+def test_module_lowering_rejects_conflicting_native_default_fluxes_for_one_state():
+    module = model_pkg.Module("conflicting_default_fluxes")
+    state = module.state_space("fluid", ("rho",))
+    (rho,) = module.state_symbols(state)
+    signature = (state,) >> model_pkg.Rate(state)
+    first = module.operator(
+        "first",
+        signature=signature,
+        kind="grid_operator",
+        expr={"x": (rho,), "y": (rho,)},
+    )
+    second = module.operator(
+        "second",
+        signature=signature,
+        kind="grid_operator",
+        expr={"x": (2.0 * rho,), "y": (2.0 * rho,)},
+    )
+    module.rate_operator(
+        "first_rate", state_space=state, fluxes=(first,), default_flux=first)
+    module.rate_operator(
+        "second_rate", state_space=state, fluxes=(second,), default_flux=second)
+
+    with pytest.raises(ValueError, match="conflicting native-default flux operators"):
+        _module_to_model(module)
+
+
 # --- 5: the handle carries the module_hash for drift detection + the lowered-module trace -------
 
 def test_handle_carries_module_hash_and_trace():
@@ -190,6 +216,69 @@ def _stub_toolchain(monkeypatch, tmp_path):
     return cd
 
 
+def _final_trace_artifact(compiled):
+    """Wrap the real low-level compile result in the exact final artifact/plan records."""
+
+    from pops.codegen._compiled_artifact import CompiledBlockArtifact, CompiledSimulationArtifact
+    from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan
+    from pops.identity import make_identity
+    from pops.model.bind_schema import BindSchema
+    from pops.problem._snapshot import AuthoringSnapshot
+    from tests.python.support.layout_plan import resolved_layout_contract
+
+    class _CompiledTraceModel:
+        so_path = "/nonexistent/trace-model.so"
+        backend = "production"
+        target = "system"
+        abi_key = compiled.abi_key
+        cxx = compiled.cxx
+        std = compiled.std
+        model_hash = "trace-model"
+        gamma = None
+        caps = {"cpu": True, "mpi": False, "amr": False, "gpu": False}
+        artifact_identity = make_identity("artifact", {"component": "trace-model"})
+
+        @staticmethod
+        def __pops_artifact_model_metadata__():
+            return {
+                "schema_version": 1,
+                "state_spaces": ("U",),
+                "cons_names": ("rho", "mx", "my"),
+                "n_vars": 3,
+                "params": {},
+                "aux_names": (),
+                "n_aux": 0,
+                "capabilities": {"mpi": False},
+            }
+
+    layout = {"kind": "uniform"}
+    layout_plan, coverage = resolved_layout_contract(
+        layout, target="system", block_names=("ep",))
+    schema = BindSchema()
+    plan = ResolvedSimulationPlan(
+        snapshot=AuthoringSnapshot({"case": "module-trace"}),
+        target="system",
+        backend="production",
+        layout=layout,
+        layout_plan=layout_plan,
+        layout_targets={layout_plan.layouts[0].handle.qualified_id: "system"},
+        time=compiled.program,
+        blocks=(ResolvedBlock(
+            "ep", {"model": "trace-model"}, {"ghost_depth": 2}, "production",
+            ("U",), ("test::ep::state::U",)),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
+        field_plans={},
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True},
+        lowering_coverage=coverage,
+    )
+    block = CompiledBlockArtifact(
+        "ep", _CompiledTraceModel(), plan.blocks[0].spatial, ("U",))
+    return CompiledSimulationArtifact(plan=plan, program=compiled, blocks=(block,))
+
+
 def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_path):
     cd = _stub_toolchain(monkeypatch, tmp_path)
     model = _facade_model("ep")
@@ -198,7 +287,7 @@ def test_compile_problem_chain_threads_trace_for_facade_model(monkeypatch, tmp_p
     assert compiled.module_manifest is not None, \
         "the REAL compile chain attaches the operator-first Module manifest"
     assert compiled.module_hash(), "the REAL compile chain attaches the module_hash"
-    report = compiled.inspect().to_dict()
+    report = _final_trace_artifact(compiled).inspect().to_dict()
     ops = [op.get("name") for op in report["module_manifest"]["operators"]]
     assert "flux_default" in ops, "the trace lists the facade's operators: %s" % ops
 

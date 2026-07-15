@@ -37,6 +37,9 @@ class _RateAuthoringMixin:
                 state_space=state.space,
                 flux=flux is not None,
                 fluxes=fluxes,
+                default_flux=(
+                    fluxes[0] if flux is not None and flux.is_default else None
+                ),
                 sources=source_refs,
             )
             self._rate_contracts[result] = {

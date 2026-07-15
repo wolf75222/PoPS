@@ -219,8 +219,28 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             or state in op.signature.inputs)
     }
     explicit_default = applicable_grid_names & {"flux", "flux_default"}
+    declared_defaults = {
+        op.lowering.get("default_flux")
+        for op in applicable_rates
+        if op.lowering.get("default_flux") is not None
+    }
+    if len(declared_defaults) > 1:
+        raise ValueError(
+            "Module StateSpace %r has conflicting native-default flux operators %s"
+            % (state.name, sorted(declared_defaults)))
+    declared_default = next(iter(declared_defaults), None)
+    if declared_default is not None and declared_default not in applicable_grid_names:
+        raise ValueError(
+            "Module StateSpace %r selects unknown native-default flux operator %r"
+            % (state.name, declared_default))
+    if explicit_default and declared_default is not None and declared_default not in explicit_default:
+        raise ValueError(
+            "Module StateSpace %r declares native-default flux %r but also has explicit default %s"
+            % (state.name, declared_default, sorted(explicit_default)))
     fallback_default = None
-    if not explicit_default and len(routed_fluxes) == 1:
+    if declared_default is not None and not explicit_default:
+        fallback_default = declared_default
+    elif not explicit_default and len(routed_fluxes) == 1:
         candidate = next(iter(routed_fluxes))
         if candidate in applicable_grid_names:
             fallback_default = candidate
@@ -272,8 +292,9 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
 
     def _b_local_rate(op: Any) -> None:
         low = op.lowering
+        program_fluxes = None if low.get("default_flux") is not None else low.get("fluxes")
         m.rate_operator(op.name, flux=low.get("flux", True),
-                        sources=low.get("sources"), fluxes=low.get("fluxes"))
+                        sources=low.get("sources"), fluxes=program_fluxes)
 
     def _b_projection(op: Any) -> None:
         m.projection(_body_for_state(op.body))

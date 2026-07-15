@@ -152,8 +152,11 @@ def model_hash(model: Any, params: Any = None) -> str:
             if ws["rows"] is not None else ""))
         # ADC-617: fd_eps is EMITTED into the eig='fd' Jacobian, so it MUST enter the model hash or two
         # models differing only in fd_eps would collide on the same cached .so and serve wrong numerics.
-        # Appended ONLY when set, so the default (None -> the historical 1e-6 literal) leaves the hash
-        # byte-identical (no spurious cache miss for existing models).
+        # The central-per-column-v4 marker invalidates artifacts emitted before each column used
+        # its own scale, a unit floor and a symmetric perturbation (the former route used U[0], no
+        # usable zero-state scale and forward FD).
+        if ws["eig"] == "fd":
+            parts.append("ws_jac_fd_step=central_per_column_v4")
         if ws.get("fd_eps") is not None:
             parts.append("ws_jac_fd_eps=%s" % _scalar_token(ws["fd_eps"]))
         # ADC-645: eig_max_iter / im_tol are EMITTED into the eig kernels (real_eig_minmax /
@@ -227,13 +230,14 @@ def emit_cpp_native_loader(model: Any, name: Any = None, target: Any = "system",
     @p target: "system" (default) | "amr_system". Selects the targeted facade and
     thus the add_compiled_model OVERLOAD called.
     """
+    from pops.codegen.cpp_writer import _cpp_identifier
     from pops.codegen.module_codegen import _emit_bricks, _emit_metadata, _elliptic_field_registrations
     m = model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_native_loader: target 'system' | 'amr_system' (got %r)"
                          % (target,))
     nv, bricks, composite = _emit_bricks(m, name, hoist_reciprocals=hoist_reciprocals)
-    nm = name or (m.name.capitalize() + "Gen")
+    nm = _cpp_identifier(name or (m.name.capitalize() + "Gen"))
     ell_field_regs = _elliptic_field_registrations(m, nm)
     head = ('#include <cmath>\n'
             '#include <vector>\n'

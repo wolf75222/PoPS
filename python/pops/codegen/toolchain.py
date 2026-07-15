@@ -228,35 +228,6 @@ def _check_headers_match_module(include: Any) -> str:
     return current  # signature of the @p include tree, reusable (avoids a 2nd walk+sha256)
 
 
-def resolve_auto_backend(include: Any = None) -> tuple:
-    """DEFAULT backend policy (backend='auto', decision recorded -- ADC-63).
-
-    'production' (zero-copy native loader, strict add_block parity) AS SOON AS the
-    toolchain parity with the _pops module is established : module loadable + known baked compiler +
-    header signature of @p include == the one baked into the module. OTHERWISE 'aot' (historical
-    default : host-marshaled, works without module or parity). Never silent : returns
-    (backend, reason) and the facades set the reason on CompiledModel.backend_auto_reason.
-    An EXPLICIT backend passed by the caller short-circuits this policy (unchanged)."""
-    from .abi import module_header_signature  # intra-package; avoids circular at module level
-    mod = _pops_module()
-    if mod is None:
-        return "aot", "_pops module not loadable (the production path requires the module)"
-    if not loader_cxx_compiler():
-        return "aot", "module compiler unknown (old module or manual build)"
-    baked = module_header_signature()
-    if not baked:
-        return "aot", "header signature absent from the module (manual build)"
-    try:
-        inc = include if include is not None else pops_include()
-        sig = pops_header_signature(inc)
-    except Exception as e:  # headers not found / unreadable -> fall back on default
-        return "aot", "pops headers not found for parity (%s)" % e
-    if sig != baked:
-        return "aot", ("headers != module (rebuild the module or point at the build headers ; "
-                       "production would refuse, cf. _check_headers_match_module)")
-    return "production", "toolchain parity established (module + baked compiler + matching headers)"
-
-
 def _default_cxx(cxx: Any = None) -> Any:
     """CENTRALIZED resolution of the DSL .so compiler (all backends). Priority :
       1. explicit cxx (caller argument) ;
@@ -351,7 +322,7 @@ def _probe_cxx_std(cc: Any, std: Any) -> str:
 def _native_kokkos_root() -> Any:
     """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
 
-    PoPS is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
+    PoPS is KOKKOS-ONLY: every production DSL .so that includes the PoPS headers MUST be compiled
     with Kokkos (for_each.hpp #error otherwise). The root is read from POPS_KOKKOS_ROOT / Kokkos_ROOT /
     KOKKOS_ROOT; None if not found (the caller then raises an explicit error)."""
     for key in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):

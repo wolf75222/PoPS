@@ -115,7 +115,7 @@ class _RiemannMixin(_HyperbolicModel):
 
         Guards: length n_vars per direction; each variable under left/right; conflict with
         enable_roe (one single provider of the hook) -> error. WITHOUT a call: nothing emitted (bit-identical).
-        Requires the 'aot' or 'production' backend (the hook is emitted in the generated brick)."""
+        Emitted by the production backend in the generated brick."""
         if self._roe:
             raise ValueError("roe_dissipation : enable_roe() already called -- one single provider of the "
                              "roe_dissipation hook (capability from the roles OR provided)")
@@ -149,8 +149,8 @@ class _RiemannMixin(_HyperbolicModel):
         always eigendecomposed (as the reference flux_ROE does), not a block partition.
 
         EXCLUSIVE with m.enable_roe and m.roe_dissipation: the three are providers of the SAME
-        roe_dissipation hook (declaring more than one raises). Requires set_flux(...) and the 'aot'
-        or 'production' backend (the hook is emitted in the generated brick). WITHOUT a call: nothing
+        roe_dissipation hook (declaring more than one raises). Requires set_flux(...); the hook is
+        emitted by the Production backend in the generated brick. WITHOUT a call: nothing
         emitted (bit-identical cache key)."""
         if self._roe:
             raise ValueError("roe_from_jacobian : enable_roe() already called -- one single provider "

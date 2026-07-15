@@ -185,6 +185,31 @@ def test_diagnostic_only_output_keeps_explicit_layout_and_balance_terms(tmp_path
     prepared.discard()
 
 
+def test_paraview_geometry_is_byte_exact_and_keeps_row_major_cell_order(tmp_path):
+    snapshot, request, foreign = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".vtu")
+    prepared = ParaViewWriter().prepare(snapshot, request, target)
+    duplicate = ParaViewWriter().prepare(snapshot, request, tmp_path / "duplicate.vtu")
+    assert prepared.temporary.read_bytes() == duplicate.temporary.read_bytes()
+    duplicate.discard()
+    reopened = read_paraview(prepared.temporary).require_selection(request)
+    assert set(reopened.manifest["datasets"]["fields"]) == {
+        key.identity.token for key in request.selection}
+    assert foreign.identity.token not in reopened.manifest["datasets"]["fields"]
+    assert np.array_equal(reopened.arrays["pops_level"], [0, 0, 0, 0] + [1] * 4)
+    assert int(np.sum(reopened.arrays["pops_coverage"])) == 1
+    assert np.array_equal(reopened.arrays["connectivity"], np.arange(32))
+    assert np.array_equal(reopened.arrays["offsets"], np.arange(4, 33, 4))
+    assert np.array_equal(
+        reopened.arrays["Points"][::4, :2],
+        np.asarray([
+            [0.0, 0.0], [0.5, 0.0], [0.0, 0.5], [0.5, 0.5],
+            [10.25, 20.25], [10.5, 20.25], [10.25, 20.5], [10.5, 20.5],
+        ]),
+    )
+    prepared.discard()
+
+
 def test_paraview_single_file_is_native_reopenable_and_keeps_amr_metadata(tmp_path):
     snapshot, request, foreign = _snapshot()
     target = deterministic_target(tmp_path, "fields", request, snapshot, ".vtu")

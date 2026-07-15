@@ -144,6 +144,7 @@ jobs:
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
               - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_route_mode.py'
               - '.github/actions/setup-kokkos/**'
               - '.github/workflows/ci.yml'
             python:
@@ -156,6 +157,7 @@ jobs:
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
               - 'scripts/ci_import_closure.py'
+              - 'scripts/ci_route_mode.py'
               - '.github/actions/setup-kokkos/**'
               - '.github/workflows/ci.yml'
             python_arch:
@@ -179,6 +181,7 @@ jobs:
               - 'scripts/ci_include_graph.py'
               - 'scripts/ci_select_tests.py'
               - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_route_mode.py'
               - '.github/actions/**'
               - '.github/workflows/**'
             # Une modification du chemin distribue doit exercer MPI sur la PR sans dependre
@@ -229,7 +232,10 @@ jobs:
               - 'src/**'
               - 'scripts/**'
 
-  # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
+  # Autorite unique de routage. Elle calcule les gates obligatoires ET le mode complet ; chaque job
+  # et l'agregateur consomment ensuite ces memes sorties, donc un drift de `if:` ne peut jamais
+  # transformer un gate requis en skip passant.
+  # La suite COMPLETE (MPI + Kokkos OpenMP) tourne si :
   #  - run nocturne (schedule) OU declenchement manuel (workflow_dispatch) : INCONDITIONNEL
   #    (le cron est le filet anti-derive ; le dispatch, l'override de l'integrateur), OU
   #  - push sur master ET un chemin build/backend a bouge (needs.changes.outputs.full) : un push ne
@@ -243,35 +249,37 @@ jobs:
     needs: changes
     outputs:
       full: ${{ steps.decide.outputs.full }}
+      cpp_required: ${{ steps.decide.outputs.cpp_required }}
+      python_required: ${{ steps.decide.outputs.python_required }}
+      architecture_required: ${{ steps.decide.outputs.architecture_required }}
+      mpi_required: ${{ steps.decide.outputs.mpi_required }}
+      openmp_required: ${{ steps.decide.outputs.openmp_required }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - id: decide
         env:
+          CPP_PATHS: ${{ needs.changes.outputs.cpp }}
+          PYTHON_PATHS: ${{ needs.changes.outputs.python }}
+          ARCHITECTURE_PATHS: ${{ needs.changes.outputs.python_arch }}
+          MPI_PATHS: ${{ needs.changes.outputs.mpi }}
           FULL_PATHS: ${{ needs.changes.outputs.full }}
+          CI_KOKKOS: ${{ contains(github.event.pull_request.labels.*.name, 'ci-kokkos') }}
+          CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
           FORCE_FULL: ${{ inputs.force_full || false }}
         run: |
-          full=false
-          # Nocturne + manuel : suite complete inconditionnelle (backstop anti-derive + override).
-          if [ "${{ github.event_name }}" = "schedule" ] \
-             || [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-             || [ "${{ github.event_name }}" = "workflow_call" ]; then
-            full=true
-          fi
-          # A reusable workflow keeps the caller's event context (a release is still a tag push),
-          # so the explicit input is the authoritative release-time full-matrix request.
-          if [ "$FORCE_FULL" = "true" ]; then
-            full=true
-          fi
-          # Push master : suite complete UNIQUEMENT si un chemin build/backend a bouge (full_paths).
-          if [ "${{ github.event_name }}" = "push" ] && [ "$FULL_PATHS" = "true" ]; then
-            full=true
-          fi
-          # PR : opt-in explicite via le label ci-full.
-          if [ "${{ github.event_name }}" = "pull_request" ] \
-             && [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; then
-            full=true
-          fi
-          echo "full=$full" >> "$GITHUB_OUTPUT"
-          echo "Mode plein (MPI + Kokkos OpenMP) : $full (event=${{ github.event_name }}, full_paths=$FULL_PATHS)"
+          python3 scripts/ci_route_mode.py decide \
+            --event-name "${{ github.event_name }}" \
+            --cpp-paths "$CPP_PATHS" \
+            --python-paths "$PYTHON_PATHS" \
+            --architecture-paths "$ARCHITECTURE_PATHS" \
+            --mpi-paths "$MPI_PATHS" \
+            --full-paths "$FULL_PATHS" \
+            --ci-kokkos "$CI_KOKKOS" \
+            --ci-full "$CI_FULL" \
+            --force-full "$FORCE_FULL" \
+            --github-output "$GITHUB_OUTPUT"
 
   # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en six shards deterministes
   # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
@@ -281,14 +289,14 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: changes
+    needs: [changes, set-mode]
     strategy:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3, 4, 5]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
       # Un cache par shard, borne a 512 Mo : 3 Go maximum par generation. Chaque shard ne construit
@@ -445,20 +453,19 @@ jobs:
   gate-cpp:
     name: ubuntu-latest / Kokkos Serial (C++)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp-shards]
+    needs: [changes, set-mode, gate-cpp-shards]
     if: always()
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - name: Verdict C++ shards
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp-shards=${{ needs.gate-cpp-shards.result }}"
-          if [ "${{ needs.changes.result }}" != "success" ]; then
-            echo "::error::routage C++ indisponible"
-            exit 1
-          fi
-          case "${{ needs.gate-cpp-shards.result }}" in
-            success|skipped) echo "C++ shards OK" ;;
-            *) echo "::error::un shard C++ a echoue, expire ou ete annule" ; exit 1 ;;
-          esac
+          python3 scripts/ci_route_mode.py check \
+            --gate changes "${{ needs.changes.result }}" true \
+            --gate set-mode "${{ needs.set-mode.result }}" true \
+            --gate gate-cpp-shards "${{ needs.gate-cpp-shards.result }}" \
+              "${{ needs.set-mode.outputs.cpp_required }}"
 
   # GATE PYTHON ARCHITECTURE : tests source-only (pas de _pops, pas de Kokkos). Ils couvrent les
   # invariants de structure du package Python et doivent rester legers meme quand seule l'architecture
@@ -474,8 +481,8 @@ jobs:
   gate-python-architecture:
     name: ubuntu-latest / Python architecture
     runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.python == 'true' || needs.changes.outputs.python_arch == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    needs: [changes, set-mode]
+    if: needs.set-mode.outputs.architecture_required == 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -514,11 +521,11 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python build)
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: changes
+    needs: [changes, set-mode]
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
     # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    if: needs.set-mode.outputs.python_required == 'true'
 
     env:
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
@@ -663,8 +670,8 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [changes, gate-python-build]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    needs: [changes, set-mode, gate-python-build]
+    if: needs.set-mode.outputs.python_required == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -805,7 +812,7 @@ jobs:
         run: |
           pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
-          # adc_cpp est Kokkos-only : les tests DSL qui compilent un loader/.so (aot, production, ABI)
+          # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
@@ -896,8 +903,8 @@ jobs:
     name: ubuntu-latest / Kokkos Serial (Python) compile-cache
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [changes, gate-python-build]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    needs: [changes, set-mode, gate-python-build]
+    if: needs.set-mode.outputs.python_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -1013,46 +1020,30 @@ jobs:
     needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
     if: always()
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - name: Verdict
         run: |
           echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
-          if [ "${{ needs.changes.result }}" != "success" ]; then
-            echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
-            exit 1
-          fi
-          if [ "${{ needs.set-mode.result }}" != "success" ]; then
-            echo "::error::decision fast/full indisponible : les jobs MPI/OpenMP ne peuvent pas etre qualifies comme optionnels"
-            exit 1
-          fi
-          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}" "${{ needs.gate-python-compile-cache.result }}"; do
-            case "$r" in
-              success|skipped) ;;
-              *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
-            esac
-          done
-          full="${{ needs.set-mode.outputs.full }}"
-          mpi_route="${{ needs.changes.outputs.mpi }}"
-          mpi_result="${{ needs.mpi.result }}"
-          openmp_result="${{ needs.kokkos-openmp.result }}"
-          if [ "$full" = "true" ] || [ "$mpi_route" = "true" ]; then
-            if [ "$mpi_result" != "success" ]; then
-              echo "::error::MPI etait requis (full=$full, mpi_route=$mpi_route) mais vaut $mpi_result"
-              exit 1
-            fi
-          elif [ "$mpi_result" != "success" ] && [ "$mpi_result" != "skipped" ]; then
-            echo "::error::MPI optionnel a echoue ou ete annule ($mpi_result)"
-            exit 1
-          fi
-          if [ "$full" = "true" ]; then
-            if [ "$openmp_result" != "success" ]; then
-              echo "::error::OpenMP etait requis en mode plein mais vaut $openmp_result"
-              exit 1
-            fi
-          elif [ "$openmp_result" != "success" ] && [ "$openmp_result" != "skipped" ]; then
-            echo "::error::OpenMP optionnel a echoue ou ete annule ($openmp_result)"
-            exit 1
-          fi
-          echo "gates OK"
+          python3 scripts/ci_route_mode.py check \
+            --gate changes "${{ needs.changes.result }}" true \
+            --gate set-mode "${{ needs.set-mode.result }}" true \
+            --gate gate-cpp "${{ needs.gate-cpp.result }}" true \
+            --gate gate-python-architecture \
+              "${{ needs.gate-python-architecture.result }}" \
+              "${{ needs.set-mode.outputs.architecture_required }}" \
+            --gate gate-python-build "${{ needs.gate-python-build.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate gate-python "${{ needs.gate-python.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate gate-python-compile-cache \
+              "${{ needs.gate-python-compile-cache.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate mpi "${{ needs.mpi.result }}" \
+              "${{ needs.set-mode.outputs.mpi_required }}" \
+            --gate kokkos-openmp "${{ needs.kokkos-openmp.result }}" \
+              "${{ needs.set-mode.outputs.openmp_required }}"
 
   mpi:
     name: ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5
@@ -1062,7 +1053,7 @@ jobs:
     timeout-minutes: 30
     needs: [set-mode, changes]
     # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
-    if: needs.set-mode.outputs.full == 'true' || needs.changes.outputs.mpi == 'true'
+    if: needs.set-mode.outputs.mpi_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -1197,7 +1188,7 @@ jobs:
     # Teste le backend KOKKOS avec l'espace d'execution OpenMP (CPU multi-thread). Le gate
     # build-and-test couvre deja Kokkos Serial (mono-thread) ; ce job ferme le multi-thread.
     # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
-    if: needs.set-mode.outputs.full == 'true'
+    if: needs.set-mode.outputs.openmp_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache

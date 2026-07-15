@@ -6,12 +6,46 @@ import them from here.  No dependency on pops.dsl (no import cycle).
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pops._ir.expr import Const, Var, _Bin, Neg, Sqrt, Abs, Sign, Pow, Div, Mul
 from pops._ir.values import EigWitness, StateRef, RuntimeParamRef, _EIG_FIELDS, _EIG_PREDICATES
 from pops._ir.visitors import _key, _children
 from pops._ir.expr import _wrap
+
+
+_CPP_KEYWORDS = frozenset({
+    "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool",
+    "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl",
+    "concept", "const", "consteval", "constexpr", "constinit", "const_cast", "continue",
+    "co_await", "co_return", "co_yield", "decltype", "default", "delete", "do", "double",
+    "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for",
+    "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new",
+    "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private",
+    "protected", "public", "register", "reinterpret_cast", "requires", "return", "short",
+    "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch",
+    "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid",
+    "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t",
+    "while", "xor", "xor_eq",
+})
+
+
+def _cpp_identifier(value: Any) -> str:
+    """Return a valid, non-reserved ASCII C++ identifier for an author-facing name."""
+    identifier = re.sub(r"[^A-Za-z0-9_]", "_", str(value))
+    while "__" in identifier:
+        identifier = identifier.replace("__", "_")
+    if not identifier:
+        identifier = "pops_generated"
+    if identifier[0].isdigit():
+        identifier = "pops_" + identifier
+    # Generated types live at namespace scope: every leading underscore is reserved there, while a
+    # double underscore is reserved in any position. The collapse above also prevents e.g. a--b
+    # from becoming the reserved spelling a__b.
+    if identifier in _CPP_KEYWORDS or identifier.startswith("_"):
+        identifier = "pops_" + identifier.lstrip("_")
+    return identifier
 
 
 def _cpp_expand(e: Any, cse_map: Any) -> str:

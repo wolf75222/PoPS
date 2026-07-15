@@ -82,9 +82,9 @@ class CoupledSource:
 
     compile(backend) -> CompiledCoupledSource: flat ABI (bytecode) consumed by
     System.add_coupled_source (C++ side: stack machine evaluated in a for_each_cell device, MPI-safe,
-    named functor). The backend (production / prototype) does NOT change the numerics: the bytecode is
-    interpreted on the C++ side in both cases (no .so per coupling); it is kept for introspection
-    and API parity with the models DSL."""
+    named functor). ``Production()`` records the sole native route; it does not select a second
+    numerical engine. The bytecode is always executed by the C++ device kernel (no Python cell loop
+    and no separate .so per coupling)."""
 
     def __init__(self, name: str = "coupled_source") -> None:
         self.name = name
@@ -371,10 +371,8 @@ class CoupledSource:
         ValueError if a term is not compensated (divergent formula, forgotten sign, orphan term).
         Off by default: a deliberately NON-conservative coupling (net creation/destruction, e.g.
         ionization creating an e/i pair) stays legal without passing the flag."""
-        # ADDITIVE (Spec 5 sec.8.15): accept a typed backend descriptor (Production()/AOT()/JIT()) as
-        # well as the legacy string; lower it to the canonical token so the compiled handle's .backend
-        # stays string-typed (introspection / API parity). Imported LAZILY to keep this module
-        # codegen-free at import (Spec-4 import-graph rule). A plain string / None passes through.
+        # Accept the typed Production descriptor or the private canonical token. Imported lazily to
+        # keep this module codegen-free at import; lower_backend rejects every retired route.
         from pops.codegen._backends import lower_backend
         backend = lower_backend(backend)
         if not self._terms:

@@ -102,42 +102,52 @@ class ParaViewWriter:
                 seen.add(geometry.key)
                 geometries.append(geometry)
         geometries.sort(key=lambda item: item.key)
-        points, layout_ordinals, levels, covered, volumes = [], [], [], [], []
+        cell_counts = [int(np.count_nonzero(geometry.valid_cells))
+                       for geometry in geometries]
+        n_cells = sum(cell_counts)
+        points = np.empty((n_cells * 4, 3), dtype="<f8")
+        layout_ordinals = np.empty(n_cells, dtype="<i4")
+        levels = np.empty(n_cells, dtype="<i4")
+        covered = np.empty(n_cells, dtype="u1")
+        volumes = np.empty(n_cells, dtype="<f8")
         offsets = {}
         cell = 0
-        for ordinal, geometry in enumerate(geometries):
+        for ordinal, (geometry, count) in enumerate(
+            zip(geometries, cell_counts, strict=True)
+        ):
             start = cell
-            ny, nx = geometry.cell_shape
+            cell = start + count
+            rows, columns = np.nonzero(geometry.valid_cells)
             ox, oy = geometry.origin
             dx, dy = geometry.spacing
-            for j in range(ny):
-                for i in range(nx):
-                    if not geometry.valid_cells[j, i]:
-                        continue
-                    x0, x1 = ox + i * dx, ox + (i + 1) * dx
-                    y0, y1 = oy + j * dy, oy + (j + 1) * dy
-                    points.extend((
-                        (x0, y0, 0.0),
-                        (x1, y0, 0.0),
-                        (x1, y1, 0.0),
-                        (x0, y1, 0.0),
-                    ))
-                    layout_ordinals.append(ordinal)
-                    levels.append(geometry.level)
-                    covered.append(int(geometry.coverage[j, i]))
-                    volumes.append(float(geometry.cell_volumes[j, i]))
-                    cell += 1
+            x0 = ox + columns * dx
+            x1 = ox + (columns + 1) * dx
+            y0 = oy + rows * dy
+            y1 = oy + (rows + 1) * dy
+            cell_points = points[start * 4:cell * 4].reshape((count, 4, 3))
+            cell_points[:, 0, 0] = x0
+            cell_points[:, 1, 0] = x1
+            cell_points[:, 2, 0] = x1
+            cell_points[:, 3, 0] = x0
+            cell_points[:, 0, 1] = y0
+            cell_points[:, 1, 1] = y0
+            cell_points[:, 2, 1] = y1
+            cell_points[:, 3, 1] = y1
+            cell_points[:, :, 2] = 0.0
+            layout_ordinals[start:cell] = ordinal
+            levels[start:cell] = geometry.level
+            covered[start:cell] = geometry.coverage[rows, columns]
+            volumes[start:cell] = geometry.cell_volumes[rows, columns]
             offsets[geometry.key] = (start, cell, ordinal)
-        n_cells = cell
         arrays = {
-            "Points": np.asarray(points, dtype="<f8"),
+            "Points": points,
             "connectivity": np.arange(n_cells * 4, dtype="<i8"),
             "offsets": np.arange(4, n_cells * 4 + 1, 4, dtype="<i8"),
             "types": np.full(n_cells, 9, dtype="u1"),
-            "pops_layout": np.asarray(layout_ordinals, dtype="<i4"),
-            "pops_level": np.asarray(levels, dtype="<i4"),
-            "pops_coverage": np.asarray(covered, dtype="u1"),
-            "pops_cell_volume": np.asarray(volumes, dtype="<f8"),
+            "pops_layout": layout_ordinals,
+            "pops_level": levels,
+            "pops_coverage": covered,
+            "pops_cell_volume": volumes,
         }
         datasets = {"fields": {}, "geometries": {}}
         for ordinal, geometry in enumerate(geometries):

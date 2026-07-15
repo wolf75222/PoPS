@@ -171,7 +171,7 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
        Jacobian at the arithmetic-mean interface state is eigendecomposed (|A| via the matrix-sign
        kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
        for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
-       still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
+       still provides max_wave_speed for the CFL dt). Emitted by the production backend.
     @p frame: a typed Cartesian frame exposing the ``x`` and ``y`` axes; ``None`` selects
        :class:`Cartesian2D`.
     @return the canonical :class:`pops.physics.Model`, ready to attach to a Problem."""

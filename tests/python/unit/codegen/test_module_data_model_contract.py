@@ -214,6 +214,35 @@ def test_composite_rate_infers_the_field_context_required_by_its_sources():
     assert module.operator_registry().get("explicit_rhs").capabilities["requires_fields"] is True
 
 
+def test_rate_retains_physical_flux_identity_when_routed_as_native_default():
+    module = model.Module("default-rate-flux")
+    state = module.state_space("U", ("rho",))
+    signature = (state,) >> model.Rate(state)
+    transport = module.operator(
+        "transport", signature=signature, kind="grid_operator", expr="transport")
+
+    rate = module.rate_operator(
+        "advance",
+        state_space=module.state_handle(state),
+        fluxes=(transport,),
+        default_flux=transport,
+    )
+
+    lowering = module.operator_registry().get(rate.name).lowering
+    assert lowering["fluxes"] == ["transport"]
+    assert lowering["default_flux"] == "transport"
+
+    other = module.operator(
+        "other", signature=signature, kind="grid_operator", expr="other")
+    with pytest.raises(ValueError, match="sole exact operator"):
+        module.rate_operator(
+            "ambiguous",
+            state_space=module.state_handle(state),
+            fluxes=(transport, other),
+            default_flux=transport,
+        )
+
+
 def test_module_composite_rate_rejects_string_and_foreign_references():
     module = model.Module("typed-rate")
     state = module.state_space("U", ("rho",))

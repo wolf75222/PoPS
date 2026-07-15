@@ -377,7 +377,7 @@ class NativeAMRMaterializationCapabilities:
         operation: TransferOperation,
         *,
         transfer: TransferCapabilities | None = None,
-    ) -> "NativeAMRMaterializationCapabilities":
+    ) -> NativeAMRMaterializationCapabilities:
         return cls(tuple(sorted(_native_capability_ids(materialization, operation))), transfer)
 
     def to_data(self) -> dict[str, Any]:
@@ -778,6 +778,11 @@ class ResolvedTransfer:
     def native_materialization(self) -> NativeAMRMaterializationDescriptor:
         return self._native_materialization
 
+    @property
+    def identity(self) -> Identity:
+        """Exact identity of this resolved route, including subjects and provider action."""
+        return make_identity("amr-resolved-transfer", self.to_data())
+
     def to_data(self) -> dict[str, Any]:
         return {
             "key": self.key.to_data(),
@@ -814,7 +819,7 @@ class ResolvedAMRTransfer:
         entries = tuple(
             sorted(
                 entries,
-                key=lambda entry: make_identity("amr-resolved-transfer", entry.to_data()).token,
+                key=lambda entry: entry.identity.token,
             )
         )
         covered = sorted(

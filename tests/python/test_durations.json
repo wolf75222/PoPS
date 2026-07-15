@@ -34,7 +34,6 @@
   "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": 60.0,
   "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py": 158.5,
   "tests/python/integration/mpi/test_amr_history_mpi.py": 60.0,
-  "tests/python/integration/mpi/test_compile_cache_backend.py": 166.8,
   "tests/python/integration/mpi/test_compile_module_trace.py": 120.0,
   "tests/python/integration/mpi/test_compile_stale_and_debug.py": 120.0,
   "tests/python/integration/mpi/test_dsl_compile_cache.py": 162.0,
@@ -84,6 +83,7 @@
   "tests/python/unit/codegen/test_compiled_model_boundary.py": 2.0,
   "tests/python/unit/codegen/test_compiled_parameter_projection.py": 2.0,
   "tests/python/unit/codegen/test_compiler_model_provider.py": 2.0,
+  "tests/python/unit/codegen/test_cpp_identifier.py": 0.1,
   "tests/python/unit/codegen/test_component_adapters.py": 2.0,
   "tests/python/unit/codegen/test_component_cache_authority.py": 2.0,
   "tests/python/unit/codegen/test_component_manifest_v2.py": 2.0,
@@ -105,7 +105,6 @@
   "tests/python/unit/codegen/test_dsl_coupled_source_conservation.py": 0.5,
   "tests/python/unit/codegen/test_dsl_cse.py": 2.0,
   "tests/python/unit/codegen/test_dsl_custom_closure.py": 2.0,
-  "tests/python/unit/codegen/test_dsl_dynamic.py": 1.9,
   "tests/python/unit/codegen/test_dsl_elliptic.py": 1.2,
   "tests/python/unit/codegen/test_dsl_moments.py": 0.6,
   "tests/python/unit/codegen/test_dsl_named_sources.py": 0.5,
@@ -380,7 +379,6 @@
       "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
       "tests/python/integration/mpi/test_amr_history_mpi.py",
-      "tests/python/integration/mpi/test_compile_cache_backend.py",
       "tests/python/integration/mpi/test_compile_module_trace.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
       "tests/python/integration/mpi/test_dsl_compile_cache.py",
@@ -418,6 +416,7 @@
       "tests/python/unit/codegen/test_compiled_model_boundary.py",
       "tests/python/unit/codegen/test_compiled_parameter_projection.py",
       "tests/python/unit/codegen/test_compiler_model_provider.py",
+      "tests/python/unit/codegen/test_cpp_identifier.py",
       "tests/python/unit/codegen/test_component_adapters.py",
       "tests/python/unit/codegen/test_component_cache_authority.py",
       "tests/python/unit/codegen/test_component_manifest_v2.py",
@@ -551,6 +550,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 356
+    "total_files": 355
   }
 }

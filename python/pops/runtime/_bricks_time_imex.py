@@ -109,7 +109,7 @@ class IMEX:
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. Explicit): the block is held
       while (macro_step + 1) % M != 0, then advances by an effective step M*dt at the end of the window. Between
       two catch-ups, its STALE state contributes to the system Poisson. Default 1 = every macro-step,
-      bit-identical. Backend 'aot': stride > 1 rejected (cf. Explicit).
+      bit-identical. Production models carry the cadence explicitly.
     - ``implicit_vars``: names of the conserved variables to treat IMPLICITLY in the source step;
       the others stay explicit (forward Euler). The mask is CARRIED BY THIS POLICY / the block,
       NOT by the model -> the SAME model is reused with different implicit treatments.
@@ -222,7 +222,7 @@ class IMEXRK:
 
     DISTINCT FAMILY from the private ``IMEX`` policy (kind="imexrk_ars222" != "imex"): its local
     backward-Euler default remains unchanged and bit-identical. SCOPE: CARTESIAN System only -- AMR, the
-    polar grid, compiled models (.so: prototype/aot/production) and the Strang/Schur splittings
+    polar grid, production compiled models and the Strang/Schur splittings
     REJECT it explicitly. Public authoring uses an explicit ``pops.Program`` or ``pops.lib.time``
     factory instead of selecting these engine policies.
 

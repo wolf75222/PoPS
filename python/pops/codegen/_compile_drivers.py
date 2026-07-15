@@ -22,8 +22,8 @@ from pops.codegen.toolchain import (
 )
 from pops.codegen.cache import (
     _identity_cache_so_path,
-    _backend_distinct_so_path,
-    _record_so_backend,
+    _artifact_distinct_so_path,
+    _record_artifact_identity,
     _registry_cache_key,
     _native_mpi_flags,
     _dsl_optflags,
@@ -143,16 +143,15 @@ def compile_model(model: Any, so_path: Any = None, include: Any = None, backend:
         if os.path.exists(so_path):
             verify_cached_artifact(
                 so_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
-            _record_so_backend(so_path, backend)
             return so_path
     else:
-        so_path = _backend_distinct_so_path(so_path, backend)
+        so_path = _artifact_distinct_so_path(so_path, spec_identity)
 
     out_path = compile_native(m, so_path, include, name=name, cxx=cxx, std=std,
                               target=target, hoist_reciprocals=hoist_reciprocals)
     write_artifact_sidecar(
         out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
-    _record_so_backend(out_path, backend)
+    _record_artifact_identity(out_path, spec_identity)
     return out_path
 
 
@@ -298,6 +297,8 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
             compiled.artifact_identity = artifact
             cenv.run_dumps(compiled)
             return compiled
+    else:
+        so_path = _artifact_distinct_so_path(so_path, spec_identity)
 
     # POPS_KEEP_GENERATED (sec.12.4, #47): keep the emitted .cpp next to the .so -- the same effect
     # debug=True has (debug=True already set keep_generated in cenv, explicit-arg-wins). When neither
@@ -354,6 +355,7 @@ def compile_problem(so_path: Any = None, *, model: Any = None, model_graph: Any 
                 % (exc, getattr(time, "name", "problem"), failed_src)) from exc
     binary, artifact = write_artifact_sidecar(
         so_path, semantic_identity=semantic, spec_identity=spec_identity)
+    _record_artifact_identity(so_path, spec_identity)
     cenv.log("compile_problem: compiled -> %s" % so_path)
     compiled = CompiledProblem(so_path, time, compile_authority, abi_key, cc, eff_std,
                                libraries=library_manifests, problem_hash=program_hash,

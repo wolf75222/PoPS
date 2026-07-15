@@ -40,7 +40,7 @@ from tests.python.support.requirements import (
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 
 fails = 0
@@ -126,8 +126,10 @@ try:
 
     # (2a) eval_rhs : production+SSPRK3 == natif add_block+SSPRK3 (le RESIDU spatial ne depend pas du
     # RK -- mais on verifie que les DEUX chemins instancient le meme bloc avant toute avance).
-    prod = build_prod("ssprk3"); prod.solve_fields()
-    ref = build_ref_ssprk3(); ref.solve_fields()
+    prod = build_prod("ssprk3")
+    prod.solve_fields()
+    ref = build_ref_ssprk3()
+    ref.solve_fields()
     R_prod = np.array(prod.eval_rhs("gas")).reshape(4, n, n)
     R_ref = np.array(ref.eval_rhs("gas")).reshape(4, n, n)
     chk(float(np.max(np.abs(R_prod))) > 1e-3, "(2a) residu non trivial")
@@ -135,10 +137,12 @@ try:
         "(2a) eval_rhs production+SSPRK3 BIT-IDENTIQUE au natif add_block+SSPRK3")
 
     # (2b) avance SSPRK3 : etat final bit-identique au bloc natif sur 12 pas a dt fixe.
-    prod = build_prod("ssprk3"); ref = build_ref_ssprk3()
+    prod = build_prod("ssprk3")
+    ref = build_ref_ssprk3()
     dt = 1e-3
     for _ in range(12):
-        prod.step(dt); ref.step(dt)
+        prod.step(dt)
+        ref.step(dt)
     Up = np.array(prod.get_state("gas")).reshape(4, n, n)
     Ur = np.array(ref.get_state("gas")).reshape(4, n, n)
     chk(np.isfinite(Up).all() and Up[0].min() > 0, "(2b) etat production+SSPRK3 physique (fini, rho>0)")
@@ -149,7 +153,8 @@ try:
     p2 = build_prod("explicit")  # "explicit" == SSPRK2 (defaut historique)
     p3 = build_prod("ssprk3")
     for _ in range(12):
-        p2.step(dt); p3.step(dt)
+        p2.step(dt)
+        p3.step(dt)
     U2 = np.array(p2.get_state("gas")).reshape(4, n, n)
     U3 = np.array(p3.get_state("gas")).reshape(4, n, n)
     diff = float(np.max(np.abs(U2 - U3)))

@@ -81,14 +81,15 @@ POPS_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 /// SINGLE SOURCE of the layout of the EXTRA aux fields (X-macro). This is the ONLY place
 /// listing {member, index} for the fields beyond the base contract.
 /// Python-C++ INVARIANT: the indices here must stay identical to AUX_CANONICAL in
-/// python/pops/dsl.py ({"phi":0,"grad_x":1,"grad_y":2,"B_z":3,"T_e":4}). Modifying one
+/// python/pops/physics/aux.py ({"phi":0,"grad_x":1,"grad_y":2,"B_z":3,"T_e":4}). Modifying one
 /// requires modifying the other at the same time. The duplication is inherent: Python does not
 /// read C++ headers. load_aux (device read, spatial_operator.hpp) AND the host marshaling
-/// (python/system.cpp) are GENERATED from it, so adding an extra aux field is done HERE and
+/// used by generated loader adapters are derived from it, so adding an extra aux field is done HERE and
 /// NOWHERE ELSE. This closes the historical gap (#51: T_e added to the struct + load_aux but
-/// forgotten in the JIT marshaling -> read as 0 silently). Each entry: X(member, index). The
+/// forgotten in the generated ABI adapter -> read as 0 silently). Each entry: X(member, index). The
 /// index MUST be >= 3 (components 0..2 are phi/grad_x/grad_y, wired in the base constructor) and
-/// follow the canonical layout shared with AUX_CANONICAL on the DSL side (python/pops/dsl.py),
+/// follow the canonical layout shared with AUX_CANONICAL on the authoring side
+/// (python/pops/physics/aux.py),
 /// inherent duplication: Python does not read C++ headers. To add a field:
 /// 1 line here (and the mirror line in AUX_CANONICAL). Pure preprocessor -> device-clean
 /// (nvcc/Kokkos), no C++26 reflection.

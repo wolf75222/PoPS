@@ -59,6 +59,31 @@ def test_pops_output_is_the_exact_writer_facade():
         <= set(output.__all__)
 
 
+def test_paraview_geometry_assembly_has_no_python_cell_loops():
+    tree = ast.parse((WRITERS / "paraview.py").read_text(), "paraview.py")
+    prepare = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "prepare"
+    )
+    cell_indices = {"i", "j", "row", "column", "cell_index"}
+    offenders = []
+    for node in ast.walk(prepare):
+        if not isinstance(node, ast.For):
+            continue
+        targets = {
+            name.id for name in ast.walk(node.target) if isinstance(name, ast.Name)
+        }
+        nested = any(
+            isinstance(descendant, ast.For)
+            for statement in node.body
+            for descendant in ast.walk(statement)
+        )
+        if targets & cell_indices or nested:
+            offenders.append(node.lineno)
+    assert not offenders, "ParaView geometry must stay NumPy-vectorized: %r" % offenders
+
+
 def test_production_sources_do_not_import_the_retired_writer_module():
     offenders = []
     for path in POPS.rglob("*.py"):

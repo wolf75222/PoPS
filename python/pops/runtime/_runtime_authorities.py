@@ -591,7 +591,15 @@ def install_runtime_authorities(engine: Any, install_plan: Any) -> None:
         [int(row["temporal_ratio"]["denominator"]) for row in relations],
         [str(row["remainder_policy"]) for row in relations],
     )
-    engine._amr_execution_authority = MappingProxyType(dict(first))
+    installed_execution = dict(first)
+    installed_execution["relations"] = [
+        {
+            **row,
+            "temporal_ratio": dict(row["temporal_ratio"]),
+        }
+        for row in relations
+    ]
+    engine._amr_execution_authority = MappingProxyType(installed_execution)
 
     if install_plan.bootstrap_plan is not None:
         from pops.runtime._runtime_mesh_lowering import flow_bootstrap_tagging

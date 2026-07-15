@@ -283,7 +283,7 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: one native transfer route requires one isotropic ratio"
                 )
             self._s._register_bootstrap_transfer_route(
-                entry.key.identity.token,
+                entry.identity.token,
                 [row.subject.qualified_id for row in entry.requirements],
                 native.provider_qualified_id,
                 key["space"]["name"],

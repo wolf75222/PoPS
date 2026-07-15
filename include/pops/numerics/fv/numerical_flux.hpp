@@ -10,6 +10,7 @@
 
 #include <pops/numerics/fv/flux_interfaces.hpp>
 
+#include <cmath>
 #include <concepts>
 
 namespace pops {
@@ -214,11 +215,212 @@ struct RoeFlux {
   }
 };
 
-/// Explicit Euler presets remain distinct route types while sharing the exact generic algorithms.
-/// There is one implementation, not two drifting numerical branches.
-struct EulerHLLCFlux2D : HLLCFlux {};
-struct EulerRoeFlux2D : RoeFlux {};
-
 inline constexpr Real kRoeEntropyFixFraction = Real(0.1);
+
+/// Narrow contract for the explicit canonical Euler presets. Unlike the generic HLLC/Roe routes,
+/// these policies own the fixed (rho, m_x, m_y, E) layout and therefore need no contact/star-state
+/// or Roe-dissipation hook from the physical model.
+template <class Physical>
+concept EulerPhysicalFlux2D =
+    PhysicalFlux<Physical> && (Physical::n_vars == 4) &&
+    requires(const Physical& physical, const typename Physical::State& state) {
+      { physical.pressure(state) } -> std::convertible_to<Real>;
+    };
+
+template <class Physical>
+concept EulerHLLCPhysicalFlux2D =
+    EulerPhysicalFlux2D<Physical> &&
+    requires(const Physical& physical, const typename Physical::Trace& trace,
+             const FaceContext& face, Real& lower, Real& upper) {
+      physical.signed_wave_speeds(trace, face, lower, upper);
+    };
+
+/// Explicit canonical 2D Euler HLLC route. The physical model provides flux, pressure and signed
+/// outer waves; this policy supplies Toro's contact speed and star states from the fixed Euler
+/// layout. It is deliberately independent of HasHLLCStructure, which belongs to generic HLLC.
+struct EulerHLLCFlux2D {
+  template <EulerHLLCPhysicalFlux2D Physical>
+  POPS_HD FluxEvaluation<typename Physical::State> operator()(
+      const Physical& physical, const typename Physical::Trace& left,
+      const typename Physical::Trace& right, const FaceContext& face) const {
+    if (face.orientation == FaceOrientation::kNegative)
+      return detail::canonical_evaluation(*this, physical, left, right, face);
+
+    const auto& UL = left.state;
+    const auto& UR = right.state;
+    const int normal = face.axis == 0 ? 1 : 2;
+    const int tangent = face.axis == 0 ? 2 : 1;
+    const Real rho_left = UL[0], rho_right = UR[0];
+    const Real velocity_left = UL[normal] / rho_left;
+    const Real velocity_right = UR[normal] / rho_right;
+    const Real pressure_left = physical.pressure(UL);
+    const Real pressure_right = physical.pressure(UR);
+    Real speed_left, speed_right;
+    hll_speeds(physical, left, right, face, speed_left, speed_right);
+    const auto flux_left = physical.evaluate(left, face);
+    const auto flux_right = physical.evaluate(right, face);
+    const auto bound = detail::max_bound<typename Physical::State>(
+        physical.stability(left, face), physical.stability(right, face));
+    if (speed_left >= Real(0))
+      return FluxEvaluation<typename Physical::State>::ok(flux_left.value, bound);
+    if (speed_right <= Real(0))
+      return FluxEvaluation<typename Physical::State>::ok(flux_right.value, bound);
+
+    const Real contact =
+        (pressure_right - pressure_left +
+         rho_left * velocity_left * (speed_left - velocity_left) -
+         rho_right * velocity_right * (speed_right - velocity_right)) /
+        (rho_left * (speed_left - velocity_left) -
+         rho_right * (speed_right - velocity_right));
+    typename Physical::State density{};
+    if (contact >= Real(0)) {
+      const Real factor =
+          rho_left * (speed_left - velocity_left) / (speed_left - contact);
+      typename Physical::State star{};
+      star[0] = factor;
+      star[normal] = factor * contact;
+      star[tangent] = factor * (UL[tangent] / rho_left);
+      star[3] =
+          factor * (UL[3] / rho_left +
+                    (contact - velocity_left) *
+                        (contact + pressure_left /
+                                       (rho_left * (speed_left - velocity_left))));
+      for (int component = 0; component < 4; ++component)
+        density[component] =
+            flux_left.value[component] +
+            speed_left * (star[component] - UL[component]);
+    } else {
+      const Real factor =
+          rho_right * (speed_right - velocity_right) / (speed_right - contact);
+      typename Physical::State star{};
+      star[0] = factor;
+      star[normal] = factor * contact;
+      star[tangent] = factor * (UR[tangent] / rho_right);
+      star[3] =
+          factor * (UR[3] / rho_right +
+                    (contact - velocity_right) *
+                        (contact + pressure_right /
+                                       (rho_right * (speed_right - velocity_right))));
+      for (int component = 0; component < 4; ++component)
+        density[component] =
+            flux_right.value[component] +
+            speed_right * (star[component] - UR[component]);
+    }
+    return FluxEvaluation<typename Physical::State>::ok(density, bound);
+  }
+};
+
+/// Explicit canonical ideal-gas 2D Euler Roe route. The complete Roe average, eigenwave
+/// decomposition and Harten entropy fix live here; generic Roe remains hook-driven.
+struct EulerRoeFlux2D {
+  template <EulerPhysicalFlux2D Physical>
+  POPS_HD FluxEvaluation<typename Physical::State> operator()(
+      const Physical& physical, const typename Physical::Trace& left,
+      const typename Physical::Trace& right, const FaceContext& face) const {
+    if (face.orientation == FaceOrientation::kNegative)
+      return detail::canonical_evaluation(*this, physical, left, right, face);
+
+    const auto& UL = left.state;
+    const auto& UR = right.state;
+    const int normal_component = face.axis == 0 ? 1 : 2;
+    const int tangent_component = face.axis == 0 ? 2 : 1;
+    const Real rho_left = UL[0], rho_right = UR[0];
+    const Real normal_left = UL[normal_component] / rho_left;
+    const Real normal_right = UR[normal_component] / rho_right;
+    const Real tangent_left = UL[tangent_component] / rho_left;
+    const Real tangent_right = UR[tangent_component] / rho_right;
+    const Real pressure_left = physical.pressure(UL);
+    const Real pressure_right = physical.pressure(UR);
+    const Real enthalpy_left = (UL[3] + pressure_left) / rho_left;
+    const Real enthalpy_right = (UR[3] + pressure_right) / rho_right;
+
+    const Real sqrt_left = std::sqrt(rho_left);
+    const Real sqrt_right = std::sqrt(rho_right);
+    const Real denominator = sqrt_left + sqrt_right;
+    const Real normal =
+        (sqrt_left * normal_left + sqrt_right * normal_right) / denominator;
+    const Real tangent_velocity =
+        (sqrt_left * tangent_left + sqrt_right * tangent_right) / denominator;
+    const Real enthalpy =
+        (sqrt_left * enthalpy_left + sqrt_right * enthalpy_right) / denominator;
+    const Real roe_density = sqrt_left * sqrt_right;
+    const Real velocity_squared =
+        normal * normal + tangent_velocity * tangent_velocity;
+    const Real gamma_minus_one =
+        pressure_left /
+        (UL[3] - Real(0.5) * rho_left *
+                     (normal_left * normal_left + tangent_left * tangent_left));
+    const Real sound_squared =
+        gamma_minus_one * (enthalpy - Real(0.5) * velocity_squared);
+    const Real sound = std::sqrt(sound_squared);
+
+    const Real density_jump = rho_right - rho_left;
+    const Real pressure_jump = pressure_right - pressure_left;
+    const Real normal_jump = normal_right - normal_left;
+    const Real tangent_jump = tangent_right - tangent_left;
+    const Real amplitude_left =
+        (pressure_jump - roe_density * sound * normal_jump) /
+        (Real(2) * sound_squared);
+    const Real amplitude_entropy = density_jump - pressure_jump / sound_squared;
+    const Real amplitude_shear = roe_density * tangent_jump;
+    const Real amplitude_right =
+        (pressure_jump + roe_density * sound * normal_jump) /
+        (Real(2) * sound_squared);
+
+    const Real epsilon = kRoeEntropyFixFraction * sound;
+    const Real eigenvalue_left = normal - sound;
+    const Real eigenvalue_right = normal + sound;
+    const Real absolute_left = eigenvalue_left < Real(0) ? -eigenvalue_left : eigenvalue_left;
+    const Real absolute_right =
+        eigenvalue_right < Real(0) ? -eigenvalue_right : eigenvalue_right;
+    const Real fixed_left =
+        absolute_left < epsilon
+            ? Real(0.5) * (eigenvalue_left * eigenvalue_left / epsilon + epsilon)
+            : absolute_left;
+    const Real fixed_entropy = normal < Real(0) ? -normal : normal;
+    const Real fixed_right =
+        absolute_right < epsilon
+            ? Real(0.5) * (eigenvalue_right * eigenvalue_right / epsilon + epsilon)
+            : absolute_right;
+
+    const Real dissipation_density =
+        fixed_left * amplitude_left + fixed_entropy * amplitude_entropy +
+        fixed_right * amplitude_right;
+    const Real dissipation_normal =
+        fixed_left * amplitude_left * (normal - sound) +
+        fixed_entropy * amplitude_entropy * normal +
+        fixed_right * amplitude_right * (normal + sound);
+    const Real dissipation_tangent =
+        fixed_left * amplitude_left * tangent_velocity +
+        fixed_entropy *
+            (amplitude_entropy * tangent_velocity + amplitude_shear) +
+        fixed_right * amplitude_right * tangent_velocity;
+    const Real dissipation_energy =
+        fixed_left * amplitude_left * (enthalpy - normal * sound) +
+        fixed_entropy *
+            (amplitude_entropy * Real(0.5) * velocity_squared +
+             amplitude_shear * tangent_velocity) +
+        fixed_right * amplitude_right * (enthalpy + normal * sound);
+
+    const auto flux_left = physical.evaluate(left, face);
+    const auto flux_right = physical.evaluate(right, face);
+    const auto bound = detail::max_bound<typename Physical::State>(
+        physical.stability(left, face), physical.stability(right, face));
+    typename Physical::State density{};
+    density[0] = Real(0.5) * (flux_left.value[0] + flux_right.value[0]) -
+                 Real(0.5) * dissipation_density;
+    density[normal_component] =
+        Real(0.5) *
+            (flux_left.value[normal_component] + flux_right.value[normal_component]) -
+        Real(0.5) * dissipation_normal;
+    density[tangent_component] =
+        Real(0.5) *
+            (flux_left.value[tangent_component] + flux_right.value[tangent_component]) -
+        Real(0.5) * dissipation_tangent;
+    density[3] = Real(0.5) * (flux_left.value[3] + flux_right.value[3]) -
+                 Real(0.5) * dissipation_energy;
+    return FluxEvaluation<typename Physical::State>::ok(density, bound);
+  }
+};
 
 }  // namespace pops

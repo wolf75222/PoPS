@@ -22,19 +22,19 @@ from pops.physics import Model
 from pops.runtime._system import System
 from tests.python.support.requirements import (
     default_cxx,
-    missing_aot_requirement,
+    missing_native_compile_requirement,
     repo_include,
 )
 
 
 INCLUDE = repo_include()
 
-pytestmark = (
+pytestmark = [
     pytest.mark.compiler,
     pytest.mark.kokkos,
     pytest.mark.native_loader,
     pytest.mark.regression,
-)
+]
 
 
 def _frame(name: str):
@@ -151,7 +151,7 @@ def _native_rhs(compiled, state: np.ndarray) -> np.ndarray:
 def test_compiled_jacobian_speeds_cover_eigensolve_blocks_fd_and_directions(
     tmp_path: Path,
 ) -> None:
-    reason = missing_aot_requirement(INCLUDE, default_cxx())
+    reason = missing_native_compile_requirement(INCLUDE, default_cxx())
     if reason:
         pytest.skip(reason)
 

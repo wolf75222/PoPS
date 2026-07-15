@@ -5,7 +5,7 @@
     "ctest_parallel_jobs": 4,
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 176,
+    "target_count": 175,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -91,7 +91,6 @@
   "test_diffusion": 2.98,
   "test_disc_domain_mask": 0.15,
   "test_dispatch_tags": 0.01,
-  "test_dynamic_model": 0.01,
   "test_eb_transport": 0.76,
   "test_elliptic_composite_rhs": 0.02,
   "test_elliptic_interface": 0.02,

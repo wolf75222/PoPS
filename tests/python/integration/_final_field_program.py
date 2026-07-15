@@ -151,6 +151,7 @@ def resolve_periodic_field_program(
     n: int,
     regrid_every: int = 2,
     field_solver: Any = None,
+    initial_profile: Any = None,
     components: tuple[Any, ...] = (),
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
@@ -204,7 +205,10 @@ def resolve_periodic_field_program(
         case.initials.add(
             InitialCondition(
                 state=state_instance,
-                value=Constant((1.0,) + (0.0,) * (len(state.components) - 1)),
+                value=(
+                    Constant((1.0,) + (0.0,) * (len(state.components) - 1))
+                    if initial_profile is None else initial_profile
+                ),
                 projection=ConservativeCellAverage(),
             )
         )

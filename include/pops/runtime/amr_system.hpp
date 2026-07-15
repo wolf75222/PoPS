@@ -45,7 +45,7 @@
 /// implicit source; capstone vii) with union-of-tags regrid (multi-block + regrid_every > 0 is NOW
 /// SUPPORTED: the mesh re-grids from the union of the tags; regrid_every == 0 = frozen hierarchy). Multirate (substeps/stride), inter-species
 /// coupled sources: already wired. Multiple COMPILED blocks (add_compiled_model) and a MIX of
-/// compiled + native: wired (capstone v, multi-block production DSL). Union regrid: later PR.
+/// compiled + native: wired (capstone v, multi-block production DSL).
 ///
 /// @note Resolved explicit bootstrap supports N ratio-2 levels; the legacy implicit config remains
 /// two-level. Temporal treatment is explicit or IMEX per block.
@@ -935,6 +935,7 @@ class AmrSystem {
   /// @}
 
   int nx() const;
+  int ny() const;  ///< Square AMR domain parity with System::ny().
   /// Generated Program shared libraries read the accepted clock through the flat loader ABI.
   POPS_EXPORT double time() const;
   /// MACRO-STEP counter (0-indexed; incremented by step / advance / step_cfl), parity with

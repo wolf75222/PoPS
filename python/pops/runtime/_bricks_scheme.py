@@ -348,9 +348,7 @@ class Explicit:
                  system Poisson (and to the coupled sources) with its STALE state -- its last advanced
                  density/charge, frozen until the next catch-up. step_cfl honors the cadence: the stable
                  step includes the stride factor (dt <= cfl*h*substeps / (stride*w)).
-                 NB: the 'aot' backend (System.add_equation on a CompiledModel backend='aot') does NOT
-                 carry the cadence and REJECTS stride > 1 (explicit path, no silent ignore);
-                 add_block (native) and backend='production' support the stride.
+                 Production compiled models and native blocks both carry this cadence explicitly.
     method     : "ssprk2" (default, Shu-Osher 2-stage order 2) | "ssprk3" (3-stage order 3,
                  less dissipative, to pair with weno5) | "euler" (ForwardEuler, order 1: fidelity
                  to first-order references, validation only). Shortcut ssprk3=True.

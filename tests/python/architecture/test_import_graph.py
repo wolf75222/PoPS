@@ -50,7 +50,6 @@ ALLOWED = {
     "projection": set(),
     "params": set(),
     "linalg": set(),
-    "experimental": set(),
     "frames": {"identity"},
     "domain": {"frames", "identity"},
     "model": {"_ir", "identity", "params"},

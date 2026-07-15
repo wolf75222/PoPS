@@ -41,9 +41,9 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.physics._facade import Model
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import missing_native_compile_requirement, repo_include
 
 fails = 0
-from tests.python.support.requirements import missing_aot_requirement, repo_include
 INCLUDE = repo_include()
 
 A, B = 1.5, 0.7    # vitesses des ondes en x / y (constantes, asymetriques pour pieger un swap d'axe)
@@ -65,7 +65,8 @@ def chk(cond, label):
 
 def err_msg(fn):
     try:
-        fn(); return ""
+        fn()
+        return ""
     except Exception as ex:  # noqa: BLE001
         return str(ex)
 
@@ -144,7 +145,7 @@ chk("set_wave_speeds" in msg and "set_eigenvalues" in msg,
     f"ni eigenvalues ni wave_speeds -> emission refusee, remede nomme ({msg[:60]}...)")
 
 cxx = _default_cxx(None)
-missing = missing_aot_requirement(INCLUDE, cxx)
+missing = missing_native_compile_requirement(INCLUDE, cxx)
 if missing:
     print(f"{missing} : tests (2)-(4)/(6) sautes")
     sys.exit(1 if fails else 0)

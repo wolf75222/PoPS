@@ -346,7 +346,6 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_mms_vr
   test_polar_fluid_transport
   test_polar_lorentz_source
-  test_dynamic_model
   test_block_builder
   test_block_inverse
   test_weno5_ssprk3

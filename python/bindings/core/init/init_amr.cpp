@@ -761,6 +761,7 @@ void bind_amr_stepping(py::class_<AmrSystem>& cls) {
 // Clock + compiled-Program install/introspection + runtime freeze lifecycle.
 void bind_amr_program(py::class_<AmrSystem>& cls) {
   cls.def("nx", &AmrSystem::nx)
+      .def("ny", &AmrSystem::ny)
       .def("time", &AmrSystem::time)
       // AMR clock (IO v1, System parity): macro-step counter + restoration (t, macro_step) ->
       // the regrid/stride cadence resumes exactly after a set_clock. Prerequisite PR-IO-3.

@@ -175,9 +175,14 @@ class _ProgramCall(_ProgramBase):
             return self._rhs_primitive(name=name, state=args[0], fields=fields, flux=True,
                                        sources=[], fluxes=fluxes)
         low = op.lowering
+        # A multi-state Module retains the exact physical grid-operator identity in ``fluxes`` so
+        # model lowering can install the right formula.  When that sole operator is explicitly the
+        # native default, its Program evaluation must use rhs_into (the configured FV/Riemann route),
+        # not the named centered-divergence kernel.
+        program_fluxes = None if low.get("default_flux") is not None else low.get("fluxes")
         return self._rhs_primitive(name=name, state=args[0], fields=fields,
                                    flux=low.get("flux", True), sources=low.get("sources"),
-                                   fluxes=low.get("fluxes"))
+                                   fluxes=program_fluxes)
 
     def _lower_local_linear_operator(self, op: Any, _operator_handle: Any,
                                      operator_name: Any, args: Any, name: Any) -> Any:

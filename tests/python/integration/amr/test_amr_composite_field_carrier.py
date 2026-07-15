@@ -6,11 +6,14 @@ through public validation/resolution.  Only the final test is an end-to-end
 """
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
 import pops
 import pops.lib.time as libtime
+from pops.lib.initial import Gaussian
 from pops.runtime._system import AmrSystem
 from pops.solvers.elliptic import GeometricMG
 from pops.solvers.options import CompositeFAC
@@ -22,7 +25,7 @@ from tests.python.integration._final_field_program import (
 )
 
 
-pytestmark = (pytest.mark.compiler, pytest.mark.native_loader, pytest.mark.kokkos)
+pytestmark = [pytest.mark.compiler, pytest.mark.native_loader, pytest.mark.kokkos]
 
 _DT = 1.0e-4
 
@@ -37,13 +40,15 @@ _FAC_DEFAULTS = {
     "verbose": False,
 }
 _FAC_CONFIGURED = {
-    "max_iters": 11,
-    "fine_sweeps": 17,
+    # Keep every value observably distinct from the native defaults while retaining a production-
+    # grade iteration budget for the refined Gaussian solve exercised by the root lifecycle below.
+    "max_iters": 37,
+    "fine_sweeps": 401,
     "rel_tol": 2.0e-7,
     "abs_tol": 3.0e-12,
     "coarse_rel_tol": 4.0e-9,
     "coarse_abs_tol": 5.0e-14,
-    "coarse_cycles": 19,
+    "coarse_cycles": 101,
     "verbose": True,
 }
 
@@ -57,6 +62,19 @@ def _field_program(state, rate, field):
 
 def _resolve(solver: GeometricMG):
     model = scalar_advection_field_model("native-composite-fac-carrier-model")
+    x_axis, y_axis = model.frame.axes
+    inverse_width = 80.0
+    root_width = math.sqrt(inverse_width)
+
+    def gaussian_integral(center: float) -> float:
+        return math.sqrt(math.pi) / (2.0 * root_width) * (
+            math.erf(root_width * (1.0 - center))
+            + math.erf(root_width * center)
+        )
+
+    # Periodic Poisson with a constant nullspace requires a zero-mean RHS.  The native Gaussian
+    # route stores exact cell averages, so cancel its analytic integral over this unit square.
+    background = -gaussian_integral(0.35) * gaussian_integral(0.55)
     return resolve_periodic_field_program(
         model,
         _field_program,
@@ -66,6 +84,13 @@ def _resolve(solver: GeometricMG):
         n=16,
         regrid_every=1,
         field_solver=solver,
+        initial_profile=Gaussian(
+            frame=model.frame,
+            center={x_axis: 0.35, y_axis: 0.55},
+            background=background,
+            amplitude=1.0,
+            inverse_width=inverse_width,
+        ),
     )
 
 
@@ -90,7 +115,10 @@ def _assert_options(actual, expected) -> None:
         if isinstance(value, bool):
             assert actual[name] is value
         else:
-            assert actual[name] == pytest.approx(value)
+            observed = actual[name]
+            if isinstance(observed, dict) and set(observed) == {"binary64"}:
+                observed = float.fromhex(observed["binary64"])
+            assert observed == pytest.approx(value)
 
 
 @pytest.mark.parametrize(
@@ -149,14 +177,7 @@ def test_fac_overrides_propagate_through_a_refined_final_root_lifecycle(
     resolved = _resolve(solver)
     artifact = pops.compile(resolved)
 
-    n = 16
-    coordinate = (np.arange(n, dtype=np.float64) + 0.5) / n
-    x, y = np.meshgrid(coordinate, coordinate, indexing="xy")
-    density = 0.1 + np.exp(-80.0 * ((x - 0.35) ** 2 + (y - 0.55) ** 2))
-    simulation = pops.bind(
-        artifact,
-        initial_state={"plasma": density[None, :, :]},
-    )
+    simulation = pops.bind(artifact)
     report = pops.run(simulation, t_end=2.0 * _DT, max_steps=2)
 
     assert report.accepted_steps == 2

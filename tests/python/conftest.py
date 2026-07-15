@@ -320,14 +320,12 @@ def _process_skip_reason(output: str) -> str | None:
 
 
 def _missing_process_requirement(output: str) -> str | None:
-    if "compile_aot: PoPS is Kokkos-only" in output:
-        return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "PoPS is Kokkos-only" in output and "POPS_KOKKOS_ROOT" in output:
         return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "PoPS is Kokkos-only" in output and "Kokkos_Core.hpp" in output:
         return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "Kokkos introuvable" in output:
-        return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
+        return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "DO NOT MATCH those with which the _pops module was built" in output:
         return "headers do not match the built _pops module (stale build/overlay)"
     return None

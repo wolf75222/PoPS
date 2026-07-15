@@ -63,13 +63,12 @@ def test_riemann_surface_matches_dispatch():
 
 def test_backends_dsl_flags_match_backend_caps():
     caps_b = capabilities()["backends_dsl"]
-    for backend in ("prototype", "aot", "production"):
-        ref = _BACKEND_CAPS[backend]
-        got = caps_b[backend]
-        assert bool(got["mpi"]) == bool(ref["mpi"]), \
-            "%s: capabilities() mpi=%r disagrees with _BACKEND_CAPS mpi=%r" % (backend, got["mpi"], ref["mpi"])
-        assert bool(got["amr"]) == bool(ref["amr"]), \
-            "%s: capabilities() amr=%r disagrees with _BACKEND_CAPS amr=%r" % (backend, got["amr"], ref["amr"])
+    assert set(_BACKEND_CAPS) == {"production"}
+    assert set(caps_b) == {"default", "production"}
+    ref = _BACKEND_CAPS["production"]
+    got = caps_b["production"]
+    assert bool(got["mpi"]) == bool(ref["mpi"])
+    assert bool(got["amr"]) == bool(ref["amr"])
 
 
 def test_polar_stability_bounds_advertised_wired():
@@ -162,10 +161,9 @@ if __name__ == "__main__":
     test_riemann_surface_matches_dispatch()
     test_backends_dsl_flags_match_backend_caps()
     test_polar_stability_bounds_advertised_wired()
-    test_amr_schur_advertised_implemented()
     test_dimension_invariant_2d()
     test_runtime_environment_and_precision_facts()
     test_regrid_variable_selector_advertised()
     test_aux_named_surface_and_limit_parity()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "
-          "AMR Schur, 2D dimension, regrid selector, aux named surface + limit parity)")
+          "2D dimension, regrid selector, aux named surface + limit parity)")

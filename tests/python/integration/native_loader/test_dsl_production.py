@@ -25,7 +25,7 @@ import pops.runtime._engine_descriptors as engine
 from test_dsl_coupled import build_euler_poisson, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 
 

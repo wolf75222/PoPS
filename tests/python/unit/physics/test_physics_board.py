@@ -7,6 +7,7 @@ compiled time-program run, so they pass without a freshly built _pops beyond wha
 ``import pops`` requires.
 """
 from pops.params import ConstParam
+import numpy as np
 import pytest
 
 from pops import model as _model
@@ -111,6 +112,15 @@ def test_flux_value_uses_axis_identity_not_frame_iteration_order():
 
     assert m.flux_value((3.0,), {}, X_AXIS) == [3.0]
     assert m.flux_value((3.0,), {}, Y_AXIS) == [6.0]
+    assert m.flux_value(3.0, {}, X_AXIS) == [3.0]
+
+    field = np.arange(6.0).reshape(2, 3)
+    np.testing.assert_array_equal(
+        m.flux_value((field,), {}, Y_AXIS), (2.0 * field)[None, ...])
+    with pytest.raises(ValueError, match="has 2 component.*requires 1"):
+        m.flux_value((3.0, 4.0), {}, X_AXIS)
+    with pytest.raises(TypeError, match="numeric component sequence"):
+        m.flux_value(("not-a-number",), {}, X_AXIS)
 
 
 def test_board_model_lowers_to_operator_first_ir():

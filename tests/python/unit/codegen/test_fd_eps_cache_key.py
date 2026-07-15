@@ -2,7 +2,7 @@
 
 Two families:
   * wave_speeds_from_jacobian(eig='fd', fd_eps=...): the emitted C++ literal changes AND model_hash
-    changes; the default (fd_eps=None) is byte-identical + hash-stable vs the pre-617 emission.
+    changes; every Jacobian column uses a central difference scaled from its own state component.
   * solve_local_nonlinear(fd_eps=...): the emitted Newton kernel literal changes AND the program IR
     hash changes; the default is byte-identical.
 
@@ -26,10 +26,16 @@ def _fd_model(fd_eps=None):
     return m
 
 
-def test_wave_speeds_default_fd_eps_emits_historical_literal():
+def test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step():
     src = _fd_model()._m.emit_cpp_brick()
-    # The default keeps the exact historical literal (1e-6 relative + 1e-30 floor), byte-identical.
-    assert "pops::Real(1e-6) * (U[0] < 0 ? -U[0] : U[0]) + pops::Real(1e-30)" in src
+    # The default keeps the public relative factor, scales every column independently and preserves
+    # a meaningful perturbation when a conservative component is exactly zero.
+    assert ("pops::Real(1e-6) * std::fmax(std::fabs(U[k_]), pops::Real(1))"
+            in src)
+    assert "(U[0] < 0 ? -U[0] : U[0])" not in src
+    assert "Up_[k_] += eps_;" in src
+    assert "Um_[k_] -= eps_;" in src
+    assert "(Fp_[i_] - Fm_[i_]) / (pops::Real(2) * eps_)" in src
 
 
 def test_wave_speeds_fd_eps_override_changes_literal_and_hash():
@@ -45,8 +51,8 @@ def test_wave_speeds_fd_eps_override_changes_literal_and_hash():
 
 
 def test_wave_speeds_default_fd_eps_hash_is_stable():
-    # None -> the ws_jac hash part is byte-identical to a model with no fd_eps segment (no spurious
-    # cache miss for existing models). Two default models hash identically and deterministically.
+    # The central per-column algorithm version is deterministic. It invalidates artifacts from the
+    # former U[0]-scaled forward-difference implementation; corrected models still share a cache key.
     assert model_hash(_fd_model()._m) == model_hash(_fd_model()._m)
 
 
@@ -130,7 +136,7 @@ def test_eig_knobs_validated_and_carried():
 
 
 def main():
-    test_wave_speeds_default_fd_eps_emits_historical_literal()
+    test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step()
     test_wave_speeds_fd_eps_override_changes_literal_and_hash()
     test_wave_speeds_default_fd_eps_hash_is_stable()
     test_wave_speeds_fd_eps_rejected_on_numeric_path()

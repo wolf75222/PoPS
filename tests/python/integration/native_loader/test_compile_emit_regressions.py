@@ -9,6 +9,8 @@ from pops.physics._facade import Model
 def _runtime_elliptic_model() -> Model:
     model = Model("runtime_elliptic")
     (rho,) = model.conservative_vars("rho")
+    model.primitive_vars(rho=rho)
+    model.conservative_from([rho])
     scale = model.value(model.param(RuntimeParam("scale", default=2.0)))
     model.flux(x=[rho], y=[rho])
     model.eigenvalues(x=[rho], y=[rho])

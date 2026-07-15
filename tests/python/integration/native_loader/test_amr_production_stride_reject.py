@@ -28,7 +28,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 
 fails = 0

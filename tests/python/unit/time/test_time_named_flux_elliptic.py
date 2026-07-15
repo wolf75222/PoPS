@@ -85,6 +85,31 @@ def _program(module, state, rate, *, name: str):
     return case, program
 
 
+def test_default_flux_route_does_not_reclassify_named_flux_operators() -> None:
+    module, state, default_flux, whole_rate, _ = _named_flux_module()
+    default_rate = module.rate_operator(
+        "default_rate",
+        state_space=state,
+        fluxes=(default_flux,),
+        default_flux=default_flux,
+    )
+    _, default_program = _program(module, state, default_rate, name="default-route")
+    _, named_program = _program(module, state, whole_rate, name="named-route")
+
+    default_rhs = [node for node in default_program.ir_nodes() if node["op"] == "rhs"]
+    named_rhs = [node for node in named_program.ir_nodes() if node["op"] == "rhs"]
+    assert len(default_rhs) == len(named_rhs) == 1
+    assert default_rhs[0]["attrs"]["fluxes"] is None
+    assert named_rhs[0]["attrs"]["fluxes"] == ["whole"]
+
+    lowered = module.to_dsl()
+    default_source = emit_cpp_program(default_program, model=lowered)
+    named_source = emit_cpp_program(named_program, model=lowered)
+    assert "ctx.neg_div_flux_default_into(0," in default_source
+    assert "ctx.neg_div_flux_into(" not in default_source
+    assert "ctx.neg_div_flux_into(" in named_source
+
+
 def test_named_flux_sum_lowers_to_one_divergence_kernel() -> None:
     module, state, _, whole_rate, split_rate = _named_flux_module()
     _, whole_program = _program(module, state, whole_rate, name="whole-flux")

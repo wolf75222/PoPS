@@ -21,7 +21,7 @@ from pops.physics import Density, Energy, Model, Momentum
 from pops.runtime._system import System
 from tests.python.support.requirements import (
     default_cxx,
-    missing_aot_requirement,
+    missing_native_compile_requirement,
     repo_include,
 )
 
@@ -29,12 +29,12 @@ from tests.python.support.requirements import (
 INCLUDE = repo_include()
 GAMMA = 1.4
 
-pytestmark = (
+pytestmark = [
     pytest.mark.compiler,
     pytest.mark.kokkos,
     pytest.mark.native_loader,
     pytest.mark.regression,
-)
+]
 
 
 def _frame(name: str):
@@ -50,7 +50,7 @@ def _compile_native(model: Model, path: Path):
 
 
 def _require_native_toolchain() -> None:
-    reason = missing_aot_requirement(INCLUDE, default_cxx())
+    reason = missing_native_compile_requirement(INCLUDE, default_cxx())
     if reason:
         pytest.skip(reason)
 
@@ -146,6 +146,7 @@ def test_board_roe_runs_euler_and_preserves_stationary_shear(tmp_path: Path) -> 
 
     euler = _compile_native(_euler("final_euler_roe"), tmp_path / "euler_roe.so")
     assert euler.has_roe
+    assert not euler.has_hllc  # compiling Roe-only must not require the unrelated HLLC capability
     rho = _smooth_density(n)
     u = np.full_like(rho, 0.1)
     v = np.zeros_like(rho)
@@ -167,6 +168,7 @@ def test_board_roe_runs_euler_and_preserves_stationary_shear(tmp_path: Path) -> 
     isothermal = _compile_native(
         _isothermal("final_isothermal_roe"), tmp_path / "isothermal_roe.so")
     assert isothermal.has_roe
+    assert not isothermal.has_hllc
     points = (np.arange(n) + 0.5) / n
     transverse_velocity = np.tile(0.3 * np.sin(2.0 * np.pi * points), (n, 1))
     shear = np.stack((np.ones((n, n)), np.zeros((n, n)), transverse_velocity))

@@ -133,10 +133,12 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
         raise TypeError("native field solver configuration must be a mapping")
     result = copy.deepcopy(dict(row))
     expected = {
-        "schema_version", "provider_slot", "solver", "hierarchy", "mg", "fac",
+        "schema_version", "provider_slot", "plan_identity", "solver", "hierarchy", "mg", "fac",
     }
     if set(result) != expected or result["schema_version"] != 1 \
-            or result["provider_slot"] != slot:
+            or result["provider_slot"] != slot \
+            or not isinstance(result["plan_identity"], str) \
+            or not result["plan_identity"]:
         raise TypeError("native field solver configuration has an invalid schema")
     if not isinstance(result["solver"], str) or not isinstance(result["hierarchy"], str):
         raise TypeError("native field solver configuration requires typed solver identities")
@@ -154,7 +156,11 @@ def _field_solver_configuration(executor: Any, slot: str) -> dict[str, Any] | No
         if not isinstance(result[name], Mapping) or set(result[name]) != keys:
             raise TypeError("native field solver configuration %s has an invalid schema" % name)
         result[name] = dict(result[name])
-    return result
+    # RunReport payloads are semantic evidence and therefore never retain platform binary floats.
+    # Preserve the native POD values exactly as canonical binary64 spellings before freeze_data().
+    from pops.identity.semantic import semantic_value
+
+    return semantic_value(result, where="native field solver configuration")
 
 
 def _field_provider_evidence(

@@ -62,7 +62,9 @@ def kokkos_root() -> Path | None:
     return None
 
 
-def missing_aot_requirement(include: str | os.PathLike[str], cxx: str | None) -> str | None:
+def missing_native_compile_requirement(
+    include: str | os.PathLike[str], cxx: str | None,
+) -> str | None:
     if not cxx:
         return "compilateur C++ absent"
     if not Path(include).is_dir():

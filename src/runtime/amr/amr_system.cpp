@@ -735,6 +735,23 @@ struct AmrSystem::Impl {
     field_plan_consensus_verified_ = true;
   }
 
+  void install_active_temporal_relations() {
+    if (!runtime)
+      throw std::runtime_error(
+          "AmrSystem : cannot install temporal relations without an AMR runtime");
+    const std::size_t active_transition_count =
+        static_cast<std::size_t>(runtime->nlev() - 1);
+    if (temporal_relations_.size() < active_transition_count)
+      throw std::runtime_error(
+          "AmrSystem : explicit AMR execution lacks a temporal relation for an active "
+          "coarse/fine transition");
+    runtime->set_parent_child_temporal_relations(
+        std::vector<::pops::amr::ParentChildClockRelation>(
+            temporal_relations_.begin(),
+            temporal_relations_.begin() +
+                static_cast<std::ptrdiff_t>(active_transition_count)));
+  }
+
   // Builds the MULTI-BLOCK runtime engine (AmrRuntime): one common SharedAmrLayout (shared
   // hierarchy, frozen), then EACH block materializes its type-erased AmrRuntimeBlock on it (via its
   // block_builder, which captures the concrete Model/Limiter/Flux). The coarse Poisson is SUMMED and
@@ -891,6 +908,7 @@ struct AmrSystem::Impl {
     runtime =
         std::make_shared<pops::AmrRuntime>(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(rblocks),
                                            S.base_per, S.replicated_coarse, S.wall);
+    install_active_temporal_relations();
     runtime->set_component_logical_time(macro_step_, t);
     if (amr_tagger_component_)
       runtime->install_external_tagger(amr_tagger_component_);
@@ -898,8 +916,6 @@ struct AmrSystem::Impl {
       runtime->install_external_clustering(amr_clustering_component_);
     if (!boundary_plans_.empty())
       runtime->install_boundary_storage_routes(boundary_field_routes_);
-    if (!temporal_relations_.empty() || cfg.level_count == 1)
-      runtime->set_parent_child_temporal_relations(temporal_relations_);
     // The authored AMRTransfer registry is the authority for every public-DSL block's runtime
     // coarse/fine and temporal routes. Resolve the exact owner-qualified subject once, then retain
     // only prepared native callables in AmrRuntime; no string/kernel switch survives into stepping.
@@ -2562,7 +2578,14 @@ void AmrSystem::bootstrap_next_level(int refinement_ratio) {
       throw std::runtime_error(
           "AmrSystem::bootstrap_next_level transition/transfer ratio mismatch");
   }
+  const std::size_t next_transition =
+      static_cast<std::size_t>(p_->runtime->nlev() - 1);
+  if (next_transition >= p_->temporal_relations_.size())
+    throw std::runtime_error(
+        "AmrSystem::bootstrap_next_level lacks the explicit temporal relation for the next "
+        "coarse/fine transition");
   p_->runtime->bootstrap_next_level(refinement_ratio);
+  p_->install_active_temporal_relations();
 }
 
 void AmrSystem::begin_bootstrap_plan() {
@@ -2597,14 +2620,19 @@ void AmrSystem::register_bootstrap_transfer_route(
       runtime::amr::TransferRouteDescriptor{
           space, centering, representation, storage, operation,
           order, ghost_depth, dimension, refinement_ratio}};
-  p_->bootstrap_transfer_routes.add(identity, std::move(route));
+  auto staged_subject_routes = p_->bootstrap_subject_routes;
   for (const std::string& subject : subjects) {
     const auto key = std::make_pair(subject, operation);
-    if (subject.empty() || p_->bootstrap_subject_routes.count(key) != 0)
+    if (subject.empty() || !staged_subject_routes.emplace(key, identity).second)
       throw std::runtime_error(
           "AmrSystem::register_bootstrap_transfer_route requires unique subjects");
-    p_->bootstrap_subject_routes.emplace(key, identity);
   }
+  auto staged_transfer_routes = p_->bootstrap_transfer_routes;
+  staged_transfer_routes.add(identity, std::move(route));
+  // Commit both fully validated copies together.  A rejected provider, identity or subject leaves
+  // both live registries byte-for-byte unchanged.
+  p_->bootstrap_transfer_routes = std::move(staged_transfer_routes);
+  p_->bootstrap_subject_routes = std::move(staged_subject_routes);
 }
 
 void AmrSystem::commit_bootstrap_level() {
@@ -2617,6 +2645,7 @@ void AmrSystem::rollback_bootstrap_level() {
   if (!p_->runtime)
     throw std::runtime_error("AmrSystem::rollback_bootstrap_level has no runtime engine");
   p_->runtime->rollback_bootstrap_level();
+  p_->install_active_temporal_relations();
 }
 
 void AmrSystem::register_bootstrap_array(const std::string& subject,
@@ -3220,6 +3249,9 @@ AmrSystem::SourceNewtonReport AmrSystem::newton_report(const std::string& name) 
 }
 
 int AmrSystem::nx() const {
+  return p_->cfg.n;
+}
+int AmrSystem::ny() const {
   return p_->cfg.n;
 }
 double AmrSystem::time() const {

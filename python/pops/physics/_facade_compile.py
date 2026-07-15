@@ -85,7 +85,7 @@ class _FacadeCompileMixin(_FacadeModel):
                                             _native_feature_key, pops_include)
         from pops.codegen.cache import (
             _dsl_optflags, _identity_cache_so_path, _platform_cache_key,
-            _precision_cache_key, _record_so_backend, _registry_cache_key,
+            _precision_cache_key, _registry_cache_key,
         )
         from pops.codegen.compile_provenance import (
             verify_cached_artifact, write_artifact_sidecar,
@@ -151,10 +151,6 @@ class _FacadeCompileMixin(_FacadeModel):
                                  hoist_reciprocals=hoist_reciprocals)
             binary_identity, final_artifact_identity = write_artifact_sidecar(
                 out_path, semantic_identity=semantic_identity, spec_identity=spec_identity)
-        # The keyed path (cache HIT) or the path retained by the engine carries the written backend: we
-        # record it so a cross-backend reuse of the SAME path in this process is detected.
-        _record_so_backend(out_path, backend)
-
         cons_roles = roles_for(m.cons_names, m.cons_roles)
         cm: Any = CompiledModel(
             so_path=out_path, backend=backend, target=target,

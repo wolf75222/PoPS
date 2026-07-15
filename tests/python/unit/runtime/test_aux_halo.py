@@ -11,8 +11,7 @@ On verifie (compilateur requis pour le bout-en-bout, auto-skip sinon) :
   (3) System CARTESIEN non periodique : un flux lisant un aux nomme vx voit le ghost ; la BC dirichlet
       du champ change le residu AU BORD mais PAS a l'interieur, et 'foextrap' explicite == defaut
       (non-regression bit-identique du chemin partage) ;
-  (4) polaire : le halo est accepte + applique (solve_fields_polar) sans casser le champ ;
-  (5) AMR : le halo est accepte sur AmrSystem (mono + multi bloc) et n'empeche pas le pas.
+  (4) AMR : le halo est accepte sur AmrSystem (mono + multi bloc) et n'empeche pas le pas.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
@@ -23,7 +22,7 @@ import tempfile
 import numpy as np
 
 import pops.runtime._engine_descriptors as engine
-from pops.mesh import AuxHalo, PolarMesh
+from pops.mesh import AuxHalo
 from pops.physics._facade import Model
 from pops.runtime._engine_descriptors import Dirichlet
 from pops.runtime.doctor import capabilities
@@ -97,7 +96,8 @@ def test_system_cartesian_halo():
         return
     tmp = tempfile.mkdtemp()
     try:
-        compiled = build_advect_vx().compile(os.path.join(tmp, "advx.so"), include=INCLUDE, backend="aot")
+        compiled = build_advect_vx().compile(
+            os.path.join(tmp, "advx.so"), include=INCLUDE, backend="production")
         n = 16
         x = (np.arange(n) + 0.5) / n
         vx2d = np.tile(x, (n, 1))  # vx[j, i] = x_i : varie en x -> foextrap != dirichlet au bord x
@@ -118,43 +118,6 @@ def test_system_cartesian_halo():
             "le halo ne doit PAS changer l'interieur (max %.2e)" % float(
                 np.max(np.abs(R_dir[:, 1:n - 1] - R_def[:, 1:n - 1])))
         print("OK  cartesian halo : dirichlet change le bord (%.2e), interieur intact, foextrap==defaut" % db)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-
-
-def test_polar_halo():
-    """Polaire : un flux lisant un aux nomme vx voit le ghost RADIAL ; le halo dirichlet du champ change
-    le residu au bord radial, PAS a l'interieur ; theta reste periodique (residu fini). Le halo est
-    applique par solve_fields_polar sur le canal aux PARTAGE (lu directement par le bloc polaire)."""
-    if not _have_compiler():
-        print("skip  polar halo (compilateur absent)")
-        return
-    tmp = tempfile.mkdtemp()
-    try:
-        compiled = build_advect_vx().compile(os.path.join(tmp, "avxp.so"), include=INCLUDE, backend="aot")
-        nr, nth = 16, 16
-        vx = np.tile((np.arange(nr) + 0.5) / nr, (nth, 1))  # varies in r (fast axis i)
-
-        def rhs(halo):
-            s = System(mesh=PolarMesh(r_min=0.3, r_max=1.0, nr=nr, ntheta=nth))
-            s.add_equation("a", model=compiled,
-                           spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()), time=engine.Explicit())
-            s.set_density("a", np.ones((nth, nr)))
-            s.set_aux_field("a", "vx", vx, halo=halo)
-            s.solve_fields()
-            return np.array(s.eval_rhs("a")).reshape(nth, nr)  # (theta=j, r=i)
-
-        R_def = rhs(None)
-        R_dir = rhs(AuxHalo("dirichlet", value=0.0))
-        assert np.all(np.isfinite(R_def)) and np.all(np.isfinite(R_dir)), "polar residual finite (theta periodic)"
-        # the RADIAL boundary (r = column 0 and nr-1) changes; theta is periodic -> no theta boundary effect.
-        rb = max(float(np.max(np.abs(R_dir[:, 0] - R_def[:, 0]))),
-                 float(np.max(np.abs(R_dir[:, nr - 1] - R_def[:, nr - 1]))))
-        assert rb > 1e-6, "polar : the radial dirichlet halo should change the radial boundary residual (%.2e)" % rb
-        assert np.allclose(R_dir[:, 1:nr - 1], R_def[:, 1:nr - 1], atol=1e-12), \
-            "polar : the halo must not change the radial interior (max %.2e)" % float(
-                np.max(np.abs(R_dir[:, 1:nr - 1] - R_def[:, 1:nr - 1])))
-        print("OK  polar halo : radial dirichlet changes the radial boundary (%.2e), interior intact, theta finite" % rb)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -203,7 +166,6 @@ def main():
     test_auxhalo_validation()
     test_capabilities_halo()
     test_system_cartesian_halo()
-    test_polar_halo()
     test_amr_halo()
     print("test_aux_halo : OK")
 

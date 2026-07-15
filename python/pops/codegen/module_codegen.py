@@ -30,6 +30,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops._ir.literals import scalar_cpp
+from pops.codegen.cpp_writer import _cpp_identifier
 
 # Re-export the moved helpers + the brick emitter so the public surface of
 # ``pops.codegen.module_codegen`` is unchanged (every name resolves here).
@@ -61,7 +62,7 @@ def emit_cpp(model: Any, func: Any = None, cse: bool = True) -> str:
     the common subexpressions (H, c...) into ``cseK_`` locals ; cse=False recomputes them inline.
 
     Step (2) of the DSL (see docs/ARCHITECTURE_CIBLE.md sect. 3) : HOST C++ (templatable on Real)."""
-    name = func or model.name
+    name = _cpp_identifier(func or model.name)
     if not model._flux:
         raise ValueError("emit_cpp : call set_flux(...) first")
     if len(model._flux.get("x", [])) != model.n_vars or len(model._flux.get("y", [])) != model.n_vars:
@@ -113,7 +114,7 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
             raise ValueError("model has multiple named sources; use pops.compile(...) "
                              "or define m.source(...) explicitly")
         raise ValueError("emit_cpp_source: call set_source([...]) first")
-    nm = name or (model.name.capitalize() + "Source")
+    nm = _cpp_identifier(name or (model.name.capitalize() + "Source"))
     nc = model.n_vars
 
     def cons_locals() -> list:
@@ -197,11 +198,11 @@ def emit_cpp_source(model: Any, name: Any = None, namespace: str = "pops_generat
 
 def _emit_bricks(model: Any, name: Any = None, hoist_reciprocals: bool = False) -> tuple:
     """Generate the bricks (hyperbolic + source + elliptic) and the CompositeModel<...> type
-    shared by BOTH backends (JIT IModel and AOT). Source / elliptic OPTIONAL: without
+    consumed by the production native loader. Source / elliptic OPTIONAL: without
     set_source -> pops::NoSource; without set_elliptic_rhs -> zero rhs (no Poisson coupling).
     @p hoist_reciprocals: codegen option propagated to the bricks (cf. emit_cpp_brick).
     Returns (nv, bricks_code, composite_type)."""
-    nm = name or (model.name.capitalize() + "Gen")
+    nm = _cpp_identifier(name or (model.name.capitalize() + "Gen"))
     nv = model.n_vars
     # CODEGEN guard (not only check(), which compile() does not call): a source
     # frequency or jacobian without m.source(...) would be silently PURGED by the
@@ -276,8 +277,8 @@ def _elliptic_field_registrations(model: Any, nm: Any) -> list:
 # ---------------------------------------------------------------------------
 
 def _emit_metadata(model: Any, model_alias: Any) -> str:
-    """OPTIONAL metadata symbols of the .so block, read by dlsym on the System side. SHARED by both
-    backends (JIT and AOT). The NAMES + ROLES are always emitted (POPS_EXPORT_BLOCK_METADATA):
+    """OPTIONAL metadata symbols of the .so block, read by the production loader. The NAMES + ROLES
+    are always emitted (POPS_EXPORT_BLOCK_METADATA):
     they come from the model's VariableSet (single source of truth), the System reads them instead of
     the u0.. fallback / no roles. The GAMMA is emitted (POPS_EXPORT_BLOCK_GAMMA) only if set_gamma(...)
     has been called; otherwise no gamma symbol -> the System keeps its default 1.4 (backward-compat).
@@ -314,7 +315,7 @@ def emit_cpp_elliptic(model: Any, name: Any = None, namespace: str = "pops_gener
     cse=True factors out common sub-expressions. ValueError if set_elliptic_rhs(...) is missing."""
     if model._elliptic is None:
         raise ValueError("emit_cpp_elliptic: call set_elliptic_rhs(...) first")
-    nm = name or (model.name.capitalize() + "Elliptic")
+    nm = _cpp_identifier(name or (model.name.capitalize() + "Elliptic"))
     rt_member = model._runtime_params_member()  # P7-b: runtime indices BEFORE any to_cpp()
     out = [
         "#include <cmath>",  # self-sufficient for std::sqrt / std::pow

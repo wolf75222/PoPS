@@ -110,7 +110,7 @@ inline constexpr RouteInfo kLimiterRoutes[] = {
   {0, "none", "pops::NoSlope", "", ""},
   {1, "minmod", "pops::Minmod", "", ""},
   {2, "vanleer", "pops::VanLeer", "", ""},
-  {3, "weno5", "pops::Weno5Z", "3-cell halo", "prototype backend not wired (host order-1 residual)"},
+  {3, "weno5", "pops::Weno5Z", "3-cell halo", ""},
 };
 inline constexpr const char* kLimiterRouteTokensCsv = "none|minmod|vanleer|weno5";
 
@@ -133,8 +133,8 @@ enum class TimeRouteId : int {
 };
 inline constexpr RouteInfo kTimeRoutes[] = {
   {0, "explicit", "pops::SSPRK2", "", ""},
-  {1, "ssprk3", "pops::SSPRK3", "", "aot .so ABI not wired (SSPRK2-only extern C entry); native add_block/add_native_block only"},
-  {2, "euler", "pops::ForwardEuler", "", "aot .so ABI not wired; native add_block/add_native_block only; validation use, never default"},
+  {1, "ssprk3", "pops::SSPRK3", "", ""},
+  {2, "euler", "pops::ForwardEuler", "", "validation use, never default"},
   {3, "imex", "pops::AdvanceImex", "implicit source term", ""},
   {4, "imexrk_ars222", "pops::ImexRkArs222", "implicit source term", "composed native add_block only (.so ABIs do not carry the RK tableau)"},
 };
@@ -306,7 +306,7 @@ inline constexpr int kComponentCatalogSchemaVersion = 1;
 inline constexpr int kComponentManifestSchemaVersion = 2;
 inline constexpr int kRouteRegistryVersion = 2;
 inline constexpr int kCapabilityVocabularyVersion = 1;
-inline constexpr const char* kComponentCatalogSha256 = "dfb04cd60f0523d305063096d60b90e00f2a298f8cd4da7a55bc6d7997c5e57e";
+inline constexpr const char* kComponentCatalogSha256 = "b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5";
 inline constexpr const char* kComponentCatalogSemanticSha256 = "2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1";
 inline constexpr const char* kRouteRegistrySignature = "v2:2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1";
 inline constexpr const char* kComponentManifestSemanticFields[] = {

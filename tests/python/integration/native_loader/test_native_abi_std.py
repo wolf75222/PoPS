@@ -16,8 +16,8 @@ Ce test :
      se charge SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
      sous Kokkos avec l'ancien defaut c++23 (mismatch __cplusplus), il passe avec le std aligne.
 
-S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes pops sont absents (chemins JIT/AOT/natif
-ont la meme convention). Cable au job CI Kokkos (OpenMP) : c'est le SEUL job ou loader != c++23, donc
+S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes pops sont absents. Cable au job CI
+Kokkos (OpenMP) : c'est le SEUL job ou loader != c++23, donc
 le seul ou cette regression se manifeste.
 """
 import os
@@ -105,7 +105,7 @@ def check_native_loads_without_abi_error(expected_std):
                 raise AssertionError(
                     "REGRESSION : add_native_block rejette le modele production (std du modele != "
                     "std du loader %s). C'est exactement le bug GH200 sous Kokkos. Detail : %s"
-                    % (expected_std, ex))
+                    % (expected_std, ex)) from ex
             raise
 
         # Sanity end-to-end : un etat trivial + eval_rhs renvoie un residu fini (le bloc tourne vraiment).

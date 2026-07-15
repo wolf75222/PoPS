@@ -19,6 +19,8 @@ import importlib.util
 import pathlib
 import sys
 
+import pytest
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRIPTS = REPO_ROOT / "scripts"
 
@@ -32,6 +34,7 @@ def _load(name):
 
 
 cic = _load("ci_import_closure")
+route_mode = _load("ci_route_mode")
 
 
 # --------------------------------------------------------------------------- #
@@ -107,12 +110,11 @@ def test_cross_test_forward_pulls_shared_brick_helper():
 
 
 def test_cross_test_reverse_pulls_dependents_of_shared_helper():
-    """Selecting the brick helper pulls its two remaining sibling dependents."""
+    """Selecting the brick helper pulls its remaining sibling dependent."""
     _, edges = cic.test_imports(REPO_ROOT)
     selected = {"tests/python/unit/codegen/test_dsl_brick.py"}
     cic._close_cross_test(selected, edges)
     assert "tests/python/unit/codegen/test_dsl_cse.py" in selected
-    assert "tests/python/unit/codegen/test_dsl_dynamic.py" in selected
 
 
 # --------------------------------------------------------------------------- #
@@ -252,6 +254,55 @@ def test_manifest_cpp_suites_exclude_mpi_only_targets():
     assert "test_splitting" in names
 
 
+@pytest.mark.parametrize(
+    ("event", "inputs", "expected"),
+    (
+        ("pull_request", {"cpp_paths": True},
+         (False, True, True, True, False, False)),
+        ("pull_request", {"python_paths": True},
+         (False, False, True, True, False, False)),
+        ("pull_request", {"architecture_paths": True},
+         (False, False, False, True, False, False)),
+        ("pull_request", {},
+         (False, False, False, False, False, False)),
+        ("pull_request", {"ci_kokkos": True},
+         (False, True, True, True, False, False)),
+        ("pull_request", {"ci_full": True},
+         (True, True, True, True, True, True)),
+        ("pull_request", {"force_full": True},
+         (True, True, True, True, True, True)),
+        ("push", {},
+         (False, True, True, True, False, False)),
+        ("push", {"full_paths": True},
+         (True, True, True, True, True, True)),
+        ("workflow_call", {},
+         (True, True, True, True, True, True)),
+    ),
+)
+def test_ci_route_authority_covers_pr_labels_push_and_full(event, inputs, expected):
+    decision = route_mode.decide_routes(event_name=event, **inputs)
+    assert (
+        decision.full,
+        decision.cpp_required,
+        decision.python_required,
+        decision.architecture_required,
+        decision.mpi_required,
+        decision.openmp_required,
+    ) == expected
+
+
+def test_ci_gate_verdict_is_fail_closed_but_allows_an_unrouted_skip():
+    route_mode.validate_gate_result("required", "success", True)
+    route_mode.validate_gate_result("optional-success", "success", False)
+    route_mode.validate_gate_result("optional-skip", "skipped", False)
+    with pytest.raises(route_mode.RouteModeError, match="required"):
+        route_mode.validate_gate_result("required", "skipped", True)
+    with pytest.raises(route_mode.RouteModeError, match="optional"):
+        route_mode.validate_gate_result("optional", "failure", False)
+    with pytest.raises(route_mode.RouteModeError, match="true or false"):
+        route_mode.validate_gate_result("missing-route", "skipped", "")
+
+
 def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "mpi: ${{ steps.filter.outputs.mpi }}" in workflow
@@ -275,7 +326,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         assert selector_input in workflow
 
     filter_text = workflow.split("\n          filters: |\n", 1)[1].split(
-        "\n  # Calcule si la suite COMPLETE", 1)[0]
+        "\n  # Autorite unique de routage", 1)[0]
     cpp_filter = filter_text.split("            cpp:\n", 1)[1].split(
         "\n            python:\n", 1)[0]
     python_filter = filter_text.split("            python:\n", 1)[1].split(
@@ -287,6 +338,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "scripts/ci_include_graph.py",
+        "scripts/ci_route_mode.py",
         ".github/actions/setup-kokkos/**",
         ".github/workflows/ci.yml",
     ):
@@ -298,6 +350,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "scripts/ci_import_closure.py",
+        "scripts/ci_route_mode.py",
         ".github/actions/setup-kokkos/**",
         ".github/workflows/ci.yml",
     ):
@@ -307,17 +360,37 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "needs: [changes, set-mode," in gate_block
     assert "mpi, kokkos-openmp" in gate_block
     assert "needs.set-mode.result" in gate_block
-    assert "needs.set-mode.outputs.full" in gate_block
+    assert "scripts/ci_route_mode.py check" in gate_block
+    assert "needs.set-mode.outputs.architecture_required" in gate_block
+    assert "needs.set-mode.outputs.python_required" in gate_block
+    assert "needs.set-mode.outputs.mpi_required" in gate_block
+    assert "needs.set-mode.outputs.openmp_required" in gate_block
     assert "needs.mpi.result" in gate_block
     assert "needs.kokkos-openmp.result" in gate_block
 
     mpi_block = workflow.split("\n  mpi:\n", 1)[1].split("\n  kokkos-openmp:\n", 1)[0]
     assert "needs: [set-mode, changes]" in mpi_block
-    assert "needs.changes.outputs.mpi == 'true'" in mpi_block
+    assert "if: needs.set-mode.outputs.mpi_required == 'true'" in mpi_block
+
+    set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
+        "\n  # GATE C++", 1)[0]
+    for output in (
+        "cpp_required", "python_required", "architecture_required",
+        "mpi_required", "openmp_required",
+    ):
+        assert f"{output}: ${{{{ steps.decide.outputs.{output} }}}}" in set_mode_block
+    assert "python3 scripts/ci_route_mode.py decide" in set_mode_block
+
+    cpp_verdict = workflow.split("\n  gate-cpp:\n", 1)[1].split(
+        "\n  # GATE PYTHON ARCHITECTURE", 1)[0]
+    assert "scripts/ci_route_mode.py check" in cpp_verdict
+    assert "needs.set-mode.outputs.cpp_required" in cpp_verdict
+    assert "success|skipped" not in cpp_verdict
 
     architecture_block = workflow.split(
         "\n  gate-python-architecture:\n", 1)[1].split(
             "\n  gate-python-build:\n", 1)[0]
+    assert "if: needs.set-mode.outputs.architecture_required == 'true'" in architecture_block
     assert "python3 scripts/generate_component_catalog.py --check" in architecture_block
 
     python_build_block = workflow.split(
@@ -329,12 +402,15 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 20" in python_build_block
     assert "timeout-minutes: 30" in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
+    for block in (python_build_block, python_shards_block, python_cache_block):
+        assert "if: needs.set-mode.outputs.python_required == 'true'" in block
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():
     selector = _load("ci_select_tests")
     for path in (
         ".github/workflows/ci.yml",
+        "scripts/ci_route_mode.py",
         "scripts/ci_select_tests.py",
         "scripts/ci_shard_binpack.py",
         "tests/test_manifest.toml",

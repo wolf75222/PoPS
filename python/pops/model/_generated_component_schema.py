@@ -3,7 +3,7 @@ from __future__ import annotations
 
 COMPONENT_CATALOG_SCHEMA_VERSION = 1
 COMPONENT_MANIFEST_SCHEMA_VERSION = 2
-COMPONENT_CATALOG_SHA256 = 'dfb04cd60f0523d305063096d60b90e00f2a298f8cd4da7a55bc6d7997c5e57e'
+COMPONENT_CATALOG_SHA256 = 'b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5'
 COMPONENT_CATALOG_SEMANTIC_SHA256 = '2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1'
 COMPONENT_INTERFACE_SPECS = ({'name': 'requirement', 'method': 'requirements', 'required_args': 0},
  {'name': 'lowering', 'method': 'lower', 'required_args': 1},

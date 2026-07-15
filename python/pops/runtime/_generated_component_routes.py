@@ -9,7 +9,7 @@ ROUTE_REGISTRY_VERSION = 2
 
 CAPABILITY_VOCAB_VERSION = 1
 
-COMPONENT_CATALOG_SHA256 = 'dfb04cd60f0523d305063096d60b90e00f2a298f8cd4da7a55bc6d7997c5e57e'
+COMPONENT_CATALOG_SHA256 = 'b709b8b15e073d7c20ca0114da924f37aaf605fbfdf02e015af8235042f32eb5'
 
 COMPONENT_CATALOG_SEMANTIC_SHA256 = '2655ee5697755f565c40d442de74d8be9e41948dae612b7e35a6c7741204a8f1'
 
@@ -50,26 +50,15 @@ ROUTE_TABLES = {'riemann': (('rusanov',
  'limiter': (('none', 'pops::NoSlope', (), ()),
              ('minmod', 'pops::Minmod', (), ()),
              ('vanleer', 'pops::VanLeer', (), ()),
-             ('weno5',
-              'pops::Weno5Z',
-              ('3-cell halo',),
-              ('prototype backend not wired (host order-1 residual)',))),
+             ('weno5', 'pops::Weno5Z', ('3-cell halo',), ())),
  'recon': (('conservative', 'pops::make_block(recon_prim=false)', (), ()),
            ('primitive',
             'pops::make_block(recon_prim=true)',
             ('primitive_vars',),
             ('requires a model exposing primitive variables',))),
  'time': (('explicit', 'pops::SSPRK2', (), ()),
-          ('ssprk3',
-           'pops::SSPRK3',
-           (),
-           ('aot .so ABI not wired (SSPRK2-only extern C entry); native add_block/add_native_block '
-            'only',)),
-          ('euler',
-           'pops::ForwardEuler',
-           (),
-           ('aot .so ABI not wired; native add_block/add_native_block only; validation use, never '
-            'default',)),
+          ('ssprk3', 'pops::SSPRK3', (), ()),
+          ('euler', 'pops::ForwardEuler', (), ('validation use, never default',)),
           ('imex', 'pops::AdvanceImex', ('implicit source term',), ()),
           ('imexrk_ars222',
            'pops::ImexRkArs222',

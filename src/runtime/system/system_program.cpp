@@ -159,16 +159,15 @@ void System::block_boundary_jvp_into_at(
   closure(point, U, V, J);
 }
 // FLUX-ONLY residual R <- -div F(U) (ADC-425): the block's SourceFreeModel<Model> rhs path (built in
-// build_block), bit-identical to rhs_into minus the default source. Fails loud on a block that did not
-// build it (the host .so prototype loader) instead of silently leaking the source.
+// build_block), bit-identical to rhs_into minus the default source. Fails loud on a block installed
+// without this closure instead of silently leaking the source.
 void System::block_neg_div_flux_into(int b, MultiFab& U, MultiFab& R) {
   Impl::Species& s = p_->sp[static_cast<std::size_t>(b)];
   if (!s.rhs_flux_only)
     throw std::runtime_error(
         "System::block_neg_div_flux_into: block '" + s.name +
-        "' has no flux-only residual closure (the host .so prototype loader does not build one); a "
-        "flux-only RHS (P.rhs(flux=True, sources without 'default')) needs a native block "
-        "(add_block / production-backend compiled block)");
+        "' was installed without a flux-only residual closure; a flux-only RHS "
+        "requires add_block or a Production compiled block");
   s.rhs_flux_only(U, R);
 }
 void System::block_neg_div_flux_into_at(
@@ -178,17 +177,15 @@ void System::block_neg_div_flux_into_at(
 }
 // SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the block's SourceInto<Model> path (built in
 // build_block), the exact mirror of block_neg_div_flux_into and bit-identical to the source half of
-// rhs_into. Fails loud on a block that did not build it (the host .so prototype loader) instead of
-// silently leaking the flux.
+// rhs_into. Fails loud on a block installed without this closure instead of silently leaking the
+// flux.
 void System::block_source_into(int b, MultiFab& U, MultiFab& R) {
   Impl::Species& s = p_->sp[static_cast<std::size_t>(b)];
   if (!s.source_only)
     throw std::runtime_error(
         "System::block_source_into: block '" + s.name +
-        "' has no source-only residual closure (the host .so prototype loader does not build one); "
-        "a "
-        "source-only RHS (P.rhs(flux=False, sources with 'default')) needs a native block "
-        "(add_block / production-backend compiled block)");
+        "' was installed without a source-only residual closure; a source-only RHS "
+        "requires add_block or a Production compiled block");
   s.source_only(U, R);
 }
 // Max |wave speed| of block b on U: the SAME BlockState::max_speed closure step_cfl reads (set at

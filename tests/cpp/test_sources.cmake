@@ -85,7 +85,6 @@ set(POPS_CPP_TEST_SOURCE_test_dense_eig "tests/cpp/unit/runtime/test_dense_eig.c
 set(POPS_CPP_TEST_SOURCE_test_diffusion "tests/cpp/unit/numerics/test_diffusion.cpp")
 set(POPS_CPP_TEST_SOURCE_test_disc_domain_mask "tests/cpp/unit/runtime/test_disc_domain_mask.cpp")
 set(POPS_CPP_TEST_SOURCE_test_dispatch_tags "tests/cpp/unit/mesh/test_dispatch_tags.cpp")
-set(POPS_CPP_TEST_SOURCE_test_dynamic_model "tests/cpp/unit/codegen/test_dynamic_model.cpp")
 set(POPS_CPP_TEST_SOURCE_test_eb_transport "tests/cpp/unit/runtime/test_eb_transport.cpp")
 set(POPS_CPP_TEST_SOURCE_test_elliptic_composite_rhs "tests/cpp/unit/elliptic/test_elliptic_composite_rhs.cpp")
 set(POPS_CPP_TEST_SOURCE_test_elliptic_interface "tests/cpp/unit/elliptic/test_elliptic_interface.cpp")

@@ -199,9 +199,14 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
               std::string(route_info(RiemannRouteId::kEulerRoe).native_entry) ==
                   "pops::EulerRoeFlux2D")
       << "route euler_roe : round-trip + native 'pops::EulerRoeFlux2D'";
-  EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).limitations).size() > 0 &&
-              contains(route_info(TimeRouteId::kSsprk3).limitations, "aot"))
-      << "route_info(kSsprk3) : limitations non vide (mentionne 'aot')";
+  EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).native_entry) == "pops::SSPRK3" &&
+              std::string(route_info(TimeRouteId::kSsprk3).limitations).empty())
+      << "route_info(kSsprk3) : native production sans limitation obsolete";
+  EXPECT_TRUE(std::string(route_info(TimeRouteId::kForwardEuler).native_entry) ==
+                  "pops::ForwardEuler" &&
+              std::string(route_info(TimeRouteId::kForwardEuler).limitations) ==
+                  "validation use, never default")
+      << "route_info(kForwardEuler) : route native reservee a la validation";
 }
 
 TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {

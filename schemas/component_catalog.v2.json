@@ -596,9 +596,7 @@
           "requirements": [
             "3-cell halo"
           ],
-          "limitations": [
-            "prototype backend not wired (host order-1 residual)"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {
             "n_ghost": 3
@@ -658,9 +656,7 @@
           "cpp_id": "kSsprk3",
           "native_entry": "pops::SSPRK3",
           "requirements": [],
-          "limitations": [
-            "aot .so ABI not wired (SSPRK2-only extern C entry); native add_block/add_native_block only"
-          ],
+          "limitations": [],
           "aliases": [],
           "metadata": {}
         },
@@ -671,7 +667,7 @@
           "native_entry": "pops::ForwardEuler",
           "requirements": [],
           "limitations": [
-            "aot .so ABI not wired; native add_block/add_native_block only; validation use, never default"
+            "validation use, never default"
           ],
           "aliases": [],
           "metadata": {}
