@@ -194,8 +194,8 @@ The documentation corpus describes the final public lifecycle and its current im
 PoPS follows [Semantic Versioning](https://semver.org). The public API under guarantee and
 the bump rules are declared in [docs/VERSIONING.md](docs/VERSIONING.md). Available versions and
 their change logs: the [Releases page](https://github.com/wolf75222/PoPS/releases) and
-[CHANGELOG.md](CHANGELOG.md). The project is in `0.y.z` initial development: the public API may
-still change until `1.0.0`.
+[CHANGELOG.md](CHANGELOG.md). Version `1.0.0` establishes the stable public contract; subsequent
+compatibility and deprecation decisions follow those Semantic Versioning rules.
 
 ## Contributing
 
