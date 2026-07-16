@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -52,16 +53,29 @@ def skip_process_test(reason: str, *, code: int = 0) -> None:
     sys.exit(code)
 
 
-def require_native_or_skip(reason: str) -> None:
+def native_tests_required() -> bool:
+    """Return whether missing native prerequisites are release-gate failures."""
+    return os.environ.get("POPS_REQUIRE_NATIVE_TESTS") == "1"
+
+
+def require_native_or_skip(
+    reason: str,
+    *,
+    optional_skip: Callable[[str], object] | None = None,
+) -> None:
     """Fail a required native CI acceptance, otherwise report an explicit optional skip.
 
     Local source-only runs may legitimately lack a compiler, Kokkos, or an installed extension.
     The Serial native CI lane sets ``POPS_REQUIRE_NATIVE_TESTS=1`` because those prerequisites are
     part of that lane's contract; treating their disappearance (or an import/API regression) as a
-    skip would silently remove release coverage.
+    skip would silently remove release coverage. ``optional_skip`` lets pytest-native fixtures and
+    tests use this same policy without relying on the process-test ``POPS_SKIP`` protocol.
     """
-    if os.environ.get("POPS_REQUIRE_NATIVE_TESTS") == "1":
+    if native_tests_required():
         raise RuntimeError(f"required native test unavailable: {reason}")
+    if optional_skip is not None:
+        optional_skip(reason)
+        return
     skip_process_test(reason)
 
 

@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 import pops
-from pops._ir.expr import Const
 from pops.codegen import Production
 from pops.codegen._orchestration_compile import capture_field_plans
 from pops.codegen.lowering_coverage import LoweringRejection
@@ -21,7 +20,7 @@ from pops.fields.bcs import (
 )
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.math import laplacian, unknown
+from pops.math import Const, laplacian, unknown
 from pops.mesh import CartesianGrid
 from pops.params import ConstParam, RuntimeParam
 from pops.physics import Model

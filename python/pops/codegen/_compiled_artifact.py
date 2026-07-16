@@ -601,7 +601,19 @@ class CompiledSimulationArtifact:
 
     @property
     def module_manifest(self) -> Any:
-        return self._common_executable_attribute("module_manifest", absent=None)
+        # A Module manifest authenticates the compiled *model*, not the per-layout
+        # Program executable.  The latter is the right authority for ``so_path``
+        # and ``abi_key``, but a Program compiled from the frozen model graph does
+        # not itself carry a second Module manifest.  Report the common block-model
+        # manifest when the aggregate has one unambiguous model authority; a
+        # heterogeneous multi-model artifact remains explicitly non-scalar.
+        manifests = tuple(
+            getattr(block.model, "module_manifest", None) for block in self.blocks)
+        if not manifests or manifests[0] is None:
+            return None
+        if any(manifest != manifests[0] for manifest in manifests[1:]):
+            return None
+        return manifests[0]
 
     @property
     def lowering_coverage(self) -> Any:

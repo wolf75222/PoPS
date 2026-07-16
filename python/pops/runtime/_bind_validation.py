@@ -107,18 +107,39 @@ def validate_initial_state(manifest: Any, arguments: Any, layout: Any,
     for name in sorted(set(initial_state) - declared):
         lines.append("initial state for unknown block %r; the artifact declares block(s) %s"
                      % (name, sorted(declared) or "(none)"))
-    mesh = _layout_mesh(layout)
-    # The decision is the open layout capability, never a concrete class or historical ``.base``
-    # attribute.  AMR dispatches density/full state by the authenticated array shape at install.
-    amr = _layout_kind(layout) == "amr"
-    ghost = getattr(manifest, "ghost_depth", None)
-    if ghost is None and initial_state:
-        lines.append("the compiled manifest carries no ghost_depth; it is ABI-incomplete and cannot "
-                     "be bound safely (rebuild the artifact so its manifest records the halo depth)")
+    ghost_depth_by_block = getattr(manifest, "ghost_depth_by_block", None)
+    if ghost_depth_by_block is None:
+        ghost_depth_by_block = {}
+    elif not isinstance(ghost_depth_by_block, Mapping):
+        return [
+            "the compiled manifest ghost_depth_by_block is not a mapping; it is ABI-incomplete "
+            "and cannot be bound safely"
+        ]
+    scalar_ghost = getattr(manifest, "ghost_depth", None)
+    authoritative_per_block = bool(ghost_depth_by_block)
     accepted_dtypes = _precision_dtype_names(getattr(manifest, "precision", None))
     for name in sorted(set(initial_state) & declared):
         array = initial_state[name]
         spec = instances[name]
+        ghost = ghost_depth_by_block.get(name)
+        if ghost is None and not authoritative_per_block:
+            # The scalar remains a valid single-layout manifest projection.  Multi-layout
+            # artifacts deliberately have no scalar aggregate and therefore reach this fallback
+            # only when their required per-block authority is absent.
+            ghost = scalar_ghost
+        if isinstance(ghost, bool) or not isinstance(ghost, int) or ghost < 1:
+            lines.append(
+                "the compiled manifest carries no ghost_depth for block %r; it is "
+                "ABI-incomplete and cannot be bound safely (rebuild the artifact so its manifest "
+                "records the exact ghost_depth_by_block authority)" % name
+            )
+            continue
+        block_layout = _layout_for_block(layout, name)
+        mesh = _layout_mesh(block_layout)
+        # The decision is the open layout capability, never a concrete class or historical
+        # ``.base`` attribute. AMR dispatches density/full state by the authenticated array shape
+        # at install.
+        amr = _layout_kind(block_layout) == "amr"
         _check_one_initial_state(lines, name, array, spec, mesh, ghost, accepted_dtypes, amr)
     return lines
 
@@ -248,6 +269,31 @@ def _layout_mesh(layout: Any) -> Any:
     if isinstance(n, (tuple, list)):
         return int(n[0]) if n else None
     return int(n)
+
+
+def _layout_for_block(layout: Any, block_name: str) -> Any:
+    """Return the authenticated runtime descriptor assigned to ``block_name``.
+
+    A single-layout bind already receives its descriptor directly.  A multi-layout bind receives a
+    ``ResolvedRuntimeLayouts`` authority whose plan assigns every materialized block to one layout;
+    resolve that exact assignment instead of selecting a representative grid.
+    """
+    rows = getattr(layout, "rows", None)
+    plan = getattr(layout, "plan", None)
+    descriptor = getattr(layout, "descriptor", None)
+    if not isinstance(rows, tuple) or plan is None or not callable(descriptor):
+        return layout
+    matches = [
+        assignment.layout
+        for assignment in getattr(plan, "assignments", ())
+        if getattr(assignment, "subject_kind", None) == "block"
+        and getattr(getattr(assignment, "subject", None), "local_id", None) == block_name
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            "runtime layout plan has no exact layout assignment for block %r" % block_name
+        )
+    return descriptor(matches[0])
 
 
 def _layout_kind(layout: Any) -> str | None:

@@ -9,13 +9,12 @@ import pytest
 import pops
 import pops.lib.time as libtime
 import pops.model as model
-from pops._ir.expr import Var
 from pops.codegen import Production
 from pops.codegen.program_codegen import emit_cpp_program
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
 from pops.layouts import Uniform
-from pops.math import sqrt
+from pops.math import Var, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.time import FixedDt
 

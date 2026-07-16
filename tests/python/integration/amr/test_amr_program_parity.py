@@ -120,18 +120,37 @@ def _nonlinear_model(name="adc508_nonlinear_model"):
     return model
 
 
-def _ssprk2_program(model, name="adc508_ssprk2", *, target="amr_system"):
+def _ssprk2_program(
+    model,
+    name="adc508_ssprk2",
+    *,
+    target="amr_system",
+    refresh_final_field=False,
+):
     """The canonical SSPRK2 (Heun) Program on one block 'plasma' -- the SAME scheme the native explicit
     AMR advance uses. solve_fields(); R=rhs(U); U1=U+dt R; solve_fields(U1); R1=rhs(U1);
     U <<= 0.5 U + 0.5 (U1 + dt R1)."""
-    return resolve_periodic_field_program(
-        model,
-        lambda state, rate, fields: libtime.SSPRK2(
+    def factory(state, rate, fields):
+        program = libtime.SSPRK2(
             state,
             rate=rate,
             fields=fields,
             solve_action=FailRun(),
-        ),
+        )
+        if refresh_final_field:
+            # The physical residual below is an observation of U^{n+1}, not of the last RK stage.
+            # Express that observation in the public Program itself: the qualified field provider
+            # consumes the committed candidate before the commit is published.  No private runtime
+            # solve seam is needed after the step.
+            (committed_state,) = tuple(program.commits().values())
+            fields(committed_state, name="final_committed_fields").consume(
+                action=FailRun()
+            )
+        return program
+
+    return resolve_periodic_field_program(
+        model,
+        factory,
         name=name,
         block_name="plasma",
         target=target,
@@ -224,8 +243,11 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     sim.install_program(compiled.so_path)
     for _ in range(nsteps):
         sim.step(dt)
-    sim.solve_fields()  # refresh phi for the committed final state, not the last RK stage
-    return (np.array(sim.get_state("plasma")), np.array(sim.potential())), None
+    (provider_slot,) = tuple(sim.field_provider_slots())
+    return (
+        np.array(sim.get_state("plasma")),
+        np.array(sim.field_potential_global(provider_slot)).reshape(N, N),
+    ), None
 
 
 def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
@@ -263,8 +285,9 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         return None, "install (AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
         amr.step(dt)
-    amr.solve_fields()  # refresh phi for the committed final state, not the last RK stage
-    return (np.array(amr.density("plasma")), np.array(amr.potential()),
+    (provider_slot,) = tuple(amr.field_provider_slots())
+    coarse_potential = np.array(amr.field_potential_global(provider_slot)).reshape(N, N)
+    return (np.array(amr.density("plasma")), coarse_potential,
             float(amr.mass("plasma"))), None
 
 
@@ -281,11 +304,18 @@ def test_single_level_bit_identical_parity():
     u0 = _init_density()
 
     sys_out, sys_err = _system_run(
-        _ssprk2_program(model, target="system"), model, u0)
+        _ssprk2_program(model, target="system", refresh_final_field=True), model, u0)
     assert sys_out is not None, sys_err
     amr_model = _euler_model("adc508_parity_ssprk2")
     amr_out, amr_err = _amr_run(
-        _ssprk2_program(amr_model, target="amr_system"), amr_model, u0)
+        _ssprk2_program(
+            amr_model,
+            target="amr_system",
+            refresh_final_field=True,
+        ),
+        amr_model,
+        u0,
+    )
     assert amr_out is not None, amr_err
 
     sys_state, sys_phi = sys_out
@@ -419,19 +449,20 @@ def _amr_run_cfl_native(model, u0, nsteps=NSTEPS, cfl=0.4):
 
 def test_step_cfl_routes_through_installed_program():
     """(4) ADC-508 review fix 1: AmrSystem::step_cfl must route through an installed Program, NOT silently
-    run the native engine. We install the SSPRK2 Program, drive it with step_cfl, and assert: (a) the
+    run the native engine. We install a custom midpoint Program, drive it with step_cfl, and assert:
+    (a) the
     program ran (its hash is set, finite dt, finite density), and (b) the evolved density DIFFERS from a
     native (no-program) step_cfl run on the same block + IC -- i.e. step_cfl did NOT silently bypass the
-    Program. The SSPRK2 Program and the native ssprk2 scheme are NOT byte-identical here (the Program
-    expresses its own solve_fields / commit), so a measurable difference proves the Program drove the
-    step. Host/CPU-runnable; self-skips without a compiler / Kokkos."""
+    Program.  A custom midpoint Program is compared with the native SSPRK2 engine on a nonlinear
+    Burgers flux, so a measurable difference proves the Program drove the step without relying on a
+    formerly-wrong SSPRK2 implementation. Host/CPU-runnable; self-skips without a compiler / Kokkos."""
     print("== step_cfl routes through the installed AMR Program (fix 1: no silent native bypass) ==")
-    model = _euler_model("adc508_stepcfl")
+    model = _nonlinear_model("adc508_stepcfl")
     u0 = _init_density()
 
     prog_out, err = _amr_run_cfl(
-        _ssprk2_program(
-            model, "adc508_stepcfl_prog", target="amr_system"),
+        _midpoint_program(
+            model, "adc508_stepcfl_midpoint", target="amr_system"),
         model,
         u0,
     )
@@ -444,11 +475,11 @@ def test_step_cfl_routes_through_installed_program():
         "the Program-driven step_cfl kept a finite, strictly-positive density (min = %.4f)"
         % float(prog_rho.min()))
 
-    nat_out, nerr = _amr_run_cfl_native(_euler_model("adc508_stepcfl"), u0)
+    nat_out, nerr = _amr_run_cfl_native(_nonlinear_model("adc508_stepcfl"), u0)
     assert nat_out is not None, nerr
     nat_rho, nat_dt = nat_out
-    # The two dt agree (same CFL scan -- the Program route reuses cfl_dt), but the evolved density must
-    # DIFFER: if step_cfl had silently run the native scheme, prog_rho would EQUAL nat_rho byte-for-byte.
+    # The evolved density must DIFFER: if step_cfl had silently run the native SSPRK2 scheme, the
+    # custom midpoint Program would have no effect and prog_rho would equal nat_rho byte-for-byte.
     diff = float(np.abs(prog_rho - nat_rho).max())
     chk(diff > 1e-14,
         "the Program-driven step_cfl density DIFFERS from the native step_cfl baseline (max|diff| = "

@@ -214,7 +214,11 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
             projection=ConservativeCellAverage(),
         ))
         refine_threshold = case.param(
-            RuntimeParam("named_field_refine_threshold", default=2.0)
+            # The analytic Gaussian is bounded by 1.0.  A 0.5 threshold selects a compact,
+            # deterministic interior patch on the 8x8 parent grid (and leaves untagged coarse
+            # cells), so this test exercises a genuine two-level field solve instead of asking the
+            # bootstrap to create a level from an identically-empty tag mask.
+            RuntimeParam("named_field_refine_threshold", default=0.5)
         )
         transfer = AMRTransfer()
         transfer.state(state_instance, StateTransfer())
@@ -331,11 +335,15 @@ def test_named_elliptic_runtime_parameter_binds_into_native_rhs_without_recompil
     centered_potentials = []
     provider_slots = []
     for simulation in simulations:
+        if target == "amr_system":
+            assert simulation.n_levels() == 2
         report = pops.run(simulation, t_end=DT, max_steps=1)
         assert report.accepted_steps == 1
         assert report.final_time == DT
         slots = simulation.field_provider_slots()
         assert len(slots) == 1
+        if target == "amr_system":
+            assert simulation.field_provider_levels(slots[0]) == 2
         provider_slots.append(slots[0])
         potential_values = np.asarray(
             simulation.field_potential_global(slots[0]), dtype=np.float64

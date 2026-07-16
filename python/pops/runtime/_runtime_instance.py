@@ -285,6 +285,14 @@ class RuntimeInstance:
         return self._install_plan.bind_identity
 
     @property
+    def bound_snapshot(self) -> Any:
+        """Immutable evidence of the exact artifact, layouts and inputs bound to this runtime."""
+        snapshot = getattr(self._executor, "bound_snapshot", None)
+        if snapshot is None:
+            raise RuntimeError("RuntimeInstance executor lost its authenticated bound snapshot")
+        return snapshot
+
+    @property
     def consumer_graph(self) -> ConsumerGraph:
         """Resolved public authority for accepted runtime effects."""
         return self._consumer_graph
@@ -737,24 +745,26 @@ class RuntimeInstance:
         step_target = native_step_target(native)
         selected = resolve_run_strategy(native)
         control = run_control_payload(selected, controller_controls)
-        prepare_step_controller(native, selected, controller_controls)
         self._step_transaction_methods()
-        temporal = getattr(native, "_temporal_restart_state", None)
-        if temporal is not None:
-            temporal.begin_run(control, time=native.time(), macro_step=native.macro_step())
-        from pops.runtime._run_manifest import begin_run
-
-        manifest = begin_run(
-            native,
-            t_end=t_end,
-            step_transaction=control,
-            max_steps=max_steps,
-            output_dir=output_dir,
-        )
+        entry_temporal = copy.deepcopy(getattr(native, "_temporal_restart_state", None))
+        entry_controller = copy.deepcopy(getattr(native, "_step_controller", None))
         previous_root, self._output_root = self._output_root, output_dir
         steps = 0
         rejected_steps = 0
         try:
+            prepare_step_controller(native, selected, controller_controls)
+            temporal = getattr(native, "_temporal_restart_state", None)
+            if temporal is not None:
+                temporal.begin_run(control, time=native.time(), macro_step=native.macro_step())
+            from pops.runtime._run_manifest import begin_run
+
+            manifest = begin_run(
+                native,
+                t_end=t_end,
+                step_transaction=control,
+                max_steps=max_steps,
+                output_dir=output_dir,
+            )
             self._fire_consumers(at_start=True)
             while native.time() < t_end and steps < max_steps:
                 def advance() -> tuple[Any, int]:
@@ -776,6 +786,27 @@ class RuntimeInstance:
                     f"requested t_end={t_end!r}")
             if steps == 0:
                 self._fire_consumers(at_end=True)
+        except BaseException as error:
+            # ``begin_run`` binds controller/strategy state before the first native transaction.
+            # If no macro-step commits, the complete failed call leaves the temporal authority at
+            # its entry boundary.  After one or more accepted steps, each later failed transaction
+            # already restores the last accepted boundary and that progress must be retained.
+            if steps == 0:
+                restore_error = None
+                try:
+                    restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
+                    if callable(restore_temporal):
+                        restore_temporal(entry_temporal)
+                    elif hasattr(native, "_temporal_restart_state"):
+                        native._temporal_restart_state = entry_temporal
+                    if hasattr(native, "_step_controller"):
+                        native._step_controller = entry_controller
+                except BaseException as caught:
+                    restore_error = caught
+                add_note = getattr(error, "add_note", None)
+                if restore_error is not None and callable(add_note):
+                    add_note("run-entry temporal rollback also failed: %s" % restore_error)
+            raise
         finally:
             self._output_root = previous_root
         return RunReport(

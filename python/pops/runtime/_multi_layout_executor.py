@@ -195,6 +195,11 @@ class _CompositeTemporalRestartState:
     def program_schedule(self) -> Any:
         return self._same_attribute("program_schedule")
 
+    def to_data(self) -> dict[str, Any]:
+        """Project one temporal report only after proving every layout is identical."""
+        rows = tuple(state.to_data() for state in self.states)
+        return _common_exact(rows, where="multi-layout temporal report")
+
     def _broadcast(self, name: str, **kwargs: Any) -> None:
         for state in self.states:
             getattr(state, name)(**kwargs)

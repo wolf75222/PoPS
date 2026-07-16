@@ -1,9 +1,4 @@
-"""Numerical regressions for the final board-authored Roe capability.
-
-The test deliberately crosses the authenticated compiler-provider boundary instead of importing
-the former PDE facade.  Both models are ordinary :class:`pops.physics.Model` values and execute in
-the native ``System`` route with the generic ``Roe`` descriptor.
-"""
+"""Numerical regressions for board-authored Roe through the final public lifecycle."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,22 +6,21 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import pops.runtime._engine_descriptors as engine
+import pops
+from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.lib.time import ForwardEuler
 from pops.math import ddt, div, sqrt
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Roe
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
 from pops.physics import Density, Energy, Model, Momentum
-from pops.runtime._system import System
-from tests.python.support.requirements import (
-    default_cxx,
-    missing_native_compile_requirement,
-    repo_include,
-)
+from pops.time import FixedDt
 
 
-INCLUDE = repo_include()
+ROOT = Path(__file__).resolve().parents[4]
 GAMMA = 1.4
 
 pytestmark = [
@@ -41,18 +35,52 @@ def _frame(name: str):
     return Rectangle(name, (0.0, 0.0), (1.0, 1.0)).frame(Cartesian2D())
 
 
-def _compile_native(model: Model, path: Path):
-    """Compile through the final explicit provider, never through ``Model.compile``."""
-    lowering = model.__pops_compiler_lowering__()
-    assert lowering.facade is model
-    assert lowering.source_module is model.module
-    return lowering.emit_model.compile(str(path), INCLUDE, backend="production")
-
-
-def _require_native_toolchain() -> None:
-    reason = missing_native_compile_requirement(INCLUDE, default_cxx())
-    if reason:
-        pytest.skip(reason)
+def _compile_public(
+    model: Model,
+    *,
+    case_name: str,
+    block_name: str,
+    n: int,
+    dt: float,
+    cxx: str,
+):
+    """Compile one Roe case through ``validate -> resolve -> compile`` only."""
+    state = model.states["U"]
+    flux = model.fluxes["transport"]
+    rate = model.operators["transport"]
+    case = pops.Case(case_name)
+    block = case.block(block_name, model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Roe(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(n, n),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    assert len(artifact.blocks) == 1
+    return artifact
 
 
 def _euler(name: str) -> Model:
@@ -90,7 +118,7 @@ def _euler(name: str) -> Model:
             y_axis: (v - sound_speed, v, v, v + sound_speed),
         },
     )
-    model.riemann(Roe(), flux=flux, pressure=pressure)
+    model.riemann(riemann.Roe(), flux=flux, pressure=pressure)
     model.rate("transport", equation=ddt(state) == -div(flux))
     return model
 
@@ -127,7 +155,7 @@ def _isothermal(name: str) -> Model:
             y_axis: (v - sound_speed, v, v + sound_speed),
         },
     )
-    model.riemann(Roe(), flux=flux, pressure=pressure)
+    model.riemann(riemann.Roe(), flux=flux, pressure=pressure)
     model.rate("transport", equation=ddt(state) == -div(flux))
     return model
 
@@ -138,47 +166,65 @@ def _smooth_density(n: int, amplitude: float = 0.4) -> np.ndarray:
     return 1.0 + amplitude * np.exp(-60.0 * ((x - 0.5) ** 2 + (y - 0.5) ** 2))
 
 
-def test_board_roe_runs_euler_and_preserves_stationary_shear(tmp_path: Path) -> None:
-    _require_native_toolchain()
-
+def test_board_roe_runs_euler_and_preserves_stationary_shear(
+    isolated_native_cache: Path,
+    native_cxx: str,
+    kokkos_root: Path,
+) -> None:
+    del isolated_native_cache, kokkos_root
     n = 24
-    roe_spatial = engine.Spatial(limiter=FirstOrder(), flux=Roe())
+    euler_dt = 2.0e-4
 
-    euler = _compile_native(_euler("final_euler_roe"), tmp_path / "euler_roe.so")
-    assert euler.has_roe
-    assert not euler.has_hllc  # compiling Roe-only must not require the unrelated HLLC capability
+    euler = _compile_public(
+        _euler("final_euler_roe"),
+        case_name="final_euler_roe_case",
+        block_name="gas",
+        n=n,
+        dt=euler_dt,
+        cxx=native_cxx,
+    )
+    assert euler.blocks[0].model.has_roe
+    # Compiling Roe-only must not require the unrelated HLLC capability.
+    assert not euler.blocks[0].model.has_hllc
     rho = _smooth_density(n)
     u = np.full_like(rho, 0.1)
     v = np.zeros_like(rho)
     pressure = np.ones_like(rho)
     energy = pressure / (GAMMA - 1.0) + 0.5 * rho * (u * u + v * v)
-    initial = np.stack((rho, rho * u, rho * v, energy))
+    initial = np.ascontiguousarray(np.stack((rho, rho * u, rho * v, energy)))
 
-    gas = System(n=n, L=1.0, periodic=True)
-    gas.add_equation(
-        "gas", model=euler, spatial=roe_spatial, time=engine.Explicit())
-    gas.set_state("gas", initial)
-    for _ in range(8):
-        gas.step(2.0e-4)
-    final = np.asarray(gas.get_state("gas"))
+    gas = pops.bind(euler, initial_state={"gas": initial})
+    report = pops.run(gas, t_end=8 * euler_dt, max_steps=8)
+    assert report.accepted_steps == 8
+    final = np.asarray(gas.get_state("gas"), dtype=np.float64).reshape(initial.shape)
     assert np.isfinite(final).all()
-    np.testing.assert_allclose(final[[0, 3]].sum(axis=(1, 2)),
-                               initial[[0, 3]].sum(axis=(1, 2)), rtol=1.0e-12, atol=1.0e-12)
+    np.testing.assert_allclose(
+        final[[0, 3]].sum(axis=(1, 2)),
+        initial[[0, 3]].sum(axis=(1, 2)),
+        rtol=1.0e-12,
+        atol=1.0e-12,
+    )
 
-    isothermal = _compile_native(
-        _isothermal("final_isothermal_roe"), tmp_path / "isothermal_roe.so")
-    assert isothermal.has_roe
-    assert not isothermal.has_hllc
+    shear_dt = 1.0e-3
+    isothermal = _compile_public(
+        _isothermal("final_isothermal_roe"),
+        case_name="final_isothermal_roe_case",
+        block_name="fluid",
+        n=n,
+        dt=shear_dt,
+        cxx=native_cxx,
+    )
+    assert isothermal.blocks[0].model.has_roe
+    assert not isothermal.blocks[0].model.has_hllc
     points = (np.arange(n) + 0.5) / n
     transverse_velocity = np.tile(0.3 * np.sin(2.0 * np.pi * points), (n, 1))
-    shear = np.stack((np.ones((n, n)), np.zeros((n, n)), transverse_velocity))
-    fluid = System(n=n, L=1.0, periodic=True)
-    fluid.add_equation(
-        "fluid", model=isothermal, spatial=roe_spatial, time=engine.Explicit())
-    fluid.set_state("fluid", shear)
-    before = np.asarray(fluid.get_state("fluid")).copy()
-    for _ in range(6):
-        fluid.step_cfl(0.3)
-    after = np.asarray(fluid.get_state("fluid"))
+    shear = np.ascontiguousarray(
+        np.stack((np.ones((n, n)), np.zeros((n, n)), transverse_velocity))
+    )
+    fluid = pops.bind(isothermal, initial_state={"fluid": shear})
+    before = np.asarray(fluid.get_state("fluid"), dtype=np.float64).reshape(shear.shape).copy()
+    report = pops.run(fluid, t_end=6 * shear_dt, max_steps=6)
+    assert report.accepted_steps == 6
+    after = np.asarray(fluid.get_state("fluid"), dtype=np.float64).reshape(shear.shape)
     # The contact/shear wave has zero normal speed, so Roe adds exactly no dissipation.
     np.testing.assert_array_equal(after, before)

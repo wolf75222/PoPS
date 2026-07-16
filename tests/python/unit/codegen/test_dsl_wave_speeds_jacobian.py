@@ -1,9 +1,4 @@
-"""Native HLL oracles for Jacobian eigenvalues, partitions and finite differences.
-
-All authoring uses the final blackboard ``Model``.  Three independently compiled models exercise
-the full numeric Jacobian, a direction-specific block partition and the finite-difference Jacobian;
-the native HLL residual is checked against an independent NumPy reference in both directions.
-"""
+"""Public HLL oracles for Jacobian eigenvalues, partitions and finite differences."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,23 +6,25 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import pops.runtime._engine_descriptors as engine
+import pops
+from pops.codegen import Production
 from pops.domain import Rectangle
 from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.lib.time import ForwardEuler
 from pops.math import ddt, div
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import HLL
-from pops.numerics.riemann.waves import FromJacobian, provider_of
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.riemann import FromJacobian, provider_of
+from pops.numerics.spatial import FiniteVolume
 from pops.physics import Model
-from pops.runtime._system import System
-from tests.python.support.requirements import (
-    default_cxx,
-    missing_native_compile_requirement,
-    repo_include,
-)
+from pops.time import FixedDt
 
 
-INCLUDE = repo_include()
+ROOT = Path(__file__).resolve().parents[4]
+N = 24
+# One explicit stage with dt=1 returns exactly U + RHS, retaining the original RHS oracle tolerance.
+DT = 1.0
 
 pytestmark = [
     pytest.mark.compiler,
@@ -65,11 +62,51 @@ def _jacobian_model(name: str, *, eig: str = "numeric", blocks=None) -> Model:
     return model
 
 
-def _compile_native(model: Model, path: Path):
-    lowering = model.__pops_compiler_lowering__()
-    assert lowering.facade is model
-    assert lowering.source_module is model.module
-    return lowering.emit_model.compile(str(path), INCLUDE, backend="production")
+def _compile_public(
+    model: Model,
+    *,
+    case_name: str,
+    waves: FromJacobian,
+    cxx: str,
+):
+    """Compile one HLL model through the final public lifecycle."""
+    state = model.states["U"]
+    flux = model.fluxes["transport"]
+    rate = model.operators["transport"]
+    case = pops.Case(case_name)
+    block = case.block("toy", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.HLL(waves=waves),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    assert len(artifact.blocks) == 1
+    assert artifact.blocks[0].model.has_wave_speeds
+    return artifact
 
 
 def _state(n: int) -> np.ndarray:
@@ -135,25 +172,21 @@ def _expected_hll_rhs(state: np.ndarray, n: int, *, partitioned: bool) -> np.nda
     return rhs
 
 
-def _native_rhs(compiled, state: np.ndarray) -> np.ndarray:
-    n = state.shape[-1]
-    simulation = System(n=n, L=1.0, periodic=True)
-    simulation.add_equation(
-        "toy",
-        model=compiled,
-        spatial=engine.Spatial(limiter=FirstOrder(), flux=HLL()),
-        time=engine.Explicit(),
-    )
-    simulation.set_state("toy", state)
-    return np.asarray(simulation.eval_rhs("toy"))
+def _public_rhs(artifact, state: np.ndarray) -> np.ndarray:
+    initial = np.ascontiguousarray(state)
+    simulation = pops.bind(artifact, initial_state={"toy": initial})
+    report = pops.run(simulation, t_end=DT, max_steps=1)
+    assert report.accepted_steps == 1
+    final = np.asarray(simulation.get_state("toy"), dtype=np.float64).reshape(initial.shape)
+    return (final - initial) / DT
 
 
 def test_compiled_jacobian_speeds_cover_eigensolve_blocks_fd_and_directions(
-    tmp_path: Path,
+    isolated_native_cache: Path,
+    native_cxx: str,
+    kokkos_root: Path,
 ) -> None:
-    reason = missing_native_compile_requirement(INCLUDE, default_cxx())
-    if reason:
-        pytest.skip(reason)
+    del isolated_native_cache, kokkos_root
 
     partitions = {"x": [[0], [1]], "y": [[1], [0]]}
     numeric_model = _jacobian_model("jacobian_numeric")
@@ -171,21 +204,32 @@ def test_compiled_jacobian_speeds_cover_eigensolve_blocks_fd_and_directions(
     assert fd_provider.kind == FromJacobian(eig="fd").kind
     assert fd_provider.options()["eig"] == "fd"
 
-    numeric = _compile_native(numeric_model, tmp_path / "jacobian_numeric.so")
-    partitioned = _compile_native(
-        partitioned_model, tmp_path / "jacobian_partitioned.so")
-    finite_difference = _compile_native(fd_model, tmp_path / "jacobian_fd.so")
-    assert numeric.has_wave_speeds
-    assert partitioned.has_wave_speeds
-    assert finite_difference.has_wave_speeds
+    numeric = _compile_public(
+        numeric_model,
+        case_name="jacobian_numeric_case",
+        waves=FromJacobian(eig="numeric"),
+        cxx=native_cxx,
+    )
+    partitioned = _compile_public(
+        partitioned_model,
+        case_name="jacobian_partitioned_case",
+        waves=FromJacobian(eig="numeric", blocks=partitions),
+        cxx=native_cxx,
+    )
+    finite_difference = _compile_public(
+        fd_model,
+        case_name="jacobian_fd_case",
+        waves=FromJacobian(eig="fd"),
+        cxx=native_cxx,
+    )
 
-    state = _state(24)
-    expected = _expected_hll_rhs(state, 24, partitioned=False)
-    expected_partitioned = _expected_hll_rhs(state, 24, partitioned=True)
+    state = _state(N)
+    expected = _expected_hll_rhs(state, N, partitioned=False)
+    expected_partitioned = _expected_hll_rhs(state, N, partitioned=True)
     assert np.max(np.abs(expected_partitioned - expected)) > 1.0e-3
-    numeric_rhs = _native_rhs(numeric, state)
-    partitioned_rhs = _native_rhs(partitioned, state)
-    fd_rhs = _native_rhs(finite_difference, state)
+    numeric_rhs = _public_rhs(numeric, state)
+    partitioned_rhs = _public_rhs(partitioned, state)
+    fd_rhs = _public_rhs(finite_difference, state)
 
     # The independent reference uses different signed spectra in x and y, so a direction swap or a
     # scalar-radius fallback cannot satisfy this equality.

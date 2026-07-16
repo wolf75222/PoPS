@@ -48,6 +48,29 @@ class _Uniform:
         self.mesh = _Mesh(n)
 
 
+class _MultiLayout:
+    """Minimal exact multi-layout authority used by the pure bind gate."""
+
+    def __init__(self, assignments):
+        handles = {name: object() for name in assignments}
+        self.rows = tuple(SimpleNamespace(handle=handles[name], descriptor=layout)
+                          for name, layout in assignments.items())
+        self.plan = SimpleNamespace(assignments=tuple(
+            SimpleNamespace(
+                subject_kind="block",
+                subject=SimpleNamespace(local_id=name),
+                layout=handles[name],
+            )
+            for name in assignments
+        ))
+
+    def descriptor(self, handle):
+        matches = [row.descriptor for row in self.rows if row.handle is handle]
+        if len(matches) != 1:
+            raise KeyError("unknown layout handle")
+        return matches[0]
+
+
 class _AMR:
     """An AMR layout stand-in exposing capabilities() and runtime_layout_data()."""
 
@@ -151,6 +174,43 @@ def test_missing_ghost_depth_manifest_is_refused_as_abi_incomplete():
     lines = bv.validate_initial_state(manifest, _one_block_args(1), _Uniform(64),
                                       {"ne": _Array((64, 64))})
     assert any("no ghost_depth" in l and "ABI-incomplete" in l for l in lines)
+
+
+def test_multi_layout_uses_exact_per_block_ghost_depth_and_mesh():
+    manifest = _Manifest(ghost_depth=None)
+    manifest.ghost_depth_by_block = {"fine": 3, "coarse": 1}
+    args = _Arguments({
+        "fine": {"state": "U", "components": 1, "required": True},
+        "coarse": {"state": "U", "components": 1, "required": True},
+    })
+    layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
+
+    assert bv.validate_initial_state(
+        manifest,
+        args,
+        layout,
+        {"fine": _Array((1, 22, 22)), "coarse": _Array((1, 10, 10))},
+    ) == []
+
+
+def test_multi_layout_refuses_partial_per_block_ghost_authority():
+    manifest = _Manifest(ghost_depth=3)
+    manifest.ghost_depth_by_block = {"fine": 3}
+    args = _Arguments({
+        "fine": {"state": "U", "components": 1, "required": True},
+        "coarse": {"state": "U", "components": 1, "required": True},
+    })
+    layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
+
+    lines = bv.validate_initial_state(
+        manifest,
+        args,
+        layout,
+        {"fine": _Array((16, 16)), "coarse": _Array((8, 8))},
+    )
+    assert len(lines) == 1
+    assert "block 'coarse'" in lines[0]
+    assert "ghost_depth_by_block" in lines[0]
 
 
 def test_non_array_initial_state_is_refused():

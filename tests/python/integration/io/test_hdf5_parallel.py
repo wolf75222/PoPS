@@ -3,7 +3,8 @@
 The low-level proof compares disjoint collective hyperslabs with a serial publication. The native
 proof launches the complete ``Case -> validate -> resolve(Production) -> compile -> bind -> run``
 path, inspects only the public rank-owned state surface, and validates the collective file. Missing
-optional MPI/HDF5 prerequisites are explicit skips; execution never degrades to a serial writer.
+optional MPI/HDF5 prerequisites are explicit local skips, but fail closed when the MPI acceptance
+lane declares them required; execution never degrades to a serial writer.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from typing import NoReturn
 
 import numpy as np
 import pops
@@ -50,6 +52,12 @@ from pops.time import FixedDt, StagePoint, TimePoint, every
 
 pytestmark = pytest.mark.mpi
 _MPI_CHILD = "POPS_HDF5_MPI_TEST_CHILD"
+
+
+def _missing_mpi_requirement(reason: str) -> NoReturn:
+    if os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1":
+        pytest.fail("required collective HDF5 test unavailable: %s" % reason)
+    pytest.skip(reason)
 
 
 def _identity(domain: str, name: str):
@@ -172,15 +180,22 @@ def _native_case() -> tuple[pops.Case, Uniform, np.ndarray]:
 
 
 def _parallel_hdf5_world(test_name: str):
-    h5py = pytest.importorskip("h5py", reason="collective HDF5 requires h5py")
+    try:
+        import h5py
+    except ImportError:
+        _missing_mpi_requirement("collective HDF5 requires h5py")
     if not h5py.get_config().mpi:
-        pytest.skip("collective HDF5 requires h5py built with MPI")
-    mpi = pytest.importorskip("mpi4py.MPI", reason="collective HDF5 requires mpi4py")
+        _missing_mpi_requirement("collective HDF5 requires h5py built with MPI")
+    try:
+        from mpi4py import MPI as mpi
+    except ImportError:
+        _missing_mpi_requirement("collective HDF5 requires mpi4py")
     communicator = mpi.COMM_WORLD
     if int(communicator.Get_size()) == 1 and os.environ.get(_MPI_CHILD) != "1":
         mpiexec = shutil.which("mpiexec") or shutil.which("mpirun")
         if mpiexec is None:
-            pytest.skip("collective HDF5 requires an MPI launcher for the two-rank proof")
+            _missing_mpi_requirement(
+                "collective HDF5 requires an MPI launcher for the two-rank proof")
         env = dict(os.environ)
         env[_MPI_CHILD] = "1"
         result = subprocess.run(

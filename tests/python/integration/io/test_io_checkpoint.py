@@ -66,7 +66,7 @@ sim = build()
 for _ in range(3):
     sim.step(dt)
 temporal = sim.program_report().temporal
-chk(temporal["strategy"]["kind"] == "fixed_dt",
+chk(temporal["strategy"]["strategy"]["kind"] == "fixed_dt",
     "l'enveloppe directe conserve la strategie FixedDt exacte")
 chk(temporal["transaction_stats"] == {"accepted": 3, "failed": 0, "rejected": 0},
     "une seule acceptation temporelle par pas direct")

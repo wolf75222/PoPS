@@ -11,6 +11,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.support.requirements import (
+    native_tests_required,
+    require_native_or_skip,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PYTHON = REPO_ROOT / "python"
@@ -49,11 +54,15 @@ class PythonProcessItem(pytest.Item):
         )
         skip_reason = _process_skip_reason(result.stdout)
         if skip_reason:
-            pytest.skip(skip_reason)
+            require_native_or_skip(skip_reason, optional_skip=pytest.skip)
+        if result.returncode == 0:
+            legacy_missing = _missing_process_requirement(result.stdout)
+            if legacy_missing:
+                require_native_or_skip(legacy_missing, optional_skip=pytest.skip)
         if result.returncode != 0:
             missing = _missing_process_requirement_for_environment(result.stdout, env)
             if missing:
-                pytest.skip(missing)
+                require_native_or_skip(missing, optional_skip=pytest.skip)
             raise PythonProcessFailure(Path(str(self.path)), result.returncode, result.stdout)
 
     def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException]) -> str:
@@ -117,7 +126,11 @@ def kokkos_root() -> Path:
             root = Path(value)
             if root.exists():
                 return root
-    pytest.skip("Kokkos root is not configured")
+    require_native_or_skip(
+        "Kokkos root is not configured",
+        optional_skip=pytest.skip,
+    )
+    raise AssertionError("pytest.skip unexpectedly returned")
 
 
 @pytest.fixture(scope="session")
@@ -132,7 +145,11 @@ def native_cxx() -> str:
     for candidate in candidates:
         if candidate:
             return candidate
-    pytest.skip("no C++ compiler available")
+    require_native_or_skip(
+        "no C++ compiler available",
+        optional_skip=pytest.skip,
+    )
+    raise AssertionError("pytest.skip unexpectedly returned")
 
 
 @pytest.fixture(scope="session")
@@ -203,7 +220,62 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         # skip through the POPS_SKIP marker, so they are left alone here.
         if compiler_missing and not isinstance(item, PythonProcessItem):
             if any(m.name == "compiler" for m in item.iter_markers()):
-                item.add_marker(pytest.mark.skip(reason=compiler_missing))
+                require_native_or_skip(
+                    compiler_missing,
+                    optional_skip=lambda reason, target=item: target.add_marker(
+                        pytest.mark.skip(reason=reason)
+                    ),
+                )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item,
+    call: pytest.CallInfo[None],
+) -> Iterator[None]:
+    """Make every native-gated skip fail closed in required CI lanes.
+
+    This is the final safety net for a legacy direct ``pytest.skip`` or a third-party fixture skip.
+    The canonical requirement helper remains the preferred call site, but release coverage cannot
+    become green merely because one native test missed that migration.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if (
+        report.skipped
+        and native_tests_required()
+        and _is_native_requirement_skip(report.longrepr)
+    ):
+        report.outcome = "failed"
+        report.longrepr = (
+            "POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: "
+            f"{item.nodeid} ({report.longrepr})"
+        )
+
+
+def _is_native_requirement_skip(longrepr: object) -> bool:
+    """Recognize only compiler/Kokkos/native-build skip diagnostics.
+
+    Marker membership is deliberately insufficient: a test can combine a native leg with an
+    optional MPI/HDF5 leg. Conversely, legacy mixed tests may omit the compiler marker entirely.
+    The skip reason is the authority for whether ``POPS_REQUIRE_NATIVE_TESTS`` applies.
+    """
+    reason = str(longrepr).lower()
+    explicit = (
+        "c++ compiler",
+        "compiler available",
+        "compilateur c++",
+        "kokkos",
+        "pops headers",
+        "pops header",
+        "en-tetes pops",
+        "native extension",
+        "_pops module",
+        "stale build",
+    )
+    return any(token in reason for token in explicit) or (
+        ".so" in reason and ("build" in reason or "compile" in reason)
+    )
 
 
 @cache
