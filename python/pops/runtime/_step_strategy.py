@@ -99,7 +99,12 @@ def _native_attempt(engine: Any, native: Any, advance: Any) -> Any:
         if temporal is not None:
             from pops.runtime._temporal_restart import is_rejected_attempt
             recorder = temporal.reject if is_rejected_attempt(error) else temporal.fail
-            recorder(time=native.time(), macro_step=native.macro_step())
+            # Record the unsuccessful attempt at the last accepted boundary. A composite target may
+            # have advanced one child before another failed; querying its live clock here can then
+            # raise a divergence error and mask the initiating numerical exception. The enclosing
+            # transaction owns native rollback, while the temporal envelope remains at this captured
+            # pre-attempt clock by definition.
+            recorder(time=before_time, macro_step=before_step)
         raise
     if temporal is not None:
         temporal.accept(

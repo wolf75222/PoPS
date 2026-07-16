@@ -322,6 +322,10 @@ class _MultiLayoutUniformExecutor:
     def macro_step(self) -> int:
         return int(self._common_clock("macro_step"))
 
+    def _native_step_target(self) -> Any:
+        """The coordinator itself is the raw target for one composite attempt."""
+        return self
+
     def _mapping_blocks(self, transfer: Any) -> tuple[str, str]:
         matches = tuple(
             row
@@ -406,12 +410,14 @@ class _MultiLayoutUniformExecutor:
         return receipt
 
     def step(self, dt: float) -> None:
+        from pops.runtime._native_step_target import native_step_target
+
         transfers = tuple(self._runtime_plan.communication.transfers)
         sources = tuple(self._capture_mapping_source(transfer) for transfer in transfers)
         for transfer, source in zip(transfers, sources, strict=True):
             self._apply_mapping(transfer, source)
         for engine in self._engines.values():
-            engine.step(dt)
+            native_step_target(engine).step(dt)
         self._common_clock("time")
         self._common_clock("macro_step")
 
@@ -473,6 +479,13 @@ class _MultiLayoutUniformExecutor:
             raise RuntimeError("composite temporal state count differs from native layouts")
         for engine, state in zip(self._engines.values(), states, strict=True):
             engine._temporal_restart_state = state
+
+    def _restore_temporal_restart_state(self, state: Any) -> None:
+        """Restore the coordinator envelope and every child authority atomically."""
+        if not isinstance(state, _CompositeTemporalRestartState):
+            raise TypeError("multi-layout temporal restore requires a composite state")
+        self._temporal_restart_state = state
+        self._synchronize_child_temporal_states()
 
     def _rebuild_composite_temporal_state(self) -> None:
         self._temporal_restart_state = _CompositeTemporalRestartState(

@@ -19,7 +19,7 @@
 ///   a de-replicated coarse level would wrongly switch back to replicated;
 /// - recon_prim selects the primitive reconstruction (cf. assemble_rhs) instead of conservative;
 ///   false (default) = strictly bit-identical;
-/// - kSsprk3 requires imex == false (rejected otherwise, enforced on the engine side).
+/// - kSsprk2 and kSsprk3 require imex == false (rejected otherwise by the engine).
 
 namespace pops {
 
@@ -52,8 +52,9 @@ struct LevelHierarchy {
   // NEWTON OPTIONS of the IMEX step (default {} = historical constants 2 iters / 1e-7 -> bit-identical).
   // Honored only when imex==true; forwarded to backward_euler_source by mf_apply_source_treatment.
   NewtonOptions newton_options{};
-  // TIME METHOD: kEuler (default, forward Euler per substep, bit-identical to the historical) or
-  // kSsprk3 (SSPRK3 order 3 + per-stage reflux). kSsprk3 requires imex == false (rejected otherwise, cf. engine).
+  // TIME METHOD: kEuler (forward Euler), kSsprk2 (SSPRK2/Heun, order 2), or kSsprk3 (order 3).
+  // Both SSP methods expose their effective stage-weighted flux to reflux and require imex == false
+  // (rejected by the engine).
   AmrTimeMethod time_method = AmrTimeMethod::kEuler;
   // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
   // transport. <= 0 (default) -> inactive, bit-identical to the historical path.

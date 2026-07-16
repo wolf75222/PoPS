@@ -88,7 +88,7 @@ struct AmrBlockBuildArgs {
   NewtonOptions newton;
   const std::vector<double>* state;  // &BlockSpec::state when has_state, else nullptr (non-owning)
   bool newton_diagnostics;
-  int time_method;  // 1 == ssprk3 -> AmrTimeMethod::kSsprk3, else kEuler (build_multi mapping)
+  int time_method;  // stable AmrTimeMethod wire: 0=euler, 1=ssprk3, 2=ssprk2
   double pos_floor;
 };
 
@@ -103,8 +103,7 @@ AmrRuntimeBlock build_amr_block_for(TR tr, const AmrBlockBuildArgs& a, const Sha
         a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
                                                  a.implicit_roles)
                : std::vector<int>{};
-    const AmrTimeMethod tmethod =
-        a.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+    const AmrTimeMethod tmethod = amr_time_method_from_wire(a.time_method);
     out = dispatch_amr_block(m, a.limiter, a.riemann, S, a.name, a.density, a.has_density, a.gamma,
                              a.substeps, a.recon_prim, a.imex, a.stride, impl_components, a.newton,
                              a.state, a.newton_diagnostics, tmethod, a.pos_floor);
@@ -138,8 +137,7 @@ AmrRuntimeBlock build_amr_block_for_flux(TR tr, const AmrBlockBuildArgs& a,
         a.imex ? resolve_implicit_components_amr(a.name, M::conservative_vars(), a.implicit_vars,
                                                  a.implicit_roles)
                : std::vector<int>{};
-    const AmrTimeMethod tmethod =
-        a.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+    const AmrTimeMethod tmethod = amr_time_method_from_wire(a.time_method);
     out = dispatch(m, a, S, impl_components, tmethod);
   });
   return out;

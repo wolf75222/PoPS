@@ -133,6 +133,29 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         from pops.runtime._temporal_restart import TemporalRestartState
         self._temporal_restart_state = TemporalRestartState()
 
+    def _native_step_target(self) -> Any:
+        """Return the transaction-free compiled target for runtime controllers."""
+        return self._s
+
+    def step(self, dt: Any) -> None:
+        """Advance one fixed step and synchronize exactly one temporal envelope."""
+        from pops.runtime._native_step_target import native_step_target
+        from pops.runtime._step_strategy import run_control_payload, run_step_attempt
+        from pops.time import FixedDt
+
+        strategy = FixedDt(dt)
+        self._temporal_restart_state.begin_run(
+            run_control_payload(strategy),
+            time=self._s.time(),
+            macro_step=self._s.macro_step(),
+        )
+        run_step_attempt(
+            self,
+            native_step_target(self),
+            strategy,
+            t_end=float(self._s.time()) + strategy.dt,
+        )
+
     def set_poisson(self, rhs: Any = "charge_density", solver: Any = "geometric_mg", *,
                     bc: Any = None, wall: Any = None, composite: bool = False,
                     fac_max_iters: int = 0, fac_fine_sweeps: int = 0,
@@ -189,6 +212,7 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         """Advance up to ``t_end``; RuntimeInstance alone publishes ConsumerGraph effects."""
         from pops.runtime._step_strategy import (
             prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        from pops.runtime._native_step_target import native_step_target
         strategy = resolve_run_strategy(self)
         control_payload = run_control_payload(strategy, controls)
         prepare_step_controller(self, strategy, controls)
@@ -198,10 +222,12 @@ class AmrSystem(_AmrSystemEquation, _AmrSystemInstall, _AmrSystemIO, _AmrSystemP
         begin_run(
             self, t_end=t_end, step_transaction=control_payload,
             max_steps=max_steps, output_dir=output_dir)
+        step_target = native_step_target(self)
         steps = 0
         while self._s.time() < t_end and steps < max_steps:
             run_step_attempt(
-                self, self._s, strategy, t_end=float(t_end), controls=controls)
+                self, step_target, strategy,
+                t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 

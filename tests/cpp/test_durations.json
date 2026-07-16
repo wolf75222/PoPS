@@ -4,7 +4,7 @@
     "ctest_parallel_jobs": 4,
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 184,
+    "target_count": 185,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -34,6 +34,7 @@
   "test_amr_seed_no_refine": 4.3,
   "test_amr_source_covered_cells": 0.01,
   "test_amr_spatial_parity": 0.06,
+  "test_amr_ssprk2": 3.0,
   "test_amr_stride_cadence": 0.01,
   "test_amr_system_bz_multibox": 0.02,
   "test_amr_system_bz_pop": 0.01,

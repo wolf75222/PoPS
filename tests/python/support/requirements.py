@@ -52,6 +52,19 @@ def skip_process_test(reason: str, *, code: int = 0) -> None:
     sys.exit(code)
 
 
+def require_native_or_skip(reason: str) -> None:
+    """Fail a required native CI acceptance, otherwise report an explicit optional skip.
+
+    Local source-only runs may legitimately lack a compiler, Kokkos, or an installed extension.
+    The Serial native CI lane sets ``POPS_REQUIRE_NATIVE_TESTS=1`` because those prerequisites are
+    part of that lane's contract; treating their disappearance (or an import/API regression) as a
+    skip would silently remove release coverage.
+    """
+    if os.environ.get("POPS_REQUIRE_NATIVE_TESTS") == "1":
+        raise RuntimeError(f"required native test unavailable: {reason}")
+    skip_process_test(reason)
+
+
 def kokkos_root() -> Path | None:
     for name in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
         value = os.environ.get(name)

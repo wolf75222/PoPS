@@ -25,11 +25,23 @@ This test asserts:
 
 WHAT NEEDS WHICH RUNNER. (1) is pure Python. (2)/(3) need a compiler + a visible Kokkos
 (``POPS_KOKKOS_ROOT``) to build the .so; the compiled-.so dlopen + per-level RUN IS validatable on
-Kokkos CPU (Serial/OpenMP) locally -- unlike GPU (the CUDA run is the ROMEO step). Self-skips (exit 0)
-without pops / a built _pops / a compiler. Pytest + ``__main__`` guard (CI runs ``python3 <file>``).
+Kokkos CPU (Serial/OpenMP) locally -- unlike GPU (the CUDA run is the ROMEO step). This process-level
+acceptance preflights those native requirements once, then every compile/install/run leg is mandatory.
+Pytest + ``__main__`` guard (CI runs ``python3 <file>``).
 """
 import sys
 from fractions import Fraction
+
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+_native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
+if _native_missing:
+    require_native_or_skip("test_amr_program_parity: %s" % _native_missing)
 
 # ADC-627 idiom: this file AOT-compiles several Program/.so artifacts; give the
 # process-isolated runner headroom over the default (CI runner speed varies 3-4x).
@@ -54,8 +66,7 @@ try:
         scalar_advection_field_model,
     )
 except Exception as exc:  # noqa: BLE001 -- pops/numpy unavailable in this interpreter
-    print("skip test_amr_program_parity (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip("test_amr_program_parity imports unavailable: %s" % exc)
 
 N = 16
 NSTEPS = 4
@@ -271,15 +282,11 @@ def test_single_level_bit_identical_parity():
 
     sys_out, sys_err = _system_run(
         _ssprk2_program(model, target="system"), model, u0)
-    if sys_out is None:
-        print("skip (%s)" % sys_err)
-        return
+    assert sys_out is not None, sys_err
     amr_model = _euler_model("adc508_parity_ssprk2")
     amr_out, amr_err = _amr_run(
         _ssprk2_program(amr_model, target="amr_system"), amr_model, u0)
-    if amr_out is None:
-        print("skip (%s)" % amr_err)
-        return
+    assert amr_out is not None, amr_err
 
     sys_state, sys_phi = sys_out
     amr_rho, amr_phi, amr_mass = amr_out
@@ -321,18 +328,14 @@ def test_custom_two_stage_runs_and_differs():
 
     mid_amr, err = _amr_run(
         _midpoint_program(model, target="amr_system"), model, u0)
-    if mid_amr is None:
-        print("skip (%s)" % err)
-        return
+    assert mid_amr is not None, err
     mid_rho, mid_phi, mid_mass = mid_amr
 
     # SSPRK2 on the SAME AMR for the differ-check (same model name -> same .so cache key per Program).
     ss_model = _nonlinear_model("adc508_parity_mid")
     ss_amr, err2 = _amr_run(
         _ssprk2_program(ss_model, target="amr_system"), ss_model, u0)
-    if ss_amr is None:
-        print("skip ssprk2 leg (%s)" % err2)
-        return
+    assert ss_amr is not None, err2
     ss_rho = ss_amr[0]
 
     chk(np.all(np.isfinite(mid_rho)), "the midpoint Program produced a finite state")
@@ -348,19 +351,19 @@ def test_custom_two_stage_runs_and_differs():
     sys_model = _nonlinear_model("adc508_parity_mid")
     sys_out, sys_err = _system_run(
         _midpoint_program(sys_model, target="system"), sys_model, u0)
-    if sys_out is not None:
-        sys_rho = sys_out[0][0]
-        chk(np.array_equal(sys_rho, mid_rho),
-            "the midpoint Program is bit-identical System vs AMR (max|diff| = %.3e)"
-            % float(np.abs(sys_rho - mid_rho).max()))
+    assert sys_out is not None, sys_err
+    sys_rho = sys_out[0][0]
+    chk(np.array_equal(sys_rho, mid_rho),
+        "the midpoint Program is bit-identical System vs AMR (max|diff| = %.3e)"
+        % float(np.abs(sys_rho - mid_rho).max()))
     ss_sys_model = _nonlinear_model("adc508_parity_mid")
     ss_sys_out, ss_sys_err = _system_run(
         _ssprk2_program(ss_sys_model, target="system"), ss_sys_model, u0)
-    if ss_sys_out is not None:
-        ss_sys_rho = ss_sys_out[0][0]
-        chk(np.array_equal(ss_sys_rho, ss_rho),
-            "the SSPRK2 Program is bit-identical System vs AMR (max|diff| = %.3e)"
-            % float(np.abs(ss_sys_rho - ss_rho).max()))
+    assert ss_sys_out is not None, ss_sys_err
+    ss_sys_rho = ss_sys_out[0][0]
+    chk(np.array_equal(ss_sys_rho, ss_rho),
+        "the SSPRK2 Program is bit-identical System vs AMR (max|diff| = %.3e)"
+        % float(np.abs(ss_sys_rho - ss_rho).max()))
 
 
 def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
@@ -381,6 +384,8 @@ def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
     except RuntimeError as exc:
         return None, "compile (AMR): %s" % str(exc)[:140]
     try:
+        for field, field_plan in plan.field_plans.items():
+            amr._install_field_plan(field, field_plan)
         amr.add_equation("plasma", block_cm,
                          spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                          time=engine.Explicit(method="ssprk2"))
@@ -430,13 +435,7 @@ def test_step_cfl_routes_through_installed_program():
         model,
         u0,
     )
-    if prog_out is None:
-        if err and "unknown provider slot" in err:
-            chk(False, "installed AMR Program field provider slots must be fully materialized: %s"
-                % err)
-            return
-        print("skip (%s)" % err)
-        return
+    assert prog_out is not None, err
     prog_rho, prog_hash, prog_dt = prog_out
     chk(prog_hash != "", "step_cfl on an installed-Program AMR system records the program hash")
     chk(np.isfinite(prog_dt) and prog_dt > 0.0,
@@ -446,9 +445,7 @@ def test_step_cfl_routes_through_installed_program():
         % float(prog_rho.min()))
 
     nat_out, nerr = _amr_run_cfl_native(_euler_model("adc508_stepcfl"), u0)
-    if nat_out is None:
-        print("skip native baseline (%s)" % nerr)
-        return
+    assert nat_out is not None, nerr
     nat_rho, nat_dt = nat_out
     # The two dt agree (same CFL scan -- the Program route reuses cfl_dt), but the evolved density must
     # DIFFER: if step_cfl had silently run the native scheme, prog_rho would EQUAL nat_rho byte-for-byte.

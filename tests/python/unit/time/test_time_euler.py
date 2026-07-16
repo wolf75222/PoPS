@@ -3,8 +3,8 @@
 
 Motivation : fidelite aux references au premier ordre (RIEMOM2D : split dimensionnel
 additif + Euler == Euler non-splitte, algebriquement Mx+My-M = M+dt(Lx+Ly)) ; le seul
-ecart de schema d'un replay vs ces references est l'etage 2 de ssprk2. "euler" est un
-mode VALIDATION : ssprk2 reste le defaut (no-default-change verifie ici).
+ecart de schema d'un replay vs ces references est l'etage 2 de ssprk2. ``euler`` reste un
+schema public explicite ; ssprk2 reste le defaut (no-default-change verifie ici).
 
 On verifie :
  (1) facade : Explicit() -> kind 'explicit' (defaut intact) ; Explicit(method='euler') ->
@@ -45,6 +45,7 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import repo_include
 
 fails = 0
 
@@ -58,7 +59,8 @@ def chk(cond, label):
 
 def err_msg(fn):
     try:
-        fn(); return ""
+        fn()
+        return ""
     except Exception as ex:  # noqa: BLE001
         return str(ex)
 
@@ -127,21 +129,57 @@ seb.step(dt)
 d = np.abs(np.array(s2b.get_state("ions")) - np.array(seb.get_state("ions"))).max()
 chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
-print("== (5) AMR : Euler explicite avec relation temporelle ==")
-amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-amr.set_temporal_relations([2], [1], ["integral_only"])
-try:
-    amr.add_equation(
+def make_amr_sim(method):
+    n = 24
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.add_equation(
         "ions",
         transport_model(),
         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
-        time=engine.Explicit(method="euler"),
+        time=engine.Explicit(method=method),
     )
-    amr_euler_ok = True
-except Exception as exc:  # noqa: BLE001 - the script reports the exact failed contract
-    print("AMR Euler install failed:", exc)
-    amr_euler_ok = False
-chk(amr_euler_ok, "AmrSystem accepte Euler avec une relation temporelle explicite")
+    x = (np.arange(n) + 0.5) / n
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
+    sim.set_density("ions", rho.ravel())
+    return sim, rho
+
+
+print("== (5) AMR : Euler explicite execute avec relation temporelle ==")
+amr_euler, amr_rho0 = make_amr_sim("euler")
+amr_ssprk2, _ = make_amr_sim("ssprk2")
+amr_euler.step(dt)
+amr_euler_once = np.asarray(amr_euler.density("ions")).reshape(amr_rho0.shape)
+amr_ssprk2.step(dt)
+amr_ssprk2_once = np.asarray(amr_ssprk2.density("ions")).reshape(amr_rho0.shape)
+chk(
+    amr_euler.macro_step() == 1 and abs(amr_euler.time() - dt) < 1e-15,
+    "AmrSystem Euler avance exactement un macro-pas",
+)
+chk(
+    np.all(np.isfinite(amr_euler_once)),
+    "AmrSystem Euler publie un etat fini apres son premier pas",
+)
+chk(
+    float(np.max(np.abs(amr_euler_once - amr_ssprk2_once))) > 1e-8,
+    "AmrSystem Euler ne se rabat pas silencieusement sur SSPRK2",
+)
+amr_euler.step(dt)
+amr_euler_twice = np.asarray(amr_euler.density("ions")).reshape(amr_rho0.shape)
+chk(
+    np.all(np.isfinite(amr_euler_twice))
+    and float(np.max(np.abs(amr_euler_twice - amr_rho0))) > 1e-8,
+    "deux pas Euler AMR produisent un transport non trivial et fini",
+)
+amr_ssprk2_reference = 0.5 * amr_rho0 + 0.5 * amr_euler_twice
+amr_relation_error = float(np.max(np.abs(amr_ssprk2_once - amr_ssprk2_reference)))
+chk(
+    np.array_equal(amr_ssprk2_once, amr_ssprk2_reference)
+    or amr_relation_error < 1e-15,
+    "identite de Shu-Osher AMR : SSPRK2 == 0.5 U0 + 0.5 Euler(Euler(U0)) "
+    f"(err max {amr_relation_error:.1e})",
+)
 
 cxx = _default_cxx(None)
 if not cxx:
@@ -150,7 +188,6 @@ if not cxx:
     sys.exit(1 if fails else 0)
 
 print("== (6) package natif production : Euler explicite porte ==")
-from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()
 
 

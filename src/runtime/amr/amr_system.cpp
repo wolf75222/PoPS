@@ -173,6 +173,34 @@ std::string amr_time_routes_csv() {
          "|" + route_token(TimeRouteId::kImex);
 }
 
+int amr_time_method_wire_for_route(const std::string& time) {
+  if (time == route_token(TimeRouteId::kExplicitSsprk2))
+    return static_cast<int>(AmrTimeMethod::kSsprk2);
+  if (time == route_token(TimeRouteId::kForwardEuler) || time == route_token(TimeRouteId::kImex))
+    return static_cast<int>(AmrTimeMethod::kEuler);
+  if (time == route_token(TimeRouteId::kSsprk3))
+    return static_cast<int>(AmrTimeMethod::kSsprk3);
+  throw std::runtime_error("unknown AMR time route '" + time + "'");
+}
+
+std::string amr_effective_time_method_token(int wire) {
+  switch (amr_time_method_from_wire(wire)) {
+    case AmrTimeMethod::kEuler:
+      return "euler";
+    case AmrTimeMethod::kSsprk2:
+      return "ssprk2";
+    case AmrTimeMethod::kSsprk3:
+      return "ssprk3";
+  }
+  throw std::runtime_error("unreachable AMR time method");
+}
+
+std::string amr_effective_time_route_token(int wire) {
+  return amr_time_method_from_wire(wire) == AmrTimeMethod::kSsprk2
+             ? std::string(route_token(TimeRouteId::kExplicitSsprk2))
+             : amr_effective_time_method_token(wire);
+}
+
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
   return newton.max_iters != kNewtonDefaultMaxIters || newton.rel_tol != kNewtonDefaultRelTol ||
          newton.abs_tol != kNewtonDefaultAbsTol || newton.fd_eps != kNewtonDefaultFdEps ||
@@ -244,9 +272,9 @@ struct AmrSystem::Impl {
     NewtonOptions newton{};  // IMEX source Newton options (wave 3; single-block AND multi-block)
     bool newton_non_default = false;  // true -> non-default options (.so loader REJECTED: flat ABI)
     bool newton_diagnostics = false;  // newton_report: native MULTI-BLOCK (single/.so REJECTED)
-    // TEMPORAL METHOD of the block (time == "ssprk3" -> kSsprk3). 0 == historical forward Euler (default),
-    // 1 == kSsprk3 (order 3 + per-stage reflux). Materialized to AmrTimeMethod at build (single-block via
-    // make_build_params -> bp.physics.time_method; multi-block via dispatch_amr_block). Mutually exclusive with imex.
+    // Stable temporal-method wire: 0=kEuler, 1=kSsprk3 (both historical values), 2=kSsprk2.
+    // Materialized strictly to AmrTimeMethod at build (single-block via make_build_params,
+    // multi-block via dispatch_amr_block). Any SSP method is mutually exclusive with imex.
     int time_method = 0;
     // Zhang-Shu positivity floor (ADC-259): if > 0, the AMR transport floors the Density-role face
     // states + C/F fine ghost means to >= pos_floor. 0 (default) = inactive, bit-identical. Threaded
@@ -1308,9 +1336,8 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   // (coupler) and the .so loaders reject it (at build / at the facade), never an empty report.
   if (time != "imex" && newton_diagnostics)
     throw std::runtime_error("AmrSystem::add_block : newton_diagnostics requires time='imex'");
-  // time == "ssprk3": SSPRK3 (order 3 + per-stage reflux), explicit transport -> MUTUALLY EXCLUSIVE
-  // with imex (single time.kind selector, parity with System). The implicit stiff source (imex) does
-  // NOT combine with SSPRK3 (unvalidated combination): the engine also rejects it as defense in depth.
+  // Explicit SSPRK2 and SSPRK3 are method-of-lines advances with effective reflux fluxes. IMEX is a
+  // distinct Euler-transport/backward-Euler-source split (the single time selector makes them exclusive).
   if (time != "explicit" && time != "euler" && time != "imex" && time != "ssprk3") {
     if (time == "imexrk_ars222")
       throw std::runtime_error(
@@ -1325,7 +1352,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
     throw std::runtime_error("AmrSystem : unknown recon '" + recon + "' (valid: " +
                              kReconRouteTokensCsv + ")");
   const bool imex = (time == "imex");
-  const int time_method = (time == "ssprk3") ? 1 : 0;  // pops::AmrTimeMethod (0 kEuler, 1 kSsprk3)
+  const int time_method = amr_time_method_wire_for_route(time);
   // The partial IMEX mask (implicit_vars / implicit_roles) only applies to the IMEX source step:
   // requesting it in explicit is an ERROR (no silent ignore; same guard as System::add_block).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -1352,7 +1379,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   b.riemann = riemann;
   b.recon_prim = (recon == "primitive");
   b.imex = imex;
-  b.time_method = time_method;  // SSPRK3 (1) or forward Euler (0); threaded at build (single/multi)
+  b.time_method = time_method;  // 0=euler, 1=ssprk3, 2=ssprk2; threaded at build (single/multi)
   b.implicit_vars =
       implicit_vars;  // partial IMEX mask (resolved into indices at build, build_multi)
   b.implicit_roles = implicit_roles;
@@ -1605,7 +1632,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
     int ncomp, double gamma, int substeps,
     std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
     AmrCompiledBlockBuilder multi_builder, const std::string& name, bool recon_prim, bool imex,
-    int stride, const std::vector<std::string>& implicit_vars,
+    int time_method, int stride, const std::vector<std::string>& implicit_vars,
     const std::vector<std::string>& implicit_roles, double pos_floor) {
   (void)ncomp;  // the number of variables is carried by the concrete Model (Model::n_vars) in the
                 // type-erasing builders; the parameter stays for API symmetry with System.
@@ -1617,6 +1644,10 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
     throw std::runtime_error("AmrSystem::set_compiled_block : substeps >= 1");
   if (stride < 1)
     throw std::runtime_error("AmrSystem::set_compiled_block : stride >= 1");
+  const AmrTimeMethod method = amr_time_method_from_wire(time_method);
+  if (imex && method != AmrTimeMethod::kEuler)
+    throw std::runtime_error(
+        "AmrSystem::set_compiled_block : SSPRK2/SSPRK3 cannot be combined with time='imex'");
   // The partial IMEX mask only applies to the IMEX source step (same guard as add_block):
   // requesting it in explicit is an ERROR (no silent ignore).
   if (!imex && (!implicit_vars.empty() || !implicit_roles.empty()))
@@ -1638,6 +1669,7 @@ POPS_EXPORT void AmrSystem::set_compiled_block(
   b.stride = stride;
   b.recon_prim = recon_prim;
   b.imex = imex;
+  b.time_method = static_cast<int>(method);
   b.implicit_vars =
       implicit_vars;  // partial IMEX mask (resolved into indices by multi_builder at build)
   b.implicit_roles = implicit_roles;
@@ -1849,8 +1881,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   if (!(positivity_floor >= 0.0) || !std::isfinite(positivity_floor))
     throw std::runtime_error(
         "AmrSystem::add_native_block : positivity_floor >= 0 and finite (0 = inactive)");
-  // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) already rejects
-  // time outside {explicit, imex} and recon outside {conservative, primitive}, but we diagnose HERE a
+  // UPSTREAM scheme validation (like add_block): add_compiled_model(AmrSystem&) rejects unknown
+  // time routes and recon outside {conservative, primitive}, but we diagnose HERE a
   // typo before the C++ boundary. time == "imex" => stiff source handled IMPLICITLY
   // (backward_euler_source), explicit transport carried by the reflux. limiter (including weno5, wired #105)
   // and riemann (including hllc/roe, wired at parity #113) are validated by dispatch_amr_compiled in the
@@ -1860,21 +1892,12 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
         "AmrSystem::add_native_block : recon 'conservative' | 'primitive' "
         "(got '" +
         recon + "')");
-  // time == "ssprk3": SSPRK3 IS NOT transported by the AMR .so loader flat ABI -- the extern "C"
-  // installer (pops_install_native_amr) only marshals the time STRING, and the add_compiled_model
-  // template it inlines only maps {explicit, imex} (it does NOT freeze AmrBuildParams::time_method). Rather
-  // than SILENTLY FALLING BACK to kEuler (option ignored), we REJECT explicitly here: an SSPRK3 block
-  // must use a private native ModelSpec block (AmrSystem.add_block), not a compiled .so loader.
-  if (time == "ssprk3")
+  // The flat loader ABI already marshals the canonical time STRING. The regenerated header template
+  // lowers it to the stable AMR method wire, so Euler, SSPRK2 and SSPRK3 retain their real semantics.
+  if (time != "explicit" && time != "euler" && time != "ssprk3" && time != "imex")
     throw std::runtime_error(
-        "AmrSystem::add_native_block : time='ssprk3' not transported by the compiled .so loader "
-        "(flat "
-        "ABI : only {explicit, imex} is marshaled) ; public authoring uses an explicit "
-        "pops.Program or pops.lib.time.SSPRK3(...); direct AmrSystem.add_block accepts only "
-        "private engine policies.");
-  if (time != "explicit" && time != "imex")
-    throw std::runtime_error(
-        "AmrSystem::add_native_block : time 'explicit' | 'imex' on AMR (got '" + time + "')");
+        "AmrSystem::add_native_block : time must be one of " + amr_time_routes_csv() + " (got '" +
+        time + "')");
   // DSL "production" path on the AMR side: the generated .so loader (emit_cpp_native_loader with
   // target="amr_system") inlines the header template add_compiled_model(AmrSystem&, ...), which
   // materializes a concrete AmrCouplerMP<Model> at lazy build and installs its hooks via
@@ -3915,8 +3938,8 @@ EffectiveOptionsReport AmrSystem::effective_options_report() const {
     row.limiter = b.limiter;
     row.riemann = b.riemann;
     row.recon = b.recon_prim ? "primitive" : "conservative";
-    row.time = b.imex ? "imex" : (b.time_method == 1 ? "ssprk3" : "explicit");
-    row.time_method = b.imex ? "imex" : (b.time_method == 1 ? "ssprk3" : "euler");
+    row.time = b.imex ? "imex" : amr_effective_time_route_token(b.time_method);
+    row.time_method = b.imex ? "imex" : amr_effective_time_method_token(b.time_method);
     row.imex = b.imex;
     row.substeps = b.substeps;
     row.stride = b.stride;

@@ -626,8 +626,9 @@ class AmrCouplerMP {
   /// 1e-7, ...) -> path (2a) BIT-IDENTICAL to the old call. No effect if imex==false. The
   /// partial IMEX mask is NOT carried by this mono-block path (full backward-Euler), only the OPTIONS
   /// are (the mono-block AmrSystem wires the Newton options but not the mask or the diagnostics).
-  /// @p tmethod: time method (kEuler by default = historical forward Euler bit-identical;
-  /// kSsprk3 = order-3 SSPRK3 + per-stage reflux). kSsprk3 requires imex == false (rejected otherwise).
+  /// @p tmethod: time method (kEuler = forward Euler; kSsprk2 = order-2 SSPRK2/Heun;
+  /// kSsprk3 = order-3 SSPRK3). SSP methods expose a stage-weighted effective reflux flux and require
+  /// imex == false (rejected otherwise).
   template <class Disc = FirstOrder>
   void step(Real dt, bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
             AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {

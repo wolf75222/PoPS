@@ -623,7 +623,12 @@ class RuntimeInstance:
         self._consumer_reports = snapshot["consumer_reports"]
         self._checkpoint_cursor_override = snapshot["checkpoint_cursor_override"]
         if hasattr(native, "_temporal_restart_state"):
-            native._temporal_restart_state = snapshot["temporal_restart_state"]
+            restored_temporal = snapshot["temporal_restart_state"]
+            restore_temporal = getattr(native, "_restore_temporal_restart_state", None)
+            if callable(restore_temporal):
+                restore_temporal(restored_temporal)
+            else:
+                native._temporal_restart_state = restored_temporal
         if hasattr(native, "_step_controller"):
             native._step_controller = snapshot["step_controller"]
         if hasattr(native, "_last_step_transaction_report"):
@@ -725,9 +730,11 @@ class RuntimeInstance:
             )
         from pops.runtime._step_strategy import (
             prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        from pops.runtime._native_step_target import native_step_target
         from pops.runtime.run_report import RunStopReason
 
         native = self._executor
+        step_target = native_step_target(native)
         selected = resolve_run_strategy(native)
         control = run_control_payload(selected, controller_controls)
         prepare_step_controller(native, selected, controller_controls)
@@ -752,7 +759,7 @@ class RuntimeInstance:
             while native.time() < t_end and steps < max_steps:
                 def advance() -> tuple[Any, int]:
                     report = run_step_attempt(
-                        native, native, selected, t_end=float(t_end),
+                        native, step_target, selected, t_end=float(t_end),
                         controls=controller_controls)
                     return report, report.attempts
 

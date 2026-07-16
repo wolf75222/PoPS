@@ -128,6 +128,7 @@ def test_final_gate_pins_one_conda_environment_and_native_headers(
         "/usr/bin/env",
     ]
     assert "POPS_INCLUDE=" + str((ROOT / "include").resolve()) in command
+    assert "POPS_REQUIRE_NATIVE_TESTS=1" in command
     assert command[-3:] == ["python", "-c", "import pops"]
     assert "bash" not in command
 

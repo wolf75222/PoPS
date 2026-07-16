@@ -119,6 +119,7 @@ def _conda_command(arguments: Sequence[str]) -> list[str]:
         "/usr/bin/env",
         "PYTHONPATH=",
         "PYTHONNOUSERSITE=1",
+        "POPS_REQUIRE_NATIVE_TESTS=1",
         "POPS_INCLUDE=" + str((ROOT / "include").resolve()),
         *arguments,
     ]

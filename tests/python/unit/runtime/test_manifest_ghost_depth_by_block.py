@@ -14,6 +14,7 @@ This module pins, at the pure metadata level (no compile / bind / .so):
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -176,6 +177,32 @@ def test_build_arguments_derives_weno_depth_and_refuses_missing_plan_depth():
     assert args.layout_runtime["ghost_depth_by_block"] == {"ions": 3}
     with pytest.raises(ValueError, match="no exact ghost depth"):
         build_arguments(_compiled(("ions",), ghost_depth=None))
+
+
+def test_compiled_ghost_depth_is_maximum_of_spatial_and_field_plans():
+    from pops.codegen.inspect_compiled import _ghost_depth, _ghost_depth_by_block
+
+    spatial_depth = 2
+    field_depths = (1, 4)
+    block = SimpleNamespace(
+        name="ions", numerics=None, spatial={"ghost_depth": spatial_depth})
+    field_plans = {
+        "potential": SimpleNamespace(native_options={
+            "output_route": {"owner_block": "ions"},
+            "method": {"ghost_depth": field_depths[0]},
+        }),
+        "screened_potential": SimpleNamespace(native_options={
+            "output_route": {"owner_block": "ions"},
+            "method": {"ghost_depth": field_depths[1]},
+        }),
+    }
+    compiled = SimpleNamespace(
+        plan=SimpleNamespace(blocks=(block,), field_plans=field_plans))
+
+    expected = max(spatial_depth, *field_depths)
+    assert field_depths[1] > spatial_depth, "fixture must exercise a field deeper than spatial"
+    assert _ghost_depth_by_block(compiled, ("ions",)) == {"ions": expected}
+    assert _ghost_depth(compiled) == expected
 
 
 # --- 4: build_compiled_manifest threads the per-block map ---------------------------------------

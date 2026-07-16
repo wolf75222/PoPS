@@ -344,6 +344,74 @@ def test_multi_layout_checkpoint_restart_restores_every_layout_and_mapping_count
         np.testing.assert_array_equal(np.asarray(instance.get_state(name)), values)
 
 
+def test_mid_step_child_failure_preserves_root_error_and_rolls_back_composite(
+    compiled_multi_layout,
+):
+    instance, _artifact, _coarse_id, _fine_id, _mapping_id, _fine, _coarse = _bind(
+        compiled_multi_layout
+    )
+    before = {name: np.asarray(instance.get_state(name)).copy() for name in ("coarse", "tracer")}
+    before_time = instance.time()
+    before_step = instance.macro_step()
+    before_counts = instance._executor.mapping_report()
+    before_temporal = tuple(
+        json.dumps(state.to_data(), sort_keys=True)
+        for state in instance._executor._temporal_restart_state.states
+    )
+    before_child_temporal = tuple(
+        json.dumps(engine._temporal_restart_state.to_data(), sort_keys=True)
+        for engine in instance._executor._engines.values()
+    )
+
+    native = instance._executor
+    second_layout = tuple(native._engines)[1]
+    original = native._engines[second_layout]
+
+    class FailFirstStep:
+        def __init__(self, engine):
+            object.__setattr__(self, "engine", engine)
+            object.__setattr__(self, "failed", False)
+
+        def __getattr__(self, name):
+            return getattr(self.engine, name)
+
+        def __setattr__(self, name, value):
+            if name in {"engine", "failed"}:
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self.engine, name, value)
+
+        def time(self):
+            return self.engine.time()
+
+        def macro_step(self):
+            return self.engine.macro_step()
+
+        def step(self, dt):
+            if not self.failed:
+                self.failed = True
+                raise RuntimeError("injected second-layout step failure")
+            return self.engine.step(dt)
+
+    native._engines[second_layout] = FailFirstStep(original)
+    with pytest.raises(RuntimeError, match="injected second-layout step failure"):
+        pops.run(instance, t_end=DT, max_steps=1)
+
+    assert instance.time() == before_time
+    assert instance.macro_step() == before_step
+    assert instance._executor.mapping_report() == before_counts
+    assert tuple(
+        json.dumps(state.to_data(), sort_keys=True)
+        for state in instance._executor._temporal_restart_state.states
+    ) == before_temporal
+    assert tuple(
+        json.dumps(engine._temporal_restart_state.to_data(), sort_keys=True)
+        for engine in instance._executor._engines.values()
+    ) == before_child_temporal
+    for name, values in before.items():
+        np.testing.assert_array_equal(np.asarray(instance.get_state(name)), values)
+
+
 def test_failed_child_restart_rolls_back_already_restored_layouts(compiled_multi_layout, tmp_path):
     instance, _artifact, _coarse_id, _fine_id, _mapping_id, _fine, _coarse = _bind(
         compiled_multi_layout

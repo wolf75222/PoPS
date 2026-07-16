@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Uniform low-level IO: visualization plus strict checkpoint boundary.
+"""Uniform low-level IO: visualization plus synchronized direct-step state.
 
-The final checkpoint route requires a compiled/bound Program, a declared run controller and an
-accepted synchronized transaction. This low-level engine intentionally has none of those identities:
-the test therefore proves it cannot manufacture a restart artifact. Exact compiled-Program restart,
-including stride/history state, is covered by ``test_time_history_checkpoint.py``.
+``System.step(dt)`` is an exact ``FixedDt`` attempt and therefore owns a declared controller plus an
+accepted synchronized temporal boundary. Publication remains stricter: a durable checkpoint requires
+an installed compiled Program identity, so the direct low-level route must be refused. Compiled-Program
+checkpoint/restart remains covered by ``test_time_history_checkpoint.py``.
 
 Verifie :
-  (1) un moteur bas niveau ne peut pas contourner la frontiere de checkpoint stricte ;
+  (1) trois pas directs produisent une enveloppe FixedDt synchronisee, mais ne peuvent pas publier
+      un checkpoint sans identite de Program compile ;
   (2) write npz : champs et horloge presents ; write vtk : .vti lisible (en-tete ImageData).
 Invariants par assert ; imprime "OK test_io_checkpoint" en cas de succes.
 """
@@ -33,8 +34,7 @@ def chk(cond, label):
 
 
 def build(n=16):
-    """Deux blocs couples par le Poisson, le second a STRIDE=2 (cadence hold-then-catch-up) :
-    le restart doit reprendre la fenetre stride exactement (macro_step restaure)."""
+    """Deux blocs couples par le Poisson, dont un cadence en hold-then-catch-up STRIDE=2."""
     sim = System(n=n, L=1.0, periodic=True)
     sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.add_equation("ions",
@@ -60,17 +60,25 @@ def build(n=16):
 tmp = tempfile.mkdtemp()
 dt = 2e-3
 
-# --- (1) strict checkpoint boundary -------------------------------------------------
-print("== (1) checkpoint strict : moteur bas niveau refuse ==")
+# --- (1) synchronized direct-step state and strict checkpoint identity -------------
+print("== (1) pas direct : frontiere FixedDt synchronisee, identite stricte ==")
 sim = build()
-for _ in range(3):  # 3 pas (IMPAIR) : le bloc stride=2 est au MILIEU de sa fenetre au checkpoint
+for _ in range(3):
     sim.step(dt)
+temporal = sim.program_report().temporal
+chk(temporal["strategy"]["kind"] == "fixed_dt",
+    "l'enveloppe directe conserve la strategie FixedDt exacte")
+chk(temporal["transaction_stats"] == {"accepted": 3, "failed": 0, "rejected": 0},
+    "une seule acceptation temporelle par pas direct")
 try:
-    sim.checkpoint(os.path.join(tmp, "chk"))
-    chk(False, "checkpoint bas niveau aurait du etre refuse")
-except RuntimeError as e:
-    chk("desynchronized" in str(e), f"frontiere stricte : {str(e)[:80]}")
-chk(not os.path.exists(os.path.join(tmp, "chk.npz")), "aucun fichier partiel publie")
+    checkpoint_root = os.path.join(tmp, "chk")
+    sim.checkpoint(checkpoint_root)
+    chk(False, "checkpoint sans Program compile aurait du etre refuse")
+except RuntimeError as exc:
+    chk("installed compiled Program hash" in str(exc),
+        "checkpoint refuse sans identite de Program compile")
+    chk(not os.path.exists(checkpoint_root + ".npz"),
+        "le refus ne laisse aucun checkpoint partiel")
 
 # --- (2) write npz / vtk ---------------------------------------------------------------
 print("== (2) write npz / vtk ==")

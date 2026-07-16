@@ -151,7 +151,7 @@ struct AmrBuildParams {
     int substeps = 1;
     bool recon_prim = false;  ///< recon == "primitive" (frozen by add_compiled_model)
     bool imex = false;        ///< time == "imex": stiff implicit source (backward_euler)
-    int time_method = 0;      ///< pops::AmrTimeMethod: 0 kEuler (default), 1 kSsprk3
+    int time_method = 0;      ///< stable AmrTimeMethod wire: 0 kEuler, 1 kSsprk3, 2 kSsprk2
     // NEWTON OPTIONS of the IMEX source on the MONO-BLOCK path (wave 3: mono-block AMR options wired).
     // DEFAULT {} = historical constants (2 / 0 / 0 / 1e-7 / 1.0 / none) -> backward_euler_source path
     // (2a) bit-identical. Consumed by build_amr_compiled (the mono-block closure passes it to cpl->step).
@@ -400,8 +400,8 @@ class AmrSystem {
   ///  - @p multi_builder: given the SHARED layout materialized at lazy build (common to all
   ///    blocks), returns the type-erased AmrRuntimeBlock of the block. Used IN MULTI-BLOCK (>= 2 blocks,
   ///    compiled and/or native mixed) -> AmrRuntime runtime engine, exactly like add_block.
-  /// @p recon_prim / @p imex / @p stride / @p implicit_vars / @p implicit_roles: metadata of the block
-  /// (temporal scheme, multirate, partial IMEX mask) frozen at add time, consumed by the
+  /// @p recon_prim / @p imex / @p time_method / @p stride / @p implicit_vars / @p implicit_roles:
+  /// metadata of the block (temporal scheme, multirate, partial IMEX mask) frozen at add time, consumed by the
   /// multi-block routing (the mono-block already carries them in the AmrBuildParams via mono_builder).
   /// DO NOT call directly: go through the free function add_compiled_model(AmrSystem&, ...).
   /// @throws std::runtime_error if the system is already built.
@@ -415,7 +415,7 @@ class AmrSystem {
       int ncomp, double gamma, int substeps,
       std::function<AmrCompiledHooks(const AmrBuildParams&)> mono_builder,
       AmrCompiledBlockBuilder multi_builder = {}, const std::string& name = std::string(),
-      bool recon_prim = false, bool imex = false, int stride = 1,
+      bool recon_prim = false, bool imex = false, int time_method = 0, int stride = 1,
       const std::vector<std::string>& implicit_vars = {},
       const std::vector<std::string>& implicit_roles = {}, double pos_floor = 0.0);
 
@@ -478,8 +478,8 @@ class AmrSystem {
   /// with native add_block) -> the compiled blocks co-exist on the shared hierarchy via AmrRuntime
   /// (the loader recompiled against this header provides the runtime builder; cf. set_compiled_block). The
   /// name then INDEXES the block (set_density/mass/density), like add_block.
-  /// time is wired to {explicit, imex} (imex = stiff implicit source via backward_euler_source; any
-  /// other treatment is rejected by add_compiled_model). The multirate (stride) and the partial IMEX
+  /// time is wired to {explicit (SSPRK2/Heun), euler, ssprk3, imex}; imex is the distinct
+  /// forward-Euler-transport + stiff implicit-source split. The multirate (stride) and the partial IMEX
   /// mask do NOT transit through the flat ABI of the loader (ABI unchanged): this .so path now REJECTS
   /// them at the Python facade level (AmrSystem.add_equation raises ValueError on stride>1 or a
   /// non-empty IMEX mask, rather than ignoring them silently). For these parameters, use

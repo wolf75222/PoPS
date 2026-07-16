@@ -134,6 +134,10 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         from pops.runtime._temporal_restart import TemporalRestartState
         self._temporal_restart_state = TemporalRestartState()
 
+    def _native_step_target(self) -> Any:
+        """Return the transaction-free compiled target for runtime controllers."""
+        return self._s
+
     def step(self, dt: Any) -> None:
         """Advance one explicit fixed step and keep the restart envelope synchronized.
 
@@ -142,19 +146,22 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         :meth:`run` so a checkpoint taken after direct steps records the live clock and strategy.
         """
         from pops.runtime._step_strategy import run_control_payload, run_step_attempt
+        from pops.runtime._native_step_target import native_step_target
         from pops.time import FixedDt
 
         strategy = FixedDt(dt)
         self._temporal_restart_state.begin_run(
             run_control_payload(strategy), time=self.time(), macro_step=self.macro_step())
         run_step_attempt(
-            self, self._s, strategy, t_end=float(self.time()) + strategy.dt)
+            self, native_step_target(self), strategy,
+            t_end=float(self.time()) + strategy.dt)
 
     def run(self, t_end: Any, *, max_steps: int, output_dir: Any = None,
             controls: Any = None) -> Any:
         """Advance with the Program-authenticated typed strategy and exact runtime controls."""
         from pops.runtime._step_strategy import (
             prepare_step_controller, resolve_run_strategy, run_control_payload, run_step_attempt)
+        from pops.runtime._native_step_target import native_step_target
         strategy = resolve_run_strategy(self)
         control_payload = run_control_payload(strategy, controls)
         prepare_step_controller(self, strategy, controls)
@@ -164,10 +171,12 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         begin_run(
             self, t_end=t_end, step_transaction=control_payload,
             max_steps=max_steps, output_dir=output_dir)
+        step_target = native_step_target(self)
         steps = 0
         while self.time() < t_end and steps < max_steps:
             run_step_attempt(
-                self, self._s, strategy, t_end=float(t_end), controls=controls)
+                self, step_target, strategy,
+                t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 

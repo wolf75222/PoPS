@@ -289,8 +289,11 @@ def capabilities() -> Any:
                        "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
                        "fully implicit source)",
                        "Program factories Lie|Strang + explicit Program.solve"],
-            "amr": ["explicit (forward Euler per substep)", "ssprk3 (order 3 + reflux per stage)",
-                    "imex (= SourceImplicitBE)",
+            "amr": ["explicit (SSPRK2/Heun, order 2 + effective reflux flux)",
+                    "euler (Forward Euler)",
+                    "ssprk3 (order 3 + effective reflux flux)",
+                    "coarse/fine SSP stages sample the parent window at RK abscissae",
+                    "imex (= Forward Euler transport + SourceImplicitBE)",
                     "Program factories Lie|Strang + hierarchy-scoped Program.solve"],
             "system_polar": ["explicit (ssprk2|ssprk3)",
                              "metric-aware explicit Program.solve graph"],

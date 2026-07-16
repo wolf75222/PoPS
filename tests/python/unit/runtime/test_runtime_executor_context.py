@@ -16,6 +16,7 @@ from pops._platform_contracts import (
 )
 from pops.runtime import _multi_layout_executor as multi_executor
 from pops.runtime import _runtime_executor as executor
+from pops.runtime._component_execution_context import component_execution_data
 from tests.python.unit.runtime.test_runtime_planning import _install
 
 
@@ -87,6 +88,75 @@ def test_process_global_native_state_is_rejected_before_system_constructor(
     with pytest.raises(NotImplementedError, match=match):
         executor.install_runtime_executor(_install())
     assert calls == []
+
+
+class _ZeroHandleComm:
+    def __init__(self, *, rank=0, size=2):
+        self._rank = rank
+        self._size = size
+
+    @staticmethod
+    def Compare(left, right):
+        return 0 if left is right else 1
+
+    def Get_rank(self):
+        return self._rank
+
+    def Get_size(self):
+        return self._size
+
+    @staticmethod
+    def py2f():
+        return 0
+
+
+class _ZeroHandleDatatype:
+    @staticmethod
+    def py2f():
+        return 0
+
+
+def test_mpi_projection_preserves_valid_zero_valued_fortran_handles(monkeypatch):
+    """Fortran handle zero is data, not a missing-resource sentinel."""
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.runtime import _platform_manifest
+
+    world = _ZeroHandleComm()
+    double = _ZeroHandleDatatype()
+    mpi = SimpleNamespace(
+        Comm=_ZeroHandleComm,
+        Datatype=_ZeroHandleDatatype,
+        COMM_WORLD=world,
+        DOUBLE=double,
+        IDENT=0,
+    )
+    monkeypatch.setitem(sys.modules, "mpi4py", SimpleNamespace(MPI=mpi))
+    monkeypatch.setitem(sys.modules, "mpi4py.MPI", mpi)
+    backend = replace(
+        proven_serial_manifest(
+            backend="production", target="system", abi="test|clang++|c++23", runtime=True
+        ),
+        communicator=CapabilityProof.proven(
+            "MPI_COMM_WORLD", "test.zero-valued-fortran-handles"
+        ),
+    )
+    artifact = object.__new__(CompiledSimulationArtifact)
+    object.__setattr__(
+        artifact,
+        "platform_manifest",
+        proven_serial_manifest(
+            backend="production", target="system", abi="test|clang++|c++23"
+        ),
+    )
+    monkeypatch.setattr(_platform_manifest, "native_runtime_backend", lambda _platform: backend)
+
+    context = ExecutionContext.mpi_world(artifact, world)
+    projected = component_execution_data(context)
+
+    assert context.communicator.handle is world
+    assert context.datatype.handle is double
+    assert projected["communicator_f_handle"] == 0
+    assert projected["communicator_datatype_f_handle"] == 0
 
 
 def test_before_step_transfers_read_one_atomic_source_snapshot():

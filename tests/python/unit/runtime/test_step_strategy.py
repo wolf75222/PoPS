@@ -1,12 +1,20 @@
 """ADC-666: all final StepStrategy descriptors execute through one controller protocol."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
 
+from pops.runtime._amr_system import AmrSystem
+from pops.runtime._multi_layout_executor import (
+    _CompositeTemporalRestartState,
+    _MultiLayoutUniformExecutor,
+)
+from pops.runtime._native_step_target import native_step_target
+from pops.runtime._runtime_instance import RuntimeInstance
 from pops.runtime._step_strategy import (
     StepController,
     StepAttemptRejected,
@@ -16,6 +24,7 @@ from pops.runtime._step_strategy import (
     run_control_payload,
     run_step_attempt,
 )
+from pops.runtime._system import System
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.time import AdaptiveCFL, ErrorControlledDt, ExternalTimeGrid, FixedDt, StepStrategy
 from pops.time._step.strategy import register_step_strategy_type
@@ -60,6 +69,32 @@ class _Native:
         self.t += dt
         self.cursor += 1
         return dt
+
+
+class _TemporalOwner:
+    """Test facade whose public step must never run inside another controller."""
+
+    def __init__(self, strategy, *, reject=0):
+        self.raw = _Native(reject=reject)
+        self._step_strategy = strategy
+        self._step_transaction_plan = None
+        self._step_controller = None
+        self._last_step_transaction_report = None
+        self._temporal_restart_state = TemporalRestartState()
+        self.facade_step_calls = 0
+
+    def _native_step_target(self):
+        return self.raw
+
+    def time(self):
+        return self.raw.time()
+
+    def macro_step(self):
+        return self.raw.macro_step()
+
+    def step(self, dt):
+        self.facade_step_calls += 1
+        raise AssertionError("a controller opened a nested facade step transaction")
 
 
 def _error_strategy():
@@ -246,3 +281,207 @@ def test_registered_strategy_provider_owns_strict_restart_reconstruction():
     forged = {"strategy": {**payload["strategy"], "extra": True}, "controls": {}}
     with pytest.raises(ValueError, match="invalid Restartable manifest"):
         validate_step_strategy_manifest(forged)
+
+
+@pytest.mark.parametrize(
+    ("strategy", "controls", "reject", "t_end", "calls", "rejected"),
+    (
+        (FixedDt(0.1), None, 0, 0.1, [("step", 0.1)], 0),
+        (
+            _error_strategy(),
+            None,
+            1,
+            1.0,
+            [("step", 0.2), ("step", 0.1)],
+            1,
+        ),
+        (
+            ExternalTimeGrid("forcing_times"),
+            {"forcing_times": [0.0, 0.125, 0.5]},
+            0,
+            0.5,
+            [("step", 0.125)],
+            0,
+        ),
+    ),
+    ids=("fixed-dt", "error-controlled", "external-grid"),
+)
+def test_temporal_owner_uses_one_raw_attempt_and_preserves_authenticated_strategy(
+    strategy, controls, reject, t_end, calls, rejected,
+):
+    owner = _TemporalOwner(strategy, reject=reject)
+    payload = run_control_payload(strategy, controls)
+    owner._temporal_restart_state.begin_run(payload, time=0.0, macro_step=0)
+    controller = prepare_step_controller(owner, strategy, controls)
+
+    target = native_step_target(owner)
+    assert target is owner.raw
+    report = run_step_attempt(
+        owner, target, strategy, t_end=t_end, controls=controls)
+
+    assert report.attempts == len(calls)
+    assert owner.facade_step_calls == 0
+    assert owner.raw.calls == calls
+    assert owner._step_controller is controller
+    state = owner._temporal_restart_state
+    assert state.transaction_stats == {
+        "accepted": 1,
+        "rejected": rejected,
+        "failed": 0,
+    }
+    checkpoint = json.loads(
+        state.checkpoint_json(time=owner.time(), macro_step=owner.macro_step())
+    )
+    assert checkpoint["strategy"] == payload
+
+
+@pytest.mark.parametrize("facade_type", (System, AmrSystem), ids=("uniform", "amr"))
+def test_direct_facade_fixed_step_commits_one_temporal_envelope(facade_type):
+    facade = object.__new__(facade_type)
+    facade._s = _Native()
+    facade._step_strategy = None
+    facade._step_transaction_plan = None
+    facade._step_controller = None
+    facade._last_step_transaction_report = None
+    facade._temporal_restart_state = TemporalRestartState()
+
+    facade.step(0.1)
+
+    assert facade._s.calls == [("step", 0.1)]
+    assert facade._temporal_restart_state.transaction_stats == {
+        "accepted": 1,
+        "rejected": 0,
+        "failed": 0,
+    }
+    assert facade._temporal_restart_state.strategy == run_control_payload(FixedDt(0.1))
+
+
+def test_multi_layout_attempt_advances_child_raw_targets_and_accepts_once():
+    strategy = FixedDt(0.1)
+    children = {
+        "layout-a": _TemporalOwner(strategy),
+        "layout-b": _TemporalOwner(strategy),
+    }
+    executor = object.__new__(_MultiLayoutUniformExecutor)
+    executor._runtime_plan = SimpleNamespace(
+        communication=SimpleNamespace(transfers=()))
+    executor._engines = children
+    executor._step_strategy = strategy
+    executor._step_transaction_plan = None
+    executor._step_controller = None
+    executor._last_step_transaction_report = None
+    executor._temporal_restart_state = _CompositeTemporalRestartState(
+        child._temporal_restart_state for child in children.values())
+
+    payload = run_control_payload(strategy)
+    executor._temporal_restart_state.begin_run(payload, time=0.0, macro_step=0)
+    controller = prepare_step_controller(executor, strategy)
+    report = run_step_attempt(
+        executor, native_step_target(executor), strategy, t_end=0.1)
+
+    assert report.attempts == 1
+    assert executor._step_controller is controller
+    assert executor.time() == pytest.approx(0.1)
+    assert executor.macro_step() == 1
+    for child in children.values():
+        assert child.facade_step_calls == 0
+        assert child._step_controller is None
+        assert child.raw.calls == [("step", 0.1)]
+        state = child._temporal_restart_state
+        assert state.transaction_stats == {
+            "accepted": 1,
+            "rejected": 0,
+            "failed": 0,
+        }
+        checkpoint = json.loads(
+            state.checkpoint_json(time=child.time(), macro_step=child.macro_step())
+        )
+        assert checkpoint["strategy"] == payload
+
+
+def test_native_target_resolution_never_invokes_dynamic_delegation():
+    class DynamicallyDelegatingRaw(_Native):
+        def __init__(self):
+            super().__init__()
+            self.dynamic_lookups = []
+
+        def __getattr__(self, name):
+            self.dynamic_lookups.append(name)
+            return lambda *args, **kwargs: None
+
+    raw = DynamicallyDelegatingRaw()
+
+    assert native_step_target(raw) is raw
+    assert raw.dynamic_lookups == []
+
+    class DynamicOnly:
+        def __init__(self):
+            self.dynamic_lookups = []
+
+        def __getattr__(self, name):
+            self.dynamic_lookups.append(name)
+            return lambda *args, **kwargs: None
+
+    dynamic_only = DynamicOnly()
+    with pytest.raises(TypeError, match="native step target protocol"):
+        native_step_target(dynamic_only)
+    assert dynamic_only.dynamic_lookups == []
+
+
+def test_runtime_instance_keeps_error_controller_and_strategy_across_macro_steps():
+    from tests.python.unit.runtime.test_runtime_instance_gate import _Executor
+    from tests.python.unit.runtime.test_runtime_planning import _install
+
+    class RecordingExecutor(_Executor):
+        def __init__(self, plan):
+            super().__init__(plan)
+            self.calls = []
+
+        def step(self, dt):
+            self.calls.append(float(dt))
+            return super().step(dt)
+
+    class RuntimeOwner:
+        def __init__(self, raw, strategy):
+            self.raw = raw
+            self._step_strategy = strategy
+            self._step_transaction_plan = raw._step_transaction_plan
+            self._step_controller = None
+            self._last_step_transaction_report = None
+            self._temporal_restart_state = raw._temporal_restart_state
+            self.facade_step_calls = 0
+
+        def _native_step_target(self):
+            return self.raw
+
+        def step(self, dt):
+            self.facade_step_calls += 1
+            raise AssertionError("RuntimeInstance called the temporal facade recursively")
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
+    plan = _install()
+    strategy = _error_strategy()
+    raw = RecordingExecutor(plan)
+    owner = RuntimeOwner(raw, strategy)
+    runtime = RuntimeInstance(plan, executor=owner)
+
+    report = runtime._run(t_end=0.5, max_steps=2)
+
+    assert report.accepted_steps == 2
+    assert owner.facade_step_calls == 0
+    assert raw.calls == [pytest.approx(0.2), pytest.approx(0.3)]
+    controller = owner._step_controller
+    assert controller.strategy is strategy
+    assert controller.next_dt == pytest.approx(0.45)
+    state = owner._temporal_restart_state
+    assert state.transaction_stats == {
+        "accepted": 2,
+        "rejected": 0,
+        "failed": 0,
+    }
+    checkpoint = json.loads(
+        state.checkpoint_json(time=owner.time(), macro_step=owner.macro_step())
+    )
+    assert checkpoint["strategy"] == run_control_payload(strategy)

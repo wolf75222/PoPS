@@ -111,6 +111,11 @@ sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_ssprk2"
+sources = ["tests/cpp/integration/amr/test_amr_ssprk2.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_stride_cadence"
 sources = ["tests/cpp/integration/amr/test_amr_stride_cadence.cpp"]
 labels = ["integration", "amr", "medium"]

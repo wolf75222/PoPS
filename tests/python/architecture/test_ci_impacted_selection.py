@@ -541,8 +541,8 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"
     )
+    assert "timeout-minutes: 60" in cpp_shards_block
     assert "timeout-minutes: 50" in cpp_shards_block
-    assert "timeout-minutes: 47" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
     assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
@@ -655,6 +655,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "always() && steps.kokkos.outcome == 'success'" in python_build_block
     assert "github.run_attempt" in python_build_block
     assert "timeout-minutes: 30" in python_shards_block
+    assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
     for block in (python_build_block, python_shards_block, python_cache_block):
         assert "if: needs.set-mode.outputs.python_required == 'true'" in block
@@ -666,6 +667,16 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}" in workflow
     assert "COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test" in workflow
     assert 'mkdir -p "$COMPILE_CACHE_TMP"' in python_cache_block
+
+
+def test_native_required_lane_cannot_reclassify_subprocess_failure_as_skip():
+    from tests.python import conftest as process_runner
+
+    diagnostic = "RuntimeError: required native test unavailable: Kokkos introuvable"
+    assert process_runner._missing_process_requirement_for_environment(
+        diagnostic, {}) == "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
+    assert process_runner._missing_process_requirement_for_environment(
+        diagnostic, {"POPS_REQUIRE_NATIVE_TESTS": "1"}) is None
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():

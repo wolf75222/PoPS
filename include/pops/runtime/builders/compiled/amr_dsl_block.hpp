@@ -113,6 +113,10 @@ void apply_amr_implicit_source_and_cascade(const Model& model, std::vector<AmrLe
 template <class Model, class Limiter, class Flux>
 AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp) {
   using Coupler = AmrCouplerMP<Model>;
+  const AmrTimeMethod tmethod = amr_time_method_from_wire(bp.physics.time_method);
+  if (bp.physics.imex && tmethod != AmrTimeMethod::kEuler)
+    throw std::runtime_error(
+        "build_amr_compiled: SSPRK2/SSPRK3 cannot be combined with the AMR IMEX source split");
   const int nc = Model::n_vars;
   const Geometry g{Box2D::from_extents(bp.mesh.n, bp.mesh.n), 0.0, bp.mesh.L, 0.0, bp.mesh.L};
   const double dxc = bp.mesh.L / bp.mesh.n, dxf = dxc / 2;
@@ -230,10 +234,8 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
   // backward_euler_source. DEFAULT {} (newton_options not set) = historical constants (2 iters) ->
   // bit-identical path (2a). Captured BY VALUE (POD) in the h.step closure.
   const NewtonOptions nopts = bp.physics.newton_options;
-  // TIME METHOD mono-block: integer of the flat ABI (bp.physics.time_method) -> AmrTimeMethod, threaded
-  // to cpl->step -> advance_amr. 0 (default / older .so loader) = historical kEuler, bit-identical.
-  const AmrTimeMethod tmethod =
-      bp.physics.time_method == 1 ? AmrTimeMethod::kSsprk3 : AmrTimeMethod::kEuler;
+  // TIME METHOD mono-block: the stable integer wire was lowered strictly at function entry, then is
+  // threaded to cpl->step -> advance_amr. No unknown value can silently become Euler.
   // Zhang-Shu positivity floor (ADC-259): threaded to cpl->step / advance_transport -> advance_amr ->
   // compute_face_fluxes + C/F ghost clamp. bp.physics.pos_floor == 0 (default) -> inactive, bit-identical.
   const Real pf = static_cast<Real>(bp.physics.pos_floor);
@@ -245,7 +247,7 @@ AmrCompiledHooks build_amr_compiled(const Model& model, const AmrBuildParams& bp
       const double h2 = dt / sub;
       // NEWTON OPTIONS threaded to the coupler (mono-block): nopts={} by default => iters=2 historical,
       // bit-identical; non-default nopts (set_density + pops.IMEX(newton_*)) drives the local Newton.
-      // tmethod (kEuler default) selects SSPRK3 if requested (time='ssprk3'); kEuler bit-identical.
+      // tmethod selects Euler, SSPRK2/Heun, or SSPRK3 exactly as authored.
       for (int s = 0; s < sub; ++s)
         cpl->template step<AmrDiscLF<Limiter, Flux>>(h2, rprim, imex, nopts, tmethod, pf);
       // PROJECTION PONCTUELLE post-pas (ADC-177) PAR NIVEAU, APRES transport + source de tous les
@@ -449,7 +451,7 @@ inline SharedAmrLayout make_shared_amr_layout(const AmrBuildParams& bp, bool sin
 ///
 /// TIME TREATMENT (capstone vii): @p imex selects the SOURCE treatment. We populate
 /// TWO distinct closures set on the AmrRuntimeBlock and AmrRuntime::step chooses (b.imex):
-///   - advance: AMR transport + EXPLICIT source (forward Euler) -- historical path unchanged;
+///   - advance: AMR transport + EXPLICIT source under the selected Euler/SSPRK method;
 ///   - imex_advance: SOURCE-FREE AMR transport + stiff IMPLICIT source backward_euler_source per
 ///     level (mask @p implicit_components for partial IMEX) + cascade. The SEMANTICS of the splitting
 ///     mirror the IMEX branch of AmrSystemCoupler::step (SourceFreeModel + AmrImplicitSourceStepper), and
@@ -468,6 +470,10 @@ AmrRuntimeBlock build_amr_block(
     const NewtonOptions& nopts = {}, const std::vector<double>* state = nullptr,
     bool newton_diagnostics = false, AmrTimeMethod time_method = AmrTimeMethod::kEuler,
     double pos_floor = 0.0) {
+  time_method = amr_time_method_from_wire(static_cast<int>(time_method));
+  if (imex && time_method != AmrTimeMethod::kEuler)
+    throw std::runtime_error(
+        "build_amr_block: SSPRK2/SSPRK3 cannot be combined with the AMR IMEX source split");
   const int nc = Model::n_vars;
   const int ng = Limiter::n_ghost;  // limiter stencil (scheme parity, like build_amr_compiled)
   const int nlev = S.nlev();
@@ -514,14 +520,14 @@ AmrRuntimeBlock build_amr_block(
   const bool rprim = recon_prim;
   // advance: ONE AMR transport sub-step of the block (conservative Berger-Oliger + reflux + average_down)
   // of size dt, with ITS scheme (Limiter, Flux) on ITS level stack, source in
-  // FORWARD EULER (imex=false always here: the IMEX path lives in imex_advance, selected by
-  // step()). The sub-step loop (substeps) and the stride cadence are CARRIED by AmrRuntime::step,
+  // the selected explicit Euler/SSPRK method (imex=false always here: the IMEX path lives in
+  // imex_advance, selected by step()). The sub-step loop (substeps) and stride cadence are CARRIED by AmrRuntime::step,
   // not by this closure: thus the multirate semantics are in ONE place in the engine (mirror
   // of AmrSystemCoupler::step) and stay disableable / testable there. Implicit FUNCTOR:
   // advance_amr<Limiter, Flux> is a named template function (no cross-TU extended lambda);
   // we capture it in a std::function from THIS TU (device-clean recipe #64/#97).
-  // tmethod (kEuler default) selects SSPRK3 (time='ssprk3') for the explicit transport of the block;
-  // kEuler -> historical forward Euler, bit-identical. The explicit source stays carried by advance_amr.
+  // time_method selects Euler, SSPRK2/Heun, or SSPRK3 for the explicit transport of the block. The
+  // explicit source stays carried by advance_amr at every stage of the selected method.
   b.advance = [model, rprim, time_method, pos_floor](std::vector<AmrLevelMP>& L,
                                                      const Box2D& dom, Real dt,
                                                      Periodicity per, bool repl) {
@@ -1194,8 +1200,8 @@ inline std::vector<int> resolve_implicit_components_compiled(
 /// bit-identical. MULTI-BLOCK (>= 2 blocks, compiled and/or native mixed; capstone v): the block is
 /// materialized as a type-erased AmrRuntimeBlock on the layout SHARED by the multi_builder, exactly
 /// like native add_block. We freeze BOTH builders here (the facade chooses the routing at ensure_built).
-/// @p time: "explicit" (forward Euler source) or "imex" (stiff implicit source via
-/// backward_euler_source, explicit transport carried by the reflux). Any other treatment is refused.
+/// @p time: "explicit" (SSPRK2/Heun), "euler", "ssprk3", or "imex" (forward-Euler transport
+/// plus stiff implicit source via backward_euler_source). Unknown treatments are refused.
 /// @p stride: HOLD-THEN-CATCH-UP cadence of the block in multi-block (1 = each macro-step).
 /// @p implicit_vars / @p implicit_roles: partial IMEX mask of the block (multi-block; requires time=imex).
 /// @p pos_floor: Zhang-Shu positivity floor (ADC-322; 0 = inactive, bit-identical). Stored on the block
@@ -1220,18 +1226,22 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
   // (build_amr_compiled -> cpl->levels()) que sur le multi-bloc natif (build_amr_block ->
   // AmrRuntime::step -> project_per_level). Cell-local + idempotente : conservation preservee (les
   // flux-registres sont deja regles). No-op si le modele ne declare pas m.project.
-  // SSPRK3 IS NOT carried by the COMPILED path: neither the mono_builder nor the multi_builder
-  // freezes AmrBuildParams::time_method / passes AmrTimeMethod to dispatch_amr_block (the flat ABI of the
-  // .so loader does not marshal the method). EXPLICIT rejection rather than a silent kEuler fallback; an
-  // SSPRK3 block must be NATIVE (AmrSystem::add_block / dispatch_amr_block, which threads it).
-  if (time == "ssprk3")
-    throw std::runtime_error(
-        "add_compiled_model(AmrSystem): time='ssprk3' not carried by the "
-        "compiled path (.so); use a native block pops.Model(...).");
-  if (time != "explicit" && time != "imex")
+  // The flat loader ABI already carries the canonical time token. Lower it once to the stable
+  // AmrTimeMethod wire and freeze it in both deferred builders; no scheme falls back to Euler.
+  AmrTimeMethod time_method = AmrTimeMethod::kEuler;
+  if (time == "explicit")
+    time_method = AmrTimeMethod::kSsprk2;
+  else if (time == "euler")
+    time_method = AmrTimeMethod::kEuler;
+  else if (time == "ssprk3")
+    time_method = AmrTimeMethod::kSsprk3;
+  else if (time == "imex")
+    time_method = AmrTimeMethod::kEuler;
+  else
     throw std::runtime_error(
         "add_compiled_model(AmrSystem): time '" + time + "' unknown (available here: " +
         std::string(route_token(TimeRouteId::kExplicitSsprk2)) + "|" +
+        route_token(TimeRouteId::kForwardEuler) + "|" + route_token(TimeRouteId::kSsprk3) + "|" +
         route_token(TimeRouteId::kImex) + ")");
   if (recon != "conservative" && recon != "primitive")
     throw std::runtime_error("add_compiled_model(AmrSystem): recon unknown '" + recon +
@@ -1240,10 +1250,12 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
   const bool imex = (time == "imex");
   // (1) MONO-BLOCK builder: captures the concrete Model + the scheme, materializes the AmrCouplerMP at the
   // lazy build (refine/poisson/density parameters frozen at that point).
-  auto mono_builder = [model, limiter, riemann, recon_prim, imex](const AmrBuildParams& bp) {
+  auto mono_builder =
+      [model, limiter, riemann, recon_prim, imex, time_method](const AmrBuildParams& bp) {
     AmrBuildParams p = bp;
     p.physics.recon_prim = recon_prim;
     p.physics.imex = imex;
+    p.physics.time_method = static_cast<int>(time_method);
     return detail::dispatch_amr_compiled(model, limiter, riemann, p);
   };
   // (2) MULTI-BLOCK builder: captures the SAME concrete Model/scheme, materializes the AmrRuntimeBlock of the
@@ -1253,7 +1265,7 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
   // the add, there from a ModelSpec at build). FUNCTOR without a cross-TU extended lambda in the kernel:
   // dispatch_amr_block captures advance_amr<Limiter, Flux> (named template function), device-clean
   // recipe #64/#97; the outer lambda only orchestrates (no device kernel in its body).
-  auto multi_builder = [model, limiter, riemann](
+  auto multi_builder = [model, limiter, riemann, time_method](
                            const detail::SharedAmrLayout& S, const std::string& bname,
                            const std::vector<double>& density, bool has_density,
                            const std::vector<double>& state, bool has_state, double bgamma, int bsub,
@@ -1267,16 +1279,17 @@ void add_compiled_model(AmrSystem& sys, const std::string& name, Model model,
     // pos_floor (ADC-322): the .so flat ABI now carries the Zhang-Shu floor; forward it to the SAME
     // dispatch_amr_block -> build_amr_block leaf as a native multi-block. Runtime initial state is
     // carried by this deferred builder (it is bound after the .so installs the concrete model); Newton
-    // options/diagnostics and SSPRK3 remain outside this compiled path.
+    // options/diagnostics remain outside this compiled path; the temporal method is captured above.
     return detail::dispatch_amr_block(
         model, limiter, riemann, S, bname, density, has_density, bgamma, bsub, brecon_prim, bimex,
         bstride, impl_components, NewtonOptions{},
-        has_state ? &state : nullptr, /*newton_diagnostics=*/false, AmrTimeMethod::kEuler,
+        has_state ? &state : nullptr, /*newton_diagnostics=*/false, time_method,
         bpos_floor);
   };
   sys.set_compiled_block(Model::n_vars, gamma, substeps, std::move(mono_builder),
-                         std::move(multi_builder), name, recon_prim, imex, stride, implicit_vars,
-                         implicit_roles, pos_floor);
+                         std::move(multi_builder), name, recon_prim, imex,
+                         static_cast<int>(time_method), stride, implicit_vars, implicit_roles,
+                         pos_floor);
 }
 
 }  // namespace pops

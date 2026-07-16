@@ -26,6 +26,7 @@ set(POPS_CPP_TEST_SOURCE_test_amr_riemann_native "tests/cpp/integration/native_l
 set(POPS_CPP_TEST_SOURCE_test_amr_seed_no_refine "tests/cpp/integration/amr/test_amr_seed_no_refine.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_source_covered_cells "tests/cpp/integration/amr/test_amr_source_covered_cells.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_spatial_parity "tests/cpp/integration/amr/test_amr_spatial_parity.cpp")
+set(POPS_CPP_TEST_SOURCE_test_amr_ssprk2 "tests/cpp/integration/amr/test_amr_ssprk2.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_stride_cadence "tests/cpp/integration/amr/test_amr_stride_cadence.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_system_bz_multibox "tests/cpp/integration/amr/test_amr_system_bz_multibox.cpp")
 set(POPS_CPP_TEST_SOURCE_test_amr_system_bz_pop "tests/cpp/integration/amr/test_amr_system_bz_pop.cpp")

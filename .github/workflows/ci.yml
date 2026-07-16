@@ -300,10 +300,11 @@ jobs:
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 30 min cold build + 15 min for the authenticated slow target.  The main step remains bounded
-    # at 47 minutes: the independent phase watchdogs identify whether a compiler or a test wedged,
-    # while the outer job still leaves three minutes for setup and the always() ccache save.
-    timeout-minutes: 50
+    # 30 min cold build + 15 min for the authenticated slow target.  The main step keeps five
+    # minutes for configure/inventory between those independently diagnosed phases; the outer job
+    # keeps ten more for checkout, toolchain/cache setup and the always() ccache save.  These are
+    # fail-safe ceilings and do not lengthen a healthy build.
+    timeout-minutes: 60
     needs: [changes, set-mode]
     strategy:
       fail-fast: false
@@ -422,7 +423,7 @@ jobs:
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Configure + build + test (Kokkos Serial)
-        timeout-minutes: 47
+        timeout-minutes: 50
         run: |
           SECONDS=0
           run_with_heartbeat() {
@@ -809,6 +810,9 @@ jobs:
       # redacted) banner .cpp -- neither changes the compiled .so bytes nor the cache key.
       POPS_CACHE_DIR: ${{ github.workspace }}/.pops-dsl-cache
       POPS_KEEP_GENERATED: "1"
+      # This lane installs the compiled extension, Kokkos and a C++ compiler. Native acceptance
+      # files must fail if any prerequisite/import/API disappears; a source-only local run may skip.
+      POPS_REQUIRE_NATIVE_TESTS: "1"
 
     steps:
       - uses: actions/checkout@v7

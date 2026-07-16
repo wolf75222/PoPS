@@ -95,6 +95,50 @@ def test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state
             run_control_payload(FixedDt(0.25)), time=0.125, macro_step=1)
 
 
+def test_system_direct_step_publishes_one_synchronized_fixed_dt_restart_envelope():
+    """The real low-level System seam reports the accepted direct step without private reads."""
+    import pops.runtime._engine_descriptors as engine
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.runtime._system import System
+
+    n = 8
+    dt = 0.01
+    system = System(n=n, L=1.0, periodic=True)
+    system.add_equation(
+        "scalar",
+        engine.Model(
+            state=engine.FluidState("isothermal", cs2=0.5),
+            transport=engine.IsothermalFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0),
+        ),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method="euler"),
+    )
+    coordinates = (np.arange(n, dtype=np.float64) + 0.5) / n
+    x, y = np.meshgrid(coordinates, coordinates, indexing="ij")
+    rho = 1.0 + 0.2 * np.sin(2.0 * np.pi * x) * np.cos(2.0 * np.pi * y)
+    initial = np.stack((rho, 0.3 * rho, -0.1 * rho))
+    system.set_state("scalar", initial)
+
+    system.step(dt)
+
+    assert system.macro_step() == 1
+    assert system.time() == pytest.approx(dt, rel=0.0, abs=1e-15)
+    assert not np.array_equal(np.asarray(system.get_state("scalar")), initial)
+    temporal = system.program_report().temporal
+    assert temporal["strategy"] == run_control_payload(FixedDt(dt))
+    assert temporal["clock"] == {"time": float(dt).hex(), "macro_step": 1}
+    assert temporal["schedule_cursors"] == {
+        "macro_step": {"macro_step": 1, "phase": "accepted"},
+    }
+    assert temporal["controller_state"] == {"last_accepted_dt": float(dt).hex()}
+    assert temporal["transaction_stats"] == {"accepted": 1, "rejected": 0, "failed": 0}
+    assert temporal["status"] == "accepted"
+    assert temporal["synchronized"] is True
+
+
 def test_nested_clock_cursors_round_trip_at_only_the_accepted_boundary():
     macro, child, schedule = _nested_schedule()
     state = TemporalRestartState()

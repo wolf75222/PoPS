@@ -96,10 +96,12 @@ class _AmrSystemEquation(_AmrSystem):
           inlines add_compiled_model(AmrSystem&), so the block runs
           the SAME AMR hierarchy as add_block (conservative reflux, regrid), ZERO-COPY.
 
-        Time handling is wired to {explicit, imex}: imex treats the stiff source IMPLICITLY
-        (backward_euler_source), the remaining transport explicit and carried by the conservative reflux
-        (parity with the System IMEX; the source being cell-local, the implicit split does not touch
-        conservation at the coarse-fine interfaces). recon "primitive" and flux "roe"/"hllc"/weno5 are
+        Time handling is wired to ``Explicit(method="ssprk2"|"ssprk3"|"euler")`` and ``IMEX``.
+        SSPRK2/Heun and SSPRK3 evaluate the explicit source at every stage and expose the matching
+        stage-weighted effective face flux to conservative reflux. At coarse/fine boundaries, every
+        stage samples the authored parent time window at its RK abscissa. IMEX remains the distinct
+        forward-Euler transport plus backward-Euler stiff-source split; the cell-local implicit source
+        does not enter reflux. recon "primitive" and flux "roe"/"hllc"/weno5 are
         WIRED on AMR (parity with add_block; cf. dispatch_amr_compiled). limiter="weno5" (WENO5-Z,
         3 ghosts): the coupler allocates its levels to Limiter::n_ghost and the regrid inherits n_grow(), so
         the 5-point stencil does not read out of bounds. cf. DSL_MODEL_DESIGN.md Phase D (point 10).

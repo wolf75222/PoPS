@@ -14,17 +14,22 @@ REAL ``.so`` compile. Skips cleanly unless the full toolchain is present (like t
 """
 import sys
 
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
-def _skip(msg):
-    print("skip test_compile_module_trace (%s)" % msg)
-    sys.exit(0)
+_native_missing = missing_native_compile_requirement(repo_include(), default_cxx())
+if _native_missing:
+    require_native_or_skip("test_compile_module_trace: %s" % _native_missing)
 
 
 try:
     import pops
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
-    from pops.model.manifest import module_manifest_of
     from pops.runtime._engine_descriptors import (
         BackgroundDensity, FluidState, IsothermalFlux, Model as NativeBrickModel, NoSource,
     )
@@ -34,7 +39,7 @@ try:
     )
     from tests.python.support.typed_program import program_states
 except Exception as exc:  # noqa: BLE001
-    _skip("pops unavailable: %s" % exc)
+    require_native_or_skip("test_compile_module_trace imports unavailable: %s" % exc)
 
 fails = 0
 
@@ -78,27 +83,28 @@ def bricks_model():
 
 
 # Standard flow: pass the final Model directly, with no manual Module lowering.
-try:
-    compiled_model = physics_model()
-    resolved = resolve_periodic_field_program(
-        compiled_model,
-        lambda state, rate, _fields: libtime.ForwardEuler(state, rate=rate),
-        name="module-trace",
-        block_name="ions",
-        target="system",
-        n=8,
-    )
-    compiled = pops.compile(resolved)
-except (RuntimeError, Exception) as exc:  # noqa: BLE001
-    _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
+compiled_model = physics_model()
+resolved = resolve_periodic_field_program(
+    compiled_model,
+    lambda state, rate, _fields: libtime.ForwardEuler(state, rate=rate),
+    name="module-trace",
+    block_name="ions",
+    target="system",
+    n=8,
+)
+compiled = pops.compile(resolved)
 
 print("== ADC-557: one lowering, module trace on the handle (final Model) ==")
 report = compiled.inspect().to_dict()
 expected_module_hash = compiled_model.module.module_hash()
-source_manifest = module_manifest_of(compiled_model.module).to_dict()
-ops = [op.get("name") for op in source_manifest.get("operators", [])]
+compile_frozen_manifest = compiled.module_manifest
+chk(compile_frozen_manifest is not None,
+    "the compiled handle retains its immutable compile-frozen module manifest")
+ops = [] if compile_frozen_manifest is None else [
+    op.get("name") for op in compile_frozen_manifest.to_dict().get("operators", [])
+]
 chk("transport" in ops and "electrostatic" in ops,
-    "the authenticated source trace lists the operator-first operators (%s)" % ops)
+    "the compile-frozen handle trace lists the operator-first operators (%s)" % ops)
 module_hashes = [
     dict(block.model.definition_identity).get("module_hash")
     for block in compiled.blocks

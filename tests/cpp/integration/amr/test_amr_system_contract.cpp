@@ -2,8 +2,7 @@
 // explicitement (std::runtime_error), plus de no-op silencieux. Avant ce nettoyage, set_poisson
 // stockait rhs/solver sans jamais les valider (on pouvait croire que solver='fft' tournait sur la
 // hierarchie alors qu'AmrCouplerMP cable toujours GeometricMG), et add_block acceptait n'importe
-// quel time. Ce test verrouille les refus -- et, depuis le cablage IMEX (source raide implicite),
-// l'ACCEPTATION de time='imex' (seul un time hors {explicit, imex} est refuse). Il compile
+// quel time. Ce test verrouille les refus et les schemas temporels reellement cables. Il compile
 // python/amr_system.cpp avec le test, la classe AmrSystem etant la facade des bindings.
 
 #include <gtest/gtest.h>
@@ -91,21 +90,23 @@ TEST(test_amr_system_contract, Runs) {
       std::runtime_error)
       << "wall inconnu refuse au build";
 
-  // --- add_block : time={explicit, imex} ACCEPTE, tout autre traitement REFUSE -----------------
-  // time='imex' est desormais cable sur AMR (source raide implicite via backward_euler_source ;
-  // transport explicite porte par le reflux). On verrouille donc qu'il est ACCEPTE, et qu'un
-  // traitement GENUINEMENT inconnu reste refuse tot.
-  EXPECT_NO_THROW({
-    AmrSystem s(cfg);
-    s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "imex", 1);
-  }) << "add_block accepte time='imex' (IMEX cable sur AMR)";
+  // --- add_block : schemas cables ACCEPTES, valeur inconnue REFUSEE ---------------------------
+  // Chaque identifiant public doit atteindre son chemin natif : ``explicit`` canonique (SSPRK2),
+  // Forward Euler, SSPRK3 et source raide IMEX. Ce verrou complete les tests numeriques qui
+  // distinguent ensuite les trajectoires Euler et SSPRK2.
+  for (const char* method : {"explicit", "euler", "ssprk3", "imex"}) {
+    EXPECT_NO_THROW({
+      AmrSystem s(cfg);
+      s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", method, 1);
+    }) << "add_block accepte le schema temporel cable '" << method << "'";
+  }
   EXPECT_THROW(
       {
         AmrSystem s(cfg);
         s.add_block("ne", exb_spec(), "none", "rusanov", "conservative", "time_bidon", 1);
       },
       std::runtime_error)
-      << "add_block refuse un time hors {explicit, imex}";
+      << "add_block refuse un time hors {explicit, euler, ssprk3, imex}";
   EXPECT_THROW(
       {
         AmrSystem s(cfg);

@@ -51,7 +51,7 @@ class PythonProcessItem(pytest.Item):
         if skip_reason:
             pytest.skip(skip_reason)
         if result.returncode != 0:
-            missing = _missing_process_requirement(result.stdout)
+            missing = _missing_process_requirement_for_environment(result.stdout, env)
             if missing:
                 pytest.skip(missing)
             raise PythonProcessFailure(Path(str(self.path)), result.returncode, result.stdout)
@@ -329,6 +329,20 @@ def _missing_process_requirement(output: str) -> str | None:
     if "DO NOT MATCH those with which the _pops module was built" in output:
         return "headers do not match the built _pops module (stale build/overlay)"
     return None
+
+
+def _missing_process_requirement_for_environment(
+    output: str, environment: dict[str, str],
+) -> str | None:
+    """Keep legacy local skips out of a native-required release lane.
+
+    ``require_native_or_skip`` raises on missing prerequisites when
+    ``POPS_REQUIRE_NATIVE_TESTS=1``. The subprocess parent must preserve that failure instead of
+    reclassifying its diagnostic text through the older heuristic fallback above.
+    """
+    if environment.get("POPS_REQUIRE_NATIVE_TESTS") == "1":
+        return None
+    return _missing_process_requirement(output)
 
 
 @cache

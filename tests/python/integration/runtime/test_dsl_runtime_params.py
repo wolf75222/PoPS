@@ -157,7 +157,7 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
     field_operator = model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=-laplacian(phi) + phi == scale * rho,
+        equation=-laplacian(phi) + 1.0 * phi == scale * rho,
         outputs=(FieldOutput("phi", potential),),
     )
 
