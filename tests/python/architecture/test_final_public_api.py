@@ -180,6 +180,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
     assert public == {
         "amr",
         "bind_identity",
+        "bound_snapshot",
         "block_level_state",
         "block_level_state_global",
         "block_names",

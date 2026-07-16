@@ -1066,6 +1066,8 @@ Une application ne construit donc ni moteur, ni config native, ni plan d'install
 identités et rapports, aux lectures d'état, clock, layout, champs et histories, à la vue de rapports AMR,
 au rapport du programme, ainsi qu'à `checkpoint` et `restart`. Elle ne retourne jamais le `System` ou
 l'`AmrSystem` privé et n'expose aucune route `step`, `profile` ou d'assemblage.
+`RuntimeInstance.bound_snapshot` est la preuve immuable et authentifiée de l'artefact, des layouts et
+des entrées effectivement liés ; cette lecture explicite ne donne aucun accès au moteur privé.
 
 ## 9. Consommateurs, sorties et restart
 
