@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 import sys
+from types import SimpleNamespace
 
 
 _REQUIRE_MPI = os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
@@ -19,6 +20,7 @@ try:
         proven_serial_manifest,
     )
     from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.runtime import _runtime_executor as executor
     from pops.runtime._component_execution_context import component_execution_data
 except Exception as exc:  # noqa: BLE001 -- optional outside the required MPI lane
     if _REQUIRE_MPI:
@@ -53,6 +55,9 @@ assert projected["communicator_f_handle"] == int(MPI.COMM_WORLD.py2f())
 assert projected["communicator_datatype_f_handle"] == int(MPI.DOUBLE.py2f())
 assert projected["communicator_identity"] == "MPI_COMM_WORLD"
 assert projected["communicator_datatype_identity"] == "MPI_DOUBLE"
+executor._require_supported_execution_context(
+    SimpleNamespace(execution_context=context)
+)
 
 duplicate = MPI.COMM_WORLD.Dup()
 try:
