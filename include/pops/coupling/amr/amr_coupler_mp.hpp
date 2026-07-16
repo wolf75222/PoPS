@@ -496,20 +496,20 @@ class AmrCouplerMP {
     }
   }
 
-  // GLOBAL (np>1 GATHER) variants of level_state / level_potential (ADC-509). The base accessors
-  // above fill the GLOBAL buffer from the LOCAL fabs only (zeros where this rank owns no box); these
-  // add an all_reduce_sum_inplace so EACH rank holds the complete field (AMR reflux pattern, comm.hpp;
-  // MIRROR of System::state_global / gather_global). COLLECTIVE: all ranks MUST call them. Mono-rank
-  // the reduce is the identity -> bit-identical to level_state / level_potential. The base distributed
-  // coarse + round-robin fine patches are disjoint, so the sum double-counts nothing.
+  // GLOBAL variants of level_state / level_potential (ADC-509). Ownership-distributed levels contain
+  // zeros outside the local fabs, so all_reduce_sum_inplace gathers the complete field on every rank
+  // (AMR reflux pattern, comm.hpp; MIRROR of System::state_global / gather_global).  Replicated level
+  // 0 is already complete on every rank and must not be reduced, which would multiply it by n_ranks.
   std::vector<double> level_state_global(int k) {
     std::vector<double> out = level_state(k);
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    if (k > 0 || !replicated_coarse_)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
   std::vector<double> level_potential_global(int k) {
     std::vector<double> out = level_potential(k);
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    if (k > 0 || !replicated_coarse_)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
 

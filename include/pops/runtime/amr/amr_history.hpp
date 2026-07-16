@@ -231,7 +231,8 @@ struct AmrHistoryOps {
   // (level 0 then 1 ...), each at the v3 convention c*nf*nf+j*nf+i (nf derives from the runtime
   // hierarchy transition product; zeros outside
   // the patches at a fine level) -- the SAME layout level_aux_flat uses, hiding the level axis inside
-  // the accessor so _system_io_history.py is reused verbatim. @p gather -> np>1 all_reduce_sum.
+  // the accessor so _system_io_history.py is reused verbatim. @p gather collects only the
+  // ownership-distributed level slices; replicated level 0 is already global on every rank.
   static std::vector<double> global(const AmrRuntime& eng, const std::string& name, int slot,
                                     bool gather) {
     auto it = eng.hist_rings_.find(name);
@@ -259,10 +260,10 @@ struct AmrHistoryOps {
                   static_cast<std::size_t>(j - domain.lo[1]) * nf +
                   static_cast<std::size_t>(i - domain.lo[0])] = a(i, j, c);
       }
+      if (gather && (k > 0 || !eng.replicated_coarse_))
+        all_reduce_sum_inplace(lvl.data(), static_cast<int>(lvl.size()));
       out.insert(out.end(), lvl.begin(), lvl.end());
     }
-    if (gather)
-      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
 

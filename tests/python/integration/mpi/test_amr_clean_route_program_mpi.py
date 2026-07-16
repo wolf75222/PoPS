@@ -20,6 +20,8 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from _compile_once import compile_resolved_plan_once
+
 
 _REQUIRE_MPI = os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
 
@@ -69,6 +71,11 @@ NSTEPS = 4
 DT = 1.0e-3
 _fails = 0
 _COMM = MPI.COMM_WORLD
+
+
+def _phase(label: str) -> None:
+    """Emit an unbuffered per-rank marker around potentially collective phases."""
+    print("[rank %d] %s" % (int(_COMM.Get_rank()), label), flush=True)
 
 
 def chk(cond: Any, label: str) -> None:
@@ -218,17 +225,30 @@ def _execute(
     *,
     distribute_coarse: bool,
 ) -> tuple[np.ndarray, np.ndarray, Any, Any, Any]:
-    artifact = pops.compile(
-        _resolved(program_builder, distribute_coarse=distribute_coarse)
+    builder_name = getattr(program_builder, "__name__", type(program_builder).__name__)
+    route = "%s/coarse=%s" % (builder_name, distribute_coarse)
+    _phase(route + ": resolve start")
+    resolved = _resolved(program_builder, distribute_coarse=distribute_coarse)
+    _phase(route + ": resolve done")
+    artifact = compile_resolved_plan_once(
+        _COMM,
+        resolved,
+        route=route,
+        compile_artifact=pops.compile,
     )
+
+    _phase(route + ": execution-context bind start")
     context = pops.ExecutionContext.mpi_world(artifact, _COMM)
     runtime = pops.bind(artifact, resources={"execution_context": context})
+    _phase(route + ": execution-context bind done")
     # AMR global state is level-qualified in the final contract; the old unqualified accessor is
     # deliberately rejected because it cannot identify a level on a refined hierarchy.
     initial = np.asarray(
         runtime.block_level_state_global("tracer", 0), dtype=np.float64
     ).copy()
+    _phase(route + ": run start")
     report = pops.run(runtime, t_end=NSTEPS * DT, max_steps=NSTEPS)
+    _phase(route + ": run done")
     result = np.asarray(
         runtime.block_level_state_global("tracer", 0), dtype=np.float64
     ).copy()

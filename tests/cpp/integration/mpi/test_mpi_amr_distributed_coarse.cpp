@@ -18,7 +18,10 @@
 //       (les sommes additives, elles, dependent de l'ordre de reduction FMA quand le grossier est
 //       genuinement decoupe -- documente pour #59 ; on ne l'exige donc PAS bit a bit ici).
 //   (3) CONSERVATION : masse conservee a l'arrondi (reflux conservatif + all_reduce_sum).
-//   (4) MG CONVERGE : phi reste fini et le champ non trivial (pas de divergence du multigrille
+//   (4) GLOBAL ACCESSORS: the replicated coarse is never summed over ranks (which would multiply
+//       it by np); the distributed coarse reconstructs the exact global state/potential. The
+//       checkpoint views are compared to the independent density()/potential() production reads.
+//   (5) MG CONVERGE : phi reste fini et le champ non trivial (pas de divergence du multigrille
 //       geometrique sur le grossier multi-box). Couvert par (1) : un MG diverge -> NaN -> echec.
 //
 // Independant du backend : Kokkos Serial (CI, CPU) et Cuda (GH200). Le script ROMEO relance le MEME
@@ -34,6 +37,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -64,9 +68,31 @@ static std::vector<double> four_bubbles(int n) {
 // GLOBALE (n*n) + masse finale + m0. distribute => grossier multi-box reparti (sinon replique).
 struct Result {
   std::vector<double> dens;
+  std::vector<double> state;
+  std::vector<double> phi;
+  std::vector<double> phi_global;
   double mass, m0;
   int npf;
 };
+
+static double max_abs_difference(const std::vector<double>& a, const std::vector<double>& b) {
+  if (a.size() != b.size())
+    return std::numeric_limits<double>::infinity();
+  double dmax = 0.0;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    dmax = std::fmax(dmax, std::fabs(a[i] - b[i]));
+  return dmax;
+}
+
+static double component_zero_difference(const std::vector<double>& state,
+                                        const std::vector<double>& density) {
+  if (state.size() < density.size())
+    return std::numeric_limits<double>::infinity();
+  double dmax = 0.0;
+  for (std::size_t i = 0; i < density.size(); ++i)
+    dmax = std::fmax(dmax, std::fabs(state[i] - density[i]));
+  return dmax;
+}
 
 static Result run(int n, int nsteps, double dt, bool distribute) {
   const std::vector<double> rho = four_bubbles(n);
@@ -93,6 +119,12 @@ static Result run(int n, int nsteps, double dt, bool distribute) {
   Kokkos::fence();
 #endif
   R.dens = sys.density();
+  // The density/potential paths reconstruct their global coarse fields independently of the
+  // checkpoint accessors below. They are the oracle for the replicated-vs-distributed ownership
+  // contract of level_{state,potential}_global(0).
+  R.state = sys.level_state_global(0);
+  R.phi = sys.potential();
+  R.phi_global = sys.level_potential_global(0);
   R.mass = sys.mass();
   R.npf = sys.n_patches();
   return R;
@@ -134,13 +166,23 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   const double cmax_spread = xmax - xmin;
   // dmax reduit sur les rangs (chaque rang a le meme champ global reconstruit, mais on est defensif).
   const double dmax_g = all_reduce_max(dmax);
+  const double rep_state_dmax = component_zero_difference(rep.state, rep.dens);
+  const double dis_state_dmax = component_zero_difference(dis.state, dis.dens);
+  const double rep_phi_dmax = max_abs_difference(rep.phi_global, rep.phi);
+  const double dis_phi_dmax = max_abs_difference(dis.phi_global, dis.phi);
+  // Full-state / potential parity between ownership policies verifies that the distributed gather
+  // exposes the same physical global field rather than a rank-local fragment.
+  const double state_mode_dmax = max_abs_difference(rep.state, dis.state);
+  const double phi_mode_dmax = max_abs_difference(rep.phi_global, dis.phi_global);
 
   int fails = 0;
   if (me == 0) {
     std::printf(
         "AMRDIST np=%d distribute_npf=%d replicated_npf=%d | cmax=%.17e | "
-        "dist_vs_repl_dmax=%.3e | cmax_crossrank_spread=%.3e\n",
-        np, dis.npf, rep.npf, cmax, dmax_g, cmax_spread);
+        "dist_vs_repl_dmax=%.3e | cmax_crossrank_spread=%.3e | "
+        "state_rep=%.3e state_dist=%.3e phi_rep=%.3e phi_dist=%.3e\n",
+        np, dis.npf, rep.npf, cmax, dmax_g, cmax_spread, rep_state_dmax, dis_state_dmax,
+        rep_phi_dmax, dis_phi_dmax);
 #if defined(POPS_HAS_KOKKOS)
     const char* space = Kokkos::DefaultExecutionSpace::name();
 #else
@@ -152,6 +194,19 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
 
     if (!(dis.dens.size() == static_cast<std::size_t>(n) * n)) {
       std::printf("FAIL densite repartie de mauvaise taille\n");
+      ++fails;
+    }
+    if (!(rep_state_dmax == 0.0 && rep_phi_dmax == 0.0)) {
+      std::printf(
+          "FAIL les vues globales repliquees ont ete reduites (state=%.3e phi=%.3e)\n",
+          rep_state_dmax, rep_phi_dmax);
+      ++fails;
+    }
+    if (!(dis_state_dmax == 0.0 && dis_phi_dmax == 0.0)) {
+      std::printf(
+          "FAIL les vues globales distribuees ne reconstituent pas la reference (state=%.3e "
+          "phi=%.3e)\n",
+          dis_state_dmax, dis_phi_dmax);
       ++fails;
     }
     if (!(cmax > 1e-6)) {
@@ -168,6 +223,11 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
     // ou un transport casse exploserait bien au-dela.
     if (!(dmax_g < 1e-9)) {
       std::printf("FAIL reparti != replique au-dela de l'arrondi (dmax=%.3e)\n", dmax_g);
+      ++fails;
+    }
+    if (!(state_mode_dmax < 1e-9 && phi_mode_dmax < 1e-9)) {
+      std::printf("FAIL checkpoint global reparti != replique (state=%.3e phi=%.3e)\n",
+                  state_mode_dmax, phi_mode_dmax);
       ++fails;
     }
     // (3) conservation des deux modes.

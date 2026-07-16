@@ -1155,7 +1155,9 @@ class AmrRuntime {
                 static_cast<double>(data(i, j, component));
         }
     }
-    if (n_ranks() > 1)
+    // A replicated coarse carrier is already complete on every rank.  Fine levels and a
+    // distributed coarse carrier contain disjoint ownership contributions and require a gather.
+    if (n_ranks() > 1 && (level > 0 || !replicated_coarse_))
       all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
@@ -3725,9 +3727,10 @@ class AmrRuntime {
   // hierarchy. The shared layout is FROZEN at build (make_shared_amr_layout: a deterministic central
   // fine patch, regrid_every==0): replaying the SAME composition reproduces the SAME hierarchy, so a
   // restart only needs to restore each block's valid cells + phi (no set_hierarchy on the runtime).
-  // The _global variants all_reduce_sum the per-rank LOCAL fabs into the complete field (np>1
-  // gather), MIRROR of System::state_global / gather_global; mono-rank they are the identity. @p b:
-  // block index, @p k: level (0 = coarse, >= 1 = fine).
+  // The _global variants gather ownership-distributed levels with all_reduce_sum so every rank owns
+  // the complete field, MIRROR of System::state_global / gather_global.  A replicated level 0 is
+  // already complete on every rank and must not be reduced (which would multiply it by n_ranks).
+  // @p b: block index, @p k: level (0 = coarse, >= 1 = fine).
   // ----------------------------------------------------------------------------------------------
 
   // Conserved components of block @p b (Model::n_vars, carried by the AmrRuntimeBlock).
@@ -3755,11 +3758,13 @@ class AmrRuntime {
     return out;
   }
 
-  // Same as block_level_state but all_reduce_sum the per-rank contributions -> every rank holds the
-  // complete field (np>1 gather, AMR reflux pattern). COLLECTIVE: all ranks MUST call it.
+  // Same as block_level_state but gather ownership-distributed contributions so every rank holds the
+  // complete field.  Replicated level 0 is returned directly.  COLLECTIVE only when a reduction is
+  // required; all ranks must nevertheless make the same call for a given hierarchy.
   std::vector<double> block_level_state_global(std::size_t b, int k) const {
     std::vector<double> out = block_level_state(b, k);
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    if (k > 0 || !replicated_coarse_)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
 
@@ -3805,10 +3810,12 @@ class AmrRuntime {
     return out;
   }
 
-  // Same as level_potential but all_reduce_sum (np>1 gather). COLLECTIVE: all ranks MUST call it.
+  // Same as level_potential, gathering only ownership-distributed levels.  Replicated level 0 is
+  // already global and is returned directly.
   std::vector<double> level_potential_global(int k) {
     std::vector<double> out = level_potential(k);
-    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+    if (k > 0 || !replicated_coarse_)
+      all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
     return out;
   }
 

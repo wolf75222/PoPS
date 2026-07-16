@@ -22,6 +22,8 @@ import sys
 import tempfile
 from typing import Any
 
+from _compile_once import compile_resolved_plan_once
+
 
 _REQUIRE_MPI = os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
 
@@ -229,21 +231,6 @@ def _resolved(
     )
 
 
-def _compile(
-    program_factory: ProgramFactory,
-    *,
-    distribute_coarse: bool,
-    regrid_every: int,
-) -> Any:
-    return pops.compile(
-        _resolved(
-            program_factory,
-            distribute_coarse=distribute_coarse,
-            regrid_every=regrid_every,
-        )
-    )
-
-
 def _bind(artifact: Any) -> Any:
     context = pops.ExecutionContext.mpi_world(artifact, _COMM)
     return pops.bind(artifact, resources={"execution_context": context})
@@ -300,10 +287,22 @@ def _run_restart_case(
     nsteps: int,
     label: str,
 ) -> dict[str, Any]:
-    artifact = _compile(
+    factory_name = getattr(program_factory, "__name__", type(program_factory).__name__)
+    route = "%s/coarse=%s/regrid=%d" % (
+        factory_name,
+        distribute_coarse,
+        regrid_every,
+    )
+    resolved = _resolved(
         program_factory,
         distribute_coarse=distribute_coarse,
         regrid_every=regrid_every,
+    )
+    artifact = compile_resolved_plan_once(
+        _COMM,
+        resolved,
+        route=route,
+        compile_artifact=pops.compile,
     )
 
     continuous = _bind(artifact)

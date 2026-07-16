@@ -525,10 +525,10 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_shards_block.index("verify-cpp-target-labels") < cpp_shards_block.index(
         "ctest --preset ci-kokkos -L"
     )
-    assert "timeout-minutes: 35" in cpp_shards_block
-    assert "timeout-minutes: 32" in cpp_shards_block
+    assert "timeout-minutes: 45" in cpp_shards_block
+    assert "timeout-minutes: 40" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 23m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
     assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" 7m' in cpp_shards_block
     assert "timeout --signal=TERM --kill-after=30s" in cpp_shards_block
     assert "mem_available=" in cpp_shards_block
@@ -564,9 +564,11 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)" in mpi_block
     assert 'run_mpi "Python MPI contract ${mpi_test}"' in mpi_block
     assert 'run_mpi "collective HDF5 writer"' in mpi_block
-    assert "timeout --signal=TERM --kill-after=30s 7m" in mpi_block
+    assert "timeout --signal=TERM --kill-after=30s 20m" in mpi_block
     assert "timeout --signal=TERM --kill-after=30s 4m" in mpi_block
-    assert "timeout-minutes: 18" in mpi_block
+    assert "timeout-minutes: 70" in mpi_block
+    assert "timeout-minutes: 35" in mpi_block
+    assert '/usr/bin/python3 -u "$mpi_test"' in mpi_block
     assert "mpiexec -n \"$mpi_ranks\"" not in mpi_block
     assert "test_amr_clean_route_program_mpi.py" not in mpi_block
     assert "test_amr_history_mpi.py" not in mpi_block
@@ -577,7 +579,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
 
     openmp_block = workflow.split("\n  kokkos-openmp:\n", 1)[1]
     assert "name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})" in openmp_block
-    assert "timeout-minutes: 40" in openmp_block
+    assert "timeout-minutes: 70" in openmp_block
     assert "fail-fast: false" in openmp_block
     assert "lane: [cpp, python]" in openmp_block
     assert openmp_block.count("if: matrix.lane == 'cpp'") == 2
@@ -586,8 +588,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "uses: actions/cache/save@v6" in openmp_block
     assert "github.run_attempt" in openmp_block
     assert openmp_block.count("run_with_heartbeat() {") == 2
-    assert 'run_with_heartbeat "Kokkos OpenMP C++ build" 27m' in openmp_block
-    assert 'run_with_heartbeat "Kokkos OpenMP Python module build" 18m' in openmp_block
+    assert 'run_with_heartbeat "Kokkos OpenMP C++ build" 40m' in openmp_block
+    assert 'run_with_heartbeat "Kokkos OpenMP Python module build" 45m' in openmp_block
+    assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" in openmp_block
     assert "timeout --signal=TERM --kill-after=30s 8m ctest" in openmp_block
     assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
 
@@ -618,12 +621,13 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "\n  gate-python:\n", 1)[1].split("\n  gate-python-compile-cache:\n", 1)[0]
     python_cache_block = workflow.split(
         "\n  gate-python-compile-cache:\n", 1)[1].split("\n  gate:\n", 1)[0]
-    assert "timeout-minutes: 20" in python_build_block
-    assert "timeout-minutes: 19" in python_build_block
-    assert "timeout --signal=TERM --kill-after=30s 18m" in python_build_block
-    assert "exceeded its 18-minute cache-safe watchdog" in python_build_block
+    assert "timeout-minutes: 45" in python_build_block
+    assert "timeout-minutes: 42" in python_build_block
+    assert "timeout --signal=TERM --kill-after=30s 40m" in python_build_block
+    assert "exceeded its 40-minute cold-build watchdog" in python_build_block
     assert "exit \"$build_status\"" in python_build_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=4" in python_build_block
+    assert "ccache --zero-stats" in python_build_block
     assert "uses: actions/cache/restore@v6" in python_build_block
     assert "uses: actions/cache/save@v6" in python_build_block
     assert "always() && steps.kokkos.outcome == 'success'" in python_build_block

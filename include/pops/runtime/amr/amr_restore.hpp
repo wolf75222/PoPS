@@ -75,7 +75,8 @@ inline bool AmrRuntime::cell_covered_(int i, int j, const std::vector<Box2D>& co
 
 // COLLECTIVE per-level masked sum (sum / abs_sum / sum_sq) of block b at level k, one component or
 // ALL when full, EXCLUDING coarse cells covered by the next finer level's patches. Raw cell sum (the
-// dx*dy volume weight is applied by the caller). One all_reduce_sum.
+// dx*dy volume weight is applied by the caller). Ownership-distributed levels require one sum
+// reduction; replicated level 0 is already globally complete on every rank.
 inline double AmrRuntime::composite_level_sum_(std::size_t b, int k, const std::string& kind,
                                                int comp, bool full) const {
   const std::vector<AmrLevelMP>& L = *blocks_[b].levels;
@@ -114,7 +115,7 @@ inline double AmrRuntime::composite_level_sum_(std::size_t b, int k, const std::
         }
       }
   }
-  return all_reduce_sum(s);
+  return (k == 0 && replicated_coarse_) ? s : all_reduce_sum(s);
 }
 
 inline double AmrRuntime::composite_reduce(const std::string& block, const std::string& kind,
@@ -188,11 +189,13 @@ inline std::vector<double> AmrRuntime::level_aux_flat(int k) const {
   return out;
 }
 
-// np>1 gather of level_aux_flat (all_reduce_sum of the disjoint per-rank contributions -- the AMR
-// checkpoint gather pattern). COLLECTIVE: all ranks MUST call it. Mono-rank identity.
+// Global form of level_aux_flat. Ownership-distributed levels are gathered from their disjoint
+// per-rank contributions; replicated level 0 is already complete on every rank and must not be
+// reduced (which would multiply the checkpoint payload by n_ranks).
 inline std::vector<double> AmrRuntime::level_aux_flat_global(int k) const {
   std::vector<double> out = level_aux_flat(k);
-  all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
+  if (k > 0 || !replicated_coarse_)
+    all_reduce_sum_inplace(out.data(), static_cast<int>(out.size()));
   return out;
 }
 

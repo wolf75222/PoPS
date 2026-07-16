@@ -300,10 +300,10 @@ jobs:
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 23 min build + 7 min tests + setup/cache margin.  The inner watchdogs keep a
+    # 30 min cold build + 7 min tests + setup/cache margin.  The inner watchdogs keep a
     # wedged compiler/test explicit while this outer bound still leaves time for
     # the always() ccache save.
-    timeout-minutes: 35
+    timeout-minutes: 45
     needs: [changes, set-mode]
     strategy:
       fail-fast: false
@@ -422,7 +422,7 @@ jobs:
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Configure + build + test (Kokkos Serial)
-        timeout-minutes: 32
+        timeout-minutes: 40
         run: |
           SECONDS=0
           run_with_heartbeat() {
@@ -466,7 +466,7 @@ jobs:
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi
-          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 23m \
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m \
             cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
@@ -583,7 +583,10 @@ jobs:
   gate-python-build:
     name: ubuntu-latest / Kokkos Serial (Python build)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A changed production header invalidates most -O3 runtime objects.  Bound a
+    # genuinely cold build rather than relying on partial ccache state from an
+    # earlier failed attempt; the exact-module cache still makes warm PRs fast.
+    timeout-minutes: 45
     needs: [changes, set-mode]
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
@@ -636,6 +639,9 @@ jobs:
             ccache-${{ runner.os }}-python-${{ github.ref }}-
             ccache-${{ runner.os }}-python-refs/heads/master-
             ccache-${{ runner.os }}-python-
+
+      - name: Reset ccache stats (Python module)
+        run: ccache --zero-stats
 
       # ADC-621 EVICTION GUARD for the pure-python fast path. The expensive artifact is the
       # compiled _pops.so; on a PR that touches NO .so-affecting
@@ -690,9 +696,9 @@ jobs:
       # exactement l'un des deux tourne et le module existe toujours pour l'artefact.
       - name: Build module Python `pops` (Kokkos Serial)
         if: ${{ !(github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true') }}
-        # The inner 18-minute watchdog leaves bounded room inside the 20-minute job for the
-        # `always()` ccache save.  The step timeout is a second guard for configure/reporting.
-        timeout-minutes: 19
+        # The inner watchdog covers the measured cold-build floor while leaving
+        # bounded room inside the job for configure, reporting, and ccache save.
+        timeout-minutes: 42
         run: |
           pip install --upgrade pip numpy pytest
           SECONDS=0
@@ -701,15 +707,16 @@ jobs:
           # embedded path strings change; instructions/symbols identical) -> the abi_key (compiler+header
           # content hash) is untouched. CI-only -D, mirroring -DCMAKE_LINKER_TYPE=MOLD (presets stay clean).
           # POPS_HEAVY_MODULE_TU_POOL=4 (ADC-621): use the public Linux runner's four compile slots.
-          # Keeping the old value 2 serialized half of the generated-seam leaves and exceeded this
-          # job's 20-minute contract even with useful ccache hits. This override remains guarded by the
-          # 18-minute build watchdog and the attempt cache below; the CMake default stays the conservative
-          # size-1 OOM guard and wheel builders keep their platform-specific bounded pools.
+          # Keeping the old value 2 serialized half of the generated-seam leaves.
+          # This measured CI-only override remains guarded by the cold-build watchdog
+          # and attempt cache; the CMake default stays the conservative size-1 OOM
+          # guard and wheel builders keep their platform-specific bounded pools.
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
             -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
           set +e
-          timeout --signal=TERM --kill-after=30s 18m \
+          timeout --signal=TERM --kill-after=30s 40m \
             cmake --build --preset ci-kokkos-python
           build_status=$?
           set -e
@@ -727,7 +734,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           if [[ $build_status -eq 124 ]]; then
-            echo "::error::Python native build exceeded its 18-minute cache-safe watchdog"
+            echo "::error::Python native build exceeded its 40-minute cold-build watchdog"
           fi
           exit "$build_status"
 
@@ -1143,10 +1150,10 @@ jobs:
     # Fixed distro release: the binary h5py/mpi4py packages and OpenMPI/HDF5
     # runtime come from one ABI-compatible Ubuntu package set.
     runs-on: ubuntu-24.04
-    # The native build, the 4-minute CTest watchdog, and the 18-minute Python
+    # The native build, the 4-minute CTest watchdog, and the 35-minute Python
     # MPI contract fence run sequentially.  Keep the job envelope larger than
     # those fail-fast fences so GitHub never kills a healthy final test step.
-    timeout-minutes: 45
+    timeout-minutes: 70
     needs: [set-mode, changes]
     # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
     if: needs.set-mode.outputs.mpi_required == 'true'
@@ -1282,7 +1289,7 @@ jobs:
           exit "$ctest_status"
 
       - name: Test Python MPI contracts + native lifecycle + collective HDF5 writer
-        timeout-minutes: 18
+        timeout-minutes: 35
         # Assemble the exact source package around the MPI-enabled extension produced above. The
         # distro interpreter is intentional: apt's Python, mpi4py and h5py-MPI share one ABI.
         env:
@@ -1324,14 +1331,14 @@ jobs:
           run_mpi() {
             local label="$1"
             shift
-            echo "::notice::${label}: watchdog=7m"
+            echo "::notice::${label}: watchdog=20m"
             set +e
-            timeout --signal=TERM --kill-after=30s 7m \
+            timeout --signal=TERM --kill-after=30s 20m \
               mpiexec "${mpi_failfast_args[@]}" "$@"
             local status=$?
             set -e
             if [ "$status" -eq 124 ]; then
-              echo "::error::${label} exceeded its 7-minute MPI watchdog"
+              echo "::error::${label} exceeded its 20-minute MPI watchdog"
             elif [ "$status" -ne 0 ]; then
               echo "::error::${label} failed (mpiexec status=${status})"
             fi
@@ -1341,7 +1348,7 @@ jobs:
             test -n "$mpi_ranks" && test -f "$mpi_test"
             echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
             run_mpi "Python MPI contract ${mpi_test}" \
-              -n "$mpi_ranks" /usr/bin/python3 "$mpi_test"
+              -n "$mpi_ranks" /usr/bin/python3 -u "$mpi_test"
           done < build-mpi/python-mpi-plan.tsv
           run_mpi "collective HDF5 writer" \
             -n 2 /usr/bin/python3 -m pytest -q \
@@ -1357,7 +1364,9 @@ jobs:
     # the wall clock instead of serializing two ~20 minute compilations.
     name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Both matrix lanes keep their own bounded build/test watchdogs.  The outer
+    # envelope only provides setup, cache-save, and TERM/KILL cleanup margin.
+    timeout-minutes: 70
     needs: set-mode
     strategy:
       fail-fast: false
@@ -1441,7 +1450,7 @@ jobs:
 
       - name: Configure + build (backend Kokkos OpenMP)
         if: matrix.lane == 'cpp'
-        timeout-minutes: 29
+        timeout-minutes: 42
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
         run: |
@@ -1478,7 +1487,7 @@ jobs:
           }
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos
-          run_with_heartbeat "Kokkos OpenMP C++ build" 27m \
+          run_with_heartbeat "Kokkos OpenMP C++ build" 40m \
             cmake --build --preset ci-kokkos
 
       - name: Test (ctest, backend Kokkos OpenMP)
@@ -1518,7 +1527,7 @@ jobs:
       # avec l'ancien defaut c++23, ils passent avec le std aligne sur le loader.
       - name: Build module Python `pops` (backend Kokkos OpenMP)
         if: matrix.lane == 'python'
-        timeout-minutes: 20
+        timeout-minutes: 47
         env:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
@@ -1556,8 +1565,11 @@ jobs:
             return "$status"
           }
           export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
-          cmake --preset ci-kokkos-python
-          run_with_heartbeat "Kokkos OpenMP Python module build" 18m \
+          # Keep the production-TU pool at one on OpenMP: the measured Roe seam
+          # alone left about 2.3 GiB available on the 15 GiB public runner.  More
+          # concurrency would trade a bounded cold build for a nondeterministic OOM.
+          cmake --preset ci-kokkos-python -DPOPS_HEAVY_MODULE_TU_POOL=1
+          run_with_heartbeat "Kokkos OpenMP Python module build" 45m \
             cmake --build --preset ci-kokkos-python
 
       # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --

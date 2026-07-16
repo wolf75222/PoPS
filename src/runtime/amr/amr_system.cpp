@@ -1773,7 +1773,9 @@ std::vector<double> AmrSystem::field_potential_level_global(const std::string& p
         result[static_cast<std::size_t>(j) * width + static_cast<std::size_t>(i)] =
             static_cast<double>(values(i, j, 0));
   }
-  if (p_->cfg.distribute_coarse)
+  // Level 0 follows the authored coarse ownership policy; every fine level is distributed over
+  // its patch mapping even when the coarse level is replicated.
+  if (level > 0 || p_->cfg.distribute_coarse)
     all_reduce_sum_inplace(result.data(), static_cast<int>(result.size()));
   return result;
 }
