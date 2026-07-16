@@ -33,6 +33,7 @@ _CHILD = textwrap.dedent(
     import pops
     from pops.mesh import PolarMesh
     from pops.runtime._engine_descriptors import Dirichlet
+    import pops.runtime._engine_descriptors as engine
     from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon

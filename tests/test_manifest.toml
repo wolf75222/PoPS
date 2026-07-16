@@ -1090,6 +1090,7 @@ labels = ["integration", "python", "mpi", "medium"]
 mpi_entrypoints = [
   { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
   { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_execution_context_mpi_world.py", nproc = 2 },
 ]
 
 [[python.suite]]

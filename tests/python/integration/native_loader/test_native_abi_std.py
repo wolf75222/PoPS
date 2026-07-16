@@ -30,6 +30,7 @@ import numpy as np
 import pops
 from pops.codegen.toolchain import loader_cxx_std
 from pops.codegen.loader import CompiledModel
+from pops.codegen.abi import _abi_key_python
 from pops.math import sqrt
 from pops.physics._model import HyperbolicModel
 from pops.physics.aux import roles_for
@@ -89,7 +90,7 @@ def check_std_invariant():
     return got
 
 
-def check_native_loads_without_abi_error(expected_std):
+def check_native_loads_without_abi_error(expected_std, cxx):
     """Le coeur du fix : compile(backend="production") avec le std PAR DEFAUT (derive du loader) puis
     System.add_equation doit charger SANS "incompatible ABI". Sous Kokkos avec l'ancien defaut c++23 en
     dur, ce chemin levait ; avec le std aligne, il passe."""
@@ -98,7 +99,8 @@ def check_native_loads_without_abi_error(expected_std):
     try:
         e = build_trivial_euler()
         # std laisse a None -> defaut par backend : production suit loader_cxx_std() (le fix).
-        so_path = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE, backend="production")
+        so_path = e.compile(os.path.join(tmp, "euler_abistd.so"), INCLUDE,
+                            backend="production", cxx=cxx)
         assert os.path.exists(so_path), "compile(backend='production') n'a pas produit de .so"
         # HyperbolicModel.compile is the deliberately low-level loader compiler and returns a path;
         # attach its immutable metadata to the final dispatcher handle explicitly.  This keeps the
@@ -115,9 +117,9 @@ def check_native_loads_without_abi_error(expected_std):
             n_aux=len(e.aux_names) + len(e.aux_extra_names),
             params={},
             caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
-            abi_key=pops._pops.abi_key(),
+            abi_key=_abi_key_python(INCLUDE, cxx, expected_std),
             model_hash=e._model_hash(),
-            cxx="c++",
+            cxx=cxx,
             std=expected_std,
             wave_speeds=True,
             wave_speed_provider="pressure_derived",
@@ -160,7 +162,7 @@ def main():
         return
 
     expected_std = check_std_invariant()
-    check_native_loads_without_abi_error(expected_std)
+    check_native_loads_without_abi_error(expected_std, cxx)
     print("test_native_abi_std : tout est vert")
 
 

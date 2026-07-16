@@ -238,7 +238,7 @@ CFL = 0.4
 
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.block("ions", transport_model(),
+    sim.add_equation("ions", transport_model(),
                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
                   time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")

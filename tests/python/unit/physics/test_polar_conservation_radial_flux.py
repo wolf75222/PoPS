@@ -131,7 +131,7 @@ def test_polar_conservation_with_nonzero_radial_flux():
     Voir docstring du module pour la motivation et la strategie.
     """
     sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.block(
+    sim.add_equation(
         "ne",
         model=engine.Model(
             state=engine.Scalar(),
@@ -203,35 +203,5 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
 
 if __name__ == "__main__":
-    import pops as _pops_mod
-
-    _sim = _pops_mod.System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    _sim.block(
-        "ne",
-        model=_pops_mod.Model(
-            state=_pops_mod.Scalar(),
-            transport=_pops_mod.ExB(B0=1.0),
-            source=_pops_mod.NoSource(),
-            elliptic=_pops_mod.ChargeDensity(charge=1.0),
-        ),
-        spatial=_pops_mod.Spatial(minmod=True),
-        time=_pops_mod.Explicit(),
-    )
-    _sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
-    _sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
-    _m0 = _sim.mass("ne")
-    _var0 = _radial_variance(_sim, "ne", NR, NTH)
-    print("var0 = %.6e (esperance: 0 car perturbation azimutale moyenne nulle)" % _var0)
-    _dt = _sim.step_cfl(0.3)
-    print("dt_cfl = %.6e" % _dt)
-    for _ in range(NSTEPS):
-        _sim.step(_dt)
-    _m1 = _sim.mass("ne")
-    _var1 = _radial_variance(_sim, "ne", NR, NTH)
-    _rel = abs(_m1 - _m0) / abs(_m0)
-    _dvar = abs(_var1 - _var0)
-    print("var_final = %.6e  dvar = %.6e  (> 1e-9 requis)" % (_var1, _dvar))
-    print("conservation masse : ecart relatif = %.3e  (< 1e-11 requis)" % _rel)
-    assert _dvar > 1e-9, "ECHEC C4 : dvar=%.3e" % _dvar
-    assert _rel < 1e-11, "ECHEC C3 : rel=%.3e" % _rel
+    test_polar_conservation_with_nonzero_radial_flux()
     print("OK test_polar_conservation_radial_flux")

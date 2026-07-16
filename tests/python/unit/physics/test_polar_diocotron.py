@@ -49,7 +49,7 @@ def _mode_amplitude(sim, l):
 
 def test_polar_diocotron_mode_grows_and_conserves():
     sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.block(
+    sim.add_equation(
         "ne",
         model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
                         source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0)),

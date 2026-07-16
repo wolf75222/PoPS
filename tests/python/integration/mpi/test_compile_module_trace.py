@@ -24,6 +24,7 @@ try:
     import pops
     import pops.lib.time as libtime
     from pops.codegen._compile_drivers import compile_problem
+    from pops.model.manifest import module_manifest_of
     from pops.runtime._engine_descriptors import (
         BackgroundDensity, FluidState, IsothermalFlux, Model as NativeBrickModel, NoSource,
     )
@@ -93,19 +94,19 @@ except (RuntimeError, Exception) as exc:  # noqa: BLE001
 
 print("== ADC-557: one lowering, module trace on the handle (final Model) ==")
 report = compiled.inspect().to_dict()
-chk(report.get("module_manifest") is not None,
-    "compiled.inspect() carries the lowered-module trace (operator-first Module)")
-chk(
-    all(bool(block.model.module_hash()) for block in compiled.blocks),
-    "every qualified block component carries a compile-time module_hash for drift detection",
-)
-
-# The trace lists the operator-first operators (transport / electrostatic) without the user
-# ever building a Module by hand.
-ops = [op.get("name") for op in report["module_manifest"].get("operators", [])] \
-    if report.get("module_manifest") else []
+expected_module_hash = compiled_model.module.module_hash()
+source_manifest = module_manifest_of(compiled_model.module).to_dict()
+ops = [op.get("name") for op in source_manifest.get("operators", [])]
 chk("transport" in ops and "electrostatic" in ops,
-    "the lowered-module trace lists the operators (%s)" % ops)
+    "the authenticated source trace lists the operator-first operators (%s)" % ops)
+module_hashes = [
+    dict(block.model.definition_identity).get("module_hash")
+    for block in compiled.blocks
+]
+chk(module_hashes and all(value == expected_module_hash for value in module_hashes),
+    "every qualified block carries its authenticated compile-time module hash")
+cache_hashes = report.get("options", {}).get("cache_key", {}).get("model_hashes", [])
+chk(bool(cache_hashes), "compiled.inspect() exposes the model hashes used by the cache key")
 
 # The retired root-level ModelSpec composition no longer enters Program compilation. Its explicit,
 # bounded runtime bridge is rejected before a handle exists, so codegen cannot fabricate a Module

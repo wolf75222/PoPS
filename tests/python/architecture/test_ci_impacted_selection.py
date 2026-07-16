@@ -380,7 +380,22 @@ def test_manifest_projects_exact_python_mpi_entrypoints():
             "path": "tests/python/integration/mpi/test_amr_history_mpi.py",
             "nproc": 2,
         },
+        {
+            "suite": "pops_python_integration_mpi",
+            "path": "tests/python/integration/mpi/test_execution_context_mpi_world.py",
+            "nproc": 2,
+        },
     ]
+
+
+def test_python_mpi_entrypoints_are_excluded_from_serial_pytest_suites():
+    sel = _load("ci_select_tests")
+    manifest = sel.load_manifest()
+    mpi_paths = {row["path"] for row in sel.manifest_python_mpi_entrypoints(manifest)}
+    serial_paths = {
+        path for suite in sel.manifest_python_suites(manifest) for path in suite["files"]
+    }
+    assert mpi_paths.isdisjoint(serial_paths)
 
 
 def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
@@ -395,12 +410,13 @@ def test_python_mpi_plan_is_ranked_and_manifest_owned(tmp_path):
     assert (tmp_path / "python-mpi-plan.tsv").read_text().splitlines() == [
         "2\ttests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
         "2\ttests/python/integration/mpi/test_amr_history_mpi.py",
+        "2\ttests/python/integration/mpi/test_execution_context_mpi_world.py",
     ]
     outputs = dict(
         line.partition("=")[::2]
         for line in (tmp_path / "github-output.txt").read_text().splitlines()
     )
-    assert outputs["python_mpi_count"] == "2"
+    assert outputs["python_mpi_count"] == "3"
 
 
 @pytest.mark.parametrize(

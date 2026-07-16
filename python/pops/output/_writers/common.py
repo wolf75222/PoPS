@@ -47,21 +47,33 @@ def deterministic_target(
     snapshot: OutputSnapshot,
     extension: str,
 ) -> Path:
-    """Return the sole deterministic scientific-output filename."""
+    """Return the sole deterministic, filesystem-bounded output filename.
+
+    Human-readable prefixes are deliberately bounded, while the digest covers every full
+    identity-bearing input.  Long consumer or clock identities therefore cannot exceed common
+    ``NAME_MAX`` limits and cannot collide merely because their readable prefixes are equal.
+    """
     root = Path(directory)
     clean_prefix = _SAFE_NAME.sub("-", str(prefix)).strip("-")
     clean_consumer = _SAFE_NAME.sub("-", request.consumer_id).strip("-")
     clean_clock = _SAFE_NAME.sub("-", snapshot.clock.clock_id).strip("-")
     if not clean_prefix or not clean_consumer or not clean_clock:
         raise ValueError("output filename parts must contain a safe non-empty token")
-    if not extension.startswith(".") or "/" in extension or "\\" in extension:
+    if (not extension.startswith(".") or "/" in extension or "\\" in extension
+            or len(extension.encode("utf-8")) > 32):
         raise ValueError("output extension must be a simple suffix")
-    name = "%s__%s__%s__s%09d__%s%s" % (
-        clean_prefix,
-        clean_consumer,
-        clean_clock,
+    target_identity = make_identity("scientific-output-target", {
+        "prefix": str(prefix),
+        "consumer_id": request.consumer_id,
+        "clock": snapshot.clock.to_data(),
+        "request_identity": request.identity.token,
+        "extension": extension,
+    })
+    name = "%s__%s__s%09d__%s%s" % (
+        clean_prefix[:40],
+        clean_consumer[:40],
         snapshot.clock.macro_step,
-        request.identity.hexdigest[:16],
+        target_identity.hexdigest,
         extension,
     )
     return root / name

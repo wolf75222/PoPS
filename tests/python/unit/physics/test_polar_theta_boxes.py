@@ -54,7 +54,7 @@ def _iso_system(theta_boxes):
     (cs2 du modele), il ne lit pas grad phi."""
     sim = System(mesh=PolarMesh(
         r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.block(
+    sim.add_equation(
         "iso",
         model=engine.Model(state=engine.FluidState(kind="isothermal", cs2=1.0),
                         transport=engine.IsothermalFlux(), source=engine.NoSource(),
@@ -67,7 +67,7 @@ def _exb_system(theta_boxes):
     """System polaire ExB scalaire (1 variable) a theta_boxes bandes. Poisson NON resolu ici (cf. (c))."""
     sim = System(mesh=PolarMesh(
         r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.block(
+    sim.add_equation(
         "ne",
         model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0), source=engine.NoSource(),
                         elliptic=engine.ChargeDensity(charge=1.0)),

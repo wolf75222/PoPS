@@ -211,8 +211,8 @@ def test_system_end_to_end():
     Garde sur la disponibilite de l'extension compilee (import pops) ; sinon ignore."""
     print("== (4) [_pops] semantique POST-PAS (production) == reference numpy ==")
     try:
-        import pops
         from pops.codegen.loader import CompiledModel
+        from pops.codegen.abi import _abi_key_python
         from pops.codegen.toolchain import loader_cxx_std
         from pops._ir.expr import Const
         from pops._ir.ops import eig_max_im, sign
@@ -267,7 +267,7 @@ def test_system_end_to_end():
             n_aux=len(model.aux_names) + len(model.aux_extra_names),
             params={},
             caps={"cpu": True, "mpi": False, "amr": False, "gpu": False},
-            abi_key=pops._pops.abi_key(),
+            abi_key=_abi_key_python(INCLUDE, cxx, loader_cxx_std()),
             model_hash=model._model_hash(),
             cxx=cxx,
             std=loader_cxx_std(),
@@ -292,9 +292,10 @@ def test_system_end_to_end():
         m_eig = build_pkg("e")
         m_none = build_pkg("n")  # meme transport ; on neutralise sa projection pour la reference
         m_none._proj = None
-        so = m_eig.compile(os.path.join(tmp, "eig_production.so"), INCLUDE, backend="production")
+        so = m_eig.compile(os.path.join(tmp, "eig_production.so"), INCLUDE,
+                           backend="production", cxx=cxx)
         so_n = m_none.compile(os.path.join(tmp, "none_production.so"), INCLUDE,
-                              backend="production")
+                              backend="production", cxx=cxx)
         eig_component = compiled_component(m_eig, so)
         plain_component = compiled_component(m_none, so_n)
         # run AVEC hook

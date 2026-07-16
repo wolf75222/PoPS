@@ -126,6 +126,26 @@ def test_npz_prepare_reopen_publish_is_exact_and_deterministic(tmp_path):
     read_npz(target).require_selection(request)
 
 
+def test_deterministic_target_is_bounded_and_hashes_full_long_identities(tmp_path):
+    snapshot, request, _ = _snapshot()
+    long_consumer = "consumer-" + "a" * 400
+    long_clock = "clock-" + "b" * 400
+    first_request = replace(request, consumer_id=long_consumer)
+    first_snapshot = replace(snapshot, clock=replace(snapshot.clock, clock_id=long_clock))
+    first = deterministic_target(tmp_path, "fields-" + "p" * 400,
+                                 first_request, first_snapshot, ".npz")
+    repeated = deterministic_target(tmp_path, "fields-" + "p" * 400,
+                                    first_request, first_snapshot, ".npz")
+    changed_request = replace(request, consumer_id=long_consumer[:-1] + "z")
+    changed = deterministic_target(tmp_path, "fields-" + "p" * 400,
+                                   changed_request, first_snapshot, ".npz")
+
+    assert first == repeated
+    assert first != changed
+    assert len(first.name.encode("utf-8")) <= 255
+    assert first.suffix == ".npz"
+
+
 def test_npz_collision_and_discard_never_publish_partial_content(tmp_path):
     snapshot, request, _ = _snapshot()
     target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")

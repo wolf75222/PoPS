@@ -428,6 +428,9 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         }
     except (FileNotFoundError, subprocess.CalledProcessError, UnicodeDecodeError):
         tracked = None
+    mpi_entrypoint_paths = {
+        entry["path"] for entry in manifest_python_mpi_entrypoints(manifest)
+    }
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -444,7 +447,8 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         files = sorted(
             str(p.relative_to(ROOT))
             for p in suite_path.rglob("test_*.py")
-            if tracked is None or str(p.relative_to(ROOT)) in tracked
+            if (tracked is None or str(p.relative_to(ROOT)) in tracked)
+            and str(p.relative_to(ROOT)) not in mpi_entrypoint_paths
         )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
