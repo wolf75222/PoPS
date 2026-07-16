@@ -734,9 +734,9 @@ class System {
   /// @{
   /// Install the macro-step body. When set, SystemStepper::step calls it instead of the historical
   /// path (and keeps t / macro_step coherent). Pass an empty std::function to clear it.
-  /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary (RTLD_GLOBAL), like
-  /// install_block / grid_context; without default visibility the .so could not find them (_pops is
-  /// built with hidden visibility).
+  /// POPS_EXPORT: a generated problem.so resolves these across the dlopen boundary from the globally
+  /// promoted host; without default visibility the .so could not find them (_pops is built with
+  /// hidden visibility). The generated package itself remains RTLD_LOCAL.
   POPS_EXPORT void install_program_step(std::function<void(double)> step);
   /// Set the compiled-Program macro-step cadence (ADC-411): SYSTEM-level @p substeps and @p stride
   /// around the installed program closure (cf. SystemStepper::step). @p substeps subdivides each
@@ -767,7 +767,7 @@ class System {
   /// block -- NOT the positional index. An EMPTY map is the identity (a single-block or order-matching
   /// Program lowers byte-identically; ProgramContext built directly, e.g. in a C++ test, also sees
   /// identity). Lives in Impl (private to the _pops TU) so it survives the dlopen boundary; the seam is
-  /// POPS_EXPORT so the generated .so and ProgramContext resolve it via RTLD_GLOBAL.
+  /// POPS_EXPORT so the generated .so and ProgramContext resolve it from the globally promoted host.
   /// @{
   /// Install the program-index -> system-index map (entry p = the System block index of Program block
   /// p). Empty clears it (identity). Set by install_program after matching the .so's block names.
@@ -963,8 +963,9 @@ class System {
   /// Load a generated problem.so and install its compiled time Program. dlopens @p so_path, checks
   /// its ABI key against this module (fail-loud on mismatch), and calls its pops_install_program(this),
   /// which wraps the System in a ProgramContext and installs the macro-step closure. The .so resolves
-  /// the seam accessors above via the global scope (same self-promotion as the native loader). Mirrors
-  /// add_native_block; the .so stays loaded for the process lifetime.
+  /// the seam accessors above from the globally promoted host, while the package itself stays local
+  /// so independent semantic artifacts cannot interpose. Mirrors add_native_block; the .so stays
+  /// loaded for the process lifetime.
   POPS_EXPORT void install_program(const std::string& so_path);
   /// IR hash of the installed compiled Program (the string returned by the .so's pops_program_hash),
   /// or "" if no program is installed. Recorded in the checkpoint (sim.checkpoint) so a restart against
@@ -1047,7 +1048,8 @@ class System {
   /// survives across the dlopen boundary; the .so writes it through the POPS_EXPORT setter below.
   /// @{
   /// Store @p value under @p name (overwrites a prior value of the same name). Called by the installed
-  /// program closure each step. POPS_EXPORT: the generated problem.so resolves it via RTLD_GLOBAL.
+  /// program closure each step. POPS_EXPORT: the generated problem.so resolves it from the globally
+  /// promoted host while the generated package remains local.
   POPS_EXPORT void record_program_diagnostic(const std::string& name, Real value);
   /// The recorded value of diagnostic @p name. @throws std::out_of_range if @p name was never
   /// recorded (a typo / a diagnostic the installed program does not write fails loud, not 0).

@@ -1929,14 +1929,14 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
     if (dladdr(reinterpret_cast<void*>(&amr_native_anchor), &info) && info.dli_fname)
       dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
   }
-  // RTLD_GLOBAL: places the loader's symbols in the global scope AND lets the loader resolve
-  // its undefined symbols (set_compiled_block exported POPS_EXPORT) against the already-loaded images. RTLD_NOW:
-  // immediate resolution -> a missing AmrSystem symbol fails HERE, not in flight.
-  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  // Only the host image is promoted globally. The generated package imports set_compiled_block
+  // from that host but remains RTLD_LOCAL, preventing identically named generated templates from
+  // different semantic artifacts from interposing on one another under ELF.
+  pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
-    const char* e = dlerror();
     throw std::runtime_error(
-        "AmrSystem::add_native_block : dlopen('" + so_path + "') : " + std::string(e ? e : "?") +
+        "AmrSystem::add_native_block : dlopen('" + so_path + "') : " +
+        pops::dynlib::last_error() +
         " (the symbol pops::AmrSystem::set_compiled_block must be exported AND the "
         "_pops module loaded globally ; cf. POPS_EXPORT)");
   }
@@ -1985,8 +1985,8 @@ void AmrSystem::add_native_block(const std::string& name, const std::string& so_
   install(static_cast<void*>(this), name.c_str(), limiter.c_str(), riemann.c_str(), recon.c_str(),
           time.c_str(), gamma, substeps, params.empty() ? nullptr : params.data(),
           static_cast<int>(params.size()), positivity_floor);
-  // The .so stays loaded (RTLD_GLOBAL) for the duration of the process: the type-erasing builder
-  // installed by set_compiled_block captures code (header template) that lives there. We do NOT close it.
+  // The local .so stays loaded for the duration of the process: the type-erasing builder installed
+  // by set_compiled_block captures code (header template) that lives there. We do NOT close it.
 #endif  // _WIN32 (production AMR POSIX-only; Windows = throw, ADC-100)
   const int installed_idx = p_->block_index(name);
   if (installed_idx >= 0) {
@@ -3613,12 +3613,14 @@ POPS_EXPORT void AmrSystem::install_program(const std::string& so_path) {
     if (dladdr(reinterpret_cast<void*>(&amr_native_anchor), &info) && info.dli_fname)
       dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
   }
-  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  // Resolve host seams from the promoted module without exporting this generated Program into the
+  // process-wide scope, where another semantic variant may reuse the same generated symbol names.
+  pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
-    const char* e = dlerror();
     throw std::runtime_error(
-        "AmrSystem::install_program : dlopen('" + so_path + "') : " + std::string(e ? e : "?") +
-        " (the pops::AmrSystem seam accessors must be exported AND the module loaded "
+        "AmrSystem::install_program : dlopen('" + so_path + "') : " +
+        pops::dynlib::last_error() +
+        " (the pops::AmrSystem seam accessors must be exported and the host module promoted "
         "globally ; cf. POPS_EXPORT)");
   }
 #endif

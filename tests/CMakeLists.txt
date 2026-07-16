@@ -391,10 +391,10 @@ foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
 endforeach()
 pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
-# The Cartesian-vs-polar radial-diffusion comparison runs two full advections and sits close to the
-# 600 s default cap on slow CI runners (timed out on identical binaries across consecutive master
-# runs, ADC-624); labels stay inferred (unit physics fast).
-pops_add_gtest_suite(NAME test_polar_ring_advection TIMEOUT 1800)
+# The Cartesian-vs-polar radial-diffusion comparison runs two full advections and takes about 748 s
+# on the serial Linux runner.  Keep it required, but authenticate its real cost in both CTest and the
+# manifest so the selector and watchdog can treat it as the single slow target it is.
+pops_add_gtest_suite(NAME test_polar_ring_advection TIMEOUT 1800 LABELS unit physics slow)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
   target_include_directories(test_solver_codegen_generated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")

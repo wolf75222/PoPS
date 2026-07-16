@@ -528,8 +528,14 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 45" in cpp_shards_block
     assert "timeout-minutes: 40" in cpp_shards_block
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
-    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" 7m' in cpp_shards_block
+    assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 20m' in cpp_shards_block
+    assert "test_watchdog=7m" in cpp_shards_block
+    assert 'if [ "$target" = "test_polar_ring_advection" ]; then' in cpp_shards_block
+    assert "test_watchdog=15m" in cpp_shards_block
+    assert (
+        'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
+        '"$test_watchdog"' in cpp_shards_block
+    )
     assert "timeout --signal=TERM --kill-after=30s" in cpp_shards_block
     assert "mem_available=" in cpp_shards_block
     assert "NINJA_STATUS='[%f/%t elapsed=%es active=%r] '" in cpp_shards_block

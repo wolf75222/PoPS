@@ -468,8 +468,9 @@ class AmrSystem {
   /// build and installs its hooks via set_compiled_block -- NATIVE path, SAME AMR hierarchy as
   /// add_block (conservative reflux, regrid), no flat-array marshaling.
   ///
-  /// The _pops module is PROMOTED to global scope (RTLD_NOLOAD) then the loader is dlopen-ed in
-  /// RTLD_GLOBAL to resolve set_compiled_block; the ABI key baked in the loader
+  /// The _pops host module is PROMOTED to global scope (RTLD_NOLOAD), then the generated package is
+  /// opened RTLD_LOCAL: it can resolve set_compiled_block without exporting its identically named
+  /// generated templates to later semantic artifacts. The ABI key baked in the package
   /// (pops_native_abi_key) is compared to the module's (abi_key()) -- mismatch => clear error (no
   /// silent UB at the C++ boundary). Same scheme guard-rails as System (upstream validation).
   ///
@@ -812,8 +813,9 @@ class AmrSystem {
   /// time Program over the AMR hierarchy. Mirrors the System seam (install_program_step registers the
   /// macro-step body; the cadence + per-block RuntimeParams stores live HERE on the Impl, NOT in the
   /// .so closure, so a value change reaches the captured context and a later checkpoint can reach
-  /// them). A generated AMR Program .so resolves these across the dlopen boundary (RTLD_GLOBAL,
-  /// POPS_EXPORT), exactly like set_compiled_block on the native AMR loader.
+  /// them). A generated AMR Program .so resolves these POPS_EXPORT seams from the globally promoted
+  /// host while the generated package remains RTLD_LOCAL, exactly like set_compiled_block on the
+  /// native AMR loader.
   /// @{
   /// Install the macro-step body. When set, AmrSystem::step calls it instead of the historical
   /// AmrRuntime::step path (keeping t / macro_step coherent). Pass an empty std::function to clear it.

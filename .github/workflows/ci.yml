@@ -300,8 +300,8 @@ jobs:
   gate-cpp-shards:
     name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 30 min cold build + 7 min tests + setup/cache margin.  The inner watchdogs keep a
-    # wedged compiler/test explicit while this outer bound still leaves time for
+    # 20 min cold build + 15 min for the authenticated slow target + setup/cache margin.  The inner
+    # watchdogs keep a wedged compiler/test explicit while this outer bound still leaves time for
     # the always() ccache save.
     timeout-minutes: 45
     needs: [changes, set-mode]
@@ -466,7 +466,7 @@ jobs:
             echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
             exit 0
           fi
-          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m \
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 20m \
             cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
@@ -480,7 +480,18 @@ jobs:
           python3 scripts/ci_select_tests.py verify-cpp-target-labels \
             --ctest-json "$ctest_inventory" \
             --targets "${cpp_targets[@]}"
-          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" 7m \
+          # Most shards retain the tight seven-minute test guard.  The polar-ring regression has
+          # a measured healthy duration of ~748 s, so only the shard that actually owns that target
+          # receives the bounded 15-minute allowance (about 20% headroom).  It remains a normal,
+          # required CTest selected by the same authenticated target label as every other suite.
+          test_watchdog=7m
+          for target in "${cpp_targets[@]}"; do
+            if [ "$target" = "test_polar_ring_advection" ]; then
+              test_watchdog=15m
+              break
+            fi
+          done
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" "$test_watchdog" \
             ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
           {

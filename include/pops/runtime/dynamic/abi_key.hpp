@@ -80,14 +80,13 @@
 // All tokens are string literals (__VERSION__ and POPS_HEADER_SIG already are), so the key is frozen
 // in the .rodata of EACH TU at preprocessing -- NO function call.
 //
-// WHY a literal and not an inline function (real CI bug, ELF/Linux): a .so loader is loaded
-// RTLD_GLOBAL and an `inline` function (weak linkage, default visibility) that would build the key
-// would be INTERPOSED by the dynamic linker onto the copy in the already-loaded module -- the
-// loader would then return the key OF THE MODULE and the guard would compare the module key against
-// itself (tautology: ABI never rejected). Whether interposition happened depended on the compiler's
-// inlining threshold (the short function was inlined -> correct local key; lengthened by
-// kokkos=/stdlib=, gcc -O2 stopped inlining it -> interposition -> guard neutralized, caught by
-// test_amr_native_loader). A literal crosses no symbol: no interposition.
+// WHY a literal and not an inline function (real CI bug, ELF/Linux): the historical production path
+// loaded generated packages RTLD_GLOBAL. An `inline` function (weak linkage, default visibility)
+// that built the key could then be INTERPOSED onto the copy in the already-loaded module, making the
+// guard compare the module key against itself (tautology: ABI never rejected). Whether that happened
+// depended on the compiler's inlining threshold, and test_amr_native_loader caught the regression.
+// Packages are now RTLD_LOCAL, but the ABI value remains a TU-local literal so the guard cannot be
+// weakened by a future visibility change or a non-PoPS caller with different loading policy.
 // NB: the parsers (dsl._pops_cxx_std_from_module / module_header_signature) scan by token prefix
 // ("std=", "headers=") -> insensitive to ADDING tokens at the tail.
 #define POPS_ABI_KEY_LITERAL                                                                \

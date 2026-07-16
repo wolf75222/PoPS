@@ -110,11 +110,12 @@ void add_native_block(System* system, ImplT*, const std::string& name,
     if (dladdr(reinterpret_cast<void*>(&pops::abi_key), &info) && info.dli_fname)
       dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
   }
-  pops::dynlib::handle handle = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  // Only the host module is global. Keep each content-addressed package local so two semantic
+  // variants that emit the same C++ template names cannot interpose on one another under ELF.
+  pops::dynlib::handle handle = pops::dynlib::open(so_path);
   if (handle == nullptr) {
-    const char* error = dlerror();
     throw std::runtime_error(std::string(context) + ": dlopen('" + so_path +
-                             "'): " + (error != nullptr ? error : "unknown error"));
+                             "'): " + pops::dynlib::last_error());
   }
 #endif
 

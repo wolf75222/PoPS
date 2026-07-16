@@ -266,9 +266,9 @@ int System::rebuild_history_slots(const std::string& name, const std::vector<int
 
 // Load a generated problem.so and install its compiled time Program. Mirrors add_native_block
 // (native_loader.hpp): self-promote this module to the global scope so the .so resolves the System
-// seam accessors (POPS_EXPORT) against it, dlopen, fail-loud on ABI-key mismatch, then call
-// pops_install_program(this) which wraps the System in a ProgramContext and installs the macro-step
-// closure. The .so stays loaded for the process lifetime (the closure runs every step).
+// seam accessors (POPS_EXPORT) against it, load the generated package locally, fail-loud on ABI-key
+// mismatch, then call pops_install_program(this), which wraps the System in a ProgramContext and
+// installs the macro-step closure. The .so stays loaded for the process lifetime.
 POPS_EXPORT void System::install_program(const std::string& so_path) {
   require_assembling(p_->lifecycle_, "install_program");  // frozen once pops.bind completes (ADC-592)
 #if defined(_WIN32)
@@ -287,12 +287,13 @@ POPS_EXPORT void System::install_program(const std::string& so_path) {
     if (dladdr(reinterpret_cast<void*>(&pops::abi_key), &info) && info.dli_fname)
       dlopen(info.dli_fname, RTLD_NOW | RTLD_GLOBAL | RTLD_NOLOAD);
   }
-  void* h = dlopen(so_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  // The host must be visible to the package, but the package itself must remain local: generated
+  // Programs deliberately reuse fixed ABI and C++ template names across semantic identities.
+  pops::dynlib::handle h = pops::dynlib::open(so_path);
   if (!h) {
-    const char* e = dlerror();
     throw std::runtime_error(
-        "System::install_program: dlopen('" + so_path + "'): " + std::string(e ? e : "?") +
-        " (the pops::System seam accessors must be exported AND the module loaded "
+        "System::install_program: dlopen('" + so_path + "'): " + pops::dynlib::last_error() +
+        " (the pops::System seam accessors must be exported and the host module promoted "
         "globally; cf. POPS_EXPORT)");
   }
 #endif

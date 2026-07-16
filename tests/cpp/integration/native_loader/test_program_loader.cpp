@@ -7,7 +7,7 @@
 // SAME Forward-Euler closure as the in-process test_program_runtime.
 // We then sim.install_program(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
-// dlopen + ABI-key guard + RTLD_GLOBAL resolution of the seam accessors, end to end.
+// dlopen + ABI-key guard + globally visible host seams with a locally scoped package, end to end.
 //
 // Skips (exit 0) under Kokkos (a nu CPU loader is ABI-incompatible with the device module) or when no
 // C++ compiler is known to the build -- same policy as test_amr_native_loader. CMake injects

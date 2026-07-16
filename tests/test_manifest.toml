@@ -934,7 +934,7 @@ labels = ["unit", "physics", "fast"]
 [[cpp.suite]]
 name = "test_polar_ring_advection"
 sources = ["tests/cpp/unit/physics/test_polar_ring_advection.cpp"]
-labels = ["unit", "physics", "fast"]
+labels = ["unit", "physics", "slow"]
 
 [[cpp.suite]]
 name = "test_polar_transport_mms"
