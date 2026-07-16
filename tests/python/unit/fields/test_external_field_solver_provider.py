@@ -24,7 +24,10 @@ from pops.problem import Case
 from tests.python.support.layout_plan import cartesian_grid
 
 
-def _component(tmp_path, *, name, interface, source_suffix=b"", dimension=2):
+def _component(
+    tmp_path, *, name, interface, source_suffix=b"", dimension=2,
+    manifest_parameters=(), instance_parameters=None,
+):
     root = tmp_path / name
     root.mkdir(parents=True)
     manifest = ComponentManifest(
@@ -37,6 +40,7 @@ def _component(tmp_path, *, name, interface, source_suffix=b"", dimension=2):
             "native_interface": interface.signature_declaration(),
         },
         interfaces=interface.manifest_declarations(),
+        parameters=manifest_parameters,
         target={"variants": [{
             "dimension": dimension,
             "scalar": "float64",
@@ -52,7 +56,8 @@ def _component(tmp_path, *, name, interface, source_suffix=b"", dimension=2):
         components={name: manifest}, payloads={source_name: ("source", source)})
     package_path = root / (name + ".pops.json")
     package_path.write_text(json.dumps(package_data), encoding="utf-8")
-    return load(package_path).require(name, interface=interface)()
+    factory = load(package_path).require(name, interface=interface)
+    return factory(**({} if instance_parameters is None else instance_parameters))
 
 
 def _case(solver):
@@ -160,6 +165,32 @@ def test_external_pair_rejects_same_manifest_from_another_source_package(tmp_pat
     )["potential"]
 
     with pytest.raises(ValueError, match="changed source package"):
+        plan.require_component_inputs((topology, substituted_solver))
+
+
+def test_external_pair_canonicalizes_nested_parameters_without_weakening_identity(tmp_path):
+    topology = _component(
+        tmp_path, name="topology", interface=interfaces.FieldTopology)
+    options = {"levels": [1, 2], "policy": {"strict": True}}
+    solver = _component(
+        tmp_path, name="solver", interface=interfaces.FieldSolver,
+        manifest_parameters=({"name": "options", "kind": "runtime"},),
+        instance_parameters={"options": options},
+    )
+    provider = ExternalFieldSolver(topology=topology, solver=solver)
+    plan = capture_field_plans(
+        _case(provider), lambda value: value, target="system",
+        layout=Uniform(cartesian_grid(n=8, periodic=False)),
+    )["potential"]
+
+    plan.require_component_inputs((topology, solver))
+    assert plan.native_install_data()["solver_provider"]["solver"]["parameters"] == {
+        "options": options,
+    }
+
+    substituted_solver = solver.component_type(
+        options={"levels": [1, 2], "policy": {"strict": 1}})
+    with pytest.raises(ValueError, match="parameters"):
         plan.require_component_inputs((topology, substituted_solver))
 
 

@@ -18,7 +18,7 @@ from pops.codegen.field_boundary_lowering import (
     field_layout_contract,
     topology_recipe,
 )
-from pops.identity import Identity
+from pops.identity import Identity, canonical_bytes
 from pops.math import principal_kinds
 
 from pops.fields._identity import field_identity, strict_field_data
@@ -386,21 +386,22 @@ class ResolvedFieldInstallPlan:
     def require_component_inputs(self, components: tuple[Any, ...]) -> None:
         """Match every authored field component against the explicit resolve inputs."""
         from pops.external import CompiledComponentArtifact, ExternalComponent
-        from pops.fields._identity import strict_field_data
 
         by_id = {}
         for component in components:
             if type(component) is ExternalComponent:
                 component_id = component.component_manifest.component_id
                 manifest = component.component_manifest.manifest_digest.token
-                interface = strict_field_data(component.component_type.interface.to_data())
+                interface = canonical_bytes(
+                    strict_field_data(component.component_type.interface.to_data()))
                 source_package = component.package_identity.token
-                parameters = component.to_data()["parameters"]
+                parameters = canonical_bytes(
+                    strict_field_data(component.to_data()["parameters"]))
             elif type(component) is CompiledComponentArtifact:
                 component.verify()
                 component_id = component.component_id
                 manifest = component.component_manifest.token
-                interface = strict_field_data(component.interface.to_data())
+                interface = canonical_bytes(strict_field_data(component.interface.to_data()))
                 source_package = (
                     None if component.source_package is None
                     else component.source_package.token
@@ -419,13 +420,15 @@ class ResolvedFieldInstallPlan:
                 )
             expected = (
                 binding["component_manifest_identity"],
-                strict_field_data(binding["native_interface"]),
+                canonical_bytes(strict_field_data(binding["native_interface"])),
                 binding["source_package_identity"])
             if actual[:3] != expected or (
-                    actual[3] is not None and actual[3] != binding["parameters"]):
+                    actual[3] is not None
+                    and actual[3] != canonical_bytes(
+                        strict_field_data(binding["parameters"]))):
                 raise ValueError(
-                    "field %r component %r changed source package, manifest, or native "
-                    "interface identity"
+                    "field %r component %r changed source package, manifest, native "
+                    "interface identity, or parameters"
                     % (self.name, component_id)
                 )
 

@@ -369,6 +369,7 @@ class _SystemUnifiedInstall(_System):
         # canonical structural form, not Python container implementation details; this keeps the
         # exact interface contract while accepting its faithful detached representation.
         from pops.fields._identity import field_identity, strict_field_data
+        from pops.identity import canonical_bytes
 
         installed = []
         for binding in bindings:
@@ -381,8 +382,9 @@ class _SystemUnifiedInstall(_System):
             if component.component_manifest.token != binding[
                     "component_manifest_identity"]:
                 raise ValueError("field component manifest identity changed before install")
-            if strict_field_data(component.interface.to_data()) != strict_field_data(
-                binding["native_interface"]
+            if (
+                canonical_bytes(strict_field_data(component.interface.to_data()))
+                != canonical_bytes(strict_field_data(binding["native_interface"]))
             ):
                 raise ValueError("field component native interface identity changed before install")
             if component.native_handle is None:
