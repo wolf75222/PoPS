@@ -96,19 +96,26 @@ class ProgramModelGraph:
             raise TypeError(
                 "ProgramModelGraph requires one or more exact ResolvedBlock values"
             )
+        # Capture every source owner before lowering any block.  Lowering reuses the exact
+        # authoring authority and may register a richer live fingerprint provider on it; reading
+        # later block owners after that mutation would make routes depend on block iteration order.
+        # The resolved blocks entered this phase under one already-authenticated owner snapshot.
+        source_blocks = []
+        for block in blocks:
+            owner = _model_owner(block.model)
+            source_blocks.append((block, owner, owner.canonical()))
+        source_blocks = tuple(source_blocks)
         models: dict[Any, Any] = {}
         modules: dict[Any, Any] = {}
         authorities: dict[Any, Any] = {}
         routes: dict[str, Any] = {}
         lowered_by_authority: dict[tuple[int, tuple[str, ...]], tuple[Any, Any]] = {}
         block_models: dict[str, Any] = {}
-        for block in blocks:
+        for block, owner, canonical in source_blocks:
             if block.name in routes:
                 raise ValueError(
                     "ProgramModelGraph contains duplicate block name %r" % block.name
                 )
-            owner = _model_owner(block.model)
-            canonical = owner.canonical()
             previous_authority = authorities.get(canonical)
             if previous_authority is not None and previous_authority != owner:
                 raise ValueError(
@@ -125,11 +132,11 @@ class ProgramModelGraph:
                 )
                 lowered_by_authority[authority_key] = lowered
             emit_model, source_module = lowered
-            emit_owner = _model_owner(emit_model).canonical()
-            if emit_owner != canonical:
+            emit_owner = _model_owner(emit_model)
+            if emit_owner != owner:
                 raise ValueError(
                     "ProgramModelGraph lowering changed model owner %s to %s"
-                    % (canonical, emit_owner)
+                    % (owner, emit_owner)
                 )
             models.setdefault(canonical, emit_model)
             modules[canonical] = source_module

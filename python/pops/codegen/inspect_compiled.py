@@ -461,6 +461,24 @@ def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
         raise ValueError("ghost depth derivation requires at least one compiled block")
     if len(names) != len(set(names)) or set(names) - set(by_name):
         raise ValueError("ghost depth derivation received non-exact compiled block names")
+    field_depths: dict[str, list[int]] = {}
+    field_plans = getattr(plan, "field_plans", None)
+    if field_plans is not None:
+        if not isinstance(field_plans, Mapping):
+            raise TypeError("compiled field plans must be an exact mapping")
+        for field_name, field_plan in field_plans.items():
+            options = getattr(field_plan, "native_options", None)
+            route = options.get("output_route") if isinstance(options, Mapping) else None
+            method = options.get("method") if isinstance(options, Mapping) else None
+            owner = route.get("owner_block") if isinstance(route, Mapping) else None
+            depth = method.get("ghost_depth") if isinstance(method, Mapping) else None
+            if not isinstance(owner, str) or not owner or owner not in by_name:
+                raise ValueError(
+                    "compiled field plan %r has no exact owner block for ghost depth" % field_name)
+            if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
+                raise TypeError(
+                    "compiled field plan %r ghost depth must be an integer >= 1" % field_name)
+            field_depths.setdefault(owner, []).append(depth)
     result = {}
     for name in names:
         block = by_name[name]
@@ -478,18 +496,19 @@ def _ghost_depth_by_block(compiled: Any, block_names: Any) -> dict[str, int]:
                 else getattr(spatial, "ghost_depth", None)
             if value is not None:
                 candidates.append(value)
-        if not candidates:
+        field_candidates = field_depths.get(name, ())
+        if not candidates and not field_candidates:
             raise ValueError(
                 "compiled block %r has no exact ghost depth in its resolved numerics/spatial plan"
                 % name)
         if any(isinstance(value, bool) or not isinstance(value, int) or value < 1
                for value in candidates):
             raise TypeError("compiled block %r ghost depth must be an integer >= 1" % name)
-        if any(value != candidates[0] for value in candidates[1:]):
+        if candidates and any(value != candidates[0] for value in candidates[1:]):
             raise ValueError(
                 "compiled block %r carries conflicting resolved ghost depths %s"
                 % (name, candidates))
-        result[name] = candidates[0]
+        result[name] = max((*candidates, *field_candidates))
     return result
 
 

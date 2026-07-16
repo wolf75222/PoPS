@@ -218,8 +218,22 @@ def test_runtime_instance_executes_one_two_sided_shared_flux(tmp_path):
         "tracer": np.ones((1, 8, 8), dtype=np.float64),
         "right": np.full((1, 8, 8), 3.0, dtype=np.float64),
     }
+    params = {
+        core.case.resolve(handle, block=block): value
+        for block in (core.tracer, right)
+        for handle, value in (
+            (core.velocity_x_param, 1.0),
+            (core.velocity_y_param, 0.25),
+            (core.inlet_x_param, 0.0),
+            (core.inlet_y_param, 0.0),
+        )
+    }
+    params.update({
+        core.case.resolve(core.refine_threshold): 0.10,
+        core.case.resolve(core.coarsen_threshold): 0.04,
+    })
     runtime = pops.bind(
-        artifact, initial_state=initial, params=example.build_bind_params(core))
+        artifact, initial_state=initial, params=params)
 
     pops.run(runtime, t_end=1.0e-3, max_steps=1)
 

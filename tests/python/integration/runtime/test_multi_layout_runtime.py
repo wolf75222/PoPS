@@ -224,13 +224,28 @@ def compiled_multi_layout(tmp_path_factory):
 
 
 def _bind(compiled_multi_layout):
-    example, core, artifact, coarse_id, fine_id, mapping_id = compiled_multi_layout
+    _example, core, artifact, coarse_id, fine_id, mapping_id = compiled_multi_layout
     fine_initial = _initial(16, 0.13)
     coarse_initial = np.full((1, 8, 8), -4.0, dtype=np.float64)
+    blocks = core.case.blocks()
+    params = {
+        core.case.resolve(handle, block=blocks[block_name]): value
+        for block_name in ("tracer", "coarse")
+        for handle, value in (
+            (core.velocity_x_param, 1.0),
+            (core.velocity_y_param, 0.25),
+            (core.inlet_x_param, 0.0),
+            (core.inlet_y_param, 0.0),
+        )
+    }
+    params.update({
+        core.case.resolve(core.refine_threshold): 0.10,
+        core.case.resolve(core.coarsen_threshold): 0.04,
+    })
     instance = pops.bind(
         artifact,
         initial_state={"tracer": fine_initial, "coarse": coarse_initial},
-        params=example.build_bind_params(core),
+        params=params,
     )
     return instance, artifact, coarse_id, fine_id, mapping_id, fine_initial, coarse_initial
 

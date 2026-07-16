@@ -82,7 +82,8 @@ def test_scalar_advection_completes_typed_phase_pipeline():
     )
 
     assert validated is target.authoring.case and validated.frozen
-    assert artifact.plan is resolved
+    assert artifact.plan.plan_identity == resolved.plan_identity
+    assert artifact.plan is not resolved
     artifact.verify()
     assert simulation._executor.lifecycle_state() == "bound"
     installed = simulation._executor._boundary_authorities["tracer"]

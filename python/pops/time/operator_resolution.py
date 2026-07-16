@@ -82,11 +82,33 @@ def resolve_operator_handle(
     if not isinstance(handle, OperatorHandle):
         raise TypeError(
             "%s: expected a pops.model.OperatorHandle, got %r" % (where, handle))
-    registry, owner = _bound_registry(program, where, handle.owner_path)
-    if handle.owner_path != owner:
+    declaration = handle.declaration_ref if handle.is_instance else handle
+    if declaration is None:
+        raise ValueError(
+            "%s: instantiated operator handle %r has no declaration provenance"
+            % (where, handle.name))
+    registry, owner = _bound_registry(program, where, declaration.owner_path)
+    if declaration.owner_path != owner:
         raise ValueError(
             "%s: operator handle %r belongs to owner %s, but this Program is bound to %s"
-            % (where, handle.name, handle.owner_path, owner))
+            % (where, handle.name, declaration.owner_path, owner))
+    if handle.is_instance:
+        block = handle.block_ref
+        if block is None or block.model_owner_path != owner:
+            raise ValueError(
+                "%s: instantiated operator handle %r has inconsistent block/model provenance"
+                % (where, handle.name))
+        argument_blocks = {
+            value.block
+            for value in values
+            if getattr(value, "block", None) is not None
+        }
+        if argument_blocks and block not in argument_blocks:
+            raise ValueError(
+                "%s: operator handle %r belongs to block %r, but none of its arguments comes "
+                "from that block (argument blocks: %s)"
+                % (where, handle.name, block.local_id,
+                   sorted(item.local_id for item in argument_blocks)))
     argument_owners = {
         value.block.model_owner_path
         for value in values
@@ -97,8 +119,9 @@ def resolve_operator_handle(
             "%s: operator handle %r belongs to owner %s, but none of its block-qualified "
             "arguments instantiate that owner (argument owners: %s)"
             % (where, handle.name, owner, sorted(str(item) for item in argument_owners)))
-    registry_name = registry.target_for_handle(handle.name)
-    if handle.registered_operator_name != registry_name:
+    registry_name = registry.target_for_handle(declaration.name)
+    if declaration.registered_operator_name != registry_name \
+            or handle.registered_operator_name != registry_name:
         raise ValueError(
             "%s: operator handle %r targets %r, but the bound registry authenticates target %r"
             % (where, handle.name, handle.registered_operator_name, registry_name))

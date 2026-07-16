@@ -244,9 +244,12 @@ def run_one_step(sources, flux):
     tag = "%s_%s" % ("flux" if flux else "noflux", "_".join(sources) or "empty")
     try:
         program_model = advect_model("adv_%s" % tag, A, C)
+        program = one_step_program(
+            "p_%s" % tag, sources, flux=flux, model=program_model)
         compiled = compile_drivers.compile_problem(
             model=program_model,
-            time=one_step_program("p_%s" % tag, sources, flux=flux, model=program_model))
+            time=program,
+            field_plans=codegen_field_plans(program))
     except RuntimeError as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim, rho0 = make_sim(tag)
@@ -292,8 +295,11 @@ def lie_split_program(name, model=None):
 
 try:
     lie_model = advect_model("adv_lie", A, C)
+    lie_program = lie_split_program("lie", model=lie_model)
     compiled_lie = compile_drivers.compile_problem(
-        model=lie_model, time=lie_split_program("lie", model=lie_model))
+        model=lie_model,
+        time=lie_program,
+        field_plans=codegen_field_plans(lie_program))
 except RuntimeError as exc:
     _skip("compile_problem (lie) could not build the .so: %s" % str(exc)[:160])
 sim_lie, rho0l = make_sim("lie")

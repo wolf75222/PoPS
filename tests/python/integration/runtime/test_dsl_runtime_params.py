@@ -41,7 +41,7 @@ from pops.layouts import AMR, Uniform
 from pops.lib.amr import EllipticRecompute, StateTransfer
 from pops.lib.initial import Gaussian
 from pops.lib.time import ForwardEuler
-from pops.math import ValueExpr, ddt, div, laplacian
+from pops.math import ValueExpr, ddt, div, laplacian, unknown
 from pops.mesh import CartesianGrid, PeriodicAxes
 from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
 from pops.numerics.spatial import FiniteVolume
@@ -153,10 +153,11 @@ def _resolved_named_field_runtime_parameter_case(*, target: str):
     )
     rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
     potential = model.field("potential")
+    phi = unknown(potential)
     field_operator = model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=-laplacian(potential) + potential == scale * rho,
+        equation=-laplacian(phi) + phi == scale * rho,
         outputs=(FieldOutput("phi", potential),),
     )
 
