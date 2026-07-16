@@ -78,6 +78,7 @@ def resolve_operator_handle(
     model, or a forged/stale handle, from selecting unrelated physics.
     """
     from pops.model import OperatorHandle
+    from pops.problem.handles import BlockHandle
 
     if not isinstance(handle, OperatorHandle):
         raise TypeError(
@@ -87,6 +88,10 @@ def resolve_operator_handle(
         raise ValueError(
             "%s: instantiated operator handle %r has no declaration provenance"
             % (where, handle.name))
+    if not isinstance(declaration, OperatorHandle):
+        raise ValueError(
+            "%s: instantiated operator handle %r has non-operator declaration provenance"
+            % (where, handle.name))
     registry, owner = _bound_registry(program, where, declaration.owner_path)
     if declaration.owner_path != owner:
         raise ValueError(
@@ -94,7 +99,7 @@ def resolve_operator_handle(
             % (where, handle.name, declaration.owner_path, owner))
     if handle.is_instance:
         block = handle.block_ref
-        if block is None or block.model_owner_path != owner:
+        if not isinstance(block, BlockHandle) or block.model_owner_path != owner:
             raise ValueError(
                 "%s: instantiated operator handle %r has inconsistent block/model provenance"
                 % (where, handle.name))

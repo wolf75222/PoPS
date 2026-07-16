@@ -52,8 +52,8 @@ def chk(cond, label):
 def iso_model():
     return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
                      transport=engine.IsothermalFlux(),
-                     source=engine.PotentialForce(charge=1.0),
-                     elliptic=engine.ChargeDensity(charge=1.0))
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def gaussian(n):
