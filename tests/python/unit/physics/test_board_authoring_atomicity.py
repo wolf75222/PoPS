@@ -169,6 +169,43 @@ def test_field_operator_builder_failure_is_observationally_atomic(monkeypatch):
     assert _snapshot(model) == before
 
 
+def test_field_operator_bind_failure_restores_materialized_provider_caches(monkeypatch):
+    model, _state, u = _scalar("elliptic_bind_rollback")
+    phi = model.field("phi")
+    baseline = model.module
+    baseline_manifest = baseline.manifest().to_dict()
+    baseline_hash = baseline.module_hash()
+    baseline_registry = model._dsl._m._operator_registry_cache["U"]
+    baseline_dsl_module = model._dsl._module_cache
+    before = _snapshot(model)
+    saw_materialized_provider = False
+    original_bind = typed_model.Module._bind_operator
+
+    def fail_after_binding(module, *args, **kwargs):
+        nonlocal saw_materialized_provider
+        assert module is model._module_cache
+        assert module is model._dsl._module_cache
+        assert module.operator_registry().get("poisson").kind == "field_operator"
+        assert model._dsl._m._operator_registry_cache["U"] is module.operator_registry()
+        original_bind(module, *args, **kwargs)
+        saw_materialized_provider = True
+        raise RuntimeError("injected post-materialization binding failure")
+
+    monkeypatch.setattr(typed_model.Module, "_bind_operator", fail_after_binding)
+    with pytest.raises(RuntimeError, match="post-materialization"):
+        model.field_operator(
+            "poisson", unknown=phi, equation=(-laplacian(phi) == u),
+            outputs=(FieldOutput("potential", phi),))
+
+    assert saw_materialized_provider
+    assert _snapshot(model) == before
+    assert model._dsl._m._operator_registry_cache["U"] is baseline_registry
+    assert model._dsl._module_cache is baseline_dsl_module
+    assert model._module_cache is baseline
+    assert model.module.manifest().to_dict() == baseline_manifest
+    assert model.module.module_hash() == baseline_hash
+
+
 def test_invalid_field_operator_output_and_foreign_unknown_are_atomic():
     model, _state, u = _scalar("field_local")
     phi = model.field("phi")

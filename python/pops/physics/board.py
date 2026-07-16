@@ -38,6 +38,18 @@ from ._board_riemann import _RiemannAuthoringMixin
 from ._freeze import PhysicsFreezable
 
 
+def _multi_flux_operator_name(state: Any, flux_name: str) -> str:
+    """Injective, author-inaccessible registry name for one multi-state physical flux."""
+    state_name = require_name(state.name, "multi-state flux state name")
+    # ``_safe_name`` strips leading underscores, so this reserved prefix cannot be produced by a
+    # public board operator/rate name. Hex encoding keeps arbitrary UTF-8 display names injective
+    # without relying on lossy identifier sanitisation or process-random hashes.
+    return "__pops_physical_flux_%s_%s" % (
+        state_name.encode("utf-8").hex(),
+        flux_name.encode("utf-8").hex(),
+    )
+
+
 class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannAuthoringMixin,
             _EllipticAuthoringMixin, _MultiSpeciesMixin):
     """A blackboard-style physical model that lowers to the operator-first IR."""
@@ -93,6 +105,19 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     def _invalidate_authoring_views(self) -> None:
         self._module_cache = None
+
+    def _operator_binding_authority(self, module: Any) -> Any:
+        """Register the exact board scientific-declaration family with ``module``."""
+        from pops.model import DeclarationIndex, OperatorHandle
+
+        handles = [
+            handle
+            for family in (self._states, self._fields, self._fluxes, self._sources)
+            for handle in family.values()
+            if hasattr(handle, "kind") and not isinstance(handle, OperatorHandle)
+        ]
+        declarations = DeclarationIndex(owner=self.owner_path, handles=handles)
+        return module._register_operator_binding_authority(declarations)
 
     @property
     def owner_path(self) -> Any:
@@ -167,38 +192,87 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         registry = module.operator_registry()
         registered = set(registry.names())
         aliases = registry.aliases()
+        field_routes = {}
+        for descriptor in self._field_operators.values():
+            contributions = tuple(descriptor.providers)
+            if len(contributions) != 1:
+                raise ValueError(
+                    "board field operator %r must expose one exact executable provider route"
+                    % descriptor.name
+                )
+            field_routes[descriptor.unknown] = contributions[0].provider
+        unbound = []
+        for subject in (*self._fluxes.values(), *field_routes):
+            try:
+                module.operator_binding(subject)
+            except KeyError:
+                unbound.append(subject)
+        binding_declarations = (
+            self._operator_binding_authority(module) if unbound else None
+        )
         for handle in self._fluxes.values():
-            # The native single-state emitter has one canonical base-flux route named
-            # ``flux_default``.  Preserve the public physical name as an authenticated registry
-            # alias instead of renaming the route or losing what the author wrote.  Multi-state
-            # Modules already register each flux under its public name and need no alias.
-            if handle.name in registered:
-                if registry.get(handle.name).kind != "grid_operator":
+            # Scientific handles and callable operators use distinct typed registries. The native
+            # single-state emitter keeps its canonical ``flux_default`` route while Module records
+            # the explicit FluxHandle -> OperatorHandle projection. In particular, a rate may also
+            # be named ``transport`` without shadowing either declaration.
+            try:
+                existing = module.operator_binding(handle)
+            except KeyError:
+                existing = None
+            if existing is not None:
+                authenticated = registry.declaration_index().authenticate(existing)
+                if authenticated.kind != "grid_operator":
                     raise ValueError(
-                        "physical flux name %r collides with a non-flux operator"
-                        % handle.name
+                        "physical flux %r is bound to non-flux operator %r"
+                        % (handle.name, authenticated.registered_operator_name)
                     )
                 continue
-            target = "flux_default" if handle.is_default else None
-            if target not in registered:
+            target = None
+            if (
+                handle.name in registered
+                and registry.get(handle.name).kind == "grid_operator"
+            ):
+                target = handle.name
+            elif handle.name in aliases:
+                alias_target = aliases[handle.name]
+                if registry.get(alias_target).kind == "grid_operator":
+                    target = alias_target
+            if target is None and handle.is_default and "flux_default" in registered:
+                target = "flux_default"
+            if target is None:
                 raise ValueError(
                     "physical flux %r has no canonical operator route in Model %r"
                     % (handle.name, self.name)
                 )
-            existing = aliases.get(handle.name)
-            if existing is not None:
-                if existing != target:
-                    raise ValueError(
-                        "physical flux name %r collides with operator alias targeting %r"
-                        % (handle.name, existing)
-                    )
-                continue
-            registry.register_alias(handle.name, target)
-            aliases[handle.name] = target
-        for handle in self._fields.values():
-            target = getattr(handle, "registered_operator_name", None)
-            if target is not None and target != handle.name:
-                registry.register_alias(handle.name, target)
+            module._bind_operator(
+                handle,
+                module.operator_handle(target),
+                declarations=binding_declarations,
+            )
+        for handle, target in field_routes.items():
+            try:
+                existing = module.operator_binding(handle)
+            except KeyError:
+                existing = None
+            authenticated = registry.declaration_index().authenticate(target)
+            if authenticated.kind != "field_operator":
+                raise ValueError(
+                    "field %r provider route %r is not a field operator"
+                    % (handle.local_id, authenticated.registered_operator_name)
+                )
+            canonical = module.operator_handle(authenticated.registered_operator_name)
+            if existing is None:
+                module._bind_operator(
+                    handle,
+                    canonical,
+                    declarations=binding_declarations,
+                )
+            elif existing != canonical:
+                raise ValueError(
+                    "field %r is already bound to operator %r, not %r"
+                    % (handle.local_id, existing.registered_operator_name,
+                       canonical.registered_operator_name)
+                )
         self._module_cache = module
         return module
 
@@ -590,29 +664,41 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
             if name in self._fluxes:
                 raise ValueError("flux %r is already declared" % name)
-            self._multi_module.operator(
-                name=name,
-                kind="grid_operator",
-                signature=Signature((state.space,), Rate(state.space)),
-                expr={
-                    "x": [self._to_expr(value) for value in x_values],
-                    "y": [self._to_expr(value) for value in y_values],
-                },
-            )
-            if wave_values is not None:
-                proposed = {
-                    "x": tuple(self._to_expr(value) for value in wave_values[0]),
-                    "y": tuple(self._to_expr(value) for value in wave_values[1]),
-                }
-                existing = self._multi_module._eigenvalues
-                if existing is not None and repr(existing) != repr(proposed):
-                    raise ValueError(
-                        "multi-species flux wave declarations must share one exact eigenvalue law"
-                    )
-                self._multi_module.eigenvalues(**proposed)
-            self._fluxes[name] = h
-            self._invalidate_authoring_views()
-            return h
+            module = self._multi_module
+            registry = module.operator_registry()
+            route = _multi_flux_operator_name(state, name)
+            with atomic_attrs(
+                (registry, "_by_name"), (registry, "_order"),
+                (module, "_eigenvalues"), (module, "_operator_bindings"),
+                (module, "_operator_binding_authorities"),
+                (self, "_fluxes"), (self, "_module_cache"),
+            ):
+                target = module.operator(
+                    name=route,
+                    kind="grid_operator",
+                    signature=Signature((state.space,), Rate(state.space)),
+                    expr={
+                        "x": [self._to_expr(value) for value in x_values],
+                        "y": [self._to_expr(value) for value in y_values],
+                    },
+                )
+                if wave_values is not None:
+                    proposed = {
+                        "x": tuple(self._to_expr(value) for value in wave_values[0]),
+                        "y": tuple(self._to_expr(value) for value in wave_values[1]),
+                    }
+                    existing = module._eigenvalues
+                    if existing is not None and repr(existing) != repr(proposed):
+                        raise ValueError(
+                            "multi-species flux wave declarations must share one exact "
+                            "eigenvalue law"
+                        )
+                    module.eigenvalues(**proposed)
+                self._fluxes[name] = h
+                declarations = self._operator_binding_authority(module)
+                module._bind_operator(h, target, declarations=declarations)
+                self._invalidate_authoring_views()
+                return h
 
         hyp = self._dsl._m
         with atomic_attrs((hyp, "aux_names"), (hyp, "aux_extra_names"), (hyp, "_flux"),
@@ -852,24 +938,42 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
                 raise ValueError(
                     "operator(%r): the operator handle %r belongs to another physics model"
                     % (name, obj.name))
-            target = obj.registered_operator_name
             try:
                 registry = (self._multi_module.operator_registry()
                             if self._multi_module is not None
                             else self._dsl._m.operator_registry())
-                registry.get(target)
-            except KeyError:
+                registered_obj = registry.declaration_index().authenticate(obj)
+            except (KeyError, ValueError):
                 raise ValueError(
                     "operator(%r): operator handle %r is not registered by this physics model"
                     % (name, obj.name)) from None
-            if name in self._aliases:
-                raise ValueError("operator alias %r is already declared" % name)
-            self._aliases[name] = target
-            # Aliases are part of the blackboard Module projection even though they do not mutate
-            # the underlying PDE registry. Rebuild that view on its next access so its manifest and
-            # declaration index observe the complete authored surface.
-            self._invalidate_authoring_views()
-            return obj
+            target = registered_obj.registered_operator_name
+            if reg in self._aliases:
+                raise ValueError("operator alias %r is already declared" % reg)
+            if self._multi_module is not None:
+                with atomic_attrs(
+                    (registry, "_aliases"),
+                    (self, "_aliases"),
+                    (self, "_module_cache"),
+                ):
+                    registry.register_alias(reg, target)
+                    self._aliases[reg] = target
+                    self._invalidate_authoring_views()
+                    return self._multi_module.operator_handle(reg)
+
+            hyp = self._dsl._m
+            with atomic_attrs(
+                (hyp, "_aliases"),
+                (hyp, "_operator_registry_cache"),
+                (self._dsl, "_module_cache"),
+                (self, "_aliases"),
+                (self, "_module_cache"),
+            ):
+                alias_handle = hyp.operator_alias(reg, target)
+                self._aliases[reg] = target
+                self._dsl._invalidate_authoring_views()
+                self._invalidate_authoring_views()
+                return alias_handle
         raise TypeError(
             "operator(%r): returns= must be a local_linear_operator object or a "
             "registered operator; got %r" % (name, obj))

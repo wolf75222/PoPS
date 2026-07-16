@@ -56,7 +56,7 @@ def _two_fluid_module():
 def test_manifest_schema_and_spaces():
     module = _small_module()
     manifest = module.manifest()
-    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 7
+    assert manifest.schema_version == model.manifest.SCHEMA_VERSION == 8
     assert manifest.name == "m"
     assert manifest.to_dict()["owner_path"] == module.owner_path.canonical().to_data()
     assert manifest.state_spaces["U"]["components"] == ("rho", "mx", "my")
@@ -176,7 +176,7 @@ def test_to_json_round_trips_through_json_loads():
     manifest = _small_module().manifest()
     blob = manifest.to_json()
     restored = json.loads(blob)
-    assert restored["schema_version"] == 7
+    assert restored["schema_version"] == 8
     assert restored["name"] == "m"
     assert restored["operators"][0]["name"] == "fields_from_state"
     assert restored == manifest.to_dict()
@@ -210,7 +210,7 @@ def test_strict_json_round_trip_rejects_schema_and_identity_tampering():
         model.ModuleManifest.from_dict(forged_qid)
 
     with pytest.raises(ValueError, match="duplicate object key"):
-        model.ModuleManifest.from_json('{"schema_version":7,"schema_version":7}')
+        model.ModuleManifest.from_json('{"schema_version":8,"schema_version":8}')
     with pytest.raises(ValueError, match="non-finite"):
         model.ModuleManifest.from_json('{"schema_version":NaN}')
 
@@ -240,6 +240,81 @@ def test_alias_manifest_carries_authenticated_alias_and_target_identities():
     forged["operator_aliases"]["fields"]["target"] = "forged"
     with pytest.raises(ValueError, match="unknown operator"):
         model.ModuleManifest.from_dict(forged)
+
+
+def test_operator_binding_manifest_is_typed_separate_and_round_trips():
+    module = model.Module("bindings")
+    state = module.state_space("U", ("rho",))
+    flux_operator = module.operator(
+        "flux_default",
+        signature=(state,) >> model.Rate(state),
+        kind="grid_operator",
+        expr="F",
+    )
+    module.operator(
+        "transport",
+        signature=(state,) >> model.Rate(state),
+        kind="local_rate",
+        expr="-div(F)",
+    )
+    flux = model.Handle("transport", kind="flux", owner=module.owner_path)
+    declarations = model.DeclarationIndex(owner=module.owner_path, handles=(flux,))
+    declarations = module._register_operator_binding_authority(declarations)
+    module._bind_operator(flux, flux_operator, declarations=declarations)
+    assert not hasattr(module, "bind_operator")
+    assert not hasattr(module, "register_operator_binding_authority")
+
+    manifest = module.manifest()
+    data = manifest.to_dict()
+    assert "transport" not in data["operator_aliases"]
+    assert {row["name"]: row["kind"] for row in data["operators"]}["transport"] \
+        == "local_rate"
+    assert len(data["operator_bindings"]) == 1
+    binding = data["operator_bindings"][0]
+    subject = model.Handle.from_canonical_identity(binding["subject_handle"])
+    target = model.Handle.from_canonical_identity(binding["target_handle"])
+    assert subject.kind == "flux" and subject.local_id == "transport"
+    assert isinstance(target, model.OperatorHandle)
+    assert target.local_id == target.registered_operator_name == "flux_default"
+    assert binding["subject_qid"] == subject.qualified_id
+    assert binding["target_qid"] == target.qualified_id
+    assert model.ModuleManifest.from_dict(data).to_dict() == data
+    assert module.operator_binding(flux) == flux_operator
+    with pytest.raises(TypeError):
+        manifest.operator_bindings[0]["subject_qid"] = "forged"
+
+    with pytest.raises(TypeError, match="Handle"):
+        module.operator_binding("transport")
+    with pytest.raises(TypeError, match="non-operator Handle"):
+        module._bind_operator(
+            flux_operator,
+            flux_operator,
+            declarations=declarations,
+        )
+    with pytest.raises(ValueError, match="already registered"):
+        module._bind_operator(flux, flux_operator, declarations=declarations)
+    forged = model.Handle("forged", kind="flux", owner=module.owner_path)
+    with pytest.raises(model.MissingOwnershipError, match="not registered"):
+        module._bind_operator(forged, flux_operator, declarations=declarations)
+    fake_authority = model.DeclarationIndex(
+        owner=module.owner_path,
+        handles=(forged,),
+    )
+    with pytest.raises(ValueError, match="not registered by this Module"):
+        module._bind_operator(forged, flux_operator, declarations=fake_authority)
+    foreign = model.Module("foreign")
+    foreign_flux = model.Handle("transport", kind="flux", owner=foreign.owner_path)
+    with pytest.raises(ValueError, match="another Module authority"):
+        module._bind_operator(
+            foreign_flux,
+            flux_operator,
+            declarations=declarations,
+        )
+
+    forged_manifest = manifest.to_dict()
+    forged_manifest["operator_bindings"][0]["target_qid"] = "forged"
+    with pytest.raises(ValueError, match="qid"):
+        model.ModuleManifest.from_dict(forged_manifest)
 
 
 def test_manifest_preserves_an_exact_rational_parameter_default():
@@ -317,6 +392,7 @@ def main():
     test_to_json_round_trips_through_json_loads()
     test_strict_json_round_trip_rejects_schema_and_identity_tampering()
     test_alias_manifest_carries_authenticated_alias_and_target_identities()
+    test_operator_binding_manifest_is_typed_separate_and_round_trips()
     test_native_routes_and_abi_slot_present()
     test_coupled_rate_multi_output_names_bundle_without_new_flat_field()
     test_describe_errors_cite_operator_and_registry_contents()

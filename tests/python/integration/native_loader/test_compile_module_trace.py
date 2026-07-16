@@ -102,14 +102,21 @@ chk(compile_frozen_manifest is not None,
     "the compiled handle retains its immutable compile-frozen module manifest")
 manifest_data = {} if compile_frozen_manifest is None else compile_frozen_manifest.to_dict()
 ops = [op.get("name") for op in manifest_data.get("operators", [])]
-transport_alias = manifest_data.get("operator_aliases", {}).get("transport", {})
+transport_bindings = [
+    row for row in manifest_data.get("operator_bindings", [])
+    if row.get("subject_handle", {}).get("kind") == "flux"
+    and row.get("subject_handle", {}).get("local_id") == "transport"
+]
+transport_binding = transport_bindings[0] if len(transport_bindings) == 1 else {}
 chk(
     "flux_default" in ops
     and "electrostatic" in ops
-    and transport_alias.get("target") == "flux_default"
-    and transport_alias.get("handle", {}).get("registered_operator_name") == "flux_default",
-    "the trace preserves authored flux 'transport' as the authenticated alias of the canonical "
-    "flux_default native route (operators=%s, alias=%s)" % (ops, transport_alias),
+    and "transport" not in manifest_data.get("operator_aliases", {})
+    and transport_binding.get("target_handle", {}).get("registered_operator_name")
+    == "flux_default",
+    "the trace preserves authored FluxHandle 'transport' as a typed binding to the canonical "
+    "flux_default route without occupying the operator-alias namespace "
+    "(operators=%s, binding=%s)" % (ops, transport_binding),
 )
 module_hashes = [
     dict(block.model.definition_identity).get("module_hash")

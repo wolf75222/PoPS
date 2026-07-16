@@ -297,7 +297,7 @@ def test_manifest_is_structured_deeply_frozen_json_and_copy_out():
 
     manifest = module.manifest()
     entry = manifest.operators.describe("fields_from_state")
-    assert manifest.schema_version == 7
+    assert manifest.schema_version == 8
     assert entry.to_dict()["signature"] == model.Signature((state,), fields).to_data()
     assert json.loads(manifest.to_json()) == manifest.to_dict()
 

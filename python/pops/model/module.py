@@ -55,6 +55,16 @@ class Module(ModuleFreezable):
         # while the contract proves that a numerical method discretizes precisely the ordered
         # grid-operator pack selected by one rate.
         self._rate_contracts = {}
+        # Scientific handles and executable operators are distinct declaration families. This
+        # small typed registry records their explicit projections without injecting presentation
+        # names into OperatorRegistry's flat callable namespace. Keys and values are handles, so a
+        # projection can only be selected through an authenticated scientific declaration.
+        self._operator_bindings = {}
+        # Process-local membership authorities admitted explicitly by the model builder. They are
+        # not semantic data: only successful typed bindings enter the hash/manifest. Object identity
+        # prevents an arbitrary same-owner DeclarationIndex from authenticating a forged subject
+        # through the public Module API; admission and writes are private facade-adapter seams.
+        self._operator_binding_authorities = []
         # The canonical model owner is content-addressed by the complete definition. module_hash()
         # deliberately excludes OwnerPath/Handle identities, so this provider cannot recurse into
         # the identity it stabilizes. It supersedes OperatorRegistry's standalone fallback.
@@ -370,6 +380,98 @@ class Module(ModuleFreezable):
             name, kind=operator.kind, owner=self._registry.owner_path,
             signature=operator.signature, registered_operator_name=target)
 
+    def _bind_operator(
+        self,
+        subject: Any,
+        operator: Any,
+        *,
+        declarations: Any,
+    ) -> OperatorHandle:
+        """Private facade-adapter seam binding a scientific handle to an executable operator.
+
+        This is a projection registry, not an operator-alias registry. The subject and target keep
+        their own typed namespaces, so (for example) a physical flux and a local rate may both be
+        named ``transport``. Lookup accepts only the exact owner-qualified subject handle; strings
+        never gain declaration authority. ``declarations`` is the originating family's read-only
+        membership authority and must first be admitted explicitly by this Module; sharing an owner
+        path alone cannot manufacture a binding subject.
+        """
+        self._guard_mutable("bind a scientific handle to an operator")
+        if (
+            not isinstance(subject, Handle)
+            or isinstance(subject, OperatorHandle)
+        ):
+            raise TypeError(
+                "operator binding subject must be a non-operator Handle"
+            )
+        if subject.owner_path != self.owner_path:
+            raise ValueError("operator binding subject belongs to another Module authority")
+        if not isinstance(declarations, DeclarationIndex):
+            raise TypeError(
+                "operator binding declarations must be a DeclarationIndex authority"
+            )
+        if declarations.owner_path != self.owner_path:
+            raise ValueError("operator binding declaration index belongs to another authority")
+        if not any(authority is declarations for authority in self._operator_binding_authorities):
+            raise ValueError(
+                "operator binding declaration index is not registered by this Module"
+            )
+        registered_subject = declarations.authenticate(subject)
+        if isinstance(registered_subject, OperatorHandle):  # pragma: no cover - guarded above
+            raise TypeError("operator binding subject must be a non-operator Handle")
+        if not isinstance(operator, OperatorHandle):
+            raise TypeError("operator binding target must be an OperatorHandle")
+        registered = self._registry.declaration_index().authenticate(operator)
+        if not isinstance(registered, OperatorHandle):  # pragma: no cover - registry invariant
+            raise RuntimeError("operator registry returned a non-OperatorHandle declaration")
+        if registered_subject in self._operator_bindings:
+            raise ValueError(
+                "operator binding subject %s is already registered"
+                % registered_subject.qualified_id
+            )
+        target = registered.registered_operator_name
+        canonical_target = self.operator_handle(target)
+        self._operator_bindings[registered_subject] = canonical_target
+        return canonical_target
+
+    def _register_operator_binding_authority(
+        self, declarations: Any,
+    ) -> DeclarationIndex:
+        """Private facade-adapter admission for one originating declaration index.
+
+        The public Module surface cannot nominate a same-owner index as trusted. Sanctioned model
+        facades call this private seam with their exact family projection; equivalent repeated
+        projections are coalesced to keep persistent Modules bounded.
+        """
+        self._guard_mutable("register an operator binding declaration authority")
+        if not isinstance(declarations, DeclarationIndex):
+            raise TypeError(
+                "operator binding authority must be a DeclarationIndex"
+            )
+        if declarations.owner_path != self.owner_path:
+            raise ValueError("operator binding declaration index belongs to another authority")
+        for authority in self._operator_binding_authorities:
+            if authority is declarations or authority.records() == declarations.records():
+                return authority
+        self._operator_binding_authorities.append(declarations)
+        return declarations
+
+    def operator_binding(self, subject: Any) -> OperatorHandle:
+        """Return the target for an exact registered subject handle; strings are refused."""
+        if not isinstance(subject, Handle) or isinstance(subject, OperatorHandle):
+            raise TypeError("operator_binding requires a non-operator Handle subject")
+        if subject.owner_path != self.owner_path:
+            raise ValueError("operator binding subject belongs to another Module authority")
+        try:
+            return self._operator_bindings[subject]
+        except KeyError:
+            raise KeyError("no operator binding is registered for %s" % subject.qualified_id) \
+                from None
+
+    def operator_bindings(self) -> MappingProxyType:
+        """Immutable snapshot of typed scientific-handle to operator projections."""
+        return MappingProxyType(dict(self._operator_bindings))
+
     def state_handle(self, state: Any) -> Handle:
         """Return the registry-issued handle of a declared :class:`StateSpace`."""
         return self._descriptor_handle(
@@ -417,22 +519,37 @@ class Module(ModuleFreezable):
 
     def declaration_index(self) -> DeclarationIndex:
         """Read-only union of the Module's authoritative family registries."""
-        handles = [
+        candidates = [
             *self._state_handles.values(),
             *self._field_handles.values(),
             *self._param_registry.handles(),
             *self._aux_handles.values(),
+            *self._operator_bindings,
             *self._registry.declaration_index().records(),
         ]
+        handles = []
+        by_key = {}
+        for handle in candidates:
+            key = (handle.kind, handle.local_id)
+            previous = by_key.get(key)
+            if previous is not None:
+                if previous != handle:
+                    raise ValueError(
+                        "Module %r exposes conflicting %s declaration %r"
+                        % (self.name, handle.kind, handle.local_id)
+                    )
+                continue
+            by_key[key] = handle
+            handles.append(handle)
         return DeclarationIndex(owner=self.owner_path, handles=handles)
 
     def manifest(self) -> Any:
         """The self-describing :class:`pops.model.manifest.ModuleManifest` of this Module (ADC-585).
 
         The central, JSON-ready representation of the model -- spaces, params, aux, eigenvalue
-        presence, the typed operator registry (each operator by its stable id) and the native
-        route-registry components -- that supersedes the legacy flat ModelSpec POD. Read-only:
-        it does not mutate the Module."""
+        presence, the typed operator registry (each operator by its stable id), scientific-handle
+        projections and the native route-registry components -- that supersedes the legacy flat
+        ModelSpec POD. Read-only: it does not mutate the Module."""
         from pops.model.manifest import build_module_manifest
         return build_module_manifest(self)
 
@@ -542,9 +659,10 @@ class Module(ModuleFreezable):
 
         Folds the spaces, parameters, aux declarations and -- for every operator -- the name,
         kind, signature, capabilities, requirements and a body identity (the source of a callable
-        body, else its repr), plus every authenticated public operator alias. Sensitive to an
-        operator body, signature, capability, alias or space change; deterministic for an identical
-        module. A spec2 tag namespaces it away from any spec1 key.
+        body, else its repr), plus every authenticated public operator alias and typed scientific
+        operator binding. Sensitive to an operator body, signature, capability, alias, binding or
+        space change; deterministic for an identical module. A spec2 tag namespaces it away from
+        any spec1 key.
         """
         from ._module_hash import module_content_hash
         return module_content_hash(self)

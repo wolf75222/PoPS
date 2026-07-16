@@ -9,7 +9,7 @@ from .hash_data import body_identity, canonical_hash_data
 
 
 def module_content_hash(module: Any) -> str:
-    """Hash every semantic declaration and public alias while preserving registry order."""
+    """Hash declarations, aliases and typed operator bindings in canonical order."""
     payload = {
         "schema": "spec2-module",
         "name": module.name,
@@ -44,6 +44,33 @@ def module_content_hash(module: Any) -> str:
         # Two Modules exposing different author-facing handles must therefore never collapse to
         # the same model-definition owner even when they lower to the same native operator route.
         "operator_aliases": module._registry.aliases(),
+        # Projections from scientific handles to executable operators are authenticated in a
+        # namespace separate from callable aliases. Owner paths are excluded (as for every other
+        # Module declaration); typed local identity and exact registry target define the content.
+        "operator_bindings": [
+            {
+                "subject": {
+                    "kind": subject.kind,
+                    "local_id": subject.local_id,
+                    "schema_version": subject.schema_version,
+                },
+                "target": {
+                    "kind": target.kind,
+                    "local_id": target.local_id,
+                    "registered_operator_name": target.registered_operator_name,
+                    "schema_version": target.schema_version,
+                },
+            }
+            for subject, target in sorted(
+                module._operator_bindings.items(),
+                key=lambda item: (
+                    item[0].kind,
+                    item[0].local_id,
+                    item[0].schema_version,
+                    item[1].registered_operator_name,
+                ),
+            )
+        ],
     }
     canonical = json.dumps(
         canonical_hash_data(payload), sort_keys=True, separators=(",", ":"), ensure_ascii=True)

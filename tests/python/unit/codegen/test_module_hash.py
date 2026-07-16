@@ -68,6 +68,52 @@ def test_public_operator_alias_change_invalidates():
     print("OK  an authenticated public operator alias invalidates module_hash")
 
 
+def test_typed_operator_binding_change_invalidates():
+    def build(subject_name=None, target="flux_default"):
+        module = model.Module("bound")
+        state = module.state_space("U", ("rho",))
+        for name in ("flux_default", "flux_alternate"):
+            module.operator(
+                name=name,
+                signature=(state,) >> model.Rate(state),
+                kind="grid_operator",
+                expr=name,
+            )
+        if subject_name is not None:
+            subject = model.Handle(subject_name, kind="flux", owner=module.owner_path)
+            declarations = model.DeclarationIndex(owner=module.owner_path, handles=(subject,))
+            declarations = module._register_operator_binding_authority(declarations)
+            module._bind_operator(
+                subject,
+                module.operator_handle(target),
+                declarations=declarations,
+            )
+        return module
+
+    assert build("transport").module_hash() != build().module_hash()
+    assert build("transport").module_hash() != build("advection").module_hash()
+    assert build("transport").module_hash() != build("transport", "flux_alternate").module_hash()
+
+    def build_many(names):
+        module = build()
+        subjects = tuple(
+            model.Handle(name, kind="flux", owner=module.owner_path) for name in names
+        )
+        declarations = model.DeclarationIndex(owner=module.owner_path, handles=subjects)
+        declarations = module._register_operator_binding_authority(declarations)
+        for subject in subjects:
+            module._bind_operator(
+                subject,
+                module.operator_handle("flux_default"),
+                declarations=declarations,
+            )
+        return module
+
+    assert build_many(("transport", "advection")).module_hash() \
+        == build_many(("advection", "transport")).module_hash()
+    print("OK  a typed scientific-to-operator binding invalidates module_hash")
+
+
 def test_expr_body_change_invalidates():
     def build(expr):
         mod = model.Module("m")
@@ -268,6 +314,7 @@ def main():
     test_deterministic()
     test_signature_change_invalidates()
     test_public_operator_alias_change_invalidates()
+    test_typed_operator_binding_change_invalidates()
     test_expr_body_change_invalidates()
     test_callable_body_change_invalidates()
     test_callable_instances_hash_by_code_and_strict_state_not_address_repr()

@@ -8,6 +8,7 @@ canonical path with that capability removed.  Only canonical paths are serialisa
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from itertools import count
@@ -315,6 +316,33 @@ class OwnerPath:
         if authority is None:
             raise RuntimeError("authoring OwnerPath lost its authority")
         authority.bind_provider(provider, priority=priority)
+
+    @contextmanager
+    def _definition_fingerprint_transaction(self) -> Any:
+        """Restore the live definition authority if an authoring transaction fails.
+
+        Constructing a derived registry or :class:`Module` may attach a richer fingerprint
+        provider to the shared model authority. Compound facade builders use this private ownership
+        seam so a rejected candidate cannot remain the newest provider after their ordinary model
+        tables and caches roll back. The authority representation stays encapsulated here.
+        """
+        authority = self._authority
+        if authority is None:
+            raise UnresolvedOwnershipError(
+                "definition fingerprint transactions require a live authoring OwnerPath"
+            )
+        saved = (
+            authority._fingerprint,
+            authority._fingerprint_priority,
+            list(authority._fingerprint_providers),
+        )
+        try:
+            yield
+        except BaseException:
+            authority._fingerprint = saved[0]
+            authority._fingerprint_priority = saved[1]
+            authority._fingerprint_providers = saved[2]
+            raise
 
     def contains(self, kind: Any) -> bool:
         if not isinstance(kind, OwnerKind):

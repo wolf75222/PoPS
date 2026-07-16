@@ -67,6 +67,36 @@ def _operator_alias_rows(
     return rows
 
 
+def _operator_binding_rows(
+    module: Any,
+    index: Any,
+    *,
+    owner: OwnerPath,
+) -> list[dict[str, Any]]:
+    """Canonical rows for typed scientific-handle -> operator projections."""
+    rows = []
+    bindings = module.operator_bindings()
+    ordered = sorted(
+        bindings.items(),
+        key=lambda item: (
+            item[0].kind,
+            item[0].local_id,
+            item[0].schema_version,
+            item[1].registered_operator_name,
+        ),
+    )
+    for subject, target in ordered:
+        resolved_subject = index.authenticate(subject)._resolved(owner)
+        resolved_target = index.authenticate(target)._resolved(owner)
+        rows.append({
+            "subject_qid": resolved_subject.qualified_id,
+            "subject_handle": resolved_subject.canonical_identity(),
+            "target_qid": resolved_target.qualified_id,
+            "target_handle": resolved_target.canonical_identity(),
+        })
+    return rows
+
+
 def build_module_manifest(module: Any) -> ModuleManifest:
     """Build a canonical ModuleManifest through authoritative public registries."""
     module_owner = OwnerPath.coerce(module)
@@ -87,6 +117,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         )
     aliases = _operator_alias_rows(module, registry, index, owner=canonical_owner)
     operators = OperatorRegistryManifest(entries, aliases=aliases, owner=canonical_owner)
+    operator_bindings = _operator_binding_rows(module, index, owner=canonical_owner)
     declared_states = module.state_spaces()
     declared_fields = module.field_spaces()
     declared_params = module.params()
@@ -175,6 +206,7 @@ def build_module_manifest(module: Any) -> ModuleManifest:
         has_eigenvalues=has_eigenvalues,
         wave_speed_provider=wave_speed_provider,
         operators=operators,
+        operator_bindings=operator_bindings,
         capabilities=capabilities,
         native_routes=routes,
         native_catalog=catalog,

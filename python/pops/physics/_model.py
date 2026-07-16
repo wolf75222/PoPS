@@ -47,7 +47,7 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         "set_source", "set_elliptic_rhs", "elliptic_field", "source_term", "linear_source",
         "rate_operator", "stability_speed", "stability_dt", "source_frequency", "projection",
         "source_jacobian", "enable_hllc", "set_riemann_hooks", "enable_roe",
-        "roe_dissipation", "roe_from_jacobian",
+        "roe_dissipation", "roe_from_jacobian", "operator_alias",
     })
 
     def _semantic_data(self) -> dict[str, Any]:
@@ -95,6 +95,9 @@ class HyperbolicModel(PhysicsFreezable, _VariablesMixin, _FluxMixin, _SourceMixi
         self.name = name
         self._owner_path = OwnerPath.fresh(OwnerKind.MODEL_DEFINITION, name)
         self._operator_registry_cache = {}
+        # Persistent authoring aliases rebuilt into every derived OperatorRegistry. This table is
+        # mutated only by operator_alias(); reading Module/operator_registry never repairs state.
+        self._aliases = {}
         self._state_space_metadata = {
             "representation": "conservative",
             "centering": "cell",

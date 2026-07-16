@@ -60,7 +60,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
     required = {
         "schema_version", "name", "owner_path", "state_spaces", "field_spaces", "params",
         "params_utilization", "aux", "provider_pack", "has_eigenvalues",
-        "wave_speed_provider", "operators", "operator_aliases",
+        "wave_speed_provider", "operators", "operator_aliases", "operator_bindings",
         "capabilities", "native_routes", "native_catalog", "abi_requirements",
     }
     if set(manifest) != required:
@@ -100,6 +100,7 @@ def model_semantic_data(model: Any) -> dict[str, Any]:
         "providers": manifest["provider_pack"],
         "operators": operators,
         "operator_aliases": manifest["operator_aliases"],
+        "operator_bindings": manifest["operator_bindings"],
         "has_eigenvalues": manifest["has_eigenvalues"],
         "wave_speed_provider": manifest["wave_speed_provider"],
         "component_digests": {"module": module.module_hash()},

@@ -206,8 +206,39 @@ class _OperatorViewMixin(_HyperbolicModel):
                 lowering={"flux": cfg["flux"], "sources": cfg["sources"],
                           "fluxes": cfg["fluxes"]},
                 source=None))
+        for alias, target in sorted(self._aliases.items()):
+            reg.register_alias(alias, target)
         # Deep-freeze seals derived caches as mapping proxies. A missing view remains computable
         # after freeze, but must not mutate the sealed model merely to memoize it.
         if isinstance(cache, dict):
             cache[state_name] = reg
         return reg
+
+    def operator_alias(self, alias: Any, target: Any) -> Any:
+        """Persist one public alias in the authoritative derived-registry recipe."""
+        if not isinstance(alias, str) or not alias or not alias.isidentifier():
+            raise ValueError("operator alias must be a valid non-empty identifier")
+        if not isinstance(target, str) or not target:
+            raise ValueError("operator alias target must be a non-empty string")
+        registry = self.operator_registry()
+        operator = registry.get(target)
+        if alias in registry.names() or alias in registry.aliases():
+            raise ValueError("operator alias %r collides with an existing declaration" % alias)
+
+        previous_cache = self._operator_registry_cache
+        self._aliases[alias] = target
+        self._invalidate_authoring_views()
+        try:
+            rebuilt = self.operator_registry()
+            handle = _model.OperatorHandle(
+                alias,
+                kind=operator.kind,
+                owner=self.owner_path,
+                signature=operator.signature,
+                registered_operator_name=target,
+            )
+            return rebuilt.declaration_index().authenticate(handle)
+        except BaseException:
+            del self._aliases[alias]
+            self._operator_registry_cache = previous_cache
+            raise

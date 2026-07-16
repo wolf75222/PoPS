@@ -12,6 +12,7 @@ from ._operator_manifest import (
     require_exact_keys,
     validate_handle_identity,
 )
+from .handles import Handle, OperatorHandle
 from .manifest_data import (
     freeze_json as _freeze_json,
     require_manifest_name,
@@ -23,7 +24,7 @@ from .ownership import OwnerPath
 from .provider_pack import ProviderPack
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _WAVE_SPEED_PROVIDERS = frozenset({"explicit_pair", "jacobian", "pressure_derived"})
 
@@ -107,6 +108,64 @@ def _validate_declaration_rows(
             validate_parameter_data(declaration_data)
 
 
+def _validate_operator_bindings(
+    rows: Any,
+    *,
+    owner: OwnerPath,
+    operators: OperatorRegistryManifest,
+) -> list[dict[str, Any]]:
+    """Authenticate the generic scientific-handle -> operator projection registry."""
+    if not isinstance(rows, (list, tuple)):
+        raise TypeError("ModuleManifest operator_bindings must be a list")
+    expected = {"subject_qid", "subject_handle", "target_qid", "target_handle"}
+    normalized = []
+    seen = set()
+    for position, value in enumerate(rows):
+        row = require_exact_keys(
+            value, expected, where="operator binding row %d" % position
+        )
+        subject = Handle.from_canonical_identity(row["subject_handle"])
+        if isinstance(subject, OperatorHandle):
+            raise TypeError("operator binding subject must not be an OperatorHandle")
+        validate_handle_identity(
+            row["subject_handle"],
+            row["subject_qid"],
+            owner=owner,
+            local_id=subject.local_id,
+            kind=subject.kind,
+            where="operator binding subject %s:%s" % (subject.kind, subject.local_id),
+        )
+        target = Handle.from_canonical_identity(row["target_handle"])
+        if not isinstance(target, OperatorHandle):
+            raise TypeError("operator binding target must be an OperatorHandle")
+        entry = operators.describe(target.registered_operator_name)
+        validate_handle_identity(
+            row["target_handle"],
+            row["target_qid"],
+            owner=owner,
+            local_id=target.registered_operator_name,
+            kind=entry.kind,
+            operator_target=target.registered_operator_name,
+            where="operator binding target %s" % target.registered_operator_name,
+        )
+        if row["target_handle"] != entry.to_dict()["handle"]:
+            raise ValueError(
+                "operator binding target identity does not match operator %r"
+                % target.registered_operator_name
+            )
+        subject_key = (subject.kind, subject.local_id, subject.schema_version)
+        if subject_key in seen:
+            raise ValueError(
+                "duplicate operator binding subject %s:%s"
+                % (subject.kind, subject.local_id)
+            )
+        seen.add(subject_key)
+        normalized.append((subject_key, target.registered_operator_name, dict(row)))
+    return [
+        row for _, _, row in sorted(normalized, key=lambda item: (item[0], item[1]))
+    ]
+
+
 class ModuleManifest:
     """Self-describing, canonical manifest of a model Module."""
 
@@ -122,6 +181,7 @@ class ModuleManifest:
         "has_eigenvalues",
         "wave_speed_provider",
         "operators",
+        "operator_bindings",
         "capabilities",
         "native_routes",
         "native_catalog",
@@ -142,6 +202,7 @@ class ModuleManifest:
         has_eigenvalues: Any,
         wave_speed_provider: Any,
         operators: Any,
+        operator_bindings: Any = None,
         capabilities: Any,
         native_routes: Any,
         native_catalog: Any,
@@ -158,6 +219,11 @@ class ModuleManifest:
             )
         if operators.owner_path != owner:
             raise ValueError("ModuleManifest operator registry has a different owner_path")
+        checked_bindings = _validate_operator_bindings(
+            [] if operator_bindings is None else operator_bindings,
+            owner=owner,
+            operators=operators,
+        )
         _validate_declaration_rows(
             state_spaces, owner=owner, kind="state", where="module state_spaces"
         )
@@ -194,6 +260,11 @@ class ModuleManifest:
         object.__setattr__(self, "operators", operators)
         object.__setattr__(
             self,
+            "operator_bindings",
+            _freeze_json(checked_bindings, where="module operator_bindings"),
+        )
+        object.__setattr__(
+            self,
             "params_utilization",
             _freeze_json(
                 params_utilization or _params_utilization(self.params),
@@ -221,6 +292,7 @@ class ModuleManifest:
             has_eigenvalues=_thaw_json(self.has_eigenvalues),
             wave_speed_provider=_thaw_json(self.wave_speed_provider),
             operators=self.operators,
+            operator_bindings=_thaw_json(self.operator_bindings),
             capabilities=_thaw_json(self.capabilities),
             native_routes=_thaw_json(self.native_routes),
             native_catalog=_thaw_json(self.native_catalog),
@@ -243,6 +315,7 @@ class ModuleManifest:
             "wave_speed_provider": _thaw_json(self.wave_speed_provider),
             "operators": self.operators.to_dict(),
             "operator_aliases": self.operators.aliases(),
+            "operator_bindings": _thaw_json(self.operator_bindings),
             "capabilities": _thaw_json(self.capabilities),
             "native_routes": _thaw_json(self.native_routes),
             "native_catalog": _thaw_json(self.native_catalog),
@@ -265,6 +338,7 @@ class ModuleManifest:
             "wave_speed_provider",
             "operators",
             "operator_aliases",
+            "operator_bindings",
             "capabilities",
             "native_routes",
             "native_catalog",
@@ -294,6 +368,7 @@ class ModuleManifest:
             has_eigenvalues=row["has_eigenvalues"],
             wave_speed_provider=row["wave_speed_provider"],
             operators=operators,
+            operator_bindings=row["operator_bindings"],
             capabilities=row["capabilities"],
             native_routes=row["native_routes"],
             native_catalog=row["native_catalog"],

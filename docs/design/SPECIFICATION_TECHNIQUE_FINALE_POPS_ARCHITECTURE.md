@@ -319,6 +319,14 @@ fv = FiniteVolume(
 disc.rates.add(A, fv)
 ```
 
+Un handle scientifique (`FluxHandle`, `FieldHandle`, etc.) et l'opérateur exécutable qui réalise
+son calcul appartiennent à deux espaces de noms typés distincts. Le `Module` conserve leur
+projection dans un registre `operator_bindings` séparé des alias d'opérateurs : la clé est le handle
+scientifique exact, la cible est un `OperatorHandle` authentifié. Cette liaison participe au hash et
+au manifest versionné. Elle autorise donc, sans collision, un flux et un taux — ou un champ et son
+solveur — portant le même nom physique, mais interdit toute sélection par string, tout handle d'un
+autre owner et toute substitution silencieuse de route.
+
 Un modèle sans primitive de pression peut déclarer directement la paire signée requise par HLL,
 attachée au handle exact du flux et aux axes typés :
 

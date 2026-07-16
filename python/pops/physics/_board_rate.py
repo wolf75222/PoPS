@@ -37,7 +37,14 @@ class _RateAuthoringMixin(_BoardModel):
                 fluxes = ()
                 default_flux = None
             else:
-                fluxes = (self._multi_module.operator_handle(flux.name),)
+                try:
+                    flux_target = self._multi_module.operator_binding(flux)
+                except KeyError:
+                    raise RuntimeError(
+                        "multi-state physical flux %r has no typed executable binding"
+                        % flux.name
+                    ) from None
+                fluxes = (flux_target,)
                 default_flux = fluxes[0] if flux.is_default else None
             source_refs = tuple(
                 self._multi_module.operator_handle(source.reg_name) for source in sources)

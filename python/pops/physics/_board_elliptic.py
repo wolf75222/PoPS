@@ -133,9 +133,14 @@ class _EllipticAuthoringMixin(_BoardModel):
                 raise ValueError(
                     "native field_operator outputs must be FieldOutput or "
                     "FieldOutput + GradientOutput")
-            with atomic_attrs(
-                    (model, "_elliptic_fields"), (model, "aux_extra_names"),
-                    (self, "_module_cache"), (self, "_field_operators")):
+            with self.owner_path._definition_fingerprint_transaction(), atomic_attrs(
+                    (model, "_elliptic_fields"),
+                    (model, "aux_names"),
+                    (model, "aux_extra_names"),
+                    (model, "_operator_registry_cache"),
+                    (self._dsl, "_module_cache"),
+                    (self, "_module_cache"),
+                    (self, "_field_operators")):
                 from .aux import AUX_CANONICAL
                 for aux_name in aux_names:
                     if aux_name in model.aux_names or aux_name in model.aux_extra_names:
@@ -148,7 +153,8 @@ class _EllipticAuthoringMixin(_BoardModel):
                     name, rhs, operator="poisson", aux=aux_names,
                     gradient_sign=gradient_sign)
                 self._invalidate_authoring_views()
-                provider = self.module.operator_handle(name)
+                module = self.module
+                provider = module.operator_handle(name)
                 from pops.fields import FieldOperator, ScreenedPoissonOperator
 
                 operator_type = ScreenedPoissonOperator if reaction is not None else FieldOperator
@@ -156,8 +162,14 @@ class _EllipticAuthoringMixin(_BoardModel):
                     name, unknown=unknown, equation=equation, providers=provider,
                     outputs=output_tuple)
                 operator.validate()
-                self._field_operators[name] = operator
-                return operator
+                with atomic_attrs(
+                    (module, "_operator_bindings"),
+                    (module, "_operator_binding_authorities"),
+                ):
+                    declarations = self._operator_binding_authority(module)
+                    module._bind_operator(unknown, provider, declarations=declarations)
+                    self._field_operators[name] = operator
+                    return operator
         raise ValueError(
             "field_operator %r has no formula-backend lowering for principal operator %s"
             % (name, type(equation.lhs).__name__))

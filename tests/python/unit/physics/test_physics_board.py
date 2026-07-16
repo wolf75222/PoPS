@@ -103,18 +103,30 @@ def test_flux_value_uses_axis_identity_not_frame_iteration_order():
     frame = ReversedCartesianFrame()
     m = physics.Model("reversed_frame", frame=frame)
     state = m.state("U", components=("u",))
-    m.flux(
+    flux = m.flux(
         "transport",
         frame=frame,
         state=state,
         components={X_AXIS: (state[0],), Y_AXIS: (2.0 * state[0],)},
     )
+    # Scientific flux and callable rate deliberately share their authored name. They are separate
+    # typed declaration families, so neither may steal the other's registry entry.
+    m.rate("transport", equation=amath.ddt(state) == -amath.div(flux))
 
     manifest = m.module.manifest().to_dict()
-    assert "flux_default" in {row["name"] for row in manifest["operators"]}
-    transport_alias = manifest["operator_aliases"]["transport"]
-    assert transport_alias["target"] == "flux_default"
-    assert transport_alias["handle"]["registered_operator_name"] == "flux_default"
+    operators = {row["name"]: row for row in manifest["operators"]}
+    assert operators["flux_default"]["kind"] == "grid_operator"
+    assert operators["transport"]["kind"] == "local_rate"
+    assert "transport" not in manifest["operator_aliases"]
+    transport_binding = next(
+        row for row in manifest["operator_bindings"]
+        if row["subject_handle"]["kind"] == "flux"
+        and row["subject_handle"]["local_id"] == "transport"
+    )
+    assert transport_binding["target_handle"]["registered_operator_name"] == "flux_default"
+    assert m.module.operator_binding(flux).registered_operator_name == "flux_default"
+    with pytest.raises(TypeError, match="Handle"):
+        m.module.operator_binding("transport")
 
     assert m.flux_value((3.0,), {}, X_AXIS) == [3.0]
     assert m.flux_value((3.0,), {}, Y_AXIS) == [6.0]
@@ -127,6 +139,103 @@ def test_flux_value_uses_axis_identity_not_frame_iteration_order():
         m.flux_value((3.0, 4.0), {}, X_AXIS)
     with pytest.raises(TypeError, match="numeric component sequence"):
         m.flux_value(("not-a-number",), {}, X_AXIS)
+
+
+def test_flux_binding_is_order_independent_across_module_cache_invalidation():
+    def build(*, inspect_before_rate):
+        model = physics.Model("binding_order", frame=FRAME)
+        state = model.state("U", components=("u",))
+        flux = model.flux(
+            "transport",
+            frame=FRAME,
+            state=state,
+            components={X_AXIS: (state[0],), Y_AXIS: (state[0],)},
+        )
+        early = model.module if inspect_before_rate else None
+        if early is not None:
+            assert early.operator_binding(flux).registered_operator_name == "flux_default"
+            assert early.manifest().to_dict()["operator_bindings"]
+        model.rate("transport", equation=amath.ddt(state) == -amath.div(flux))
+        return model, flux, early
+
+    early_model, early_flux, stale_view = build(inspect_before_rate=True)
+    direct_model, direct_flux, _ = build(inspect_before_rate=False)
+    rebuilt = early_model.module
+    direct = direct_model.module
+
+    assert stale_view is not rebuilt
+    assert rebuilt.operator_binding(early_flux).registered_operator_name == "flux_default"
+    assert direct.operator_binding(direct_flux).registered_operator_name == "flux_default"
+    assert rebuilt.module_hash() == direct.module_hash()
+    assert rebuilt.manifest().to_dict() == direct.manifest().to_dict()
+
+
+def test_operator_alias_is_authored_before_module_projection_and_survives_rebuild():
+    def build(*, inspect_before_alias):
+        model = physics.Model("alias_order", frame=FRAME)
+        state = model.state("U", components=("u",))
+        flux = model.flux(
+            "physical_flux",
+            frame=FRAME,
+            state=state,
+            components={X_AXIS: (state[0],), Y_AXIS: (state[0],)},
+        )
+        rate = model.rate("transport", equation=amath.ddt(state) == -amath.div(flux))
+        before = model.module if inspect_before_alias else None
+        alias = model.operator("advance", returns=rate)
+        return model, alias, before
+
+    inspected, inspected_alias, stale = build(inspect_before_alias=True)
+    direct, direct_alias, _ = build(inspect_before_alias=False)
+
+    assert inspected_alias.registered_operator_name == "transport"
+    assert direct_alias.registered_operator_name == "transport"
+    assert stale is not inspected.module
+    assert stale.operator_registry().aliases() == {}
+    assert inspected.module.operator_registry().aliases() == {"advance": "transport"}
+    assert direct.module.operator_registry().aliases() == {"advance": "transport"}
+    assert inspected.module.module_hash() == direct.module.module_hash()
+    assert (
+        inspected.module.manifest().to_dict()["operator_bindings"]
+        == direct.module.manifest().to_dict()["operator_bindings"]
+    )
+
+
+def test_multi_state_flux_and_rate_may_share_public_name_without_operator_alias():
+    model = physics.Model("multi_named_flux", frame=FRAME)
+    electrons = model.species("electrons", state=("ne",))
+    model.species("ions", state=("ni",))
+    flux = model.flux(
+        "transport",
+        frame=FRAME,
+        state=electrons,
+        components={X_AXIS: (electrons["ne"],), Y_AXIS: (electrons["ne"],)},
+    )
+    rate = model.rate(
+        "transport", equation=amath.ddt(electrons) == -amath.div(flux)
+    )
+
+    module = model.module
+    binding = module.operator_binding(flux)
+    assert binding.kind == "grid_operator"
+    assert binding.registered_operator_name.startswith("__pops_physical_flux_")
+    assert module.operator_registry().get("transport").kind == "local_rate"
+    assert module.operator_registry().aliases() == {}
+    assert module.rate_contract(rate)["flux"] == (binding,)
+    alias = model.operator("advance", returns=rate)
+    assert alias.registered_operator_name == "transport"
+    aliases_after_write = module.operator_registry().aliases()
+    assert aliases_after_write == {"advance": "transport"}
+    assert model.module.operator_registry().aliases() == aliases_after_write
+    manifest = module.manifest().to_dict()
+    assert manifest["operator_aliases"]["advance"]["target"] == "transport"
+    assert any(
+        row["subject_handle"]["kind"] == "flux"
+        and row["subject_handle"]["local_id"] == "transport"
+        and row["target_handle"]["registered_operator_name"]
+        == binding.registered_operator_name
+        for row in manifest["operator_bindings"]
+    )
 
 
 def test_explicit_wave_speeds_require_owned_expressions_and_bind_to_the_flux():
