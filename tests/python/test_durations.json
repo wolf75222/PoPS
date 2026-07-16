@@ -33,9 +33,7 @@
   "tests/python/integration/io/test_io_multirank.py": 0.5,
   "tests/python/integration/io/test_scheduler_cache_checkpoint.py": 0.5,
   "tests/python/integration/io/test_time_history_checkpoint.py": 0.5,
-  "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py": 60.0,
   "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py": 158.5,
-  "tests/python/integration/mpi/test_amr_history_mpi.py": 60.0,
   "tests/python/integration/mpi/test_compile_module_trace.py": 120.0,
   "tests/python/integration/mpi/test_compile_stale_and_debug.py": 120.0,
   "tests/python/integration/mpi/test_dsl_compile_cache.py": 162.0,
@@ -363,7 +361,7 @@
     "unit_seconds": "per-file pytest wall time",
     "measured_source": "borrowed _pops.so, local pytest per file (non-compiler tests)",
     "estimated_note": "Unmeasured files use conservative path/content tiers (1/2/5/30/60/120 s); compiler-gated files retain native-compile estimates. Refresh every estimated row from a full CI run gate-python timing artifact.",
-    "estimated_count": 195,
+    "estimated_count": 193,
     "estimated_files": [
       "tests/python/examples/final/test_hyqmom15_final_example.py",
       "tests/python/examples/final/test_imex_amr_final_example.py",
@@ -383,9 +381,7 @@
       "tests/python/integration/io/test_amr_history_checkpoint.py",
       "tests/python/integration/io/test_amr_history_regrid_replay.py",
       "tests/python/integration/io/test_hdf5_parallel.py",
-      "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py",
       "tests/python/integration/mpi/test_amr_compiled_positivity_floor.py",
-      "tests/python/integration/mpi/test_amr_history_mpi.py",
       "tests/python/integration/mpi/test_compile_module_trace.py",
       "tests/python/integration/mpi/test_compile_stale_and_debug.py",
       "tests/python/integration/mpi/test_dsl_compile_cache.py",
@@ -561,6 +557,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 359
+    "total_files": 357
   }
 }

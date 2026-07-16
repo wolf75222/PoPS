@@ -918,7 +918,9 @@ jobs:
       - name: Test module Python `pops` shard ${{ matrix.shard }} (Kokkos Serial)
         if: steps.test-plan.outputs.python_shard_count != '0'
         run: |
-          pip install --upgrade pip numpy pytest
+          # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
+          # an optional user dependency; CI installs that capability explicitly instead of skipping.
+          pip install --upgrade pip numpy pytest h5py
           export PYTHONPATH="$PWD/build-kokkos-py/python"
           # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
@@ -1543,7 +1545,9 @@ jobs:
           CCACHE_DIR: ${{ github.workspace }}/.ccache
           CCACHE_MAXSIZE: 2G
         run: |
-          pip install --upgrade pip numpy pytest
+          # Keep this runtime lane capability-equivalent to the serial Python gate for the final
+          # examples and output reopen checks; collective HDF5 stays in the dedicated MPI job.
+          pip install --upgrade pip numpy pytest h5py
           run_with_heartbeat() {
             local label="$1"
             local limit="$2"

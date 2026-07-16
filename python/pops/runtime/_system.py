@@ -167,7 +167,7 @@ class System(_SystemInstall, _SystemUnifiedInstall, _SystemAuxState,
         steps = 0
         while self.time() < t_end and steps < max_steps:
             run_step_attempt(
-                self, self, strategy, t_end=float(t_end), controls=controls)
+                self, self._s, strategy, t_end=float(t_end), controls=controls)
             steps += 1
         return steps
 

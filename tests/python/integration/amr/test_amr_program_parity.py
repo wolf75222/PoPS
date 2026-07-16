@@ -81,7 +81,7 @@ def _nonlinear_model(name="adc508_nonlinear_model"):
     from pops.domain import Rectangle
     from pops.fields import FieldOutput, GradientOutput
     from pops.frames import Cartesian2D
-    from pops.math import ddt, div, laplacian
+    from pops.math import ddt, div, laplacian, unknown
     from pops.physics import Model
 
     frame = Rectangle(
@@ -99,10 +99,11 @@ def _nonlinear_model(name="adc508_nonlinear_model"):
     )
     model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
     potential = model.field("potential")
+    phi = unknown(potential)
     model.field_operator(
         "electrostatic",
         unknown=potential,
-        equation=(-laplacian(potential) == rho - 1.0),
+        equation=(-laplacian(phi) == rho - 1.0),
         outputs=(FieldOutput("phi", potential), GradientOutput("grad", potential)),
     )
     return model
