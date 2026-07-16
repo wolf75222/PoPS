@@ -54,11 +54,11 @@ def _model():
     )
 
 
-def _system(n, *, periodic=True):
+def _system(n, *, periodic=True, model=None):
     sim = System(n=n, L=1.0, periodic=periodic)
     sim.add_equation(
         "ions",
-        _model(),
+        _model() if model is None else model,
         spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
         time=engine.Explicit(),
     )
@@ -120,7 +120,16 @@ print("== (5) solved-potential halos are valid before source evaluation ==")
 
 def rhs_with(solver):
     n = 32
-    sim = _system(n)
+    # cs2=0 with zero momentum makes the transport RHS identically zero.  The resulting RHS is
+    # therefore a direct observation of PotentialForce consuming the published periodic gradient,
+    # rather than a cross-solver comparison that also measures the different elliptic symbols.
+    source_only = engine.Model(
+        state=engine.FluidState("isothermal", cs2=0.0),
+        transport=engine.IsothermalFlux(cs2=0.0),
+        source=engine.PotentialForce(charge=1.0),
+        elliptic=engine.ChargeDensity(charge=1.0),
+    )
+    sim = _system(n, model=source_only)
     sim.set_poisson(
         rhs="charge_density", solver=_solver_token(solver), bc=Periodic())
     x = (np.arange(n) + 0.5) / n
@@ -128,16 +137,23 @@ def rhs_with(solver):
         1e-3 * np.cos(2.0 * np.pi * x)[None, :] * np.ones((n, n))
         + 1e-3 * np.sin(2.0 * np.pi * x)[:, None] * np.ones((n, n))
     )
+    density = 1.0 + rho
     sim.set_state("ions", np.stack([
-        1.0 + rho, np.zeros_like(rho), np.zeros_like(rho)]))
+        density, np.zeros_like(rho), np.zeros_like(rho)]))
     sim.solve_fields()
-    return np.array(sim.eval_rhs("ions"))
+    phi = np.asarray(sim.potential()).reshape(n, n)
+    rhs = np.asarray(sim.eval_rhs("ions")).reshape(3, n, n)
+    h = 1.0 / n
+    grad_x = (np.roll(phi, -1, axis=1) - np.roll(phi, 1, axis=1)) / (2.0 * h)
+    grad_y = (np.roll(phi, -1, axis=0) - np.roll(phi, 1, axis=0)) / (2.0 * h)
+    expected = np.stack((np.zeros_like(phi), -density * grad_x, -density * grad_y))
+    return np.abs(rhs - expected).max()
 
 
-reference = rhs_with(GeometricMG())
-for solver, tolerance in ((FFT(), 1e-7), (FFT(spectral=True), 1e-4)):
-    difference = np.abs(rhs_with(solver) - reference).max()
-    chk(difference < tolerance,
+roundoff = 8.0 * np.finfo(float).eps
+for solver in (FFT(), FFT(spectral=True)):
+    difference = rhs_with(solver)
+    chk(difference <= roundoff,
         "%s publishes valid halos before grad(phi) is consumed" % solver.scheme)
 
 print("FAILS =", fails)

@@ -54,13 +54,13 @@ def _program(name="env_demo"):
     return _program_fixture(name)[0]
 
 
-def _compiled_model():
+def _compiled_model(*, abi_key="SIG|c++|c++23", cxx="c++", std="c++23"):
     """Exact metadata carrier for synthetic handles; no compiler is involved."""
     return CompiledModel(
         so_path="<synthetic>", backend="production", cons_names=["u"],
         cons_roles=["Scalar"], prim_names=["u"], n_vars=1, gamma=None, n_aux=0,
-        params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="env-model",
-        cxx="c++", std="c++23",
+        params={}, caps={"cpu": True}, abi_key=abi_key, model_hash="env-model",
+        cxx=cxx, std=std,
     )
 
 
@@ -150,7 +150,7 @@ def test_inspect_without_env_is_empty_not_faked():
     # A handle built outside compile_problem carries no env -> {} (documented absence, not a default).
     model = _compiled_model()
     component = CompiledProblem(
-        "/tmp/x/problem.so", _program(), model, "SIG", "c++", "c++23"
+        "/tmp/x/problem.so", _program(), model, model.abi_key, "c++", "c++23"
     )
     bare = typed_compiled_artifact(component, model)
     assert bare.codegen_env is None
@@ -200,7 +200,10 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
         assert compiled.codegen_env.autotune == "basic"
-        artifact = typed_compiled_artifact(compiled, compiled.model)
+        artifact = typed_compiled_artifact(
+            compiled,
+            _compiled_model(abi_key=compiled.abi_key, cxx=compiled.cxx, std=compiled.std),
+        )
         assert artifact.inspect().env["autotune"] == "basic"
         # The .so landed in POPS_CODEGEN_DIR.
         assert os.path.dirname(compiled.so_path) == tmp

@@ -15,8 +15,8 @@ On verifie :
  (3) no-default-change : un pas Explicit() == un pas Explicit(method='ssprk2') bit-exact ;
  (4) garde de discrimination : euler != ssprk2 sur le meme pas (le test (2) ne compare pas
      deux choses egales par accident) ;
- (5) AmrSystem : time='euler' rejete par le perimetre AMR existant (explicit|ssprk3|imex),
-     message explicite -- pas d'ignore silencieux ;
+ (5) AmrSystem : time='euler' porte par le chemin Forward-Euler AMR existant, avec sa relation
+     temporelle explicite -- pas de rabattement silencieux vers SSPRK2 ;
  (6) [compilateur] le package natif backend='production' (add_native_block, gabarit
      add_compiled_model -> make_block) porte euler avec la meme identite de Shu-Osher.
 
@@ -25,7 +25,6 @@ compilateur requis ; (6) s'auto-saute sans compilateur ou sans Kokkos.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import os
 import sys
 import tempfile
 

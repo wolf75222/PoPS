@@ -257,18 +257,20 @@ class MomentModel:
 
         return sources
 
-    def build(self, name: Any = "moments") -> Any:
+    def build(self, name: Any = "moments", *, frame: Any = None) -> Any:
         """Build the recorded specification into the canonical ``physics.Model``.
 
         Maps the recorded options literally onto :func:`build_moment_model`, then authors the
-        recorded Poisson coupling through the same field/operator contracts as user code.
+        recorded Poisson coupling through the same field/operator contracts as user code. ``frame``
+        may provide the domain-owned Cartesian frame required by a final ``CartesianGrid`` layout.
         """
         registered: dict[str, Any] = {}
         m = build_moment_model(
             name, self._order, self._resolved_closure(),
             exact_speeds=self._exact_speeds, robust=self._robust,
             sources=self._sources_cb(registered), roe=self._roe,
-            eps_m00=self._proj.eps_m00, eps_cov=self._proj.eps_cov)
+            eps_m00=self._proj.eps_m00, eps_cov=self._proj.eps_cov,
+            frame=frame)
         if self._poisson is not None:
             self._apply_poisson(m, registered)
         return m

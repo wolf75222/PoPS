@@ -53,7 +53,7 @@ def build_euler(name: str = "euler") -> Model:
     pressure = model.primitive(
         "p",
         (gamma - 1.0)
-        * (energy - 0.5 * rho * (velocity_x * velocity_x + velocity_y * velocity_y)),
+        * (energy - 0.5 * (rho_u * rho_u + rho_v * rho_v) / rho),
     )
     model.primitive_state(
         rho,
@@ -74,7 +74,6 @@ def build_euler(name: str = "euler") -> Model:
             "p": Pressure(),
         },
     )
-    enthalpy = model.scalar("H", (energy + pressure) / rho)
     sound_speed = model.scalar("c", sqrt(gamma * pressure / rho))
     flux = model.flux(
         "transport",
@@ -82,16 +81,16 @@ def build_euler(name: str = "euler") -> Model:
         state=state,
         components={
             X_AXIS: (
-                rho_u,
+                rho * velocity_x,
                 rho_u * velocity_x + pressure,
-                rho_u * velocity_y,
-                rho * enthalpy * velocity_x,
+                rho_v * velocity_x,
+                (energy + pressure) * velocity_x,
             ),
             Y_AXIS: (
-                rho_v,
-                rho_v * velocity_x,
+                rho * velocity_y,
+                rho_u * velocity_y,
                 rho_v * velocity_y + pressure,
-                rho * enthalpy * velocity_y,
+                (energy + pressure) * velocity_y,
             ),
         },
         waves={

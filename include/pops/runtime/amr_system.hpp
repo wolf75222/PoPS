@@ -326,7 +326,7 @@ class AmrSystem {
   ///                | "roe" (generic when the model supplies the Riemann capability
   ///                HasHLLCStructure / HasRoeDissipation; else the canonical Euler 2D layout,
   ///                4 variables + pressure)
-  /// @param time    "explicit" (SSPRK2, forward-Euler source carried by the AMR step) | "ssprk3"
+  /// @param time    "explicit" (SSPRK2) | "euler" (forward Euler) | "ssprk3"
   ///                (SSPRK3, order 3, reflux per stage; explicit transport, EXCLUSIVE of imex) |
   ///                "imex" (stiff source handled IMPLICITLY by backward_euler_source; the transport
   ///                stays explicit, carried by the conservative reflux; cf. capstone vii). Any other
@@ -344,7 +344,7 @@ class AmrSystem {
   ///                is an ERROR (no silent ignore). MULTI-BLOCK only (the mono-block
   ///                AmrCouplerMP carries its IMEX without a mask; a mask there is therefore refused).
   /// @throws std::runtime_error if a block is already defined, if substeps < 1, if stride < 1, if time
-  ///         is not in {explicit, ssprk3, imex}, if recon is not in {conservative,
+  ///         is not in {explicit, euler, ssprk3, imex}, if recon is not in {conservative,
   ///         primitive}, or if an implicit mask is requested outside IMEX / with a name-role absent from the block.
   /// @param newton  options of the IMEX source Newton grouped in a POD (ADC-214; cf.
   ///                 NewtonOptions; parity with System::add_block): max_iters / rel_tol / abs_tol /

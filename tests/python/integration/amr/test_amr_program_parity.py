@@ -15,12 +15,13 @@ This test asserts:
   2) (Kokkos-gated, the must-pass GATE 4.1a) BIT-IDENTICAL parity -- the SAME SSPRK2 Program installed
      on a single-level ``System`` (``ProgramContext``) and on a single-level ``AmrSystem``
      (``AmrProgramContext``, the coarse-only Program layout) produces the BYTE-IDENTICAL coarse density
-     and potential over several steps (0 ulp). This proves the AmrProgramContext seam methods are
-     byte-faithful mirrors of ProgramContext's -- the whole duck-typing claim;
+     over several steps (0 ulp). This proves the AmrProgramContext seam methods are byte-faithful
+     mirrors of ProgramContext's -- the whole duck-typing claim.  Each independently refreshed
+     potential must satisfy the same discrete Poisson equation;
 
-  3) (Kokkos-gated) a CUSTOM 2-stage Program (midpoint RK2) installed on AMR RUNS, conserves the coarse
-     mass to round-off, and DIFFERS from the SSPRK2 Program (the Program text actually drives the
-     integrator, not a hard-coded scheme).
+  3) (Kokkos-gated) a CUSTOM 2-stage Program (midpoint RK2) installed on a nonlinear scalar Burgers
+     operator RUNS, conserves the coarse mass to round-off, and DIFFERS from SSPRK2.  Each scheme is
+     also bit-identical AMR vs System (the Program text actually drives the integrator).
 
 WHAT NEEDS WHICH RUNNER. (1) is pure Python. (2)/(3) need a compiler + a visible Kokkos
 (``POPS_KOKKOS_ROOT``) to build the .so; the compiled-.so dlopen + per-level RUN IS validatable on
@@ -73,6 +74,38 @@ def chk(cond, label):
 def _euler_model(name="adc508_parity_model"):
     """One conservative scalar plus a periodic field solve for context parity."""
     return scalar_advection_field_model(name)
+
+
+def _nonlinear_model(name="adc508_nonlinear_model"):
+    """Periodic scalar Burgers transport, for a genuine midpoint/SSPRK2 discriminator."""
+    from pops.domain import Rectangle
+    from pops.fields import FieldOutput, GradientOutput
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div, laplacian
+    from pops.physics import Model
+
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.5 * rho * rho,), y_axis: (0.125 * rho * rho,)},
+        waves={x_axis: (rho,), y_axis: (0.25 * rho,)},
+    )
+    model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+    potential = model.field("potential")
+    model.field_operator(
+        "electrostatic",
+        unknown=potential,
+        equation=(-laplacian(potential) == rho - 1.0),
+        outputs=(FieldOutput("phi", potential), GradientOutput("grad", potential)),
+    )
+    return model
 
 
 def _ssprk2_program(model, name="adc508_ssprk2", *, target="amr_system"):
@@ -179,6 +212,7 @@ def _system_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
     sim.install_program(compiled.so_path)
     for _ in range(nsteps):
         sim.step(dt)
+    sim.solve_fields()  # refresh phi for the committed final state, not the last RK stage
     return (np.array(sim.get_state("plasma")), np.array(sim.potential())), None
 
 
@@ -217,6 +251,7 @@ def _amr_run(plan, model, u0, nsteps=NSTEPS, dt=DT):
         return None, "install (AMR): %s" % str(exc)[:240]
     for _ in range(nsteps):
         amr.step(dt)
+    amr.solve_fields()  # refresh phi for the committed final state, not the last RK stage
     return (np.array(amr.density("plasma")), np.array(amr.potential()),
             float(amr.mass("plasma"))), None
 
@@ -226,11 +261,9 @@ def test_single_level_bit_identical_parity():
     single-level AmrSystem (AmrProgramContext, coarse-only) must be BIT-IDENTICAL on the evolved coarse
     DENSITY (0 ulp) -- the AmrProgramContext seam methods (state / rhs_into / axpy / lincomb /
     solve_fields / scratch) are byte-faithful ProgramContext mirrors, so the SAME lowered body produces
-    the SAME arithmetic. The potential phi is determined only up to an ADDITIVE CONSTANT on a periodic
-    domain (the Poisson null space): System and AMR pin that constant differently (different warm-start /
-    mean-subtraction), so we compare the MEAN-REMOVED phi -- the physically meaningful part that sets
-    grad phi (the force feeding the density's RHS, which is why the density IS bit-identical) -- to the
-    geometric-MG solve tolerance (~1e-7 rel)."""
+    the SAME arithmetic. The periodic potential is non-unique and each runtime owns an independent MG
+    history, so both are refreshed on the committed state and checked against the same discrete
+    Poisson equation rather than compared iterate-to-iterate."""
     print("== single-level SSPRK2 parity: AmrProgramContext == ProgramContext (bit-identical) ==")
     model = _euler_model("adc508_parity_ssprk2")
     u0 = _init_density()
@@ -254,13 +287,23 @@ def test_single_level_bit_identical_parity():
     drho = float(np.abs(sys_rho - amr_rho).max())
     chk(np.array_equal(sys_rho, amr_rho),
         "the evolved coarse density is BIT-IDENTICAL System vs AMR (max|diff| = %.3e)" % drho)
-    # phi up to an additive constant (periodic Poisson null space): compare the mean-removed field.
-    dphi = float(np.abs((sys_phi - sys_phi.mean()) - (amr_phi - amr_phi.mean())).max())
-    rng = float(np.abs(sys_phi - sys_phi.mean()).max()) or 1.0
-    chk(dphi / rng < 1e-4,
-        "the mean-removed coarse potential matches to the MG solve tolerance (rel max|diff| = %.3e; "
-        "the residual is warm-start drift between two independent iterative solves, NOT a seam "
-        "difference -- the density it drives is bit-identical)" % (dphi / rng))
+    # The two independent iterative solves have different warm-start histories.  Validate the same
+    # discrete periodic equation independently instead of comparing their non-unique iterates.
+    def relative_poisson_residual(phi, rho):
+        h = 1.0 / N
+        laplacian = (
+            np.roll(phi, -1, axis=0) + np.roll(phi, 1, axis=0)
+            + np.roll(phi, -1, axis=1) + np.roll(phi, 1, axis=1) - 4.0 * phi
+        ) / (h * h)
+        source = rho - 1.0
+        residual = -laplacian - source
+        return float(np.linalg.norm(residual) / np.linalg.norm(source))
+
+    sys_residual = relative_poisson_residual(sys_phi, sys_rho)
+    amr_residual = relative_poisson_residual(amr_phi, amr_rho)
+    chk(sys_residual < 1e-7 and amr_residual < 1e-7,
+        "both potentials satisfy the same discrete Poisson equation independently "
+        "(System %.3e, AMR %.3e)" % (sys_residual, amr_residual))
     chk(np.all(np.isfinite(amr_rho)) and float(amr_rho.min()) > 0.0,
         "the AMR Program kept a finite, strictly-positive density (min = %.4f)" % float(amr_rho.min()))
 
@@ -271,7 +314,7 @@ def test_custom_two_stage_runs_and_differs():
     scheme. Also bit-identical vs the same midpoint Program on System (the duck-typing holds for a
     second, different combine)."""
     print("== custom 2-stage (midpoint RK2) Program on AMR: runs, conserves, differs from SSPRK2 ==")
-    model = _euler_model("adc508_parity_mid")
+    model = _nonlinear_model("adc508_parity_mid")
     u0 = _init_density()
     m0 = float(u0.mean())  # mean density == coarse mass / area (L=1)
 
@@ -283,7 +326,7 @@ def test_custom_two_stage_runs_and_differs():
     mid_rho, mid_phi, mid_mass = mid_amr
 
     # SSPRK2 on the SAME AMR for the differ-check (same model name -> same .so cache key per Program).
-    ss_model = _euler_model("adc508_parity_mid")
+    ss_model = _nonlinear_model("adc508_parity_mid")
     ss_amr, err2 = _amr_run(
         _ssprk2_program(ss_model, target="amr_system"), ss_model, u0)
     if ss_amr is None:
@@ -301,7 +344,7 @@ def test_custom_two_stage_runs_and_differs():
         "the midpoint scheme DIFFERS from SSPRK2 through the SAME seam (max|diff| = %.3e)" % diff)
 
     # Bit-identical vs the same midpoint Program on System (the duck-typing holds for a 2nd combine).
-    sys_model = _euler_model("adc508_parity_mid")
+    sys_model = _nonlinear_model("adc508_parity_mid")
     sys_out, sys_err = _system_run(
         _midpoint_program(sys_model, target="system"), sys_model, u0)
     if sys_out is not None:
@@ -309,6 +352,14 @@ def test_custom_two_stage_runs_and_differs():
         chk(np.array_equal(sys_rho, mid_rho),
             "the midpoint Program is bit-identical System vs AMR (max|diff| = %.3e)"
             % float(np.abs(sys_rho - mid_rho).max()))
+    ss_sys_model = _nonlinear_model("adc508_parity_mid")
+    ss_sys_out, ss_sys_err = _system_run(
+        _ssprk2_program(ss_sys_model, target="system"), ss_sys_model, u0)
+    if ss_sys_out is not None:
+        ss_sys_rho = ss_sys_out[0][0]
+        chk(np.array_equal(ss_sys_rho, ss_rho),
+            "the SSPRK2 Program is bit-identical System vs AMR (max|diff| = %.3e)"
+            % float(np.abs(ss_sys_rho - ss_rho).max()))
 
 
 def _amr_run_cfl(plan, model, u0, nsteps=NSTEPS, cfl=0.4):
@@ -379,6 +430,10 @@ def test_step_cfl_routes_through_installed_program():
         u0,
     )
     if prog_out is None:
+        if err and "unknown provider slot" in err:
+            chk(False, "installed AMR Program field provider slots must be fully materialized: %s"
+                % err)
+            return
         print("skip (%s)" % err)
         return
     prog_rho, prog_hash, prog_dt = prog_out

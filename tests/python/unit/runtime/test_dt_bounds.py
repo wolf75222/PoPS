@@ -133,6 +133,7 @@ chk(amr2.last_dt_bound() == "global:cap_amr",
 
 print("== (C2) AMR multi-blocs : borne globale via AmrRuntime ==")
 amr3 = build_amr()
+amr3.set_temporal_relations([2], [1], ["integral_only"])
 amr3.add_equation("e2", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
                   time=engine.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
 amr3.set_density("e2", gaussian(24).ravel())

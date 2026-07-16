@@ -200,10 +200,12 @@ def _check_imex_ssprk3_rejected(n=16):
 def _check_native_loader_rejects_ssprk3(n=16):
     s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
     s.set_temporal_relations([2], [1], ["integral_only"])
-    # add_native_block valide time AVANT le dlopen : aucun .so reel requis pour observer le rejet.
+    # The private binding is deliberately named _install_native_block; it validates time before
+    # dlopen, so no real package is required to observe the rejection.
     try:
-        s._s.add_native_block("b", "/tmp/_pops_ssprk3_inexistant.so", "minmod", "rusanov",
-                              "conservative", "ssprk3", 1.4, 1)
+        s._s._install_native_block(
+            "b", "/tmp/_pops_ssprk3_inexistant.so", "minmod", "rusanov",
+            "conservative", "ssprk3", 1.4, 1)
     except Exception as e:
         assert "ssprk3" in str(e), "rejet .so present mais message inattendu : %s" % e
     else:
@@ -212,8 +214,9 @@ def _check_native_loader_rejects_ssprk3(n=16):
     # SPECIFIQUE a ssprk3, pas un refus generique de add_native_block. NB : chemin SANS 'ssprk3'
     # dans le nom -- dlopen echoie le chemin dans son message, ce qui piegerait l'assertion.
     try:
-        s._s.add_native_block("b", "/tmp/_pops_loader_inexistant.so", "minmod", "rusanov",
-                              "conservative", "explicit", 1.4, 1)
+        s._s._install_native_block(
+            "b", "/tmp/_pops_loader_inexistant.so", "minmod", "rusanov",
+            "conservative", "explicit", 1.4, 1)
     except Exception as e:
         assert "ssprk3" not in str(e), "explicit rejete pour cause de ssprk3 (rejet trop large)"
     print("OK  (e) loader .so + ssprk3 rejete explicitement (ABI plate sans methode temporelle)")

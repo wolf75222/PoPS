@@ -169,7 +169,8 @@ runtime::amr::TransferKernelRegistry bootstrap_transfer_kernels() {
 
 std::string amr_time_routes_csv() {
   return std::string(route_token(TimeRouteId::kExplicitSsprk2)) + "|" +
-         route_token(TimeRouteId::kSsprk3) + "|" + route_token(TimeRouteId::kImex);
+         route_token(TimeRouteId::kForwardEuler) + "|" + route_token(TimeRouteId::kSsprk3) +
+         "|" + route_token(TimeRouteId::kImex);
 }
 
 bool amr_newton_options_non_default(const NewtonOptions& newton, bool diagnostics = false) {
@@ -1310,7 +1311,7 @@ void AmrSystem::add_block(const std::string& name, const ModelSpec& model,
   // time == "ssprk3": SSPRK3 (order 3 + per-stage reflux), explicit transport -> MUTUALLY EXCLUSIVE
   // with imex (single time.kind selector, parity with System). The implicit stiff source (imex) does
   // NOT combine with SSPRK3 (unvalidated combination): the engine also rejects it as defense in depth.
-  if (time != "explicit" && time != "imex" && time != "ssprk3") {
+  if (time != "explicit" && time != "euler" && time != "imex" && time != "ssprk3") {
     if (time == "imexrk_ars222")
       throw std::runtime_error(
           "AmrSystem : time 'imexrk_ars222' (IMEX-RK family, ARS(2,2,2) scheme) not wired on AMR "

@@ -32,6 +32,8 @@ S'auto-saute (exit 0) pour (9) sans compilateur C++ ou sans Kokkos (coeur Kokkos
 """
 import pops
 from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
 from pops.lib.time import ForwardEuler
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, PeriodicAxes
@@ -51,6 +53,8 @@ from tests.python.support.requirements import repo_include
 
 fails = 0
 INCLUDE = repo_include()
+MOMENT_FRAME = Rectangle(
+    "moment-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
 
 
 def chk(cond, label):
@@ -101,7 +105,7 @@ def moment_model(name, order, closure, *, robust=False):
     """Build through the final typed moment facade with the oracle's exact guard mode."""
     return (CartesianVelocityMoments(order, closure=closure, robust=robust)
             .add_transport()
-            .build(name=name))
+            .build(name=name, frame=MOMENT_FRAME))
 
 
 print("== (1) convention d'ordre des variables ==")

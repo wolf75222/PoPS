@@ -174,8 +174,13 @@ def _branch_program(t, *, name, threshold):
     target = P.value("target", 2.0 * U0)
     diff = P.value("diff", target - U0)
     cond = P.norm_inf(diff) > threshold
-    body = _contraction_body(target)
-    xf = P.branch(cond, lambda T: body(T, U0), lambda _T: U0)
+    branch_point = TimePoint(P.clock, step=1)
+    xf = P.branch(
+        cond,
+        lambda T: T.value(
+            "branch_contraction", 0.5 * U0 + 0.5 * target, at=branch_point),
+        lambda T: T.value("branch_identity", U0, at=branch_point),
+    )
     endpoint = typed_state(P, "blk", state_name="U").next
     P.commit(endpoint, P.value("branch_next", xf, at=endpoint.point))
     return P

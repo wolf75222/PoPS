@@ -38,6 +38,7 @@ try:
     import numpy as np
 
     import pops
+    from pops.codegen._compile_drivers import compile_problem
     import pops.runtime._engine_descriptors as engine
     from pops.numerics.reconstruction import FirstOrder
     from pops.numerics.riemann import Rusanov
@@ -119,8 +120,8 @@ def _build(program, regrid_every):
     if not hasattr(amr, "install_program") or not hasattr(amr, "history_names"):
         return None, "no engine"
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model(program.name + "_m"),
-                                                 time=program, target="amr_system")
+        compiled = compile_problem(model=_passive_source_model(program.name + "_m"),
+                                   time=program, target="amr_system")
         block_cm = _passive_source_model(program.name + "_b").compile(backend="production",
                                                                       target="amr_system")
         bg_cm = _passive_source_model(program.name + "_bg").compile(backend="production",
