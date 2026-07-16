@@ -364,6 +364,12 @@ class _SystemUnifiedInstall(_System):
         native_options = field_plan.native_install_data()
         provider = native_options["solver_provider"]
         bindings = (provider["topology"], provider["solver"])
+        # ``native_install_data`` deliberately detaches the frozen plan into ordinary JSON-like
+        # carriers, so a tuple declared by ComponentInterface becomes a list here.  Compare the
+        # canonical structural form, not Python container implementation details; this keeps the
+        # exact interface contract while accepting its faithful detached representation.
+        from pops.fields._identity import field_identity, strict_field_data
+
         installed = []
         for binding in bindings:
             component = install_plan.components.get(binding["component_id"])
@@ -375,13 +381,14 @@ class _SystemUnifiedInstall(_System):
             if component.component_manifest.token != binding[
                     "component_manifest_identity"]:
                 raise ValueError("field component manifest identity changed before install")
-            if component.interface.to_data() != binding["native_interface"]:
+            if strict_field_data(component.interface.to_data()) != strict_field_data(
+                binding["native_interface"]
+            ):
                 raise ValueError("field component native interface identity changed before install")
             if component.native_handle is None:
                 raise ValueError("field components must be loaded before native installation")
             installed.append(component.native_handle)
         import json
-        from pops.fields._identity import field_identity, strict_field_data
         from pops.runtime._component_execution_context import component_execution_data
 
         boundary = {

@@ -386,20 +386,21 @@ class ResolvedFieldInstallPlan:
     def require_component_inputs(self, components: tuple[Any, ...]) -> None:
         """Match every authored field component against the explicit resolve inputs."""
         from pops.external import CompiledComponentArtifact, ExternalComponent
+        from pops.fields._identity import strict_field_data
 
         by_id = {}
         for component in components:
             if type(component) is ExternalComponent:
                 component_id = component.component_manifest.component_id
                 manifest = component.component_manifest.manifest_digest.token
-                interface = component.component_type.interface.to_data()
+                interface = strict_field_data(component.component_type.interface.to_data())
                 source_package = component.package_identity.token
                 parameters = component.to_data()["parameters"]
             elif type(component) is CompiledComponentArtifact:
                 component.verify()
                 component_id = component.component_id
                 manifest = component.component_manifest.token
-                interface = component.interface.to_data()
+                interface = strict_field_data(component.interface.to_data())
                 source_package = (
                     None if component.source_package is None
                     else component.source_package.token
@@ -417,7 +418,8 @@ class ResolvedFieldInstallPlan:
                     % (self.name, component_id)
                 )
             expected = (
-                binding["component_manifest_identity"], binding["native_interface"],
+                binding["component_manifest_identity"],
+                strict_field_data(binding["native_interface"]),
                 binding["source_package_identity"])
             if actual[:3] != expected or (
                     actual[3] is not None and actual[3] != binding["parameters"]):
