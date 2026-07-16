@@ -63,6 +63,9 @@ def _field_program(state, rate, field):
 def _resolve(solver: GeometricMG):
     model = scalar_advection_field_model("native-composite-fac-carrier-model")
     x_axis, y_axis = model.frame.axes
+    center_x, center_y = 0.35, 0.55
+    equilibrium = 1.0
+    amplitude = 1.0
     inverse_width = 80.0
     root_width = math.sqrt(inverse_width)
 
@@ -72,9 +75,12 @@ def _resolve(solver: GeometricMG):
             + math.erf(root_width * center)
         )
 
-    # Periodic Poisson with a constant nullspace requires a zero-mean RHS.  The native Gaussian
-    # route stores exact cell averages, so cancel its analytic integral over this unit square.
-    background = -gaussian_integral(0.35) * gaussian_integral(0.55)
+    # The field equation is -laplacian(phi) == rho - equilibrium.  Periodicity therefore requires
+    # mean(rho) == equilibrium.  The native Gaussian route stores exact cell averages, so choose
+    # the background from the exact profile integral over this unit square.
+    background = equilibrium - amplitude * (
+        gaussian_integral(center_x) * gaussian_integral(center_y)
+    )
     return resolve_periodic_field_program(
         model,
         _field_program,
@@ -86,9 +92,9 @@ def _resolve(solver: GeometricMG):
         field_solver=solver,
         initial_profile=Gaussian(
             frame=model.frame,
-            center={x_axis: 0.35, y_axis: 0.55},
+            center={x_axis: center_x, y_axis: center_y},
             background=background,
-            amplitude=1.0,
+            amplitude=amplitude,
             inverse_width=inverse_width,
         ),
     )
