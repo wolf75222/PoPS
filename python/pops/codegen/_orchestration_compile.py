@@ -46,18 +46,32 @@ def compile_install_model(name: str, model: Any, backend: str, target: str,
     facade = model
     model, source_module = lower_and_validate(
         model, facade=facade, state_space=state_spaces[0])
-    source_module_hash = (
-        source_module.module_hash() if source_module is not None else None
-    )
+    if source_module is None:
+        raise TypeError(
+            "resolved block %r compiler lowering has no operator-first Module authority" % name)
+    source_module_hash = source_module.module_hash()
+    from pops.model.manifest import build_module_manifest
+
+    module_manifest = build_module_manifest(source_module)
+    if source_module.module_hash() != source_module_hash:
+        raise ValueError(
+            "resolved block %r Module changed while its compile-frozen trace was captured" % name)
     compile_model = getattr(model, "compile", None)
     if not callable(compile_model):
         raise TypeError("resolved block %r has no total compile lowering" % name)
     compiled = compile_model(backend=backend, target=target, **compile_options)
     if type(compiled) is not CompiledModel:
         raise TypeError("resolved block compiler must return exact CompiledModel")
+    if compiled.module_manifest is not None:
+        raise TypeError(
+            "model.compile() returned a CompiledModel with a pre-attached ModuleManifest; "
+            "only pops.compile may attach compile-frozen trace authority")
     compiled.state_spaces = state_spaces
     validate_compiled_model_result(compiled)
     authenticate_compiled_model(model, compiled, module_hash=source_module_hash)
+    object.__setattr__(
+        compiled, "module_manifest", module_manifest.with_abi_key(compiled.abi_key))
+    validate_compiled_model_result(compiled)
     if compiled.target != target or compiled.backend != backend:
         raise ValueError("compiled block route differs from ResolvedSimulationPlan")
     return compiled

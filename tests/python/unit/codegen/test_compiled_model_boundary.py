@@ -121,6 +121,18 @@ def test_matching_identity_is_scalar_only_and_does_not_retain_source():
         "model_hash": "structural:source",
         "module_hash": module_hash,
     }
+    assert compiled.module_manifest.to_dict()["name"] == "compiled_model_boundary"
+    assert compiled.module_manifest.abi_requirements["abi_key"] == "abi"
+
+
+def test_compile_result_cannot_claim_pre_attached_manifest_authority():
+    source = _SourceModel()
+    compiled = _compiled(identity=model_compile_identity(source))
+    compiled.module_manifest = source.module.manifest().with_abi_key(compiled.abi_key)
+    source.compile = lambda **kwargs: compiled
+
+    with pytest.raises(TypeError, match="pre-attached ModuleManifest"):
+        _compile(source)
 
 
 def test_subclass_slot_cannot_hide_an_authoring_builder():

@@ -1028,6 +1028,9 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_SLOPPINESS: locale,time_macros
       COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+      # This job owns the final native compile/cache acceptance.  A missing compiler, Kokkos
+      # install, compiled extension, or native API is a release failure here, never a green skip.
+      POPS_REQUIRE_NATIVE_TESTS: "1"
       # `runner.temp` is likewise a step-only context. A workspace-local, ignored test temporary is
       # deterministic and remains available to the failure-artifact upload steps.
       COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test
@@ -1601,6 +1604,9 @@ jobs:
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
+          # The OpenMP runtime lane has built every native prerequisite above.  Keep the three
+          # script-mode ABI/production contracts fail-closed if one of those capabilities regresses.
+          POPS_REQUIRE_NATIVE_TESTS: "1"
           # PARITE KOKKOS du loader runtime : le module _pops est compile AVEC Kokkos ; sans cette
           # variable, dsl.py compile le loader SANS -DPOPS_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
           # kokkos=1 du module -> rejet explicite (jeton ajoute expres : cette divergence etait

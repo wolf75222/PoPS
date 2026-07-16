@@ -615,6 +615,9 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=1" in openmp_block
     assert "timeout --signal=TERM --kill-after=30s 8m ctest" in openmp_block
     assert openmp_block.count("NINJA_STATUS='[%f/%t elapsed=%es active=%r] '") == 2
+    openmp_native_test_block = openmp_block.split(
+        "\n      - name: Test ABI natif", 1)[1].split("\n      - name:", 1)[0]
+    assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in openmp_native_test_block
 
     set_mode_block = workflow.split("\n  set-mode:\n", 1)[1].split(
         "\n  # GATE C++", 1)[0]
@@ -657,6 +660,7 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert "timeout-minutes: 30" in python_shards_block
     assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_shards_block
     assert "timeout-minutes: 30" in python_cache_block
+    assert 'POPS_REQUIRE_NATIVE_TESTS: "1"' in python_cache_block
     for block in (python_build_block, python_shards_block, python_cache_block):
         assert "if: needs.set-mode.outputs.python_required == 'true'" in block
 
@@ -677,6 +681,22 @@ def test_native_required_lane_cannot_reclassify_subprocess_failure_as_skip():
         diagnostic, {}) == "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     assert process_runner._missing_process_requirement_for_environment(
         diagnostic, {"POPS_REQUIRE_NATIVE_TESTS": "1"}) is None
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "tests/python/integration/native_loader/test_native_abi_std.py",
+        "tests/python/integration/native_loader/test_dsl_production.py",
+        "tests/python/integration/native_loader/test_dsl_production_amr.py",
+    ),
+)
+def test_openmp_native_scripts_share_the_fail_closed_requirement_policy(relative_path):
+    source = (REPO_ROOT / relative_path).read_text()
+    assert "missing_native_compile_requirement" in source
+    assert "require_native_or_skip" in source
+    assert "if not cxx or not os.path.isdir(INCLUDE)" not in source
+    assert "OK (rien a compiler)" not in source
 
 
 def test_ci_control_plane_inputs_force_full_functional_selection():

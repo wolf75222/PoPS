@@ -25,7 +25,8 @@ add_compiled_model). On verifie :
      CompiledModel target="system" est refuse par AmrSystem.add_equation (loader sans pops_install_native_amr).
   5) GARDE-FOU ABI : un loader AMR a cle pops_native_abi_key falsifiee est rejete par add_native_block.
 
-S'auto-saute (exit 0) sans compilateur C++ ou en-tetes pops (comme test_dsl_production).
+S'auto-saute explicitement sur une machine locale sans toolchain native. Dans une lane native de
+release, toute capacite manquante est un echec, jamais une couverture silencieusement retiree.
 """
 from pops.numerics.variables import Conservative, Primitive
 from pops.numerics.riemann import HLLC, Roe
@@ -44,7 +45,12 @@ from pops.math import sqrt
 from pops.physics._facade import Model
 from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
 from tests.python.support.initial_states import bubble_amr as _bubble
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
 GAMMA = 1.4
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
@@ -158,11 +164,11 @@ def _component_at(component, so_path):
 
 
 def main():
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
-        print("test_dsl_production_amr : OK (rien a compiler)")
-        return
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(INCLUDE, cxx)
+    if missing is not None:
+        require_native_or_skip(missing)
+    assert cxx is not None
 
     n, L = 48, 1.0
     tmp = tempfile.mkdtemp()

@@ -21,6 +21,7 @@ _SCALAR_FIELDS = (
 )
 _CORE_FIELDS = set(_SEQUENCE_FIELDS) | set(_SCALAR_FIELDS) | {
     "params", "caps", "bind_schema", "install_plan", "definition_identity",
+    "module_manifest",
     "semantic_identity", "artifact_spec_identity", "binary_identity", "artifact_identity",
 }
 
@@ -80,6 +81,19 @@ def _validate_core(compiled: Any, *, allow_install_plan: bool) -> None:
         from pops.codegen._compiled_model_identity import validate_compiled_model_identity
 
         validate_compiled_model_identity(identity)
+    module_manifest = _core_value(compiled, "module_manifest")
+    if module_manifest is not None:
+        from pops.model import ModuleManifest
+
+        if type(module_manifest) is not ModuleManifest:
+            raise TypeError("CompiledModel.module_manifest must be an exact ModuleManifest")
+        if identity is None or identity.get("module_hash") is None:
+            raise ValueError(
+                "CompiledModel.module_manifest requires an authenticated module_hash")
+        manifest_abi = module_manifest.abi_requirements.get("abi_key")
+        if manifest_abi != _core_value(compiled, "abi_key"):
+            raise ValueError(
+                "CompiledModel.module_manifest ABI key disagrees with the compiled model")
     from pops.identity import Identity
     expected_identity_domains = {
         "semantic_identity": "semantic",

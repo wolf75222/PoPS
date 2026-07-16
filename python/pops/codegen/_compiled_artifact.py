@@ -283,7 +283,10 @@ def _binary_evidence(value: Any, *, where: str) -> dict[str, Any]:
                 hashed.update(chunk)
         digest = hashed.hexdigest()
     metadata = {}
-    for name in ("target", "backend", "abi_key", "model_hash", "definition_identity"):
+    for name in (
+        "target", "backend", "abi_key", "model_hash", "definition_identity",
+        "module_manifest",
+    ):
         item = getattr(value, name, None)
         if item is not None:
             metadata[name] = _evidence(item, where="%s.%s" % (where, name))
@@ -611,7 +614,9 @@ class CompiledSimulationArtifact:
             getattr(block.model, "module_manifest", None) for block in self.blocks)
         if not manifests or manifests[0] is None:
             return None
-        if any(manifest != manifests[0] for manifest in manifests[1:]):
+        authority = manifests[0].to_dict()
+        if any(manifest is None or manifest.to_dict() != authority
+               for manifest in manifests[1:]):
             return None
         return manifests[0]
 

@@ -17,9 +17,8 @@ Ce test :
      SANS erreur d'ABI -- c'est exactement ce qui cassait sous Kokkos. Le test echouerait
      sous Kokkos avec l'ancien defaut c++23 (mismatch __cplusplus), il passe avec le std aligne.
 
-S'auto-saute (exit 0) si aucun compilateur C++ ou les en-tetes pops sont absents. Cable au job CI
-Kokkos (OpenMP) : c'est le SEUL job ou loader != c++23, donc
-le seul ou cette regression se manifeste.
+S'auto-saute explicitement sur une machine locale sans toolchain native. Dans le job CI Kokkos
+(OpenMP), ou loader != c++23, toute capacite native manquante est un echec de release.
 """
 import os
 import shutil
@@ -36,7 +35,12 @@ from pops.physics._model import HyperbolicModel
 from pops.physics.aux import roles_for
 
 
-from tests.python.support.requirements import repo_include
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 from pops.runtime._system import System  # runtime facade used by the low-level ABI test
 from pops.runtime._engine_descriptors import Explicit, Spatial
 from pops.numerics.reconstruction.limiters import Minmod
@@ -155,11 +159,11 @@ def check_native_loads_without_abi_error(expected_std, cxx):
 
 
 def main():
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
-        print("test_native_abi_std : OK (rien a compiler)")
-        return
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(INCLUDE, cxx)
+    if missing is not None:
+        require_native_or_skip(missing)
+    assert cxx is not None
 
     expected_std = check_std_invariant()
     check_native_loads_without_abi_error(expected_std, cxx)

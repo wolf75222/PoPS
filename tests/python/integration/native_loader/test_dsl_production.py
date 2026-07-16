@@ -15,6 +15,11 @@ import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
 from test_dsl_coupled import build_euler, compile_euler_component, GAMMA, INCLUDE
 from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    require_native_or_skip,
+)
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
 # global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
@@ -45,11 +50,11 @@ def _initial_state(n):
 
 
 def main():
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
-        print("test_dsl_production : OK (rien a compiler)")
-        return
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(INCLUDE, cxx)
+    if missing is not None:
+        require_native_or_skip(missing)
+    assert cxx is not None
 
     model = build_euler("production-parity")
     n, L = 48, 1.0

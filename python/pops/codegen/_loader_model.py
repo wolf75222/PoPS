@@ -30,7 +30,8 @@ class CompiledModel:
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
                  wave_speeds: Any = False, elliptic_field_names: Any = None,
                  bind_schema: Any = None, definition_identity: Any = None,
-                 state_spaces: Any = ("U",), wave_speed_provider: Any = None) -> None:
+                 state_spaces: Any = ("U",), wave_speed_provider: Any = None,
+                 module_manifest: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
@@ -79,6 +80,10 @@ class CompiledModel:
         # Authenticated structural preimage of model.compile(). Public orchestration requires this
         # to match the frozen compiler input; low-level test/runtime handles may leave it absent.
         self.definition_identity = definition_identity
+        # Exact immutable trace captured from the same operator-first Module authority as the
+        # module_hash in definition_identity.  Public orchestration attaches and ABI-binds it after
+        # model.compile(); low-level handles may leave it absent but must never synthesize it later.
+        self.module_manifest = module_manifest
         self.cxx = cxx
         self.std = std
         # Set directly only by advanced constructors. The public pops.compile route replaces this
