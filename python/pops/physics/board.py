@@ -165,6 +165,36 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
             return self._module_cache
         module = self._multi_module if self._multi_module is not None else self._dsl.module
         registry = module.operator_registry()
+        registered = set(registry.names())
+        aliases = registry.aliases()
+        for handle in self._fluxes.values():
+            # The native single-state emitter has one canonical base-flux route named
+            # ``flux_default``.  Preserve the public physical name as an authenticated registry
+            # alias instead of renaming the route or losing what the author wrote.  Multi-state
+            # Modules already register each flux under its public name and need no alias.
+            if handle.name in registered:
+                if registry.get(handle.name).kind != "grid_operator":
+                    raise ValueError(
+                        "physical flux name %r collides with a non-flux operator"
+                        % handle.name
+                    )
+                continue
+            target = "flux_default" if handle.is_default else None
+            if target not in registered:
+                raise ValueError(
+                    "physical flux %r has no canonical operator route in Model %r"
+                    % (handle.name, self.name)
+                )
+            existing = aliases.get(handle.name)
+            if existing is not None:
+                if existing != target:
+                    raise ValueError(
+                        "physical flux name %r collides with operator alias targeting %r"
+                        % (handle.name, existing)
+                    )
+                continue
+            registry.register_alias(handle.name, target)
+            aliases[handle.name] = target
         for handle in self._fields.values():
             target = getattr(handle, "registered_operator_name", None)
             if target is not None and target != handle.name:

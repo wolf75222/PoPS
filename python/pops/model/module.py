@@ -50,6 +50,11 @@ class Module(ModuleFreezable):
         # numerics selection: Einfeldt/Davis remain Riemann-provider strategies and are therefore
         # deliberately absent from this model-source vocabulary.
         self._wave_speed_provider = None
+        # RateHandle -> exact physical dependencies consumed by DiscretizationPlan.  This is
+        # derived authoring metadata: the operator registry remains the executable authority,
+        # while the contract proves that a numerical method discretizes precisely the ordered
+        # grid-operator pack selected by one rate.
+        self._rate_contracts = {}
         # The canonical model owner is content-addressed by the complete definition. module_hash()
         # deliberately excludes OwnerPath/Handle identities, so this provider cannot recurse into
         # the identity it stabilizes. It supersedes OperatorRegistry's standalone fallback.
@@ -207,16 +212,20 @@ class Module(ModuleFreezable):
         inputs = [u]
         selected = []
         source_names = []
+        source_handles = []
         for source_ref in source_refs:
             target, operator = self._operator_reference(
                 source_ref, expected_kind="local_source", label="source")
             source_names.append(target)
+            source_handles.append(self.operator_handle(target))
             selected.append(operator)
         flux_names = []
+        flux_handles = []
         for flux_ref in flux_refs:
             target, operator = self._operator_reference(
                 flux_ref, expected_kind="grid_operator", label="flux")
             flux_names.append(target)
+            flux_handles.append(self.operator_handle(target))
             selected.append(operator)
         default_flux_name = None
         if default_flux is not None:
@@ -265,7 +274,33 @@ class Module(ModuleFreezable):
             source=provenance,
         )
         self._registry.register(op)
-        return self.operator_handle(op.name)
+        handle = self.operator_handle(op.name)
+        self._rate_contracts[handle] = {
+            "state": state_ref,
+            "flux": tuple(flux_handles) if flux else None,
+            "sources": tuple(source_handles),
+        }
+        return handle
+
+    def rate_contract(self, rate: Any) -> dict[str, Any]:
+        """Return the exact physical dependencies of a registered rate operator.
+
+        A raw operator-first Module names a physical flux as an ordered pack of
+        ``grid_operator`` handles.  Keeping the pack typed and ordered lets a finite-volume
+        method authenticate both a single flux and an explicitly decomposed sum without
+        collapsing either form to strings.
+        """
+        if not isinstance(rate, OperatorHandle) or rate.kind != "local_rate":
+            raise TypeError("rate_contract requires a local_rate OperatorHandle")
+        try:
+            contract = self._rate_contracts[rate]
+        except KeyError:
+            raise ValueError("rate handle is not registered by this Module") from None
+        return {
+            "state": contract["state"],
+            "flux": contract["flux"],
+            "sources": tuple(contract["sources"]),
+        }
 
     def eigenvalues(self, x: Any, y: Any) -> Any:
         """Declare the per-direction wave speeds (eigenvalues) the Riemann solver needs, as lists of
@@ -507,8 +542,9 @@ class Module(ModuleFreezable):
 
         Folds the spaces, parameters, aux declarations and -- for every operator -- the name,
         kind, signature, capabilities, requirements and a body identity (the source of a callable
-        body, else its repr). Sensitive to an operator body, signature, capability or space change;
-        deterministic for an identical module. A spec2 tag namespaces it away from any spec1 key.
+        body, else its repr), plus every authenticated public operator alias. Sensitive to an
+        operator body, signature, capability, alias or space change; deterministic for an identical
+        module. A spec2 tag namespaces it away from any spec1 key.
         """
         from ._module_hash import module_content_hash
         return module_content_hash(self)

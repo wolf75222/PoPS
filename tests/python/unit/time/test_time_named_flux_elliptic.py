@@ -16,6 +16,7 @@ from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.math import Var, sqrt
 from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, FiniteVolume, reconstruction, riemann, variables
 from pops.time import FixedDt
 
 
@@ -72,16 +73,33 @@ def _named_flux_module():
     return module, state, default_flux, whole_rate, split_rate
 
 
-def _program(module, state, rate, *, name: str):
+def _program(module, state, rate, *, name: str, numerics=None):
     case = pops.Case(name + "-case")
     block = case.block("plasma", module)
-    # A hand-authored operator-first Module already carries its exact grid-operator formulas.
-    # FiniteVolume is the higher-level board contract for a physical FluxHandle and must not be
-    # forged from a grid_operator merely to drive this lower-level composition oracle.
+    # The Program retains only the physical time graph. Runtime tests attach the separate,
+    # explicit numerical authority below; source-emission tests do not need to resolve a Case.
     program = libtime.ForwardEuler(block[state], rate=rate)
     program.step_strategy(FixedDt(DT))
+    if numerics is not None:
+        case.numerics(numerics, block=block)
     case.program(program)
     return case, program
+
+
+def _numerical_plan(module, state, *rates):
+    plan = DiscretizationPlan()
+    for rate in rates:
+        contract = module.rate_contract(rate)
+        plan.rates.add(
+            rate,
+            FiniteVolume(
+                flux=contract["flux"],
+                variables=variables.Conservative(state),
+                reconstruction=reconstruction.FirstOrder(),
+                riemann=riemann.Rusanov(),
+            ),
+        )
+    return plan
 
 
 def test_default_flux_route_does_not_reclassify_named_flux_operators() -> None:
@@ -121,6 +139,58 @@ def test_named_flux_sum_lowers_to_one_divergence_kernel() -> None:
     assert "ctx.rhs_into(0," not in split_source
 
 
+def test_named_flux_rate_contract_retains_the_exact_ordered_operator_pack() -> None:
+    module, state, _, whole_rate, split_rate = _named_flux_module()
+
+    whole = module.rate_contract(whole_rate)
+    split = module.rate_contract(split_rate)
+    assert whole["state"] == split["state"] == state
+    assert tuple(handle.local_id for handle in whole["flux"]) == ("whole",)
+    assert tuple(handle.local_id for handle in split["flux"]) == (
+        "convective", "pressure")
+    assert all(handle.kind == "grid_operator" for handle in (*whole["flux"], *split["flux"]))
+
+    with pytest.raises(ValueError, match="non-empty"):
+        FiniteVolume(
+            flux=(), variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+        )
+
+    foreign = model.Module("foreign-flux")
+    foreign_state = foreign.state_space("U", ("rho", "mx", "my"))
+    foreign_flux = foreign.operator(
+        "foreign",
+        signature=(foreign_state,) >> model.Rate(foreign_state),
+        kind="grid_operator",
+        expr={"x": (0.0, 0.0, 0.0), "y": (0.0, 0.0, 0.0)},
+    )
+    with pytest.raises(ValueError, match="different Models"):
+        FiniteVolume(
+            flux=(whole["flux"][0], foreign_flux),
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+        )
+
+    case, _ = _program(
+        module, state, whole_rate, name="ordered-flux-contract",
+        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+    )
+    frame = Rectangle(
+        "ordered-flux-contract-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=Uniform(CartesianGrid(
+            frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes))),
+    )
+    methods = {
+        row.rate.local_id: row.method.to_data()
+        for row in resolved.blocks[0].numerics.rates
+    }
+    assert [item["local_id"] for item in methods["split_rate"]["flux"]] == [
+        "convective", "pressure"]
+
+
 @pytest.mark.compiler
 @pytest.mark.native_loader
 def test_split_named_flux_step_matches_whole_named_flux_step(
@@ -128,8 +198,14 @@ def test_split_named_flux_step_matches_whole_named_flux_step(
 ) -> None:
     del isolated_native_cache, native_cxx, kokkos_root
     module, state, _, whole_rate, split_rate = _named_flux_module()
-    whole_case, _ = _program(module, state, whole_rate, name="whole-flux-runtime")
-    split_case, _ = _program(module, state, split_rate, name="split-flux-runtime")
+    whole_case, _ = _program(
+        module, state, whole_rate, name="whole-flux-runtime",
+        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+    )
+    split_case, _ = _program(
+        module, state, split_rate, name="split-flux-runtime",
+        numerics=_numerical_plan(module, state, whole_rate, split_rate),
+    )
     frame = Rectangle(
         "named-flux-runtime-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
     ).frame(Cartesian2D())

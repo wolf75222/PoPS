@@ -78,7 +78,11 @@ def _brick_data(value: Any) -> dict[str, Any]:
 
 
 class FiniteVolume(Descriptor):
-    """Finite-volume method for one explicit physical :class:`FluxHandle`.
+    """Finite-volume method for one exact physical flux authority.
+
+    The high-level physics facade supplies one ``FluxHandle``.  A raw operator-first Module may
+    instead supply a non-empty ordered tuple of ``grid_operator`` handles: this represents the
+    exact flux sum selected by its rate operator, not several independently chosen methods.
 
     No public ``order`` or ``ghost_depth`` argument exists: both are derived from
     ``reconstruction``. Likewise, the CFL provider is derived from ``riemann`` and the model's
@@ -99,8 +103,31 @@ class FiniteVolume(Descriptor):
     ) -> None:
         from pops.model import Handle
 
-        if not isinstance(flux, Handle) or flux.kind != "flux":
-            raise TypeError("FiniteVolume(flux=) requires a physical FluxHandle")
+        if isinstance(flux, Handle):
+            if flux.kind != "flux":
+                raise TypeError(
+                    "FiniteVolume(flux=) requires a physical FluxHandle or an ordered tuple "
+                    "of grid_operator handles"
+                )
+            flux_owner = flux.owner_path
+        else:
+            if not isinstance(flux, tuple):
+                raise TypeError(
+                    "FiniteVolume(flux=) requires a physical FluxHandle or an ordered tuple "
+                    "of grid_operator handles"
+                )
+            if not flux:
+                raise ValueError("FiniteVolume grid-operator flux pack must be non-empty")
+            if any(not isinstance(item, Handle) or item.kind != "grid_operator" for item in flux):
+                raise TypeError(
+                    "FiniteVolume grid-operator flux pack must contain only typed "
+                    "grid_operator handles"
+                )
+            flux_owner = flux[0].owner_path
+            if any(item.owner_path != flux_owner for item in flux[1:]):
+                raise ValueError(
+                    "FiniteVolume grid-operator flux pack spans different Models"
+                )
         self.flux = flux
         self.variables = _brick(
             variables, category="variables", where="FiniteVolume.variables")
@@ -114,10 +141,10 @@ class FiniteVolume(Descriptor):
                 raise ValueError("FiniteVolume.positivity_floor must be >= 0")
         self.positivity_floor = positivity_floor
         state = self.variables.options.get("state")
-        if state is not None and state.owner_path != flux.owner_path:
+        if state is not None and state.owner_path != flux_owner:
             raise ValueError("FiniteVolume variables and physical flux belong to different Models")
         velocity = self.riemann.options.get("velocity")
-        if velocity is not None and velocity.owner_path != flux.owner_path:
+        if velocity is not None and velocity.owner_path != flux_owner:
             raise ValueError("FiniteVolume Riemann velocity and physical flux belong to different Models")
 
     def options(self) -> dict[str, Any]:
@@ -147,7 +174,11 @@ class FiniteVolume(Descriptor):
         from pops.descriptors_report import RequirementSet
 
         return RequirementSet({
-            "physical_flux": self.flux.qualified_id,
+            "physical_flux": (
+                self.flux.qualified_id
+                if not isinstance(self.flux, tuple)
+                else tuple(item.qualified_id for item in self.flux)
+            ),
             "ghost_depth": self.ghost_depth,
             "riemann_capabilities": tuple(
                 self.riemann.requirements.get("capabilities", ())),
@@ -167,8 +198,7 @@ class FiniteVolume(Descriptor):
         self.variables.validate(context)
         self.reconstruction.validate(context)
         self.riemann.validate(context)
-        self.formal_order
-        self.ghost_depth
+        _ = self.formal_order, self.ghost_depth
         return True
 
     def amr_indicator_stencil(self, *, dimension: int) -> Any:
@@ -209,11 +239,15 @@ class FiniteVolume(Descriptor):
                 "FiniteVolume variables do not reference the state differentiated by the rate")
         return True
 
-    def resolve_references(self, resolver: Any) -> "FiniteVolume":
+    def resolve_references(self, resolver: Any) -> FiniteVolume:
         if not callable(resolver):
             raise TypeError("FiniteVolume.resolve_references requires a resolver")
         return type(self)(
-            flux=resolver(self.flux),
+            flux=(
+                resolver(self.flux)
+                if not isinstance(self.flux, tuple)
+                else tuple(resolver(item) for item in self.flux)
+            ),
             variables=_resolved_brick(self.variables, resolver),
             reconstruction=_resolved_brick(self.reconstruction, resolver),
             riemann=_resolved_brick(self.riemann, resolver),
@@ -221,12 +255,17 @@ class FiniteVolume(Descriptor):
         )
 
     def to_data(self) -> dict[str, Any]:
-        if not self.flux.is_resolved:
+        fluxes = self.flux if isinstance(self.flux, tuple) else (self.flux,)
+        if any(not item.is_resolved for item in fluxes):
             raise ValueError("FiniteVolume.to_data requires resolved physical handles")
         return {
             "schema_version": 1,
             "method": "finite_volume",
-            "flux": self.flux.canonical_identity(),
+            "flux": (
+                self.flux.canonical_identity()
+                if not isinstance(self.flux, tuple)
+                else [item.canonical_identity() for item in self.flux]
+            ),
             "variables": _brick_data(self.variables),
             "reconstruction": _brick_data(self.reconstruction),
             "riemann": _brick_data(self.riemann),
@@ -234,6 +273,16 @@ class FiniteVolume(Descriptor):
             "ghost_depth": self.ghost_depth,
             "positivity_floor": self.positivity_floor,
         }
+
+    def runtime_configuration(self) -> dict[str, Any]:
+        """Return the exact per-block native method identity, excluding physical ownership.
+
+        A block can evolve several rates whose physical flux handles differ while sharing one
+        reconstruction/Riemann/variable selection.  The native ABI installs that numerical
+        selection once per block; the resolved rate rows retain each physical flux identity.
+        """
+        data = self.to_data()
+        return {key: value for key, value in data.items() if key != "flux"}
 
     def runtime_spatial(self) -> Any:
         """Lower at the native boundary to the existing optimized runtime value."""

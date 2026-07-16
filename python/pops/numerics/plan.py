@@ -321,14 +321,27 @@ class ResolvedDiscretizationPlan:
         """Compatibility projection for the current per-block native spatial ABI.
 
         The resolved plan retains every per-rate binding. The native engine currently accepts one
-        spatial method per block, so distinct methods fail explicitly instead of picking the first.
+        spatial method per block. Rates may name different physical fluxes while selecting the
+        same native reconstruction/Riemann/variable configuration; that exact physical ownership
+        remains on each resolved rate row. Genuinely different runtime configurations fail
+        explicitly instead of picking the first.
         """
         methods = [row.method for row in self.rates]
-        first = methods[0].to_data()
-        if any(method.to_data() != first for method in methods[1:]):
+        configurations = []
+        for method in methods:
+            provider = getattr(method, "runtime_configuration", None)
+            configuration = provider() if callable(provider) else method.to_data()
+            if not isinstance(configuration, dict):
+                raise TypeError(
+                    "rate method runtime_configuration() must return a dict"
+                )
+            configurations.append(configuration)
+        first = configurations[0]
+        if any(configuration != first for configuration in configurations[1:]):
             raise ValueError(
                 "native runtime requires one finite-volume method per block; resolved rates select "
-                "distinct methods and cannot be lowered without a per-operator native ABI"
+                "distinct runtime configurations and cannot be lowered without a per-operator "
+                "native ABI"
             )
         return methods[0]
 
@@ -481,13 +494,24 @@ class DiscretizationPlan(Descriptor):
         # resolved BoundaryHandles below are executable per-block endpoints and must stay distinct.
         boundary_owner = resolved_block.instance_owner_path
         resolved_rates = tuple(sorted(rates, key=lambda row: row.rate.qualified_id))
-        boundary_context = BoundaryResolutionContext(
-            owner=boundary_owner,
-            block=resolved_block,
-            frame=model.frame,
-            rates=resolved_rates,
-            resolve=resolve_handle,
+        needs_boundary_context = bool(
+            self.boundaries.values() or self.interfaces.values()
         )
+        boundary_context = None
+        if needs_boundary_context:
+            frame = getattr(model, "frame", None)
+            if frame is None:
+                raise TypeError(
+                    "numerical boundary/interface authorities require a Model exposing a "
+                    "typed frame"
+                )
+            boundary_context = BoundaryResolutionContext(
+                owner=boundary_owner,
+                block=resolved_block,
+                frame=frame,
+                rates=resolved_rates,
+                resolve=resolve_handle,
+            )
         boundaries = []
         for authority in self.boundaries.values():
             resolve_boundary = getattr(authority, "resolve_for_numerics", None)
@@ -500,6 +524,9 @@ class DiscretizationPlan(Descriptor):
             _callable_projection(resolved_boundary, "resolved boundary authority")
             boundaries.append(resolved_boundary)
         def resolve_interface(value: Any) -> Any:
+            if boundary_context is None:
+                raise RuntimeError(
+                    "interface resolution lost its required BoundaryResolutionContext")
             protocol = getattr(value, "resolve_for_numerics", None)
             if callable(protocol):
                 resolved = protocol(boundary_context)

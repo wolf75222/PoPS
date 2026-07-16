@@ -1,10 +1,11 @@
 """Spec 2 (S2-7): Module.module_hash covers the ModuleSpec (spaces + typed operators).
 
-module_hash folds the spaces, parameters, aux and -- per operator -- name, kind, signature,
-capabilities, requirements and a body identity. It is deterministic for an identical module and
-invalidated by an operator body / signature / capability / space change, so a compiled artifact
-keyed on it is rebuilt when the operator spec changes. The dsl codegen sensitivity to a formula
-change stays with the existing Model._model_hash; module_hash adds the operator-spec layer.
+module_hash folds the spaces, parameters, aux, authenticated operator aliases and -- per operator
+-- name, kind, signature, capabilities, requirements and a body identity. It is deterministic for
+an identical module and invalidated by an operator body / signature / capability / alias / space
+change, so a compiled artifact keyed on it is rebuilt when the operator spec changes. The dsl
+codegen sensitivity to a formula change stays with the existing Model._model_hash; module_hash adds
+the operator-spec layer.
 Pure Python; skips if pops is not importable.
 """
 import sys
@@ -48,6 +49,23 @@ def test_signature_change_invalidates():
     m2.operator(name="op", signature=(u2, f2) >> model.Rate(u2), kind="local_rate", expr="E")
     assert m1.module_hash() != m2.module_hash()
     print("OK  a signature change invalidates module_hash")
+
+
+def test_public_operator_alias_change_invalidates():
+    def build(alias=None):
+        module = model.Module("aliased")
+        state = module.state_space("U", ("rho",))
+        module.operator(
+            name="flux_default", signature=(state,) >> model.Rate(state),
+            kind="grid_operator", expr="F",
+        )
+        if alias is not None:
+            module.operator_registry().register_alias(alias, "flux_default")
+        return module
+
+    assert build("transport").module_hash() != build().module_hash()
+    assert build("transport").module_hash() != build("advection").module_hash()
+    print("OK  an authenticated public operator alias invalidates module_hash")
 
 
 def test_expr_body_change_invalidates():
@@ -184,7 +202,7 @@ def test_capability_and_space_change_invalidate():
 def test_layout_storage_roles_and_typed_signature_change_invalidate():
     def build(*, layout="cell", storage="multifab", roles=None, operator_components=("rho",)):
         mod = model.Module("m")
-        u = mod.state_space(
+        mod.state_space(
             "U", ("rho",), roles=roles or {"rho": "Density"},
             layout=layout, storage=storage,
         )
@@ -249,6 +267,7 @@ def test_dsl_backed_module_hashes():
 def main():
     test_deterministic()
     test_signature_change_invalidates()
+    test_public_operator_alias_change_invalidates()
     test_expr_body_change_invalidates()
     test_callable_body_change_invalidates()
     test_callable_instances_hash_by_code_and_strict_state_not_address_repr()

@@ -353,6 +353,14 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
     coverage_report = LoweringCoverageReport(coverage_rows)
     object.__setattr__(m, "lowering_coverage_report", coverage_report)
     object.__setattr__(m, "_lowering_coverage_report", coverage_report)
+    # ``m`` is an executable lowering view of this exact operator-first Module, not a second
+    # model definition.  The builder calls above invalidate the facade's derived Module cache as
+    # they populate its HyperbolicModel.  Restore the canonical source authority once construction
+    # is complete so later compile-identity inspection cannot synthesize another Module on the
+    # shared OwnerPath and install a competing content-fingerprint provider.  Besides making owner
+    # identity depend on call order, that synthesized view is intentionally shaped for the legacy
+    # emitter and need not have the same structural hash as the source compile IR.
+    object.__setattr__(m, "_module_cache", module)
     return m
 
 

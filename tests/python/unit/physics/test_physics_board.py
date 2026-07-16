@@ -110,6 +110,12 @@ def test_flux_value_uses_axis_identity_not_frame_iteration_order():
         components={X_AXIS: (state[0],), Y_AXIS: (2.0 * state[0],)},
     )
 
+    manifest = m.module.manifest().to_dict()
+    assert "flux_default" in {row["name"] for row in manifest["operators"]}
+    transport_alias = manifest["operator_aliases"]["transport"]
+    assert transport_alias["target"] == "flux_default"
+    assert transport_alias["handle"]["registered_operator_name"] == "flux_default"
+
     assert m.flux_value((3.0,), {}, X_AXIS) == [3.0]
     assert m.flux_value((3.0,), {}, Y_AXIS) == [6.0]
     assert m.flux_value(3.0, {}, X_AXIS) == [3.0]
