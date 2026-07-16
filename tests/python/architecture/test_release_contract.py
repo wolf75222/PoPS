@@ -60,7 +60,7 @@ def test_release_contract_versions_every_protocol_and_declares_exact_matrix():
     generated = _load("_release_contract_test",
                       ROOT / "python" / "pops" / "_generated_release_contract.py")
     source = json.loads((ROOT / "schemas" / "release_contract.v1.json").read_text())
-    assert generated.PACKAGE_VERSION == "0.3.0"
+    assert generated.PACKAGE_VERSION == "1.0.0"
     for name in (
         "public_api_version", "semantic_ir_version", "normalization_version",
         "component_catalog_schema_version", "component_manifest_schema_version",

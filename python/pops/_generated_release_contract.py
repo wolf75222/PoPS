@@ -4,7 +4,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any
 
-PACKAGE_VERSION = '0.3.0'
+PACKAGE_VERSION = '1.0.0'
 RELEASE_CONTRACT_SCHEMA_VERSION = 1
 PUBLIC_API_VERSION = 1
 SEMANTIC_IR_VERSION = 1
@@ -18,7 +18,7 @@ NATIVE_ABI_VERSION = 3
 CHECKPOINT_ENVELOPE_SCHEMA_VERSION = 1
 UNIFORM_CHECKPOINT_PAYLOAD_VERSION = 3
 AMR_CHECKPOINT_PAYLOAD_VERSION = 3
-RELEASE_CONTRACT_SHA256 = 'c8acf57707d46195eef9e52a877d9af384493f626151ee5ce9f03a5fce4723fd'
+RELEASE_CONTRACT_SHA256 = 'cf525ed5c9e5fedaf00cefaa618541df590526a905aca6ec489b86ae234d1838'
 _SUPPORTED_MATRIX_DATA = {'distributed': {'execution_spaces': ['Serial'], 'mpi_implementation': 'OpenMPI'},
  'kokkos': {'execution_spaces': ['Serial', 'OpenMP'], 'version': '4.4.01'},
  'language': {'compiler_families': ['GNU', 'AppleClang'],

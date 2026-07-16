@@ -1,7 +1,7 @@
 # Changelog
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
-[SemVer](https://semver.org/lang/en/) (0.y.z while the public API still moves).
+[SemVer](https://semver.org/lang/en/). Version 1.0.0 establishes the stable public contract.
 
 ## Versioning policy
 
@@ -15,6 +15,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
   `[x.y.z] - YYYY-MM-DD`.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-07-16
+
 ### Added
 - ADC-688 versions the public API, semantic IR, normalization, component catalog/registry,
   native ABI, and checkpoint envelopes independently in one generated Python/C++ release contract;
@@ -29,6 +32,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
 - ADC-644 Wire three previously silent knobs end to end: the GeometricMG preconditioner V-cycle-shape options (n_vcycles, pre/post/bottom sweeps, min_coarse) on P.solve_linear (unknown kwargs and the iterative tolerance/max_cycles now refuse loud instead of being swallowed); DirectSmallGrid(threshold) as a native total-cell coarsening ceiling (coarse_threshold) on set_poisson, distinct from the per-axis min_coarse; and vacuum_floor on the compiled CompositeModel isothermal transport brick. Every knob at its default is bit-identical (attrs omitted, native goldens unchanged).
 
 ### Fixed
+- Finalize MPI ownership for AMR global state, potential, provider, auxiliary, history, staggered and
+  composite-reduction views; serialize content-addressed artifact publication across ranks; and give
+  genuinely cold CI builds bounded watchdogs large enough to preserve their caches and complete.
 - ADC-688 makes CMake package compatibility follow the pre-1.0 SemVer boundary: `0.y` consumers
   accept only the same minor line, while releases from 1.0 onward use the major boundary.
 - ADC-639 A whole-system compiled time Program on a genuinely multilevel AMR hierarchy now conserves mass, momentum and energy across the coarse-fine interface to round-off, matching the native reflux. The synchronous per-level driver captures each level's effective flux through the Program's own linear combination (a flux ledger shadowing ctx.axpy / ctx.lincomb, so an arbitrary DSL scheme's stage weights reach the register with no scheme dispatch) and routes it through the native route_reflux at level sync (couple_levels now does average_down then conservative reflux, finest first, via a new amr_program_reflux.hpp tail header and a dt-integrated route_reflux_integrated variant). A multistep Program (AB2 / BDF2) stays conservative across an in-window regrid: the lagged residual's flux rides with the history ring and the macro-step rotate is deferred past the reflux with a slot-0 resync. A coarse-only / flat Program (nlev==1) never reaches the capture path and stays bit-identical to System (np.array_equal). The tracked test_amr_history_regrid mass tolerance tightens from 2e-4 to 1e-8.
