@@ -1529,7 +1529,7 @@ RadialLine $\sim$ moderately growing iteration count (isotropic $\times 2$ per g
 tensor $\times 2.4$); Jacobi grows in $1/h^2$ (sanity check / fallback). The cross term and the azimuthal
 coupling are not in the preconditioner (an honest limit, later refinement possible).
 Validation: `test_polar_transport_mms` / `test_polar_mms_vr` (polar transport MMS order 2),
-`test_polar_ring_advection`, `test_polar_fluid_transport`, `test_polar_lorentz_source`,
+`test_polar_fluid_transport`, `test_polar_lorentz_source`,
 `test_polar_conservation_radial_flux` (radial wall, mass conserved), `test_polar_poisson_mms`
 (PolarPoissonSolver, radial order 2), `test_polar_tensor_elliptic_mms` (polar tensor operator),
 `test_time_divergence` (generic matrix-free `div(grad)` Program solve) and
