@@ -1032,6 +1032,16 @@ sources = ["tests/cpp/unit/runtime/test_spatial_discretisation.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_step_attempt_rejected_amr_link"
+sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp"]
+labels = ["unit", "runtime", "amr", "fast"]
+
+[[cpp.suite]]
+name = "test_step_attempt_rejected_header_only"
+sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_header_only.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_variable_role"
 sources = ["tests/cpp/unit/runtime/test_variable_role.cpp"]
 labels = ["unit", "runtime", "fast"]
@@ -1130,7 +1140,7 @@ mpi_entrypoints = [
 [[python.suite]]
 name = "pops_python_integration_native_loader"
 path = "tests/python/integration/native_loader"
-labels = ["integration", "python", "native_loader", "medium"]
+labels = ["integration", "python", "native_loader", "compiler", "medium"]
 
 [[python.suite]]
 name = "pops_python_integration_runtime"

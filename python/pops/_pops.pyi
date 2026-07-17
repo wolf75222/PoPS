@@ -19,6 +19,7 @@ __all__ = (
     "__has_kokkos__",
     "__has_mpi__",
     "__has_parallel_hdf5__",
+    "__native_loader_contract__",
     "__mpi_contract__",
     "__aux_named_base__",
     "__aux_max_extra__",
@@ -54,6 +55,7 @@ __cxx_compiler__: str
 __has_kokkos__: bool
 __has_mpi__: bool
 __has_parallel_hdf5__: bool
+__native_loader_contract__: dict[str, object]
 __mpi_contract__: dict[str, object] | None
 __aux_named_base__: int
 __aux_max_extra__: int

@@ -9,6 +9,7 @@ import importlib
 import os
 import shutil
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -30,6 +31,26 @@ def _pops_module() -> Any:
         if exc.name == "pops._pops":
             return None
         raise
+
+
+_NATIVE_LOADER_CONTRACT_FIELDS = frozenset({"schema_version", "compile_definitions"})
+_NATIVE_LOADER_SHARED_DEFINITIONS = ("POPS_RUNTIME_SHARED_EXCEPTION_ABI",)
+
+
+def _native_loader_manifest_compile_flags(module: Any) -> list[str]:
+    """Replay the closed host manifest shared by every generated native plugin route."""
+    raw = getattr(module, "__native_loader_contract__", None)
+    if not isinstance(raw, Mapping) or set(raw) != _NATIVE_LOADER_CONTRACT_FIELDS:
+        raise RuntimeError(
+            "loaded pops._pops exposes no exact __native_loader_contract__ schema")
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        raise RuntimeError("unsupported pops._pops.__native_loader_contract__ schema_version")
+    definitions = raw["compile_definitions"]
+    if type(definitions) is not tuple or definitions != _NATIVE_LOADER_SHARED_DEFINITIONS:
+        raise RuntimeError(
+            "pops._pops native-loader compile definitions differ from the supported shared "
+            "exception ABI contract")
+    return ["-D" + definition for definition in definitions]
 
 
 # --- Signature of the core header tree (ABI key of the "production" path) -------------
@@ -368,13 +389,18 @@ def _native_feature_key() -> str:
         except OSError:
             tag = "unknown"
         kk = "kokkos=on;kcfg=%s" % tag
+    # The native-loader manifest changes cross-DSO declarations and must partition every cached
+    # plugin even in serial builds. Replaying it here also fails closed before a stale host contract
+    # can select an artifact built under the header-only exception mode.
+    mod = _pops_module()
+    loader = "loader_defs=" + ",".join(
+        flag.removeprefix("-D") for flag in _native_loader_manifest_compile_flags(mod))
     # The MPI seam changes both inline code and ABI.  Partition by the concrete CMake-authenticated
     # mpi.h/library fingerprint, not only an on/off bit: Open MPI and MPICH artifacts must never share
     # one cache slot merely because both define POPS_HAS_MPI.
-    mod = _pops_module()
     from pops.codegen._native_mpi import native_mpi_abi_key
     mpi = native_mpi_abi_key(mod)
-    return "%s;%s" % (kk, mpi)
+    return "%s;%s;%s" % (kk, loader, mpi)
 
 
 def _warn_kokkos_parity() -> None:
@@ -488,20 +514,22 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
     against the Kokkos runtime already loaded by _pops (no 2nd copy). Raises if no installed Kokkos is
-    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU).  When the host extension
-    has MPI, the same compile flags also select the real MPI seam without linking a second runtime."""
+    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU). The host's central native
+    loader manifest is replayed for every route before the optional MPI manifest, so serial and MPI
+    plugins consume the same exported exception RTTI without acquiring the producer definition."""
     if _native_kokkos_root() is None:
         raise RuntimeError(
             "pops_loader_build_flags: PoPS is Kokkos-only -- point to an installed Kokkos via "
             "POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos`.")
     cc = _native_kokkos_compiler(cxx)
     cflags, lflags = _native_kokkos_flags()
-    from pops.codegen._native_mpi import native_mpi_build_flags
     module = _pops_module()
     from pops.codegen._native_host import ensure_native_host_global
     ensure_native_host_global(module)
+    loader_cflags = _native_loader_manifest_compile_flags(module)
+    from pops.codegen._native_mpi import native_mpi_build_flags
     mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
-    cflags = [*cflags, *mpi_cflags]
+    cflags = [*loader_cflags, *cflags, *mpi_cflags]
     lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":
         cflags = list(cflags) + ["-undefined", "dynamic_lookup"]

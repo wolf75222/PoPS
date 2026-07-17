@@ -5,12 +5,14 @@ import copy
 import json
 import os
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
 from pops.codegen._plans import require_install_plan
 from pops.fields import LayoutBinding
-from pops.identity import Identity
+from pops.identity import Identity, make_identity
+from pops.output._writers.common import _QuarantineRecovery
 from pops.time import TimePoint
 
 from pops.output._consumer_contracts import (
@@ -22,7 +24,7 @@ from pops.output._consumer_contracts import (
     SkipSampleReported,
 )
 from ._consumer_planning import plan_accepted_side_effects
-from ._consumer_transaction import ConsumerTransaction
+from ._consumer_transaction import ConsumerTransaction, ConsumerTransactionReport
 from ._output_publisher import preflight_consumer_publication
 from ._runtime_component_manifests import component_manifests_for_install
 from ._runtime_consumers import RuntimeConsumerPublisher, RuntimeOutputSnapshot, _layout_identity
@@ -223,6 +225,36 @@ def _field_provider_evidence(
     return tuple(result)
 
 
+@dataclass(frozen=True, slots=True)
+class ConsumerRecoveryRecord:
+    """Narrow inspection value for one retained output-quarantine authority."""
+
+    recovery_id: str
+    public_path: Path
+    quarantine_path: Path
+    owner: tuple[int, int]
+    state: str
+    consumer_report_index: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ConsumerRecoveryOwner:
+    record: ConsumerRecoveryRecord
+    authority: _QuarantineRecovery
+
+
+@dataclass(frozen=True, slots=True)
+class _ConsumerRecoveryBatch:
+    recoveries: tuple[Any, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingConsumerFinalization:
+    transaction: Any
+    consumer_report_index: int
+    base_diagnostics: tuple[str, ...]
+
+
 class RuntimeInstance:
     """Authenticated InstallPlan plus its sole native executor and transactional consumers."""
 
@@ -237,6 +269,8 @@ class RuntimeInstance:
         "_executor",
         "_consumer_cursors",
         "_consumer_reports",
+        "_consumer_finalize_pending",
+        "_consumer_recoveries",
         "_output_root",
         "_attempt",
         "_checkpoint_cursor_override",
@@ -275,6 +309,8 @@ class RuntimeInstance:
         self._executor = native
         self._consumer_cursors = ConsumerCursorSet()
         self._consumer_reports = ()
+        self._consumer_finalize_pending: tuple[_PendingConsumerFinalization, ...] = ()
+        self._consumer_recoveries: dict[str, _ConsumerRecoveryOwner] = {}
         self._output_root = None
         self._attempt = 0
         self._checkpoint_cursor_override = None
@@ -303,6 +339,39 @@ class RuntimeInstance:
     def consumer_cursors(self) -> ConsumerCursorSet:
         """Immutable accepted cursors for the resolved consumer graph."""
         return self._consumer_cursors
+
+    @property
+    def consumer_recoveries(self) -> tuple[ConsumerRecoveryRecord, ...]:
+        """Typed output recoveries retained after a cleanup race, ordered by identity."""
+        registry = getattr(self, "_consumer_recoveries", {})
+        return tuple(registry[key].record for key in sorted(registry))
+
+    def retry_consumer_finalizers(self) -> tuple[str, ...]:
+        """Retry release-only finalizers without reopening accepted transactions."""
+        return self._retry_consumer_finalizers()
+
+    def restore_consumer_recovery(self, recovery_id: str) -> ConsumerRecoveryRecord:
+        """Restore one retained inode without overwriting a newer public path."""
+        registry = getattr(self, "_consumer_recoveries", {})
+        owner = registry.get(recovery_id)
+        if owner is None:
+            raise KeyError("unknown consumer recovery %r" % recovery_id)
+        owner.authority.restore()
+        updated = replace(owner.record, state="restored")
+        registry[recovery_id] = replace(owner, record=updated)
+        return updated
+
+    def cleanup_consumer_recovery(self, recovery_id: str) -> None:
+        """Release one explicitly restored quarantine hardlink and forget its authority."""
+        registry = getattr(self, "_consumer_recoveries", {})
+        owner = registry.get(recovery_id)
+        if owner is None:
+            raise KeyError("unknown consumer recovery %r" % recovery_id)
+        if owner.record.state != "restored":
+            raise RuntimeError(
+                "consumer recovery must be restored before its retained authority is cleaned")
+        owner.authority.cleanup_restored()
+        del registry[recovery_id]
 
     @property
     def last_run_identity(self) -> Any:
@@ -360,6 +429,66 @@ class RuntimeInstance:
 
     def block_names(self) -> tuple[str, ...]:
         return tuple(self._executor.block_names())
+
+    def integral(
+        self, block: str, component: int = 0, *, levels: tuple[int, ...] | None = None,
+    ) -> float:
+        """Return the native volume integral of one conservative component.
+
+        Uniform execution uses its component reduction plus the resolved Cartesian cell measure;
+        adaptive execution uses the native composite reduction on exactly ``levels`` (all levels
+        when omitted), masking covered coarse cells between selected levels.  No state array is
+        copied into Python for this diagnostic.
+        """
+        if isinstance(component, bool) or not isinstance(component, int) or component < 0:
+            raise TypeError("integral component must be a non-negative integer")
+        selected_levels = () if levels is None else tuple(levels)
+        if any(isinstance(level, bool) or not isinstance(level, int) or level < 0
+               for level in selected_levels):
+            raise TypeError("integral levels must contain non-negative integers")
+        if tuple(sorted(set(selected_levels))) != selected_levels:
+            raise ValueError("integral levels must be strictly increasing and unique")
+        assignments = [
+            row for row in self._layout_plan.assignments
+            if row.subject_kind == "block" and row.subject.local_id == block
+        ]
+        if len(assignments) != 1:
+            raise KeyError("unknown RuntimeInstance block %s" % block)
+        layouts = [
+            row for row in self._layout_plan.layouts
+            if row.handle == assignments[0].layout
+        ]
+        if len(layouts) != 1:
+            raise KeyError("block %s has no exact runtime layout" % block)
+        layout = layouts[0]
+        engine = self._executor_for_block(block)
+        if layout.adaptive:
+            provider = getattr(engine, "composite_reduce", None)
+            if not callable(provider):
+                raise NotImplementedError(
+                    "adaptive runtime provider does not expose composite_reduce")
+            return float(provider(block, "sum", component, list(selected_levels)))
+
+        provider = getattr(engine, "reduce_component", None)
+        if not callable(provider):
+            raise NotImplementedError(
+                "uniform runtime provider does not expose reduce_component")
+        if selected_levels not in {(), (0,)}:
+            raise ValueError("uniform integral accepts only level 0")
+        from pops.mesh._layout_plan_contracts import (
+            CARTESIAN_CELL_AREA,
+            NormalizedGeometry,
+        )
+
+        geometry = layout.geometry
+        if type(geometry) is not NormalizedGeometry \
+                or geometry.cell_measure != CARTESIAN_CELL_AREA:
+            raise NotImplementedError(
+                "uniform integral requires the native Cartesian cell measure")
+        measure = 1.0
+        for length, cells in zip(geometry.lengths, geometry.cells, strict=True):
+            measure *= float(length) / int(cells)
+        return measure * float(provider(block, "sum", component))
 
     def get_state(self, block: str) -> Any:
         return self._executor.get_state(block)
@@ -577,8 +706,63 @@ class RuntimeInstance:
             self._checkpoint_cursor_override = None
         return tuple(staged)
 
-    @staticmethod
-    def _abort_consumers(transactions: tuple[ConsumerTransaction, ...]) -> BaseException | None:
+    def _retain_consumer_recoveries(
+        self,
+        transaction: Any,
+        *,
+        consumer_report_index: int | None,
+    ) -> tuple[str, ...]:
+        """Transfer typed quarantine authorities before a transaction owner is released."""
+        failures = []
+        try:
+            recoveries = getattr(transaction, "recoveries", ())
+            if type(recoveries) is not tuple:
+                raise TypeError("ConsumerTransaction.recoveries must return a tuple")
+        except BaseException as error:
+            return (
+                "consumer recovery registry failed: %s: %s"
+                % (type(error).__name__, error),
+            )
+        registry = getattr(self, "_consumer_recoveries", None)
+        if registry is None:
+            registry = {}
+            self._consumer_recoveries = registry
+        for recovery in recoveries:
+            if type(recovery) is not _QuarantineRecovery:
+                failures.append(
+                    "consumer recovery registry refused a non-canonical authority")
+                continue
+            recovery_id = make_identity("consumer-output-recovery", {
+                "public_path": recovery.public_path.as_posix(),
+                "quarantine_path": recovery.quarantine_path.as_posix(),
+                "owner": list(recovery.owner),
+                "directory_owner": list(recovery.directory_owner),
+            }).token
+            existing = registry.get(recovery_id)
+            if existing is not None:
+                if existing.authority is not recovery and existing.authority != recovery:
+                    failures.append(
+                        "consumer recovery identity collides with another authority")
+                continue
+            record = ConsumerRecoveryRecord(
+                recovery_id,
+                recovery.public_path,
+                recovery.quarantine_path,
+                recovery.owner,
+                "retained",
+                consumer_report_index,
+            )
+            registry[recovery_id] = _ConsumerRecoveryOwner(record, recovery)
+        return tuple(failures)
+
+    def _retain_output_recoveries(self, recoveries: tuple[Any, ...]) -> tuple[str, ...]:
+        """Typed callback used when writer staging fails before a transaction is returned."""
+        if type(recoveries) is not tuple:
+            return ("output recovery transfer requires a tuple",)
+        return self._retain_consumer_recoveries(
+            _ConsumerRecoveryBatch(recoveries), consumer_report_index=None)
+
+    def _abort_consumers(self, transactions: tuple[ConsumerTransaction, ...]) -> BaseException | None:
         failure = None
         for transaction in reversed(transactions):
             try:
@@ -586,6 +770,10 @@ class RuntimeInstance:
             except BaseException as error:
                 if failure is None:
                     failure = error
+            recovery_failures = self._retain_consumer_recoveries(
+                transaction, consumer_report_index=None)
+            if recovery_failures and failure is None:
+                failure = RuntimeError("; ".join(recovery_failures))
         return failure
 
     def _accept_consumers(
@@ -598,20 +786,109 @@ class RuntimeInstance:
                 cursors = cursors.replace(cursor)
         return reports, cursors, self._consumer_reports + reports
 
+    @staticmethod
+    def _consumer_seal_diagnostics(transaction: Any) -> tuple[str, ...]:
+        try:
+            result = transaction.seal()
+            if type(result) is not tuple or any(
+                    not isinstance(item, str) or not item for item in result):
+                return (
+                    "consumer seal contract violation: seal() must return tuple[str, ...]",
+                )
+            return result
+        except BaseException as error:
+            # A release failure is evidence only after native finalization.  Catch BaseException
+            # so a rank-local cancellation cannot reopen compensation or strand its owner.
+            return (
+                "consumer seal failed post-commit: %s: %s"
+                % (type(error).__name__, error),
+            )
+
+    @staticmethod
+    def _report_with_finalize_diagnostics(
+        report: Any,
+        base_diagnostics: tuple[str, ...],
+        diagnostics: tuple[str, ...],
+    ) -> Any:
+        if type(report) is not ConsumerTransactionReport:
+            return report
+        try:
+            return replace(report, diagnostics=base_diagnostics + diagnostics)
+        except BaseException:
+            return report
+
+    def _seal_consumer_reports(
+        self,
+        transactions: tuple[ConsumerTransaction, ...],
+        reports: tuple[Any, ...],
+    ) -> tuple[Any, ...]:
+        """Seal, report, and retain every release owner until its finalizer succeeds."""
+        sealed = []
+        pending = list(getattr(self, "_consumer_finalize_pending", ()))
+        report_offset = len(self._consumer_reports)
+        for index, transaction in enumerate(transactions):
+            report = reports[index]
+            base_diagnostics = (
+                report.diagnostics if type(report) is ConsumerTransactionReport else ()
+            )
+            report_index = report_offset + index
+            diagnostics = self._consumer_seal_diagnostics(transaction)
+            diagnostics += self._retain_consumer_recoveries(
+                transaction, consumer_report_index=report_index)
+            report = self._report_with_finalize_diagnostics(
+                report, base_diagnostics, diagnostics)
+            sealed.append(report)
+            if diagnostics or bool(getattr(transaction, "finalize_pending", False)):
+                pending.append(_PendingConsumerFinalization(
+                    transaction, report_index, base_diagnostics))
+        self._consumer_finalize_pending = tuple(pending)
+        return tuple(sealed)
+
+    def _retry_consumer_finalizers(self) -> tuple[str, ...]:
+        """Retry pending releases and replace, rather than accumulate, operational diagnostics."""
+        pending = tuple(getattr(self, "_consumer_finalize_pending", ()))
+        if not pending:
+            return ()
+        reports = list(self._consumer_reports)
+        remaining = []
+        current_diagnostics = []
+        for owner in pending:
+            diagnostics = self._consumer_seal_diagnostics(owner.transaction)
+            diagnostics += self._retain_consumer_recoveries(
+                owner.transaction,
+                consumer_report_index=owner.consumer_report_index,
+            )
+            current_diagnostics.extend(diagnostics)
+            if 0 <= owner.consumer_report_index < len(reports):
+                reports[owner.consumer_report_index] = self._report_with_finalize_diagnostics(
+                    reports[owner.consumer_report_index],
+                    owner.base_diagnostics,
+                    diagnostics,
+                )
+            else:
+                diagnostics += ("consumer finalizer lost its accepted report slot",)
+            if diagnostics or bool(getattr(owner.transaction, "finalize_pending", False)):
+                remaining.append(owner)
+        self._consumer_reports = tuple(reports)
+        self._consumer_finalize_pending = tuple(remaining)
+        return tuple(current_diagnostics)
+
     def _fire_consumers(self, *, at_start: bool = False, at_end: bool = False) -> tuple[Any, ...]:
+        self._retry_consumer_finalizers()
         transactions = self._stage_consumers(at_start=at_start, at_end=at_end)
         try:
-            reports, cursors, all_reports = self._accept_consumers(transactions)
+            reports, cursors, _all_reports = self._accept_consumers(transactions)
         except BaseException as error:
             cleanup_error = self._abort_consumers(transactions)
             if cleanup_error is not None:
                 raise cleanup_error from error
             raise
+        sealed_reports = self._seal_consumer_reports(transactions, reports)
         self._consumer_cursors = cursors
-        self._consumer_reports = all_reports
-        for transaction in transactions:
-            transaction.seal()
-        return reports
+        report_offset = len(self._consumer_reports)
+        self._consumer_reports = self._consumer_reports + sealed_reports
+        self._retry_consumer_finalizers()
+        return self._consumer_reports[report_offset:]
 
     def _step_transaction_methods(self) -> tuple[Any, Any, Any, Any]:
         native = self._executor
@@ -666,6 +943,7 @@ class RuntimeInstance:
         """Advance once and publish its due effects as one rollback boundary."""
         from pops.time import StepTransactionReport
 
+        self._retry_consumer_finalizers()
         native = self._executor
         begin, commit, finalize, rollback = self._step_transaction_methods()
         snapshot = self._step_envelope_snapshot()
@@ -673,6 +951,9 @@ class RuntimeInstance:
         attempts = 1
         failure_report = None
         transactions = ()
+        result = None
+        reports: tuple[Any, ...] = ()
+        cursors = self._consumer_cursors
         native_active = False
         begin_entered = False
         try:
@@ -694,16 +975,37 @@ class RuntimeInstance:
             phase = "commit"
             commit()
             phase = "effect"
-            reports, cursors, all_reports = self._accept_consumers(transactions)
+            reports, cursors, _all_reports = self._accept_consumers(transactions)
             phase = "commit"
             finalize()
             native_active = False
+            phase = "native_finalized"
+            sealed_reports = self._seal_consumer_reports(transactions, reports)
             self._consumer_cursors = cursors
-            self._consumer_reports = all_reports
-            for transaction in transactions:
-                transaction.seal()
+            self._consumer_reports = self._consumer_reports + sealed_reports
+            self._retry_consumer_finalizers()
             return result
         except BaseException as error:
+            if phase == "native_finalized":
+                # The engine and published receipts are already irrevocably accepted.  A release
+                # bug is operational evidence only: never compensate artifacts, call native
+                # rollback, or restore the pre-step Python envelope from this boundary.
+                accepted_reports = list(reports)
+                diagnostic = (
+                    "consumer finalization failed post-commit: %s: %s"
+                    % (type(error).__name__, error)
+                )
+                if accepted_reports and type(accepted_reports[0]) is ConsumerTransactionReport:
+                    try:
+                        report = accepted_reports[0]
+                        accepted_reports[0] = replace(
+                            report, diagnostics=report.diagnostics + (diagnostic,))
+                    except BaseException:
+                        pass
+                self._consumer_cursors = cursors
+                self._consumer_reports = (
+                    snapshot["consumer_reports"] + tuple(accepted_reports))
+                return result
             failure_report = getattr(native, "_last_step_transaction_report", None)
             cleanup_error = self._abort_consumers(transactions)
             try:
@@ -925,25 +1227,29 @@ class RuntimeInstance:
         return authority.operation
 
     def checkpoint(self, path: Any) -> str:
-        operation = self._restart_operation()
-        extension = operation.consumer_data()["extension"]
-        from pops.output._checkpoint_collective import canonical_checkpoint_path
-
-        target = canonical_checkpoint_path(path, extension=extension)
-        snapshot = operation.snapshot(self, target.parent)
-        operation.validate_snapshot(snapshot)
+        self._retry_consumer_finalizers()
         try:
-            return str(operation.write(snapshot, target))
-        except BaseException as error:
-            discard = getattr(snapshot, "discard", None)
-            if callable(discard):
-                try:
-                    discard()
-                except BaseException as cleanup_error:
-                    add_note = getattr(error, "add_note", None)
-                    if callable(add_note):
-                        add_note("checkpoint staging cleanup also failed: %s" % cleanup_error)
-            raise
+            operation = self._restart_operation()
+            extension = operation.consumer_data()["extension"]
+            from pops.output._checkpoint_collective import canonical_checkpoint_path
+
+            target = canonical_checkpoint_path(path, extension=extension)
+            snapshot = operation.snapshot(self, target.parent)
+            operation.validate_snapshot(snapshot)
+            try:
+                return str(operation.write(snapshot, target))
+            except BaseException as error:
+                discard = getattr(snapshot, "discard", None)
+                if callable(discard):
+                    try:
+                        discard()
+                    except BaseException as cleanup_error:
+                        add_note = getattr(error, "add_note", None)
+                        if callable(add_note):
+                            add_note("checkpoint staging cleanup also failed: %s" % cleanup_error)
+                raise
+        finally:
+            self._retry_consumer_finalizers()
 
     @staticmethod
     def _checkpoint_cursors_from_data(cursor_data: Any) -> ConsumerCursorSet:

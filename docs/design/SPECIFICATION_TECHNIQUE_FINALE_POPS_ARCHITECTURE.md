@@ -680,7 +680,11 @@ correction conservative et sous-cyclage AMR exigent un ratio de transition égal
 coarse/fine reste l'unique ledger de flux détenu par PoPS : aucune interface externe `Reflux`
 n'existe, car déléguer ce dépôt créerait une seconde autorité conservative. Une autre dimension ou un autre
 ratio est refusé pendant la résolution ou le bind avec les capacités observées. Le coeur de
-planification ne normalise jamais la demande vers ce sous-ensemble.
+planification ne normalise jamais la demande vers ce sous-ensemble. Défensivement,
+`AmrProgramContext` revalide aussi chaque transition à sa construction et refuse un ratio différent
+de 2 avant le premier pas : cette limite appartient au provider natif reflux/average-down installé,
+pas aux protocoles publics `AMRHierarchy`, `Transfer` et `AMRExecution`, qui restent extensibles par
+sélection d'un autre provider déclarant les capacités correspondantes.
 
 Les critères booléens et les politiques de transfert sont des protocoles authentifiés ouverts. Une
 nouvelle implémentation fournit données canoniques, requirements/capabilities et lowering ; elle ne
@@ -1089,8 +1093,11 @@ Une application ne construit donc ni moteur, ni config native, ni plan d'install
 
 `RuntimeInstance` ne publie ni moteur natif, ni sélecteur de moteur par layout/bloc, ni `InstallPlan` ou
 `RuntimePlan`, et n'effectue aucune délégation générique d'attribut. Sa surface explicite se limite aux
-identités et rapports, aux lectures d'état, clock, layout, champs et histories, à la vue de rapports AMR,
-au rapport du programme, ainsi qu'à `checkpoint` et `restart`. Elle ne retourne jamais le `System` ou
+identités et rapports, aux lectures d'état, clock, layout, champs et histories, à la réduction native
+`integral(block, component=0, levels=...)`, à la vue de rapports AMR, au rapport du programme, ainsi
+qu'à `checkpoint` et `restart`. `integral` applique la mesure cartésienne résolue en Uniform et délègue
+le masque composite pondéré au provider AMR ; elle ne recopie jamais l'état pour sommer en Python.
+Elle ne retourne jamais le `System` ou
 l'`AmrSystem` privé et n'expose aucune route `step`, `profile` ou d'assemblage.
 `RuntimeInstance.bound_snapshot` est la preuve immuable et authentifiée de l'artefact, des layouts et
 des entrées effectivement liés ; cette lecture explicite ne donne aucun accès au moteur privé.

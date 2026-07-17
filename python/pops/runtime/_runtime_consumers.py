@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import math
 import json
+import stat
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -36,7 +37,13 @@ from pops.output.data import (
     OutputSnapshot,
 )
 from pops.output._consumer_contracts import ConsumerKind, ParallelMode
-from pops.output._writers.common import deterministic_target
+from pops.output._writers.common import (
+    _OutputRecoveryRequired,
+    _StagedOutputFile,
+    _StagingAuthority,
+    _exception_text,
+    deterministic_target,
+)
 
 from ._consumer import (
     AcceptedSideEffect,
@@ -218,6 +225,10 @@ class _PreparedScientificOutput(PreparedPublication):
     def payload_identity(self) -> Identity:
         return self._output.payload_identity
 
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return self._output.recoveries
+
     def publish(self) -> PublicationReceipt:
         if self._discarded:
             raise RuntimeError("discarded scientific output cannot be published")
@@ -266,6 +277,29 @@ class _PreparedScientificOutput(PreparedPublication):
         self._discarded = True
         if error is not None:
             raise error
+
+    def finalize(self) -> None:
+        if not self._published or self._discarded:
+            raise RuntimeError("only a published scientific output can be finalized")
+        error = None
+        try:
+            if self._output.finalize() is not None:
+                raise TypeError("scientific output finalize() must return None")
+        except BaseException as caught:
+            error = caught
+        try:
+            if self._diagnostic.finalize() is not None:
+                raise TypeError("diagnostic finalize() must return None")
+        except BaseException as caught:
+            if error is None:
+                error = caught
+            else:
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    add_note("diagnostic finalization also failed: %s" % caught)
+        if error is not None:
+            raise error
+        return None
 
 
 class _PreparedCheckpoint(PreparedPublication):
@@ -451,16 +485,6 @@ class _PreparedExternalWriter(PreparedPublication):
         self._parallel_mode = mode
         self._installed = installed
         self._target = Path(preparation.target)
-        self._target.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(
-            prefix=".%s." % self._target.name, suffix=".writer-stage",
-            dir=str(self._target.parent))
-        os.close(fd)
-        self._temporary = Path(temporary)
-        self._component_published = self._temporary.with_suffix(
-            self._temporary.suffix + ".component-published")
-        owner = self._temporary.stat()
-        self._stage_owner = (owner.st_dev, owner.st_ino)
         self._wire = _writer_snapshot_data(preparation.snapshot, preparation.request)
         self._execution = component_execution_data(execution_context)
         self._snapshot_identity = make_identity(
@@ -468,6 +492,14 @@ class _PreparedExternalWriter(PreparedPublication):
         clock = preparation.snapshot.clock
         if clock.stage != "accepted":
             raise ValueError("native Writer publishes only an accepted snapshot stage")
+        interface = installed.interface.to_data()
+        self._interface_uri = interface["uri"]
+        self._interface_version = interface["version"]
+        self._staging = _StagingAuthority.created(
+            self._target, suffix=".writer-stage")
+        self._temporary = self._staging.path
+        self._component_published = self._temporary.with_suffix(
+            self._temporary.suffix + ".component-published")
         self._request_data = {
             "snapshot": self._wire,
             "execution": self._execution,
@@ -489,27 +521,33 @@ class _PreparedExternalWriter(PreparedPublication):
                 "physical_time": float.fromhex(clock.time_hex),
             },
         }
-        interface = installed.interface.to_data()
-        self._interface_uri = interface["uri"]
-        self._interface_version = interface["version"]
+        self._recoveries: list[Any] = []
         self._published = False
         self._discarded = False
         self._created_target = False
+        self._finalized = False
         try:
             receipt = self._invoke("verify")
-            if not self._owns(self._temporary):
-                raise RuntimeError("native Writer verify replaced its runtime-owned staging inode")
-            if receipt["bytes_written"] != self._temporary.stat().st_size:
+            self._staging.authenticate_path()
+            if receipt["bytes_written"] != os.fstat(self._staging.fileno()).st_size:
                 raise RuntimeError("native Writer verify receipt size differs from its temporary")
             if not receipt["content_digest"]:
                 raise RuntimeError("native Writer verify returned no content digest")
             self._verified_receipt = dict(receipt)
-        except BaseException:
-            try:
-                self._invoke("rollback")
-            finally:
-                self._cleanup_private()
+        except BaseException as error:
+            cleanup_errors = self._release("rollback", include_target=False)
+            add_note = getattr(error, "add_note", None)
+            if callable(add_note):
+                for cleanup_error in cleanup_errors:
+                    add_note("native Writer verification cleanup also failed: " + cleanup_error)
+            self._discarded = True
             raise
+
+    def __del__(self) -> None:
+        try:
+            self._staging.close()
+        except BaseException:
+            pass
 
     @property
     def effect_identity(self) -> Identity:
@@ -527,50 +565,193 @@ class _PreparedExternalWriter(PreparedPublication):
     def target(self) -> Path:
         return self._target
 
-    def _invoke(self, operation: str) -> Any:
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return tuple(self._recoveries)
+
+    def cleanup_recoveries(self) -> None:
+        failures = []
+        remaining = []
+        for recovery in self._recoveries:
+            try:
+                recovery.cleanup_restored()
+            except BaseException as error:
+                failures.append(_exception_text(error))
+                remaining.append(recovery)
+        self._recoveries = remaining
+        if failures:
+            raise RuntimeError(
+                "native Writer recovery cleanup failed: " + "; ".join(failures))
+
+    def _invoke(self, operation: str, request_data: Mapping[str, Any] | None = None) -> Any:
         return self._installed.native_handle._invoke_component_operation(
             self._interface_uri, self._interface_version, operation,
-            self._request_data)
+            self._request_data if request_data is None else request_data)
+
+    @staticmethod
+    def _redact_cleanup_paths(value: Any, replacements: Mapping[str, str]) -> Any:
+        if isinstance(value, str):
+            redacted = value
+            for source, destination in replacements.items():
+                redacted = redacted.replace(source, destination)
+            return redacted
+        if isinstance(value, Mapping):
+            return {
+                key: _PreparedExternalWriter._redact_cleanup_paths(item, replacements)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                _PreparedExternalWriter._redact_cleanup_paths(item, replacements)
+                for item in value
+            ]
+        if isinstance(value, tuple):
+            return tuple(
+                _PreparedExternalWriter._redact_cleanup_paths(item, replacements)
+                for item in value
+            )
+        return value
+
+    def _invoke_cleanup(self, operation: str) -> Any:
+        """Invoke native release with only private, disposable path tombstones."""
+        directory = Path(tempfile.mkdtemp(
+            prefix=".pops-writer-cleanup-", dir=self._temporary.parent))
+        directory_flags = (
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            parent_fd = os.open(directory.parent, directory_flags)
+        except BaseException:
+            directory.rmdir()
+            raise
+        directory_fd: int | None = None
+        directory_owner: tuple[int, int] | None = None
+        primary: BaseException | None = None
+        try:
+            directory_fd = os.open(directory.name, directory_flags, dir_fd=parent_fd)
+            descriptor = os.fstat(directory_fd)
+            named = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)
+            directory_owner = (int(descriptor.st_dev), int(descriptor.st_ino))
+            if not stat.S_ISDIR(descriptor.st_mode) \
+                    or stat.S_IMODE(descriptor.st_mode) & 0o077 \
+                    or directory_owner != (int(named.st_dev), int(named.st_ino)):
+                raise RuntimeError("native Writer cleanup tombstone directory is not private")
+            tombstones = {
+                str(self._temporary): str(directory / "temporary.detached"),
+                str(self._component_published): str(directory / "component.detached"),
+                str(self._target): str(directory / "target.detached"),
+            }
+            request_data = self._redact_cleanup_paths(self._request_data, tombstones)
+            snapshot = dict(request_data["snapshot"])
+            # Metadata is not required by a release callback.  Replacing it wholesale prevents
+            # an author-supplied indirect target/root path from surviving string substitution.
+            snapshot["metadata_json"] = json.dumps(
+                {"cleanup": "detached"}, sort_keys=True, separators=(",", ":"))
+            request_data["snapshot"] = snapshot
+            request_data["temporary_path"] = tombstones[str(self._temporary)]
+            request_data["published_path"] = tombstones[str(self._component_published)]
+            return self._invoke(operation, request_data)
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            cleanup_error: BaseException | None = None
+            if directory_fd is not None:
+                try:
+                    for name in os.listdir(directory_fd):
+                        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                        if stat.S_ISDIR(current.st_mode):
+                            raise RuntimeError(
+                                "native Writer cleanup created a directory inside its tombstone")
+                        os.unlink(name, dir_fd=directory_fd)
+                    current = os.stat(
+                        directory.name, dir_fd=parent_fd, follow_symlinks=False)
+                    if directory_owner is None or (
+                            int(current.st_dev), int(current.st_ino)) != directory_owner:
+                        raise RuntimeError(
+                            "native Writer cleanup replaced its private tombstone directory")
+                except BaseException as error:
+                    cleanup_error = error
+                finally:
+                    try:
+                        os.close(directory_fd)
+                    except BaseException as error:
+                        cleanup_error = cleanup_error or error
+            if cleanup_error is None:
+                try:
+                    os.rmdir(directory.name, dir_fd=parent_fd)
+                except BaseException as error:
+                    cleanup_error = error
+            try:
+                os.close(parent_fd)
+            except BaseException as error:
+                cleanup_error = cleanup_error or error
+            if cleanup_error is not None:
+                if primary is not None:
+                    add_note = getattr(primary, "add_note", None)
+                    if callable(add_note):
+                        add_note("native Writer cleanup tombstone removal also failed: %s" % cleanup_error)
+                else:
+                    raise cleanup_error
 
     @staticmethod
     def _inode(path: Path) -> tuple[int, int] | None:
         try:
-            value = path.stat()
+            value = path.lstat()
         except FileNotFoundError:
             return None
-        return value.st_dev, value.st_ino
+        return int(value.st_dev), int(value.st_ino)
 
     def _owns(self, path: Path) -> bool:
-        return self._inode(path) == self._stage_owner
+        return self._inode(path) == self._staging.owner
 
-    def _unlink_owned(self, path: Path, *, where: str) -> None:
-        inode = self._inode(path)
-        if inode is None:
-            return
-        if inode != self._stage_owner:
-            raise RuntimeError(
-                "native Writer %s path no longer names its runtime-owned inode: %s"
-                % (where, path))
-        path.unlink()
+    def _detach_owned(self, path: Path, *, where: str) -> None:
+        try:
+            _StagedOutputFile._quarantine_owned_path(
+                path,
+                self._staging.owner,
+                replaced_message=(
+                    "native Writer %s path no longer names its runtime-owned inode: %s"
+                    % (where, path)),
+            )
+        except _OutputRecoveryRequired as error:
+            self._recoveries.append(error.recovery)
+            raise
 
-    def _cleanup_private(self) -> None:
+    def _detach_paths(self, *, include_target: bool) -> tuple[str, ...]:
         errors = []
-        for path, where in (
+        paths = [
             (self._temporary, "temporary"),
             (self._component_published, "component publication"),
-        ):
+        ]
+        if include_target and self._created_target:
+            paths.append((self._target, "public target"))
+        for path, where in paths:
             try:
-                self._unlink_owned(path, where=where)
-            except Exception as exc:
-                errors.append("%s: %s" % (type(exc).__name__, exc))
-        if errors:
-            raise RuntimeError("native Writer private cleanup failed: " + "; ".join(errors))
+                self._detach_owned(path, where=where)
+                if path == self._target:
+                    self._created_target = False
+            except BaseException as error:
+                errors.append(_exception_text(error))
+        return tuple(errors)
 
-    def _rollback_runtime_target(self) -> None:
-        if not self._created_target:
-            return
-        self._unlink_owned(self._target, where="public target")
-        self._created_target = False
+    def _release(self, operation: str, *, include_target: bool) -> tuple[str, ...]:
+        errors = list(self._detach_paths(include_target=include_target))
+        # A component callback receives these same private path strings.  It is safe only after
+        # every path was detached; otherwise a callback could unlink a replacement restored by the
+        # quarantine recovery protocol.
+        if not errors:
+            try:
+                result = self._invoke_cleanup(operation)
+                if result is not None:
+                    raise TypeError("native Writer %s must return None" % operation)
+            except BaseException as error:
+                errors.append(_exception_text(error))
+        try:
+            self._staging.close()
+        except BaseException as error:
+            errors.append(_exception_text(error))
+        return tuple(errors)
 
     def publish(self) -> PublicationReceipt:
         if self._discarded:
@@ -578,7 +759,8 @@ class _PreparedExternalWriter(PreparedPublication):
         if not self._published:
             try:
                 receipt = self._invoke("publish")
-                if self._temporary.exists() or not self._owns(self._component_published):
+                if self._inode(self._temporary) is not None \
+                        or not self._owns(self._component_published):
                     raise RuntimeError(
                         "native Writer publish did not move its verified inode into the private "
                         "publication path")
@@ -590,19 +772,17 @@ class _PreparedExternalWriter(PreparedPublication):
                 if not self._owns(self._target):
                     raise RuntimeError(
                         "native Writer public target does not name its verified staging inode")
-                self._unlink_owned(
+                self._detach_owned(
                     self._component_published, where="component publication")
                 self._published = True
-            except BaseException:
-                try:
-                    self._invoke("rollback")
-                finally:
-                    try:
-                        self._cleanup_private()
-                    finally:
-                        self._rollback_runtime_target()
-                    self._published = False
-                    self._discarded = True
+            except BaseException as error:
+                cleanup_errors = self._release("rollback", include_target=True)
+                add_note = getattr(error, "add_note", None)
+                if callable(add_note):
+                    for cleanup_error in cleanup_errors:
+                        add_note("native Writer publication cleanup also failed: " + cleanup_error)
+                self._published = False
+                self._discarded = True
                 raise
         artifact = make_identity("native-writer-artifact", {
             "component_artifact": self._installed.artifact_identity.token,
@@ -619,27 +799,35 @@ class _PreparedExternalWriter(PreparedPublication):
     def discard(self) -> None:
         if self._discarded:
             return
+        if self._finalized:
+            raise RuntimeError("finalized native Writer cannot be discarded")
         if self._published:
             self.rollback()
             return
-        try:
-            self._invoke("discard")
-        finally:
-            self._cleanup_private()
-            self._discarded = True
+        errors = self._release("discard", include_target=False)
+        self._discarded = True
+        if errors:
+            raise RuntimeError("native Writer discard failed: " + "; ".join(errors))
 
     def rollback(self) -> None:
         if self._discarded:
             return
-        try:
-            self._invoke("rollback")
-        finally:
-            try:
-                self._cleanup_private()
-            finally:
-                self._rollback_runtime_target()
-            self._published = False
-            self._discarded = True
+        if self._finalized:
+            raise RuntimeError("finalized native Writer cannot be rolled back")
+        errors = self._release("rollback", include_target=True)
+        self._published = False
+        self._discarded = True
+        if errors:
+            raise RuntimeError("native Writer rollback failed: " + "; ".join(errors))
+
+    def finalize(self) -> None:
+        if self._finalized:
+            return None
+        if not self._published or self._discarded:
+            raise RuntimeError("only a published native Writer can be finalized")
+        self._staging.close()
+        self._finalized = True
+        return None
 
 
 class _PreparedRootExternalWriter(PreparedPublication):
@@ -662,7 +850,7 @@ class _PreparedRootExternalWriter(PreparedPublication):
             try:
                 self._local = _PreparedExternalWriter(
                     effect, preparation, installed, execution_context)
-            except Exception as exc:
+            except BaseException as exc:
                 error = "%s: %s" % (type(exc).__name__, exc)
         try:
             rows = self._allgather(error=error)
@@ -697,6 +885,10 @@ class _PreparedRootExternalWriter(PreparedPublication):
     @property
     def target(self) -> Path | None:
         return None if self._local is None else self._local.target
+
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return () if self._local is None else self._local.recoveries
 
     def _allgather(
         self, *, error: str | None, artifact_id: str | None = None,
@@ -737,7 +929,7 @@ class _PreparedRootExternalWriter(PreparedPublication):
                     if receipt.parallel_mode is not ParallelMode.ROOT:
                         raise ValueError("rank-zero native Writer returned a non-ROOT receipt")
                     artifact_id = receipt.artifact_id
-                except Exception as exc:
+                except BaseException as exc:
                     error = "%s: %s" % (type(exc).__name__, exc)
         rows = self._allgather(error=error, artifact_id=artifact_id)
         self._raise_failures("publish", rows)
@@ -762,17 +954,26 @@ class _PreparedRootExternalWriter(PreparedPublication):
                 error = "RuntimeError: rank zero has no prepared native Writer"
             else:
                 try:
-                    getattr(self._local, operation)()
-                except Exception as exc:
+                    result = getattr(self._local, operation)()
+                    if result is not None:
+                        raise TypeError(
+                            "rank-zero native Writer %s must return None" % operation)
+                except BaseException as exc:
                     error = "%s: %s" % (type(exc).__name__, exc)
         rows = self._allgather(error=error)
         self._raise_failures(operation, rows)
 
     def discard(self) -> None:
         self._cleanup("discard")
+        return None
 
     def rollback(self) -> None:
         self._cleanup("rollback")
+        return None
+
+    def finalize(self) -> None:
+        self._cleanup("finalize")
+        return None
 
 
 class RuntimeConsumerPublisher(ConsumerPublisher):
@@ -786,7 +987,10 @@ class RuntimeConsumerPublisher(ConsumerPublisher):
         self._pending_baselines: dict[str, dict[str, float]] = {}
         self._diagnostics: dict[str, DiagnosticPayload] = {}
         self._baselines: dict[str, float] = {}
-        self._output = ConsumerOutputPublisher(self._resolve_output)
+        self._output = ConsumerOutputPublisher(
+            self._resolve_output,
+            retain_recoveries=owner._retain_output_recoveries,
+        )
         self._external_writers: dict[str, Any] = {}
         exact_targets: dict[str, str] = {}
         self._validate_diagnostic_providers()
@@ -1607,7 +1811,7 @@ class RuntimeOutputSnapshot:
                 raise RuntimeError("native ROOT output returned field data on a non-root rank")
             if mode is not ParallelMode.ROOT:
                 metadata = tuple(self._piece_metadata(piece) for piece in local)
-        except Exception as exc:
+        except BaseException as exc:
             error = "%s: %s" % (type(exc).__name__, exc)
         if mode is ParallelMode.ROOT:
             rows = allgather_value(communicator, {"rank": rank, "error": error})
@@ -1735,7 +1939,7 @@ class RuntimeOutputSnapshot:
                 "kind": "diagnostics",
                 "quantities": diagnostic_schema,
             },)
-        except Exception as exc:
+        except BaseException as exc:
             preflight_error = "%s: %s" % (type(exc).__name__, exc)
         if communicator is not None:
             rows = allgather_value(communicator, {
@@ -1865,7 +2069,7 @@ class RuntimeOutputSnapshot:
             selection.pop("rank")
             canonical["selection"] = selection
             canonical["fields"] = [dict(row, pieces=[]) for row in canonical["fields"]]
-        except Exception as exc:
+        except BaseException as exc:
             if communicator is None:
                 raise
             final_error = "%s: %s" % (type(exc).__name__, exc)

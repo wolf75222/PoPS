@@ -21,6 +21,9 @@ foreach(_seam_row IN LISTS POPS_SEAM_COMBINATIONS)
   endif()
 endforeach()
 
+set(POPS_RUNTIME_CORE_SOURCES
+    runtime/program/step_transaction.cpp)
+
 set(POPS_RUNTIME_SYSTEM_SOURCES
     runtime/system/system.cpp
     runtime/system/system_install.cpp
@@ -40,15 +43,32 @@ set(POPS_RUNTIME_AMR_SOURCES
 set(POPS_RUNTIME_OUTPUT_SOURCES
     runtime/output/hdf5_collective.cpp)
 
+add_library(pops_runtime_core STATIC ${POPS_RUNTIME_CORE_SOURCES})
+set_target_properties(pops_runtime_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(pops_runtime_system OBJECT ${POPS_RUNTIME_SYSTEM_SOURCES})
 add_library(pops_runtime_amr OBJECT ${POPS_RUNTIME_AMR_SOURCES})
 add_library(pops_runtime_output OBJECT ${POPS_RUNTIME_OUTPUT_SOURCES})
-set(POPS_RUNTIME_TARGETS pops_runtime_system pops_runtime_amr pops_runtime_output)
+set(POPS_RUNTIME_OBJECT_TARGETS pops_runtime_system pops_runtime_amr pops_runtime_output)
+set(POPS_RUNTIME_TARGETS pops_runtime_core ${POPS_RUNTIME_OBJECT_TARGETS})
 
 foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
   target_link_libraries(${_runtime_target} PUBLIC pops::pops ${CMAKE_DL_LIBS})
   target_compile_features(${_runtime_target} PRIVATE cxx_std_${POPS_CXX_STD})
+  # These targets own every out-of-line POPS_EXPORT runtime seam. The shared-exception switch keeps
+  # StepAttemptRejected declaration-only and BUILDING selects dllexport on Windows; both propagate to
+  # the final module/executable embedding these static/object targets. Generated native components
+  # receive only the shared switch from the authenticated loader manifest and therefore import it.
+  target_compile_definitions(${_runtime_target} PUBLIC
+    POPS_RUNTIME_SHARED_EXCEPTION_ABI
+    POPS_EXPORT_BUILDING_MODULE)
 endforeach()
+
+# The transaction control-flow types are shared runtime ABI, not System implementation detail.
+# PUBLIC linkage makes the single key-function/typeinfo authority follow either facade into every
+# final executable/module, including AMR-only consumers, without compiling a duplicate definition.
+target_link_libraries(pops_runtime_system PUBLIC pops_runtime_core)
+target_link_libraries(pops_runtime_amr PUBLIC pops_runtime_core)
+target_link_libraries(pops_runtime_output PUBLIC pops_runtime_core)
 
 if(POPS_BUILD_TESTS)
   # Preserve the historical test-runtime compilation contract: the heavy implementation objects and
@@ -56,7 +76,7 @@ if(POPS_BUILD_TESTS)
   # pool. This test-only pool is intentionally independent from the production module's -O3 pool.
   set_property(GLOBAL APPEND PROPERTY
     JOB_POOLS pops_heavy_test_tu=${POPS_HEAVY_TEST_TU_POOL})
-  foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
+  foreach(_runtime_target IN LISTS POPS_RUNTIME_OBJECT_TARGETS)
     target_compile_options(${_runtime_target} PUBLIC
       $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
     set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_test_tu)
@@ -64,7 +84,7 @@ if(POPS_BUILD_TESTS)
 elseif(POPS_BUILD_PYTHON)
   # A Python-only build compiles these production objects at -O3. When tests are enabled they stay
   # on the independent -O0 test pool above, even if the same objects also feed the Python module.
-  foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
+  foreach(_runtime_target IN LISTS POPS_RUNTIME_OBJECT_TARGETS)
     set_target_properties(${_runtime_target} PROPERTIES JOB_POOL_COMPILE pops_heavy_module_tu)
   endforeach()
 endif()
@@ -116,7 +136,9 @@ function(pops_runtime_enable_python_thin_lto)
   if(NOT TARGET pybind11::thin_lto)
     message(FATAL_ERROR "POPS_PY_LTO requires the pybind11::thin_lto target")
   endif()
-  foreach(_runtime_target pops_runtime_system pops_runtime_amr pops_runtime_output)
+  # This function is called from python/, whose dynamic CMake scope does not inherit the target-list
+  # variable defined in this subdirectory; keep the four concrete authorities explicit here.
+  foreach(_runtime_target pops_runtime_core pops_runtime_system pops_runtime_amr pops_runtime_output)
     target_link_libraries(${_runtime_target} PRIVATE pybind11::thin_lto)
   endforeach()
 endfunction()

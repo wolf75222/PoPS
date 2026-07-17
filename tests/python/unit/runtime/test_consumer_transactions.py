@@ -148,12 +148,26 @@ class _Prepared(PreparedPublication):
         artifact = "artifact-%s" % self.effect.payload.identity.hexdigest[:12]
         self.publisher.artifacts.discard(artifact)
 
+    def finalize(self):
+        self.publisher.finalize_calls += 1
+        if self.publisher.finalize_calls <= self.publisher.fail_finalizations:
+            raise OSError("injected finalization failure")
+        if self.publisher.non_none_finalize:
+            return "invalid-finalize-result"
+        return None
+
 
 class _Publisher(ConsumerPublisher):
-    def __init__(self, *, fail_publications=0, fail_on=()):
+    def __init__(
+        self, *, fail_publications=0, fail_on=(), fail_finalizations=0,
+        non_none_finalize=False,
+    ):
         self.fail_on = set(fail_on) or set(range(1, fail_publications + 1))
         self.prepare_calls = 0
         self.publish_calls = 0
+        self.finalize_calls = 0
+        self.fail_finalizations = fail_finalizations
+        self.non_none_finalize = non_none_finalize
         self.temporaries = set()
         self.artifacts = set()
 
@@ -392,6 +406,65 @@ def test_accepted_publications_remain_compensatable_until_the_outer_transaction_
     assert compensated.cursors.to_data() == cursors.to_data()
     assert publisher.temporaries == set()
     assert publisher.artifacts == set()
+
+
+def test_seal_explicitly_finalizes_every_accepted_publication_once():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize"))
+    manifest = _manifest_for(runtime, "finalize", clock)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    publisher = _Publisher()
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+
+    transaction.accept()
+    assert publisher.finalize_calls == 0
+    assert transaction.seal() == ()
+    assert publisher.finalize_calls == 1
+    assert transaction.abort() is None
+    assert transaction.seal() == ()
+    assert publisher.finalize_calls == 1
+
+
+def test_seal_failure_is_non_compensating_diagnostic_and_retryable():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize-retry"))
+    manifest = _manifest_for(runtime, "finalize-retry", clock)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    publisher = _Publisher(fail_finalizations=1)
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+
+    transaction.accept()
+    artifact = next(iter(publisher.artifacts))
+    diagnostics = transaction.seal()
+    assert len(diagnostics) == 1 and "injected finalization failure" in diagnostics[0]
+    assert publisher.artifacts == {artifact}
+    assert transaction.abort() is None
+
+    assert transaction.seal() == ()
+    assert publisher.finalize_calls == 2
+    assert publisher.artifacts == {artifact}
+
+
+def test_seal_rejects_a_non_none_finalizer_result_without_compensation():
+    _, runtime = _runtime()
+    clock = Clock("solution", owner=OwnerPath.consumer("adc-685-finalize-result"))
+    manifest = _manifest_for(runtime, "finalize-result", clock)
+    cursors = ConsumerCursorSet()
+    plan = plan_accepted_side_effects(
+        runtime, ConsumerGraph((manifest,)), _moment(clock), cursors)
+    publisher = _Publisher(non_none_finalize=True)
+    transaction = ConsumerTransaction(plan, cursors, publisher)
+
+    transaction.accept()
+    diagnostics = transaction.seal()
+    assert len(diagnostics) == 1
+    assert "PreparedPublication.finalize() must return None" in diagnostics[0]
+    assert publisher.artifacts
+    assert transaction.abort() is None
 
 
 def test_later_publication_failure_compensates_every_earlier_artifact():

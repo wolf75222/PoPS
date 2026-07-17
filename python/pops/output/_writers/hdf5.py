@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pops.output._writers.common import (
     OutputWriterSession,
     ReopenedOutput,
+    _StagingAuthority,
     _StagedOutputFile,
+    _cleanup_staging_authority,
     authenticate_manifest,
     json_text,
     manifest,
@@ -202,7 +205,7 @@ def _parallel_snapshot_data(
             },
             "error": None,
         }
-    except Exception as exc:
+    except BaseException as exc:
         # Every rank must still enter the collective so one malformed local snapshot cannot leave
         # its peers blocked in allgather. The detached error is diagnostic only; no output identity
         # is derived from it.
@@ -239,119 +242,279 @@ def _parallel_snapshot_data(
             raise RuntimeError("collective HDF5 preflight completed without local authorities")
         if not isinstance(data, dict):
             raise RuntimeError("collective HDF5 snapshot authority is not canonical data")
-    except Exception as exc:
+    except BaseException as exc:
         validation_error = "%s: %s" % (type(exc).__name__, exc)
-    validation_errors = allgather_value(communicator, validation_error)
-    validation_failures = [
-        "rank %d: %s" % (rank, error)
-        for rank, error in enumerate(validation_errors) if error is not None
-    ]
-    if validation_failures:
-        raise ValueError(
-            "collective HDF5 snapshot validation failed across ranks: "
-            + "; ".join(validation_failures)
-        )
-    if data is None or target_path is None or native is None or capability is None:
-        raise RuntimeError("collective HDF5 snapshot validation returned no authority")
-    return data, selected, target_path, native, capability
+    validation_failure = _collective_phase_error(
+        communicator,
+        rank=request.rank,
+        size=request.size,
+        phase="snapshot validation",
+        error=validation_error,
+    )
+    if validation_failure is not None:
+        raise ValueError(validation_failure)
+    # The local non-None checks are inside the reported validation phase above.  No rank performs a
+    # second private branch after consensus.
+    return (
+        cast(dict[str, Any], data),
+        selected,
+        cast(Path, target_path),
+        native,
+        cast(dict[str, Any], capability),
+    )
 
 
-def _parallel_temporary_path(target: Path, communicator: Any) -> Path:
+def _parallel_temporary_path(target: Path, communicator: Any) -> _StagingAuthority:
     """Create one shared temporary on rank zero and broadcast failures without deadlocking."""
-    from pops._native_collectives import allgather_value, rank
+    from pops._native_collectives import allgather_value, broadcast_value, rank, size
 
     local_rank = rank(communicator)
-    envelope: dict[str, str | None] = {"path": None, "error": None}
+    local_authority = None
+    envelope: dict[str, Any] = {"path": None, "owner": None, "error": None}
     if local_rank == 0:
         try:
-            envelope["path"] = str(temporary_path(target))
-        except Exception as exc:
+            local_authority = temporary_path(target)
+            envelope["path"] = str(local_authority.path)
+            envelope["owner"] = local_authority.owner
+        except BaseException as exc:
             envelope["error"] = "%s: %s" % (type(exc).__name__, exc)
-    gathered = allgather_value(communicator, envelope)
-    failures = [
-        "rank %d: %s" % (owner, item["error"])
-        for owner, item in enumerate(gathered)
-        if item["error"] is not None
-    ]
-    if failures:
-        raise RuntimeError(
+
+    def fail_with_cleanup(message: str) -> None:
+        cleanup_error = None
+        if local_rank == 0 and local_authority is not None:
+            try:
+                _cleanup_staging_authority(
+                    local_authority,
+                    replaced_message=(
+                        "collective HDF5 refuses to delete a replaced temporary at %s"
+                        % local_authority.path),
+                )
+            except BaseException as cleanup:
+                cleanup_error = "%s: %s" % (type(cleanup).__name__, cleanup)
+        cleanup_error = broadcast_value(communicator, cleanup_error, root=0)
+        if cleanup_error is not None:
+            message += "; cleanup: " + cleanup_error
+        raise RuntimeError(message)
+
+    try:
+        gathered = allgather_value(communicator, envelope)
+    except BaseException as error:
+        cleanup_error = None
+        if local_rank == 0 and local_authority is not None:
+            try:
+                _cleanup_staging_authority(
+                    local_authority,
+                    replaced_message=(
+                        "collective HDF5 refuses to delete a replaced temporary at %s"
+                        % local_authority.path),
+                )
+            except BaseException as cleanup:
+                cleanup_error = "%s: %s" % (type(cleanup).__name__, cleanup)
+        message = "collective HDF5 temporary-file consensus failed: %s: %s" % (
+            type(error).__name__, error)
+        if cleanup_error is not None:
+            message += "; cleanup: " + cleanup_error
+        raise RuntimeError(message) from None
+    malformed = len(gathered) != size(communicator) or any(
+        type(item) is not dict or set(item) != {"path", "owner", "error"}
+        for item in gathered
+    )
+    if malformed:
+        fail_with_cleanup("collective HDF5 temporary-file authority is malformed")
+    else:
+        failures = [
+            "rank %d: %s" % (owner, item["error"])
+            for owner, item in enumerate(gathered)
+            if item["error"] is not None
+        ]
+        message = (
             "collective HDF5 temporary-file preparation failed: " + "; ".join(failures)
+            if failures else None
         )
-    authority = gathered[0]["path"]
-    if not authority or any(item["path"] is not None for item in gathered[1:]):
-        raise RuntimeError("collective HDF5 temporary-file authority is malformed")
-    return Path(authority)
+    if message is not None:
+        fail_with_cleanup(message)
+    authority_path = gathered[0]["path"]
+    authority_owner = gathered[0]["owner"]
+    if not authority_path or type(authority_owner) is not tuple \
+            or len(authority_owner) != 2 \
+            or any(type(item) is not int or item < 0 for item in authority_owner) \
+            or any(
+                item["path"] is not None or item["owner"] is not None
+                for item in gathered[1:]
+            ):
+        fail_with_cleanup("collective HDF5 temporary-file authority is malformed")
+    if local_rank == 0:
+        # Rank zero authored the gathered path/owner directly from this object.  Any creation
+        # failure was already in its envelope; no rank-private validation remains after consensus.
+        return cast(_StagingAuthority, local_authority)
+    return _StagingAuthority.observed(authority_path, authority_owner)
 
 
 def _collective_temporary_owner(
     communicator: Any,
-    path: Path,
+    authority: Any,
 ) -> tuple[int, int]:
-    """Authenticate the shared staging inode without letting rank-zero I/O skip consensus."""
-    from pops._native_collectives import broadcast_value, rank
+    """Authenticate every local staging view, then fail uniformly on any owner mismatch."""
+    from pops._native_collectives import allgather_value, rank, size
 
-    envelope: dict[str, Any] | None = None
-    if rank(communicator) == 0:
-        try:
-            stat = path.lstat()
-            envelope = {
-                "owner": (int(stat.st_dev), int(stat.st_ino)),
-                "error": None,
-            }
-        except BaseException as exc:
-            envelope = {
-                "owner": None,
-                "error": "%s: %s" % (type(exc).__name__, exc),
-            }
-    envelope = broadcast_value(communicator, envelope, root=0)
-    if type(envelope) is not dict or set(envelope) != {"owner", "error"}:
-        raise RuntimeError(
-            "collective HDF5 temporary inode authority is malformed"
-        )
-    error = envelope["error"]
-    if error is not None:
-        if not isinstance(error, str) or not error:
-            raise RuntimeError(
-                "collective HDF5 temporary inode failure is malformed"
+    local_rank = rank(communicator)
+    owner = None
+    error = None
+    try:
+        if type(authority) is _StagingAuthority:
+            authority.authenticate_path()
+            current = (
+                os.fstat(authority.fileno())
+                if local_rank == 0 else authority.path.lstat()
             )
+            owner = (int(current.st_dev), int(current.st_ino))
+            if owner != authority.owner:
+                raise RuntimeError(
+                    "local staging inode differs from its broadcast authority")
+        else:
+            # Retained for the MPI negative-path contract.  Every rank probes so a local
+            # filesystem mismatch becomes consensus evidence instead of a one-rank branch.
+            current = Path(authority).lstat()
+            owner = (int(current.st_dev), int(current.st_ino))
+    except BaseException as exc:
+        error = "%s: %s" % (type(exc).__name__, exc)
+    rows = allgather_value(communicator, {
+        "rank": local_rank,
+        "owner": owner,
+        "error": error,
+    })
+    if len(rows) != size(communicator) or any(
+            type(row) is not dict
+            or set(row) != {"rank", "owner", "error"}
+            or row["rank"] != expected_rank
+            for expected_rank, row in enumerate(rows)):
+        raise RuntimeError("collective HDF5 temporary inode authority is malformed")
+    failures = [
+        "rank %d: %s" % (expected_rank, row["error"])
+        for expected_rank, row in enumerate(rows) if row["error"] is not None
+    ]
+    if failures:
         raise RuntimeError(
-            "collective HDF5 temporary inode authentication failed: rank 0: " + error
-        )
-    owner = envelope["owner"]
-    if type(owner) is not tuple or len(owner) != 2 \
-            or any(type(item) is not int or item < 0 for item in owner):
+            "collective HDF5 temporary inode authentication failed: "
+            + "; ".join(failures))
+    root_owner = rows[0]["owner"]
+    if type(root_owner) is not tuple or len(root_owner) != 2 \
+            or any(type(item) is not int or item < 0 for item in root_owner) \
+            or any(row["owner"] != root_owner for row in rows[1:]):
         raise RuntimeError(
-            "collective HDF5 temporary inode authority is malformed"
-        )
-    return owner
+            "collective HDF5 temporary inode authority differs across ranks")
+    return cast(tuple[int, int], root_owner)
+
+
+def _collective_phase_error(
+    communicator: Any,
+    *,
+    rank: int,
+    size: int,
+    phase: str,
+    error: str | None,
+) -> str | None:
+    """Return one identical failure string only after every rank reports the local phase."""
+    from pops._native_collectives import allgather_value
+
+    rows = allgather_value(communicator, {
+        "rank": rank,
+        "error": error,
+    })
+    if len(rows) != size or any(
+            type(row) is not dict
+            or set(row) != {"rank", "error"}
+            or row["rank"] != expected_rank
+            or (row["error"] is not None and (
+                not isinstance(row["error"], str) or not row["error"]))
+            for expected_rank, row in enumerate(rows)):
+        return "collective HDF5 %s rank authority is malformed" % phase
+    failures = [
+        "rank %d: %s" % (expected_rank, row["error"])
+        for expected_rank, row in enumerate(rows) if row["error"] is not None
+    ]
+    if failures:
+        return "collective HDF5 %s failed: %s" % (phase, "; ".join(failures))
+    return None
 
 
 def _collective_remove(
     communicator: Any,
-    path: Path,
-    expected_owner: tuple[int, int],
+    authority: _StagingAuthority,
 ) -> str | None:
     """Remove one shared path on rank zero, then release every rank together."""
-    from pops._native_collectives import barrier, broadcast_value, rank
+    from pops._native_collectives import barrier, rank, size
 
-    error = None
-    if rank(communicator) == 0:
+    world_rank = rank(communicator)
+    local_error = None
+    if world_rank == 0:
         try:
-            try:
-                current = path.lstat()
-            except FileNotFoundError:
-                current = None
-            if current is not None:
-                owner = (int(current.st_dev), int(current.st_ino))
-                if owner != expected_owner:
-                    raise RuntimeError(
-                        "collective HDF5 refuses to delete a replaced temporary at %s" % path)
-                path.unlink()
-        except Exception as exc:
-            error = "%s: %s" % (type(exc).__name__, exc)
-    error = broadcast_value(communicator, error, root=0)
+            _cleanup_staging_authority(
+                authority,
+                replaced_message=(
+                    "collective HDF5 refuses to delete a replaced temporary at %s"
+                    % authority.path),
+            )
+        except BaseException as exc:
+            local_error = "%s: %s" % (type(exc).__name__, exc)
+    else:
+        try:
+            authority.close()
+        except BaseException as exc:
+            local_error = "%s: %s" % (type(exc).__name__, exc)
+    error = _collective_phase_error(
+        communicator,
+        rank=world_rank,
+        size=size(communicator),
+        phase="temporary cleanup/release",
+        error=local_error,
+    )
     barrier(communicator)
     return error
+
+
+def _construct_collective_staged_output(
+    communicator: Any,
+    *,
+    rank: int,
+    size: int,
+    authority: _StagingAuthority,
+    target: Path,
+    format: str,
+    output_identity: Any,
+    selection_identity: Any,
+    verify: Any,
+) -> _StagedOutputFile:
+    """Construct/authenticate on every rank, then expose either success or failure uniformly."""
+    staged = None
+    error = None
+    try:
+        staged = _StagedOutputFile(
+            authority,
+            target,
+            format=format,
+            output_identity=output_identity,
+            selection_identity=selection_identity,
+            verify=verify,
+            communicator=communicator,
+        )
+    except BaseException as caught:
+        error = "%s: %s" % (type(caught).__name__, caught)
+    failure = _collective_phase_error(
+        communicator,
+        rank=rank,
+        size=size,
+        phase="staged-file construction",
+        error=error,
+    )
+    if failure is not None:
+        cleanup_error = _collective_remove(communicator, authority)
+        if cleanup_error is not None:
+            failure += "; cleanup: " + cleanup_error
+        raise RuntimeError(failure)
+    # ``staged is None`` was itself part of the local construction try block.  A private assertion
+    # here would reintroduce the rank-divergent branch this helper exists to remove.
+    return cast(_StagedOutputFile, staged)
 
 
 def _writer_plan(
@@ -587,7 +750,7 @@ class HDF5Writer:
                 raise RuntimeError("HDF5 writer plan has an invalid result schema")
             plan_manifest = plan[2]
             plan_identity = plan[3].token
-        except Exception as exc:
+        except BaseException as exc:
             plan_error = "%s: %s" % (type(exc).__name__, exc)
         if communicator is not None:
             from pops._native_collectives import allgather_value
@@ -598,7 +761,7 @@ class HDF5Writer:
                 "identity": plan_identity,
                 "error": plan_error,
             })
-            if any(
+            if len(plan_rows) != request.size or any(
                 not isinstance(row, dict)
                 or set(row) != {"rank", "manifest", "identity", "error"}
                 or row["rank"] != owner
@@ -622,17 +785,23 @@ class HDF5Writer:
                     "collective HDF5 manifest/identity differs across ranks")
         elif plan_error is not None:
             raise RuntimeError("HDF5 writer-plan preparation failed: " + plan_error)
-        if plan is None:
-            raise RuntimeError("HDF5 writer-plan preparation returned no exact authority")
-        arrays, _datasets, output_manifest, identity = plan
+        # Invalid/None local plans were reported in ``plan_error`` before rank consensus.
+        arrays, _datasets, output_manifest, identity = cast(tuple[Any, ...], plan)
         temporary = (
             _parallel_temporary_path(target, communicator)
             if collective
             else temporary_path(target)
         )
-        temporary_owner = None
         if collective:
-            temporary_owner = _collective_temporary_owner(communicator, temporary)
+            try:
+                _collective_temporary_owner(communicator, temporary)
+            except BaseException as error:
+                cleanup_error = _collective_remove(communicator, temporary)
+                message = "collective HDF5 temporary inode authentication failed: %s: %s" % (
+                    type(error).__name__, error)
+                if cleanup_error is not None:
+                    message += "; cleanup: " + cleanup_error
+                raise RuntimeError(message) from None
             from pops._native_collectives import allgather_value
 
             descriptors = None
@@ -649,92 +818,126 @@ class HDF5Writer:
                 if root_arrays is None or field_rows is None or native is None:
                     raise RuntimeError(
                         "collective HDF5 descriptor preparation returned no native plan")
-            except Exception as exc:
+            except BaseException as exc:
                 descriptor_error = "%s: %s" % (type(exc).__name__, exc)
-            consensus = allgather_value(communicator, descriptor_error)
-            failures = [
-                "rank %d: %s" % (owner, error)
-                for owner, error in enumerate(consensus) if error is not None
-            ]
-            if failures:
-                cleanup_error = _collective_remove(
-                    communicator, temporary, temporary_owner)
-                message = "collective HDF5 descriptor preparation failed: " + "; ".join(failures)
+            descriptor_failure = _collective_phase_error(
+                communicator,
+                rank=cast(int, world_rank),
+                size=request.size,
+                phase="descriptor preparation",
+                error=descriptor_error,
+            )
+            if descriptor_failure is not None:
+                cleanup_error = _collective_remove(communicator, temporary)
+                message = descriptor_failure
                 if cleanup_error is not None:
                     message += "; cleanup: " + cleanup_error
                 raise RuntimeError(message)
-            if native is None or root_arrays is None or field_rows is None:
-                raise RuntimeError(
-                    "collective HDF5 descriptor preparation returned no native plan")
+            # Every local non-None check was part of ``descriptor_error`` above.
+            native_error = None
             try:
                 native._write_parallel_hdf5(
                     communicator,
-                    str(temporary),
+                    str(temporary.path),
                     json_text(output_manifest),
                     root_arrays,
                     field_rows,
                 )
-            except Exception as exc:
-                cleanup_error = _collective_remove(
-                    communicator, temporary, temporary_owner)
-                message = "collective HDF5 native transaction failed: %s: %s" % (
-                    type(exc).__name__, exc)
+            except BaseException as exc:
+                native_error = "%s: %s" % (type(exc).__name__, exc)
+            native_failure = _collective_phase_error(
+                communicator,
+                rank=cast(int, world_rank),
+                size=request.size,
+                phase="native write",
+                error=native_error,
+            )
+            if native_failure is not None:
+                cleanup_error = _collective_remove(communicator, temporary)
+                message = native_failure
                 if cleanup_error is not None:
                     message += "; cleanup: " + cleanup_error
-                raise RuntimeError(message) from None
+                raise RuntimeError(message)
         else:
             io_error = None
             try:
-                with h5py.File(temporary, "w") as output:
-                    output.attrs["pops_output_manifest"] = json_text(output_manifest)
-                    for name, value in arrays.items():
-                        output.create_dataset(name, data=value, compression="gzip")
-                    for index, field in enumerate(fields):
-                        name = "fields/%04d/values" % index
-                        shape = (
-                            ((len(field.component_names),) if field.component_names else ())
-                            + field.global_shape
-                        )
-                        dataset = output.require_dataset(
-                            name, shape=shape, dtype=field.array_dtype)
-                        for piece in field.pieces:
-                            jlo, ilo = piece.lower
-                            jhi, ihi = piece.upper
-                            dataset[..., jlo:jhi, ilo:ihi] = piece.values
-                    output.flush()
-            except Exception as exc:
+                with os.fdopen(temporary.duplicate(), "r+b") as staging_file:
+                    with h5py.File(staging_file, "w") as output:
+                        output.attrs["pops_output_manifest"] = json_text(output_manifest)
+                        for name, value in arrays.items():
+                            output.create_dataset(name, data=value, compression="gzip")
+                        for index, field in enumerate(fields):
+                            name = "fields/%04d/values" % index
+                            shape = (
+                                ((len(field.component_names),) if field.component_names else ())
+                                + field.global_shape
+                            )
+                            dataset = output.require_dataset(
+                                name, shape=shape, dtype=field.array_dtype)
+                            for piece in field.pieces:
+                                jlo, ilo = piece.lower
+                                jhi, ihi = piece.upper
+                                dataset[..., jlo:jhi, ilo:ihi] = piece.values
+                        output.flush()
+            except BaseException as exc:
                 io_error = "%s: %s" % (type(exc).__name__, exc)
             if io_error is not None:
-                temporary.unlink(missing_ok=True)
+                cleanup_error = None
+                try:
+                    _cleanup_staging_authority(
+                        temporary,
+                        replaced_message=(
+                            "HDF5 staging cleanup refused a replaced temporary at %s"
+                            % temporary.path),
+                    )
+                except BaseException as cleanup:
+                    cleanup_error = "%s: %s" % (type(cleanup).__name__, cleanup)
+                if cleanup_error is not None:
+                    io_error += "; cleanup: " + cleanup_error
                 raise RuntimeError("HDF5 write failed: %s" % io_error)
-        if communicator is not None:
-            from pops._native_collectives import barrier
-
-            barrier(communicator)
         failure = None
         if communicator is None or world_rank == 0:
             try:
-                read_hdf5(temporary).require_selection(request)
-            except Exception as exc:
+                read_hdf5(temporary.path).require_selection(request)
+            except BaseException as exc:
                 failure = "%s: %s" % (type(exc).__name__, exc)
         if communicator is not None:
-            from pops._native_collectives import broadcast_value
-
-            failure = broadcast_value(communicator, failure, root=0)
+            failure = _collective_phase_error(
+                communicator,
+                rank=cast(int, world_rank),
+                size=request.size,
+                phase="native verification",
+                error=failure,
+            )
         if failure is not None:
             if communicator is not None:
-                if temporary_owner is None:
-                    raise RuntimeError(
-                        "collective HDF5 verification cleanup has no temporary inode authority")
-                cleanup_error = _collective_remove(
-                    communicator, temporary, temporary_owner)
+                cleanup_error = _collective_remove(communicator, temporary)
                 if cleanup_error is not None:
                     failure += "; cleanup: " + cleanup_error
             else:
-                temporary.unlink(missing_ok=True)
+                try:
+                    _cleanup_staging_authority(
+                        temporary,
+                        replaced_message=(
+                            "HDF5 verification cleanup refused a replaced temporary at %s"
+                            % temporary.path),
+                    )
+                except BaseException as cleanup:
+                    failure += "; cleanup: %s: %s" % (
+                        type(cleanup).__name__, cleanup)
             raise RuntimeError("prepared HDF5 failed native verification: %s" % failure)
         if communicator is not None:
-            barrier(communicator)
+            return _construct_collective_staged_output(
+                communicator,
+                rank=cast(int, world_rank),
+                size=request.size,
+                authority=temporary,
+                target=target,
+                format=self.format,
+                output_identity=identity,
+                selection_identity=request.publication_identity,
+                verify=read_hdf5,
+            )
         return _StagedOutputFile(
             temporary,
             target,
@@ -743,7 +946,6 @@ class HDF5Writer:
             selection_identity=request.publication_identity,
             verify=read_hdf5,
             communicator=communicator,
-            temporary_owner=temporary_owner,
         )
 
 

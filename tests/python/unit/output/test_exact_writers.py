@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+from importlib import import_module
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -25,6 +28,7 @@ from pops.output import (
     read_npz, read_paraview, writer_session_authority,
 )
 from pops.output._consumer_contracts import FailRun, ParallelMode, ScheduleCursor
+from pops.output._writers.common import _OutputRecoveryRequired, _StagedOutputFile
 from pops.output._writers.hdf5 import _rebuild_parallel_snapshot_data
 from pops.output.provider import consumer_format_data
 from pops.runtime._consumer import (
@@ -33,7 +37,9 @@ from pops.runtime._consumer import (
 from pops.runtime._output_publisher import (
     ConsumerOutputPublisher,
     OutputPreparation,
+    PreparedConsumerOutput,
 )
+from pops.runtime._runtime_instance import RuntimeInstance
 
 
 def _identity(domain, name):
@@ -122,6 +128,87 @@ def _stage_writer(writer, snapshot, request, target, *, communicator=None):
         snapshot, request, target, communicator=communicator)
     session.stage()
     return session
+
+
+def _recovery_paths(root):
+    return tuple(sorted(root.glob(".pops-quarantine-*/owned")))
+
+
+def _serial_execution_context():
+    return ExecutionContext(
+        backend=proven_serial_manifest(
+            backend="production", target="system", abi="test|c++|c++23", runtime=True),
+        communicator=ExecutionResource("communicator", "serial"),
+        datatype=ExecutionResource("datatype", "float64"),
+        device=ExecutionResource("device", "host"),
+    )
+
+
+def _external_writer_preparation(
+    tmp_path, *, replace_component=False, recreate_after_detach=False,
+):
+    from pops.runtime._runtime_consumers import _PreparedExternalWriter
+
+    snapshot, request, _ = _snapshot()
+    target = tmp_path / "external.npz"
+    effect = _accepted_output_effect(request, target)
+
+    class NativeHandle:
+        def __init__(self):
+            self.operations = []
+            self.cleanup_requests = []
+            self.original_temporary = None
+            self.original_component = None
+
+        def _invoke_component_operation(
+            self, _uri, _version, operation, request_data,
+        ):
+            self.operations.append(operation)
+            temporary = Path(request_data["temporary_path"])
+            component = Path(request_data["published_path"])
+            if operation == "verify":
+                self.original_temporary = temporary
+                self.original_component = component
+                temporary.write_bytes(b"native-writer-output")
+                return {
+                    "bytes_written": len(b"native-writer-output"),
+                    "content_digest": "native-writer-output-v1",
+                }
+            if operation == "publish":
+                os.rename(temporary, component)
+                if replace_component:
+                    component.unlink()
+                    component.write_bytes(b"third-party-component")
+                return {
+                    "bytes_written": len(b"native-writer-output"),
+                    "content_digest": "native-writer-output-v1",
+                }
+            if operation in {"discard", "rollback"}:
+                self.cleanup_requests.append(request_data)
+                if recreate_after_detach:
+                    self.original_temporary.write_bytes(b"third-party-temporary")
+                    self.original_component.write_bytes(b"third-party-component")
+                    target.write_bytes(b"third-party-target")
+                # Deliberately destructive callback: only private tombstones may be addressable.
+                temporary.unlink(missing_ok=True)
+                component.unlink(missing_ok=True)
+                return None
+            raise AssertionError("unexpected native Writer operation %r" % operation)
+
+    native = NativeHandle()
+    installed = SimpleNamespace(
+        native_handle=native,
+        interface=SimpleNamespace(
+            to_data=lambda: {"uri": "pops://test/writer", "version": 1}),
+        artifact_identity=_identity("component-artifact", "external-writer"),
+    )
+    prepared = _PreparedExternalWriter(
+        effect,
+        OutputPreparation(NPZ(), snapshot, request, target),
+        installed,
+        _serial_execution_context(),
+    )
+    return prepared, native
 
 
 def test_npz_prepare_reopen_publish_is_exact_and_deterministic(tmp_path):
@@ -213,6 +300,11 @@ def test_npz_rollback_refuses_to_remove_a_replaced_target(tmp_path):
     with pytest.raises(RuntimeError, match="rollback refused a replaced target"):
         session.rollback()
     assert target.read_bytes() == b"third-party-replacement"
+    (recovery,) = _recovery_paths(tmp_path)
+    assert os.path.samefile(recovery, target)
+    session.cleanup_recoveries()
+    assert target.read_bytes() == b"third-party-replacement"
+    assert _recovery_paths(tmp_path) == ()
 
 
 def test_npz_abort_refuses_to_remove_a_replaced_temporary(tmp_path):
@@ -226,6 +318,469 @@ def test_npz_abort_refuses_to_remove_a_replaced_temporary(tmp_path):
     with pytest.raises(RuntimeError, match="refuses to delete a replaced temporary"):
         session.abort_prepare()
     assert temporary.read_bytes() == b"third-party-temporary"
+    (recovery,) = _recovery_paths(tmp_path)
+    assert os.path.samefile(recovery, temporary)
+    session.cleanup_recoveries()
+    assert temporary.read_bytes() == b"third-party-temporary"
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_npz_publish_source_race_preserves_every_unauthenticated_path(tmp_path, monkeypatch):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    real_link = os.link
+    raced = False
+
+    def replace_before_link(source, destination, *args, **kwargs):
+        nonlocal raced
+        if not raced and Path(source) == temporary and Path(destination) == target:
+            temporary.unlink()
+            temporary.write_bytes(b"third-party-temporary")
+            raced = True
+        real_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", replace_before_link)
+    with pytest.raises(RuntimeError, match="staging inode changed during publication"):
+        session.publish()
+    assert target.read_bytes() == b"third-party-temporary"
+
+    with pytest.raises(RuntimeError, match="refuses to delete a replaced temporary"):
+        session.rollback()
+    assert target.read_bytes() == b"third-party-temporary"
+    assert temporary.read_bytes() == b"third-party-temporary"
+    recoveries = _recovery_paths(tmp_path)
+    assert len(recoveries) == 2
+    assert all(os.path.samefile(recovery, temporary) for recovery in recoveries)
+
+
+def test_npz_publish_rejects_a_target_replaced_after_link(tmp_path, monkeypatch):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    real_link = os.link
+    raced = False
+
+    def replace_target_after_link(source, destination, *args, **kwargs):
+        nonlocal raced
+        real_link(source, destination, *args, **kwargs)
+        if not raced and Path(source) == temporary and Path(destination) == target:
+            target.unlink()
+            target.write_bytes(b"third-party-target")
+            raced = True
+
+    monkeypatch.setattr(os, "link", replace_target_after_link)
+    with pytest.raises(RuntimeError, match="staging inode changed during publication"):
+        session.publish()
+
+    with pytest.raises(RuntimeError, match="rollback refused a replaced target"):
+        session.rollback()
+    assert target.read_bytes() == b"third-party-target"
+    assert not temporary.exists()
+    (recovery,) = _recovery_paths(tmp_path)
+    assert os.path.samefile(recovery, target)
+
+
+def test_npz_abort_quarantines_a_temporary_replaced_during_removal(tmp_path, monkeypatch):
+    common = import_module("pops.output._writers.common")
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    real_rename = common._rename_no_replace
+    raced = False
+
+    def replace_temporary_before_quarantine(source, destination, *args, **kwargs):
+        nonlocal raced
+        if not raced and source == temporary.name and kwargs.get("src_dir_fd") is not None:
+            temporary.unlink()
+            temporary.write_bytes(b"third-party-temporary")
+            raced = True
+        real_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(common, "_rename_no_replace", replace_temporary_before_quarantine)
+    with pytest.raises(RuntimeError, match="refuses to delete a replaced temporary"):
+        session.abort_prepare()
+    assert temporary.read_bytes() == b"third-party-temporary"
+    (recovery,) = _recovery_paths(tmp_path)
+    assert os.path.samefile(recovery, temporary)
+
+
+def test_npz_rollback_quarantines_a_target_replaced_during_removal(tmp_path, monkeypatch):
+    common = import_module("pops.output._writers.common")
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    session.publish()
+    real_rename = common._rename_no_replace
+    raced = False
+
+    def replace_target_before_quarantine(source, destination, *args, **kwargs):
+        nonlocal raced
+        if not raced and source == target.name and kwargs.get("src_dir_fd") is not None:
+            target.unlink()
+            target.write_bytes(b"third-party-target")
+            raced = True
+        real_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(common, "_rename_no_replace", replace_target_before_quarantine)
+    with pytest.raises(RuntimeError, match="rollback refused a replaced target"):
+        session.rollback()
+    assert target.read_bytes() == b"third-party-target"
+    (recovery,) = _recovery_paths(tmp_path)
+    assert os.path.samefile(recovery, target)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "writer_factory", "suffix", "reader_name"),
+    (
+        ("pops.output._writers.npz", NPZWriter, ".npz", "read_npz"),
+        ("pops.output._writers.paraview", ParaViewWriter, ".vtu", "read_paraview"),
+        ("pops.output._writers.hdf5", HDF5Writer, ".h5", "read_hdf5"),
+    ),
+)
+def test_writer_factory_rejects_substitution_before_staged_constructor(
+    tmp_path, monkeypatch, module_name, writer_factory, suffix, reader_name,
+):
+    module = import_module(module_name)
+    snapshot, request, _ = _snapshot()
+    target = tmp_path / ("substitution" + suffix)
+    captured = []
+    real_temporary_path = module.temporary_path
+    real_reader = getattr(module, reader_name)
+
+    def capture_authority(path):
+        authority = real_temporary_path(path)
+        captured.append(authority)
+        return authority
+
+    def replace_after_verification(path):
+        reopened = real_reader(path)
+        authority = captured[-1]
+        authority.path.unlink()
+        authority.path.write_bytes(b"third-party-substitution")
+        return reopened
+
+    monkeypatch.setattr(module, "temporary_path", capture_authority)
+    monkeypatch.setattr(module, reader_name, replace_after_verification)
+    session = writer_factory().prepare_session(snapshot, request, target)
+    with pytest.raises(RuntimeError, match="replaced before authority transfer"):
+        session.stage()
+
+    (authority,) = captured
+    assert not authority.is_open
+    assert authority.path.read_bytes() == b"third-party-substitution"
+
+
+def test_collective_rank_zero_retains_mkstemp_authority_through_quarantine_cleanup(
+    tmp_path, monkeypatch,
+):
+    native_collectives = import_module("pops._native_collectives")
+    hdf5 = import_module("pops.output._writers.hdf5")
+    communicator = object()
+    monkeypatch.setattr(native_collectives, "rank", lambda _communicator: 0)
+    monkeypatch.setattr(native_collectives, "size", lambda _communicator: 1)
+    monkeypatch.setattr(
+        native_collectives, "allgather_value", lambda _communicator, value: (value,))
+    monkeypatch.setattr(
+        native_collectives,
+        "broadcast_value",
+        lambda _communicator, value, root=0: value,
+    )
+    monkeypatch.setattr(native_collectives, "barrier", lambda _communicator: None)
+
+    authority = hdf5._parallel_temporary_path(tmp_path / "collective.h5", communicator)
+    descriptor = os.fstat(authority.fileno())
+    assert authority.owner == (int(descriptor.st_dev), int(descriptor.st_ino))
+    assert hdf5._collective_temporary_owner(communicator, authority) == authority.owner
+    temporary = authority.path
+    assert hdf5._collective_remove(communicator, authority) is None
+    assert not authority.is_open
+    assert not temporary.exists()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_collective_temporary_consensus_failure_quarantines_and_closes_rank_zero_fd(
+    tmp_path, monkeypatch,
+):
+    native_collectives = import_module("pops._native_collectives")
+    hdf5 = import_module("pops.output._writers.hdf5")
+    communicator = object()
+    captured = []
+    real_temporary_path = hdf5.temporary_path
+
+    def capture_authority(target):
+        authority = real_temporary_path(target)
+        captured.append(authority)
+        return authority
+
+    monkeypatch.setattr(hdf5, "temporary_path", capture_authority)
+    monkeypatch.setattr(native_collectives, "rank", lambda _communicator: 0)
+    monkeypatch.setattr(native_collectives, "size", lambda _communicator: 1)
+    monkeypatch.setattr(
+        native_collectives,
+        "allgather_value",
+        lambda _communicator, _value: ({"malformed": True},),
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "broadcast_value",
+        lambda _communicator, value, root=0: value,
+    )
+
+    with pytest.raises(RuntimeError, match="temporary-file authority is malformed"):
+        hdf5._parallel_temporary_path(tmp_path / "collective-failure.h5", communicator)
+
+    (authority,) = captured
+    assert not authority.is_open
+    assert not authority.path.exists()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_collective_owner_mismatch_is_consensus_evidence_before_cleanup(tmp_path, monkeypatch):
+    common = import_module("pops.output._writers.common")
+    hdf5 = import_module("pops.output._writers.hdf5")
+    native_collectives = import_module("pops._native_collectives")
+    communicator = object()
+    authority = common.temporary_path(tmp_path / "owner-mismatch.h5")
+
+    monkeypatch.setattr(native_collectives, "rank", lambda _communicator: 0)
+    monkeypatch.setattr(native_collectives, "size", lambda _communicator: 2)
+
+    def mixed_owner_rows(_communicator, envelope):
+        peer = dict(envelope, rank=1, owner=(envelope["owner"][0], envelope["owner"][1] + 1))
+        return envelope, peer
+
+    monkeypatch.setattr(native_collectives, "allgather_value", mixed_owner_rows)
+    with pytest.raises(RuntimeError, match="inode authority differs across ranks"):
+        hdf5._collective_temporary_owner(communicator, authority)
+
+    common._cleanup_staging_authority(
+        authority, replaced_message="test cleanup refused replacement")
+    assert not authority.is_open
+    assert not authority.path.exists()
+
+
+def test_collective_constructor_peer_failure_cleans_rank_zero_without_barrier_split(
+    tmp_path, monkeypatch,
+):
+    common = import_module("pops.output._writers.common")
+    hdf5 = import_module("pops.output._writers.hdf5")
+    native_collectives = import_module("pops._native_collectives")
+    communicator = object()
+    target = tmp_path / "mixed-constructor.h5"
+    authority = common.temporary_path(target)
+
+    monkeypatch.setattr(native_collectives, "rank", lambda _communicator: 0)
+    monkeypatch.setattr(native_collectives, "size", lambda _communicator: 2)
+    monkeypatch.setattr(
+        native_collectives,
+        "allgather_value",
+        lambda _communicator, envelope: (
+            envelope,
+            {"rank": 1, "error": "RuntimeError: injected peer constructor failure"},
+        ),
+    )
+    monkeypatch.setattr(
+        native_collectives,
+        "broadcast_value",
+        lambda _communicator, value, root=0: value,
+    )
+    barriers = []
+    monkeypatch.setattr(
+        native_collectives, "barrier", lambda _communicator: barriers.append("cleanup"))
+
+    with pytest.raises(RuntimeError, match="injected peer constructor failure"):
+        hdf5._construct_collective_staged_output(
+            communicator,
+            rank=0,
+            size=2,
+            authority=authority,
+            target=target,
+            format="hdf5",
+            output_identity=_identity("scientific-output", "mixed-constructor"),
+            selection_identity=_identity("output-selection", "mixed-constructor"),
+            verify=lambda _path: None,
+        )
+
+    assert barriers == ["cleanup"]
+    assert not authority.is_open
+    assert not authority.path.exists()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_collective_remove_consensus_includes_nonroot_base_exception(
+    tmp_path, monkeypatch,
+):
+    hdf5 = import_module("pops.output._writers.hdf5")
+    native_collectives = import_module("pops._native_collectives")
+    communicator = object()
+
+    class RankLocalClose(BaseException):
+        pass
+
+    class Authority:
+        path = tmp_path / "rank-local-close.h5"
+
+        @staticmethod
+        def close():
+            raise RankLocalClose("injected non-root close failure")
+
+    monkeypatch.setattr(native_collectives, "rank", lambda _communicator: 1)
+    monkeypatch.setattr(native_collectives, "size", lambda _communicator: 2)
+
+    def gather(_communicator, envelope):
+        return {"rank": 0, "error": None}, envelope
+
+    monkeypatch.setattr(native_collectives, "allgather_value", gather)
+    barriers = []
+    monkeypatch.setattr(
+        native_collectives, "barrier", lambda _communicator: barriers.append("done"))
+
+    failure = hdf5._collective_remove(communicator, Authority())
+
+    assert "rank 1: RankLocalClose: injected non-root close failure" in failure
+    assert barriers == ["done"]
+
+
+def test_output_finalize_releases_fd_and_normal_paths_leave_no_quarantine(tmp_path):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    staging = session._staged._staging
+    session.publish()
+    assert staging.is_open
+
+    session.finalize()
+    assert not staging.is_open
+    with pytest.raises(RuntimeError, match="finalized writer session"):
+        session.rollback()
+    assert target.is_file()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_post_rename_error_is_recoverable_and_retains_primary_diagnostic(tmp_path, monkeypatch):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    real_stat = os.stat
+    owned_calls = 0
+
+    def fail_authentication_after_rename(path, *args, **kwargs):
+        nonlocal owned_calls
+        if path == "owned" and kwargs.get("dir_fd") is not None:
+            owned_calls += 1
+            if owned_calls == 2:
+                raise OSError("injected post-rename authentication failure")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", fail_authentication_after_rename)
+    with pytest.raises(RuntimeError, match="post-rename authentication failure"):
+        session.abort_prepare()
+    assert not temporary.exists()
+    (recovery,) = session.recoveries
+    assert recovery.quarantine_path.is_file()
+
+    recovery.restore()
+    session.cleanup_recoveries()
+    assert temporary.is_file()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_recovery_cleanup_retries_after_unlink_then_rmdir_failure(tmp_path, monkeypatch):
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    temporary.unlink()
+    temporary.write_bytes(b"third-party-temporary")
+
+    with pytest.raises(RuntimeError, match="refuses to delete a replaced temporary"):
+        session.abort_prepare()
+    (recovery,) = session.recoveries
+    assert os.path.samefile(temporary, recovery.quarantine_path)
+
+    real_rmdir = os.rmdir
+    failed_once = False
+
+    def fail_first_quarantine_rmdir(path, *args, **kwargs):
+        nonlocal failed_once
+        if not failed_once and isinstance(path, str) and path.startswith(".pops-quarantine-"):
+            failed_once = True
+            raise OSError("injected recovery rmdir failure")
+        return real_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rmdir", fail_first_quarantine_rmdir)
+    with pytest.raises(RuntimeError, match="recovery cleanup failed"):
+        session.cleanup_recoveries()
+    assert session.recoveries == (recovery,)
+    assert not recovery.quarantine_path.exists()
+
+    session.cleanup_recoveries()
+    assert session.recoveries == ()
+    assert temporary.read_bytes() == b"third-party-temporary"
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_quarantine_rmdir_failure_never_masks_primary_rename_error(tmp_path, monkeypatch):
+    common = import_module("pops.output._writers.common")
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    real_rename = common._rename_no_replace
+    real_rmdir = os.rmdir
+
+    def fail_rename(source, destination, *args, **kwargs):
+        if source == session.temporary.name and kwargs.get("src_dir_fd") is not None:
+            raise OSError("injected primary rename failure")
+        return real_rename(source, destination, *args, **kwargs)
+
+    def fail_rmdir(path, *args, **kwargs):
+        if isinstance(path, str) and path.startswith(".pops-quarantine-"):
+            raise OSError("injected quarantine rmdir failure")
+        return real_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(common, "_rename_no_replace", fail_rename)
+    monkeypatch.setattr(os, "rmdir", fail_rmdir)
+    with pytest.raises(RuntimeError, match="injected primary rename failure") as failure:
+        session.abort_prepare()
+    assert "quarantine cleanup also failed" in str(failure.value)
+
+
+def test_quarantine_atomic_rename_never_overwrites_a_concurrent_owned_entry(
+    tmp_path, monkeypatch,
+):
+    common = import_module("pops.output._writers.common")
+    snapshot, request, _ = _snapshot()
+    target = deterministic_target(tmp_path, "fields", request, snapshot, ".npz")
+    session = _stage_writer(NPZWriter(), snapshot, request, target)
+    temporary = session.temporary
+    real_rename = common._rename_no_replace
+
+    def occupy_destination_before_atomic_rename(source, destination, *args, **kwargs):
+        descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+            dir_fd=kwargs["dst_dir_fd"],
+        )
+        try:
+            os.write(descriptor, b"third-party-quarantine-entry")
+        finally:
+            os.close(descriptor)
+        return real_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(
+        common, "_rename_no_replace", occupy_destination_before_atomic_rename)
+    with pytest.raises(RuntimeError, match="destination appeared concurrently"):
+        session.abort_prepare()
+
+    assert temporary.is_file()
+    (occupied,) = _recovery_paths(tmp_path)
+    assert occupied.read_bytes() == b"third-party-quarantine-entry"
 
 
 def test_missing_exact_level_state_selection_fails_before_a_writer(tmp_path):
@@ -489,6 +1044,59 @@ def test_consumer_publisher_adapter_prepares_only_a_resolved_effect(tmp_path):
         publisher.prepare(object())
 
 
+def test_rank_local_base_exception_is_consensus_error_before_publish_returns(
+    tmp_path, monkeypatch,
+):
+    module = import_module("pops.runtime._output_publisher")
+    snapshot, request, _ = _snapshot()
+    request = replace(request, parallel_mode=ParallelMode.ROOT, size=2)
+    target = tmp_path / "rank-cancelled.npz"
+    effect = _accepted_output_effect(request, target)
+    authority = writer_session_authority("rank-cancelled", request, target)
+
+    class RankLocalCancellation(BaseException):
+        pass
+
+    class Session:
+        def __init__(self):
+            self.identity = Identity.from_token(authority["session_identity"])
+            self.temporary = None
+            self.target = target
+
+        @property
+        def authority(self):
+            return dict(authority)
+
+        def stage(self):
+            return None
+
+        def abort_prepare(self):
+            return None
+
+        def publish(self):
+            raise RankLocalCancellation("injected rank-local cancellation")
+
+        def rollback(self):
+            return None
+
+        def finalize(self):
+            return None
+
+    collectives = []
+
+    def gather(_communicator, envelope):
+        collectives.append(envelope)
+        return envelope, dict(envelope, rank=1, result=None, error=None)
+
+    monkeypatch.setattr(module, "allgather_value", gather)
+    prepared = PreparedConsumerOutput(
+        effect, Session(), "pops.test.rank-cancelled", request, object())
+
+    with pytest.raises(RuntimeError, match="RankLocalCancellation"):
+        prepared.publish()
+    assert len(collectives) == 1
+
+
 def test_rank_without_pieces_keeps_exact_dtype_but_cannot_materialize():
     snapshot, request, _ = _snapshot()
     field = snapshot.select(request)[0]
@@ -512,6 +1120,110 @@ def test_native_writer_projection_never_densifies_field_pieces(monkeypatch):
     assert all(row["pieces"] for row in projected["fields"])
     assert projected["geometries"][0]["coverage"] is snapshot.geometries[0].coverage
     assert projected["geometries"][0]["cell_volumes"] is snapshot.geometries[0].cell_volumes
+
+
+def test_external_writer_discard_quarantines_a_replaced_temporary_before_callback(tmp_path):
+    prepared, native = _external_writer_preparation(tmp_path)
+    temporary = prepared.temporary
+    temporary.unlink()
+    temporary.write_bytes(b"third-party-temporary")
+
+    with pytest.raises(RuntimeError, match="no longer names its runtime-owned inode"):
+        prepared.discard()
+
+    assert native.operations == ["verify"]
+    assert temporary.read_bytes() == b"third-party-temporary"
+    assert not prepared._staging.is_open
+    (recovery,) = prepared.recoveries
+    assert os.path.samefile(recovery.quarantine_path, temporary)
+    prepared.cleanup_recoveries()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_external_writer_cleanup_callback_cannot_delete_names_recreated_after_detach(tmp_path):
+    prepared, native = _external_writer_preparation(
+        tmp_path, recreate_after_detach=True)
+    temporary = prepared.temporary
+    component = prepared._component_published
+    target = prepared.target
+
+    prepared.discard()
+
+    assert temporary.read_bytes() == b"third-party-temporary"
+    assert component.read_bytes() == b"third-party-component"
+    assert target.read_bytes() == b"third-party-target"
+    assert native.operations == ["verify", "discard"]
+    (cleanup_request,) = native.cleanup_requests
+    cleanup_text = repr(cleanup_request)
+    assert str(temporary) not in cleanup_text
+    assert str(component) not in cleanup_text
+    assert str(target) not in cleanup_text
+    cleanup_temporary = Path(cleanup_request["temporary_path"])
+    cleanup_component = Path(cleanup_request["published_path"])
+    assert cleanup_temporary.parent == cleanup_component.parent
+    assert not cleanup_temporary.parent.exists()
+
+
+def test_external_writer_publish_quarantines_a_replaced_component_path(tmp_path):
+    prepared, native = _external_writer_preparation(tmp_path, replace_component=True)
+    component = prepared._component_published
+
+    with pytest.raises(RuntimeError, match="did not move its verified inode"):
+        prepared.publish()
+
+    assert native.operations == ["verify", "publish"]
+    assert component.read_bytes() == b"third-party-component"
+    assert not prepared._staging.is_open
+    (recovery,) = prepared.recoveries
+    assert os.path.samefile(recovery.quarantine_path, component)
+    prepared.cleanup_recoveries()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_external_writer_publish_quarantines_a_target_replaced_after_link(
+    tmp_path, monkeypatch,
+):
+    prepared, native = _external_writer_preparation(tmp_path)
+    target = prepared.target
+    real_link = os.link
+    raced = False
+
+    def replace_target_after_link(source, destination, *args, **kwargs):
+        nonlocal raced
+        result = real_link(source, destination, *args, **kwargs)
+        if not raced and Path(destination) == target and kwargs.get("dst_dir_fd") is None:
+            raced = True
+            target.unlink()
+            target.write_bytes(b"third-party-target")
+        return result
+
+    monkeypatch.setattr(os, "link", replace_target_after_link)
+    with pytest.raises(RuntimeError, match="public target does not name"):
+        prepared.publish()
+
+    assert native.operations == ["verify", "publish"]
+    assert target.read_bytes() == b"third-party-target"
+    assert not prepared._staging.is_open
+    (recovery,) = prepared.recoveries
+    assert os.path.samefile(recovery.quarantine_path, target)
+    prepared.cleanup_recoveries()
+    assert _recovery_paths(tmp_path) == ()
+
+
+def test_external_writer_finalize_releases_fd_without_removing_accepted_artifact(tmp_path):
+    prepared, native = _external_writer_preparation(tmp_path)
+    staging = prepared._staging
+    receipt = prepared.publish()
+
+    assert receipt.artifact_id
+    assert staging.is_open
+    assert prepared.finalize() is None
+    assert not staging.is_open
+    assert prepared.target.read_bytes() == b"native-writer-output"
+    with pytest.raises(RuntimeError, match="finalized native Writer"):
+        prepared.rollback()
+    assert native.operations == ["verify", "publish"]
+    assert _recovery_paths(tmp_path) == ()
 
 
 def test_format_interface_selects_exact_writer():
@@ -635,6 +1347,9 @@ def test_custom_writer_session_uses_only_the_public_structural_protocol(tmp_path
             if self._created:
                 self.target.unlink(missing_ok=True)
 
+        def finalize(self):
+            return None
+
     class Writer:
         @staticmethod
         def preflight(_context):
@@ -677,6 +1392,109 @@ def test_custom_writer_session_uses_only_the_public_structural_protocol(tmp_path
     assert target.read_bytes() == b"public-structural-session"
     prepared.rollback()
     assert not target.exists()
+
+
+def test_stage_abort_recovery_is_registered_on_runtime_instance(tmp_path):
+    snapshot, request, _ = _snapshot()
+    target = tmp_path / "stage-recovery.test"
+
+    class Session:
+        def __init__(self):
+            self._authority = writer_session_authority(
+                "stage-recovery", request, target)
+            self.identity = Identity.from_token(self._authority["session_identity"])
+            self.temporary = tmp_path / ".stage-recovery.prepared"
+            self.target = target
+            self._owner = None
+            self._recoveries = ()
+
+        @property
+        def authority(self):
+            return dict(self._authority)
+
+        @property
+        def recoveries(self):
+            return self._recoveries
+
+        def stage(self):
+            self.temporary.write_bytes(b"runtime-owned")
+            staged = self.temporary.lstat()
+            self._owner = (int(staged.st_dev), int(staged.st_ino))
+            self.temporary.unlink()
+            self.temporary.write_bytes(b"third-party")
+            raise RuntimeError("injected stage failure")
+
+        def abort_prepare(self):
+            try:
+                _StagedOutputFile._quarantine_owned_path(
+                    self.temporary,
+                    self._owner,
+                    replaced_message="stage abort refused replacement",
+                )
+            except _OutputRecoveryRequired as error:
+                self._recoveries = (error.recovery,)
+                raise RuntimeError("stage abort retained recovery") from error
+
+        def publish(self):
+            raise AssertionError("failed stage cannot publish")
+
+        def rollback(self):
+            return None
+
+        def finalize(self):
+            return None
+
+    session = Session()
+
+    class Writer:
+        @staticmethod
+        def preflight(_context):
+            return {"schema_version": 1, "writer": "stage-recovery"}
+
+        @staticmethod
+        def prepare_session(_snapshot, _request, _target, *, communicator=None):
+            assert communicator is None
+            return session
+
+    class Provider:
+        __pops_ir_immutable__ = True
+
+        @staticmethod
+        def consumer_data():
+            return {
+                "schema_version": 1,
+                "provider_id": "pops.test.stage-recovery.v1",
+                "extension": ".test",
+                "parallel_mode": "serial",
+            }
+
+        @staticmethod
+        def writer():
+            return Writer()
+
+    provider = Provider()
+    effect = replace(
+        _accepted_output_effect(request, target),
+        target=PublicationTarget(
+            str(target), provider.consumer_data(), None, ParallelMode.SERIAL),
+    )
+    runtime = object.__new__(RuntimeInstance)
+    runtime._consumer_recoveries = {}
+
+    with pytest.raises(RuntimeError, match="stage abort retained recovery"):
+        ConsumerOutputPublisher(
+            lambda _effect: OutputPreparation(provider, snapshot, request, target),
+            retain_recoveries=runtime._retain_output_recoveries,
+        ).prepare(effect)
+
+    (record,) = runtime.consumer_recoveries
+    assert record.public_path == session.temporary
+    assert record.quarantine_path.is_file()
+    runtime.restore_consumer_recovery(record.recovery_id)
+    assert session.temporary.read_bytes() == b"third-party"
+    runtime.cleanup_consumer_recovery(record.recovery_id)
+    assert runtime.consumer_recoveries == ()
+    assert not record.quarantine_path.exists()
 
 
 

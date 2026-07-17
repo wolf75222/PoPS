@@ -70,7 +70,22 @@ that differ; it never silently downgrades the guarantee.
 
 The bundle crosses into execution only through the private implementation of `pops.bind` and
 `pops.run`. Author code neither constructs the planner records nor imports runtime engines.
-`RuntimeInstance` is the opaque bound value returned by `pops.bind`; its explicit read, checkpoint,
-restart and inspection methods are the only supported instance surface. Installation and execution
-must authenticate the bundle's plan, bind, component and layout identities without rebuilding or
-weakening them.
+`RuntimeInstance` is the opaque bound value returned by `pops.bind`; its explicit read, native
+`integral(block, component=0, levels=...)`, checkpoint, restart and inspection methods are the only
+supported instance surface. Uniform integrals apply the resolved Cartesian cell measure to the native
+component reduction; adaptive integrals use the native volume-weighted composite reduction for the
+exact selected levels. Installation and execution must authenticate the bundle's plan, bind,
+component and layout identities without rebuilding or weakening them.
+
+For an accepted step, successful native finalization is an irreversible `native_finalized`
+boundary. The instance commits the engine state, accepted cursor set and consumer receipts across
+that boundary before running release-only consumer finalizers. A release failure or non-`None`
+return is exposed as a post-commit diagnostic on the accepted report and may be retried
+idempotently; it never invokes consumer abort, native rollback, envelope restoration or artifact
+removal.
+
+The instance retains failed release owners across calls and retries them at safe fire, step and
+checkpoint boundaries. Its narrow `retry_consumer_finalizers()` method permits an explicit retry.
+Typed output-quarantine authorities remain in `consumer_recoveries` until the caller performs the
+authenticated `restore_consumer_recovery()` then `cleanup_consumer_recovery()` lifecycle; reports
+may describe the failure but never replace that live authority with text.

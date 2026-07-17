@@ -59,6 +59,14 @@ def test_pops_output_is_the_exact_writer_facade():
     assert {"HDF5Writer", "NPZWriter", "ParaViewWriter", "ScientificWriter", "WriterSession"} \
         <= set(output.__all__)
 
+    public_session_methods = {
+        name for name, member in WriterSession.__dict__.items()
+        if not name.startswith("_") and callable(member)
+    }
+    assert public_session_methods == {
+        "stage", "abort_prepare", "publish", "rollback", "finalize",
+    }
+
 
 def test_paraview_geometry_assembly_has_no_python_cell_loops():
     tree = ast.parse((WRITERS / "paraview.py").read_text(), "paraview.py")

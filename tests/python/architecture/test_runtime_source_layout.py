@@ -90,6 +90,12 @@ def test_python_and_tests_consume_the_central_targets():
     for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
         assert target in TESTS_CMAKE, f"tests have no consumers for {target}"
 
+    for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
+        assert re.search(
+            rf"target_link_libraries\(\s*{target}\s+PUBLIC\s+pops_runtime_core\s*\)",
+            SRC_CMAKE,
+        ), f"{target} does not carry the shared runtime ABI authority transitively"
+
     positions = {
         name: re.search(rf"(?m)^\s*add_subdirectory\({name}\)\s*$", ROOT_CMAKE).start()
         for name in ("src", "tests", "python")

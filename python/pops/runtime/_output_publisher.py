@@ -84,7 +84,7 @@ def preflight_consumer_publication(graph: Any, execution_context: Any) -> None:
             canonical_bytes(writer_capability)
             capability["writer"] = writer_capability
             capability_rows.append(capability)
-    except Exception as exc:
+    except BaseException as exc:
         local_error = "%s: %s" % (type(exc).__name__, exc)
 
     authority = {
@@ -180,7 +180,7 @@ def _authenticate_preparation(
             "target": target,
             "target_family": family,
         }
-    except Exception as exc:
+    except BaseException as exc:
         envelope = {
             "error": "%s: %s" % (type(exc).__name__, exc),
             "rank": preparation.request.rank,
@@ -290,6 +290,13 @@ class PreparedConsumerOutput(PreparedPublication):
     def target(self):
         return getattr(self._session, "target", None)
 
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        recoveries = getattr(self._session, "recoveries", ())
+        if type(recoveries) is not tuple:
+            raise TypeError("writer session recoveries must be a tuple")
+        return recoveries
+
     def _allgather(self, envelope: dict[str, Any]) -> tuple[dict[str, Any], ...]:
         if self._communicator is None:
             return (envelope,)
@@ -338,8 +345,12 @@ class PreparedConsumerOutput(PreparedPublication):
     def _operate(self, operation: str) -> tuple[dict[str, Any], ...]:
         result = error = None
         try:
-            result = self._receipt_data(getattr(self._session, operation)())
-        except Exception as exc:
+            value = getattr(self._session, operation)()
+            if operation == "publish":
+                result = self._receipt_data(value)
+            elif value is not None:
+                raise TypeError("writer session %s() must return None" % operation)
+        except BaseException as exc:
             error = "%s: %s" % (type(exc).__name__, exc)
         rows = self._allgather({
             "mode": self._request.parallel_mode.value,
@@ -434,20 +445,50 @@ class PreparedConsumerOutput(PreparedPublication):
     def rollback(self) -> None:
         self._operate("rollback")
 
+    def finalize(self) -> None:
+        self._operate("finalize")
+
 
 class ConsumerOutputPublisher(ConsumerPublisher):
     """Dispatch only accepted scientific-output effects to their exact writer."""
 
-    __slots__ = ("_resolve", "publisher_id")
+    __slots__ = ("_resolve", "_retain_recoveries", "publisher_id")
 
     def __init__(self, resolve: Callable[[AcceptedSideEffect], OutputPreparation], *,
+                 retain_recoveries: Callable[[tuple[Any, ...]], tuple[str, ...]] | None = None,
                  publisher_id: str = "pops.exact-output.v1") -> None:
         if not callable(resolve):
             raise TypeError("ConsumerOutputPublisher resolver must be callable")
+        if retain_recoveries is not None and not callable(retain_recoveries):
+            raise TypeError("ConsumerOutputPublisher recovery retainer must be callable")
         if not isinstance(publisher_id, str) or not publisher_id or publisher_id.strip() != publisher_id:
             raise TypeError("ConsumerOutputPublisher publisher_id must be canonical text")
         self._resolve = resolve
+        self._retain_recoveries = retain_recoveries
         self.publisher_id = publisher_id
+
+    def _register_stage_recoveries(self, session: Any) -> tuple[str, ...]:
+        """Transfer abort-created authorities into the bound RuntimeInstance immediately."""
+        try:
+            recoveries = getattr(session, "recoveries", ())
+            if type(recoveries) is not tuple:
+                raise TypeError("writer session recoveries must be a tuple")
+        except BaseException as error:
+            return ("stage recovery inspection failed: %s: %s" % (
+                type(error).__name__, error),)
+        if not recoveries:
+            return ()
+        if self._retain_recoveries is None:
+            return ("stage recovery registry is unavailable",)
+        try:
+            result = self._retain_recoveries(recoveries)
+            if type(result) is not tuple or any(
+                    not isinstance(item, str) or not item for item in result):
+                raise TypeError("stage recovery registry must return tuple[str, ...]")
+            return result
+        except BaseException as error:
+            return ("stage recovery registration failed: %s: %s" % (
+                type(error).__name__, error),)
 
     def prepare(self, effect: AcceptedSideEffect) -> PreparedConsumerOutput:
         if type(effect) is not AcceptedSideEffect:
@@ -474,7 +515,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
                     or not callable(getattr(writer, "prepare_session", None)):
                 raise TypeError(
                     "scientific output writer must implement preflight() and prepare_session()")
-        except Exception as exc:
+        except BaseException as exc:
             writer_error = "%s: %s" % (type(exc).__name__, exc)
         if preparation.communicator is not None:
             writer_rows = allgather_value(preparation.communicator, {
@@ -523,7 +564,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             if any(authority[key] != value for key, value in expected.items()):
                 raise ValueError(
                     "writer session authority differs from its resolved request/target")
-        except Exception as exc:
+        except BaseException as exc:
             error = "%s: %s" % (type(exc).__name__, exc)
 
         if preparation.communicator is not None:
@@ -574,7 +615,7 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             result = session.stage()
             if result is not None:
                 raise TypeError("writer session stage() must return None")
-        except Exception as exc:
+        except BaseException as exc:
             stage_error = "%s: %s" % (type(exc).__name__, exc)
         if preparation.communicator is not None:
             stage_rows = allgather_value(preparation.communicator, {
@@ -598,8 +639,15 @@ class ConsumerOutputPublisher(ConsumerPublisher):
             cleanup_error = None
             try:
                 session.abort_prepare()
-            except Exception as exc:
+            except BaseException as exc:
                 cleanup_error = "%s: %s" % (type(exc).__name__, exc)
+            recovery_failures = self._register_stage_recoveries(session)
+            if recovery_failures:
+                recovery_error = "recovery transfer: " + "; ".join(recovery_failures)
+                cleanup_error = (
+                    recovery_error if cleanup_error is None
+                    else cleanup_error + "; " + recovery_error
+                )
             cleanup_failures = []
             if preparation.communicator is not None:
                 cleanup_rows = allgather_value(preparation.communicator, cleanup_error)

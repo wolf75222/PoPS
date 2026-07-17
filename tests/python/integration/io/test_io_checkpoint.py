@@ -3,12 +3,13 @@
 
 ``System.step(dt)`` is an exact ``FixedDt`` attempt and therefore owns a declared controller plus an
 accepted synchronized temporal boundary. Publication remains stricter: a durable checkpoint requires
-an installed compiled Program identity, so the direct low-level route must be refused. Compiled-Program
-checkpoint/restart remains covered by ``test_time_history_checkpoint.py``.
+the authenticated ``ExecutionContext`` installed by ``pops.bind``, so the direct low-level route must
+be refused before checkpoint capture. Authenticated checkpoint/restart remains covered by the public
+lifecycle tests.
 
 Verifie :
   (1) trois pas directs produisent une enveloppe FixedDt synchronisee, mais ne peuvent pas publier
-      un checkpoint sans identite de Program compile.
+      un checkpoint sans ExecutionContext installe par pops.bind.
 Invariants par assert ; imprime "OK test_io_checkpoint" en cas de succes.
 """
 from pops.numerics.reconstruction.limiters import Minmod
@@ -59,8 +60,8 @@ def build(n=16):
 tmp = tempfile.mkdtemp()
 dt = 2e-3
 
-# --- (1) synchronized direct-step state and strict checkpoint identity -------------
-print("== (1) pas direct : frontiere FixedDt synchronisee, identite stricte ==")
+# --- (1) synchronized direct-step state and strict bind authority ------------------
+print("== (1) pas direct : frontiere FixedDt synchronisee, autorite bind stricte ==")
 sim = build()
 for _ in range(3):
     sim.step(dt)
@@ -72,10 +73,10 @@ chk(temporal["transaction_stats"] == {"accepted": 3, "failed": 0, "rejected": 0}
 try:
     checkpoint_root = os.path.join(tmp, "chk")
     sim.checkpoint(checkpoint_root)
-    chk(False, "checkpoint sans Program compile aurait du etre refuse")
-except RuntimeError as exc:
-    chk("installed compiled Program hash" in str(exc),
-        "checkpoint refuse sans identite de Program compile")
+    chk(False, "checkpoint sans ExecutionContext aurait du etre refuse")
+except ValueError as exc:
+    chk("authenticated ExecutionContext installed by pops.bind" in str(exc),
+        "checkpoint refuse sans ExecutionContext installe par pops.bind")
     chk(not os.path.exists(checkpoint_root + ".npz"),
         "le refus ne laisse aucun checkpoint partiel")
 

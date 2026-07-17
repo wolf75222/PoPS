@@ -500,6 +500,45 @@ struct AmrHistoryOps {
     }
     return outcome;
   }
+
+  // Rebinding a lagged conservative residual to a replaced interface is stricter than the normal
+  // overlap-preserving history remap. The compact flux authority stores only the OLD interface, so it
+  // cannot reconstruct the mismatch on a newly exposed face. Preserve every old-fine fluctuation, but
+  // add one parent-constant correction per covered 2x2 child group so average(fine lag) == parent lag.
+  // The new interface then has exactly zero coarse/fine residual mismatch, consistent with an empty
+  // lagged flux strip, without lowering retained fine spatial detail. Callers must restrict this to
+  // histories that actually carry a conservative interface-flux authority; ordinary state/field carries
+  // keep the unmodified overlap-preserving remap.
+  static void match_conservative_ring_average_to_parent(AmrRuntime& eng, const std::string& name,
+                                                        int fk, int pk) {
+    auto found = eng.hist_rings_.find(name);
+    if (found == eng.hist_rings_.end())
+      throw std::runtime_error(
+          "AmrRuntime::match_conservative_ring_average_to_parent: unknown history '" + name + "'");
+    if (pk < 0 || fk != pk + 1 || fk >= eng.nlev_)
+      throw std::runtime_error(
+          "AmrRuntime::match_conservative_ring_average_to_parent: levels must name one hierarchy "
+          "transition");
+    const int refinement_ratio = eng.hierarchy_.refinement_ratios[static_cast<std::size_t>(pk)];
+    const BoxArray& fb = eng.hierarchy_.ba[static_cast<std::size_t>(fk)];
+    const DistributionMapping& dmap = eng.hierarchy_.dm[static_cast<std::size_t>(fk)];
+    for (auto& slot : found->second) {
+      MultiFab& fine = slot[static_cast<std::size_t>(fk)];
+      const MultiFab& parent = slot[static_cast<std::size_t>(pk)];
+      MultiFab restricted = parent;
+      mf_average_down_mb(fine, restricted);
+      MultiFab delta = parent;
+      lincomb(delta, Real(1), parent, Real(-1), restricted);
+      // regrid_field_on_layout may read a replicated parent through host-side copy routing. Complete
+      // the device lincomb before that host-visible read; the later saxpy consumes fine_delta on the
+      // same execution stream and the next slot's mf_average_down_mb begins with its own fence.
+      device_fence();
+      MultiFab no_old_fine(BoxArray{}, DistributionMapping{}, fine.ncomp(), fine.n_grow());
+      MultiFab fine_delta = regrid_field_on_layout(fb, dmap, delta, no_old_fine, pk, fine.n_grow(),
+                                                   eng.replicated_coarse_, refinement_ratio);
+      saxpy(fine, Real(1), fine_delta);
+    }
+  }
 };
 
 }  // namespace detail

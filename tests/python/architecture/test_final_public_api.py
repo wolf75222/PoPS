@@ -197,6 +197,7 @@ def test_runtime_instance_has_only_the_explicit_read_and_restart_surface() -> No
         "history_names",
         "history_ncomp",
         "inspect",
+        "integral",
         "installed_program_hash",
         "last_restart_identity",
         "last_run_identity",

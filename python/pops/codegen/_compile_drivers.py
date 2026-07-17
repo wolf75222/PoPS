@@ -78,7 +78,8 @@ def compile_native(model: Any, so_path: Any, include: Any = None, name: Any = No
             if not pops_lib:
                 raise RuntimeError(
                     "compile_native: _pops.lib not found next to the _pops module (required to "
-                    "link the DSL .dll; rebuild _pops with POPS_EXPORT_BUILDING_MODULE). The "
+                    "link the DSL .dll; rebuild _pops with its shared-exception ABI producer "
+                    "definitions). The "
                     "PRODUCTION native route is REQUIRED for the compile/bind target surface; the "
                     "prototype/host routes are NOT a fallback (ADC-600).")
             cl_flags = (["/nologo", "/LD", "/std:" + std, "/O2", "/DNDEBUG", "/EHsc",

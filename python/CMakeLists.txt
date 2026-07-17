@@ -37,6 +37,12 @@ else()
 endif()
 target_link_libraries(_pops PRIVATE pops_runtime_system pops_runtime_amr pops_runtime_output pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
+# The pybind adapter is the final runtime module producer too. Its direct binding TUs use the same
+# declaration-only exception ABI as the central runtime and select dllexport; generated native
+# components replay only POPS_RUNTIME_SHARED_EXCEPTION_ABI and therefore select dllimport.
+target_compile_definitions(_pops PRIVATE
+  POPS_RUNTIME_SHARED_EXCEPTION_ABI
+  POPS_EXPORT_BUILDING_MODULE)
 
 # RAM CI : sous Kokkos, cc1plus a -O3 sur les TU geantes du runtime (system.cpp / amr_system.cpp =
 # facades completes, briques + AMR instanciees) pese plusieurs GB CHACUNE ; des que DEUX compilent

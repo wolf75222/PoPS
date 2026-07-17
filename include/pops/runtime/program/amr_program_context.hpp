@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
@@ -14,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/core/foundation/types.hpp>                         // Real, POPS_HD
 #include <pops/mesh/boundary/physical_bc.hpp>                     // fill_ghosts
 #include <pops/mesh/execution/for_each.hpp>                       // for_each_cell, device_fence
@@ -63,6 +65,13 @@ class AmrProgramContext {
     SyncPhase phase = SyncPhase::Reflux;
     amr::ClockStamp clock;
   };
+  struct HistoryFluxTopology {
+    std::uint64_t epoch = std::numeric_limits<std::uint64_t>::max();
+    std::vector<std::vector<Box2D>> boxes;
+    std::vector<std::vector<int>> owners;
+
+    bool bound() const { return epoch != std::numeric_limits<std::uint64_t>::max(); }
+  };
   /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
   /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
   /// blocks must be materialized -- install_program forces the build before install()).
@@ -73,9 +82,14 @@ class AmrProgramContext {
           "AmrProgramContext: the AMR runtime engine is not built; install_program must force the "
           "multi-block AmrRuntime build before installing a compiled time Program over the "
           "hierarchy");
+    require_supported_program_refinement_ratios_(*eng_);
   }
   /// Direct ctor (C++ tests / the driver): an engine + the facade carrying the param / block-map stores.
-  AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {}
+  AmrProgramContext(AmrRuntime* eng, AmrSystem* facade) : facade_(facade), eng_(eng) {
+    if (eng_ == nullptr)
+      throw std::runtime_error("AmrProgramContext: the AMR runtime engine is null");
+    require_supported_program_refinement_ratios_(*eng_);
+  }
 
   // --- driver state (mutable: every seam method is const, like ProgramContext::mg_precond_) ----------
   void set_level(int k) const { level_ = k; }
@@ -279,7 +293,26 @@ class AmrProgramContext {
     }
   }
   /// Head-of-step regrid at the engine's cadence (the SAME union-tags regrid the native step runs).
-  void regrid_if_due(int macro_step) const { eng_->regrid_if_due(macro_step); }
+  /// A changed topology also rebinds lagged conservative histories and their compact interface-flux
+  /// authority before the Program reads prev(k); a layout-identical regrid remains bit-identical.
+  void regrid_if_due(int macro_step) const {
+    const HistoryFluxTopology before = history_flux_topology_snapshot_();
+    if (history_flux_topology_.bound() &&
+        !same_history_flux_topology_(history_flux_topology_, before))
+      throw std::runtime_error(
+          "AMR lagged-flux topology authority differs from the accepted hierarchy");
+    history_flux_topology_ = before;
+    eng_->regrid_if_due(macro_step);
+    const HistoryFluxTopology after = history_flux_topology_snapshot_();
+    if (after.epoch != before.epoch && !same_history_flux_layout_(before, after))
+      rebind_history_flux_topology_(before, after);
+    history_flux_topology_ = after;
+  }
+  std::uint64_t history_flux_topology_epoch() const {
+    return history_flux_topology_.bound() ? history_flux_topology_.epoch : eng_->topology_epoch();
+  }
+  bool history_flux_topology_bound() const { return history_flux_topology_.bound(); }
+  int history_flux_topology_rebind_count() const { return history_flux_topology_rebind_count_; }
 
   // --- state / RHS seam over the CURRENT level -------------------------------------------------------
   MultiFab& state(int b) const {
@@ -1024,6 +1057,20 @@ class AmrProgramContext {
  private:
   enum class ResidualCapture { FullRate, FluxOnly };
   using FluxContribution = AmrProgramFluxContribution;
+  static void require_supported_program_refinement_ratios_(const AmrRuntime& eng) {
+    for (int child = 1; child < eng.nlev(); ++child) {
+      const int parent_refinement = eng.level_refinement(child - 1);
+      const int child_refinement = eng.level_refinement(child);
+      const int ratio = child_refinement / parent_refinement;
+      if (child_refinement != parent_refinement * ratio || ratio != kAmrRefRatio)
+        throw std::runtime_error(
+            "AmrProgramContext: the native Program reflux/average-down provider supports only "
+            "refinement ratio " +
+            std::to_string(kAmrRefRatio) + "; transition " + std::to_string(child - 1) + "->" +
+            std::to_string(child) + " resolved ratio " + std::to_string(ratio) +
+            ". Select a provider whose declared capabilities cover that transition.");
+    }
+  }
   static std::runtime_error block_map_error_(std::string message) {
     return std::runtime_error(std::move(message));
   }
@@ -1160,6 +1207,8 @@ class AmrProgramContext {
     const auto saved_history_spaces = history_space_ids_;
     const auto saved_history_clocks = history_clock_ids_;
     const auto saved_history_interpolations = history_interpolation_ids_;
+    const auto saved_history_flux_topology = history_flux_topology_;
+    const int saved_history_flux_topology_rebind_count = history_flux_topology_rebind_count_;
     const auto saved_clocks = level_clocks_;
     const auto saved_clock_schedule = clock_schedule_;
     const auto saved_live = live_state_rings_;
@@ -1230,6 +1279,8 @@ class AmrProgramContext {
       history_space_ids_ = saved_history_spaces;
       history_clock_ids_ = saved_history_clocks;
       history_interpolation_ids_ = saved_history_interpolations;
+      history_flux_topology_ = saved_history_flux_topology;
+      history_flux_topology_rebind_count_ = saved_history_flux_topology_rebind_count;
       level_clocks_ = saved_clocks;
       clock_schedule_ = saved_clock_schedule;
       live_state_rings_ = saved_live;
@@ -1418,6 +1469,7 @@ class AmrProgramContext {
     ring_flux_ = std::move(state.ring_flux);
     ring_flux_contributions_ = std::move(state.ring_flux_contributions);
     ring_flux_init_ = std::move(state.ring_flux_initialized);
+    history_flux_topology_ = history_flux_topology_snapshot_();
     accepted_flux_report_ = std::move(state.accepted_flux_ledger);
     accepted_sync_report_ = std::move(state.accepted_sync);
     accepted_state_revision_ = revision;
@@ -1853,6 +1905,100 @@ class AmrProgramContext {
         std::swap(ring[s], ring[s - 1]);
     }
   }
+
+  HistoryFluxTopology history_flux_topology_snapshot_() const {
+    HistoryFluxTopology result;
+    result.epoch = eng_->topology_epoch();
+    result.boxes.reserve(static_cast<std::size_t>(nlev()));
+    result.owners.reserve(static_cast<std::size_t>(nlev()));
+    for (int level = 0; level < nlev(); ++level) {
+      const MultiFab& state = eng_->level_state(0, level);
+      result.boxes.push_back(state.box_array().boxes());
+      result.owners.push_back(state.dmap().ranks());
+    }
+    return result;
+  }
+
+  static bool same_history_flux_layout_(const HistoryFluxTopology& lhs,
+                                        const HistoryFluxTopology& rhs) {
+    return lhs.boxes == rhs.boxes && lhs.owners == rhs.owners;
+  }
+
+  static bool same_history_flux_topology_(const HistoryFluxTopology& lhs,
+                                          const HistoryFluxTopology& rhs) {
+    return lhs.epoch == rhs.epoch && same_history_flux_layout_(lhs, rhs);
+  }
+
+  static void clear_parent_interface_(EdgeFlux& flux) { flux.coarse.clear(); }
+  static void clear_child_interface_(EdgeFlux& flux) { flux.fine.clear(); }
+
+  bool has_lagged_conservative_flux_authority_(const std::string& name) const {
+    const auto fluxes = ring_flux_.find(name);
+    if (fluxes != ring_flux_.end())
+      for (const auto& slot : fluxes->second)
+        for (const EdgeFlux& flux : slot)
+          if (!flux.empty())
+            return true;
+    const auto contributions = ring_flux_contributions_.find(name);
+    if (contributions != ring_flux_contributions_.end())
+      for (const auto& slot : contributions->second)
+        for (const auto& level : slot)
+          if (!level.empty())
+            return true;
+    return false;
+  }
+
+  /// A compact lagged EdgeFlux stores only the interface that existed when the rate was evaluated.
+  /// Once that interface moves, missing new faces cannot be invented. For a ring with a conservative
+  /// flux authority, add a parent-constant correction to each child group so the lagged fine average
+  /// exactly matches its parent, then invalidate the obsolete payload. The residual and zero-mismatch
+  /// ledger agree on the new topology while every retained old-fine fluctuation, temporal slot, exact
+  /// contribution weight and clock survives. Rings without conservative flux contributions (for
+  /// example a phi/state carry) keep the engine's normal overlap-preserving remap and are untouched.
+  void rebind_history_flux_topology_(const HistoryFluxTopology& before,
+                                     const HistoryFluxTopology& after) const {
+    if (before.boxes.size() != after.boxes.size() || before.owners.size() != after.owners.size())
+      throw std::runtime_error(
+          "AMR lagged-flux topology rebind cannot change the resolved hierarchy depth");
+    for (int child = 1; child < nlev(); ++child) {
+      const std::size_t k = static_cast<std::size_t>(child);
+      const int parent = child - 1;
+      const std::size_t p = static_cast<std::size_t>(parent);
+      const bool parent_changed =
+          before.boxes[p] != after.boxes[p] || before.owners[p] != after.owners[p];
+      const bool child_changed =
+          before.boxes[k] != after.boxes[k] || before.owners[k] != after.owners[k];
+      if (!parent_changed && !child_changed)
+        continue;
+      for (const auto& [name, owner] : history_owners_) {
+        (void)owner;
+        if (!has_lagged_conservative_flux_authority_(name))
+          continue;
+        pops::detail::AmrHistoryOps::match_conservative_ring_average_to_parent(*eng_, name, child,
+                                                                               parent);
+        auto flux_ring = ring_flux_.find(name);
+        if (flux_ring != ring_flux_.end())
+          for (auto& slot : flux_ring->second) {
+            if (parent < static_cast<int>(slot.size()))
+              clear_parent_interface_(slot[static_cast<std::size_t>(parent)]);
+            if (child < static_cast<int>(slot.size()))
+              clear_child_interface_(slot[k]);
+          }
+        auto contributions = ring_flux_contributions_.find(name);
+        if (contributions != ring_flux_contributions_.end())
+          for (auto& slot : contributions->second) {
+            if (parent < static_cast<int>(slot.size()))
+              for (FluxContribution& contribution : slot[static_cast<std::size_t>(parent)])
+                clear_parent_interface_(contribution.payload);
+            if (child < static_cast<int>(slot.size()))
+              for (FluxContribution& contribution : slot[k])
+                clear_child_interface_(contribution.payload);
+          }
+      }
+      ++history_flux_topology_rebind_count_;
+    }
+  }
+
   void require_history_owner_(const std::string& name, int owner) const {
     const auto found = history_owners_.find(name);
     if (found == history_owners_.end() || found->second != owner)
@@ -2006,6 +2152,11 @@ class AmrProgramContext {
   // Per-ring per-level cold-start flags for ring_flux_ (mirror of the engine hist_init_), so the first
   // store of a (name, level) broadcasts its strip into every slot. PERSISTENT (not cleared per step).
   mutable std::map<std::string, std::vector<char>> ring_flux_init_;
+  // Derived binding between the compact lagged interface strips and the hierarchy that sampled them.
+  // It is reconstructed from the restored engine topology (the accepted-state payload already carries
+  // the strips and the engine checkpoint carries the exact boxes/owners), then advanced transactionally.
+  mutable HistoryFluxTopology history_flux_topology_;
+  mutable int history_flux_topology_rebind_count_ = 0;
   mutable std::map<std::string, int> history_owners_;
   mutable std::map<std::string, std::string> history_state_ids_;
   mutable std::map<std::string, std::string> history_space_ids_;

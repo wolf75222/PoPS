@@ -64,20 +64,44 @@ stages every rank, and `PER_RANK` stages one local target per rank. Any mixed-ra
 idempotent, collective-safe `abort_prepare()` on all sessions, so a successful peer cannot leak its
 temporary. The accepted-side-effect transaction later calls `publish()` for an exact receipt and an
 atomic no-clobber hard-link publication, `abort_prepare()` to remove unpublished residue, or
-`rollback()` to compensate an artifact published by the still-open outer transaction. Deterministic
-filenames include the consumer, clock, macro-step and exact selection identity; different bytes
-targeting the same name are a collision, never an overwrite. Runtime validation is purely structural:
-custom sessions need no PoPS base class and the bridge neither checks a built-in prepared-file type nor
-dispatches on `provider_id`. Built-in file sessions record the device/inode created by their hard link;
-rollback refuses a target that has since been replaced and never deletes the replacement.
+`rollback()` to compensate an artifact published by the still-open outer transaction. Once that
+outer transaction seals, it calls the session's idempotent `finalize()` release phase and permanently
+ends compensation before attempting release. `finalize()` must return `None`; a failed or invalid
+release is a post-commit diagnostic and remains retryable without reopening rollback. Built-in
+sessions retain the exact descriptor returned by `mkstemp` throughout staging and rollback
+eligibility; `finalize()` closes that descriptor only after the receipt is sealed. Deterministic
+filenames include the consumer, clock, macro-step and exact selection identity;
+different bytes targeting the same name are a collision, never an overwrite. Runtime validation is
+purely structural: custom sessions need no PoPS base class and the bridge neither checks a built-in
+prepared-file type nor dispatches on `provider_id`. Built-in file sessions record the device/inode
+created by their hard link; rollback refuses a target that has since been replaced and never deletes
+the replacement.
+
+The configured output root and each target parent are stable real directories, not symbolic links.
+Staging/quarantine opens the parent and its private quarantine directory without following a leaf
+symlink and fails closed if that authority cannot be retained. PoPS does not promise to follow or
+retarget an output-root symlink between preparation, publication, rollback or recovery.
 
 The native `ExternalWriter` keeps the same no-clobber boundary without exposing its component's
-publication path. The component may publish only to a private `.component-published` path. After
-native verification the runtime exclusively `os.link()`s that inode to the deterministic public
-target, records the owned device/inode pair, and removes the private name. Rollback removes the public
-name only while it still resolves to that owned inode; it never deletes a pre-existing or replaced
-artifact. This native adapter remains private and does not weaken the structural Python writer-session
-extension protocol.
+publication path. The runtime retains a staging-directory descriptor while the component writes its
+temporary and private `.component-published` paths. After native verification the runtime
+exclusively `os.link()`s that authenticated inode to the deterministic public target and records the
+owned device/inode pair. Before invoking a native discard/rollback callback, it first moves every
+owned temporary, component and public name into the retained private quarantine; a name replaced by
+a third party is preserved and surfaced as an explicit recovery instead of being passed to a
+destructive callback. Successful publication also quarantines the private component name.
+Finalization closes the retained authority only after the receipt is sealed. This native adapter
+remains private and does not weaken the structural Python writer-session extension protocol.
+
+Native discard/rollback callbacks never receive a detached temporary, component-publication or
+public-target name. The runtime supplies fresh tombstones inside one authenticated mode-0700
+directory, redacts path-bearing metadata, retains that directory only for the callback, and removes
+it afterward. Recreating any former public name between detachment and callback therefore cannot
+grant the component authority over the replacement.
+
+Every rank-local writer phase, including cancellation-like `BaseException` failures, first emits a
+canonical error envelope. All ranks reach the same consensus before cleanup, barriers or failure
+re-emission; a rank-local `KeyboardInterrupt`/`SystemExit` cannot split collective control flow.
 
 ## Native format contracts
 

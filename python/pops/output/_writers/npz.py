@@ -10,6 +10,7 @@ from pops.output._writers.common import (
     OutputWriterSession,
     ReopenedOutput,
     _StagedOutputFile,
+    _cleanup_staging_authority,
     authenticate_manifest,
     json_text,
     manifest,
@@ -98,21 +99,36 @@ class NPZWriter:
         output_manifest, identity = manifest(
             self.format, snapshot, request, evidence, datasets=datasets)
         temporary = temporary_path(target)
-        payload = dict(arrays)
-        payload["pops_output_manifest"] = np.asarray(json_text(output_manifest))
-        with temporary.open("wb") as stream:
-            np.savez_compressed(stream, **payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        read_npz(temporary).require_selection(request)
-        return _StagedOutputFile(
-            temporary,
-            target,
-            format=self.format,
-            output_identity=identity,
-            selection_identity=request.publication_identity,
-            verify=read_npz,
-        )
+        try:
+            payload = dict(arrays)
+            payload["pops_output_manifest"] = np.asarray(json_text(output_manifest))
+            with os.fdopen(temporary.duplicate(), "wb") as stream:
+                np.savez_compressed(stream, **payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            read_npz(temporary.path).require_selection(request)
+            return _StagedOutputFile(
+                temporary,
+                target,
+                format=self.format,
+                output_identity=identity,
+                selection_identity=request.publication_identity,
+                verify=read_npz,
+            )
+        except BaseException as error:
+            if temporary.is_open:
+                try:
+                    _cleanup_staging_authority(
+                        temporary,
+                        replaced_message=(
+                            "NPZ staging cleanup refused a replaced temporary at %s"
+                            % temporary.path),
+                    )
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("NPZ staging cleanup also failed: %s" % cleanup_error)
+            raise
 
 
 def read_npz(path: Any) -> ReopenedOutput:

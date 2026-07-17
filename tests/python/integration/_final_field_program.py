@@ -23,6 +23,7 @@ from pops.amr import (
     Tag,
 )
 from pops.domain import Rectangle
+from pops.codegen import Production
 from pops.fields import (
     CellCenteredSecondOrder,
     CompositeHierarchySolve,
@@ -107,8 +108,8 @@ def passive_source_model(name: str, *, coefficient: float) -> Model:
     return model
 
 
-def scalar_advection_field_model(name: str) -> Model:
-    """Conservative scalar advection with an authenticated periodic Poisson provider."""
+def scalar_advection_model(name: str) -> Model:
+    """Conservative scalar advection without an unrelated field solve."""
     frame = _frame(name)
     x_axis, y_axis = frame.axes
     model = Model(name, frame=frame)
@@ -128,6 +129,38 @@ def scalar_advection_field_model(name: str) -> Model:
         },
     )
     model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+    return model
+
+
+def scalar_burgers_model(name: str) -> Model:
+    """Conservative nonlinear scalar transport without an unrelated field solve."""
+    frame = _frame(name)
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (0.5 * rho * rho,),
+            y_axis: (0.125 * rho * rho,),
+        },
+        waves={
+            x_axis: (rho,),
+            y_axis: (0.25 * rho,),
+        },
+    )
+    model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+    return model
+
+
+def scalar_advection_field_model(name: str) -> Model:
+    """Conservative scalar advection with an authenticated periodic Poisson provider."""
+    model = scalar_advection_model(name)
+    state = next(iter(model.states.values()))
+    (rho,) = state
     potential = model.field("potential")
     model.field_operator(
         "electrostatic",
@@ -153,6 +186,8 @@ def resolve_periodic_field_program(
     field_solver: Any = None,
     initial_profile: Any = None,
     components: tuple[Any, ...] = (),
+    cxx: str | None = None,
+    include: str | None = None,
 ) -> Any:
     """Return the exact public resolved plan consumed by one native integration compile."""
     if target not in {"system", "amr_system"}:
@@ -160,7 +195,7 @@ def resolve_periodic_field_program(
     state = next(iter(model.states.values()))
     rate = model.operators["explicit_rhs"]
     flux = model.fluxes["transport"]
-    field_operator = model.field_operators["electrostatic"]
+    field_operator = model.field_operators.get("electrostatic")
 
     case = pops.Case("%s-case" % name)
     block = case.block(block_name, model)
@@ -176,7 +211,7 @@ def resolve_periodic_field_program(
         ),
     )
     case.numerics(numerics, block=block)
-    field_instance = case.field(
+    field_instance = None if field_operator is None else case.field(
         field_operator,
         FieldDiscretization(
             method=CellCenteredSecondOrder(),
@@ -217,7 +252,8 @@ def resolve_periodic_field_program(
         )
         transfer = AMRTransfer()
         transfer.state(state_instance, StateTransfer())
-        transfer.field(field_instance, EllipticRecompute())
+        if field_instance is not None:
+            transfer.field(field_instance, EllipticRecompute())
         tagging = AMRTagging(
             rules=(
                 Tag(ValueExpr(state_instance) > case.value(threshold)),
@@ -240,8 +276,20 @@ def resolve_periodic_field_program(
             transfer=transfer,
             execution=AMRExecution.synchronous(),
         )
+    native_options: dict[str, Any] = {}
+    if cxx is not None or include is not None:
+        if cxx is None or include is None:
+            raise ValueError("native resolution requires both cxx and include")
+        native_options = {
+            "backend": Production(),
+            "compile_options": {"cxx": cxx, "include": include},
+        }
     return pops.resolve(
-        pops.validate(case), layout=layout, components=components)
+        pops.validate(case),
+        layout=layout,
+        components=components,
+        **native_options,
+    )
 
 
 def compile_block_model(model: Model, *, target: str) -> Any:
@@ -263,5 +311,7 @@ __all__ = [
     "passive_field_model",
     "passive_source_model",
     "resolve_periodic_field_program",
+    "scalar_advection_model",
+    "scalar_burgers_model",
     "scalar_advection_field_model",
 ]

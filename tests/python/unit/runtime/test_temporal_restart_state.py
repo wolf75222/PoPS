@@ -2,16 +2,24 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from pops._bootstrap import StepAttemptRejected
-from pops.runtime._step_strategy import run_control_payload, run_step_attempt
-from pops.runtime._system_io import _SystemIO
+from pops.runtime._native_step_target import native_step_target
+from pops.runtime._step_strategy import (
+    resolve_run_strategy,
+    run_control_payload,
+    run_step_attempt,
+)
 from pops.runtime._temporal_restart import TemporalRestartState
 from pops.runtime._uniform_restart_preflight import preflight_uniform_restart
-from pops.time import Clock, FixedDt, TimePoint
+from pops.time import Clock, ErrorControlledDt, FixedDt, TimePoint
+
+
+ROOT = Path(__file__).resolve().parents[4]
 
 
 class _Native:
@@ -46,6 +54,105 @@ def _bound_state(strategy=None):
         time=0.0, macro_step=0,
     )
     return state
+
+
+def _bound_uniform_runtime(native_cxx, *, attempt_policy):
+    """Compile and bind a real Uniform runtime with the requested native attempt policy."""
+    if attempt_policy not in {"forced_reject", "error_retry"}:
+        raise ValueError("attempt_policy must be 'forced_reject' or 'error_retry'")
+    import pops
+    from pops.codegen import Production
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
+    from pops.math import ddt, div
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.numerics.terms import DefaultSource, Flux
+    from pops.physics import Model
+    from pops.time import GuardRole, Program, RejectAttempt
+
+    n = 4
+    frame = Rectangle(
+        "temporal-rejection-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("temporal-rejection-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    source = model.source("forcing", on=state, value=(0.5 + 0.0 * rho,))
+    rate = model.rate(
+        "transport-rate", equation=ddt(state) == -div(flux) + source)
+    case = pops.Case("temporal-rejection-case")
+    block = case.block("blk", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = Program("temporal_native_%s" % attempt_policy)
+    temporal = program.state(block[state])
+    rhs = program.rhs(state=temporal.n, terms=[Flux(), DefaultSource()])
+    candidate = program.value(
+        "candidate", temporal.n + program.dt * rhs, at=temporal.next.point)
+    if attempt_policy == "forced_reject":
+        candidate = program.guard(
+            "forced_native_rejection",
+            candidate,
+            program.norm_inf(candidate) < 0.0,
+            action=RejectAttempt(),
+        )
+        strategy = FixedDt(0.125)
+    else:
+        strategy = ErrorControlledDt(
+            dt_init=0.125,
+            rtol=1.0e-3,
+            atol=1.0e-8,
+            dt_min=0.01,
+            dt_max=0.25,
+            max_rejections=2,
+            shrink=0.5,
+            growth=1.25,
+        )
+        candidate = program.guard(
+            "dt_dependent_error_estimate",
+            candidate,
+            program.dt <= strategy.dt_init * strategy.shrink,
+            action=RejectAttempt(),
+            role=GuardRole.ERROR_ESTIMATE,
+        )
+    program.commit(temporal.next, candidate)
+    program.step_strategy(strategy)
+    case.program(program)
+    layout = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(n, n),
+        periodic=PeriodicAxes(frame.axes),
+    ))
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include"), "cxx": native_cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    initial = np.ones((1, n, n), dtype=np.float64)
+    return pops.bind(artifact, initial_state={"blk": initial})
 
 
 def _nested_schedule():
@@ -175,25 +282,63 @@ def test_restart_rejects_a_different_installed_nested_clock_schedule():
             payload, time=0.0, macro_step=0, program_schedule=changed)
 
 
-def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(tmp_path):
-    native = _Native(reject=True)
-    state = _bound_state()
-    engine = _Engine(native, state)
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible(
+    tmp_path, isolated_native_cache, native_cxx, kokkos_root,
+):
+    del isolated_native_cache, kokkos_root
+    runtime = _bound_uniform_runtime(native_cxx, attempt_policy="forced_reject")
+    engine = runtime._executor
+    native = native_step_target(engine)
+    initial = np.asarray(runtime.state_global("blk"), dtype=np.float64).copy()
     with pytest.raises(StepAttemptRejected):
-        run_step_attempt(engine, native, FixedDt(0.125), t_end=1.0)
+        run_step_attempt(engine, native, FixedDt(0.125), t_end=0.125)
 
-    assert (native.time(), native.macro_step()) == (0.0, 0)
-    assert state.transaction_stats == {"accepted": 0, "rejected": 1, "failed": 0}
+    assert (runtime.time(), runtime.macro_step()) == (0.0, 0)
+    assert np.array_equal(
+        np.asarray(runtime.state_global("blk"), dtype=np.float64), initial
+    ), "the rejected native attempt must roll back the complete state"
+    temporal = runtime.program_report().temporal
+    assert temporal["transaction_stats"] == {
+        "accepted": 0, "rejected": 1, "failed": 0,
+    }
+    assert temporal["status"] == "rejected"
+    assert temporal["synchronized"] is False
     target = tmp_path / "must_not_exist.npz"
     with pytest.raises(RuntimeError, match="accepted synchronized"):
-        _SystemIO.checkpoint(engine, str(target))
+        runtime.checkpoint(target)
     assert not target.exists()
 
-    native.reject = False
-    state.begin_run(run_control_payload(FixedDt(0.125)), time=0.0, macro_step=0)
-    run_step_attempt(engine, native, FixedDt(0.125), t_end=1.0)
-    assert state.transaction_stats == {"accepted": 1, "rejected": 1, "failed": 0}
-    assert state.status == "accepted"
+    retrying = _bound_uniform_runtime(native_cxx, attempt_policy="error_retry")
+    retrying_engine = retrying._executor
+    retrying_initial = np.asarray(
+        retrying.state_global("blk"), dtype=np.float64).copy()
+    report = run_step_attempt(
+        retrying_engine,
+        native_step_target(retrying_engine),
+        resolve_run_strategy(retrying_engine),
+        t_end=0.125,
+    )
+    assert report.status == "accepted"
+    assert report.attempts == 2
+    assert retrying.time() == pytest.approx(0.0625, rel=0.0, abs=1.0e-15)
+    assert retrying.macro_step() == 1
+    assert np.allclose(
+        np.asarray(retrying.state_global("blk"), dtype=np.float64),
+        retrying_initial + 0.5 * 0.0625,
+        rtol=0.0,
+        atol=1.0e-14,
+    ), "only the accepted retry may update the runtime state"
+    retrying_temporal = retrying.program_report().temporal
+    assert retrying_temporal["transaction_stats"] == {
+        "accepted": 1, "rejected": 1, "failed": 0,
+    }
+    assert retrying_temporal["controller_state"] == {
+        "last_accepted_dt": (0.0625).hex(),
+    }
+    assert retrying_temporal["status"] == "accepted"
+    assert retrying_temporal["synchronized"] is True
 
 
 def test_strict_temporal_manifest_refuses_missing_or_unsynchronized_state():

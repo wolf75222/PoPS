@@ -120,6 +120,15 @@ class PreparedPublication(ABC):
         """Idempotently remove this preparation, including an artifact it published."""
         raise NotImplementedError
 
+    def finalize(self) -> None:
+        """Release rollback-only resources after the enclosing transaction commits."""
+        return None
+
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        """Typed quarantine authorities retained by a failed cleanup operation."""
+        return ()
+
 
 class ConsumerPublisher(ABC):
     """ADC-686 writer dispatch: format-specific work begins only behind this seam."""
@@ -202,7 +211,7 @@ class ConsumerTransaction:
 
     __slots__ = (
         "_plan", "_publisher", "_initial_cursors", "_prepared", "_accepted",
-        "_cursor_updates", "_skipped", "_state",
+        "_cursor_updates", "_skipped", "_state", "_finalize_pending", "_recoveries",
     )
 
     def __init__(
@@ -229,6 +238,10 @@ class ConsumerTransaction:
         ] = []
         self._cursor_updates = ()
         self._skipped: list[SkippedSampleReport] = []
+        self._finalize_pending: list[
+            tuple[AcceptedSideEffect, PreparedPublication, PublicationReceipt]
+        ] = []
+        self._recoveries: list[Any] = []
         self._state = "preparing"
         self._prepare_all()
         self._state = "staged"
@@ -265,19 +278,39 @@ class ConsumerTransaction:
             return "consumer publication failed without diagnostic"
         return "%s: %s" % (type(error).__name__, error)
 
+    def _retain_recoveries(self, prepared: PreparedPublication) -> str | None:
+        try:
+            recoveries = prepared.recoveries
+            if type(recoveries) is not tuple:
+                raise TypeError("PreparedPublication.recoveries must return a tuple")
+            for recovery in recoveries:
+                if not any(value is recovery for value in self._recoveries):
+                    self._recoveries.append(recovery)
+        except Exception as exc:
+            return "recovery ownership transfer failed: %s" % self._reason(exc)
+        return None
+
     def _discard(self, prepared: PreparedPublication) -> str | None:
+        failure = None
         try:
             prepared.discard()
         except Exception as exc:
-            return "discard failed: %s" % self._reason(exc)
-        return None
+            failure = "discard failed: %s" % self._reason(exc)
+        recovery_failure = self._retain_recoveries(prepared)
+        if recovery_failure is not None:
+            failure = recovery_failure if failure is None else failure + "; " + recovery_failure
+        return failure
 
     def _rollback(self, prepared: PreparedPublication) -> str | None:
+        failure = None
         try:
             prepared.rollback()
         except Exception as exc:
-            return "publication rollback failed: %s" % self._reason(exc)
-        return None
+            failure = "publication rollback failed: %s" % self._reason(exc)
+        recovery_failure = self._retain_recoveries(prepared)
+        if recovery_failure is not None:
+            failure = recovery_failure if failure is None else failure + "; " + recovery_failure
+        return failure
 
     def _discard_staged(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
         rolled_back, diagnostics = [], []
@@ -429,6 +462,16 @@ class ConsumerTransaction:
             raise RuntimeError("consumer cursor updates exist only after acceptance")
         return self._cursor_updates
 
+    @property
+    def finalize_pending(self) -> bool:
+        """Whether this sealed transaction still owns release-only resources."""
+        return bool(self._finalize_pending)
+
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        """Typed recovery authorities retained independently of report diagnostics."""
+        return tuple(self._recoveries)
+
     def rollback_accepted(self) -> ConsumerTransactionReport:
         if self._state != "accepted":
             raise RuntimeError("ConsumerTransaction has no accepted publication to roll back")
@@ -447,12 +490,33 @@ class ConsumerTransaction:
                 "accepted consumer publication could not be compensated", report=report)
         return report
 
-    def seal(self) -> None:
-        """Drop rollback ownership after the enclosing native transaction is finalized."""
-        if self._state != "accepted":
+    def seal(self) -> tuple[str, ...]:
+        """Drop rollback ownership post-commit; retain failed releases for an idempotent retry."""
+        if self._state == "accepted":
+            self._finalize_pending = list(self._accepted)
+            self._accepted.clear()
+            # This transition precedes every release attempt: a finalizer is never allowed to
+            # reopen compensation after the enclosing native transaction has committed.
+            self._state = "sealed"
+        elif self._state != "sealed":
             raise RuntimeError("only an accepted ConsumerTransaction can be sealed")
-        self._accepted.clear()
-        self._state = "sealed"
+        failures = []
+        pending = []
+        for effect, prepared, receipt in self._finalize_pending:
+            try:
+                if prepared.finalize() is not None:
+                    raise TypeError("PreparedPublication.finalize() must return None")
+            except BaseException as error:
+                pending.append((effect, prepared, receipt))
+                failures.append(
+                    "%s: %s: %s" % (effect.consumer_id, type(error).__name__, error))
+            recovery_failure = self._retain_recoveries(prepared)
+            if recovery_failure is not None:
+                if not pending or pending[-1][1] is not prepared:
+                    pending.append((effect, prepared, receipt))
+                failures.append("%s: %s" % (effect.consumer_id, recovery_failure))
+        self._finalize_pending = pending
+        return tuple(failures)
 
     def abort(self) -> ConsumerTransactionReport | None:
         """Reject staged work or compensate accepted work; resolved failures are already clean."""

@@ -14,6 +14,7 @@ from pops.output._writers.common import (
     OutputWriterSession,
     ReopenedOutput,
     _StagedOutputFile,
+    _cleanup_staging_authority,
     authenticate_manifest,
     field_values_on_mask,
     json_text,
@@ -315,19 +316,36 @@ class ParaViewWriter:
             cells="".join(cells),
             cell_data="".join(cell_arrays),
         )
-        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-            stream.write(document)
-            stream.flush()
-            os.fsync(stream.fileno())
-        read_paraview(temporary).require_selection(request)
-        return _StagedOutputFile(
-            temporary,
-            target,
-            format=self.format,
-            output_identity=identity,
-            selection_identity=request.publication_identity,
-            verify=read_paraview,
-        )
+        try:
+            with os.fdopen(
+                temporary.duplicate(), "w", encoding="utf-8", newline="\n",
+            ) as stream:
+                stream.write(document)
+                stream.flush()
+                os.fsync(stream.fileno())
+            read_paraview(temporary.path).require_selection(request)
+            return _StagedOutputFile(
+                temporary,
+                target,
+                format=self.format,
+                output_identity=identity,
+                selection_identity=request.publication_identity,
+                verify=read_paraview,
+            )
+        except BaseException as error:
+            if temporary.is_open:
+                try:
+                    _cleanup_staging_authority(
+                        temporary,
+                        replaced_message=(
+                            "ParaView staging cleanup refused a replaced temporary at %s"
+                            % temporary.path),
+                    )
+                except BaseException as cleanup_error:
+                    add_note = getattr(error, "add_note", None)
+                    if callable(add_note):
+                        add_note("ParaView staging cleanup also failed: %s" % cleanup_error)
+            raise
 
 
 def read_paraview(path: Any) -> ReopenedOutput:

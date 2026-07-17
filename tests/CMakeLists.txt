@@ -318,6 +318,7 @@ set(POPS_CPP_STANDARD_TESTS
   test_external_brick
   test_external_brick_json
   test_runtime_environment
+  test_step_attempt_rejected_header_only
   test_world_communicator
   test_residual_operator
   test_capability_report
@@ -563,6 +564,16 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+# Link-only ABI fence: the source itself references the out-of-line StepAttemptRejected key
+# function/typeinfo, while the target requests only the AMR facade. The link therefore proves that
+# pops_runtime_amr carries the one runtime-core authority transitively (no System dependency).
+pops_test_source(_src test_step_attempt_rejected_amr_link)
+pops_add_gtest_suite(
+  NAME test_step_attempt_rejected_amr_link
+  SOURCES "${_src}"
+  EXTRA_LIBS pops_runtime_amr
+  LABELS unit runtime amr fast)
 
 pops_test_source(_src test_program_reflux_ledger)
 pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)

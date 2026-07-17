@@ -84,6 +84,13 @@ def test_program_cache_key_changes_with_precision_token():
     assert base != single, "a precision switch must re-key the program (no double .so reuse)"
 
 
+def _native_loader_contract():
+    return {
+        "schema_version": 1,
+        "compile_definitions": ("POPS_RUNTIME_SHARED_EXCEPTION_ABI",),
+    }
+
+
 def _mpi_module(tmp_path, *, library_bytes=b"mpi-library", library_name="libmpi.so"):
     import hashlib
     from pops.codegen._native_mpi import NativeMpiContract, _abi_material
@@ -122,7 +129,11 @@ def _mpi_module(tmp_path, *, library_bytes=b"mpi-library", library_name="libmpi.
             "header_sha256", "library_paths", "library_sha256")},
         "abi_sha256": abi,
     }
-    return SimpleNamespace(__has_mpi__=True, __mpi_contract__=data), library
+    return SimpleNamespace(
+        __has_mpi__=True,
+        __mpi_contract__=data,
+        __native_loader_contract__=_native_loader_contract(),
+    ), library
 
 
 @pytest.mark.parametrize("has_mpi", (False, True))
@@ -132,7 +143,10 @@ def test_every_runtime_loader_matches_host_mpi_seam(monkeypatch, tmp_path, has_m
 
     mpi_module, library = _mpi_module(tmp_path)
     module = mpi_module if has_mpi else SimpleNamespace(
-        __has_mpi__=False, __mpi_contract__=None)
+        __has_mpi__=False,
+        __mpi_contract__=None,
+        __native_loader_contract__=_native_loader_contract(),
+    )
     monkeypatch.setattr(toolchain, "_pops_module", lambda: module)
     monkeypatch.setattr(_native_host, "ensure_native_host_global", lambda value: None)
     monkeypatch.setattr(toolchain, "_native_kokkos_root", lambda: "/kokkos")
@@ -144,6 +158,8 @@ def test_every_runtime_loader_matches_host_mpi_seam(monkeypatch, tmp_path, has_m
     )
 
     _, compile_flags, link_flags = toolchain.pops_loader_build_flags()
+    assert compile_flags.count("-DPOPS_RUNTIME_SHARED_EXCEPTION_ABI") == 1
+    assert not any("POPS_EXPORT_BUILDING_MODULE" in flag for flag in compile_flags)
     if has_mpi:
         assert "-DPOPS_HAS_MPI" in compile_flags
         assert "-pthread" in compile_flags
@@ -156,6 +172,20 @@ def test_every_runtime_loader_matches_host_mpi_seam(monkeypatch, tmp_path, has_m
     else:
         assert "-DPOPS_HAS_MPI" not in compile_flags
         assert str(library) not in link_flags
+
+
+def test_native_loader_manifest_cannot_grant_the_generated_plugin_producer_role():
+    from pops.codegen import toolchain
+
+    module = SimpleNamespace(__native_loader_contract__={
+        "schema_version": 1,
+        "compile_definitions": (
+            "POPS_RUNTIME_SHARED_EXCEPTION_ABI",
+            "POPS_EXPORT_BUILDING_MODULE",
+        ),
+    })
+    with pytest.raises(RuntimeError, match="shared exception ABI contract"):
+        toolchain._native_loader_manifest_compile_flags(module)
 
 
 def test_native_feature_key_partitions_concrete_mpi_abi(monkeypatch, tmp_path):

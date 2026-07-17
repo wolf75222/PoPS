@@ -193,6 +193,8 @@ set(POPS_CPP_TEST_SOURCE_test_solve_robust "tests/cpp/unit/elliptic/test_solve_r
 set(POPS_CPP_TEST_SOURCE_test_solver_codegen_generated "tests/cpp/unit/elliptic/test_solver_codegen_generated.cpp")
 set(POPS_CPP_TEST_SOURCE_test_spatial_discretisation "tests/cpp/unit/runtime/test_spatial_discretisation.cpp")
 set(POPS_CPP_TEST_SOURCE_test_splitting "tests/cpp/unit/numerics/test_splitting.cpp")
+set(POPS_CPP_TEST_SOURCE_test_step_attempt_rejected_amr_link "tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp")
+set(POPS_CPP_TEST_SOURCE_test_step_attempt_rejected_header_only "tests/cpp/unit/runtime/test_step_attempt_rejected_header_only.cpp")
 set(POPS_CPP_TEST_SOURCE_test_structured_solver_diagnostics "tests/cpp/unit/elliptic/test_structured_solver_diagnostics.cpp")
 set(POPS_CPP_TEST_SOURCE_test_sync_residence "tests/cpp/unit/mesh/test_sync_residence.cpp")
 set(POPS_CPP_TEST_SOURCE_test_system_abstraction "tests/cpp/integration/runtime/test_system_abstraction.cpp")

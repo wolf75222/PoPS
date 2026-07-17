@@ -1,10 +1,13 @@
 """Backend-independent scientific-output identity and publication transaction."""
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 import re
+import stat
+import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -25,6 +28,70 @@ from pops._native_collectives import (
 
 OUTPUT_SCHEMA_VERSION = 1
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]+")
+
+
+def _exception_text(error: BaseException) -> str:
+    text = "%s: %s" % (type(error).__name__, error)
+    notes = tuple(
+        note for note in getattr(error, "__notes__", ())
+        if isinstance(note, str) and note
+    )
+    return text if not notes else text + "; " + "; ".join(notes)
+
+
+def _rename_no_replace(
+    source: str,
+    destination: str,
+    *,
+    src_dir_fd: int,
+    dst_dir_fd: int,
+) -> None:
+    """Atomically rename without replacement on the supported Linux/macOS contract."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_source, encoded_destination = os.fsencode(source), os.fsencode(destination)
+    syscall_number = None
+    if sys.platform == "darwin":
+        operation = getattr(libc, "renameatx_np", None)
+        flags = 0x00000004  # RENAME_EXCL from <sys/stdio.h>
+    elif sys.platform.startswith("linux"):
+        operation = getattr(libc, "renameat2", None)
+        flags = 0x00000001  # RENAME_NOREPLACE from <linux/fs.h>
+        if operation is None:
+            # Older glibc releases may omit the wrapper even when the running kernel implements
+            # renameat2.  These are the two Linux architectures supported by the PoPS release
+            # wheels; use the kernel ABI directly before declaring the guarantee unavailable.
+            syscall_number = {
+                "x86_64": 316,
+                "amd64": 316,
+                "aarch64": 276,
+                "arm64": 276,
+            }.get(os.uname().machine.lower())
+            operation = getattr(libc, "syscall", None) if syscall_number is not None else None
+    else:  # pragma: no cover - the package contract currently targets Linux and macOS.
+        operation = None
+        flags = 0
+    if operation is None:
+        raise RuntimeError(
+            "scientific output atomic quarantine requires renameat2 or renameatx_np")
+    if syscall_number is None:
+        operation.argtypes = (
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+        )
+        operation.restype = ctypes.c_int
+        result = operation(
+            src_dir_fd, encoded_source, dst_dir_fd, encoded_destination, flags)
+    else:
+        operation.argtypes = (
+            ctypes.c_long, ctypes.c_int, ctypes.c_char_p,
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+        )
+        operation.restype = ctypes.c_long
+        result = operation(
+            syscall_number, src_dir_fd, encoded_source,
+            dst_dir_fd, encoded_destination, flags)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), source, None, destination)
 
 
 def writer_execution_capability(
@@ -204,6 +271,8 @@ class WriterSession(Protocol):
 
     def rollback(self) -> None: ...
 
+    def finalize(self) -> None: ...
+
 
 class ScientificWriter(Protocol):
     """Public structural writer protocol implemented by format providers."""
@@ -263,11 +332,11 @@ def writer_session_authority(
 
 def authenticate_writer_session(session: Any) -> dict[str, Any]:
     """Validate a writer session structurally without naming a concrete backend type."""
-    required_methods = ("stage", "abort_prepare", "publish", "rollback")
+    required_methods = ("stage", "abort_prepare", "publish", "rollback", "finalize")
     if any(not callable(getattr(session, name, None)) for name in required_methods):
         raise TypeError(
             "scientific output session must implement stage(), abort_prepare(), "
-            "publish(), and rollback()")
+            "publish(), rollback(), and finalize()")
     first = getattr(session, "authority", None)
     second = getattr(session, "authority", None)
     if type(first) is not dict or type(second) is not dict or first != second:
@@ -307,18 +376,181 @@ def authenticate_writer_session(session: Any) -> dict[str, Any]:
     return first
 
 
+class _StagingAuthority:
+    """Exact inode authority retained from the creating ``mkstemp`` descriptor."""
+
+    __slots__ = ("path", "owner", "_fd")
+
+    def __init__(self, path: Any, owner: tuple[int, int], fd: int | None) -> None:
+        if type(owner) is not tuple or len(owner) != 2 \
+                or any(type(item) is not int or item < 0 for item in owner):
+            raise ValueError("staging authority requires an exact inode owner")
+        if fd is not None and (isinstance(fd, bool) or not isinstance(fd, int) or fd < 0):
+            raise ValueError("staging authority descriptor must be an open integer fd")
+        self.path, self.owner, self._fd = Path(path), owner, fd
+        if fd is not None:
+            actual = os.fstat(fd)
+            if (int(actual.st_dev), int(actual.st_ino)) != owner:
+                raise ValueError("staging descriptor differs from its inode authority")
+
+    @classmethod
+    def created(
+        cls,
+        target: Path,
+        *,
+        suffix: str = ".prepared",
+    ) -> _StagingAuthority:
+        if not isinstance(suffix, str) or not suffix.startswith(".") \
+                or "/" in suffix or "\x00" in suffix:
+            raise ValueError("staging authority suffix must be one local filename suffix")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, name = tempfile.mkstemp(
+            prefix=".%s." % target.name,
+            suffix=suffix,
+            dir=str(target.parent),
+        )
+        try:
+            created = os.fstat(descriptor)
+            return cls(
+                Path(name),
+                (int(created.st_dev), int(created.st_ino)),
+                descriptor,
+            )
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def observed(cls, path: Any, owner: tuple[int, int]) -> _StagingAuthority:
+        """Non-owning peer view of rank zero's retained staging descriptor."""
+        return cls(path, owner, None)
+
+    @property
+    def is_open(self) -> bool:
+        return self._fd is not None
+
+    def fileno(self) -> int:
+        if self._fd is None:
+            raise RuntimeError("this rank does not own the staging descriptor")
+        return self._fd
+
+    def duplicate(self) -> int:
+        return os.dup(self.fileno())
+
+    def authenticate_path(self) -> None:
+        try:
+            current = self.path.lstat()
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "scientific output staging path disappeared before authority transfer") from error
+        if (int(current.st_dev), int(current.st_ino)) != self.owner:
+            raise RuntimeError(
+                "scientific output staging path was replaced before authority transfer")
+        if self._fd is not None:
+            descriptor = os.fstat(self._fd)
+            if (int(descriptor.st_dev), int(descriptor.st_ino)) != self.owner:
+                raise RuntimeError("scientific output staging descriptor authority changed")
+
+    def close(self) -> None:
+        descriptor = self._fd
+        if descriptor is None:
+            return
+        self._fd = None
+        os.close(descriptor)
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantineRecovery:
+    """Explicit lifecycle for one unauthenticated inode retained after a race."""
+
+    public_path: Path
+    quarantine_path: Path
+    owner: tuple[int, int]
+    directory_owner: tuple[int, int]
+
+    def restore(self) -> None:
+        """Restore the retained inode without overwriting a path created after the failure."""
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        directory = self.quarantine_path.parent
+        parent_descriptor = os.open(directory.parent, flags)
+        descriptor = os.open(directory.name, flags, dir_fd=parent_descriptor)
+        try:
+            current_directory = os.fstat(descriptor)
+            if (int(current_directory.st_dev), int(current_directory.st_ino)) \
+                    != self.directory_owner:
+                raise RuntimeError("scientific output recovery directory authority changed")
+            retained = os.stat(
+                self.quarantine_path.name, dir_fd=descriptor, follow_symlinks=False)
+            if (int(retained.st_dev), int(retained.st_ino)) != self.owner:
+                raise RuntimeError("scientific output recovery inode authority changed")
+            try:
+                os.link(
+                    self.quarantine_path.name,
+                    self.public_path.name,
+                    src_dir_fd=descriptor,
+                    dst_dir_fd=parent_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                public = self.public_path.lstat()
+                if (int(public.st_dev), int(public.st_ino)) != self.owner:
+                    raise RuntimeError(
+                        "scientific output recovery refuses to overwrite the public path") from None
+        finally:
+            os.close(descriptor)
+            os.close(parent_descriptor)
+
+    def cleanup_restored(self) -> None:
+        """Drop the retained hardlink only while the same inode remains restored publicly."""
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        directory = self.quarantine_path.parent
+        parent_descriptor = os.open(directory.parent, flags)
+        descriptor = os.open(directory.name, flags, dir_fd=parent_descriptor)
+        try:
+            current_directory = os.fstat(descriptor)
+            if (int(current_directory.st_dev), int(current_directory.st_ino)) \
+                    != self.directory_owner:
+                raise RuntimeError("scientific output recovery directory authority changed")
+            public = self.public_path.lstat()
+            if (int(public.st_dev), int(public.st_ino)) != self.owner:
+                raise RuntimeError(
+                    "scientific output recovery refuses cleanup before exact restoration")
+            try:
+                retained = os.stat(
+                    self.quarantine_path.name, dir_fd=descriptor, follow_symlinks=False)
+            except FileNotFoundError:
+                # A previous call may have unlinked the retained hardlink before rmdir failed.
+                # The authenticated public inode is then the remaining recovery authority.
+                pass
+            else:
+                retained_owner = (int(retained.st_dev), int(retained.st_ino))
+                if retained_owner != self.owner:
+                    raise RuntimeError("scientific output recovery inode authority changed")
+                os.unlink(self.quarantine_path.name, dir_fd=descriptor)
+            os.rmdir(directory.name, dir_fd=parent_descriptor)
+        finally:
+            os.close(descriptor)
+            os.close(parent_descriptor)
+
+
+class _OutputRecoveryRequired(RuntimeError):
+    def __init__(self, message: str, recovery: _QuarantineRecovery) -> None:
+        super().__init__(message)
+        self.recovery = recovery
+
+
 class _StagedOutputFile:
     """Verified temporary scientific file, not yet attached to a consumer effect."""
 
     __slots__ = (
         "temporary", "target", "format", "output_identity", "selection_identity",
         "_verify", "_published", "_discarded", "_created_target", "_target_owner",
-        "_temporary_owner", "_communicator",
+        "_staging", "_temporary_owner", "_communicator", "_recoveries",
     )
 
     def __init__(
         self,
-        temporary: Any,
+        temporary: _StagingAuthority,
         target: Any,
         *,
         format: str,
@@ -326,32 +558,50 @@ class _StagedOutputFile:
         selection_identity: Identity,
         verify: Callable[[Any], Any],
         communicator: Any = None,
-        temporary_owner: tuple[int, int] | None = None,
     ) -> None:
-        self.temporary, self.target = Path(temporary), Path(target)
+        if type(temporary) is not _StagingAuthority:
+            raise TypeError("staged output requires its exact mkstemp authority")
+        self._staging = temporary
+        self.temporary, self.target = temporary.path, Path(target)
         self.format = format
         self.output_identity, self.selection_identity = output_identity, selection_identity
         self._verify, self._communicator = verify, communicator
         self._published = self._discarded = False
         self._created_target = False
         self._target_owner: tuple[int, int] | None = None
-        if communicator is None:
-            if temporary_owner is not None:
-                raise ValueError(
-                    "serial scientific output rejects a detached temporary inode authority")
-            temporary_stat = self.temporary.lstat()
-            temporary_owner = (
-                int(temporary_stat.st_dev),
-                int(temporary_stat.st_ino),
-            )
-        elif (
-            type(temporary_owner) is not tuple
-            or len(temporary_owner) != 2
-            or any(type(item) is not int or item < 0 for item in temporary_owner)
-        ):
-            raise ValueError(
-                "collective scientific output requires the rank-zero temporary inode authority")
-        self._temporary_owner = temporary_owner
+        self._temporary_owner = temporary.owner
+        self._recoveries: list[Any] = []
+        if communicator is None and not temporary.is_open:
+            raise ValueError("serial scientific output requires its retained mkstemp descriptor")
+        try:
+            temporary.authenticate_path()
+        except BaseException:
+            temporary.close()
+            raise
+
+    def __del__(self) -> None:
+        try:
+            self._staging.close()
+        except BaseException:
+            pass
+
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return tuple(self._recoveries)
+
+    def cleanup_recoveries(self) -> None:
+        failures = []
+        remaining = []
+        for recovery in self._recoveries:
+            try:
+                recovery.cleanup_restored()
+            except BaseException as error:
+                failures.append("%s: %s" % (type(error).__name__, error))
+                remaining.append(recovery)
+        self._recoveries = remaining
+        if failures:
+            raise RuntimeError(
+                "scientific output recovery cleanup failed: " + "; ".join(failures))
 
     def _rank(self) -> int:
         return 0 if self._communicator is None else native_rank(self._communicator)
@@ -360,17 +610,160 @@ class _StagedOutputFile:
         if self._communicator is not None:
             native_barrier(self._communicator)
 
-    def _unlink_temporary_owned(self) -> None:
+    @staticmethod
+    def _quarantine_owned_path(
+        path: Path,
+        expected_owner: tuple[int, int] | None,
+        *,
+        replaced_message: str,
+    ) -> None:
+        """Atomically detach one path, then delete only from a private quarantine.
+
+        The rename is the authority boundary: a concurrent replacement is moved, authenticated in
+        the private directory, and retained for explicit recovery instead of being unlinked.  The
+        quarantine directory is mode 0700, randomly named, and all lookups after its creation are
+        anchored by directory descriptors.  This removes the public-path ``lstat -> unlink`` race
+        on both Linux and macOS.
+        """
+        if expected_owner is None:
+            raise RuntimeError(replaced_message + "; no authenticated inode authority exists")
+        directory_flags = (
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        )
+        parent_fd = os.open(path.parent, directory_flags)
+        quarantine_name = ""
+        quarantine_fd: int | None = None
+        retain_quarantine = False
+        cleanup_error: BaseException | None = None
         try:
-            current = self.temporary.lstat()
-        except FileNotFoundError:
-            return
-        owner = (int(current.st_dev), int(current.st_ino))
-        if owner != self._temporary_owner:
-            raise RuntimeError(
-                "scientific output refuses to delete a replaced temporary at %s"
-                % self.temporary)
-        self.temporary.unlink()
+            for _attempt in range(8):
+                quarantine_name = ".pops-quarantine-%s" % os.urandom(16).hex()
+                try:
+                    os.mkdir(quarantine_name, 0o700, dir_fd=parent_fd)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise RuntimeError("scientific output could not allocate a private quarantine")
+            quarantine_fd = os.open(
+                quarantine_name, directory_flags, dir_fd=parent_fd)
+            parent_stat = os.fstat(parent_fd)
+            directory_stat = os.fstat(quarantine_fd)
+            named_directory = os.stat(
+                quarantine_name, dir_fd=parent_fd, follow_symlinks=False)
+            directory_owner = (int(directory_stat.st_dev), int(directory_stat.st_ino))
+            if not stat.S_ISDIR(directory_stat.st_mode) \
+                    or stat.S_IMODE(directory_stat.st_mode) & 0o077 \
+                    or directory_owner != (
+                        int(named_directory.st_dev), int(named_directory.st_ino)) \
+                    or int(directory_stat.st_dev) != int(parent_stat.st_dev):
+                retain_quarantine = True
+                raise RuntimeError(
+                    "scientific output private quarantine failed directory authentication")
+            try:
+                os.stat("owned", dir_fd=quarantine_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                retain_quarantine = True
+                raise RuntimeError(
+                    "scientific output private quarantine destination already exists")
+            try:
+                _rename_no_replace(
+                    path.name,
+                    "owned",
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=quarantine_fd,
+                )
+            except FileNotFoundError:
+                return
+            except FileExistsError as error:
+                # The earlier lookup is only diagnostic.  The rename itself is the atomic
+                # no-clobber boundary, so retain an independently-created destination verbatim.
+                retain_quarantine = True
+                raise RuntimeError(
+                    "scientific output private quarantine destination appeared concurrently at %s"
+                    % (path.parent / quarantine_name / "owned")
+                ) from error
+            # From this point on, every exception must retain the detached inode for recovery.
+            retain_quarantine = True
+            recovery = path.parent / quarantine_name / "owned"
+            try:
+                quarantined = os.stat("owned", dir_fd=quarantine_fd, follow_symlinks=False)
+                owner = (int(quarantined.st_dev), int(quarantined.st_ino))
+                if owner != expected_owner:
+                    recovery_authority = _QuarantineRecovery(
+                        path, recovery, owner, directory_owner)
+                    try:
+                        os.link(
+                            "owned",
+                            path.name,
+                            src_dir_fd=quarantine_fd,
+                            dst_dir_fd=parent_fd,
+                            follow_symlinks=False,
+                        )
+                    except FileExistsError:
+                        recovery_note = (
+                            "the public path is occupied; replacement retained for recovery at %s"
+                            % recovery)
+                    except OSError as restore_error:
+                        recovery_note = (
+                            "replacement retained for recovery at %s; restoration failed: %s"
+                            % (recovery, restore_error))
+                    else:
+                        recovery_note = (
+                            "replacement restored and recovery authority retained at %s" % recovery)
+                    raise _OutputRecoveryRequired(
+                        replaced_message + "; " + recovery_note,
+                        recovery_authority,
+                    )
+
+                # Only the authenticated inode reaches this private, descriptor-anchored unlink.
+                os.unlink("owned", dir_fd=quarantine_fd)
+                retain_quarantine = False
+            except _OutputRecoveryRequired:
+                raise
+            except BaseException as error:
+                recovery_authority = _QuarantineRecovery(
+                    path, recovery, expected_owner, directory_owner)
+                raise _OutputRecoveryRequired(
+                    "%s; cleanup failed after atomic quarantine; recovery authority retained at %s: %s"
+                    % (replaced_message, recovery, error),
+                    recovery_authority,
+                ) from error
+        finally:
+            try:
+                if quarantine_fd is not None:
+                    os.close(quarantine_fd)
+                if quarantine_name and not retain_quarantine:
+                    os.rmdir(quarantine_name, dir_fd=parent_fd)
+            except BaseException as error:
+                cleanup_error = error
+            try:
+                os.close(parent_fd)
+            except BaseException as error:
+                cleanup_error = cleanup_error or error
+            if cleanup_error is not None:
+                primary = sys.exc_info()[1]
+                if primary is not None:
+                    add_note = getattr(primary, "add_note", None)
+                    if callable(add_note):
+                        add_note("quarantine cleanup also failed: %s" % cleanup_error)
+                else:
+                    raise cleanup_error
+
+    def _remove_temporary_owned(self) -> None:
+        try:
+            self._quarantine_owned_path(
+                self.temporary,
+                self._temporary_owner,
+                replaced_message=(
+                    "scientific output refuses to delete a replaced temporary at %s"
+                    % self.temporary),
+            )
+        except _OutputRecoveryRequired as error:
+            self._recoveries.append(error.recovery)
+            raise
 
     def publish(self) -> OutputPublicationReceipt:
         if self._discarded:
@@ -392,16 +785,21 @@ class _StagedOutputFile:
                             "scientific output staging inode changed before publication")
                     os.link(self.temporary, self.target)
                     self._created_target = True
-                    self._target_owner = owner
+                    self._target_owner = self._temporary_owner
+                    linked = self.target.lstat()
+                    linked_owner = (int(linked.st_dev), int(linked.st_ino))
+                    if linked_owner != self._target_owner:
+                        raise RuntimeError(
+                            "scientific output staging inode changed during publication")
                 except FileExistsError:
                     if hashlib.sha256(self.temporary.read_bytes()).digest() != hashlib.sha256(
                             self.target.read_bytes()).digest():
                         raise FileExistsError(
                             "scientific output collision at deterministic target %s" % self.target
                         ) from None
-                self._unlink_temporary_owned()
-            except Exception as exc:
-                failure = "%s: %s" % (type(exc).__name__, exc)
+                self._remove_temporary_owned()
+            except BaseException as exc:
+                failure = _exception_text(exc)
         if self._communicator is not None:
             failure = broadcast_value(self._communicator, failure, root=0)
         if failure is not None:
@@ -420,14 +818,15 @@ class _StagedOutputFile:
         failure = None
         if self._rank() == 0:
             try:
-                self._unlink_temporary_owned()
-            except Exception as exc:
-                failure = "%s: %s" % (type(exc).__name__, exc)
+                self._remove_temporary_owned()
+            except BaseException as exc:
+                failure = _exception_text(exc)
         if self._communicator is not None:
             failure = broadcast_value(self._communicator, failure, root=0)
         self._barrier()
         if failure is not None:
             raise RuntimeError("collective output discard failed: %s" % failure)
+        self._staging.close()
         self._discarded = True
 
     def rollback(self) -> None:
@@ -437,35 +836,50 @@ class _StagedOutputFile:
         self._barrier()
         failure = None
         if self._rank() == 0:
+            failures = []
+            if self._created_target:
+                try:
+                    self._quarantine_owned_path(
+                        self.target,
+                        self._target_owner,
+                        replaced_message=(
+                            "scientific output rollback refused a replaced target at %s"
+                            % self.target),
+                    )
+                except _OutputRecoveryRequired as exc:
+                    self._recoveries.append(exc.recovery)
+                    failures.append(_exception_text(exc))
+                except BaseException as exc:
+                    failures.append(_exception_text(exc))
             try:
-                self._unlink_temporary_owned()
-                if self._created_target:
-                    try:
-                        current = self.target.lstat()
-                    except FileNotFoundError:
-                        current = None
-                    if current is not None:
-                        owner = (int(current.st_dev), int(current.st_ino))
-                        if owner != self._target_owner:
-                            raise RuntimeError(
-                                "scientific output rollback refused a replaced target at %s"
-                                % self.target)
-                        self.target.unlink()
-            except Exception as exc:
-                failure = "%s: %s" % (type(exc).__name__, exc)
+                self._remove_temporary_owned()
+            except BaseException as exc:
+                failures.append(_exception_text(exc))
+            if failures:
+                failure = "; ".join(failures)
         if self._communicator is not None:
             failure = broadcast_value(self._communicator, failure, root=0)
         self._barrier()
         if failure is not None:
             raise RuntimeError("collective output rollback failed: %s" % failure)
+        self._staging.close()
         self._published = False
         self._discarded = True
+
+    def finalize(self) -> None:
+        """Release rollback inode authority after the outer transaction commits."""
+        if not self._published or self._discarded:
+            raise RuntimeError("only a published output can release rollback authority")
+        self._staging.close()
+        return None
 
 
 class OutputWriterSession:
     """Built-in file-session implementation; custom writers may remain fully structural."""
 
-    __slots__ = ("_authority", "_identity", "_stage_file", "_staged", "_aborted")
+    __slots__ = (
+        "_authority", "_identity", "_stage_file", "_staged", "_aborted", "_finalized",
+    )
 
     def __init__(
         self,
@@ -481,6 +895,7 @@ class OutputWriterSession:
         self._stage_file = stage_file
         self._staged: _StagedOutputFile | None = None
         self._aborted = False
+        self._finalized = False
         authenticate_writer_session(self)
 
     @property
@@ -499,8 +914,16 @@ class OutputWriterSession:
     def target(self) -> Path:
         return Path(self._authority["target"])
 
+    @property
+    def recoveries(self) -> tuple[Any, ...]:
+        return () if self._staged is None else self._staged.recoveries
+
+    def cleanup_recoveries(self) -> None:
+        if self._staged is not None:
+            self._staged.cleanup_recoveries()
+
     def stage(self) -> None:
-        if self._aborted:
+        if self._aborted or self._finalized:
             raise RuntimeError("aborted writer session cannot be staged")
         if self._staged is not None or self._stage_file is None:
             return
@@ -524,9 +947,21 @@ class OutputWriterSession:
         return self._staged.publish()
 
     def rollback(self) -> None:
+        if self._finalized:
+            raise RuntimeError("finalized writer session cannot be rolled back")
         if self._staged is not None:
             self._staged.rollback()
         self._aborted = True
+
+    def finalize(self) -> None:
+        if self._finalized:
+            return None
+        if self._staged is not None:
+            result = self._staged.finalize()
+            if result is not None:
+                raise TypeError("built-in writer finalize() must return None")
+        self._finalized = True
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,16 +977,25 @@ class ReopenedOutput:
         return self
 
 
-def temporary_path(target: Path) -> Path:
-    """Create one local staging file; distributed ownership is handled by its writer."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(
-        prefix=".%s." % target.name,
-        suffix=".prepared",
-        dir=str(target.parent),
-    )
-    os.close(descriptor)
-    return Path(name)
+def temporary_path(target: Path) -> _StagingAuthority:
+    """Create and retain the exact staging inode authority from ``mkstemp``."""
+    return _StagingAuthority.created(target)
+
+
+def _cleanup_staging_authority(
+    authority: _StagingAuthority,
+    *,
+    replaced_message: str,
+) -> None:
+    """Remove a failed staging inode through the same quarantine protocol, then close its fd."""
+    try:
+        _StagedOutputFile._quarantine_owned_path(
+            authority.path,
+            authority.owner,
+            replaced_message=replaced_message,
+        )
+    finally:
+        authority.close()
 
 
 def piece_payload(

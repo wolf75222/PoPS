@@ -442,11 +442,11 @@ def test_failed_child_restart_rolls_back_already_restored_layouts(compiled_multi
             else:
                 setattr(self.engine, name, value)
 
-        def restart(self, path):
+        def _apply_checkpoint_restart(self, prepared):
             if not self.failed:
                 self.failed = True
                 raise RuntimeError("injected second-layout restart failure")
-            return self.engine.restart(path)
+            return self.engine._apply_checkpoint_restart(prepared)
 
     native._engines[second_layout] = FailFirstRestart(original)
     with pytest.raises(RuntimeError, match="second-layout restart failure"):
@@ -492,7 +492,7 @@ def test_post_load_composite_failure_rolls_back_children_counters_and_identity(
     with pytest.raises(RuntimeError, match="post-load temporal divergence"):
         instance.restart(checkpoint)
 
-    assert calls == 2
+    assert calls == 1
     assert instance.time() == before_time
     assert instance._executor.mapping_report() == before_counts
     assert native.last_restart_identity == before_identity

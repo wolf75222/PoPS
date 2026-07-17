@@ -1,5 +1,9 @@
 #include "../bindings_detail.hpp"
 
+#if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
+#error "the _pops host must build the shared runtime exception ABI as its exporting producer"
+#endif
+
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
 #include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/world_communicator.hpp>
@@ -408,6 +412,15 @@ void init_core(py::module_& m) {
 #else
   m.attr("__has_kokkos__") = false;
 #endif
+
+  // Central, closed compile-definition manifest replayed by every native plugin compiler. The host
+  // defines both SHARED_EXCEPTION_ABI and BUILDING_MODULE; generated loaders replay only the former,
+  // so they consume the host's one exported StepAttemptRejected key function/typeinfo.
+  py::dict native_loader_contract;
+  native_loader_contract["schema_version"] = 1;
+  native_loader_contract["compile_definitions"] =
+      py::make_tuple("POPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  m.attr("__native_loader_contract__") = std::move(native_loader_contract);
 
   // Exact, replayable MPI::MPI_CXX build manifest.  Codegen re-hashes every path immediately before
   // compilation, so an in-place MPI upgrade cannot reuse the cached ABI digest with different bytes.

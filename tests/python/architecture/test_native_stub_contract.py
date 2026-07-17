@@ -11,12 +11,16 @@ STUB = REPO_ROOT / "python" / "pops" / "_pops.pyi"
 CORE_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_core.cpp"
 AMR_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_amr.cpp"
 HDF5_BINDINGS = REPO_ROOT / "python" / "bindings" / "core" / "init" / "init_parallel_hdf5.cpp"
+COMPILE_DRIVERS = (
+    REPO_ROOT / "python" / "pops" / "codegen" / "_compile_drivers.py",
+    REPO_ROOT / "python" / "pops" / "external" / "compiler.py",
+)
 
 PUBLIC_METADATA = {
     "__version__", "__abi_version__", "__release_contract_sha256__", "__public_api_version__",
     "__semantic_ir_version__", "__normalization_version__", "__component_registry_version__",
     "__checkpoint_schema_version__", "__cxx_std__", "__cxx_compiler__", "__has_kokkos__",
-    "__has_mpi__", "__has_parallel_hdf5__", "__mpi_contract__",
+    "__has_mpi__", "__has_parallel_hdf5__", "__native_loader_contract__", "__mpi_contract__",
     "__aux_named_base__", "__aux_max_extra__",
     "__aux_base_comps__", "__aux_max_comps__", "__max_runtime_params__", "__aux_canonical__",
 }
@@ -89,6 +93,34 @@ def test_public_native_stub_surface_is_closed_and_backed_by_cpp():
     assert not public & INTERNAL_BOOTSTRAP_TYPES
     assert "_System" not in STUB.read_text(encoding="utf-8")
     assert "_AmrSystem" not in STUB.read_text(encoding="utf-8")
+
+
+def test_every_native_plugin_compile_route_uses_the_central_loader_manifest():
+    routes = set()
+    for path in COMPILE_DRIVERS:
+        source = path.read_text(encoding="utf-8")
+        assert "POPS_RUNTIME_SHARED_EXCEPTION_ABI" not in source, (
+            "compile routes must replay the central toolchain manifest, not inject ABI macros")
+        tree = ast.parse(source, filename=str(path))
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            called = {
+                child.func.id
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            }
+            if "_run_compile" not in called:
+                continue
+            route = (str(path.relative_to(REPO_ROOT)), node.name)
+            routes.add(route)
+            assert "pops_loader_build_flags" in called, (
+                "%s must consume the authenticated central native-loader manifest" % (route,))
+    assert routes == {
+        ("python/pops/codegen/_compile_drivers.py", "compile_native"),
+        ("python/pops/codegen/_compile_drivers.py", "compile_problem"),
+        ("python/pops/external/compiler.py", "compile_component"),
+    }
 
 
 def test_bootstrap_types_match_the_native_config_pods_without_dynamic_escape_hatches():

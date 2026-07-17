@@ -219,6 +219,16 @@ def test_uniform_condensed_implicit_matches_discrete_fourier_oracle(
     np.testing.assert_allclose(actual, expected, rtol=5.0e-10, atol=5.0e-10)
     assert np.array_equal(actual[0], density)
     assert float(actual[0].sum()) == float(density.sum())
+    cell_measure = 1.0 / (CELLS * CELLS)
+    expected_inventory_integral = float(actual[0].sum()) * cell_measure
+    assert runtime.integral("packet") == expected_inventory_integral
+    assert runtime.integral("packet", component=0, levels=(0,)) == expected_inventory_integral
+    with pytest.raises(TypeError, match="non-negative integer"):
+        runtime.integral("packet", component=True)
+    with pytest.raises(ValueError, match="strictly increasing and unique"):
+        runtime.integral("packet", levels=(0, 0))
+    with pytest.raises(ValueError, match="only level 0"):
+        runtime.integral("packet", levels=(1,))
     assert np.max(np.abs(potential)) > 1.0e-6
 
     # The elliptic correction is observable: a broken/omitted RHS, coefficient assembly or matvec
