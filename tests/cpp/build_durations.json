@@ -144,7 +144,6 @@
   "test_polar_lorentz_source": 2.0,
   "test_polar_mms_vr": 2.0,
   "test_polar_poisson_mms": 2.0,
-  "test_polar_ring_advection": 2.0,
   "test_polar_schur_multibox": 2.0,
   "test_polar_system_step": 2.0,
   "test_polar_tensor_elliptic_mms": 2.0,

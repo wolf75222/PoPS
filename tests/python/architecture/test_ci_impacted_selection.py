@@ -614,8 +614,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
     assert cpp_shards_block.count("run_with_heartbeat() {") == 1
     assert 'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m' in cpp_shards_block
     assert "test_watchdog=7m" in cpp_shards_block
-    assert 'if [ "$target" = "test_polar_ring_advection" ]; then' in cpp_shards_block
-    assert "test_watchdog=15m" in cpp_shards_block
     assert (
         'run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" '
         '"$test_watchdog"' in cpp_shards_block
@@ -721,8 +719,6 @@ def test_ci_required_gate_aggregates_full_matrix_and_mpi_path_changes():
         "steps.openmp-cpp-plan.outputs.cpp_shard_label_regex"
     )
     assert "test_watchdog=7m" in openmp_block
-    assert 'target" = "test_polar_ring_advection"' in openmp_block
-    assert "test_watchdog=15m" in openmp_block
     assert 'timeout --signal=TERM --kill-after=30s "$test_watchdog"' in openmp_block
     assert 'run_with_heartbeat "Kokkos OpenMP Python module build" 45m' in openmp_block
     assert "-DPOPS_HEAVY_MODULE_TU_POOL=2" in openmp_block

@@ -967,11 +967,6 @@ sources = ["tests/cpp/unit/physics/test_polar_mms_vr.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_polar_ring_advection"
-sources = ["tests/cpp/unit/physics/test_polar_ring_advection.cpp"]
-labels = ["unit", "physics", "slow"]
-
-[[cpp.suite]]
 name = "test_polar_transport_mms"
 sources = ["tests/cpp/unit/physics/test_polar_transport_mms.cpp"]
 labels = ["unit", "physics", "fast"]

@@ -396,9 +396,15 @@ def test_source_component_executes_through_generic_native_loader_and_flux_consum
     assert loaded.native_handle.report()["abi_key"] == _pops.abi_key()
     assert installed.to_data()["provenance"]["origin"] == "source"
     assert installed.runtime_contract.native_interface["name"] == "numerical_flux"
-    installed.path.write_bytes(b"tampered")
+
+    # Never truncate a shared object that is still dlopen-ed: Linux may fault a later access to
+    # the shortened mapping with SIGBUS.  Exercise the same authenticated-install collision on a
+    # distinct, never-loaded copy so the test remains a valid filesystem-integrity check.
+    collision_root = tmp_path / "collision"
+    collision = artifact.install(collision_root)
+    collision.path.write_bytes(b"tampered")
     with pytest.raises(ComponentPackageError, match="content-addressed path has other bytes"):
-        artifact.install(install_root)
+        artifact.install(collision_root)
 
 
 def _compile_writer(tmp_path: Path, name: str):

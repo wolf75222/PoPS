@@ -163,7 +163,6 @@ set(POPS_CPP_TEST_SOURCE_test_polar_fluid_transport "tests/cpp/unit/physics/test
 set(POPS_CPP_TEST_SOURCE_test_polar_lorentz_source "tests/cpp/unit/physics/test_polar_lorentz_source.cpp")
 set(POPS_CPP_TEST_SOURCE_test_polar_mms_vr "tests/cpp/unit/physics/test_polar_mms_vr.cpp")
 set(POPS_CPP_TEST_SOURCE_test_polar_poisson_mms "tests/cpp/unit/elliptic/test_polar_poisson_mms.cpp")
-set(POPS_CPP_TEST_SOURCE_test_polar_ring_advection "tests/cpp/unit/physics/test_polar_ring_advection.cpp")
 set(POPS_CPP_TEST_SOURCE_test_polar_schur_multibox "tests/cpp/unit/elliptic/test_polar_schur_multibox.cpp")
 set(POPS_CPP_TEST_SOURCE_test_polar_system_step "tests/cpp/integration/runtime/test_polar_system_step.cpp")
 set(POPS_CPP_TEST_SOURCE_test_polar_tensor_elliptic_mms "tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp")

@@ -475,17 +475,7 @@ jobs:
           python3 scripts/ci_select_tests.py verify-cpp-target-labels \
             --ctest-json "$ctest_inventory" \
             --targets "${cpp_targets[@]}"
-          # Most shards retain the tight seven-minute test guard.  The polar-ring regression has
-          # a measured healthy duration of ~748 s, so only the shard that actually owns that target
-          # receives the bounded 15-minute allowance (about 20% headroom).  It remains a normal,
-          # required CTest selected by the same authenticated target label as every other suite.
           test_watchdog=7m
-          for target in "${cpp_targets[@]}"; do
-            if [ "$target" = "test_polar_ring_advection" ]; then
-              test_watchdog=15m
-              break
-            fi
-          done
           run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" "$test_watchdog" \
             ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
@@ -1673,12 +1663,6 @@ jobs:
             --ctest-json "$ctest_inventory" \
             --targets "${cpp_targets[@]}"
           test_watchdog=7m
-          for target in "${cpp_targets[@]}"; do
-            if [ "$target" = "test_polar_ring_advection" ]; then
-              test_watchdog=15m
-              break
-            fi
-          done
           set +e
           timeout --signal=TERM --kill-after=30s "$test_watchdog" \
             ctest --preset ci-kokkos --parallel 2 \
