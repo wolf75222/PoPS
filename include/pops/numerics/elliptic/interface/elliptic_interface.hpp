@@ -35,8 +35,8 @@ namespace pops {
 // ---------------------------------------------------------------------------
 // (1) EllipticOperator: OPERATOR role of the elliptic stencil at the MultiFab level.
 //
-// Contract = what a matrix-free matvec consumer (TensorKrylovSolver) reads from
-// its operator to apply L_int(phi) = div(A grad phi) - kappa phi in a way
+// Contract = what a matrix-free matvec provider reads from its operator to apply
+// L_int(phi) = div(A grad phi) - kappa phi in a way
 // CONSISTENT with the MG residual (poisson_residual): the geometry, the physical BC, the
 // BoxArray/DistributionMapping of the fine level, and the operator coefficient POINTERS
 // (eps_x, eps_y, kappa, cut-cell weights, cross terms Axy/Ayx, mask).
@@ -71,16 +71,14 @@ concept EllipticOperator = requires(Op op) {
 //
 // Contract = solve(rel_tol, max_iters) that returns a RESULT (the convention "solve
 // up to a relative tolerance in at most max_iters steps, returning a report").
-// The return type is NOT constrained to a precise struct: GeometricMG
-// returns int (number of V-cycles performed) and TensorKrylovSolver returns SolveReport
-// (iters + relative residual + convergence). The only REAL common invariant is: the return
-// is NOT void (it carries stopping information). The concept thus reflects this
-// reality via !std::same_as<void>, without imposing a shared result type that
-// does not exist (forcing it would require modifying one of the two classes: forbidden).
+// The return type is intentionally not constrained to a precise struct: the legacy object
+// protocol is still modeled by GeometricMG, which returns the number of V-cycles. The generic
+// Krylov family has a stronger, separate prepared protocol and returns SolveReport through
+// solve_prepared_affine; it is not forced into this object-shaped concept.
 //
 // We also require the EllipticSolver base (rhs/phi/solve()/residual/geom): an
 // elliptic LinearSolver IS an EllipticSolver that, IN ADDITION, exposes the
-// tolerance variant. GeometricMG and TensorKrylovSolver model both.
+// tolerance variant. GeometricMG models both.
 //
 // DOCUMENTED GAP (concept DELIBERATELY separated from EllipticSolver). The DIRECT solvers
 // PoissonFFTSolver, DistributedFFTSolver and PolarPoissonSolver solve in ONE pass
@@ -92,7 +90,7 @@ concept EllipticOperator = requires(Op op) {
 template <class S>
 concept LinearSolver = EllipticSolver<S> && requires(S s, Real tol, int it) {
   // Tolerance variant: solves up to rel_tol (or max_iters) and returns a stopping
-  // report. Return type FREE but NON void (int for MG, SolveReport for Krylov).
+  // report. Return type FREE but NON void (int for GeometricMG today).
   s.solve(tol, it);
   requires !std::same_as<decltype(s.solve(tol, it)), void>;
 };

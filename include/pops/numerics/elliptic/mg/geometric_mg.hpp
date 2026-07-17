@@ -816,6 +816,7 @@ class GeometricMG {
                   [this](MultiFab& out, const MultiFab& in) { apply_preconditioner(out, in); },
                   [this]() { prepare_linear_preconditioner(); }),
               LinearOperatorProperties::general(), footprint_,
+              PreparedNullspacePolicy::nonsingular(),
               [this]() { return probe_linear_snapshot(); }),
           linear_workspace_(delta_, KrylovMethod::kGmres, footprint_) {}
 

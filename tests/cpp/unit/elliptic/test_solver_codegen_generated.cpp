@@ -162,7 +162,8 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
                                       {UINT64_C(5), UINT64_C(6), UINT64_C(7), UINT64_C(8)}};
   PreparedAffineLinearProblem problem(
       x_ref, A, PreparedLinearPreconditioner::identity(),
-      LinearOperatorProperties::general(), footprint, [&snapshot]() { return snapshot; });
+      LinearOperatorProperties::general(), footprint, PreparedNullspacePolicy::nonsingular(),
+      [&snapshot]() { return snapshot; });
   KrylovWorkspace workspace(x_ref, KrylovMethod::kRichardson, footprint);
   problem.prepare(snapshot);
   workspace.bind(problem);

@@ -70,7 +70,8 @@
 /// cartesian fill_ghosts applied in (r, theta) (index direction 0 = radial, 1 = azimuthal; cf.
 /// PolarGeometry convention). Nonzero Dirichlet/Robin data is folded into the true residual through
 /// an AFFINE operator and LINEARIZED (offset c_bc subtracted) for the in-loop matvecs on correction
-/// directions: same mechanics as the cartesian TensorKrylovSolver (krylov_solver.hpp).
+/// directions: the same mathematical affine-linearization contract as the prepared generic Krylov
+/// layer, implemented here by the dedicated metric-aware polar solver.
 ///
 /// SINGULAR OPERATOR (pure radial Neumann + periodic theta, no reaction): the CONSTANT is in the
 /// kernel of L_int; BiCGStab diverges without treatment. We FIX THE GAUGE by PROJECTION onto the
@@ -408,7 +409,7 @@ class PolarTensorKrylovSolver {
     return l2_norm(r_);
   }
 
-  void solve() { solve(kKrylovDefaultRelTol, kSchurKrylovCartesianMaxIters, Real(0)); }
+  void solve() { solve(kKrylovDefaultRelTol, kPolarTensorKrylovDefaultMaxIters, Real(0)); }
 
   /// MATRIX-FREE BiCGStab preconditioned by precond_ (RadialLine by default, Jacobi as fallback);
   /// fixes the gauge (project_mean) when pin_gauge_ (singular pure Neumann/periodic case). phi() =

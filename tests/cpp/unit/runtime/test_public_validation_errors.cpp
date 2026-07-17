@@ -9,7 +9,6 @@
 #include <pops/mesh/layout/refinement.hpp>
 #include <pops/mesh/storage/fab2d.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/program/program_context.hpp>
@@ -202,17 +201,4 @@ TEST(PublicValidationErrors, CsProgramStackValidationRejectsUnusedResult) {
       },
       {"test CsProgram", "exactly one result", "final stack_depth=2"}))
       << "CsProgram stack validation rejects unused result in release";
-}
-
-TEST(PublicValidationErrors, TensorKrylovSolverRejectsAliasedOperatorAndPreconditioner) {
-  EXPECT_TRUE(ThrowsWithMessage(
-      [&] {
-        Geometry geom{Box2D::from_extents(4, 4), 0.0, 1.0, 0.0, 1.0};
-        BCRec bc;
-        GeometricMG mg(geom, BoxArray::from_domain(geom.domain, 4), bc);
-        TensorKrylovSolver solver(mg, mg);
-        (void)solver;
-      },
-      {"TensorKrylovSolver", "op and precond are distinct", "alias"}))
-      << "TensorKrylovSolver rejects aliased operator/preconditioner in release";
 }

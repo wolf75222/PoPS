@@ -390,8 +390,9 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
-  test_krylov_solver
   test_numerical_defaults
+  test_pure_field_algebra_extreme_dot
+  test_scaled_scalar
   test_flux_interfaces
   test_fallback_diagnostics
   test_structured_solver_diagnostics
@@ -678,6 +679,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_field_nullspace_preflight 2)
+  set(POPS_MPI_RANKS_test_krylov_collective_contract 2)
   set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
@@ -689,8 +692,8 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
-  set(POPS_MPI_RANKS_test_krylov_solver 1 2 4)
-  set(POPS_MPI_RANKS_test_generic_krylov 2)
+  set(POPS_MPI_RANKS_test_generic_krylov 1 2 4)
+  set(POPS_MPI_RANKS_test_pure_field_algebra_extreme_dot 2)
   set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
   set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
   set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
@@ -710,6 +713,8 @@ if(POPS_HAS_MPI)
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_coupled_source
+    test_mpi_field_nullspace_preflight
+    test_krylov_collective_contract
     test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
@@ -750,6 +755,12 @@ if(POPS_HAS_MPI)
     pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
   endforeach()
   set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  set_tests_properties(test_mpi_field_nullspace_preflight_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
+  set_tests_properties(test_krylov_collective_contract_np2 PROPERTIES
+    ENVIRONMENT "POPS_TEST_EXPECT_RANKS=2;OMP_NUM_THREADS=1"
+    TIMEOUT 30)
   # This regression consumes two MPI processor slots and exercises transport, not on-node
   # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
   set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
@@ -764,12 +775,35 @@ if(POPS_HAS_MPI)
   # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
   # architecture gate compares this projection and these CMake registrations exactly.
   set(POPS_CPP_MPI_VARIANT_TESTS
-    test_krylov_solver
     test_generic_krylov
+    test_pure_field_algebra_extreme_dot
     test_fill_boundary_cache
     test_copy_schedule_cache
     test_amr_system_bz_multibox
     test_world_communicator
+  )
+  string(CONCAT POPS_GENERIC_KRYLOV_MPI_FILTER
+    "GenericKrylov.footprint_authenticates_layout_and_preconditioner_presence:"
+    "GenericKrylov.cg_converges_on_spd_operator:"
+    "GenericKrylov.bicgstab_converges_with_identity_preconditioner:"
+    "GenericKrylov.gmres_converges_on_spd_operator:"
+    "GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:"
+    "GenericKrylov.arbitrary_halo_depth_is_a_first_class_prepared_footprint:"
+    "GenericKrylov.mpi_variant_distributes_real_work_to_every_rank:"
+    "GenericKrylov.geometric_preconditioner_preserves_a_custom_distribution:"
+    "GenericKrylov.every_method_is_invariant_to_extreme_finite_equation_scaling:"
+    "GenericKrylov.every_method_solves_a_compatible_periodic_nullspace_problem:"
+    "GenericKrylov.every_method_reports_an_incompatible_rhs_before_gauge_or_iteration:"
+    "GenericKrylov.nonfinite_nullspace_rhs_is_invalid_not_incompatible:"
+    "GenericKrylov.periodic_nullspace_solve_is_collective_safe_with_an_empty_rank:"
+    "GenericKrylov.mpi_empty_rank_runs_restarted_gmres_and_preconditioned_bicgstab:"
+    "GenericKrylov.generic_methods_linearize_real_dirichlet_and_robin_preconditioners:"
+    "GenericKrylov.prepared_full_tensor_bicgstab_converges_where_the_diagonal_vcycle_stalls:"
+    "GenericKrylov.prepared_tensor_identity_matches_the_geometric_mg_reference:"
+    "GenericKrylov.prepared_physical_boundary_offsets_use_the_effective_rhs_and_a_linear_preconditioner:"
+    "GenericKrylov.prepared_nonzero_dirichlet_problem_matches_mg_and_the_mms:"
+    "GenericKrylov.snapshot_mutation_is_refused_and_workspace_is_reused:"
+    "GenericKrylov.rank_local_snapshot_drift_is_refused_collectively_at_all_safe_boundaries"
   )
   foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
     foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
@@ -777,7 +811,7 @@ if(POPS_HAS_MPI)
         pops_add_mpi_rank_test(
           ${_test} ${_np}
           GTEST_FILTER
-            "GenericKrylov.footprint_authenticates_layout_and_preconditioner_presence:GenericKrylov.cg_converges_on_spd_operator:GenericKrylov.bicgstab_converges_with_identity_preconditioner:GenericKrylov.gmres_converges_on_spd_operator:GenericKrylov.cg_refuses_unproven_operator_and_gmres_solves_nonsymmetric_operator:GenericKrylov.arbitrary_halo_depth_is_a_first_class_prepared_footprint:GenericKrylov.mpi_variant_distributes_real_work_to_every_rank:GenericKrylov.geometric_preconditioner_preserves_a_custom_distribution")
+            "${POPS_GENERIC_KRYLOV_MPI_FILTER}")
       else()
         pops_add_mpi_rank_test(${_test} ${_np})
       endif()

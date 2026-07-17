@@ -5,9 +5,9 @@
 ///        (residual), gs_color/gs_smooth (red-black Gauss-Seidel smoother), zero_conductor (embedded Dirichlet).
 ///
 /// Layer: `include/pops/numerics/elliptic/poisson`.
-/// Role: low-level bricks of the geometric multigrid (geometric_mg.hpp) and matvec of the Krylov
-/// solver (krylov_solver.hpp). The operator is provided as FREE FUNCTIONS (not a type): no concept
-/// constrains them. GLOBAL convention: we solve L(phi) = -div(A grad phi) + kappa phi = f_phys;
+/// Role: low-level bricks of the geometric multigrid (geometric_mg.hpp) and prepared matrix-free
+/// Krylov providers. The operator is provided as FREE FUNCTIONS (not a type): no concept constrains
+/// them. GLOBAL convention: we solve L(phi) = -div(A grad phi) + kappa phi = f_phys;
 /// internally the kernels assemble L_int = div(A grad phi) - kappa phi and poisson_residual returns
 /// res = f - L_int.
 /// Contract: all optional coefficients default to nullptr and THEN give back EXACTLY the bit-identical
@@ -21,7 +21,7 @@
 ///   even for discontinuous eps); the cross term uses the ARITHMETIC mean (not a normal flux);
 /// - the gs_smooth smoother stays 5 POINTS (diagonal block): the cross terms a_xy/a_yx are EXPLICIT,
 ///   carried only by the residual -> for strongly non-symmetric A the GS V-cycle may NOT
-///   converge (a Krylov solver is then required, cf. krylov_solver.hpp);
+///   converge (a prepared GMRES/BiCGStab solve is then required, cf. generic_krylov.hpp);
 /// - the kernels are NAMED FUNCTORS (and not POPS_HD lambdas) because they are first-instantiated from an
 ///   external TU: an extended lambda would break the device kernel emission under nvcc;
 /// - the red-black sweep is parallelizable (a red cell depends only on black cells).

@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 namespace pops {
@@ -29,6 +31,57 @@ struct ArenaStats {
   long fences = 0;                 // batched Kokkos::fence barriers (recycling pending blocks)
   std::size_t reserved_bytes = 0;  // total managed memory held by the pool
 };
+
+/// Native-image-wide count of actual PoPS-controlled storage-allocation calls.  Unlike solver
+/// footprint metadata, this observes allocator entry after a successful allocation.  Snapshotting
+/// it before and after a prepared hot loop therefore proves that neither Fab storage nor MPI
+/// communication buffers were allocated by that loop, on host and Kokkos builds alike. Each
+/// independently loaded hidden-visibility DSL image owns its own counter, matching the image-local
+/// allocator/arena whose hot loop it measures.
+struct AllocationEventStats {
+  std::uint64_t fab_calls = 0;
+  std::uint64_t fab_bytes = 0;
+  std::uint64_t communication_calls = 0;
+  std::uint64_t communication_bytes = 0;
+
+  friend bool operator==(const AllocationEventStats&, const AllocationEventStats&) = default;
+};
+
+namespace detail {
+inline std::atomic<std::uint64_t>& fab_allocation_calls() {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+inline std::atomic<std::uint64_t>& fab_allocation_bytes() {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+inline std::atomic<std::uint64_t>& communication_allocation_calls() {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+inline std::atomic<std::uint64_t>& communication_allocation_bytes() {
+  static std::atomic<std::uint64_t> value{0};
+  return value;
+}
+inline void record_fab_allocation(std::size_t bytes) noexcept {
+  fab_allocation_calls().fetch_add(1, std::memory_order_relaxed);
+  fab_allocation_bytes().fetch_add(static_cast<std::uint64_t>(bytes),
+                                   std::memory_order_relaxed);
+}
+inline void record_communication_allocation(std::size_t bytes) noexcept {
+  communication_allocation_calls().fetch_add(1, std::memory_order_relaxed);
+  communication_allocation_bytes().fetch_add(static_cast<std::uint64_t>(bytes),
+                                             std::memory_order_relaxed);
+}
+}  // namespace detail
+
+inline AllocationEventStats allocation_event_stats() noexcept {
+  return {detail::fab_allocation_calls().load(std::memory_order_relaxed),
+          detail::fab_allocation_bytes().load(std::memory_order_relaxed),
+          detail::communication_allocation_calls().load(std::memory_order_relaxed),
+          detail::communication_allocation_bytes().load(std::memory_order_relaxed)};
+}
 }  // namespace pops
 
 #if defined(POPS_HAS_KOKKOS)
@@ -191,7 +244,10 @@ struct ManagedAllocator {
   ManagedAllocator(const ManagedAllocator<U>&) noexcept {}
 
   T* allocate(std::size_t n) {
-    return static_cast<T*>(ManagedArena::instance().allocate(n * sizeof(T)));
+    const std::size_t bytes = n * sizeof(T);
+    T* result = static_cast<T*>(ManagedArena::instance().allocate(bytes));
+    detail::record_fab_allocation(bytes);
+    return result;
   }
   void deallocate(T* p, std::size_t n) noexcept {
     ManagedArena::instance().deallocate(p, n * sizeof(T));
@@ -242,6 +298,7 @@ struct PinnedAllocator {
     void* p = Kokkos::kokkos_malloc<Kokkos::SharedHostPinnedSpace>("pops_comm", n * sizeof(T));
     if (!p)
       throw std::bad_alloc();
+    detail::record_communication_allocation(n * sizeof(T));
     return static_cast<T*>(p);
   }
   void deallocate(T* p, std::size_t) noexcept {
@@ -266,12 +323,47 @@ using comm_allocator = PinnedAllocator<T>;
 #else
 
 namespace pops {
-template <class T>
-using fab_allocator = std::allocator<T>;
+template <class T, bool Communication>
+struct ObservedStdAllocator {
+  using value_type = T;
+  ObservedStdAllocator() noexcept = default;
+  template <class U>
+  ObservedStdAllocator(const ObservedStdAllocator<U, Communication>&) noexcept {}
+  template <class U>
+  struct rebind {
+    using other = ObservedStdAllocator<U, Communication>;
+  };
 
-// Outside Kokkos: MPI buffers in ordinary host memory (CPU build unchanged, byte-identical to before).
+  T* allocate(std::size_t n) {
+    T* result = std::allocator<T>{}.allocate(n);
+    const std::size_t bytes = n * sizeof(T);
+    if constexpr (Communication)
+      detail::record_communication_allocation(bytes);
+    else
+      detail::record_fab_allocation(bytes);
+    return result;
+  }
+  void deallocate(T* pointer, std::size_t n) noexcept {
+    std::allocator<T>{}.deallocate(pointer, n);
+  }
+};
+template <class A, class B, bool Communication>
+bool operator==(const ObservedStdAllocator<A, Communication>&,
+                const ObservedStdAllocator<B, Communication>&) noexcept {
+  return true;
+}
+template <class A, class B, bool Communication>
+bool operator!=(const ObservedStdAllocator<A, Communication>&,
+                const ObservedStdAllocator<B, Communication>&) noexcept {
+  return false;
+}
+
 template <class T>
-using comm_allocator = std::allocator<T>;
+using fab_allocator = ObservedStdAllocator<T, false>;
+
+// Outside Kokkos: MPI buffers remain ordinary host memory, with allocation-event observation only.
+template <class T>
+using comm_allocator = ObservedStdAllocator<T, true>;
 
 // Stub outside unified memory: no pool, no stats (CPU build unchanged).
 inline ArenaStats arena_stats() {

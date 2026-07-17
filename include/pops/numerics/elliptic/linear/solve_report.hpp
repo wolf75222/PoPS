@@ -4,9 +4,8 @@
 /// @brief SolveReport -- the authoritative result type of every iterative solve in
 ///        `include/pops/numerics/elliptic/linear`.
 ///
-/// One definition shared by krylov_solver.hpp (the GeometricMG-coupled BiCGStab, TensorKrylovSolver)
-/// and generic_krylov.hpp (the matrix-free richardson/cg/bicgstab loops), so the two never carry
-/// hand-synchronised copies (a cross-TU ODR hazard if they ever drift).
+/// One definition shared by every prepared matrix-free Krylov method and its runtime consumers, so
+/// generated and direct-native routes cannot drift into hand-synchronised status contracts.
 
 #include <pops/core/foundation/types.hpp>
 
@@ -76,7 +75,7 @@ inline const char* solve_action_name(SolveAction action) {
 struct SolveReport {
   int iters = 0;                     ///< number of iterations performed
   Real rel_residual = 0;             ///< residual_norm / declared reference denominator
-  Real reference_residual_norm = 0;  ///< exact reference norm used by the solver
+  Real reference_residual_norm = 0;  ///< exact reference norm of the owning solver contract
   Real residual_norm = 0;            ///< exact final norm tested for convergence
   SolveStatus status = SolveStatus::kIterationLimit;
   SolveAction action = SolveAction::kFailRun;

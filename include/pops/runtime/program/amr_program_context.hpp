@@ -27,7 +27,6 @@
 #include <pops/mesh/storage/multifab.hpp>                         // MultiFab
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>
-#include <pops/numerics/elliptic/mg/geometric_mg.hpp>             // GeometricMG (Krylov precond)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>    // apply_laplacian
 #include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/numerics/time/amr/reflux/amr_flux_ledger.hpp>
@@ -76,6 +75,81 @@ class AmrProgramContext {
 
     bool bound() const { return epoch != std::numeric_limits<std::uint64_t>::max(); }
   };
+  /// Logical-clock child interval nested inside the current AMR level window.  The hierarchy driver
+  /// remains the authority for level substeps; this move-only companion further partitions that exact
+  /// window for Program.subcycle and restores it on normal, nested, and exceptional exits.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const AmrProgramContext& owner, int iteration, int count)
+        : owner_(&owner),
+          saved_window_(owner.current_window_),
+          saved_dt_(owner.current_level_dt_),
+          saved_stage_(owner.stage_time_) {
+      if (count <= 0 || iteration < 0 || iteration >= count)
+        throw std::invalid_argument(
+            "AMR Program logical evaluation requires a valid child iteration");
+      if (!saved_window_ || !std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
+        throw std::logic_error(
+            "AMR Program logical evaluation requires a prepared parent level window");
+      const double child_dt = saved_dt_ / static_cast<double>(count);
+      const double child_physical_time =
+          saved_window_->begin.physical_time + static_cast<double>(iteration) * child_dt;
+      if (!std::isfinite(child_dt) || child_dt <= 0.0 ||
+          !std::isfinite(child_physical_time))
+        throw std::overflow_error("AMR Program logical evaluation child window is not finite");
+      const amr::Rational parent_span =
+          saved_window_->end.phase - saved_window_->begin.phase;
+      const amr::Rational child_begin_phase =
+          saved_window_->begin.phase + parent_span * amr::Rational(iteration, count);
+      const amr::Rational child_end_phase =
+          saved_window_->begin.phase + parent_span * amr::Rational(iteration + 1, count);
+      amr::ClockStamp child_begin = saved_window_->begin;
+      child_begin.phase = child_begin_phase;
+      child_begin.physical_time = child_physical_time;
+      amr::ClockStamp child_end = child_begin;
+      child_end.phase = child_end_phase;
+      child_end.physical_time = child_physical_time + child_dt;
+
+      owner.invalidate_active_operator_snapshot_();
+      child_dt_ = child_dt;
+      owner.current_window_ = amr::ClockWindow{child_begin, child_end};
+      owner.current_level_dt_ = child_dt;
+      owner.stage_time_ = amr::Rational(0, 1);
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          saved_window_(other.saved_window_),
+          saved_dt_(other.saved_dt_),
+          saved_stage_(other.saved_stage_),
+          child_dt_(other.child_dt_) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("AMR Program logical evaluation scope is no longer active");
+      return static_cast<Real>(child_dt_);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->current_window_ = saved_window_;
+      owner_->current_level_dt_ = saved_dt_;
+      owner_->stage_time_ = saved_stage_;
+      owner_->invalidate_active_operator_snapshot_();
+      owner_ = nullptr;
+    }
+
+    const AmrProgramContext* owner_ = nullptr;
+    std::optional<amr::ClockWindow> saved_window_;
+    double saved_dt_ = 0.0;
+    amr::Rational saved_stage_{0, 1};
+    double child_dt_ = 0.0;
+  };
   /// Wrap an AmrSystem passed as a flat void* (what pops_install_program_amr(void* sys) receives). The
   /// ctor pulls the AmrRuntime engine out of the facade (engine() returns the built runtime; the AMR
   /// blocks must be materialized -- install_program forces the build before install()).
@@ -100,7 +174,7 @@ class AmrProgramContext {
     }
   }
 
-  // --- driver state (mutable: every seam method is const, like ProgramContext::mg_precond_) ----------
+  // --- driver state (mutable: every seam method mirrors the const ProgramContext surface) ------------
   void set_level(int k) const { level_ = k; }
   int level() const { return level_; }
   /// Epoch used by generated install-time resource bundles. A regrid/rebalance changes this value;
@@ -214,6 +288,9 @@ class AmrProgramContext {
   ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
                                                    const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
+  }
+  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(*this, iteration, count);
   }
   void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
                                    Real offset) const {
@@ -760,20 +837,6 @@ class AmrProgramContext {
       fill_ghosts(fy, g.domain, eng_->transport_bc());
     apply_divergence(fx, fy, g, out, /*cx=*/0, /*cy=*/1);
   }
-  void geometric_mg_precond_apply(MultiFab& out, const MultiFab& in) const {
-    count_kernel();
-    if (!mg_precond_) {
-      const Geometry g = eng_->level_geom(level_);
-      const MultiFab tmpl = eng_->level_scalar_field(level_, 1, 1);
-      mg_precond_.emplace(g, tmpl.box_array(), eng_->poisson_bc());
-    }
-    GeometricMG& mg = *mg_precond_;
-    lincomb(mg.rhs(), Real(1), in, Real(0), in);
-    mg.phi().set_val(Real(0));
-    mg.vcycle();
-    lincomb(out, Real(1), mg.phi(), Real(0), out);
-  }
-
   // --- reductions (COLLECTIVE all_reduce, called on every rank; per-level field) --------------------
   Real sum_component(const MultiFab& u, int comp) const { return pops::reduce_sum(u, comp); }
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
@@ -1027,20 +1090,31 @@ class AmrProgramContext {
                                     static_cast<std::uint64_t>(nlev()));
     if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("AMR operator snapshot revision exhausted");
-    return operator_evaluation_snapshot_(authority, topology, resources,
-                                         ++operator_snapshot_revision_);
+    const std::uint64_t revision = ++operator_snapshot_revision_;
+    invalidate_active_operator_snapshot_();
+    OperatorEvaluationSnapshot snapshot =
+        operator_evaluation_snapshot_(authority, topology, resources, revision);
+    active_operator_snapshot_revision_ = revision;
+    return snapshot;
   }
 
-  /// Recompute only the allocation-free dynamic identity. The complete 256-bit layout/geometry/BC
-  /// fingerprint is minted once at prepare(); a monotonic context-local topology revision changes
-  /// whenever either the AMR engine epoch or active level changes, including a change and restoration.
+  /// Recompute only the allocation-free dynamic identity. The requested evaluation revision is
+  /// reproduced only while it remains the context's active mint; logical-scope entry/exit clears
+  /// that authority even when the exact AMR parent window is later restored. The independent
+  /// topology revision continues to change across engine-epoch or active-level transitions.
   OperatorEvaluationSnapshot probe_operator_evaluation(
       OperatorFingerprint authority, OperatorFingerprint topology,
       OperatorFingerprint resources, std::uint64_t revision) const {
-    return operator_evaluation_snapshot_(authority, topology, resources, revision);
+    const std::uint64_t probe_revision =
+        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
+    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
   }
 
  private:
+  void invalidate_active_operator_snapshot_() const noexcept {
+    active_operator_snapshot_revision_ = 0;
+  }
+
   std::uint64_t operator_topology_revision_() const {
     const std::uint64_t epoch = eng_->topology_epoch();
     if (observed_operator_topology_epoch_ != epoch || observed_operator_level_ != level_) {
@@ -2244,7 +2318,6 @@ class AmrProgramContext {
   mutable std::map<std::string, SolveReport> named_solve_reports_;
   mutable std::map<std::pair<int, int>, MultiFab> stage_state_scratch_;
   mutable std::vector<std::pair<MultiFab*, MultiFab*>> stage_restore_scratch_;
-  mutable std::optional<GeometricMG> mg_precond_;
   mutable std::shared_ptr<AmrTensorElliptic> tensor_elliptic_;
   mutable int tensor_program_block_{-1};
   mutable int tensor_ncomp_{0};
@@ -2271,6 +2344,7 @@ class AmrProgramContext {
   mutable std::vector<amr::ClockStamp> level_clocks_;
   mutable std::uint64_t accepted_state_revision_ = 0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::uint64_t operator_topology_revision_counter_ = 0;
   mutable std::uint64_t observed_operator_topology_epoch_ =
       std::numeric_limits<std::uint64_t>::max();

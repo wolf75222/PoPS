@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <pops/numerics/elliptic/linear/krylov_solver.hpp>
 #include <pops/numerics/elliptic/mg/geometric_mg.hpp>
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/runtime/config/model_spec.hpp>
@@ -35,8 +34,7 @@ TEST(test_numerical_defaults, mg_krylov_fac_amr_named_constants) {
   EXPECT_EQ(kMGDefaultRelTol, Real(1e-8)) << "MG rel_tol default is reported";
   EXPECT_EQ(kMGDefaultMaxCycles, 50) << "MG max_cycles default is reported";
   EXPECT_EQ(kMGDefaultCoarseThreshold, 0) << "MG coarse_threshold sentinel (0 = disabled) is named";
-  EXPECT_EQ(kTensorKrylovDefaultMaxIters, 200) << "Tensor Krylov budget is reported";
-  EXPECT_EQ(kSchurKrylovCartesianMaxIters, 400) << "Cartesian Schur Krylov budget is reported";
+  EXPECT_EQ(kPolarTensorKrylovDefaultMaxIters, 400) << "Polar tensor Krylov budget is reported";
   EXPECT_EQ(kSchurKrylovPolarMaxIters, 600) << "Polar Schur Krylov budget is reported";
   EXPECT_EQ(kFACDefaultMaxIters, 30) << "FAC max_iters default is reported";
   EXPECT_EQ(kFACDefaultRelTol, Real(1e-9)) << "FAC relative tolerance default is reported";

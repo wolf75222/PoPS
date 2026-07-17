@@ -64,6 +64,82 @@ namespace program {
 
 class ProgramContext {
  public:
+  /// One exact logical-clock child interval.  The generated subcycle cursor validates iteration
+  /// order; this companion owns the numerical evaluation window used by prepared operators.  It is
+  /// deliberately move-only and restores the enclosing dt/phase/time/stage on every exit path, so
+  /// nested Program.subcycle bodies cannot leak a child clock into their parent evaluation.
+  class LogicalEvaluationScope {
+   public:
+    LogicalEvaluationScope(const ProgramContext& owner, int iteration, int count)
+        : owner_(&owner),
+          saved_dt_(owner.current_dt_),
+          saved_stage_(owner.stage_time_),
+          saved_phase_begin_(owner.logical_phase_begin_),
+          saved_phase_span_(owner.logical_phase_span_),
+          saved_physical_offset_(owner.logical_physical_time_offset_) {
+      if (count <= 0 || iteration < 0 || iteration >= count)
+        throw std::invalid_argument("Program logical evaluation requires a valid child iteration");
+      if (!std::isfinite(saved_dt_) || saved_dt_ <= 0.0)
+        throw std::logic_error("Program logical evaluation requires a prepared parent dt");
+      const double child_dt = saved_dt_ / static_cast<double>(count);
+      const double child_offset =
+          saved_physical_offset_ + static_cast<double>(iteration) * child_dt;
+      if (!std::isfinite(child_dt) || child_dt <= 0.0 || !std::isfinite(child_offset))
+        throw std::overflow_error("Program logical evaluation child window is not finite");
+      const amr::Rational child_fraction(iteration, count);
+      const amr::Rational child_span = saved_phase_span_ * amr::Rational(1, count);
+      const amr::Rational child_begin =
+          saved_phase_begin_ + saved_phase_span_ * child_fraction;
+
+      owner.invalidate_active_operator_snapshot_();
+      child_dt_ = child_dt;
+      owner.current_dt_ = child_dt;
+      owner.stage_time_ = amr::Rational(0, 1);
+      owner.logical_phase_begin_ = child_begin;
+      owner.logical_phase_span_ = child_span;
+      owner.logical_physical_time_offset_ = child_offset;
+    }
+    LogicalEvaluationScope(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope& operator=(const LogicalEvaluationScope&) = delete;
+    LogicalEvaluationScope(LogicalEvaluationScope&& other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)),
+          saved_dt_(other.saved_dt_),
+          saved_stage_(other.saved_stage_),
+          saved_phase_begin_(other.saved_phase_begin_),
+          saved_phase_span_(other.saved_phase_span_),
+          saved_physical_offset_(other.saved_physical_offset_),
+          child_dt_(other.child_dt_) {}
+    LogicalEvaluationScope& operator=(LogicalEvaluationScope&&) = delete;
+    ~LogicalEvaluationScope() noexcept { restore_(); }
+
+    Real dt() const {
+      if (owner_ == nullptr)
+        throw std::logic_error("Program logical evaluation scope is no longer active");
+      return static_cast<Real>(child_dt_);
+    }
+
+   private:
+    void restore_() noexcept {
+      if (owner_ == nullptr)
+        return;
+      owner_->current_dt_ = saved_dt_;
+      owner_->stage_time_ = saved_stage_;
+      owner_->logical_phase_begin_ = saved_phase_begin_;
+      owner_->logical_phase_span_ = saved_phase_span_;
+      owner_->logical_physical_time_offset_ = saved_physical_offset_;
+      owner_->invalidate_active_operator_snapshot_();
+      owner_ = nullptr;
+    }
+
+    const ProgramContext* owner_ = nullptr;
+    double saved_dt_ = 0.0;
+    amr::Rational saved_stage_{0, 1};
+    amr::Rational saved_phase_begin_{0, 1};
+    amr::Rational saved_phase_span_{1, 1};
+    double saved_physical_offset_ = 0.0;
+    double child_dt_ = 0.0;
+  };
+
   explicit ProgramContext(System* sys) : sys_(sys) {}
   /// Wraps a System passed as a flat void* (what pops_install_program(void* sys) receives).
   explicit ProgramContext(void* sys) : sys_(static_cast<System*>(sys)) {}
@@ -82,6 +158,9 @@ class ProgramContext {
       throw std::invalid_argument("Program boundary clock requires a finite positive dt");
     current_dt_ = dt;
     stage_time_ = amr::Rational(0, 1);
+    logical_phase_begin_ = amr::Rational(0, 1);
+    logical_phase_span_ = amr::Rational(1, 1);
+    logical_physical_time_offset_ = 0.0;
   }
 
   /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
@@ -133,6 +212,9 @@ class ProgramContext {
   ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
                                                    const std::string& child, int count) const {
     return clock_schedule_.subcycle(parent, child, count);
+  }
+  [[nodiscard]] LogicalEvaluationScope logical_evaluation_scope(int iteration, int count) const {
+    return LogicalEvaluationScope(*this, iteration, count);
   }
   void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
                                    Real offset) const {
@@ -501,33 +583,46 @@ class ProgramContext {
     }
     if (operator_snapshot_revision_ == std::numeric_limits<std::uint64_t>::max())
       throw std::overflow_error("Program operator snapshot revision exhausted");
-    return operator_evaluation_snapshot_(authority, topology, resources,
-                                         ++operator_snapshot_revision_);
+    const std::uint64_t revision = ++operator_snapshot_revision_;
+    invalidate_active_operator_snapshot_();
+    OperatorEvaluationSnapshot snapshot =
+        operator_evaluation_snapshot_(authority, topology, resources, revision);
+    active_operator_snapshot_revision_ = revision;
+    return snapshot;
   }
 
-  /// Recompute the current native clock identity without advancing its revision. The uniform
-  /// System's materialized mesh and boundary authority are immutable after Program installation, so
-  /// their 256-bit fingerprint is minted once and reused here. This keeps the hot Krylov probe free of
-  /// GridContext/std::function copies and layout traversal while still rejecting every clock change.
+  /// Recompute the current native identity without advancing the monotonic counter. A requested
+  /// revision is reproduced only while it is the context's active mint; logical-scope entry/exit
+  /// clears that authority, so an exactly restored outer clock still probes unequal until reminted.
+  /// The uniform mesh fingerprint remains reusable, keeping the Krylov probe free of layout walks.
   OperatorEvaluationSnapshot probe_operator_evaluation(
       OperatorFingerprint authority, OperatorFingerprint topology,
       OperatorFingerprint resources, std::uint64_t revision) const {
-    return operator_evaluation_snapshot_(authority, topology, resources, revision);
+    const std::uint64_t probe_revision =
+        revision == active_operator_snapshot_revision_ ? revision : UINT64_C(0);
+    return operator_evaluation_snapshot_(authority, topology, resources, probe_revision);
   }
 
  private:
+  void invalidate_active_operator_snapshot_() const noexcept {
+    active_operator_snapshot_revision_ = 0;
+  }
+
   OperatorEvaluationSnapshot operator_evaluation_snapshot_(
       OperatorFingerprint authority, OperatorFingerprint topology,
       OperatorFingerprint resources, std::uint64_t revision) const {
     if (!std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::logic_error("operator snapshot requested outside a prepared Program step");
-    const double evaluation_time =
-        static_cast<double>(physical_time()) + stage_time_.value() * current_dt_;
+    const amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
+    const double evaluation_time = static_cast<double>(physical_time()) +
+                                   logical_physical_time_offset_ +
+                                   stage_time_.value() * current_dt_;
     return {authority,
             revision,
             static_cast<std::int64_t>(macro_step()),
-            stage_time_.numerator,
-            stage_time_.denominator,
+            evaluation_stage.numerator,
+            evaluation_stage.denominator,
             std::bit_cast<std::uint64_t>(current_dt_),
             std::bit_cast<std::uint64_t>(evaluation_time),
             UINT64_C(1),
@@ -1008,14 +1103,17 @@ class ProgramContext {
     require_rate_identity_(stage);
     if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
       throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
+    const amr::Rational evaluation_stage =
+        logical_phase_begin_ + stage_time_ * logical_phase_span_;
     return {primary_clock_,
             static_cast<std::int64_t>(macro_step()),
             0,
             0,
             stage,
-            stage_time_,
+            evaluation_stage,
             current_dt_,
-            static_cast<double>(physical_time()) + stage_time_.value() * current_dt_};
+            static_cast<double>(physical_time()) + logical_physical_time_offset_ +
+                stage_time_.value() * current_dt_};
   }
 
   static std::runtime_error block_map_error_(std::string message) {
@@ -1035,7 +1133,11 @@ class ProgramContext {
   mutable std::string primary_clock_;
   mutable amr::Rational stage_time_{0, 1};
   mutable double current_dt_ = 0.0;
+  mutable amr::Rational logical_phase_begin_{0, 1};
+  mutable amr::Rational logical_phase_span_{1, 1};
+  mutable double logical_physical_time_offset_ = 0.0;
   mutable std::uint64_t operator_snapshot_revision_ = 0;
+  mutable std::uint64_t active_operator_snapshot_revision_ = 0;  // zero is never minted
   mutable std::shared_ptr<MultiFab> polar_unit_rr_;
   mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   System* sys_;

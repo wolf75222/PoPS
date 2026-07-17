@@ -10,6 +10,13 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
+#ifdef POPS_HAS_KOKKOS
+#include <Kokkos_MathematicalFunctions.hpp>
+#endif
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -29,6 +36,37 @@ struct FillValidKernel {
   POPS_HD void operator()(int i, int j) const { values(i, j, component) = value; }
 };
 
+struct DivideValidKernel {
+  Array4 values;
+  Real divisor;
+  int component;
+  POPS_HD void operator()(int i, int j) const { values(i, j, component) /= divisor; }
+};
+
+struct NormalizedDifferenceKernel {
+  Array4 destination;
+  ConstArray4 left, right;
+  Real scale;
+  int component;
+  POPS_HD void operator()(int i, int j) const {
+    const Real difference = left(i, j, component) - right(i, j, component);
+    const Real finite_max = std::numeric_limits<Real>::max();
+    destination(i, j, component) =
+        difference <= finite_max && difference >= -finite_max
+            ? difference / scale
+            : left(i, j, component) / scale - right(i, j, component) / scale;
+  }
+};
+
+struct ScaledDotKernel {
+  ConstArray4 left, right;
+  Real left_scale, right_scale;
+  int component;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    sum += (left(i, j, component) / left_scale) * (right(i, j, component) / right_scale);
+  }
+};
+
 inline void fill_valid(MultiFab& field, Real value) {
   field.sync_device();
   for (int local = 0; local < field.local_size(); ++local) {
@@ -37,6 +75,262 @@ inline void fill_valid(MultiFab& field, Real value) {
     for (int component = 0; component < field.ncomp(); ++component)
       for_each_cell(valid, FillValidKernel{values, value, component});
   }
+}
+
+inline Real local_max_abs(const MultiFab& field) {
+  Real result = Real(0);
+  for (int component = 0; component < field.ncomp(); ++component)
+    result = std::max(result, norm_inf(field, component));
+  return result;
+}
+
+inline Real rescale_product(Real normalized, Real left_scale, Real right_scale) {
+  if (normalized == Real(0) || left_scale == Real(0) || right_scale == Real(0))
+    return Real(0);
+  if (!std::isfinite(static_cast<double>(normalized)) ||
+      !std::isfinite(static_cast<double>(left_scale)) ||
+      !std::isfinite(static_cast<double>(right_scale)))
+    return std::numeric_limits<Real>::quiet_NaN();
+  int normalized_exponent = 0;
+  int left_exponent = 0;
+  int right_exponent = 0;
+  const Real normalized_mantissa = std::frexp(normalized, &normalized_exponent);
+  const Real left_mantissa = std::frexp(left_scale, &left_exponent);
+  const Real right_mantissa = std::frexp(right_scale, &right_exponent);
+  return std::ldexp(normalized_mantissa * left_mantissa * right_mantissa,
+                    normalized_exponent + left_exponent + right_exponent);
+}
+
+inline Real scaled_dot_local(const MultiFab& left, const MultiFab& right, Real left_scale,
+                             Real right_scale) {
+  Real result = Real(0);
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < left.ncomp(); ++component)
+      result += reduce_sum_cell(
+          valid, ScaledDotKernel{left_values, right_values, left_scale, right_scale, component});
+  }
+  return result;
+}
+
+static_assert(std::numeric_limits<Real>::is_iec559,
+              "PureFieldAlgebra's robust dot fallback expects an IEEE-754 Real");
+
+// The fallback only runs after the ordinary Kokkos dot underflows to zero or overflows.  Sixty-six
+// bins cover every double product exponent in windows of 64 powers of two: 528 B of payload plus a
+// non-finite witness, rather than a full per-exponent superaccumulator.  It consequently preserves
+// cancellation between terms in the same window and products separated by many decades, but is not
+// an exact/reproducible accumulator for arbitrary adversarial cancellation within one 64-bit window.
+constexpr int kRobustDotInputLogbMin =
+    std::numeric_limits<Real>::min_exponent - std::numeric_limits<Real>::digits;
+constexpr int kRobustDotInputLogbMax = std::numeric_limits<Real>::max_exponent - 1;
+constexpr int kRobustDotProductLogbMin = 2 * kRobustDotInputLogbMin;
+constexpr int kRobustDotProductLogbMax = 2 * kRobustDotInputLogbMax;
+constexpr int kRobustDotBandWidth = 64;
+constexpr int kRobustDotBandCount =
+    (kRobustDotProductLogbMax - kRobustDotProductLogbMin) / kRobustDotBandWidth + 1;
+constexpr std::size_t kRobustDotNonfiniteIndex = static_cast<std::size_t>(kRobustDotBandCount);
+constexpr std::size_t kRobustDotPayloadWidth = kRobustDotNonfiniteIndex + 1;
+static_assert(kRobustDotPayloadWidth == 67,
+              "the Python/native GMRES restart capacity assumes 67 robust-dot values");
+using RobustDotBands = std::array<double, kRobustDotPayloadWidth>;
+
+POPS_HD inline Real robust_dot_logb(Real value) {
+#ifdef POPS_HAS_KOKKOS
+  return Kokkos::logb(value);
+#else
+  return std::logb(value);
+#endif
+}
+
+/// Multiply by 2^exponent without ever forming an overflowing reciprocal for a subnormal input.
+POPS_HD inline Real robust_dot_scale_pow2(Real value, int exponent) {
+  constexpr int kStageExponent = 512;
+  while (exponent > kStageExponent) {
+#ifdef POPS_HAS_KOKKOS
+    value *= Kokkos::pow(Real(2), Real(kStageExponent));
+#else
+    value *= std::pow(Real(2), Real(kStageExponent));
+#endif
+    exponent -= kStageExponent;
+  }
+  while (exponent < -kStageExponent) {
+#ifdef POPS_HAS_KOKKOS
+    value *= Kokkos::pow(Real(2), Real(-kStageExponent));
+#else
+    value *= std::pow(Real(2), Real(-kStageExponent));
+#endif
+    exponent += kStageExponent;
+  }
+#ifdef POPS_HAS_KOKKOS
+  return value * Kokkos::pow(Real(2), Real(exponent));
+#else
+  return value * std::pow(Real(2), Real(exponent));
+#endif
+}
+
+struct RobustDotBandKernel {
+  ConstArray4 left, right;
+  int component;
+  int band;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    const Real x = left(i, j, component);
+    const Real y = right(i, j, component);
+    const Real finite_max = std::numeric_limits<Real>::max();
+    if (!(x <= finite_max && x >= -finite_max && y <= finite_max && y >= -finite_max) || x == 0 ||
+        y == 0)
+      return;
+    const Real x_abs = x < 0 ? -x : x;
+    const Real y_abs = y < 0 ? -y : y;
+    const int x_exponent = static_cast<int>(robust_dot_logb(x_abs));
+    const int y_exponent = static_cast<int>(robust_dot_logb(y_abs));
+    const int product_exponent = x_exponent + y_exponent;
+    const int product_band = (product_exponent - kRobustDotProductLogbMin) / kRobustDotBandWidth;
+    if (product_band != band)
+      return;
+    const int band_exponent = kRobustDotProductLogbMin + band * kRobustDotBandWidth;
+    const Real x_mantissa = robust_dot_scale_pow2(x, -x_exponent);
+    const Real y_mantissa = robust_dot_scale_pow2(y, -y_exponent);
+    sum += robust_dot_scale_pow2(x_mantissa * y_mantissa, product_exponent - band_exponent);
+  }
+};
+
+struct RobustDotNonfiniteKernel {
+  ConstArray4 left, right;
+  int component;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    const Real x = left(i, j, component);
+    const Real y = right(i, j, component);
+    const Real finite_max = std::numeric_limits<Real>::max();
+    if (!(x <= finite_max && x >= -finite_max && y <= finite_max && y >= -finite_max))
+      sum += Real(1);
+  }
+};
+
+struct RobustDotActivityKernel {
+  ConstArray4 left, right;
+  int component;
+  POPS_HD void operator()(int i, int j, Real& sum) const {
+    const Real x = left(i, j, component);
+    const Real y = right(i, j, component);
+    if (x != Real(0) && y != Real(0))
+      sum += Real(1);
+  }
+};
+
+inline Real robust_dot_band_local(const MultiFab& left, const MultiFab& right, int band,
+                                  bool all_components) {
+  Real result = Real(0);
+  const int component_count = all_components ? left.ncomp() : 1;
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < component_count; ++component)
+      result +=
+          reduce_sum_cell(valid, RobustDotBandKernel{left_values, right_values, component, band});
+  }
+  return result;
+}
+
+inline Real robust_dot_nonfinite_local(const MultiFab& left, const MultiFab& right,
+                                       bool all_components) {
+  Real result = Real(0);
+  const int component_count = all_components ? left.ncomp() : 1;
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < component_count; ++component)
+      result +=
+          reduce_sum_cell(valid, RobustDotNonfiniteKernel{left_values, right_values, component});
+  }
+  return result;
+}
+
+inline Real robust_dot_activity_local(const MultiFab& left, const MultiFab& right,
+                                      bool all_components) {
+  Real result = Real(0);
+  const int component_count = all_components ? left.ncomp() : 1;
+  for (int local = 0; local < left.local_size(); ++local) {
+    const ConstArray4 left_values = left.fab(local).const_array();
+    const ConstArray4 right_values = right.fab(local).const_array();
+    const Box2D valid = left.box(local);
+    for (int component = 0; component < component_count; ++component)
+      result +=
+          reduce_sum_cell(valid, RobustDotActivityKernel{left_values, right_values, component});
+  }
+  return result;
+}
+
+inline Real robust_dot_reconstruct(const double* bands) {
+  int high = kRobustDotBandCount - 1;
+  while (high >= 0 && bands[static_cast<std::size_t>(high)] == 0.0)
+    --high;
+  if (high < 0)
+    return Real(0);
+  const int high_exponent = kRobustDotProductLogbMin + high * kRobustDotBandWidth;
+  double sum = 0.0;
+  double compensation = 0.0;
+  for (int band = high; band >= 0; --band) {
+    const int exponent = kRobustDotProductLogbMin + band * kRobustDotBandWidth;
+    const double term = std::ldexp(bands[static_cast<std::size_t>(band)], exponent - high_exponent);
+    const double corrected = term - compensation;
+    const double next = sum + corrected;
+    compensation = (next - sum) - corrected;
+    sum = next;
+  }
+  return static_cast<Real>(std::ldexp(sum, high_exponent));
+}
+
+inline Real robust_dot_reconstruct(const RobustDotBands& bands) {
+  return robust_dot_reconstruct(bands.data());
+}
+
+inline void robust_dot_local_payload(const MultiFab& left, const MultiFab& right,
+                                     bool all_components, double* payload) {
+  for (int band = 0; band < kRobustDotBandCount; ++band)
+    payload[static_cast<std::size_t>(band)] =
+        static_cast<double>(robust_dot_band_local(left, right, band, all_components));
+  payload[kRobustDotNonfiniteIndex] =
+      static_cast<double>(robust_dot_nonfinite_local(left, right, all_components));
+}
+
+inline Real robust_dot_global_value(const MultiFab& left, const MultiFab& right,
+                                    bool all_components) {
+  RobustDotBands bands{};
+  robust_dot_local_payload(left, right, all_components, bands.data());
+  all_reduce_sum_inplace(bands.data(), static_cast<int>(bands.size()));
+  if (bands[kRobustDotNonfiniteIndex] != 0.0)
+    return std::numeric_limits<Real>::quiet_NaN();
+  return robust_dot_reconstruct(bands);
+}
+
+inline Real fast_dot_local(const MultiFab& left, const MultiFab& right, bool all_components) {
+  return all_components ? pops::dot_all_local(left, right) : pops::dot_local(left, right);
+}
+
+inline Real fast_dot_global(const MultiFab& left, const MultiFab& right, bool all_components) {
+  return all_components ? pops::dot_all(left, right) : pops::dot(left, right);
+}
+
+inline bool robust_dot_fallback_needed(Real value) {
+  return value == Real(0) || !std::isfinite(static_cast<double>(value));
+}
+
+inline Real robust_dot_after_fast_global(const MultiFab& left, const MultiFab& right,
+                                         bool all_components, Real fast) {
+  if (!robust_dot_fallback_needed(fast))
+    return fast;
+  if (fast == Real(0)) {
+    const Real activity = static_cast<Real>(all_reduce_sum(
+        static_cast<double>(robust_dot_activity_local(left, right, all_components))));
+    if (activity == Real(0))
+      return Real(0);
+  }
+  return robust_dot_global_value(left, right, all_components);
 }
 
 }  // namespace detail
@@ -55,6 +349,12 @@ struct PureFieldAlgebra {
   }
 
   static void zero(MultiFab& value) { value.set_val(Real(0)); }
+
+  /// Global maximum magnitude over every valid component. Non-finite input is represented by
+  /// +infinity so no rank can silently hide an invalid sample from the MPI maximum.
+  static Real max_abs(const MultiFab& value) {
+    return static_cast<Real>(all_reduce_max(static_cast<double>(detail::local_max_abs(value))));
+  }
 
   /// Fill valid cells on the active Kokkos execution space. Ghosts are deliberately left for the
   /// next typed halo/boundary fill; this is the initialization primitive for prepared hot paths.
@@ -99,14 +399,21 @@ struct PureFieldAlgebra {
   /// with no local box.
   static Real dot(const MultiFab& left, const MultiFab& right) {
     require_same_vector_space(left, right, "PureFieldAlgebra::dot");
-    return left.ncomp() == 1 ? pops::dot(left, right) : pops::dot_all(left, right);
+    const Real fast = detail::fast_dot_global(left, right, true);
+    return detail::robust_dot_after_fast_global(left, right, true, fast);
   }
 
   static Real norm(const MultiFab& value) {
-    const Real square = dot(value, value);
-    if (!std::isfinite(static_cast<double>(square)) || square < Real(0))
+    const Real scale = max_abs(value);
+    if (!std::isfinite(static_cast<double>(scale)))
       return std::numeric_limits<Real>::quiet_NaN();
-    return std::sqrt(square);
+    if (scale == Real(0))
+      return Real(0);
+    const Real normalized_square = static_cast<Real>(
+        all_reduce_sum(static_cast<double>(detail::scaled_dot_local(value, value, scale, scale))));
+    if (!std::isfinite(static_cast<double>(normalized_square)) || normalized_square < Real(0))
+      return std::numeric_limits<Real>::quiet_NaN();
+    return detail::rescale_product(std::sqrt(normalized_square), scale, Real(1));
   }
 };
 
@@ -117,6 +424,8 @@ namespace detail {
 /// vector space once when the problem/workspace are bound and must not rescan every box/rank vector
 /// for each recurrence primitive.
 struct PreparedFieldAlgebra {
+  static constexpr std::size_t kRobustDotPayloadWidth = detail::kRobustDotPayloadWidth;
+
   static void zero(MultiFab& value) { fill_valid(value, Real(0)); }
 
   static void copy(MultiFab& destination, const MultiFab& source) {
@@ -132,19 +441,70 @@ struct PreparedFieldAlgebra {
     pops::lincomb(destination, left_coefficient, left, right_coefficient, right);
   }
 
+  /// Divide valid cells directly instead of materializing 1/divisor. This remains defined when a
+  /// finite subnormal equation scale has a non-representable reciprocal.
+  static void divide(MultiFab& value, Real divisor) {
+    for (int local = 0; local < value.local_size(); ++local) {
+      Array4 values = value.fab(local).array();
+      const Box2D valid = value.box(local);
+      for (int component = 0; component < value.ncomp(); ++component)
+        for_each_cell(valid, DivideValidKernel{values, divisor, component});
+    }
+  }
+
+  /// destination = (left-right)/scale. Subtract first when the physical difference is finite so a
+  /// large common affine response cancels before division; only an overflowing difference falls
+  /// back to separately normalized operands. Pointwise aliasing is safe.
+  static void normalized_difference(MultiFab& destination, const MultiFab& left,
+                                    const MultiFab& right, Real scale) {
+    for (int local = 0; local < destination.local_size(); ++local) {
+      Array4 output = destination.fab(local).array();
+      const ConstArray4 left_values = left.fab(local).const_array();
+      const ConstArray4 right_values = right.fab(local).const_array();
+      const Box2D valid = destination.box(local);
+      for (int component = 0; component < destination.ncomp(); ++component)
+        for_each_cell(
+            valid, NormalizedDifferenceKernel{output, left_values, right_values, scale, component});
+    }
+  }
+
   static Real dot(const MultiFab& left, const MultiFab& right) {
-    return left.ncomp() == 1 ? pops::dot(left, right) : pops::dot_all(left, right);
+    const bool all_components = left.ncomp() != 1;
+    const Real fast = detail::fast_dot_global(left, right, all_components);
+    return detail::robust_dot_after_fast_global(left, right, all_components, fast);
   }
 
   static Real local_dot(const MultiFab& left, const MultiFab& right) {
-    return left.ncomp() == 1 ? pops::dot_local(left, right) : pops::dot_all_local(left, right);
+    const bool all_components = left.ncomp() != 1;
+    return detail::fast_dot_local(left, right, all_components);
+  }
+
+  static void local_robust_dot_payload(const MultiFab& left, const MultiFab& right,
+                                       double* payload) {
+    const bool all_components = left.ncomp() != 1;
+    detail::robust_dot_local_payload(left, right, all_components, payload);
+  }
+
+  static Real dot_from_global_robust_payload(const double* payload) {
+    if (payload[detail::kRobustDotNonfiniteIndex] != 0.0)
+      return std::numeric_limits<Real>::quiet_NaN();
+    return detail::robust_dot_reconstruct(payload);
   }
 
   static Real norm(const MultiFab& value) {
-    const Real square = dot(value, value);
-    if (!std::isfinite(static_cast<double>(square)) || square < Real(0))
+    const bool all_components = value.ncomp() != 1;
+    // A zero square is handled by the existing max-scaled norm below.  Do not route an exact zero
+    // through every exponent band merely to rediscover that a zero field has zero norm.
+    const Real square = detail::fast_dot_global(value, value, all_components);
+    if (std::isfinite(static_cast<double>(square)) && square > Real(0))
+      return std::sqrt(square);
+    if (square < Real(0))
       return std::numeric_limits<Real>::quiet_NaN();
-    return std::sqrt(square);
+    // The ordinary one-collective dot is the fast path for normalized recurrences.  Fall back to
+    // the max-scaled norm only when squaring a finite subnormal vector underflowed to zero, or when
+    // an intermediate square overflowed.  This keeps the common hot path unchanged while allowing
+    // GMRES to distinguish a true lucky breakdown from a representable subnormal Arnoldi column.
+    return ::pops::PureFieldAlgebra::norm(value);
   }
 };
 

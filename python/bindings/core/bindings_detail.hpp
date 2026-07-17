@@ -139,8 +139,7 @@ inline py::dict numerical_defaults_report_to_dict() {
 
   py::dict krylov;
   krylov["rel_tol"] = static_cast<double>(kKrylovDefaultRelTol);
-  krylov["tensor_max_iters"] = kTensorKrylovDefaultMaxIters;
-  krylov["schur_cartesian_max_iters"] = kSchurKrylovCartesianMaxIters;
+  krylov["polar_tensor_max_iters"] = kPolarTensorKrylovDefaultMaxIters;
   krylov["schur_polar_max_iters"] = kSchurKrylovPolarMaxIters;
   krylov["breakdown_tiny"] = static_cast<double>(kKrylovBreakdownTiny);
 
@@ -237,8 +236,7 @@ inline py::dict numerical_defaults_report_to_dict() {
   klass("kNewtonDefaultFailPolicy", "public_knob");
   klass("kNewtonFiniteAbsLimit", "internal_default");
   klass("kKrylovDefaultRelTol", "public_knob");
-  klass("kTensorKrylovDefaultMaxIters", "internal_default");
-  klass("kSchurKrylovCartesianMaxIters", "public_knob");
+  klass("kPolarTensorKrylovDefaultMaxIters", "public_knob");
   klass("kSchurKrylovPolarMaxIters", "public_knob");
   klass("kKrylovBreakdownTiny", "internal_default");
   klass("kMGDefaultRelTol", "public_knob");

@@ -7,6 +7,7 @@
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -59,6 +60,19 @@ TEST(test_field_nullspace, materializes_one_basis_and_gauge_per_connected_compon
   }
 }
 
+TEST(test_field_nullspace, labelled_topology_preserves_an_arbitrary_target_field_component) {
+  TwoIslandFixture fixture;
+  const FieldNullspacePlan plan = labelled_mean_zero_nullspace(
+      "component-three-nullspace", "component-three-layout", FieldNullspaceScope::Uniform,
+      {fixture.labels},
+      {{1, "island-a", "fixture:cell-label:1"}, {2, "island-b", "fixture:cell-label:2"}}, {},
+      {Real(0.5)}, 3);
+
+  ASSERT_EQ(plan.bases.size(), 2U);
+  EXPECT_EQ(plan.bases[0].field_component, 3);
+  EXPECT_EQ(plan.bases[1].field_component, 3);
+}
+
 TEST(test_field_nullspace, checks_rhs_and_applies_gauges_component_by_component) {
   TwoIslandFixture fixture;
   const FieldNullspacePlan plan = fixture.plan();
@@ -96,4 +110,60 @@ TEST(test_field_nullspace, rejects_invalid_or_undeclared_labels_collectively) {
 
   fixture.labels->fab(0).array()(0, 0, 0) = Real(1.5);
   EXPECT_THROW(fixture.plan(), std::runtime_error);
+}
+
+TEST(test_field_nullspace, rejects_a_gauge_that_references_an_unknown_basis) {
+  TwoIslandFixture fixture;
+  FieldNullspacePlan plan = fixture.plan();
+  plan.gauges[0].basis_identity = "missing-island";
+
+  EXPECT_THROW(validate_field_nullspace_basis({fixture.labels.get()}, plan), std::runtime_error);
+}
+
+TEST(test_field_nullspace, validates_native_collective_capacities_before_size_arithmetic) {
+  const std::size_t native_max =
+      static_cast<std::size_t>(std::numeric_limits<int>::max());
+
+  std::size_t gram_edge = 1;
+  while (gram_edge <= native_max / gram_edge)
+    ++gram_edge;
+  --gram_edge;
+  EXPECT_EQ(detail::checked_field_nullspace_collective_product(
+                gram_edge, gram_edge, "synthetic Gram matrix"),
+            gram_edge * gram_edge);
+  EXPECT_THROW(detail::checked_field_nullspace_collective_product(
+                   gram_edge + 1, gram_edge + 1, "synthetic Gram matrix"),
+               std::overflow_error);
+
+  EXPECT_EQ(detail::checked_field_nullspace_collective_product(
+                native_max / 2, std::size_t{2}, "synthetic moments"),
+            (native_max / 2) * 2);
+  EXPECT_THROW(detail::checked_field_nullspace_collective_product(
+                   native_max / 2 + 1, std::size_t{2}, "synthetic moments"),
+               std::overflow_error);
+
+  EXPECT_EQ(detail::checked_field_nullspace_collective_sum(
+                native_max - 1, std::size_t{1}, "synthetic label counts"),
+            native_max);
+  EXPECT_THROW(detail::checked_field_nullspace_collective_sum(
+                   native_max, std::size_t{1}, "synthetic label counts"),
+               std::overflow_error);
+  EXPECT_EQ(detail::checked_field_nullspace_collective_count(native_max,
+                                                              "synthetic collective"),
+            std::numeric_limits<int>::max());
+  EXPECT_THROW(detail::checked_field_nullspace_collective_count(native_max + 1,
+                                                                 "synthetic collective"),
+               std::overflow_error);
+}
+
+TEST(test_field_nullspace, validates_hierarchy_level_capacity_without_materializing_levels) {
+  const int native_max = std::numeric_limits<int>::max();
+
+  EXPECT_NO_THROW(
+      detail::validate_field_nullspace_level_capacity(1, native_max, "synthetic hierarchy"));
+  EXPECT_THROW(
+      detail::validate_field_nullspace_level_capacity(2, native_max, "synthetic hierarchy"),
+      std::overflow_error);
+  EXPECT_THROW(detail::validate_field_nullspace_level_capacity(1, -1, "synthetic hierarchy"),
+               std::invalid_argument);
 }

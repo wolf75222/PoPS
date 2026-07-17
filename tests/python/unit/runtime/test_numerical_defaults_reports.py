@@ -24,7 +24,7 @@ def test_numerical_defaults_report_is_structured():
     assert d["schema_version"] == 1
     assert d["newton"]["max_iters"] == 2
     assert d["newton"]["fd_eps"] == pytest.approx(1e-7)
-    assert d["krylov"]["schur_cartesian_max_iters"] == 400
+    assert d["krylov"]["polar_tensor_max_iters"] == 400
     assert d["krylov"]["schur_polar_max_iters"] == 600
     assert d["mg"]["rel_tol"] == pytest.approx(1e-8)
     assert d["mg"]["max_cycles"] == 50
