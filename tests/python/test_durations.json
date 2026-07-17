@@ -127,6 +127,7 @@
   "tests/python/unit/codegen/test_ir_opt_passes.py": 0.5,
   "tests/python/unit/codegen/test_ir_passes.py": 0.5,
   "tests/python/unit/codegen/test_ir_strict_scalar_boundaries.py": 2.0,
+  "tests/python/unit/codegen/test_krylov_nullspace_contract.py": 0.6,
   "tests/python/unit/codegen/test_layout_plan_pipeline.py": 2.0,
   "tests/python/unit/codegen/test_lowering_coverage_report.py": 2.0,
   "tests/python/unit/codegen/test_matrix_free_dt_capture.py": 2.0,
@@ -560,6 +561,6 @@
       "tests/python/unit/time/test_typed_provenance_guards.py",
       "tests/python/unit/time/test_typed_schedule.py"
     ],
-    "total_files": 358
+    "total_files": 359
   }
 }
