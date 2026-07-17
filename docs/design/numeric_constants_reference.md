@@ -27,8 +27,7 @@ Scanned headers: `include/pops/runtime/numerical_defaults.hpp`,
 | kNewtonDefaultFailPolicy              | none    | public_knob      | IMEX(newton_fail_policy=) |
 | kNewtonFiniteAbsLimit                 | 1e300   | internal_default | fixed overflow guard |
 | kKrylovDefaultRelTol                  | 1e-10   | public_knob      | GMRES/BiCGStab(rel_tol=) |
-| kTensorKrylovDefaultMaxIters          | 200     | internal_default | fixed |
-| kSchurKrylovCartesianMaxIters         | 400     | public_knob      | Program solver max_iter= (Cartesian default report) |
+| kPolarTensorKrylovDefaultMaxIters     | 400     | public_knob      | PolarTensorKrylovSolver default report |
 | kSchurKrylovPolarMaxIters             | 600     | public_knob      | Program solver max_iter= (polar default report) |
 | kKrylovBreakdownTiny                  | 1e-300  | internal_default | fixed breakdown guard |
 | kMGDefaultRelTol                      | 1e-8    | public_knob      | GeometricMG(tolerance=) |

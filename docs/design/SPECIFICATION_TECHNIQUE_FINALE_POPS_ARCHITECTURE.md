@@ -404,7 +404,9 @@ source et l'identité du patch. L'identité dérivée de la matérialisation (g�
 périodicité et recette topologique) reste distincte de l'identité source.
 
 `PopsSolveReportV2` contient un unique statut scientifique typé, une action, `iterations`,
-`reference_residual_norm`, `residual_norm`, `relative_residual` et une `reason` obligatoire. Il ne
+`reference_residual_norm`, `residual_norm`, `relative_residual` et une `reason` obligatoire. Pour
+l'interface externe V2, la référence reste exactement `||R(x0)||`; le contrat interne préparé décrit
+plus bas utilise distinctement `||b-A(0)||`. Il ne
 contient ni booléen `converged`, ni résidus ambigus `initial`/`final`. Le ratio doit être cohérent avec
 les deux normes (dénominateur `1` seulement lorsque la norme de référence est nulle) et un succès doit
 vérifier `residual_norm <= max(relative_tolerance * reference_residual_norm, absolute_tolerance)`.
@@ -868,13 +870,51 @@ jamais au résidu. Il n'existe aucune route publique `Schur` ou `CondensedSchur`
 
 `LinearProblem` porte aussi un certificat mathématique typé, jamais inféré depuis le nom d'un
 stencil ou d'un préconditionneur. La valeur par défaut `LinearOperatorProperties.general()` convient
-aux méthodes générales. `CG` est refusé sans
-`LinearOperatorProperties.symmetric_positive_definite()` ; aucune autre méthode n'est substituée.
-Les solveurs Krylov portent un arrêt mixte exact
-`max(rel_tol * reference_residual_norm, abs_tol)` et leur footprint persistant est dérivé de la
+aux méthodes générales. Ses trois faits booléens exacts sont `symmetric`, `positive_definite` et
+`positive_definite_on_nullspace_complement`. Les quatre certificats canoniques sont `general()`,
+`symmetric_operator()`, `symmetric_positive_definite()` et
+`symmetric_positive_definite_on_nullspace_complement()` ; les deux formes de positivité sont
+mutuellement exclusives.
+
+La décision de nullspace est keyword-only et obligatoire sur chaque problème :
+
+```python
+nonsingular = LinearProblem(A, b, nullspace=None)
+
+singular = LinearProblem(
+    A,
+    b,
+    properties=LinearOperatorProperties
+        .symmetric_positive_definite_on_nullspace_complement(),
+    nullspace=ConstantNullspace(),
+    gauge=MeanValueGauge(0),
+)
+```
+
+La route matrix-free ne déduit rien des BC, de la périodicité ou du stencil. Une déclaration
+`ConstantNullspace()` exige exactement `MeanValueGauge(value)`, est scalaire seulement, et capture
+la valeur canonique immuable de la gauge à la construction. Comme un noyau droit constant ne prouve
+pas à lui seul que le complément de moyenne nulle est invariant, cette déclaration exige au minimum
+le certificat explicite `LinearOperatorProperties.symmetric_operator()`. Les deux attributs IR
+`nullspace_contract` et `gauge_contract` sont toujours présents, portent `schema_version=1`, et sont
+validés par ensembles exacts de clés/types avant allocation ou émission. `CG` exige le certificat
+SPD global avec `nullspace=None`, ou SPD sur le complément avec un nullspace constant ; aucune autre
+méthode n'est substituée. `Identity()` est le seul préconditionneur dont la préservation du
+complément est actuellement authentifiée. `GeometricMG()` est refusé pour ce contrat tant qu'il ne
+publie pas une capacité de préservation explicite. `CompositeTensorFAC()` refuse également le
+nullspace constant tant que la gauge composite multilevel n'est pas câblée de bout en bout.
+Les solveurs Krylov portent l'arrêt exact
+`||b-A(u)|| <= max(rel_tol * ||b-A(0)||, abs_tol)` : le warm start ne change jamais la référence.
+Après le test physique initial, une tentative non convergée normalise uniquement sa récurrence par
+`||b-A(u0)||`; `||b-A(0)||` reste exclu de cette échelle interne afin qu'une composante immense déjà
+satisfaite par le warm start n'annule pas un petit résidu encore fini. Cette normalisation ne modifie
+ni le seuil physique ni le `SolveReport`.
+Leur footprint persistant est dérivé de la
 méthode, du nombre de composantes, de la largeur de halo, du restart et du préconditionneur.
-Le restart GMRES accepte tout entier strictement positif : le workspace est dimensionné dynamiquement,
-son coût exact est visible dans le plan scratch, et la route Newton-Krylov n'impose aucun plafond hérité
+Le restart GMRES accepte exactement les entiers Python de `1` à `INT_MAX - 1` inclus : le workspace
+est dimensionné dynamiquement, son coût exact est visible dans le plan scratch, et la borne supérieure
+est celle du `int` natif avec une place réservée au terme supplémentaire de la réduction Arnoldi/MPI,
+pas un plafond algorithmique arbitraire. La route Newton-Krylov n'impose aucun plafond hérité
 d'un ancien tableau fixe.
 La largeur n'est pas un booléen « stencil présent » : chaque opération porte une capacité immuable
 `StencilAccess(required_ghost_depth=n)` et `set_apply` compose le sous-graphe par le maximum de ces
@@ -1316,6 +1356,8 @@ Cas obligatoirement refusés :
 - descripteur/string sélectionnant une sémantique ;
 - BC, transfert, layout, programme ou paramètre avec deux autorités ;
 - champ périodique incompatible avec nullspace/gauge ;
+- `LinearProblem` sans décision `nullspace` explicite, nullspace constant non scalaire, sans
+  certificat symétrique, sans `MeanValueGauge`, ou avec un provider ne certifiant pas le complément ;
 - solve outcome non consommé ;
 - lecture cross-clock sans synchronisation ;
 - historique ou clock attendu absent du restart ;

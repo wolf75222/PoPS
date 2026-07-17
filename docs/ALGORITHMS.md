@@ -1055,76 +1055,71 @@ exact coefficient at each coarse resolution, which preserves the order 2 of the 
 
 ---
 
-## 12. Full-tensor elliptic: matrix-free Krylov (BiCGStab)
+## 12. Generic prepared matrix-free Krylov
 
-**Intuition.** When the elliptic operator carries cross terms $A_{xy} \neq A_{yx}$ (a non-self-adjoint operator, for example the rotation $B^{-1}$ coming from Schur condensation), geometric multigrid alone, whose Gauss-Seidel smoother assumes a self-adjoint operator, stagnates or diverges. A non-symmetric Krylov solver is needed, preconditioned by the MG V-cycle applied to the symmetric part of the operator.
+**Intuition.** Krylov is an algorithm over a linear operator, not a special case of `GeometricMG`.
+The final native layer therefore accepts any matrix-free callback over a `MultiFab`, a typed
+mathematical-property certificate, an optional prepared preconditioner, and persistent workspace.
+CG, BiCGStab, restarted GMRES, and Richardson consume the same protocol. A full-tensor elliptic
+operator is one provider of that protocol; it is not baked into the solver type.
 
-**Formula / discretization.** We solve $A\,\phi = f$ with, in the convention of [`poisson_operator.hpp`](../include/pops/numerics/elliptic/poisson/poisson_operator.hpp) and of `GeometricMG`,
+**Prepared contract.** `PreparedAffineLinearProblem` freezes and authenticates the evaluation
+snapshot, topology, halo footprint, coefficients, boundary data, and optional nullspace policy before
+iteration. It evaluates the exact affine constants
 
-$$L_{\mathrm{int}}(\phi) = \mathrm{div}(A\,\nabla\phi) - \kappa\,\phi, \qquad A = \begin{pmatrix} A_{xx} & A_{xy} \\ A_{yx} & A_{yy}\end{pmatrix},$$
+$$c_A=A_{\mathrm{raw}}(0), \qquad c_M=M^{-1}_{\mathrm{raw}}(0),$$
 
-the matvec being `apply_laplacian` (exact computation of $L_{\mathrm{int}}$) and the residual $r = f - L_{\mathrm{int}}(\phi)$, bit-consistent with `poisson_residual`. BiCGStab is matrix-free: no matrix is assembled, only the product $A\,d$ is required, applied by `for_each_cell`. The preconditioner is $M^{-1} =$ ($N$ V-cycles of `GeometricMG`) on the symmetric diagonal block (cross terms $A_{xy}/A_{yx}$ dropped). The antisymmetric part being in $O(\theta^2 dt^2 \alpha)$, small at reasonable source CFL, the symmetric preconditioner captures the essential of the spectrum.
-
-Choice of BiCGStab and not gmres: it handles the non-symmetric without a restart parameter nor a growing Krylov basis to store. The memory footprint is fixed (the MultiFab $r, \hat r, p, v, s, t$ at zero ghost, plus the preconditioned $\hat p, \hat s$ at one ghost).
-
-A delicate point is the treatment of inhomogeneous Dirichlet conditions. The boundary ghost equals $2v - \phi_{\mathrm{int}}$, so the stencil of the boundary cells receives a constant term $c_{bc} = \mathrm{apply\_operator}(0)$. The raw operator is therefore affine: $L_{\mathrm{aff}}(\phi) = L_{\mathrm{lin}}(\phi) + c_{bc}$. For the true residual $r_0$ we keep the affine operator (the Dirichlet data folds into it exactly, which is what we want). But the in-loop matvecs act on correction directions $\hat p = M^{-1}p$, $\hat s = M^{-1}s$: they must be linear, otherwise the constant term injected at each product makes the residual oscillate or diverge. We therefore subtract $c_{bc}$ (matvec) and $d_{bc} = \mathrm{precond\_raw}(0)$ (preconditioner), computed once per solve in `prepare_solve`. When the Dirichlet BC is null, $c_{bc} = d_{bc} = 0$ and the path becomes bit-identical to the history again.
+then exposes only the linear direction maps
+$A_{\mathrm{lin}}(v)=A_{\mathrm{raw}}(v)-c_A$ and
+$M^{-1}_{\mathrm{lin}}(v)=M^{-1}_{\mathrm{raw}}(v)-c_M$ to Krylov recurrences. The scientific
+residual remains $r(u)=b-A_{\mathrm{raw}}(u)$. Thus nonzero Dirichlet or Robin data is retained in
+the physical equation without injecting a constant into each search direction. The relative
+reference is $\|b-A_{\mathrm{raw}}(0)\|_2$, while an authored absolute floor remains in physical
+units. A warm start is tested against the true residual, not against an Arnoldi or preconditioned
+estimate. A separate internal recurrence scale $\|b-A_{\mathrm{raw}}(x_0)\|_2$ exists only for a
+non-converged warm start, to keep that finite residual representable. The physical reference is
+deliberately excluded from this scale: a huge component already satisfied by $x_0$ must not erase a
+tiny remaining residual. This internal scale never changes the physical stopping criterion or report.
 
 ```
-function TensorKrylovSolver.solve(rel_tol, max_iters):
-    prepare_solve()                          # c_bc = apply_op(0), d_bc = precond_raw(0) si CL inhomogene
-    v   <- apply_operator(phi)               # operateur affine pour le residu vrai
-    r   <- rhs - v                           # r0, warm start respecte (phi entrant = depart)
-    norm0 <- ||rhs||_2  (sinon 1 si rhs nul) # base relative, reduction MPI collective
-    if ||r|| <= rel_tol * norm0: return converged
-    rhat <- r                                # vecteur fantome fige de BiCGStab
-    p, v <- 0 ;  rho_prev, alpha, omega <- 1
-    for k = 1 .. max_iters:
-        rho <- dot(rhat, r)                  # collectif (all_reduce, tous rangs)
-        if |rho| ~ 0 or |omega| ~ 0: return best_effort     # garde-fou rupture
-        beta <- (rho / rho_prev) * (alpha / omega)
-        p   <- r + beta * (p - omega * v)
-        phat <- M^{-1} p                     # N V-cycles MG sur la partie symetrique, CL homogenes
-        v   <- apply_operator_lin(phat)      # matvec lineaire (phat = direction)
-        alpha <- rho / dot(rhat, v)          # dot collectif ; garde-fou si ~ 0
-        s   <- r - alpha * v
-        phi <- phi + alpha * phat            # correction partielle (tampon avant test sur ||s||)
-        if ||s|| <= rel_tol * norm0: return converged        # convergence a mi-iteration
-        shat <- M^{-1} s
-        t   <- apply_operator_lin(shat)
-        omega <- dot(t, s) / dot(t, t)       # 0 si dot(t,t) ~ 0
-        phi <- phi + omega * shat
-        r   <- s - omega * t
-        if ||r|| <= rel_tol * norm0: return converged
-        rho_prev <- rho
-    return best_effort                       # max_iters atteint, converged = false
+snapshot <- authenticate(operator, topology, resources, evaluation point)
+problem.prepare(snapshot)                 # freeze resources; compute c_A and c_M
+workspace.bind(problem)                   # persistent fields/scalars, no hot-loop allocation
 
-function apply_operator(in):                 # matvec matrice-libre affine
-    device_fence() ; fill_ghosts(in, bc_entiere)
-    out <- apply_laplacian(in, eps_x, eps_y, a_xy, a_yx, kappa)   # = L_int(in)
-    if mask present: mask_zero(out)          # L_int = 0 sur cellules conductrices (Dirichlet phi=0)
-    return out
+r <- b - A_raw(x)                         # physical residual for the authored warm start
+reference <- ||b - c_A||_2
+stop <- max(rel_tol * reference, abs_tol)
+if ||r|| <= stop: publish solved(x, iters=0)
 
-function apply_operator_lin(in):             # matvec lineaire (directions de correction)
-    out <- apply_operator(in)
-    if has_op_offset: out <- out - c_bc      # retranche la part inhomogene de bord
-    return out
+repeat according to the selected method:
+    z  <- M_raw(r) - c_M                   # identity when no preconditioner is installed
+    Az <- A_raw(z) - c_A                   # linear direction product
+    update the CG/BiCGStab/GMRES/Richardson recurrence
+    confirm convergence with ||b - A_raw(x)||_2
 
-function precond_raw(in):                     # V-cycle brut (affine si CL Dirichlet != 0)
-    precond.rhs <- in ; precond.phi <- 0
-    repeat N: precond.vcycle()
-    return precond.phi
-
-function apply_precond(in):                   # M^{-1} a CL homogenes
-    out <- precond_raw(in)
-    if has_bc_offset: out <- out - d_bc      # M^{-1} in = precond_raw(in) - precond_raw(0)
-    return out
+on breakdown, invalid evaluation, or iteration limit:
+    return an explicit failed SolveReport  # no implicit best-effort solved value
 ```
 
-**Code.** [`numerics/elliptic/krylov_solver.hpp`](../include/pops/numerics/elliptic/linear/krylov_solver.hpp): class `TensorKrylovSolver`, methods `solve(rel_tol, max_iters)` (returns a `KrylovResult`: `iters`, `rel_residual`, `converged`), `apply_operator` / `apply_operator_lin` (affine and linear matvec), `precond_raw` / `apply_precond` (raw V-cycle and homogeneous-BC V-cycle), `prepare_solve` (one-time computation of the offsets $c_{bc}$, $d_{bc}$), `residual` (current global L2 residual). The constructor takes two distinct `GeometricMG`: `op` carries the full operator (matvec + storage of $\phi$/$rhs$), `precond` carries the symmetric part (same eps but `set_cross_terms` not called). They must be separate objects, enforced by `assert(&op != &precond)`: `apply_precond` overwrites `precond.rhs()`/`precond.phi()` at each iteration, and conflating them would overwrite the iterate and the right-hand side of the solve.
+`KrylovWorkspace` derives its exact field/scalar allocation from `KrylovFootprint` and the selected
+method. GMRES restart storage is explicit and persistent. MPI products and norms are collective on
+every rank, including ranks with no local box. Extension callbacks are re-probed for snapshot
+mutation; generated callbacks carry an authenticated purity contract. No Python recurrence or
+per-cell calculation participates in the solve.
 
-**Constraints / remarks.** Iterative method, no CFL of its own; the cost depends on the conditioning of the Schur complement, hence the preconditioning by symmetric MG (1 to 2 V-cycles, parameter `n_precond_vcycles`). BiCGStab breakdown safeguards: if $|\rho|$, $|\omega|$ or $\mathrm{dot}(\hat r, v)$ fall below `kTiny` $= 10^{-300}$, the solve returns the current best effort without dividing by zero. Device/MPI: named functors only (`mf_arith`: `saxpy`/`lincomb`/`dot`, `apply_laplacian`, MG V-cycle), all device-clean. The scalar products `dot` are collective (`all_reduce_sum`) and called on all ranks, including a rank without a box (`local_size() == 0`): no short-circuit, hence no MPI deadlock nor desynchronization of the stopping criterion. Known limitation: the symmetric preconditioner loses efficiency when the antisymmetric part grows (high source CFL, large $\omega_c$); the iteration count then increases.
+For the full-tensor provider,
+$L_{\mathrm{int}}(\phi)=\mathrm{div}(A\nabla\phi)-\kappa\phi$ uses the shared
+`apply_laplacian` kernels. A fixed number of cold-start `GeometricMG` V-cycles on the diagonal block
+is a prepared preconditioner; cross terms remain in the full matrix-free operator. Strong
+non-symmetry may reduce preconditioner quality, but it does not change the solver contract.
 
-Validation: `test_krylov_solver`. Case (A) on the canonical Laplacian ($A_{xy} = A_{yx} = 0$, $A = I$, $\kappa = 0$), BiCGStab converges to the same solution as `GeometricMG` at the tolerance. Case (B) on an operator with non-trivial cross terms, BiCGStab converges where the MG V-cycle alone stagnates ($c = 0.1$ to $0.4$) or diverges ($c = 0.7$). Under MPI, the iteration count and the convergence are invariant to the number of ranks (stopping criterion reduced by `all_reduce`).
+**Code.** [`generic_krylov.hpp`](../include/pops/numerics/elliptic/linear/generic_krylov.hpp),
+[`prepared_affine_problem.hpp`](../include/pops/numerics/elliptic/linear/prepared_affine_problem.hpp),
+and [`krylov_workspace.hpp`](../include/pops/numerics/elliptic/linear/krylov_workspace.hpp).
+Validation is centralized in `test_generic_krylov`: all four methods, true-residual reporting,
+affine Dirichlet/Robin operators and preconditioners, nullspaces, snapshot invalidation, persistent
+allocation, full symmetric/non-symmetric tensors, the MG-stall contrast, and MPI variants at
+np=1/2/4.
 
 ## 13. Condensed implicit Program authoring
 
@@ -1150,7 +1145,7 @@ where $-\Delta\phi^n$ is the canonical 5-point Laplacian negated and the diverge
 
 $$\mathrm{div} F(i,j) = \frac{F_x(i{+}1,j) - F_x(i{-}1,j)}{2\,dx} + \frac{F_y(i,j{+}1) - F_y(i,j{-}1)}{2\,dy}.$$
 
-The condensed operator is in general full-tensor (hence the Krylov solver, section 12). Sign convention of the solve: `TensorKrylovSolver` solves $L_{\mathrm{int}} = +\mathrm{div}(A\nabla\phi)$, so $L_{\mathrm{schur}} = -L_{\mathrm{int}}$ and the stage passes $\mathrm{rhs}_{\mathrm{kry}} = -\mathrm{rhs}_{\mathrm{schur}}$ to the solver. After resolution, the velocity is reconstructed by $v^{n+\theta} = B^{-1}(v^n - \theta\, dt\,\nabla\phi^{n+\theta})$ (centered gradient, consistent with the RHS divergence), then extrapolated from the theta-stage to the full step by $U^{n+1} = U^n + \tfrac{1}{\theta}(U^{n+\theta} - U^n)$. The energy, if the Energy role is present, is updated only by the kinetic energy increment $E^{n+1} = E^n + \tfrac{1}{2}\rho^n(|v^{n+1}|^2 - |v^n|^2)$, the Lorentz rotation doing no work and $\rho$ being frozen.
+The condensed operator is in general full-tensor and is supplied to the prepared Krylov protocol of section 12. The authored provider applies $L_{\mathrm{schur}}=-\mathrm{div}(A\nabla\phi)$ directly, so the generic solver does not infer or flip a sign. After resolution, the velocity is reconstructed by $v^{n+\theta} = B^{-1}(v^n - \theta\, dt\,\nabla\phi^{n+\theta})$ (centered gradient, consistent with the RHS divergence), then extrapolated from the theta-stage to the full step by $U^{n+1} = U^n + \tfrac{1}{\theta}(U^{n+\theta} - U^n)$. The energy, if the Energy role is present, is updated only by the kinetic energy increment $E^{n+1} = E^n + \tfrac{1}{2}\rho^n(|v^{n+1}|^2 - |v^n|^2)$, the Lorentz rotation doing no work and $\rho$ being frozen.
 
 ```python
 from pops.linalg import LinearProblem
@@ -1198,6 +1193,7 @@ phi_theta = T.solve(
         rhs=condensed_rhs,
         initial_guess=phi_n,
         scope=scope,
+        nullspace=None,
     ),
     solver=CompositeTensorFAC(max_iter=400, rel_tol=1e-10, abs_tol=0.0),
     name="condensed_stage",
@@ -1223,10 +1219,17 @@ BiCGStab otherwise keeps `r = s - omega*t` and evaluates the true residual only 
 confirmation, failure reporting and final reporting, avoiding a third matvec on every full iteration.
 GMRES batches all Arnoldi projections of a column into one vector collective, evaluates the projected
 norm exactly, and applies a selective batched CGS2 pass under the DGKS norm-loss criterion. Its normal
-column uses two collectives instead of one collective per existing basis vector. Every positive GMRES
-restart is dynamically sized, including the Newton-Krylov route; no fixed-array ceiling remains. The
-inert scratch plan reports the exact persistent field, Hessenberg/rotation scalar and
-batched-collective payload counts.
+column uses two collectives instead of one collective per existing basis vector. GMRES restart is
+dynamically sized on the exact native interval $1 \le m \le \mathrm{INT\_MAX}-1$, including the
+Newton-Krylov route; the upper bound is the C++/MPI count-capacity boundary, not an arbitrary
+algorithmic fixed-array ceiling. The
+inert scratch plan reports each allocation owner once: a matrix-free operator owns its
+apply/frozen/Jv fields, a solve owns its solution, prepared problem/preconditioner and workspace,
+and a condensed-coefficient node owns its four live coefficient fields. This makes shared-operator
+reuse inspectable without double-counting. It also reports exact Hessenberg/rotation scalar and
+batched-collective payload counts. Conditional boundary-JVP fields are a min/max range and a
+geometric-MG hierarchy remains explicitly topology-dependent; neither is presented as an exact
+whole-process allocation count.
 
 The AMR install owns one complete persistent Program-resource bundle per level and
 rebuilds those bundles when either the checkpointed topology epoch or the process-local
@@ -2246,7 +2249,8 @@ of this page. The goal is not to present a partial capability as complete.
 | stiff source (Lorentz, relaxation) | local IMEX, or global Schur condensation | implicit, no exploding time step (section 5, 13) |
 | periodic Poisson, $n = 2^k$ | `poisson_fft_solver` | direct, $O(N \log N)$ (section 10) |
 | Poisson with wall, Dirichlet, or $\varepsilon(x)$ | `geometric_mg` | multigrid, arbitrary geometry (section 9, 11) |
-| full-tensor operator (anisotropic, polar) | `krylov_solver` (matrix-free BiCGStab) | no matrix assembly (section 12, 16) |
+| full-tensor Cartesian operator | prepared GMRES or BiCGStab with an explicit provider | generic, no matrix assembly (section 12) |
+| full-tensor polar operator | dedicated metric-aware polar Krylov solver | polar measure and radial line preconditioner (section 16) |
 | localized feature (front, ring) | structured `pops.layouts.AMR` descriptor | adaptive refinement, conservative reflux (section 17 to 19) |
 | inter-species sources | `CoupledSource` bytecode as a typed `CouplingOperator` | declared conservation contract, validated at registration (section 22) |
 | non-rectangular domain | EB cut-cell (disc) or polar ring | curved boundary without staircase (section 14 to 16) |
