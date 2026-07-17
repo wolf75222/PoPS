@@ -59,6 +59,15 @@ def test_no_system_method_definition_lives_below_python_bindings():
 
 
 def test_src_cmake_is_the_single_runtime_source_authority():
+    assert SRC_CMAKE.count("add_library(pops_runtime_core_objects OBJECT") == 1
+    assert re.search(
+        r"add_library\(pops_runtime_core\s+STATIC\s+"
+        r"\$<TARGET_OBJECTS:pops_runtime_core_objects>\s*\)",
+        SRC_CMAKE,
+    )
+    for text in (PYTHON_CMAKE, TESTS_CMAKE):
+        assert not re.search(r"add_library\(\s*pops_runtime_core_objects\b", text)
+
     for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
         assert SRC_CMAKE.count(f"add_library({target} OBJECT") == 1
         assert not re.search(rf"add_library\(\s*{target}\b", PYTHON_CMAKE)
@@ -84,7 +93,8 @@ def test_src_cmake_is_the_single_runtime_source_authority():
 def test_python_and_tests_consume_the_central_targets():
     assert re.search(
         r"target_link_libraries\(\s*_pops\s+PRIVATE\s+"
-        r"pops_runtime_system\s+pops_runtime_amr\s+pops_runtime_output\b",
+        r"pops_runtime_core_objects\s+pops_runtime_system\s+"
+        r"pops_runtime_amr\s+pops_runtime_output\b",
         PYTHON_CMAKE,
     )
     for target in ("pops_runtime_system", "pops_runtime_amr", "pops_runtime_output"):
