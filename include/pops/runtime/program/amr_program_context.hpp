@@ -125,7 +125,7 @@ class AmrProgramContext {
   template <class Body>
   void advance_hierarchy(double dt, Body&& body) const {
     advance_attempt_(dt, "AmrProgramContext::advance_hierarchy",
-                     [&](const amr::ClockWindow& root) { advance_level_(0, root, body); });
+                     [&](const amr::ClockWindow& root) { advance_level_(0, root, dt, body); });
   }
 
   /// Execute one hierarchy-wide Program body inside the same accepted-step transaction as the
@@ -1498,7 +1498,8 @@ class AmrProgramContext {
   };
 
   template <class Body>
-  void advance_level_(int level, const amr::ClockWindow& window, Body& body) const {
+  void advance_level_(int level, const amr::ClockWindow& window, double local_dt,
+                      Body& body) const {
     const auto saved_window = current_window_;
     const double saved_dt = current_level_dt_;
     current_window_ = window;
@@ -1509,7 +1510,10 @@ class AmrProgramContext {
       old_states.push_back(eng_->level_state(static_cast<std::size_t>(sys_block(b)), level));
 
     stage_time_ = amr::Rational(0, 1);
-    const double local_dt = window.end.physical_time - window.begin.physical_time;
+    // The authored step duration is the numerical authority.  Reconstructing it from accumulated
+    // physical timestamps loses one ulp as soon as `(t + dt) - t != dt`; a flat hierarchy would then
+    // execute a different AB/RK combine from System even though its exact clock phase is identical.
+    // Child durations are derived below from this authoritative value and exact Rational spans.
     current_level_dt_ = local_dt;
     body(local_dt);
     flush_level_flux_(level, local_dt, window.end);
@@ -1526,10 +1530,13 @@ class AmrProgramContext {
 
     const amr::ParentChildClockRelation& relation = eng_->parent_child_temporal_relation(level + 1);
     const std::optional<ActiveParentWindow> saved_parent = active_parent_;
+    const amr::Rational parent_span = window.end.phase - window.begin.phase;
     for (const amr::ChildSubstep& substep : relation.partition(window)) {
       active_parent_ =
           ActiveParentWindow{level + 1, window, substep.window, old_states, new_states};
-      advance_level_(level + 1, substep.window, body);
+      const amr::Rational child_span = substep.window.end.phase - substep.window.begin.phase;
+      const double child_dt = local_dt * (child_span / parent_span).value();
+      advance_level_(level + 1, substep.window, child_dt, body);
     }
     active_parent_ = saved_parent;
     current_window_ = saved_window;

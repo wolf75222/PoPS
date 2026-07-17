@@ -1420,8 +1420,9 @@ def test_stage_abort_recovery_is_registered_on_runtime_instance(tmp_path):
             self.temporary.write_bytes(b"runtime-owned")
             staged = self.temporary.lstat()
             self._owner = (int(staged.st_dev), int(staged.st_ino))
-            self.temporary.unlink()
-            self.temporary.write_bytes(b"third-party")
+            replacement = self.temporary.with_name(".stage-recovery.third-party")
+            replacement.write_bytes(b"third-party")
+            os.replace(replacement, self.temporary)
             raise RuntimeError("injected stage failure")
 
         def abort_prepare(self):

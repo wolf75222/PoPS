@@ -35,7 +35,10 @@ else()
   pybind11_add_module(_pops NO_EXTRAS ${POPS_MODULE_BINDING_SOURCES})
   set_target_properties(_pops PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 endif()
-target_link_libraries(_pops PRIVATE pops_runtime_system pops_runtime_amr pops_runtime_output pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
+# pops_runtime_core_objects is intentionally direct: it is the one exported StepAttemptRejected ABI
+# authority consumed by generated components.  The facade targets still carry the archive for C++
+# executables, but its member is not extracted after this direct object has satisfied the symbols.
+target_link_libraries(_pops PRIVATE pops_runtime_core_objects pops_runtime_system pops_runtime_amr pops_runtime_output pops::pops pops_dev_options ${CMAKE_DL_LIBS})  # dl : authenticated native component loading ; pops_dev_options : warnings/sanitizers opt-in (vide par defaut, cf. cmake/PopsDevTooling.cmake)
 target_compile_features(_pops PRIVATE cxx_std_${POPS_CXX_STD})
 # The pybind adapter is the final runtime module producer too. Its direct binding TUs use the same
 # declaration-only exception ABI as the central runtime and select dllexport; generated native

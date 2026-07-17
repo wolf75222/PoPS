@@ -543,6 +543,7 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
             _component_manifests=runtime._component_manifests,
             _execution_context=runtime._execution_context,
             _layout_plan=runtime._layout_plan,
+            _retain_output_recoveries=runtime._retain_output_recoveries,
         ))
 
     # Two separately qualified Writers cannot claim the same canonical target.
@@ -557,6 +558,7 @@ def test_qualified_writer_runs_through_uniform_and_amr_runtime_transactions(tmp_
             _component_manifests=runtime._component_manifests,
             _execution_context=runtime._execution_context,
             _layout_plan=runtime._layout_plan,
+            _retain_output_recoveries=runtime._retain_output_recoveries,
         ))
 
     run_report = pops.run(

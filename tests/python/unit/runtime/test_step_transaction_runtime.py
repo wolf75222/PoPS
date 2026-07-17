@@ -1,6 +1,7 @@
 """ADC-666: RuntimeInstance envelopes native state and accepted consumers atomically."""
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -205,8 +206,9 @@ def test_runtime_instance_retains_and_operates_typed_output_recovery(tmp_path):
     public.write_bytes(b"runtime-owned")
     original = public.lstat()
     owner = (int(original.st_dev), int(original.st_ino))
-    public.unlink()
-    public.write_bytes(b"third-party")
+    replacement = public.with_name("raced-output.third-party.bin")
+    replacement.write_bytes(b"third-party")
+    os.replace(replacement, public)
     with pytest.raises(_OutputRecoveryRequired) as failure:
         _StagedOutputFile._quarantine_owned_path(
             public,

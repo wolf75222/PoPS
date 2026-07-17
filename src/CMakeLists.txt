@@ -43,13 +43,20 @@ set(POPS_RUNTIME_AMR_SOURCES
 set(POPS_RUNTIME_OUTPUT_SOURCES
     runtime/output/hdf5_collective.cpp)
 
-add_library(pops_runtime_core STATIC ${POPS_RUNTIME_CORE_SOURCES})
+# Compile the runtime ABI authority exactly once, then expose it through two deliberate link forms:
+# C++ facade consumers receive the archive transitively, while _pops embeds the object directly.
+# pybind11's exception translator does not create a strong undefined reference to the key function,
+# so linking only the archive may discard this TU and leave generated components with an unresolved
+# StepAttemptRejected destructor at dlopen.
+add_library(pops_runtime_core_objects OBJECT ${POPS_RUNTIME_CORE_SOURCES})
+set_target_properties(pops_runtime_core_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_library(pops_runtime_core STATIC $<TARGET_OBJECTS:pops_runtime_core_objects>)
 set_target_properties(pops_runtime_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_library(pops_runtime_system OBJECT ${POPS_RUNTIME_SYSTEM_SOURCES})
 add_library(pops_runtime_amr OBJECT ${POPS_RUNTIME_AMR_SOURCES})
 add_library(pops_runtime_output OBJECT ${POPS_RUNTIME_OUTPUT_SOURCES})
 set(POPS_RUNTIME_OBJECT_TARGETS pops_runtime_system pops_runtime_amr pops_runtime_output)
-set(POPS_RUNTIME_TARGETS pops_runtime_core ${POPS_RUNTIME_OBJECT_TARGETS})
+set(POPS_RUNTIME_TARGETS pops_runtime_core_objects pops_runtime_core ${POPS_RUNTIME_OBJECT_TARGETS})
 
 foreach(_runtime_target IN LISTS POPS_RUNTIME_TARGETS)
   target_link_libraries(${_runtime_target} PUBLIC pops::pops ${CMAKE_DL_LIBS})
@@ -65,7 +72,9 @@ endforeach()
 
 # The transaction control-flow types are shared runtime ABI, not System implementation detail.
 # PUBLIC linkage makes the single key-function/typeinfo authority follow either facade into every
-# final executable/module, including AMR-only consumers, without compiling a duplicate definition.
+# final executable, including AMR-only consumers, without compiling a duplicate definition.  The
+# Python module additionally embeds pops_runtime_core_objects directly so its host ABI cannot depend
+# on archive extraction.
 target_link_libraries(pops_runtime_system PUBLIC pops_runtime_core)
 target_link_libraries(pops_runtime_amr PUBLIC pops_runtime_core)
 target_link_libraries(pops_runtime_output PUBLIC pops_runtime_core)
@@ -138,7 +147,7 @@ function(pops_runtime_enable_python_thin_lto)
   endif()
   # This function is called from python/, whose dynamic CMake scope does not inherit the target-list
   # variable defined in this subdirectory; keep the four concrete authorities explicit here.
-  foreach(_runtime_target pops_runtime_core pops_runtime_system pops_runtime_amr pops_runtime_output)
+  foreach(_runtime_target pops_runtime_core_objects pops_runtime_system pops_runtime_amr pops_runtime_output)
     target_link_libraries(${_runtime_target} PRIVATE pybind11::thin_lto)
   endforeach()
 endfunction()
