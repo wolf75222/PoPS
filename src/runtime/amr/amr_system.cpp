@@ -3634,6 +3634,16 @@ double AmrSystem::composite_reduce(const std::string& block, const std::string& 
   return p_->composite_reduce_fn(kind, comp, levels);
 }
 
+double AmrSystem::composite_reduce_field(const std::string& provider_slot,
+                                         const std::string& kind, int comp,
+                                         const std::vector<int>& levels) {
+  p_->ensure_built();
+  if (!p_->runtime)
+    throw std::runtime_error(
+        "AmrSystem::composite_reduce_field requires the qualified field runtime");
+  return p_->runtime->composite_reduce_field(provider_slot, kind, comp, levels);
+}
+
 // Load a generated problem.so and install its compiled time Program on the AMR hierarchy. Mirrors
 // System::install_program (the loader logic is VERBATIM, only the AMR ABI conventions differ: the
 // global-scope promotion is anchored on amr_native_anchor like add_native_block, not pops::abi_key, and

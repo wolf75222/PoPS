@@ -12,7 +12,9 @@ from pops.frames import Cartesian2D
 from pops.layouts import Uniform
 from pops.mesh import CartesianGrid, NormalizedGeometry, PolarMesh, normalize_layout_plan
 from pops.mesh._layout_plan_contracts import LayoutLevel
-from pops.model import OwnerPath
+from pops.identity import make_identity
+from pops.model import Handle, OwnerKind, OwnerPath
+from pops.output import FieldKey
 from pops.runtime._runtime_consumers import RuntimeOutputSnapshot
 
 
@@ -128,6 +130,36 @@ def test_runtime_output_geometry_is_deduplicated_and_invalidated_by_topology_epo
     assert third is not first
     assert engine.geometry_calls == 2
     assert tuple(builder._geometry_cache) == ((third.layout_identity.token, 0, 1),)
+
+
+def test_runtime_output_composite_integral_forwards_exact_levels_to_native_reducer():
+    calls = []
+
+    class _Provider:
+        def composite_reduce(self, *args):
+            calls.append(args)
+            return 3.25
+
+    key = FieldKey(
+        Handle(
+            "rho", kind="state",
+            owner=OwnerPath.case("native-integral").child(OwnerKind.BLOCK, "fluid"),
+        ),
+        make_identity("component-manifest", {"name": "scalar"}),
+        make_identity("layout-plan", {"name": "amr"}),
+        0,
+        "accepted",
+    )
+    evidence = RuntimeOutputSnapshot._native_composite_integral({
+        "native_engine": _Provider(),
+        "reduction_method": "composite_reduce",
+        "reduction_args": ("fluid", "sum", 0, [0, 2]),
+        "reduction_levels": (0, 2),
+    }, key)
+    assert evidence is not None
+    assert evidence.levels == (0, 2)
+    assert evidence.value == 3.25
+    assert calls == [("fluid", "sum", 0, [0, 2])]
 
 
 def test_runtime_output_uses_exact_polar_annulus_cell_areas():

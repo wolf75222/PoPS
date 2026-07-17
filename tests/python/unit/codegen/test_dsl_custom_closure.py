@@ -94,7 +94,7 @@ def my_closure(S):  # noqa: N803  (S mirrors the engine variable name)
 
 chk(isinstance(my_closure, Closure),
     "la fermeture utilisateur satisfait le protocole Closure (structurel)")
-model = CartesianVelocityMoments(2, closure=my_closure).add_transport().build(name="custom_fn")
+model = CartesianVelocityMoments(2, closure=my_closure).build(name="custom_fn")
 fx = np.asarray(model.flux_value(U6, {}, model.frame.axes[0])).ravel()
 fy = np.asarray(model.flux_value(U6, {}, model.frame.axes[1])).ravel()
 e1 = max(np.abs(fx - FX_REF).max(), np.abs(fy - FY_REF).max())

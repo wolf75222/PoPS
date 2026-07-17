@@ -1,7 +1,7 @@
 """Board-facade mixin: multi-species lowering and inspection.
 
-Splits the multi-species authoring (``species`` promotion, ``coupled_rate``,
-``solve_fields_from_species``) and the inspection/dump helpers out of the board
+Splits the multi-species authoring (``species`` promotion, ``coupled_rate`` and
+block-owned ``field_provider`` declarations) and the inspection/dump helpers out of the board
 :class:`pops.physics.board.Model` so neither file exceeds the Spec-4 500-line
 bound. Methods only; they operate on the board ``Model`` instance attributes
 (``_multi_module`` / ``_species`` / ``_states`` / ``_dsl`` / ...). Lowers to the
@@ -13,9 +13,8 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from ._board_contract import (atomic_attrs, normalize_components, normalize_roles,
-                              normalize_sequence, normalize_string_mapping, require_name)
-from .board_handles import (FieldsHandle, StateHandle,
-                            _canon_role, _safe_name)
+                              normalize_sequence, require_name)
+from .board_handles import StateHandle, _canon_role, _safe_name
 
 if TYPE_CHECKING:
     from ._model_contract import _BoardModel
@@ -24,14 +23,14 @@ else:
 
 
 class _MultiSpeciesMixin(_BoardModel):
-    """Multi-species promotion, coupled_rate, field-solve, and inspection dumps."""
+    """Multi-species promotion, coupled rates, field providers, and inspection dumps."""
 
     def _promote_to_multispecies(self, extra: Any = None) -> Any:
         """Build the multi-block :class:`pops.model.Module` and migrate the first species into it.
 
         The single-state dsl model authored the first species; multi-species mode realizes every
         species as a typed StateSpace on a shared Module so N >= 2 species lower to the existing
-        operator-first multi-block IR (N spaces + coupled_rate + multi-block field solve), not a
+        operator-first multi-block IR (N spaces + coupled rates + block-owned field providers), not a
         second runtime. Promotion replaces registry metadata with a new, equal immutable handle;
         an earlier user reference retains the same qualified identity and expression components."""
         if self._multi_module is not None:
@@ -177,47 +176,6 @@ class _MultiSpeciesMixin(_BoardModel):
                 capabilities=caps or None, expr=expr)
             result = self._registered_operator_handle(reg)
         return result
-
-    def solve_fields_from_species(self, name: Any, inputs: Any = (), equation: Any = None,
-                                  outputs: Any = None) -> Any:
-        """Declare a coupled field solve over several species (multi-block Poisson).
-
-        ``inputs`` is the ordered list of contributing species; the field RHS reads every listed
-        species' stage state at once. Lowers to a typed ``field_operator`` over the N input
-        :class:`StateSpace` set, consumed by the callable case-owned field operator over all exact
-        block states. ``equation`` / ``outputs``
-        record the physical operator and produced fields. Numerical choices are registered only
-        through a case-owned ``FieldDiscretization``.
-        """
-        from .. import model as _model
-        reg = _safe_name(name)
-        if self._multi_module is None:
-            raise ValueError(
-                "solve_fields_from_species(%r) needs at least two species; declare them with "
-                "m.species(...)" % (name,))
-        in_handles = self._as_species_list("solve_fields_from_species", name, inputs)
-        in_spaces = tuple(h.space for h in in_handles)
-        output_map = ({"phi": None} if outputs is None
-                      else normalize_string_mapping(outputs, "field solve outputs"))
-        if not output_map:
-            raise ValueError("solve_fields_from_species(%r) requires at least one output" % name)
-        out_comps = tuple(output_map)
-        h = FieldsHandle(
-            name, output_map, None, owner=self.owner_path,
-            registered_operator_name=reg)
-        if name in self._fields:
-            raise ValueError("field operator %r is already declared" % name)
-        registry = self._multi_module.operator_registry()
-        with atomic_attrs(
-                (self._multi_module, "_field_spaces"), (registry, "_by_name"),
-                (registry, "_order"), (self, "_fields")):
-            fields = self._multi_module.field_space(reg, out_comps)
-            self._multi_module.operator(
-                name=reg, kind="field_operator",
-                signature=_model.Signature(in_spaces, fields),
-                expr={"blocks": [handle.name for handle in in_handles]})
-            self._fields[name] = h
-        return h
 
     def _as_species_list(self, op: Any, name: Any, items: Any) -> Any:
         """Resolve a list of species handles / names to StateHandles (multi-species mode)."""

@@ -792,6 +792,9 @@ void bind_amr_program(py::class_<AmrSystem>& cls) {
       // next selected finer footprint.
       .def("composite_reduce", &AmrSystem::composite_reduce, py::arg("block"), py::arg("kind"),
            py::arg("comp") = 0, py::arg("levels") = std::vector<int>{})
+      .def("composite_reduce_field", &AmrSystem::composite_reduce_field,
+           py::arg("provider_slot"), py::arg("kind"), py::arg("comp") = 0,
+           py::arg("levels") = std::vector<int>{})
       // ADC-592: runtime freeze lifecycle (parity with System). mark_bound() (called LAST by the
       // Python bind flow) freezes the composition; lifecycle_state() reports assembling / bound /
       // running (running derived from macro_step()).

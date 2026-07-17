@@ -25,6 +25,9 @@ from pops.mesh._layout_plan_contracts import (
 )
 from pops.output.data import (
     _NATIVE_GEOMETRY_ARRAYS,
+    _NativeCompositeIntegral,
+    _composite_integral_authority_identity,
+    _field_family_identity,
     ArrayPiece,
     DiagnosticKey,
     DiagnosticPayload,
@@ -1486,6 +1489,20 @@ class RuntimeOutputSnapshot:
         self._owner = owner
         self._geometry_cache: dict[tuple[str, int, int], LevelGeometry] = {}
 
+    @staticmethod
+    def _native_composite_integral(
+        entry: Mapping[str, Any], key: FieldKey,
+    ) -> _NativeCompositeIntegral | None:
+        """Invoke one preflighted native route for its exact selected level tuple."""
+        reduction_method = entry["reduction_method"]
+        if reduction_method is None:
+            return None
+        family_identity = _field_family_identity(key)
+        levels = entry["reduction_levels"]
+        reducer = getattr(entry["native_engine"], reduction_method)
+        return _NativeCompositeIntegral(
+            family_identity, levels, float(reducer(*entry["reduction_args"])))
+
     def _layout(self, layout_id: str) -> Any:
         rows = [row for row in self._owner._layout_plan.layouts
                 if row.handle.qualified_id == layout_id]
@@ -1876,6 +1893,10 @@ class RuntimeOutputSnapshot:
             for quantity in manifest.quantities:
                 layout = self._layout(quantity.layout_id)
                 levels = quantity.levels or tuple(row.index for row in layout.levels)
+                native_cartesian_integral = (
+                    layout.adaptive
+                    and layout.geometry.cell_measure == CARTESIAN_CELL_AREA
+                )
                 block = _block_name(quantity.reference, component_names)
                 component_manifest = self._owner._component_manifests[block].manifest_digest
                 for level in levels:
@@ -1893,16 +1914,28 @@ class RuntimeOutputSnapshot:
                         method_name = "output_field_local_pieces"
                         args = (plan.native_options["provider_slot"], level)
                         components = (plan.operator.unknown.local_id,)
+                        reduction_method = "composite_reduce_field" \
+                            if native_cartesian_integral else None
+                        reduction_args = (
+                            plan.native_options["provider_slot"], "sum", 0, list(levels))
                     else:
                         engine = self._owner._executor_for_block(block)
                         method_name = "output_state_local_pieces"
                         args = (block, level)
                         components = _conservative_names(self._owner, block)
+                        reduction_method = "composite_reduce" \
+                            if native_cartesian_integral and len(components) == 1 else None
+                        reduction_args = (block, "sum", 0, list(levels))
                     native_engine = engine._s
                     if not callable(getattr(native_engine, method_name, None)):
                         raise RuntimeError(
                             "installed native provider lacks required %s() output view"
                             % method_name)
+                    if reduction_method is not None and not callable(
+                            getattr(native_engine, reduction_method, None)):
+                        raise RuntimeError(
+                            "installed native provider lacks required %s() composite reduction"
+                            % reduction_method)
                     entry = {
                         "quantity": quantity,
                         "geometry": geometry,
@@ -1911,6 +1944,9 @@ class RuntimeOutputSnapshot:
                         "method_name": method_name,
                         "args": args,
                         "components": components,
+                        "reduction_method": reduction_method,
+                        "reduction_args": reduction_args,
+                        "reduction_levels": tuple(levels),
                     }
                     entries.append(entry)
             diagnostic_schema = []
@@ -1935,6 +1971,9 @@ class RuntimeOutputSnapshot:
                 "method": entry["method_name"],
                 "args": list(entry["args"]),
                 "components": list(entry["components"]),
+                "reduction_method": entry["reduction_method"],
+                "reduction_args": list(entry["reduction_args"]),
+                "reduction_levels": list(entry["reduction_levels"]),
             } for entry in entries) + ({
                 "kind": "diagnostics",
                 "quantities": diagnostic_schema,
@@ -1998,6 +2037,7 @@ class RuntimeOutputSnapshot:
         canonical = None
         try:
             fields, keys = [], []
+            native_integrals: dict[str, _NativeCompositeIntegral] = {}
             for entry, pieces in extracted:
                 geometry = entry["geometry"]
                 key = FieldKey(
@@ -2011,6 +2051,14 @@ class RuntimeOutputSnapshot:
                     key, "cell", "unspecified", entry["components"],
                     geometry.cell_shape, pieces, dtype=np.dtype(np.float64).str))
                 keys.append(key)
+                family_identity = _field_family_identity(key)
+                levels = entry["reduction_levels"]
+                authority_identity = _composite_integral_authority_identity(
+                    family_identity, levels)
+                if authority_identity.token not in native_integrals:
+                    evidence = self._native_composite_integral(entry, key)
+                    if evidence is not None:
+                        native_integrals[authority_identity.token] = evidence
             selected_handles = {
                 value.handle.qualified_id for value in manifest.diagnostic_quantities
             }
@@ -2063,6 +2111,7 @@ class RuntimeOutputSnapshot:
                     "runtime_plan": self._owner._runtime_plan.identity.token,
                 },
                 diagnostics=selected_diagnostics,
+                _native_composite_integrals=tuple(native_integrals.values()),
             )
             canonical = snapshot.to_data(request)
             selection = request.to_data()

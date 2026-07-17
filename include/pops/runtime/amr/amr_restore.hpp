@@ -40,6 +40,28 @@ inline double AmrRuntime::composite_reduce(const std::string& block, const std::
                                                levels);
 }
 
+inline double AmrRuntime::composite_reduce_field(const std::string& provider_slot,
+                                                 const std::string& kind, int comp,
+                                                 const std::vector<int>& levels) {
+  const int count = provider_potential_levels(provider_slot);
+  if (blocks_.empty() || blocks_.front().levels == nullptr ||
+      static_cast<int>(blocks_.front().levels->size()) != count)
+    throw std::runtime_error(
+        "AmrRuntime::composite_reduce_field: field and shared state hierarchies disagree");
+  std::vector<const MultiFab*> values;
+  std::vector<std::pair<Real, Real>> metrics;
+  values.reserve(static_cast<std::size_t>(count));
+  metrics.reserve(static_cast<std::size_t>(count));
+  for (int level = 0; level < count; ++level) {
+    values.push_back(&provider_potential_level(provider_slot, level));
+    const AmrLevelMP& shared =
+        blocks_.front().levels->at(static_cast<std::size_t>(level));
+    metrics.emplace_back(shared.dx, shared.dy);
+  }
+  return runtime::amr::composite_reduce_fields(values, metrics, replicated_coarse_, kind, comp,
+                                                levels);
+}
+
 inline std::vector<int> AmrRuntime::level_owner_ranks(int k) const {
   if (k < 0 || k >= nlev_)
     throw std::runtime_error("AmrRuntime::level_owner_ranks : level out of bounds");

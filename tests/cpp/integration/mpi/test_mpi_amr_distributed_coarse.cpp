@@ -33,6 +33,7 @@
 #include <pops/physics/fluids/euler.hpp>   // Euler
 #include <pops/runtime/amr/bootstrap_transfer_builtins.hpp>
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
+#include <pops/runtime/amr/composite_reduction.hpp>
 #include <pops/runtime/amr_system.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/parallel/world_communicator.hpp>
@@ -48,6 +49,24 @@
 
 using namespace pops;
 using Model = CompositeModel<Euler, GravityForce, GravityCoupling>;
+
+// Direct proof for the qualified-field reduction kernel used by pops.output.composite_integrals.
+// Both levels are split into two global boxes, hence np=2 owns a non-trivial disjoint partition.
+// The 4x4 fine patch covers four coarse cells: 12*(1/4)^2*1 + 16*(1/8)^2*2 = 1.25.
+static double native_composite_field_error() {
+  const BoxArray coarse_boxes({Box2D{{0, 0}, {1, 3}}, Box2D{{2, 0}, {3, 3}}});
+  const BoxArray fine_boxes({Box2D{{2, 2}, {3, 5}}, Box2D{{4, 2}, {5, 5}}});
+  MultiFab coarse(coarse_boxes, DistributionMapping(coarse_boxes.size(), n_ranks()), 1, 0);
+  MultiFab fine(fine_boxes, DistributionMapping(fine_boxes.size(), n_ranks()), 1, 0);
+  coarse.set_val(Real(1));
+  fine.set_val(Real(2));
+  const std::vector<const MultiFab*> values{&coarse, &fine};
+  const std::vector<std::pair<Real, Real>> metrics{{Real(0.25), Real(0.25)},
+                                                   {Real(0.125), Real(0.125)}};
+  const double integral = runtime::amr::composite_reduce_fields(
+      values, metrics, false, "sum", 0, {0, 1});
+  return std::fabs(integral - 1.25);
+}
 
 static bool bootstrap_volume_average_replicates_parent() {
   const Box2D coarse_domain = Box2D::from_extents(4, 4);
@@ -232,6 +251,7 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   const double dt = 1e-3;
 
   const bool bootstrap_restriction_ok = bootstrap_volume_average_replicates_parent();
+  const double composite_field_error = native_composite_field_error();
   const Result rep = run(n, nsteps, dt, /*distribute=*/false);  // oracle : grossier replique
   const Result dis = run(n, nsteps, dt, /*distribute=*/true);   // mode scalable : grossier reparti
 
@@ -292,6 +312,11 @@ static int pops_run_test_mpi_amr_distributed_coarse(int argc, char** argv) {
   if (me == 0) {
     if (!bootstrap_restriction_ok) {
       std::printf("FAIL volume-average bootstrap absent d'une copie grossiere repliquee\n");
+      ++fails;
+    }
+    if (!(composite_field_error < 1e-14)) {
+      std::printf("FAIL reduction composite native du champ (error=%.3e)\n",
+                  composite_field_error);
       ++fails;
     }
     std::printf(

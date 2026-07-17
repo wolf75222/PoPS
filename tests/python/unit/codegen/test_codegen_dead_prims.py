@@ -88,11 +88,9 @@ def realizable_states(nstates, seed):
 
 def moment_model(name, closure):
     """Final public moment construction used by both the numeric and codegen checks."""
-    return (
-        M.CartesianVelocityMoments(ORDER, closure=closure, robust=False)
-        .add_transport()
-        .build(name=name)
-    )
+    return M.CartesianVelocityMoments(
+        ORDER, closure=closure, robust=False
+    ).build(name=name)
 
 
 def codegen_lower(model):

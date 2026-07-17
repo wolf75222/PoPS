@@ -13,11 +13,18 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace pops::runtime::amr {
 
 namespace composite_detail {
+
+struct CompositeLevelView {
+  const MultiFab* values = nullptr;
+  Real dx = Real(0);
+  Real dy = Real(0);
+};
 
 struct SetCompositeMask {
   Array4 mask;
@@ -104,7 +111,7 @@ inline std::vector<int> selected_levels(int count, const std::vector<int>& reque
   return requested;
 }
 
-inline int adjacent_ratio(const AmrLevelMP& coarse, const AmrLevelMP& fine) {
+inline int adjacent_ratio(const CompositeLevelView& coarse, const CompositeLevelView& fine) {
   const double rx = static_cast<double>(coarse.dx) / static_cast<double>(fine.dx);
   const double ry = static_cast<double>(coarse.dy) / static_cast<double>(fine.dy);
   const int ratio = static_cast<int>(std::llround(rx));
@@ -117,7 +124,7 @@ inline int adjacent_ratio(const AmrLevelMP& coarse, const AmrLevelMP& fine) {
   return ratio;
 }
 
-inline int ratio_between(const std::vector<AmrLevelMP>& hierarchy, int coarse, int fine) {
+inline int ratio_between(const std::vector<CompositeLevelView>& hierarchy, int coarse, int fine) {
   int ratio = 1;
   for (int level = coarse; level < fine; ++level) {
     const int next = adjacent_ratio(hierarchy[static_cast<std::size_t>(level)],
@@ -129,9 +136,9 @@ inline int ratio_between(const std::vector<AmrLevelMP>& hierarchy, int coarse, i
   return ratio;
 }
 
-inline MultiFab active_mask(const std::vector<AmrLevelMP>& hierarchy, int level,
+inline MultiFab active_mask(const std::vector<CompositeLevelView>& hierarchy, int level,
                             int next_selected) {
-  const MultiFab& values = hierarchy[static_cast<std::size_t>(level)].U;
+  const MultiFab& values = *hierarchy[static_cast<std::size_t>(level)].values;
   MultiFab mask(values.box_array(), values.dmap(), 1, 0);
   for (int local = 0; local < mask.local_size(); ++local)
     for_each_cell(mask.box(local), SetCompositeMask{mask.fab(local).array(), Real(1)});
@@ -139,7 +146,8 @@ inline MultiFab active_mask(const std::vector<AmrLevelMP>& hierarchy, int level,
     return mask;
 
   const int ratio = ratio_between(hierarchy, level, next_selected);
-  const BoxArray& finer = hierarchy[static_cast<std::size_t>(next_selected)].U.box_array();
+  const BoxArray& finer =
+      hierarchy[static_cast<std::size_t>(next_selected)].values->box_array();
   for (int local = 0; local < mask.local_size(); ++local) {
     const Box2D valid = mask.box(local);
     const Array4 active = mask.fab(local).array();
@@ -184,17 +192,21 @@ inline Real local_max(const MultiFab& values, const MultiFab& mask, int componen
 
 }  // namespace composite_detail
 
-/// Reduce exactly @p requested_levels. Empty keeps the low-level C++ all-level convention; the
-/// resolved Python DSL always supplies its explicit level tuple. Coarser selected levels are masked
-/// only by the next SELECTED finer level, so CoarseOnly, SelectedLevels, and AllLevels have distinct
-/// and predictable meanings. Every per-cell fold remains on Kokkos storage; only one scalar per level
-/// crosses the host/MPI boundary.
-inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
-                                      bool replicated_coarse, const std::string& kind,
-                                      int component,
-                                      const std::vector<int>& requested_levels = {}) {
-  const std::vector<int> levels =
-      composite_detail::selected_levels(static_cast<int>(hierarchy.size()), requested_levels);
+inline double composite_reduce_views(
+    const std::vector<composite_detail::CompositeLevelView>& hierarchy,
+    bool replicated_coarse, const std::string& kind, int component,
+    const std::vector<int>& requested_levels = {}) {
+  if (hierarchy.empty())
+    throw std::runtime_error("composite_reduce: AMR hierarchy has no active level");
+  for (const auto& level : hierarchy)
+    if (level.values == nullptr || !std::isfinite(static_cast<double>(level.dx)) ||
+        !std::isfinite(static_cast<double>(level.dy)) || level.dx <= Real(0) ||
+        level.dy <= Real(0))
+      throw std::invalid_argument(
+          "composite_reduce: every level requires native storage and positive finite metrics");
+
+  const std::vector<int> levels = composite_detail::selected_levels(
+      static_cast<int>(hierarchy.size()), requested_levels);
   const bool full = kind.size() > 4 && kind.compare(kind.size() - 4, 4, "_all") == 0;
   const std::string base = full ? kind.substr(0, kind.size() - 4) : kind;
   const bool additive = base == "sum" || base == "abs_sum" || base == "sum_sq";
@@ -202,11 +214,11 @@ inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
     throw std::invalid_argument(
         "composite_reduce: unknown kind '" + kind +
         "' (expected sum/min/max/abs_sum/sum_sq/abs_max and optional _all)");
-  const int components = hierarchy.front().U.ncomp();
+  const int components = hierarchy.front().values->ncomp();
   if (!full && (component < 0 || component >= components))
     throw std::out_of_range("composite_reduce: selected component is out of bounds");
-  for (const AmrLevelMP& level : hierarchy)
-    if (level.U.ncomp() != components)
+  for (const auto& level : hierarchy)
+    if (level.values->ncomp() != components)
       throw std::runtime_error("composite_reduce: AMR levels disagree on component count");
 
   double result = additive ? 0.0
@@ -217,7 +229,8 @@ inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
   for (std::size_t selected = 0; selected < levels.size(); ++selected) {
     const int level = levels[selected];
     const int next = selected + 1 < levels.size() ? levels[selected + 1] : -1;
-    const AmrLevelMP& entry = hierarchy[static_cast<std::size_t>(level)];
+    const auto& entry = hierarchy[static_cast<std::size_t>(level)];
+    const MultiFab& values = *entry.values;
     MultiFab mask = composite_detail::active_mask(hierarchy, level, next);
     const int first_component = full ? 0 : component;
     const int end_component = full ? components : component + 1;
@@ -229,7 +242,7 @@ inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
                         : (base == "abs_sum" ? composite_detail::CompositeSumKind::AbsSum
                                              : composite_detail::CompositeSumKind::SumSq);
       for (int current = first_component; current < end_component; ++current)
-        local += composite_detail::local_sum(entry.U, mask, current, sum_kind);
+        local += composite_detail::local_sum(values, mask, current, sum_kind);
       const double global = level == 0 && replicated_coarse
                                 ? static_cast<double>(local)
                                 : all_reduce_sum(static_cast<double>(local));
@@ -240,19 +253,54 @@ inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
     if (base == "min") {
       Real local = std::numeric_limits<Real>::infinity();
       for (int current = first_component; current < end_component; ++current)
-        local = std::min(local, composite_detail::local_min(entry.U, mask, current));
+        local = std::min(local, composite_detail::local_min(values, mask, current));
       result = std::min(result, all_reduce_min(static_cast<double>(local)));
     } else {
       const bool absolute = base == "abs_max";
       Real local = absolute ? Real(0) : -std::numeric_limits<Real>::infinity();
       for (int current = first_component; current < end_component; ++current)
-        local = std::max(local, composite_detail::local_max(entry.U, mask, current, absolute));
+        local = std::max(local,
+                         composite_detail::local_max(values, mask, current, absolute));
       result = std::max(result, all_reduce_max(static_cast<double>(local)));
     }
   }
   if (!std::isfinite(result))
     throw std::runtime_error("composite_reduce: selected AMR levels contain no active cell");
   return result;
+}
+
+/// Reduce exactly @p requested_levels. Empty keeps the low-level C++ all-level convention; the
+/// resolved Python DSL always supplies its explicit level tuple. Coarser selected levels are masked
+/// only by the next SELECTED finer level, so CoarseOnly, SelectedLevels, and AllLevels have distinct
+/// and predictable meanings. Every per-cell fold remains on Kokkos storage; only one scalar per level
+/// crosses the host/MPI boundary.
+inline double composite_reduce_levels(const std::vector<AmrLevelMP>& hierarchy,
+                                      bool replicated_coarse, const std::string& kind,
+                                      int component,
+                                      const std::vector<int>& requested_levels = {}) {
+  std::vector<composite_detail::CompositeLevelView> views;
+  views.reserve(hierarchy.size());
+  for (const AmrLevelMP& level : hierarchy)
+    views.push_back({&level.U, level.dx, level.dy});
+  return composite_reduce_views(views, replicated_coarse, kind, component, requested_levels);
+}
+
+/// The same native composite fold for a hierarchy whose scalar values do not live in AmrLevelMP::U
+/// (for example a qualified elliptic output field).  Layout and metric metadata stay explicit and
+/// index-aligned; no field is gathered or copied to Python/host storage.
+inline double composite_reduce_fields(
+    const std::vector<const MultiFab*>& hierarchy,
+    const std::vector<std::pair<Real, Real>>& metrics, bool replicated_coarse,
+    const std::string& kind, int component,
+    const std::vector<int>& requested_levels = {}) {
+  if (hierarchy.size() != metrics.size())
+    throw std::invalid_argument(
+        "composite_reduce: field hierarchy and metric hierarchy sizes differ");
+  std::vector<composite_detail::CompositeLevelView> views;
+  views.reserve(hierarchy.size());
+  for (std::size_t level = 0; level < hierarchy.size(); ++level)
+    views.push_back({hierarchy[level], metrics[level].first, metrics[level].second});
+  return composite_reduce_views(views, replicated_coarse, kind, component, requested_levels);
 }
 
 }  // namespace pops::runtime::amr

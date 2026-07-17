@@ -1010,12 +1010,49 @@ def test_collective_hdf5_snapshot_metadata_requires_exact_rank_consensus():
         _rebuild_parallel_snapshot_data(snapshot, (envelope, peer), selected)
 
 
-def test_composite_reduction_uses_metrics_and_excludes_covered_coarse_cells():
+def test_composite_integrals_requires_exact_native_level_authority():
     snapshot, request, _ = _snapshot()
-    totals = composite_integrals(snapshot, request)
+    from pops.output.data import _NativeCompositeIntegral, _field_family_identity
+
+    with pytest.raises(RuntimeError, match="exact selected level tuple"):
+        composite_integrals(snapshot, request)
+    family = _field_family_identity(request.selection[0])
+    coarse_only = replace(request, selection=(request.selection[0],))
+    exact = replace(
+        snapshot,
+        _native_composite_integrals=(_NativeCompositeIntegral(family, (0, 1), 5.0),),
+    )
+    with pytest.raises(RuntimeError, match="under-selected, or over-selected"):
+        composite_integrals(exact, coarse_only)
+    for mismatched_levels in ((0,), (0, 1, 2)):
+        mismatched = replace(
+            snapshot,
+            _native_composite_integrals=(
+                _NativeCompositeIntegral(family, mismatched_levels, 7.0),
+            ),
+        )
+        with pytest.raises(RuntimeError, match="exact selected level tuple"):
+            composite_integrals(mismatched, request)
+
+    totals = composite_integrals(exact, request)
     assert len(totals) == 1
-    # coarse: 3 uncovered cells * 1; fine: 4 valid box cells * value 2 * volume 0.25
+    # Python exposes the scalar authenticated for exactly levels (0, 1); it never folds arrays.
     assert next(iter(totals.values())) == 5.0
+
+
+def test_composite_integrals_refuses_non_cartesian_cell_measure():
+    from pops.mesh._layout_plan_contracts import POLAR_ANNULUS_CELL_AREA
+
+    snapshot, request, _ = _snapshot()
+    snapshot = replace(snapshot, geometries=tuple(
+        replace(geometry, cell_measure=POLAR_ANNULUS_CELL_AREA)
+        for geometry in snapshot.geometries
+    ))
+    with pytest.raises(NotImplementedError, match="only the native Cartesian cell-area metric"):
+        composite_integrals(snapshot, request)
+
+
+def test_balance_terms_keep_the_explicit_open_domain_sign_convention():
     balance = BalanceTerms(11.0, 2.0, 5.0, 3.0, 1.0)
     assert balance.residual == 4.0
     assert set(balance.to_data()) == {

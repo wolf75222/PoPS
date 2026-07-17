@@ -5,10 +5,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
-from pops.identity import make_identity
-
-from .data import OutputRequest, OutputSnapshot
-from ._writers.common import field_values_on_mask
+from .data import (
+    OutputRequest,
+    OutputSnapshot,
+    _CARTESIAN_CELL_AREA,
+    _composite_integral_authority_identity,
+    _field_family_identity,
+)
 
 
 def _finite(value: Any, where: str) -> float:
@@ -25,26 +28,49 @@ def composite_integrals(snapshot: OutputSnapshot, request: OutputRequest) -> Any
     state while levels are reduced together. Vector/component fields are intentionally refused: a
     caller must select a scalar component explicitly rather than receive an implicit reduction.
     """
-    import numpy as np
-
-    totals: dict[str, float] = {}
+    if type(snapshot) is not OutputSnapshot or type(request) is not OutputRequest:
+        raise TypeError(
+            "composite_integrals requires exact OutputSnapshot and OutputRequest values")
+    selected: dict[str, dict[str, Any]] = {}
     for field in snapshot.select(request):
-        if field.component_names:
+        if len(field.component_names) > 1:
             raise ValueError(
                 "composite_integrals requires scalar selections; select a component explicitly")
         geometry = snapshot.geometry(field.key)
-        active = np.logical_and(geometry.valid_cells, np.logical_not(geometry.coverage))
-        values = field_values_on_mask(field, active, require_piece_subset=False)
-        value = float(np.sum(
-            values * geometry.cell_volumes[active], dtype=np.float64))
-        family = make_identity("output-field-family", {
-            "reference": field.key.reference.canonical_identity(),
-            "component_manifest_identity": field.key.component_manifest_identity.token,
-            "layout_identity": field.key.layout_identity.token,
-            "state_id": field.key.state_id,
-        }).token
-        totals[family] = totals.get(family, 0.0) + value
-    return MappingProxyType(dict(sorted(totals.items())))
+        if geometry.layout_kind != "amr":
+            raise ValueError("composite_integrals requires an adaptive AMR layout")
+        if geometry.cell_measure != _CARTESIAN_CELL_AREA:
+            raise NotImplementedError(
+                "composite_integrals currently supports only the native Cartesian cell-area "
+                "metric; non-Cartesian measures require a typed native metric provider")
+        family = _field_family_identity(field.key).token
+        row = selected.setdefault(family, {
+            "components": field.component_names,
+            "levels": [],
+            "family_identity": _field_family_identity(field.key),
+        })
+        if row["components"] != field.component_names:
+            raise ValueError("one output field family has inconsistent component metadata")
+        row["levels"].append(field.key.level)
+    evidence = {
+        item.authority_identity.token: item.value
+        for item in snapshot._native_composite_integrals
+    }
+    requested = {
+        family: _composite_integral_authority_identity(
+            row["family_identity"], tuple(sorted(row["levels"]))).token
+        for family, row in selected.items()
+    }
+    missing = sorted(
+        family for family, authority in requested.items() if authority not in evidence)
+    if missing:
+        raise RuntimeError(
+            "composite_integrals requires accepted-state native C++/Kokkos reduction evidence "
+            "for the exact selected level tuple; detached, under-selected, or over-selected "
+            "snapshots cannot be reduced")
+    return MappingProxyType({
+        family: evidence[requested[family]] for family in sorted(selected)
+    })
 
 
 @dataclass(frozen=True, slots=True)

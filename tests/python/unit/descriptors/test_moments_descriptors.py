@@ -123,6 +123,11 @@ def test_handles_are_not_descriptors():
             "%s is a builder/handle and must not be a Descriptor" % name)
 
 
+def test_moment_model_has_no_transport_noop_surface():
+    specification = moments.CartesianVelocityMoments(order=2)
+    assert not hasattr(specification, "add_transport")
+
+
 def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     # The MomentHierarchy snapshot carries the speeds / projection descriptors; they remain
     # inspectable route choosers even when reached through the snapshot.

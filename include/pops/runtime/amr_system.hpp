@@ -947,6 +947,11 @@ class AmrSystem {
   /// the next selected finer level. Multi-block and single-block both remain native/Kokkos.
   POPS_EXPORT double composite_reduce(const std::string& block, const std::string& kind, int comp,
                                       const std::vector<int>& levels = {}) const;
+  /// Composite integral/reduction of one qualified native field provider.  This route is available
+  /// only on the multi-block runtime engine because that engine owns the typed provider hierarchy.
+  POPS_EXPORT double composite_reduce_field(const std::string& provider_slot,
+                                            const std::string& kind, int comp,
+                                            const std::vector<int>& levels = {});
   /// @}
   /// @}
 

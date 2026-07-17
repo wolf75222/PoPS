@@ -16,6 +16,7 @@ from pops.model import Handle
 
 
 _CENTERINGS = frozenset({"cell", "node", "face_x", "face_y"})
+_CARTESIAN_CELL_AREA = "pops://cell-measures/cartesian-area@1"
 _NATIVE_GEOMETRY_ARRAYS = object()
 
 
@@ -174,7 +175,7 @@ class LevelGeometry:
     coverage: Any = field(repr=False, compare=False)
     cell_volumes: Any = field(repr=False, compare=False)
     coordinate_system: str = "pops://coordinates/cartesian-2d@1"
-    cell_measure: str = "pops://cell-measures/cartesian-area@1"
+    cell_measure: str = _CARTESIAN_CELL_AREA
     axis_names: tuple[str, str] = ("x", "y")
     valid_cells: Any = field(init=False, repr=False, compare=False)
     _native_valid_cells: InitVar[Any] = None
@@ -318,6 +319,60 @@ class FieldKey:
             "level": self.level,
             "state_id": self.state_id,
         }
+
+
+def _field_family_identity(key: FieldKey) -> Identity:
+    """Identity of one exact field across its explicitly selected AMR levels."""
+    if type(key) is not FieldKey:
+        raise TypeError("output field family requires an exact FieldKey")
+    return make_identity("output-field-family", {
+        "reference": key.reference.canonical_identity(),
+        "component_manifest_identity": key.component_manifest_identity.token,
+        "layout_identity": key.layout_identity.token,
+        "state_id": key.state_id,
+    })
+
+
+def _composite_integral_authority_identity(
+    family_identity: Identity, levels: tuple[int, ...],
+) -> Identity:
+    if type(family_identity) is not Identity:
+        raise TypeError("composite integral authority requires an exact family Identity")
+    return make_identity("native-composite-integral", {
+        "family_identity": family_identity.token,
+        "levels": list(levels),
+    })
+
+
+@dataclass(frozen=True, slots=True)
+class _NativeCompositeIntegral:
+    """Private evidence produced by the native accepted-state reduction path."""
+
+    family_identity: Identity
+    levels: tuple[int, ...]
+    value: float
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "family_identity", _identity(
+            self.family_identity, "native composite integral family_identity"))
+        levels = tuple(self.levels)
+        if not levels or any(
+                isinstance(level, bool) or type(level) is not int or level < 0
+                for level in levels):
+            raise TypeError(
+                "native composite integral levels must be non-empty exact integers >= 0")
+        if levels != tuple(sorted(set(levels))):
+            raise ValueError(
+                "native composite integral levels must be strictly increasing and unique")
+        object.__setattr__(self, "levels", levels)
+        value = float(self.value)
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError("native composite integral must be finite")
+        object.__setattr__(self, "value", value)
+
+    @property
+    def authority_identity(self) -> Identity:
+        return _composite_integral_authority_identity(self.family_identity, self.levels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -605,6 +660,8 @@ class OutputSnapshot:
     fields: tuple[FieldPayload, ...]
     metadata: Any = field(default_factory=dict)
     diagnostics: tuple[DiagnosticPayload, ...] = ()
+    _native_composite_integrals: tuple[_NativeCompositeIntegral, ...] = field(
+        default=(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if type(self.clock) is not OutputClock or type(self.provenance) is not OutputProvenance:
@@ -649,6 +706,16 @@ class OutputSnapshot:
         object.__setattr__(self, "metadata", MappingProxyType(dict(sorted(self.metadata.items()))))
         object.__setattr__(self, "diagnostics", tuple(
             diagnostic_map[token] for token in sorted(diagnostic_map)))
+        native_integrals = tuple(self._native_composite_integrals)
+        if any(type(item) is not _NativeCompositeIntegral for item in native_integrals):
+            raise TypeError(
+                "native composite integral evidence must use the private native payload")
+        native_map = {item.authority_identity.token: item for item in native_integrals}
+        if len(native_map) != len(native_integrals):
+            raise ValueError(
+                "native composite integral family-and-level authorities must be unique")
+        object.__setattr__(self, "_native_composite_integrals", tuple(
+            native_map[token] for token in sorted(native_map)))
 
     def select(self, request: OutputRequest) -> tuple[FieldPayload, ...]:
         if type(request) is not OutputRequest:

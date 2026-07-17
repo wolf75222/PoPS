@@ -324,8 +324,18 @@ def _module_to_model(module: Any, state_space: Any = None) -> Any:
             coverage_rows.append(LoweringCoverageRow(
                 source, "documentary"))
             continue
-        if op.kind == "coupled_rate" or (
-                op.kind == "field_operator" and len(state_inputs) > 1):
+        if op.kind == "field_operator" and len(state_inputs) > 1:
+            _reject(
+                source,
+                "multi_state_field_provider_unsupported",
+                "compile_problem: field_operator %r has %d StateSpace inputs; a native field "
+                "provider is owned by exactly one block. Declare the shared FieldSpace with "
+                "model.field(..., components=...), declare one model.field_provider(..., "
+                "on=species, into=field, value=...) per contributing species, and compose those "
+                "qualified providers in the case-owned FieldOperator/FieldProviderPack"
+                % (op.name, len(state_inputs)),
+            )
+        if op.kind == "coupled_rate":
             coverage_rows.append(LoweringCoverageRow(
                 source, "lowered", ("program:multi_block_operator",)))
             continue

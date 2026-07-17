@@ -103,9 +103,9 @@ def gauss_state(order):
 
 def moment_model(name, order, closure, *, robust=False):
     """Build through the final typed moment facade with the oracle's exact guard mode."""
-    return (CartesianVelocityMoments(order, closure=closure, robust=robust)
-            .add_transport()
-            .build(name=name, frame=MOMENT_FRAME))
+    return CartesianVelocityMoments(
+        order, closure=closure, robust=robust
+    ).build(name=name, frame=MOMENT_FRAME)
 
 
 print("== (1) convention d'ordre des variables ==")

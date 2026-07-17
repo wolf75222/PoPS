@@ -58,7 +58,7 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         "state", "species", "primitive", "primitive_state", "scalar", "aux", "field",
         "vector", "flux", "source", "local_linear_operator", "field_operator",
         "operator", "riemann", "invariant", "rate",
-        "finite_volume_rate", "coupled_rate", "solve_fields_from_species",
+        "finite_volume_rate", "coupled_rate",
         "field_provider", "projection", "wave_speeds", "wave_speeds_from_jacobian",
         "roe_from_jacobian",
     })
@@ -96,8 +96,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         self._riemann = None        # selected Riemann descriptor (board surface)
         self._reconstruction = None
         # Multi-species mode (Spec 3 sections 12, 16): once a SECOND species is declared the model owns
-        # a multi-block pops.model.Module directly (N StateSpaces + a coupled_rate + a multi-block field
-        # operator). The single-species path keeps the same dsl.Model backend and numerics;
+        # a multi-block pops.model.Module directly (N StateSpaces + coupled rates + exact
+        # block-owned field providers). The single-species path keeps the same dsl.Model backend
+        # and numerics;
         # _multi_module is None until N > 1.
         self._multi_module = None
         self._species = {}          # species name -> StateHandle (multi-species mode)
@@ -182,9 +183,9 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
     @property
     def module(self) -> Any:
         """The typed :class:`pops.model.Module` view (operator-first IR). Single-species: the
-        dsl-derived Module (one StateSpace). Multi-species: the multi-block Module this model assembled
-        directly (N StateSpaces, a ``coupled_rate`` operator, a multi-block field operator) -- the SAME
-        operator-first IR a hand-written :class:`pops.model.Module` would build.
+        dsl-derived Module (one StateSpace). Multi-species: the multi-block Module this model
+        assembled directly (N StateSpaces, coupled rates and block-owned field providers) -- the
+        SAME operator-first IR a hand-written :class:`pops.model.Module` would build.
         """
         if self._module_cache is not None:
             return self._module_cache
@@ -365,9 +366,11 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
         a coupled-rate formula. Arbitrary arity: declare 2, 3, 4, ... species. The single-species case
         uses the same backend as :meth:`state` (no multi-block Module is created); the multi-block path
         engages only from the SECOND species, lowering to the existing operator-first multi-block IR
-        (``pops.model.Module`` with N spaces + ``coupled_rate`` + ``solve_fields_from_blocks``), never a
-        parallel runtime. Species components are owner-qualified from the first declaration, so an
-        existing handle remains exact if a second species later uses the same component names.
+        (``pops.model.Module`` with N spaces, coupled rates and block-owned field providers), never a
+        parallel runtime. The Program's case-owned field handle lowers an N-state call to
+        ``solve_fields_from_blocks``. Species components are owner-qualified from the first
+        declaration, so an existing handle remains exact if a second species later uses the same
+        component names.
         """
         name = require_name(name, "species name")
         components = normalize_components(state, "species %s state" % name)
@@ -1045,14 +1048,47 @@ class Model(PhysicsFreezable, _BoardCompileMixin, _RateAuthoringMixin, _RiemannA
 
     # --- validation / compile ---
     def check(self) -> Any:
-        """Validate that every referenced quantity is declared (single-species path).
+        """Validate every symbolic dependency through the installed compiler authorities.
 
-        Multi-species models compose their blocks in a time Program and validate in the compiler
-        (``pops.codegen.program_codegen.emit_cpp_program`` / ``_check_lowerable``), so ``check`` is a
-        single-species notion; it is a no-op for a multi-species model."""
-        if self._multi_module is not None:
-            return None
-        return self._dsl.check()
+        The single-species path retains the historical dependency check.  A multi-species model
+        validates every exact StateSpace route (including its block-owned field providers) with the
+        same Module-to-emitter translation used by compilation, then exercises each coupled-rate body
+        through the Program lowerability gate.
+        This is structural validation only: it emits no native source and compiles no artifact.
+        """
+        if self._multi_module is None:
+            return self._dsl.check()
+
+        module = self.module
+        from pops.codegen.module_lowering import _module_to_model
+
+        for state_name in module.list_state_spaces():
+            _module_to_model(module, state_space=state_name).check()
+
+        coupled = tuple(
+            operator
+            for operator in module.operator_registry()
+            if operator.kind == "coupled_rate"
+        )
+        if coupled:
+            from pops.codegen.program_codegen import _check_lowerable
+            from pops.problem import Case
+            from pops.time import Program
+
+            check_name = "%s_multispecies_check" % _safe_name(self.name)
+            case = Case(name=check_name)
+            program = Program(check_name)
+            states = {}
+            for state_name, space in module.state_spaces().items():
+                state = module.state_handle(space)
+                block = case.block(state_name, module, states=(state,))
+                states[state_name] = program.state(block[state]).n
+            for operator in coupled:
+                module.operator_handle(operator.name)(
+                    *(states[space.name] for space in operator.signature.inputs)
+                )
+            _check_lowerable(program, module)
+        return True
 
     def lower(self) -> Any:
         """Lower this writing facade to its :class:`pops.model.Module` (ADVANCED / inspection).

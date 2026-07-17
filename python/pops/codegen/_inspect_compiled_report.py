@@ -93,7 +93,7 @@ class CompiledReport(Report):
         self.status = status
         # Active codegen POPS_* environment (Spec 5 sec.12.4, #47-48): the resolved CodegenEnv as a
         # plain dict (log_level / codegen_dir / keep_generated / dump_ir / dump_cpp / cache_dir /
-        # profile / autotune), or {} when the handle carried no env snapshot.
+        # profile), or {} when the handle carried no env snapshot.
         self.env = dict(env) if env else {}
         self.runtime = dict(runtime) if runtime else {}
         self.capabilities = dict(capabilities) if capabilities else {}
@@ -193,10 +193,6 @@ class CompiledReport(Report):
             lines.append("    dump_cpp      : %s" % self.env.get("dump_cpp"))
             lines.append("    cache_dir     : %s" % self.env.get("cache_dir"))
             lines.append("    profile       : %s" % self.env.get("profile"))
-            lines.append("    autotune      : %s%s"
-                         % (self.env.get("autotune"),
-                            "  (no-op stub: no autotune engine today)"
-                            if self.env.get("autotune") not in (None, "off") else ""))
         if self.module_manifest:
             manifest = self.module_manifest
             ops = manifest.get("operators", [])

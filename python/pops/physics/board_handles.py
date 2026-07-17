@@ -12,13 +12,12 @@ The board notation lives in :mod:`pops.math` (``ddt`` / ``div`` / ``grad`` /
 is reachable through :pyattr:`Model.module`; compilation remains the root lifecycle transition.
 
 Multi-species board authoring (``m.species`` for N >= 2, ``m.coupled_rate``,
-``m.solve_fields_from_species``) LOWERS to the existing operator-first multi-block
-IR (an :class:`pops.model.Module` with N :class:`pops.model.StateSpace`, a
-``coupled_rate`` operator over a :class:`pops.model.RateBundle`, and a multi-input
-field operator), not a second runtime: the board surface produces the SAME typed
-operators a hand-written ``pops.model.Module`` registers (ADC-457). The single-species
-path uses the same single-state backend and numerical operators. The compiled multi-block
-``.so`` run is validated on ROMEO (Kokkos-only AOT).
+``m.field`` and one ``m.field_provider`` per contributing species) LOWERS to the
+existing operator-first multi-block IR, not a second runtime.  The exact provider
+handles are combined by a case-owned :class:`pops.fields.FieldProviderPack` in the
+typed :class:`pops.fields.FieldOperator`; the physics board never hides an equation,
+solver or multi-input field route.  The single-species path uses the same single-state
+backend and numerical operators.
 """
 from __future__ import annotations
 
@@ -207,7 +206,7 @@ class SourceHandle(Handle):
         Handle.__init__(self, display_name, kind="source", owner=owner)
         object.__setattr__(self, "reg_name", reg_name)
 
-    def __pops_rate_term__(self) -> "SourceTermExpr":
+    def __pops_rate_term__(self) -> SourceTermExpr:
         return SourceTermExpr(self)
 
     def __neg__(self) -> Any:

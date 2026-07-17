@@ -1811,6 +1811,12 @@ class AmrRuntime {
   double composite_reduce(const std::string& block, const std::string& kind, int comp,
                           const std::vector<int>& levels = {}) const;
 
+  /// Native level-composite reduction over one qualified elliptic field provider.  The provider is
+  /// materialized on the shared hierarchy, then folded directly on its Kokkos MultiFabs with the
+  /// same coverage/metric/MPI contract as composite_reduce; no output snapshot arrays participate.
+  double composite_reduce_field(const std::string& provider_slot, const std::string& kind,
+                                int comp, const std::vector<int>& levels = {});
+
   /// Impose a mid-run hierarchy from a checkpoint (multi-block, all levels, reusing regrid R6/R7):
   /// build each level's BoxArray + DistributionMapping from the manifest, reallocate every block's
   /// level MultiFab on it (inherited ghost width), rebuild + rewire the shared aux, verify the

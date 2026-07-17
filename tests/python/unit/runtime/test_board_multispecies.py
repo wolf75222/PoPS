@@ -8,13 +8,14 @@ existing operator-first multi-block IR (PR #287/#299/#300) rather than a paralle
 * ``m.coupled_rate(...)`` -> the existing ``coupled_rate`` operator kind: a ``RateBundle``
   signature over the input species, the SAME operator the hand-written operator-first model
   registers;
-* ``m.solve_fields_from_species(...)`` -> a multi-input ``field_operator`` consumed through a
-  callable multi-state ``FieldHandle`` whose solve outcome is handled explicitly.
+* ``m.field_provider(..., on=species, ...)`` -> one executable block-owned field RHS contribution;
+  a case-owned ``FieldOperator`` composes the qualified providers and its callable field handle
+  consumes every participating state explicitly.
 
 The equivalence pinned here is structural AND at emit: a 3-fluid board model lowers to 3
-StateSpaces + a coupled_rate + a multi-block field operator, and a two-fluid board model emits the
-SAME C++ as the hand-written ``pops.model.Module`` reference (test 34.10). Arbitrary arity (3 + 4
-inputs) works; a wrong-species rate in an affine combine errors (test 34.11). This is the pure
+StateSpaces + a coupled_rate + one exact field provider per species, and a two-fluid board model
+emits the SAME C++ as the hand-written ``pops.model.Module`` reference (test 34.10). Arbitrary arity
+(3 + 4 inputs) works; a wrong-species rate in an affine combine errors (test 34.11). This is the pure
 authoring / IR-equivalence slice; the compiled multi-block ``.so`` collision STEP runs on ROMEO
 (Kokkos-only AOT), NOT here. Real engine only; skips cleanly if pops.time is unavailable, never
 faking.
@@ -31,7 +32,12 @@ physics = pytest.importorskip("pops.physics")
 from pops import model  # noqa: E402
 from pops._ir.expr import Var  # noqa: E402
 from pops.descriptors import Descriptor  # noqa: E402
-from pops.fields import FieldDiscretization, FieldOperator  # noqa: E402
+from pops.fields import (  # noqa: E402
+    FieldDiscretization,
+    FieldOperator,
+    FieldProviderContribution,
+    FieldProviderPack,
+)
 from pops.math import ValueExpr, laplacian  # noqa: E402
 from pops.problem import Case  # noqa: E402
 from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
@@ -64,9 +70,10 @@ def _three_fluid_board():
             i: [e["ne"] - i["ni"], i["ni"], i["ni"]],
             n: [n["nn"], n["nn"], n["nn"]],
         })
-    m.solve_fields_from_species(
-        "fields", inputs=[e, i, n], outputs={"phi": None}
-    )
+    fields = m.field("fields", components=("phi",))
+    m.field_provider("electron_charge", on=e, into=fields, value=e["ne"])
+    m.field_provider("ion_charge", on=i, into=fields, value=-i["ni"])
+    m.field_provider("neutral_charge", on=n, into=fields, value=n["nn"])
     return m, e, i, n
 
 
@@ -139,12 +146,49 @@ def test_coupled_rate_lowers_to_coupled_rate_operator_with_a_bundle():
     assert len(op.signature.inputs) == 3
 
 
-def test_field_solve_lowers_to_a_multi_input_field_operator():
+def test_field_rhs_lowers_to_one_exact_provider_per_species():
     m, _e, _i, _n = _three_fluid_board()
-    op = m.module.operator_registry().get("fields")
-    assert op.kind == "field_operator"
-    assert len(op.signature.inputs) == 3  # over all three species (solve_fields_from_blocks surface)
-    assert isinstance(op.signature.output, model.FieldSpace)
+    module = m.module
+    fields = module.field_spaces()["fields"]
+    providers = {
+        name: module.operator_registry().get(name)
+        for name in ("electron_charge", "ion_charge", "neutral_charge")
+    }
+    assert isinstance(fields, model.FieldSpace)
+    assert {operator.kind for operator in providers.values()} == {"field_operator"}
+    assert all(operator.signature.output == fields for operator in providers.values())
+    assert {
+        operator.signature.inputs[0].name: len(operator.signature.inputs)
+        for operator in providers.values()
+    } == {"electrons": 1, "ions": 1, "neutrals": 1}
+    assert all(operator.body is not None and not callable(operator.body)
+               for operator in providers.values())
+
+
+def test_retired_multispecies_field_shortcut_is_absent():
+    assert not hasattr(physics.Model("no_silent_field_shortcut"), "solve_fields_from_species")
+
+
+def test_raw_multi_input_field_provider_is_rejected_by_module_lowering():
+    from pops.codegen.lowering_coverage import LoweringRejection
+    from pops.codegen.module_lowering import _module_to_model
+
+    module = model.Module("invalid_multi_provider")
+    electrons = module.state_space("electrons", ("ne",))
+    ions = module.state_space("ions", ("ni",))
+    fields = module.field_space("fields", ("phi",))
+    ne = module.state_symbols(electrons)[0]
+    ni = module.state_symbols(ions)[0]
+    module.operator(
+        name="combined_charge",
+        kind="field_operator",
+        signature=model.Signature((electrons, ions), fields),
+        expr=ne - ni,
+    )
+
+    with pytest.raises(LoweringRejection, match="owned by exactly one block") as error:
+        _module_to_model(module, state_space="electrons")
+    assert error.value.gate == "multi_state_field_provider_unsupported"
 
 
 def test_state_handle_indexes_by_component_name():
@@ -272,13 +316,30 @@ def test_multispecies_lowers_to_a_multiblock_module():
     from pops import model as _model_pkg
 
     m, _e, _i, _n = _three_fluid_board()
-    assert m.check() is None                              # model-level check is a single-species notion
+    assert m.check() is True                             # every state route + coupled body is valid
     # No direct compilation from the physics facade (the documented path is m.lower() -> pops.compile).
     assert not hasattr(m, "compile"), "physics.Model must not expose a direct compile()"
     module = m.lower()
     assert isinstance(module, _model_pkg.Module), "physics.Model.lower() returns a pops.model.Module"
     assert isinstance(m.to_module(), _model_pkg.Module), "to_module() returns a Module too"
     assert type(m).to_module is type(m).lower, "to_module() is the lower() alias"
+
+
+def test_multispecies_check_rejects_an_undeclared_coupled_coordinate():
+    # Model.check() must exercise the real coupled-rate compiler gate, not report success merely
+    # because a multi-StateSpace Module exists.  The authoring graph remains inspectable, but its
+    # undeclared coordinate can never reach native lowering silently.
+    m = physics.Model("invalid_two_fluid")
+    e = m.species("electrons", state=["ne"])
+    i = m.species("ions", state=["ni"])
+    m.coupled_rate(
+        "collision",
+        inputs=[e, i],
+        outputs={e: [Var("ghost", "cons")], i: [e["ne"] - i["ni"]]},
+    )
+
+    with pytest.raises(NotImplementedError, match="component of no input state"):
+        m.check()
 
 
 def test_single_species_is_byte_identical_to_state():
@@ -317,10 +378,17 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     )
     e_n, i_n, n_n = (
         states["electrons"].n, states["ions"].n, states["neutrals"].n)
-    block = case.blocks()["electrons"]
-    provider = case.qualify(mod.operator_handle("fields"), block=block)
+    blocks = case.blocks()
+    block = blocks["electrons"]
+    providers = FieldProviderPack((
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("electron_charge"), block=blocks["electrons"])),
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("ion_charge"), block=blocks["ions"])),
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("neutral_charge"), block=blocks["neutrals"])),
+    ))
     unknown = block[mod.field_handle(mod.field_spaces()["fields"])]
-    electron_state = block[mod.state_handle(sp["electrons"])]
 
     class _Method(Descriptor):
         category = "field_method"
@@ -338,8 +406,9 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
         FieldOperator(
             "fields",
             unknown=unknown,
-            equation=-laplacian(ValueExpr(unknown)) == ValueExpr(electron_state),
-            providers=provider,
+            equation=-laplacian(ValueExpr(unknown)) == (
+                _e["ne"] - _i["ni"] + _n["nn"]),
+            providers=providers,
         ),
         FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
     )

@@ -144,7 +144,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
         self.lowering_coverage = lowering_coverage
         # Active codegen POPS_* environment snapshot (Spec 5 sec.12.4, #47-48): the resolved
         # CodegenEnv that governed this compile (log level, codegen dir, keep-generated, dump flags,
-        # cache dir, profile, autotune, and the UNSAFE jit-backdoor gate). Recorded so the env state
+        # cache dir, profile, and the UNSAFE jit-backdoor gate). Recorded so the env state
         # is inspectable in inspect(); None for a handle built outside compile_problem (no env was
         # resolved -- a documented absence, not a fabricated default).
         self._codegen_env = codegen_env
@@ -268,7 +268,7 @@ class CompiledProblem(CompiledProblemDumpMixin):
 
         A :class:`pops.codegen.env.CodegenEnv` recording the EFFECTIVE settings (env defaults already
         overridden by any explicit argument): log level, codegen dir, keep-generated, dump-IR /
-        dump-CPP, cache dir, profile and autotune level. Surfaced in :meth:`inspect` so the active
+        dump-CPP, cache dir and profile. Surfaced in :meth:`inspect` so the active
         environment state is never hidden (criterion #47).
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
