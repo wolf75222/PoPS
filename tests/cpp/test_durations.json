@@ -4,7 +4,7 @@
     "ctest_parallel_jobs": 4,
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 186,
+    "target_count": 187,
     "unit_seconds": "aggregate CTest wall time per build target"
   },
   "test_adaptive_multirate": 0.02,
@@ -175,6 +175,8 @@
   "test_solver_codegen_generated": 0.66,
   "test_spatial_discretisation": 0.01,
   "test_splitting": 0.01,
+  "test_step_attempt_rejected_amr_link": 0.01,
+  "test_step_attempt_rejected_header_only": 0.01,
   "test_structured_solver_diagnostics": 0.01,
   "test_sync_residence": 0.01,
   "test_system_abstraction": 0.01,

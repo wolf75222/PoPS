@@ -4,7 +4,7 @@
     "default_parallel_share_seconds": 2.0,
     "source_job": "87152034744",
     "source_run": "29352485297",
-    "target_count": 186,
+    "target_count": 187,
     "unit_seconds": "modeled shard wall time: measured serial-pool TU or parallel-share floor"
   },
   "test_adaptive_multirate": 2.0,
@@ -175,6 +175,8 @@
   "test_solver_codegen_generated": 2.0,
   "test_spatial_discretisation": 2.0,
   "test_splitting": 2.0,
+  "test_step_attempt_rejected_amr_link": 2.0,
+  "test_step_attempt_rejected_header_only": 2.0,
   "test_structured_solver_diagnostics": 2.0,
   "test_sync_residence": 2.0,
   "test_system_abstraction": 2.0,
