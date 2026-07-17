@@ -133,8 +133,8 @@ TEST(test_amr_source_covered_cells, Runs) {
                                        f(2 * ci, 2 * cj + 1, 0) + f(2 * ci + 1, 2 * cj + 1, 0));
         const Real cov = c(ci, cj, 0);
         ASSERT_TRUE(std::isfinite(cov) && std::isfinite(avg))
-            << tag << " (non finite a (" << ci << "," << cj << ") : cov=" << cov
-            << " avg=" << avg << ")";
+            << tag << " (non finite a (" << ci << "," << cj << ") : cov=" << cov << " avg=" << avg
+            << ")";
         worst = std::max(worst, std::fabs(cov - avg));
       }
     EXPECT_LT(worst, Real(1e-12)) << tag;

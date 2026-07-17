@@ -185,9 +185,9 @@ static void fill_const_local(MultiFab& mf, double val) {
 
 // Resout la MMS (tenseur arr/art/atr/att) sur un BoxArray donne ; ecrit la solution dans phi_out (memes
 // ba/dm -> memes boites locales). Rend le resultat BiCGStab.
-static PolarKrylovResult solve_mb(const PolarGeometry& g, const BoxArray& ba, Problem prob, int m,
-                                  double arr, double art, double atr, double att, PolarPrecond pc,
-                                  MultiFab& phi_out) {
+static SolveReport solve_mb(const PolarGeometry& g, const BoxArray& ba, Problem prob, int m,
+                            double arr, double art, double atr, double att, PolarPrecond pc,
+                            MultiFab& phi_out) {
   BCRec bc;
   bc.ylo = bc.yhi = BCType::Periodic;
   if (prob == Problem::Dirichlet) {
@@ -226,7 +226,7 @@ static PolarKrylovResult solve_mb(const PolarGeometry& g, const BoxArray& ba, Pr
   }
 
   solver.phi().set_val(0.0);
-  PolarKrylovResult kr = solver.solve(1e-11, 4000);
+  SolveReport kr = solver.solve(1e-11, 4000);
 
   for (int li = 0; li < phi_out.local_size(); ++li) {
     const Box2D vb = phi_out.box(li);
@@ -339,21 +339,21 @@ TEST_F(PolarSchurMultibox, tensor_cross_terms_theta_split_matches_mono_box_radia
 
   BoxArray ba_mono(std::vector<Box2D>{*dom_});
   MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
-                                      PolarPrecond::RadialLine, phi_ref);
+  SolveReport kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
+                                PolarPrecond::RadialLine, phi_ref);
   const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m_);
-  EXPECT_TRUE(kr_ref.converged) << "A_mono_converge";
+  EXPECT_TRUE(kr_ref.solved()) << "A_mono_converge";
 
   BoxArray ba8 = theta_split(nr_, nth_, 8);
   MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-  PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Dirichlet, m_, arr, art, atr, att,
-                                   PolarPrecond::RadialLine, phi8);
+  SolveReport kr8 =
+      solve_mb(g, ba8, Problem::Dirichlet, m_, arr, art, atr, att, PolarPrecond::RadialLine, phi8);
   const double err8 = err_l2(phi8, g, Problem::Dirichlet, m_);
   const double derr = std::fabs(err8 - err_ref);
   if (me_ == 0)
     std::printf("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
                 kr_ref.iters, err_ref, kr8.iters, err8, derr);
-  EXPECT_TRUE(kr8.converged) << "A_multibox_converge";
+  EXPECT_TRUE(kr8.solved()) << "A_multibox_converge";
   // coin 9-points cross-box correct
   EXPECT_TRUE(derr <= 1e-8) << "A_multibox_err_matches_mono derr=" << derr;
 }
@@ -369,21 +369,21 @@ TEST_F(PolarSchurMultibox, tiled_2d_split_matches_mono_box_jacobi) {
 
   BoxArray ba_mono(std::vector<Box2D>{*dom_});
   MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
-                                      PolarPrecond::Jacobi, phi_ref);
+  SolveReport kr_ref = solve_mb(g, ba_mono, Problem::Dirichlet, m_, arr, art, atr, att,
+                                PolarPrecond::Jacobi, phi_ref);
   const double err_ref = err_l2(phi_ref, g, Problem::Dirichlet, m_);
-  EXPECT_TRUE(kr_ref.converged) << "B_mono_jacobi_converge";
+  EXPECT_TRUE(kr_ref.solved()) << "B_mono_jacobi_converge";
 
   BoxArray tile = tile_2d(nr_, nth_, 2, 2);  // 4 boites : coupe r ET theta
   MultiFab phit(tile, rr_dm(tile), 1, 1);
-  PolarKrylovResult krt =
+  SolveReport krt =
       solve_mb(g, tile, Problem::Dirichlet, m_, arr, art, atr, att, PolarPrecond::Jacobi, phit);
   const double errt = err_l2(phit, g, Problem::Dirichlet, m_);
   const double derr = std::fabs(errt - err_ref);
   if (me_ == 0)
-    std::printf("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n", kr_ref.iters,
-                err_ref, krt.iters, errt, derr);
-  EXPECT_TRUE(krt.converged) << "B_tile2d_converge";
+    std::printf("  mono : iters=%d err=%.6e | 2x2 tiles : iters=%d err=%.6e | d=%.3e\n",
+                kr_ref.iters, err_ref, krt.iters, errt, derr);
+  EXPECT_TRUE(krt.solved()) << "B_tile2d_converge";
   // halos r/theta/diagonale corrects
   EXPECT_TRUE(derr <= 1e-8) << "B_tile2d_err_matches_mono derr=" << derr;
 }
@@ -419,7 +419,8 @@ TEST_F(PolarSchurMultibox, radial_line_rejects_r_cut_layout_jacobi_accepts_it) {
     threw_jac = true;
   }
   if (me_ == 0)
-    std::printf("  Jacobi + coupe-r     : %s\n", threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
+    std::printf("  Jacobi + coupe-r     : %s\n",
+                threw_jac ? "throw (BUG)" : "OK (pas de contrainte)");
   EXPECT_TRUE(!threw_jac) << "C_jacobi_rcut_ok";
 }
 
@@ -430,25 +431,26 @@ TEST_F(PolarSchurMultibox, neumann_gauge_theta_split_matches_mono_box_radial_lin
   const PolarGeometry& g = *g_;
   const int mN = 2;
   if (me_ == 0)
-    std::printf("\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
+    std::printf(
+        "\n--- (D) Neumann (jauge) : theta-split (8 boites) vs mono-box [RadialLine] ---\n");
 
   BoxArray ba_mono(std::vector<Box2D>{*dom_});
   MultiFab phi_ref(ba_mono, rr_dm(ba_mono), 1, 1);
-  PolarKrylovResult kr_ref = solve_mb(g, ba_mono, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
-                                      PolarPrecond::RadialLine, phi_ref);
+  SolveReport kr_ref = solve_mb(g, ba_mono, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
+                                PolarPrecond::RadialLine, phi_ref);
   const double err_ref = err_l2(phi_ref, g, Problem::Neumann, mN);
-  EXPECT_TRUE(kr_ref.converged) << "D_mono_neumann_converge";
+  EXPECT_TRUE(kr_ref.solved()) << "D_mono_neumann_converge";
 
   BoxArray ba8 = theta_split(nr_, nth_, 8);
   MultiFab phi8(ba8, rr_dm(ba8), 1, 1);
-  PolarKrylovResult kr8 = solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0,
-                                   PolarPrecond::RadialLine, phi8);
+  SolveReport kr8 =
+      solve_mb(g, ba8, Problem::Neumann, mN, 1.0, 0.0, 0.0, 1.0, PolarPrecond::RadialLine, phi8);
   const double err8 = err_l2(phi8, g, Problem::Neumann, mN);
   const double derr = std::fabs(err8 - err_ref);
   if (me_ == 0)
     std::printf("  mono : iters=%d err=%.6e | 8 boites theta : iters=%d err=%.6e | d=%.3e\n",
                 kr_ref.iters, err_ref, kr8.iters, err8, derr);
-  EXPECT_TRUE(kr8.converged) << "D_multibox_neumann_converge";
+  EXPECT_TRUE(kr8.solved()) << "D_multibox_neumann_converge";
   // jauge multi-box coherente
   EXPECT_TRUE(derr <= 1e-8) << "D_multibox_neumann_err_matches_mono derr=" << derr;
 }

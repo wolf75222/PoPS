@@ -9,17 +9,89 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  full-source-matrix:
+    name: Validate every declared source-build route
+    uses: ./.github/workflows/ci.yml
+    with:
+      force_full: true
+    permissions:
+      contents: read
+      pull-requests: read
+
+  wheel:
+    name: Build the published wheel
+    uses: ./.github/workflows/wheels.yml
+    permissions:
+      contents: read
+
+  validate:
+    name: Validate the exact published wheel
+    needs: wheel
+    runs-on: macos-14
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: pops-macos-arm64-cp312
+          path: ${{ runner.temp }}/wheelhouse
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: pops
+          environment-file: environment.yml
+          auto-activate-base: false
+
+      - name: Run the complete final gate and release preflight
+        shell: bash -el {0}
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(python -c 'import sys; print("cp%d%d" % sys.version_info[:2])')" = cp312
+          wheels=("$RUNNER_TEMP"/wheelhouse/pops-*.whl)
+          test "${#wheels[@]}" -eq 1
+          evidence="$RUNNER_TEMP/pops-final-evidence.json"
+          python scripts/run_final_gate.py --wheel "${wheels[0]}" --evidence "$evidence"
+          python - <<'PY'
+          from pops.runtime_environment import runtime_environment_report
+          report = runtime_environment_report()
+          assert report["kokkos_backend"] == "Serial", report
+          assert report["mpi_compiled"] is False, report
+          PY
+          python scripts/release_preflight.py \
+            --release --tag "$GITHUB_REF_NAME" --installed --evidence "$evidence"
+
+      - name: Retain authenticated release evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: pops-final-release-evidence
+          path: ${{ runner.temp }}/pops-final-evidence*
+          if-no-files-found: error
+
+  release:
+    name: Publish the validated release
+    needs: [full-source-matrix, wheel, validate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: pops-macos-arm64-cp312
+          path: wheelhouse
 
       - name: Extract CHANGELOG notes
         run: |
@@ -39,7 +111,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          gh release create "$GITHUB_REF_NAME" wheelhouse/*.whl \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --notes-file RELEASE_NOTES.md \

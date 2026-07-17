@@ -1,11 +1,9 @@
-"""ADC-600: architecture gate quarantining the host/prototype hot-path routes.
+"""ADC-600/ADC-693: architecture gate for the sole production native route.
 
-The prototype/host routes are the JIT ``add_dynamic_block`` (IModel virtual host Rusanov), the AOT
-``add_compiled_block`` (host-marshalled production algorithm, no MPI/AMR/GPU) and the
-``pops.experimental.PythonFlux`` numpy-host backend.  They may stay for internal tests / prototyping
-but must NEVER be taken for the final generic route: the ``pops.compile`` / ``pops.bind`` target
-surface must not reference them, a missing production native route must refuse early (no prototype
-fallback), and ``pops.experimental`` must not leak onto the ``pops`` root.
+The retired JIT and host-marshalled AOT model routes must not be reachable from the final compile,
+bind or runtime surfaces. A missing production route refuses early; no compatibility alias or
+prototype fallback remains. Host numerical oracles live under ``tests/python/support`` and no
+``pops.experimental`` backend is shipped in the installed package.
 
 These checks are source-only (they do not import ``pops`` / ``_pops``), so they run without a built
 native extension.  If a legitimate hit appears in a scanned tree, INVESTIGATE it (the target surface
@@ -20,25 +18,25 @@ import re
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 POPS = REPO_ROOT / "python" / "pops"
 
-# The TARGET compile/bind surface (Spec 5 sec.11): the Problem authoring type, the pops.compile /
+# The TARGET compile/bind surface: the Case authoring type, the pops.compile /
 # pops.bind orchestration, and the internal install seam bind calls.  None of these may reference a
 # host/prototype route -- their only route is the production native loader.
 TARGET_SURFACE = (
     "problem/problem.py",
-    "codegen/orchestration.py",
+    "codegen/_phases.py",
     "runtime/_system_unified_install.py",
 )
 
 # The host/prototype route symbols the target surface must never name (AST name / attribute /
-# import), plus the experimental (numpy host) package.
+# import), plus the retired experimental host package.
 FORBIDDEN_NAMES = ("add_dynamic_block", "add_compiled_block")
-FORBIDDEN_ATTR_CHAIN = "experimental"  # pops.experimental (host numpy PythonFlux)
+FORBIDDEN_ATTR_CHAIN = "experimental"
 
-# The production-only refusal the compile drivers MUST keep (a silent removal is a fallback hole).
-PRODUCTION_ONLY_RE = re.compile(r"require backend='production'")
+# The final backend authority must expose one descriptor and reject retired routes.
+PRODUCTION_ONLY_RE = re.compile(r"BACKEND_DESCRIPTORS\s*=\s*\{_PRODUCTION:\s*Production\}")
 
 # The legal route-tier vocabulary (ADC-600): every backend caps row carries one of these.
-LEGAL_TIERS = {"production", "prototype", "internal"}
+LEGAL_TIERS = {"production"}
 
 
 def _read(path):
@@ -93,36 +91,31 @@ def test_target_surface_does_not_reference_host_prototype_routes():
         "and remove each reference at its source (never allowlist it):\n  " + "\n  ".join(violations))
 
 
-def test_compile_drivers_keeps_the_production_only_refusal():
-    text = _read(POPS / "codegen" / "compile_drivers.py")
+def test_backend_authority_has_exactly_one_route():
+    text = _read(POPS / "codegen" / "_backends.py")
     assert PRODUCTION_ONLY_RE.search(text), (
-        "compile_drivers.py must keep the production-only refusal string "
-        "\"require backend='production'\" (ADC-600): a compiled time program refuses a non-production "
-        "backend early, it never falls back to a prototype/host route. A silent removal of this "
-        "guard opens a fallback hole -- restore the refusal.")
+        "_backends.py must expose exactly the Production descriptor; retired route descriptors or "
+        "fallback registries are forbidden")
 
 
-def test_pops_root_does_not_import_experimental():
-    text = _read(POPS / "__init__.py")
-    # experimental listed in __all__ (a lazily-reachable submodule name) is fine; an eager IMPORT of
-    # the numpy-host package onto the root is what ADC-600 forbids.
-    import_lines = [line for line in text.splitlines()
-                    if "experimental" in line and "import" in line
-                    and not line.lstrip().startswith("#")]
-    assert not import_lines, (
-        "pops/__init__.py must not import pops.experimental (ADC-600 keeps the numpy-host prototyping "
-        "package off the root; PythonFlux is not pops.PythonFlux); found:\n  "
-        + "\n  ".join(import_lines))
+def test_installed_tree_has_no_host_numerical_backend():
+    experimental_sources = sorted((POPS / "experimental").glob("*.py"))
+    assert not experimental_sources, (
+        "host numerical oracles belong under tests/python/support, never in the installed package"
+    )
+    authoring_eval = _read(POPS / "physics" / "_authoring_eval.py")
+    assert "to_python_flux" not in authoring_eval
+    assert "PythonFlux" not in authoring_eval
 
 
 def test_backend_caps_rows_carry_a_legal_tier():
-    """Source-only: every _BACKEND_CAPS row declares a tier in {production, prototype, internal}.
+    """Source-only: every _BACKEND_CAPS row declares the production tier.
 
-    Parse the assignment in compile_emit.py (no import) and assert each row dict has a ``tier`` key
+    Parse the assignment in _compile_emit.py (no import) and assert each row dict has a ``tier`` key
     whose value is one of the legal tokens, so a report can always name a route's class honestly.
     """
-    src = _read(POPS / "codegen" / "compile_emit.py")
-    tree = ast.parse(src, filename="compile_emit.py")
+    src = _read(POPS / "codegen" / "_compile_emit.py")
+    tree = ast.parse(src, filename="_compile_emit.py")
     caps_node = None
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):

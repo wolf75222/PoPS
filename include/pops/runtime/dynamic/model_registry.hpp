@@ -1,5 +1,7 @@
 #pragma once
 
+#include <pops/runtime/config/generated_component_catalog.hpp>
+
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -33,62 +35,6 @@
 /// document those supported-vs-not-routed combinations as DATA, read directly by the tests and docs.
 
 namespace pops {
-
-/// Builtin TRANSPORT brick tag. @c n_vars MIRRORS the brick type's ::n_vars (ExBVelocity = 1,
-/// IsothermalFlux = 3, CompressibleFlux = 4): a static_assert on the model_factory.hpp side (which
-/// sees both) locks the absence of drift. @c polar_ok: wired in polar geometry (block_builder_polar).
-struct TransportTag {
-  const char* name;
-  int n_vars;
-  bool polar_ok;
-  const char* summary;
-};
-
-/// SINGLE SOURCE of the builtin transports (order = historical display priority, used by the CSV /
-/// choices messages). These are GENERIC bricks, NOT named scenarios: a scenario (diocotron, ...) is a
-/// composition named on the application side (adc_cases), never a row here.
-inline constexpr TransportTag kTransports[] = {
-    {"exb", 1, true, "scalar ExB drift advection, v = (-d_y phi, d_x phi) / B0"},
-    {"compressible", 4, false, "compressible Euler, 4 var (rho, rho u, rho v, E)"},
-    {"isothermal", 3, true, "isothermal Euler, 3 var (rho, rho u, rho v)"},
-};
-
-/// Builtin SOURCE brick tag. @c min_vars: the MINIMUM transport n_vars the source needs -- a fluid
-/// force reads momentum / energy components, so it requires a fluid transport (>= 3 variables);
-/// "none" is neutral and works on any transport. min_vars is DOCUMENTARY (like the capability flags
-/// of dispatch_tags.hpp's RiemannTag): the REAL gate is the `if constexpr (NV >= 3)` in
-/// dispatch_source (model_factory.hpp), not this field -- it serves the tests and docs. Several
-/// spellings map to the SAME brick (magnetic == lorentz; potential_magnetic == potential_lorentz):
-/// each accepted spelling is a row so the registry lists them all.
-struct SourceTag {
-  const char* name;
-  int min_vars;
-  const char* summary;
-};
-
-/// SINGLE SOURCE of the builtin sources.
-inline constexpr SourceTag kSources[] = {
-    {"none", 1, "neutral: no source term"},
-    {"potential", 3, "(q/m) rho E electrostatic force"},
-    {"gravity", 3, "rho g gravity force"},
-    {"magnetic", 3, "q v x B_z magnetized Lorentz force (explicit regime)"},
-    {"lorentz", 3, "alias of 'magnetic'"},
-    {"potential_magnetic", 3, "electrostatic + Lorentz, summed"},
-    {"potential_lorentz", 3, "alias of 'potential_magnetic'"},
-};
-
-/// Builtin ELLIPTIC right-hand-side brick tag.
-struct EllipticTag {
-  const char* name;
-  const char* summary;
-};
-
-/// SINGLE SOURCE of the builtin elliptic right-hand sides.
-inline constexpr EllipticTag kElliptics[] = {
-    {"charge", "rho - q : charge density (Poisson source)"},
-    {"background", "alpha (rho - n0) : neutralizing background"},
-    {"gravity", "sign * 4 pi G (rho - rho0) : gravitational coupling"},
-};
 
 namespace detail {
 /// Joins the @c name field of a tag table into "a<sep>b<sep>..." (optionally each name single-quoted).

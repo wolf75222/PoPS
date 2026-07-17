@@ -8,6 +8,9 @@
 
 #include <pops/core/foundation/types.hpp>
 
+#include <cassert>
+#include <limits>
+
 // State and Aux: the two pointwise types handled by the physics layer.
 //
 // Architecture rule: these are trivially copyable aggregates (POD).
@@ -78,19 +81,20 @@ POPS_HD StateVec<N> operator*(Real s, StateVec<N> a) {
 /// SINGLE SOURCE of the layout of the EXTRA aux fields (X-macro). This is the ONLY place
 /// listing {member, index} for the fields beyond the base contract.
 /// Python-C++ INVARIANT: the indices here must stay identical to AUX_CANONICAL in
-/// python/pops/dsl.py ({"phi":0,"grad_x":1,"grad_y":2,"B_z":3,"T_e":4}). Modifying one
+/// python/pops/physics/aux.py ({"phi":0,"grad_x":1,"grad_y":2,"B_z":3,"T_e":4}). Modifying one
 /// requires modifying the other at the same time. The duplication is inherent: Python does not
 /// read C++ headers. load_aux (device read, spatial_operator.hpp) AND the host marshaling
-/// (python/system.cpp) are GENERATED from it, so adding an extra aux field is done HERE and
+/// used by generated loader adapters are derived from it, so adding an extra aux field is done HERE and
 /// NOWHERE ELSE. This closes the historical gap (#51: T_e added to the struct + load_aux but
-/// forgotten in the JIT marshaling -> read as 0 silently). Each entry: X(member, index). The
+/// forgotten in the generated ABI adapter -> read as 0 silently). Each entry: X(member, index). The
 /// index MUST be >= 3 (components 0..2 are phi/grad_x/grad_y, wired in the base constructor) and
-/// follow the canonical layout shared with AUX_CANONICAL on the DSL side (python/pops/dsl.py),
+/// follow the canonical layout shared with AUX_CANONICAL on the authoring side
+/// (python/pops/physics/aux.py),
 /// inherent duplication: Python does not read C++ headers. To add a field:
 /// 1 line here (and the mirror line in AUX_CANONICAL). Pure preprocessor -> device-clean
 /// (nvcc/Kokkos), no C++26 reflection.
 #define POPS_AUX_FIELDS(X) \
-  X(B_z, 3)               \
+  X(B_z, 3)                \
   X(T_e, 4)
 
 // MAXIMUM number of NAMED aux fields (declared by a model via aux_field("...") on the DSL side,
@@ -136,10 +140,12 @@ struct Aux {
   // zero cost by default). Read in a DSL formula via aux.extra_field(k).
   Real extra[kAuxMaxExtra]{};
 
-  /// BOUNDED read of a named aux field (component kAuxNamedBase + k). Returns 0 out of bounds: the
-  /// generated brick never calls extra_field with a k that the model did not declare, but the
-  /// guard makes the access safe (still device-clean, no dynamic branch on a k known at codegen).
-  POPS_HD Real extra_field(int k) const { return (k >= 0 && k < kAuxMaxExtra) ? extra[k] : Real(0); }
+  /// Read one declared named provider slot. Invalid slots are never a physical zero: debug/device
+  /// builds trap through assert and release builds propagate NaN defensively.
+  POPS_HD Real extra_field(int k) const {
+    assert(k >= 0 && k < kAuxMaxExtra);
+    return (k >= 0 && k < kAuxMaxExtra) ? extra[k] : std::numeric_limits<Real>::quiet_NaN();
+  }
 };
 
 // Width of the aux channel of the base contract (phi, grad phi). A model reading additional
@@ -157,7 +163,7 @@ inline constexpr int kAuxNamedBase = kAuxBaseComps + 2;  // = 5 (after B_z=3, T_
 // field (the largest index of POPS_AUX_FIELDS + 1). If a canonical field is added beyond T_e,
 // this static_assert forces raising kAuxNamedBase (and AUX_NAMED_BASE on the DSL side) accordingly.
 #define POPS_AUX_NAMED_BASE_CHECK(name, idx) \
-  static_assert(kAuxNamedBase > (idx),      \
+  static_assert(kAuxNamedBase > (idx),       \
                 "kAuxNamedBase must be beyond the canonical aux field '" #name "'");
 POPS_AUX_FIELDS(POPS_AUX_NAMED_BASE_CHECK)
 #undef POPS_AUX_NAMED_BASE_CHECK
@@ -165,7 +171,7 @@ POPS_AUX_FIELDS(POPS_AUX_NAMED_BASE_CHECK)
 // Safeguard: the indices declared in POPS_AUX_FIELDS are strictly EXTRA (>= base) and
 // start right after the base contract. Checked at compile time that the table stays
 // consistent with kAuxBaseComps (the 1st extra field is at index kAuxBaseComps).
-#define POPS_AUX_IDX_CHECK(name, idx)    \
+#define POPS_AUX_IDX_CHECK(name, idx)   \
   static_assert((idx) >= kAuxBaseComps, \
                 "extra aux field '" #name "': index must be >= kAuxBaseComps (3)");
 POPS_AUX_FIELDS(POPS_AUX_IDX_CHECK)

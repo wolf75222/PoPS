@@ -97,15 +97,32 @@ class RegridReport:
     """The regrid policy in force on the live hierarchy (Spec 5 sec.8.12 ``explain_regrid()``).
 
     Reports the regrid cadence (``regrid_every``, read from the AmrSystem), whether the hierarchy
-    is FROZEN (cadence 0 -> built once, bit-identical) or DYNAMIC, and the union-tag refinement
-    criteria as the route documents them (per-block variable threshold OR ``grad phi``). The exact
-    per-run threshold values live on the native model; this report names the criteria SHAPE, not a
-    fabricated threshold it cannot read back.
+    is FROZEN (cadence 0 -> built once, bit-identical) or DYNAMIC, and the live native counters
+    ``regrid_count`` / ``topology_epoch``. The count advances only after a regrid completes; the
+    epoch identifies the currently installed topology; strict restart restores its checkpointed
+    value exactly. The union-tag refinement criteria are the route-documented shape (per-block
+    variable threshold OR ``grad phi``). Exact per-run threshold values live on the native model
+    and are not fabricated here.
     """
 
-    def __init__(self, *, regrid_every: Any, frozen: Any, criteria: Any, notes: Any) -> None:
+    def __init__(
+        self,
+        *,
+        regrid_every: Any,
+        frozen: Any,
+        regrid_count: Any,
+        topology_epoch: Any,
+        criteria: Any,
+        notes: Any,
+    ) -> None:
         self.regrid_every = regrid_every
         self.frozen = bool(frozen)
+        self.regrid_count = int(regrid_count)
+        self.topology_epoch = int(topology_epoch)
+        if self.regrid_count < 0:
+            raise ValueError("regrid_count must be non-negative")
+        if self.topology_epoch < 0:
+            raise ValueError("topology_epoch must be non-negative")
         self.criteria = list(criteria)
         self.notes = list(notes)
 
@@ -113,16 +130,28 @@ class RegridReport:
         return {
             "regrid_every": self.regrid_every,
             "frozen": self.frozen,
+            "regrid_count": self.regrid_count,
+            "topology_epoch": self.topology_epoch,
             "criteria": list(self.criteria),
             "notes": list(self.notes),
         }
 
     def __repr__(self) -> Any:
-        return "RegridReport(regrid_every=%r, frozen=%r)" % (self.regrid_every, self.frozen)
+        return (
+            "RegridReport(regrid_every=%r, frozen=%r, regrid_count=%r, topology_epoch=%r)"
+            % (
+                self.regrid_every,
+                self.frozen,
+                self.regrid_count,
+                self.topology_epoch,
+            )
+        )
 
     def __str__(self) -> Any:
         mode = "frozen" if self.frozen else "dynamic"
         lines = ["AMR regrid policy: %s (regrid_every=%s)" % (mode, self.regrid_every)]
+        lines.append("  completed regrids: %d" % self.regrid_count)
+        lines.append("  topology epoch: %d" % self.topology_epoch)
         if self.criteria:
             lines.append("  union-of-tags criteria:")
             for c in self.criteria:
@@ -208,11 +237,9 @@ class RefluxReport:
 class CheckpointReport:
     """The checkpoint / restart policy of the live system (Spec 5 sec.8.12 ``explain_checkpoint()``).
 
-    Surfaces the native AMR v1 checkpoint envelope (sec.8.11): bit-identical resume is wired for a
-    SINGLE block, a SINGLE rank, and a FROZEN hierarchy (regrid_every == 0). For the live system it
-    reports whether the current configuration is RESTARTABLE under that envelope and, if not, which
-    constraint(s) it violates -- the same constraints ``AmrSystem.checkpoint`` rejects at call time,
-    surfaced here as an inert explanation rather than a raised error.
+    Surfaces the strict AMR v3 accepted-state envelope: exact hierarchy and ownership, every block and
+    level, field/history state, regrid metadata, rational clocks and transfer-plan provenance. Active
+    regridding and multi-block layouts are supported under the same authenticated bound composition.
     """
 
     def __init__(self, *, restartable: Any, constraints: Any, violations: Any, notes: Any) -> None:
@@ -234,9 +261,8 @@ class CheckpointReport:
 
     def __str__(self) -> Any:
         head = "restartable" if self.restartable else "NOT restartable"
-        lines = ["AMR checkpoint policy: %s (bit-identical v1 envelope)" % head]
-        lines.append("  envelope: single block, single rank, frozen hierarchy "
-                     "(regrid_every == 0)")
+        lines = ["AMR checkpoint policy: %s (strict bit-identical v3 envelope)" % head]
+        lines.append("  envelope: authenticated accepted state under the same bound composition")
         if self.violations:
             lines.append("  this system violates:")
             for v in self.violations:
@@ -250,7 +276,7 @@ class HierarchySnapshot:
     """A single inert snapshot of the live AMR hierarchy (Spec 5 sec.8.4 / sec.8.12).
 
     Composes the config envelope (levels / ratio / regrid cadence / patch layout / native
-    limitations, reusing :func:`pops.inspect_amr` for the config-level metadata) with the LIVE
+    limitations, reusing the internal native AMR envelope for config-level metadata) with the LIVE
     patch census (:class:`PatchReport`). It is a value object: a deterministic, array-free picture
     of the hierarchy at the moment it was taken, suitable to ``print()`` or diff between snapshots.
     """
@@ -310,7 +336,7 @@ class RuntimeInspection:
     :class:`PatchReport` again as its own top-level key (the patch census is asked for both bare
     and nested inside the hierarchy so a caller does not have to reach through
     ``hierarchy.patch_table``), the :class:`RegridReport`, and the capability ``limitations`` rows
-    (the same native-route limitation dicts :func:`pops.native_capability_report` exposes,
+    (the same native-route limitation dicts exposed by the private native capability report,
     filtered to non-available rows). It is a plain value object: it holds report objects already
     built by :class:`AmrRuntimeView`, computes nothing, and never dumps a field array.
     """

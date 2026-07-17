@@ -1,15 +1,18 @@
 #pragma once
 #include <pops/core/foundation/validation.hpp>
-#include <pops/mesh/storage/mf_arith.hpp>  // saxpy, lincomb (SSPRK3 stages, named device-clean functors)
+#include <pops/mesh/storage/mf_arith.hpp>  // saxpy, lincomb (SSPRK stages, named device-clean functors)
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/mesh/layout/refinement.hpp>  // coarsen, parallel_copy
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/numerics/time/amr/levels/amr_patch_range.hpp>
 
+#include <algorithm>
+#include <limits>
+
 /// @file
 /// @brief AMR multi-patch subcycling engine (several fine boxes per level): 2-level step
 ///        (amr_step_2level_multipatch), N-level recursion (detail::subcycle_level_mp,
-///        detail::amr_step_multilevel_multipatch), SSPRK3 per-stage advance, multi-box helpers
+///        detail::amr_step_multilevel_multipatch), SSPRK2/SSPRK3 per-stage advance, multi-box helpers
 ///        (mf_fill_fine_ghosts_mb, mf_average_down_mb, mf_find_box, coarsen_grown) and types
 ///        AmrLevelMP / RegMP. This is the engine behind advance_amr.
 ///
@@ -20,12 +23,12 @@
 ///
 /// Invariants:
 /// - distributed (MPI) with COARSE REPLICATION: the single-box coarse level is replicated on each
-///   rank (local periodic fill), the fine patches distributed; average_down and reflux gather up
+///   rank (local periodic fill), the fine patches distributed; reflux and average_down gather up
 ///   through GLOBAL-indexed coarse buffers + all_reduce_sum_inplace, then each rank applies to
 ///   its copy -> all stay identical. In serial this is bit-for-bit identical to the direct path;
 /// - validation: test_mpi_amr_multipatch (np=1/2/4 bit-identical);
-/// - SSPRK3 refills the ghosts BEFORE each stage flux evaluation (ssprk3_refill_level_ghosts),
-///   and requires imex == false;
+/// - SSPRK2/SSPRK3 refill ghosts BEFORE each stage flux evaluation
+///   (ssprk_refill_level_ghosts), and require imex == false;
 /// - saxpy/lincomb and the helper kernels are device-clean (named functors).
 
 namespace pops {
@@ -44,7 +47,7 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 // Distributed (MPI) with COARSE REPLICATION. The single-box coarse level is replicated: each
 // rank holds an identical copy (per-rank DistributionMapping, or deterministic init). The coarse
 // advance (self-periodic fill_boundary, flux, advance) runs identically on each copy; the fine
-// patches are distributed. average_down (overwrite of covered cells) and reflux (addition to
+// patches are distributed. reflux (addition to bordering cells) and average_down (overwrite of covered
 // bordering cells) gather up through two global-indexed coarse buffers + all_reduce_sum_inplace,
 // then each rank applies to its copy -> all stay identical. In serial this is bit-for-bit
 // identical to the direct path (see the final block). Validation: test_mpi_amr_multipatch
@@ -54,7 +57,8 @@ static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRe
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, Real dxc, Real dyc,
                                 MultiFab& Uf, const MultiFab& auxc, const MultiFab& auxf, Real dt) {
-  const SubcyclingSchedule sched(2);
+  const SubcyclingSchedule sched(0, 1, amr::Rational(kAmrRefRatio, 1),
+                                 amr::RemainderPolicy::IntegralOnly);
   const int nc = Uc.ncomp();
   const Real dxf = dxc / kAmrRefRatio, dyf = dyc / kAmrRefRatio, dtf = sched.dt_sub(dt);
   const int NX = dom.nx(), NY = dom.ny();
@@ -151,14 +155,14 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
     mf_apply_source(m, Uf, auxf, dtf);  // source S(U,aux) at the substep
   }
 
-  // DISTRIBUTED average_down + reflux, the coarse level being REPLICATED (each rank holds an
+  // DISTRIBUTED reflux THEN average_down, the coarse level being REPLICATED (each rank holds an
   // identical copy after the deterministic coarse advance). Each rank deposits, for its LOCAL
   // fine patches, into two global-indexed coarse buffers:
   //   avg: the average-down over the COVERED cells (overwrite semantics; a single contribution
   //        per cell since the patches are disjoint);
   //   ref: the reflux correction on the uncovered BORDERING cells (addition).
-  // all_reduce_sum -> each rank has the total, then applies to ITS copy: covered = avg,
-  // bordering += ref. All copies stay identical. In serial (np=1) the all-reduce is the identity
+  // all_reduce_sum -> each rank has the total, then applies to ITS copy: bordering += ref,
+  // then covered = avg. All copies stay identical. In serial (np=1) the all-reduce is the identity
   // and it is bit-for-bit identical to the direct path (0 + average = average exactly; advance +
   // correction). Cost: two NX*NY*nc buffers per rank (coarse replication).
   device_fence();
@@ -192,9 +196,9 @@ void amr_step_2level_multipatch(const Model& m, MultiFab& Uc, const Box2D& dom, 
         if (!ref.in(I, J))
           continue;  // outside interface: neither average nor reflux (was 0)
         for (int k = 0; k < nc; ++k) {
+          c(I, J, k) += ref.at(I, J, k);  // sync phase 1: reflux (0 if no face)
           if (covered(I, J))
-            c(I, J, k) = avg.at(I, J, k);  // average-down
-          c(I, J, k) += ref.at(I, J, k);   // reflux (0 if no face)
+            c(I, J, k) = avg.at(I, J, k);  // sync phase 2: average-down
         }
       }
   }
@@ -344,6 +348,55 @@ inline void mf_fill_fine_ghosts_mb(MultiFab& Uf, const MultiFab& Po, const Multi
   }
 }
 
+// Prepared coarse/fine spatial transfer. Unlike mf_fill_fine_ghosts_mb this operation has exactly
+// one physical parent snapshot: time interpolation is a separate prepared route with explicit
+// TimePoints. Keeping the two protocols separate prevents callers from manufacturing a fake
+// `(parent, parent)` temporal window merely to request conservative spatial ghost materialization.
+namespace detail {
+struct CoarseFineSpatialGhostKernel {
+  Array4 fine;
+  ConstArray4 coarse;
+  Box2D valid;
+  int components;
+
+  POPS_HD void operator()(int i, int j) const {
+    if (i >= valid.lo[0] && i <= valid.hi[0] && j >= valid.lo[1] && j <= valid.hi[1])
+      return;
+    const int ci = coarsen_index(i, kAmrRefRatio);
+    const int cj = coarsen_index(j, kAmrRefRatio);
+    for (int component = 0; component < components; ++component)
+      fine(i, j, component) = coarse(ci, cj, component);
+  }
+};
+}  // namespace detail
+
+inline void mf_fill_fine_ghosts_spatial_mb(MultiFab& Uf, const MultiFab& parent,
+                                           bool replicated_parent = true) {
+  const int nc = Uf.ncomp(), ng = Uf.n_grow();
+  if (parent.ncomp() != nc)
+    throw std::runtime_error("coarse/fine spatial transfer component mismatch");
+  if (replicated_parent) {
+    for (int li = 0; li < Uf.local_size(); ++li) {
+      const Box2D valid = Uf.box(li), grown = Uf.fab(li).grown_box();
+      const int box = mf_find_box(parent, coarsen_index(grown.lo[0], kAmrRefRatio),
+                                  coarsen_index(grown.lo[1], kAmrRefRatio));
+      if (box < 0)
+        continue;
+      for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
+                               Uf.fab(li).array(), parent.fab(box).const_array(), valid, nc});
+    }
+    return;
+  }
+  const BoxArray local_parent_boxes = coarsen_grown(Uf.box_array(), ng, kAmrRefRatio);
+  MultiFab local_parent(local_parent_boxes, Uf.dmap(), nc, 0);
+  parallel_copy(local_parent, parent);
+  for (int li = 0; li < Uf.local_size(); ++li) {
+    const Box2D valid = Uf.box(li), grown = Uf.fab(li).grown_box();
+    for_each_cell(grown, detail::CoarseFineSpatialGhostKernel{
+                             Uf.fab(li).array(), local_parent.fab(li).const_array(), valid, nc});
+  }
+}
+
 // multi-box fine average -> multi-box parent (each cell routed to its parent box), DISTRIBUTED.
 // The parent box of a coarse cell may be on another rank, and the parent may be either REPLICATED
 // (level 0, each rank has a copy) or DISTRIBUTED (intermediate, a single owner). Both are covered
@@ -411,16 +464,81 @@ struct RegMP {
 
 namespace detail {  // INTERNAL N-level multi-patch engine; the public facade is advance_amr
 
+/// One child interval of an explicitly authored parent/child clock relation.  The fractions are
+/// exact until this final numerical lowering: @c parent_begin is the interpolation point in the
+/// parent window and @c parent_span is the fraction of the parent dt advanced by this child.
+struct ExplicitTemporalSubstep {
+  Real parent_begin = Real(0);
+  Real parent_span = Real(0);
+};
+
+/// Lowers an authored clock relation to the scalar intervals consumed by the native Berger-Oliger
+/// engine.  In particular, a rational ratio such as 5/2 becomes {2/5, 2/5, 1/5}; the final 1/5
+/// interval exists only when ExplicitFinalSubstep was declared.  Calling ParentChildClockRelation::
+/// partition here preserves the same validation and exact Rational authority as the Program path.
+inline std::vector<ExplicitTemporalSubstep> explicit_temporal_partition(
+    const amr::ParentChildClockRelation& relation) {
+  const amr::ClockWindow unit_parent{{relation.parent_level(), 0, amr::Rational(0, 1), 0.0},
+                                     {relation.parent_level(), 0, amr::Rational(1, 1), 1.0}};
+  const auto authored = relation.partition(unit_parent);
+  std::vector<ExplicitTemporalSubstep> result;
+  result.reserve(authored.size());
+  for (const auto& child : authored) {
+    const amr::Rational begin = child.window.begin.phase - unit_parent.begin.phase;
+    const amr::Rational span = child.window.end.phase - child.window.begin.phase;
+    result.push_back({static_cast<Real>(begin.value()), static_cast<Real>(span.value())});
+  }
+  return result;
+}
+
+/// Immutable execution plan prepared once from the authored clock chain.  Runtime blocks share this
+/// object across every block/substep, so the hot recursive path performs no clock partition allocation
+/// or Rational lowering.
+class PreparedAmrTemporalPlan {
+ public:
+  static PreparedAmrTemporalPlan prepare(
+      const std::vector<amr::ParentChildClockRelation>& relations, int nlevels) {
+    const std::size_t expected = nlevels > 0 ? static_cast<std::size_t>(nlevels - 1) : 0u;
+    if (relations.size() != expected)
+      throw std::runtime_error(
+          "explicit AMR temporal relations must contain exactly one row per level transition");
+    std::vector<std::vector<ExplicitTemporalSubstep>> transitions;
+    transitions.reserve(relations.size());
+    for (std::size_t transition = 0; transition < relations.size(); ++transition) {
+      const auto& relation = relations[transition];
+      if (relation.parent_level() != static_cast<int>(transition) ||
+          relation.child_level() != static_cast<int>(transition + 1))
+        throw std::runtime_error(
+            "explicit AMR temporal relations must form the contiguous level chain");
+      transitions.push_back(explicit_temporal_partition(relation));
+    }
+    return PreparedAmrTemporalPlan(nlevels, std::move(transitions));
+  }
+
+  int nlevels() const { return nlevels_; }
+  const std::vector<ExplicitTemporalSubstep>& transition(int parent_level) const {
+    return transitions_.at(static_cast<std::size_t>(parent_level));
+  }
+
+ private:
+  PreparedAmrTemporalPlan(int nlevels,
+                          std::vector<std::vector<ExplicitTemporalSubstep>> transitions)
+      : nlevels_(nlevels), transitions_(std::move(transitions)) {}
+
+  int nlevels_ = 0;
+  std::vector<std::vector<ExplicitTemporalSubstep>> transitions_;
+};
+
 // Fills the ghosts of an AMR level: level 0 = base-domain BC (fill_boundary); level > 0 =
 // time-interpolated coarse-fine ghosts from the parent at position frac (mf_fill_fine_ghosts_mb)
 // THEN fine-fine halos (fill_boundary). Factored out of the head of subcycle_level_mp, REUSED by
-// the SSPRK3 advance which must refill the ghosts BEFORE each stage flux evaluation. The parent
+// either SSPRK advance, which must refill the ghosts BEFORE each stage flux evaluation. The parent
 // is REPLICATED only for lev == 1 (replicated level 0), otherwise distributed (internal
 // parallel_copy).
-inline void ssprk3_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_dom,
-                                       Periodicity base_per, const MultiFab* pOld,
-                                       const MultiFab* pNew, Real frac, bool coarse_replicated,
-                                       Real pos_floor = Real(0), int pos_comp = 0) {
+inline void ssprk_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_dom,
+                                      Periodicity base_per, const MultiFab* pOld,
+                                      const MultiFab* pNew, Real frac, bool coarse_replicated,
+                                      Real pos_floor = Real(0), int pos_comp = 0) {
   if (lev == 0) {
     fill_boundary(U, base_dom, base_per);
   } else {
@@ -429,6 +547,61 @@ inline void ssprk3_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_d
     const Box2D fdom = Box2D::from_extents(base_dom.nx() << lev, base_dom.ny() << lev);
     fill_boundary(U, fdom, Periodicity{false, false});
   }
+}
+
+/// Maps an SSP tableau abscissa into the parent temporal window of a fine-level substep.  The root
+/// has no parent and ignores the value.  Fine levels must carry a positive parent span; clamp only
+/// round-off at the endpoints and reject an inconsistent temporal schedule rather than extrapolate.
+inline Real ssprk_parent_stage_fraction(int lev, Real parent_begin, Real parent_span,
+                                        Real stage_abscissa) {
+  if (lev == 0)
+    return parent_begin;
+  if (!(parent_span > Real(0)))
+    throw std::runtime_error("SSPRK fine-level advance requires a positive parent temporal span");
+  const Real fraction = parent_begin + stage_abscissa * parent_span;
+  const Real tolerance = Real(32) * std::numeric_limits<Real>::epsilon();
+  if (fraction < -tolerance || fraction > Real(1) + tolerance)
+    throw std::runtime_error("SSPRK stage lies outside the parent temporal window");
+  return std::clamp(fraction, Real(0), Real(1));
+}
+
+// SSPRK2 / Heun on ONE AMR level:
+//   U1    = U0 + dt L(U0)
+//   U_new = 1/2 U0 + 1/2 (U1 + dt L(U1)).
+// L(U) = -div F(U) + S(U) is evaluated consistently at each stage.  On return (fx, fy) contain
+// Feff = 1/2 F(U0) + 1/2 F(U1), exactly the face flux whose divergence appears in U_new.  The
+// parent/fine reflux machinery can therefore consume this method through its existing flux slots
+// without a scheme-specific correction.  IMEX is deliberately absent and rejected by the caller.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void ssprk2_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx, MultiFab& fy,
+                          bool recon_prim, int lev, const Box2D& base_dom, Periodicity base_per,
+                          const MultiFab* pOld, const MultiFab* pNew, Real frac, Real parent_span,
+                          bool coarse_replicated, Real pos_floor = Real(0)) {
+  const int nc = lv.U.ncomp();
+  const int pos_comp = detail::positivity_comp<Model>(pos_floor);
+  MultiFab U0 = lv.U;
+  MultiFab R(lv.U.box_array(), lv.U.dmap(), nc, 0);
+  MultiFab Fxs(fx.box_array(), fx.dmap(), nc, 0), Fys(fy.box_array(), fy.dmap(), nc, 0);
+
+  // Stage 0: the caller already materialized F(U0).
+  mf_eval_rhs(m, lv.U, *lv.aux, fx, fy, lv.dx, lv.dy, R);
+  saxpy(lv.U, dt, R);                         // U1 = U0 + dt L(U0)
+  lincomb(fx, Real(1) / 2, fx, Real(0), fx);  // Feff <- 1/2 F(U0)
+  lincomb(fy, Real(1) / 2, fy, Real(0), fy);
+
+  // Stage 1: refresh the stage state before evaluating F(U1) and L(U1).
+  const Real stage1_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1));
+  ssprk_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, stage1_fraction,
+                            coarse_replicated, pos_floor, pos_comp);
+  compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
+                                              pos_floor);
+  device_fence();
+  mf_eval_rhs(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, R);
+  saxpy(lv.U, dt, R);                                 // U1 + dt L(U1)
+  lincomb(lv.U, Real(1) / 2, U0, Real(1) / 2, lv.U);  // Shu-Osher U_new
+  saxpy(fx, Real(1) / 2, Fxs);                        // Feff += 1/2 F(U1)
+  saxpy(fy, Real(1) / 2, Fys);
+  device_fence();
 }
 
 // SSPRK3 (Shu-Osher, 3 stages, order 3) on ONE AMR level. (1) Advance lv.U from t to t+dt:
@@ -440,14 +613,13 @@ inline void ssprk3_refill_level_ghosts(MultiFab& U, int lev, const Box2D& base_d
 // This is the flux the conservative reflux must record (coarse side g.c* and fine side g.f*), hence
 // its write into (fx, fy) where the Euler path leaves the single flux F(U0). On INPUT (fx, fy)
 // already contain F(U0) (stage 0, computed by the caller before the call). Between stages, the
-// ghosts are refreshed by ssprk3_refill_level_ghosts at the SAME frac: the coarse-fine boundary is
-// FROZEN over the substep (the levels do not cross their stages, cf. subcycle_level_mp header /
-// subcycling). saxpy/lincomb and the RHS functor are device-clean kernels (named functors), no
-// extended lambda.
+// ghosts are refreshed at the SSPRK3 tableau abscissae in the parent temporal window: c1=1 for U1
+// and c2=1/2 for U2. saxpy/lincomb and the RHS functor are device-clean kernels (named functors),
+// with no extended lambda.
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx, MultiFab& fy,
                           bool recon_prim, int lev, const Box2D& base_dom, Periodicity base_per,
-                          const MultiFab* pOld, const MultiFab* pNew, Real frac,
+                          const MultiFab* pOld, const MultiFab* pNew, Real frac, Real parent_span,
                           bool coarse_replicated, Real pos_floor = Real(0)) {
   const int nc = lv.U.ncomp();
   // Density-role component for the C/F ghost floor (ADC-259), resolved ONCE on the host. pos_floor<=0
@@ -465,8 +637,9 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   lincomb(fy, Real(1) / 6, fy, Real(0), fy);
 
   // --- stage 1: F(U1) ---
-  ssprk3_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, frac, coarse_replicated,
-                             pos_floor, pos_comp);
+  const Real stage1_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1));
+  ssprk_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, stage1_fraction,
+                            coarse_replicated, pos_floor, pos_comp);
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
                                               pos_floor);
   device_fence();
@@ -477,8 +650,9 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
   saxpy(fy, Real(1) / 6, Fys);
 
   // --- stage 2: F(U2) ---
-  ssprk3_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, frac, coarse_replicated,
-                             pos_floor, pos_comp);
+  const Real stage2_fraction = ssprk_parent_stage_fraction(lev, frac, parent_span, Real(1) / 2);
+  ssprk_refill_level_ghosts(lv.U, lev, base_dom, base_per, pOld, pNew, stage2_fraction,
+                            coarse_replicated, pos_floor, pos_comp);
   compute_face_fluxes<Limiter, NumericalFlux>(m, lv.U, *lv.aux, Fxs, Fys, lv.dx, lv.dy, recon_prim,
                                               pos_floor);
   device_fence();
@@ -493,26 +667,37 @@ void ssprk3_advance_level(const Model& m, AmrLevelMP& lv, Real dt, MultiFab& fx,
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real dt,
                        const Box2D& base_dom, Periodicity base_per, const MultiFab* pOld,
-                       const MultiFab* pNew, Real frac, std::vector<RegMP>* parentRegs,
-                       bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
-                       const NewtonOptions& nopts = {},
-                       AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
-  // SSPRK3 + IMEX: combination NOT VALIDATED (the per-stage implicit stiff source under SSP has
-  // not been verified), rejected EXPLICITLY rather than run silently. The facade cannot produce it
-  // (time.kind is a single selector: "ssprk3" XOR "imex"), defense-in-depth guard here.
-  if (tmethod == AmrTimeMethod::kSsprk3 && imex)
+                       const MultiFab* pNew, Real frac, Real parent_span,
+                       std::vector<RegMP>* parentRegs, bool coarse_replicated = true,
+                       bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+                       AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0),
+                       const PreparedAmrTemporalPlan* temporal_plan = nullptr) {
+  // An unknown enum value must never fall through to the Euler branch.  This also protects direct
+  // low-level callers that bypass the strict integer-wire lowering used by the runtime seams.
+  switch (tmethod) {
+    case AmrTimeMethod::kEuler:
+    case AmrTimeMethod::kSsprk2:
+    case AmrTimeMethod::kSsprk3:
+      break;
+    default:
+      throw std::runtime_error("subcycle_level_mp: unknown AMR time method");
+  }
+  // SSPRK + IMEX is not a defined composition: both SSP methods evaluate an explicit source at
+  // every stage, whereas the AMR IMEX route is a separate Euler-transport/backward-Euler-source
+  // split.  Reject rather than silently replacing either temporal contract.
+  if (tmethod != AmrTimeMethod::kEuler && imex)
     throw std::runtime_error(
-        "subcycle_level_mp: SSPRK3 + IMEX unsupported (combination not validated); use "
-        "time='ssprk3' (explicit source per stage) or time='imex' (forward Euler + implicit "
-        "source)");
-  const SubcyclingSchedule sched(2);
+        "subcycle_level_mp: SSPRK2/SSPRK3 + IMEX unsupported; use an explicit SSP method "
+        "or time='imex' (forward Euler transport + implicit source)");
   const int nc = L[lev].U.ncomp();
   // Density-role component for the C/F ghost floor (ADC-259), resolved ONCE on the host. pos_floor<=0
   // -> 0 without model introspection (positivity_comp short-circuit) -> bit-identical historical path.
   const int pos_comp = detail::positivity_comp<Model>(pos_floor);
   AmrLevelMP& lv = L[lev];
   const int np = lv.U.local_size();
+  const bool ssprk2 = (tmethod == AmrTimeMethod::kSsprk2);
   const bool ssprk3 = (tmethod == AmrTimeMethod::kSsprk3);
+  const bool ssprk = ssprk2 || ssprk3;
 
   if (lev == 0) {
     fill_boundary(lv.U, base_dom, base_per);
@@ -540,24 +725,24 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
                                               pos_floor);
   device_fence();
 
-  // SSPRK3: we FIRST advance lv.U from t to t+dt (3 stages) AND replace (fx, fy) -- which contain
-  // the single flux F(U0) of the Euler path -- with the EFFECTIVE FLUX Feff = 1/6 F0 + 1/6 F1 +
-  // 2/3 F2. All the rest of the function (parent register, child registers, saved coarse flux,
-  // reflux) reads (fx, fy) and the advanced state EXACTLY as in Euler: recording Feff (instead of
-  // F0) makes the reflux conservative for the full SSP step (the coarse side g.c* = coarse Feff,
-  // the fine side g.f* = sum of the subcycled fine Feff, and the correction -(g.f - g.c*dt)/dx
-  // correctly replaces the effective coarse flux with the effective fine flux). The starting state
-  // is saved BEFORE the advance for the temporal interpolation of the children (coarse role). In
-  // Euler (ssprk3 == false) this block is skipped and the advance stays the original one, in place
-  // below -> strictly bit-identical.
+  // SSPRK: advance lv.U before the shared register/reflux path and replace (fx, fy), initially F(U0),
+  // by the method's effective flux (1/2 F0 + 1/2 F1 for SSPRK2; 1/6 F0 + 1/6 F1 + 2/3 F2 for
+  // SSPRK3).  The existing parent/fine register logic then remains scheme-independent and exactly
+  // conservative for the selected time method.  Save the starting state for child interpolation.
+  // Euler skips this block and retains the historical in-place path below.
   const bool is_leaf = (lev + 1 >= static_cast<int>(L.size()));
-  MultiFab ssp_U_old;  // state t (pre-advance capture); filled only for SSPRK3 + coarse role
-  if (ssprk3) {
+  MultiFab ssp_U_old;  // state t (pre-advance capture); filled only for an SSP coarse role
+  if (ssprk) {
     if (!is_leaf)
       ssp_U_old = lv.U;  // the children interpolate between this state (t) and advanced lv.U (t+dt)
-    ssprk3_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
-                                                 base_per, pOld, pNew, frac, coarse_replicated,
-                                                 pos_floor);
+    if (ssprk2)
+      ssprk2_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
+                                                   base_per, pOld, pNew, frac, parent_span,
+                                                   coarse_replicated, pos_floor);
+    else
+      ssprk3_advance_level<Limiter, NumericalFlux>(m, lv, dt, fx, fy, recon_prim, lev, base_dom,
+                                                   base_per, pOld, pNew, frac, parent_span,
+                                                   coarse_replicated, pos_floor);
   }
 
   if (parentRegs) {  // FINE role: fine fluxes of THIS level into the parent register
@@ -581,8 +766,8 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     }
   }
 
-  if (is_leaf) {    // leaf
-    if (!ssprk3) {  // forward Euler (legacy path); SSPRK3 already advanced lv.U above
+  if (is_leaf) {   // leaf
+    if (!ssprk) {  // forward Euler (legacy path); SSPRK already advanced lv.U above
       mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
       mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
                                 nopts);  // explicit or IMEX source (Newton options)
@@ -689,23 +874,34 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
     }
   }
 
-  // state t for the temporal interpolation of the children. SSPRK3: lv.U is ALREADY advanced (the
-  // advance happened above, in ssprk3_advance_level), the state t is the pre-advance copy
+  // state t for the temporal interpolation of the children. SSPRK: lv.U is ALREADY advanced (the
+  // advance happened above), the state t is the pre-advance copy
   // ssp_U_old; Euler: lv.U is still the state t here (the advance is just below), so U_old = lv.U
   // (legacy copy).
-  MultiFab U_old = ssprk3 ? ssp_U_old : lv.U;
-  if (!ssprk3) {  // forward Euler (legacy path); SSPRK3 already advanced lv.U
+  MultiFab U_old = ssprk ? ssp_U_old : lv.U;
+  if (!ssprk) {  // forward Euler (legacy path); SSPRK already advanced lv.U
     mf_advance_faces(lv.U, fx, fy, lv.dx, lv.dy, dt);
     mf_apply_source_treatment(m, lv.U, *lv.aux, dt, imex,
                               nopts);  // explicit or IMEX source (Newton options)
   }
-  for (int s = 0; s < sched.count();
-       ++s)  // each fine substep = one full SSP step (tmethod propagated)
-    subcycle_level_mp<Limiter, NumericalFlux>(
-        m, L, lev + 1, sched.dt_sub(dt), base_dom, base_per, &U_old, &lv.U, sched.frac(s), &regs,
-        coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor);
-  mf_average_down_mb(L[lev + 1].U, lv.U);  // distributed point 3 (parallel_copy)
-
+  if (temporal_plan != nullptr) {
+    for (const ExplicitTemporalSubstep& child : temporal_plan->transition(lev))
+      subcycle_level_mp<Limiter, NumericalFlux>(
+          m, L, lev + 1, dt * child.parent_span, base_dom, base_per, &U_old, &lv.U,
+          child.parent_begin, child.parent_span, &regs, coarse_replicated, recon_prim, imex, nopts,
+          tmethod, pos_floor, temporal_plan);
+  } else {
+    // Clearly separated low-level compatibility route.  Callers that have not authored temporal
+    // relations retain the historical ratio-two cadence; an installed explicit relation never
+    // reaches this branch.
+    const SubcyclingSchedule legacy_schedule(lev, lev + 1, amr::Rational(kAmrRefRatio, 1),
+                                             amr::RemainderPolicy::IntegralOnly);
+    for (int s = 0; s < legacy_schedule.count(); ++s)
+      subcycle_level_mp<Limiter, NumericalFlux>(
+          m, L, lev + 1, legacy_schedule.dt_sub(dt), base_dom, base_per, &U_old, &lv.U,
+          legacy_schedule.frac(s), Real(1) / Real(legacy_schedule.count()), &regs,
+          coarse_replicated, recon_prim, imex, nopts, tmethod, pos_floor, nullptr);
+  }
   // Distributed point 4: coverage-aware reflux. The bordering coarse cell may belong to a REMOTE
   // parent box. For each LOCAL child, we deposit the correction (cL/fL already local after
   // parallel_copy) into a GLOBAL-indexed coarse buffer, all_reduce -> each rank has the full
@@ -733,6 +929,10 @@ void subcycle_level_mp(const Model& m, std::vector<AmrLevelMP>& L, int lev, Real
           c(I, J, k) += ref.at(I, J, k);
       }
   }
+  // The synchronization contract is explicit and ordered: first route/apply the conservative
+  // interface correction to uncovered parent cells, then replace covered cells by the child average.
+  // The two regions are disjoint, but preserving this order makes the phase observable and extensible.
+  mf_average_down_mb(L[lev + 1].U, lv.U);  // sync phase 2: average-down
 }
 
 // Driver: one dt step of the N-level multi-patch hierarchy (level 0 = coarse).
@@ -744,8 +944,41 @@ void amr_step_multilevel_multipatch(const Model& m, std::vector<AmrLevelMP>& L, 
                                     AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
                                     Real pos_floor = Real(0)) {
   subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
-                                            nullptr, coarse_replicated, recon_prim, imex, nopts,
-                                            tmethod, pos_floor);
+                                            Real(0), nullptr, coarse_replicated, recon_prim, imex,
+                                            nopts, tmethod, pos_floor, nullptr);
+}
+
+/// Explicit-clock production route.  Validation of the full chain is completed before level zero
+/// is touched, then every recursive transition consumes the authored relation (never the spatial
+/// refinement ratio).  The legacy entry above remains available only for direct low-level callers
+/// that have no temporal contract.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void amr_step_multilevel_multipatch_with_temporal_relations(
+    const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations,
+    Periodicity per = Periodicity{true, true}, bool coarse_replicated = true,
+    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+  const PreparedAmrTemporalPlan plan =
+      PreparedAmrTemporalPlan::prepare(temporal_relations, static_cast<int>(L.size()));
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+                                            Real(0), nullptr, coarse_replicated, recon_prim, imex,
+                                            nopts, tmethod, pos_floor, &plan);
+}
+
+/// Allocation-free execution of a plan prepared by the owning runtime at relation installation.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void amr_step_multilevel_multipatch_with_temporal_plan(
+    const Model& m, std::vector<AmrLevelMP>& L, const Box2D& dom, Real dt,
+    const PreparedAmrTemporalPlan& temporal_plan, Periodicity per = Periodicity{true, true},
+    bool coarse_replicated = true, bool recon_prim = false, bool imex = false,
+    const NewtonOptions& nopts = {}, AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+    Real pos_floor = Real(0)) {
+  if (temporal_plan.nlevels() != static_cast<int>(L.size()))
+    throw std::runtime_error("prepared AMR temporal plan does not match the level hierarchy");
+  subcycle_level_mp<Limiter, NumericalFlux>(m, L, 0, dt, dom, per, nullptr, nullptr, Real(0),
+                                            Real(0), nullptr, coarse_replicated, recon_prim, imex,
+                                            nopts, tmethod, pos_floor, &temporal_plan);
 }
 
 }  // namespace detail

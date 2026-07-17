@@ -17,13 +17,16 @@ here. Real engine only; skips if pops.time is unavailable, never faking.
 Runs BOTH as a script (``python3 test_coupled_rate_codegen.py``, the CI-style invocation) and under
 pytest (the test_* functions take no args and importorskip pops.time).
 """
-import sys
+from pops.codegen.program_codegen import _check_lowerable
+from pops.codegen.program_codegen import emit_cpp_program
 
 import pytest
 
+from typed_program_support import typed_state
+
 adctime = pytest.importorskip("pops.time")
-from pops import model
-from pops.ir.expr import Var
+from pops import model  # noqa: E402
+from pops._ir.expr import Var  # noqa: E402
 
 
 def _two_fluid_module(electron_expr=None):
@@ -37,40 +40,66 @@ def _two_fluid_module(electron_expr=None):
     bundle = model.RateBundle({"electrons": model.Rate(e), "ions": model.Rate(i)})
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
     e_comps = electron_expr if electron_expr is not None else [ni - ne, ne, ne]
-    mod.operator(name="collision", signature=model.Signature((e, i), bundle),
-                 kind="coupled_rate",
-                 expr={"electrons": e_comps, "ions": [ne - ni, ni, ni]})
-    return mod, e, i, bundle
+    collision = mod.operator(
+        name="collision",
+        signature=model.Signature((e, i), bundle),
+        kind="coupled_rate",
+        expr={"electrons": e_comps, "ions": [ne - ni, ni, ni]},
+    )
+    return mod, e, i, bundle, collision
 
 
 def _two_fluid_program():
     """A two-block program: solve the collision rate, then forward-Euler each species by its rate."""
-    mod, e, i, _ = _two_fluid_module()
-    P = adctime.Program("two_fluid_collision").bind_operators(mod)
-    e_n = P.state("electrons", space=e)
-    i_n = P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    mod, e, i, _, collision = _two_fluid_module()
+    P = adctime.Program("two_fluid_collision")._bind_operators(mod)
+    e_state = mod.state_handle(e)
+    i_state = mod.state_handle(i)
+    e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
+    i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
+    C = collision(e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
+    P.commit_many({
+        e_next: P.value(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.value(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
+    })
     return mod, P
 
 
 def test_check_lowerable_no_longer_raises_for_coupled_rate():
     # un-gate: a cons-only coupled_rate lowers (was a hard NotImplementedError before ADC-457 part B).
     _mod, P = _two_fluid_program()
-    P._check_lowerable(None)  # must not raise
+    _check_lowerable(P, None)  # must not raise
 
 
 def test_emit_one_multi_state_for_each_cell():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # ONE shared kernel fills both blocks' rate scratches (not two independent single-block rates).
     assert src.count("pops::for_each_cell") == 1
 
 
+def test_frozen_coupled_rate_codegen_is_a_repeatable_pure_read():
+    _mod, P = _two_fluid_program()
+    P.freeze()
+    before = P._ir_hash()
+
+    first = emit_cpp_program(P, model=None)
+    second = emit_cpp_program(P, model=None)
+
+    assert first == second
+    assert P._ir_hash() == before
+    assert not hasattr(P, "_coupled_scratch")
+
+
 def test_emit_binds_both_input_state_array4s():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # The two species states are ctx.state(0) / ctx.state(1) -> u0 / u1; each binds its OWN read handle.
     assert "const pops::ConstArray4 u0A = u0.fab(li).const_array();" in src
     assert "const pops::ConstArray4 u1A = u1.fab(li).const_array();" in src
@@ -78,7 +107,7 @@ def test_emit_binds_both_input_state_array4s():
 
 def test_emit_binds_cons_vars_from_respective_states():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # ne is component 0 of the electron state (u0), ni component 0 of the ion state (u1): each cons
     # local reads from ITS OWN state's Array4, so the coupled formulas reference the right cells.
     assert "const pops::Real ne = u0A(i, j, 0);" in src
@@ -87,7 +116,7 @@ def test_emit_binds_cons_vars_from_respective_states():
 
 def test_emit_writes_both_block_rate_scratches():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # Both blocks' rate scratches are allocated (shaped like their own state) and WRITTEN in the kernel.
     assert "= ctx.rhs_scratch_like(u0);" in src and "= ctx.rhs_scratch_like(u1);" in src
     # electron rate = [ni - ne, ne, ne]; ion rate = [ne - ni, ni, ni], each into its block's scratch.
@@ -99,7 +128,7 @@ def test_emit_writes_both_block_rate_scratches():
 
 def test_per_block_out_composes_in_a_forward_step():
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     # e1 = e_n + dt * re : the electron rate scratch is axpy'd onto the electron state with dt; same
     # for the ion block. Each coupled_rate_out aliases its block's scratch (no separate compute).
     electron_scratch = next(ln.split("=")[0].strip().split()[-1]
@@ -108,8 +137,19 @@ def test_per_block_out_composes_in_a_forward_step():
     ion_scratch = next(ln.split("=")[0].strip().split()[-1]
                        for ln in src.splitlines()
                        if "ctx.rhs_scratch_like(u1)" in ln)
-    assert ("ctx.axpy(acc" in src) and ("static_cast<pops::Real>(dt), %s);" % electron_scratch) in src
-    assert ("static_cast<pops::Real>(dt), %s);" % ion_scratch) in src
+    electron_accumulations = [
+        line for line in src.splitlines()
+        if "ctx.axpy(" in line and electron_scratch in line
+    ]
+    ion_accumulations = [
+        line for line in src.splitlines()
+        if "ctx.axpy(" in line and ion_scratch in line
+    ]
+    # The exact-coefficient ABI now carries both dt and its compile-time power metadata.
+    # This test owns the scientific routing, not the presentation of that metadata argument.
+    assert len(electron_accumulations) == 1 and ", dt," in electron_accumulations[0]
+    assert len(ion_accumulations) == 1 and ", dt," in ion_accumulations[0]
+    assert "ctx.commit_many(" in src
 
 
 def test_coupled_rate_with_prim_var_is_deferred():
@@ -117,31 +157,40 @@ def test_coupled_rate_with_prim_var_is_deferred():
     # (never silently emits an undefined `ue` local), naming the deferral precisely.
     ne, ni = Var("ne", "cons"), Var("ni", "cons")
     ue = Var("ue", "prim")  # a PRIM reference -> deferred
-    mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
-    P = adctime.Program("two_fluid_collision_prim").bind_operators(mod)
-    e_n = P.state("electrons", space=e)
-    i_n = P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    mod, e, i, _, collision = _two_fluid_module(electron_expr=[ni - ne + ue, ne, ne])
+    P = adctime.Program("two_fluid_collision_prim")._bind_operators(mod)
+    e_state = mod.state_handle(e)
+    i_state = mod.state_handle(i)
+    e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
+    i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
+    C = collision(e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
+    P.commit_many({
+        e_next: P.value(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.value(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
+    })
     with pytest.raises(NotImplementedError, match="ADC-457"):
-        P._check_lowerable(None)
+        _check_lowerable(P, None)
 
 
-def test_unbound_registry_is_deferred():
-    # Reaching the operator body needs the bound registry; emitting a coupled_rate node whose Program
-    # has no registry raises a clear ADC-457 error rather than an opaque AttributeError.
+def test_authored_coupled_rate_node_is_self_contained_after_binding():
+    # Operator resolution happens while authoring the call. The resulting typed node retains the
+    # authenticated operator payload, so later validation does not depend on a mutable registry.
     _mod, P = _two_fluid_program()
-    P._registry = None  # simulate an unbound program holding a coupled_rate node
-    with pytest.raises(NotImplementedError, match="ADC-457"):
-        P._check_lowerable(None)
+    P._registry = None
+    _check_lowerable(P, None)
 
 
 def test_coupled_rate_codegen_emits_no_forbidden_cpp_tokens():
     # Guard (mirrors test_time_local_newton): the emitted .cpp must use ProgramContext primitives only,
     # never raw std::vector / std::function / Eigen:: / new / malloc -- in code OR comments.
     _mod, P = _two_fluid_program()
-    src = P.emit_cpp_program(model=None)
+    src = emit_cpp_program(P, model=None)
     for tok in ("std::vector", "std::function", "Eigen::", "new ", "malloc"):
         assert tok not in src, "emitted coupled-rate .cpp must not contain %r" % tok
 
@@ -156,14 +205,29 @@ def test_read_only_catalyst_input_is_bound():
     n = mod.state_space("n_st", ("nn",))  # the catalyst: an input, NOT an output block
     bundle = model.RateBundle({"e": model.Rate(e), "i": model.Rate(i)})
     ne, ni, nn = Var("ne", "cons"), Var("ni", "cons"), Var("nn", "cons")
-    mod.operator(name="ioniz", signature=model.Signature((e, i, n), bundle), kind="coupled_rate",
-                 expr={"e": [ni + nn], "i": [ne + nn]})  # both rates read the catalyst nn
-    P = adctime.Program("ioniz_step").bind_operators(mod)
-    e_n, i_n, n_n = P.state("e", space=e), P.state("i", space=i), P.state("n", space=n)
-    C = P._call("ioniz", e_n, i_n, n_n)
-    P.commit_many({"e": P.linear_combine("e1", e_n + P.dt * C["e"]),
-                   "i": P.linear_combine("i1", i_n + P.dt * C["i"])})
-    src = P.emit_cpp_program(model=None)
+    ioniz = mod.operator(
+        name="ioniz",
+        signature=model.Signature((e, i, n), bundle),
+        kind="coupled_rate",
+        expr={"e": [ni + nn], "i": [ne + nn]},
+    )  # both rates read the catalyst nn
+    P = adctime.Program("ioniz_step")._bind_operators(mod)
+    e_state, i_state, n_state = mod.state_handle(e), mod.state_handle(i), mod.state_handle(n)
+    e_n = typed_state(P, "e", space=e, model=mod, state=e_state)
+    i_n = typed_state(P, "i", space=i, model=mod, state=i_state)
+    n_n = typed_state(P, "n", space=n, model=mod, state=n_state)
+    C = ioniz(e_n, i_n, n_n)
+    e_next = typed_state(P, "e", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "i", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
+    P.commit_many({
+        e_next: P.value(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.value(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
+    })
+    src = emit_cpp_program(P, model=None)
     # the catalyst's read handle (3rd input -> u2) and its cons local must be emitted
     assert "u2.fab(li).const_array()" in src, "the catalyst input state's read handle is bound"
     assert "const pops::Real nn = u2A(i, j, 0);" in src, "the catalyst cons var nn binds from u2"
@@ -175,14 +239,27 @@ def test_undefined_cons_var_is_rejected():
     # author forgot to add to a P.state space) must raise the ADC-457 deferral at emit -- never emit an
     # undefined C++ identifier that only fails at the AOT compile, far from the authoring site.
     ne, ni, zzz = Var("ne", "cons"), Var("ni", "cons"), Var("ZZZ", "cons")
-    mod, e, i, _ = _two_fluid_module(electron_expr=[ni - ne + zzz, ne, ne])  # ZZZ is in no state
-    P = adctime.Program("two_fluid_typo").bind_operators(mod)
-    e_n, i_n = P.state("electrons", space=e), P.state("ions", space=i)
-    C = P._call("collision", e_n, i_n)
-    P.commit_many({"electrons": P.linear_combine("e1", e_n + P.dt * C["electrons"]),
-                   "ions": P.linear_combine("i1", i_n + P.dt * C["ions"])})
+    mod, e, i, _, collision = _two_fluid_module(
+        electron_expr=[ni - ne + zzz, ne, ne]
+    )  # ZZZ is in no state
+    P = adctime.Program("two_fluid_typo")._bind_operators(mod)
+    e_state = mod.state_handle(e)
+    i_state = mod.state_handle(i)
+    e_n = typed_state(P, "electrons", space=e, model=mod, state=e_state)
+    i_n = typed_state(P, "ions", space=i, model=mod, state=i_state)
+    C = collision(e_n, i_n)
+    e_next = typed_state(P, "electrons", state_name=e.name, space=e,
+                         model=mod, state=e_state).next
+    i_next = typed_state(P, "ions", state_name=i.name, space=i,
+                         model=mod, state=i_state).next
+    P.commit_many({
+        e_next: P.value(
+            "e1", e_n + P.dt * C[e_n.block], at=e_next.point),
+        i_next: P.value(
+            "i1", i_n + P.dt * C[i_n.block], at=i_next.point),
+    })
     with pytest.raises(NotImplementedError, match="ADC-457"):
-        P._check_lowerable(None)
+        _check_lowerable(P, None)
 
 
 def _run():
@@ -195,4 +272,3 @@ def _run():
 
 if __name__ == "__main__":
     _run()
-    sys.exit(0)

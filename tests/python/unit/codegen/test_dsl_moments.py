@@ -15,9 +15,8 @@ On verifie ici, sans dependance externe :
      un etat ASYMETRIQUE (melange de 2 gaussiennes, moments centres impairs non nuls --
      un etat gaussien rendrait le test aveugle), miroir a la main ; attrape une inversion
      d'exposants sx^p sy^q (verifie par mutation) que (2)-(3) laissent passer ;
- (4) vitesses exactes : eval_wave_speeds (autodiff + eig) == eigvals numpy de la jacobienne
-     par differences finies du flux ;
- (5) blocks pass-through : bloc plein explicite == defaut (matrice pleine) ;
+ (4) strategie de vitesses exacte : le descripteur final ExactSpeeds expose le choix et ses
+     capacites natives, sans l'evaluateur host legacy ;
  (6) robust=True : etat quasi-vide fini la ou le chemin nu deborde ; quasi-identite sur
      etat sain ;
  (7) lorentz_sources : table d'ordre 2 derivee a la main, evaluee en flottants purs ;
@@ -27,27 +26,35 @@ On verifie ici, sans dependance externe :
      source BGK nulle a l'equilibre, invariants collisionnels (M00/M10/M01) identiquement 0,
      gaussianisation d'un etat asymetrique (ordres <= 2 conserves, ordres >= 3 modifies) ;
  (8) gardes : order < 2 ; fermeture aux cles incompletes ;
- (9) [compilateur] compile AOT + System riemann='hll' : 10 pas finis, masse conservee.
+ (9) [compilateur] lifecycle public Case -> compile -> bind -> run avec HLL : 10 pas finis,
+     masse conservee.
 S'auto-saute (exit 0) pour (9) sans compilateur C++ ou sans Kokkos (coeur Kokkos-only).
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import HLL
-import os
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.lib.time import ForwardEuler
+from pops.layouts import Uniform
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, variables
+from pops.numerics.riemann import FromJacobian, HLL, provider_of
+from pops.numerics.spatial import FiniteVolume
+from pops.time import FixedDt
 import sys
-import tempfile
 
 import numpy as np
 
-import pops
 from pops.codegen.toolchain import _default_cxx
-from pops.moments import (bgk_source, build_moment_model, gaussian_closure,
-                         lorentz_sources, maxwellian_moments, moment_indices,
-                         moment_names)
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.moments import (CartesianVelocityMoments, ExactSpeeds, bgk_source,
+                          gaussian_closure, lorentz_sources, maxwellian_moments,
+                          moment_indices, moment_names)
+from tests.python.support.requirements import repo_include
 
 fails = 0
-from tests.python.support.requirements import repo_include
 INCLUDE = repo_include()
+MOMENT_FRAME = Rectangle(
+    "moment-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
 
 
 def chk(cond, label):
@@ -59,7 +66,8 @@ def chk(cond, label):
 
 def err_msg(fn):
     try:
-        fn(); return ""
+        fn()
+        return ""
     except Exception as ex:  # noqa: BLE001
         return str(ex)
 
@@ -93,6 +101,13 @@ def gauss_state(order):
                      for (p, q) in moment_indices(order)])
 
 
+def moment_model(name, order, closure, *, robust=False):
+    """Build through the final typed moment facade with the oracle's exact guard mode."""
+    return CartesianVelocityMoments(
+        order, closure=closure, robust=robust
+    ).build(name=name, frame=MOMENT_FRAME)
+
+
 print("== (1) convention d'ordre des variables ==")
 chk(moment_names(4) == ["M00", "M10", "M20", "M30", "M40",
                         "M01", "M11", "M21", "M31",
@@ -105,11 +120,11 @@ chk(len(moment_indices(2)) == 6 and len(moment_indices(3)) == 10,
 
 print("== (2) oracle d'Isserlis : gaussian_closure -> flux == moments gaussiens decales ==")
 for order in (2, 3, 4):
-    mg = build_moment_model("g%d" % order, order, gaussian_closure(order))
+    mg = moment_model("g%d" % order, order, gaussian_closure(order))
     U = gauss_state(order)
     emax = 0.0
     for d, shift in ((0, (1, 0)), (1, (0, 1))):
-        F = np.asarray(mg.eval_flux(U, {}, d)).ravel()
+        F = np.asarray(mg.flux_value(U, {}, mg.frame.axes[d])).ravel()
         Fref = np.array([RHO * gauss_raw(p + shift[0], q + shift[1],
                                          UU, VV, C20v, C11v, C02v)
                          for (p, q) in moment_indices(order)])
@@ -124,7 +139,7 @@ def funky_closure(S):
             "S12": -0.4 * S["S11"], "S03": 1.1}
 
 
-mf = build_moment_model("funky", 2, funky_closure)
+mf = moment_model("funky", 2, funky_closure)
 U6 = gauss_state(2)
 u_, v_ = UU, VV
 sx_, sy_ = np.sqrt(C20v), np.sqrt(C02v)
@@ -138,8 +153,8 @@ m30_ = u_**3 + 3 * u_ * C20v + C30_
 m21_ = u_ * u_ * v_ + v_ * C20v + 2 * u_ * C11v + C21_
 m12_ = u_ * v_ * v_ + u_ * C02v + 2 * v_ * C11v + C12_
 m03_ = v_**3 + 3 * v_ * C02v + C03_
-Fx = np.asarray(mf.eval_flux(U6, {}, 0)).ravel()
-Fy = np.asarray(mf.eval_flux(U6, {}, 1)).ravel()
+Fx = np.asarray(mf.flux_value(U6, {}, mf.frame.axes[0])).ravel()
+Fy = np.asarray(mf.flux_value(U6, {}, mf.frame.axes[1])).ravel()
 Fx_ref = np.array([U6[1], U6[2], RHO * m30_, U6[4], RHO * m21_, RHO * m12_])
 Fy_ref = np.array([U6[3], U6[4], RHO * m21_, U6[5], RHO * m12_, RHO * m03_])
 e3 = max(np.abs(Fx - Fx_ref).max(), np.abs(Fy - Fy_ref).max())
@@ -164,7 +179,7 @@ def copy_closure(S):
             "S13": S["S03"], "S04": S["S11"]}
 
 
-mc = build_moment_model("probe_s", 3, copy_closure)
+mc = moment_model("probe_s", 3, copy_closure)
 # miroir a la main : centres directs (formules classiques), standardisation, copie,
 # de-standardisation, binomiale inverse d'ordre 4 (lineaire en C, ecrite terme a terme).
 um, vm = mix[(1, 0)], mix[(0, 1)]
@@ -195,49 +210,32 @@ m04 = vm**4 + 6 * vm * vm * K02 + 4 * vm * K03 + K04
 top_ref = {(4, 0): m40, (3, 1): m31, (2, 2): m22, (1, 3): m13, (0, 4): m04}
 e3b = 0.0
 for d, shift in ((0, (1, 0)), (1, (0, 1))):
-    F = np.asarray(mc.eval_flux(U10, {}, d)).ravel()
+    F = np.asarray(mc.flux_value(U10, {}, mc.frame.axes[d])).ravel()
     Fref = np.array([RHO * (top_ref[(p + shift[0], q + shift[1])]
                             if p + q == 3 else mix[(p + shift[0], q + shift[1])])
                      for (p, q) in moment_indices(3)])
     e3b = max(e3b, (np.abs(F - Fref) / np.maximum(np.abs(Fref), 1e-12)).max())
 chk(e3b < 1e-12, f"flux fermeture-copie == miroir manuel sur etat asymetrique ({e3b:.2e})")
 
-print("== (4) vitesses exactes : autodiff + eig vs jacobienne FD numpy ==")
-mg2 = build_moment_model("g2ws", 2, gaussian_closure(2))
-U = gauss_state(2)
-ok4 = True
-for d in (0, 1):
-    smin, smax = np.asarray(mg2.eval_wave_speeds(U, {}, d)).ravel()
-    eps = 1e-7
-    J = np.zeros((6, 6))
-    for j in range(6):
-        Up, Um = U.copy(), U.copy()
-        Up[j] += eps
-        Um[j] -= eps
-        J[:, j] = (np.asarray(mg2.eval_flux(Up, {}, d)).ravel()
-                   - np.asarray(mg2.eval_flux(Um, {}, d)).ravel()) / (2 * eps)
-    lam = np.linalg.eigvals(J).real
-    ok4 = ok4 and abs(smin - lam.min()) < 1e-5 and abs(smax - lam.max()) < 1e-5
-chk(ok4, "eval_wave_speeds == eigvals(J_fd) en x ET y (tol FD 1e-5)")
-
-print("== (5) blocks pass-through : bloc plein explicite == defaut ==")
-mb = build_moment_model("g2blk", 2, gaussian_closure(2),
-                        blocks=[[0, 1, 2, 3, 4, 5]])
-wsb = np.asarray(mb.eval_wave_speeds(U, {}, 0)).ravel()
-wsf = np.asarray(mg2.eval_wave_speeds(U, {}, 0)).ravel()
-chk(np.abs(wsb - wsf).max() < 1e-12, "blocks=[[0..5]] == matrice pleine par defaut")
+print("== (4) strategie de vitesses : descripteur final ==")
+hierarchy = CartesianVelocityMoments(2, closure=gaussian_closure(2)).hierarchy()
+chk(hierarchy.speeds.options()["kind"] == ExactSpeeds.EXACT_EIGENVALUES,
+    "la hierarchie finale selectionne le spectre jacobien exact")
+chk(hierarchy.speeds.capabilities().to_dict()["exact_speeds"] is True,
+    "ExactSpeeds declare la capacite native de vitesses signees")
 
 print("== (6) robust : planchers lisses ==")
-mr = build_moment_model("g2rob", 2, gaussian_closure(2), robust=True)
-m0 = build_moment_model("g2raw", 2, gaussian_closure(2), robust=False)
+mr = moment_model("g2rob", 2, gaussian_closure(2), robust=True)
+m0 = moment_model("g2raw", 2, gaussian_closure(2), robust=False)
 Uvac = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 with np.errstate(all="ignore"):
-    Fvac_r = np.asarray(mr.eval_flux(Uvac, {}, 0)).ravel()
-    Fvac_0 = np.asarray(m0.eval_flux(Uvac, {}, 0)).ravel()
+    Fvac_r = np.asarray(mr.flux_value(Uvac, {}, mr.frame.axes[0])).ravel()
+    Fvac_0 = np.asarray(m0.flux_value(Uvac, {}, m0.frame.axes[0])).ravel()
 chk(np.isfinite(Fvac_r).all(), "robust : flux FINI sur etat vide (M00 = 0)")
 chk(not np.isfinite(Fvac_0).all(), "nu : flux NON fini sur etat vide (0/0, par construction)")
-Fh_r = np.asarray(mr.eval_flux(U, {}, 0)).ravel()
-Fh_0 = np.asarray(m0.eval_flux(U, {}, 0)).ravel()
+U = gauss_state(2)
+Fh_r = np.asarray(mr.flux_value(U, {}, mr.frame.axes[0])).ravel()
+Fh_0 = np.asarray(m0.flux_value(U, {}, m0.frame.axes[0])).ravel()
 eh = (np.abs(Fh_r - Fh_0) / np.maximum(np.abs(Fh_0), 1e-12)).max()
 chk(eh < 1e-10, f"robust == nu sur etat sain a 1e-10 ({eh:.2e})")
 
@@ -253,7 +251,7 @@ expected = [
     qm * (ex * Mf[(0, 1)] + ey * Mf[(1, 0)]) + oc * (Mf[(0, 2)] - Mf[(2, 0)]),
     qm * 2 * ey * Mf[(0, 1)] - oc * 2 * Mf[(1, 1)],
 ]
-e7 = max(abs(a - b) for a, b in zip(src, expected))
+e7 = max(abs(a - b) for a, b in zip(src, expected, strict=True))
 chk(e7 < 1e-14, f"6 termes == table manuelle (err {e7:.1e})")
 chk(len(lorentz_sources({pq: 1.0 for pq in moment_indices(4)}, ex, ey, qm, oc)) == 15,
     "ordre 4 : hierarchie fermee (15 termes, aucune cle hors variables transportees)")
@@ -292,9 +290,9 @@ chk(all(float(sne[k]) == 0.0 for k, pq in enumerate(idx4)
     "melange asymetrique : invariants collisionnels toujours 0 (masse/qdm conservees)")
 
 print("== (8) gardes ==")
-msg = err_msg(lambda: build_moment_model("bad", 1, gaussian_closure(1)))
-chk("order >= 2" in msg, f"order=1 refuse ({msg[:42]}...)")
-msg = err_msg(lambda: build_moment_model("bad2", 2, lambda S: {"S30": 0.0}))
+msg = err_msg(lambda: CartesianVelocityMoments(1, closure=gaussian_closure(1)))
+chk("must be an int >= 2" in msg, f"order=1 refuse avec le contrat exact ({msg[:42]}...)")
+msg = err_msg(lambda: moment_model("bad2", 2, lambda S: {"S30": 0.0}))
 chk("S30" in msg, f"fermeture incomplete refusee ({msg[:42]}...)")
 
 cxx = _default_cxx(None)
@@ -303,11 +301,55 @@ if not cxx:
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)
 
-print("== (9) compile AOT + System riemann='hll' ==")
-tmp = tempfile.mkdtemp(prefix="pops_moments_")
+print("== (9) Case -> validate -> resolve -> compile -> bind -> run (HLL) ==")
 try:
-    compiled = build_moment_model("g2sys", 2, gaussian_closure(2)).compile(
-        os.path.join(tmp, "g2sys.so"), INCLUDE, backend="aot")
+    model = moment_model("g2sys", 2, gaussian_closure(2))
+    state = model.states["U"]
+    flux = model.fluxes["transport"]
+    rate = model.operators["transport"]
+
+    # The model emits signed speeds from the exact Jacobian eigenvalue route.  Pin the
+    # discretization to that same typed provider so HLL cannot silently fall back to a
+    # Rusanov majorant or another speed source.
+    provider = provider_of(model)
+    chk(provider is not None and provider.kind == "jacobian",
+        "le modele declare des vitesses signees derivees du jacobien")
+    requested_speeds = FromJacobian(eig=provider.options()["eig"])
+    chk(requested_speeds.options() == provider.options(),
+        "HLL consomme exactement le fournisseur de vitesses du modele")
+
+    case = pops.Case("g2sys-native-case")
+    block = case.block("mom", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=HLL(waves=requested_speeds),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(5.0e-4))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=model.frame,
+            cells=(16, 16),
+            periodic=PeriodicAxes(model.frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": INCLUDE, "cxx": cxx},
+    )
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    chk(len(artifact.blocks) == 1, "lifecycle final : un composant de bloc compile")
 except RuntimeError as ex:
     if "Kokkos" in str(ex):
         print("Kokkos introuvable (POPS_KOKKOS_ROOT) : test (9) saute --", str(ex)[:60])
@@ -315,18 +357,14 @@ except RuntimeError as ex:
         sys.exit(1 if fails else 0)
     raise
 n = 16
-sim = System(n=n, L=1.0, periodic=True)
-sim.add_equation("mom", model=compiled,
-                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=HLL()),
-                 time=pops.Explicit())
 x = (np.arange(n) + 0.5) / n
 X, Y = np.meshgrid(x, x, indexing="ij")
 pert = 1.0 + 0.1 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 U0 = gauss_state(2)[:, None, None] * pert[None, :, :]
-sim.set_state("mom", U0)
-for _ in range(10):
-    sim.step(5e-4)
-out = np.array(sim.get_state("mom"))
+sim = pops.bind(artifact, initial_state={"mom": U0})
+report = pops.run(sim, t_end=5.0e-3, max_steps=10)
+chk(report.accepted_steps == 10, "lifecycle final : exactement 10 pas acceptes")
+out = np.array(sim.state_global("mom"))
 chk(np.isfinite(out).all(), "10 pas HLL : etat fini")
 dm = abs(out[0].sum() - U0[0].sum()) / abs(U0[0].sum())
 chk(dm < 1e-12, f"masse conservee ({dm:.2e})")

@@ -7,7 +7,7 @@ EXPLAINABLE status. ADC-527 gives those answers TYPED result objects instead of 
     RequirementSet     what a route NEEDS from the context (ordered, typed)
     CapabilitySet      what a route PROVIDES / supports (the ``supports_<tag>`` vocabulary)
     LoweredDescriptor  the inert lowering record (IR / native_id / manifest entry; no computation)
-    ValidationReport   the accumulated, per-family structured errors (not a bare exception)
+    ReportTree         the immutable, recursively composed validation explanation
 
 ADC-625 makes them the ONE final form: they are TYPED objects, NOT ``dict`` subclasses. The only
 mapping bridge is :meth:`to_dict` -- a caller that needs a plain dict asks for one explicitly. The
@@ -18,6 +18,8 @@ objects run NO numeric loop and touch no runtime.
 from __future__ import annotations
 
 from typing import Any
+
+from pops._report import ReportTree
 
 
 class Requirement:
@@ -63,13 +65,13 @@ class RequirementSet:
         self._data[str(key)] = value
         return self
 
-    def check(self, context: Any) -> ValidationReport:
+    def check(self, context: Any) -> ReportTree:
         """Metadata-only membership check: report each requirement the context does not satisfy.
 
         NO numerics -- a requirement is satisfied when @p context carries a truthy value for its
-        key (a dict) or an attribute of that name. Returns a :class:`ValidationReport`.
+        key (a dict) or an attribute of that name. Returns an immutable :class:`ReportTree`.
         """
-        report = ValidationReport()
+        children = []
         ctx = context or {}
         for key, value in self._data.items():
             if isinstance(ctx, dict):
@@ -77,10 +79,17 @@ class RequirementSet:
             else:
                 present = bool(getattr(ctx, key, None))
             if value and not present:
-                report.error("requirement", "unsatisfied",
-                             "route requires %r, not present in the context" % key,
-                             context={"requirement": key})
-        return report
+                children.append(ReportTree(
+                    phase="validation", severity="error",
+                    code="validation.requirement.unsatisfied",
+                    message="route requires %r, not present in the context" % key,
+                    source="requirement", evidence={"requirement": key},
+                    actions=("provide requirement %s in the validation context" % key,),
+                ))
+        return ReportTree(
+            phase="validation", severity="info", code="validation.requirement.check",
+            source="requirement", evidence={"required": self.to_dict()}, children=children,
+        )
 
     def to_dict(self) -> dict:
         return dict(self._data)
@@ -204,111 +213,4 @@ class LoweredDescriptor:
             self.name, self.category, self.native_id)
 
 
-class ValidationIssue:
-    """One structured validation error: its family, a stable code, a message and user context."""
-
-    def __init__(self, *, family: Any, code: Any, message: Any, context: Any = None,
-                 severity: str = "error", alternatives: Any = ()) -> None:
-        self.family = str(family)
-        self.code = str(code)
-        self.message = str(message)
-        self.context = dict(context or {})
-        self.severity = str(severity)
-        self.alternatives = list(alternatives or [])
-
-    def to_dict(self) -> dict:
-        return {"family": self.family, "code": self.code, "message": self.message,
-                "context": dict(self.context), "severity": self.severity,
-                "alternatives": list(self.alternatives)}
-
-    def __str__(self) -> str:
-        head = "[%s/%s] %s" % (self.family, self.code, self.message)
-        if self.alternatives:
-            head += " (alternatives: %s)" % ", ".join(self.alternatives)
-        return head
-
-    def __repr__(self) -> str:
-        return "ValidationIssue(family=%r, code=%r)" % (self.family, self.code)
-
-
-class ValidationReport:
-    """Accumulated, per-family structured validation errors with user context (ADC-527).
-
-    Not a bare exception: chaining accumulators (:meth:`add` / :meth:`error` / :meth:`extend`)
-    collect issues so one pass reports EVERY problem. :meth:`by_family` groups them, :attr:`ok` /
-    ``__bool__`` give the verdict, and :meth:`raise_if_error` keeps the fail-loud behaviour strict
-    callers rely on. The subject-bound :class:`pops.problem.report.ProblemValidationReport` is the
-    Problem-facing view over this same shape.
-    """
-
-    def __init__(self, subject: Any = None) -> None:
-        self.subject = subject
-        self._issues = []
-
-    def add(self, issue: ValidationIssue) -> ValidationReport:
-        """Append a structured issue (chains)."""
-        self._issues.append(issue)
-        return self
-
-    def error(self, family: Any, code: Any, message: Any, *, context: Any = None,
-              alternatives: Any = ()) -> ValidationReport:
-        """Append an error-severity issue built from its parts (chains)."""
-        return self.add(ValidationIssue(family=family, code=code, message=message,
-                                        context=context, severity="error",
-                                        alternatives=alternatives))
-
-    def extend(self, other: ValidationReport | None) -> ValidationReport:
-        """Absorb every issue of @p other (None is a no-op; chains)."""
-        if other is not None:
-            self._issues.extend(other.issues)
-        return self
-
-    @property
-    def issues(self) -> list:
-        return list(self._issues)
-
-    def by_family(self) -> dict:
-        """The issues grouped per descriptor family (the ADC-553 per-family listing)."""
-        grouped = {}
-        for issue in self._issues:
-            grouped.setdefault(issue.family, []).append(issue)
-        return grouped
-
-    @property
-    def ok(self) -> bool:
-        return not any(issue.severity == "error" for issue in self._issues)
-
-    def __bool__(self) -> bool:
-        return self.ok
-
-    def __iter__(self) -> Any:
-        return iter(self._issues)
-
-    def __len__(self) -> int:
-        return len(self._issues)
-
-    def raise_if_error(self) -> None:
-        """Raise ValueError with the full report when any error-severity issue accumulated."""
-        if not self.ok:
-            raise ValueError(str(self))
-
-    def to_dict(self) -> dict:
-        return {"subject": getattr(self.subject, "name", None),
-                "ok": self.ok, "issues": [issue.to_dict() for issue in self._issues]}
-
-    def __str__(self) -> str:
-        if self.ok:
-            return "validation ok"
-        lines = ["validation failed:"]
-        for family, issues in self.by_family().items():
-            lines.append("  %s:" % family)
-            for issue in issues:
-                lines.append("    - %s" % issue)
-        return "\n".join(lines)
-
-    def __repr__(self) -> str:
-        return "ValidationReport(%d issue(s), ok=%s)" % (len(self._issues), self.ok)
-
-
-__all__ = ["Requirement", "RequirementSet", "CapabilitySet", "LoweredDescriptor",
-           "ValidationIssue", "ValidationReport"]
+__all__ = ["Requirement", "RequirementSet", "CapabilitySet", "LoweredDescriptor", "ReportTree"]

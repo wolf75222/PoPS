@@ -1,98 +1,299 @@
-"""pops.numerics.spatial -- the finite-volume spatial-discretisation home (Spec 5 sec.5.4).
+"""Canonical finite-volume discretization descriptors.
 
-Spec 5 (criterion 7) homes the generic spatial-discretisation surface in the top-level
-:mod:`pops.numerics` package (alongside ``riemann`` / ``reconstruction`` / ``projections``),
-moving it out of the transitional ``pops.lib.spatial``. ``pops.lib`` keeps only presets.
-
-Two things live here:
-
-* the inert brick catalog (:data:`spatial`, a namespace of :class:`pops.descriptors.BrickDescriptor`
-  entries) the codegen / runtime consume; and
-* the real :func:`FiniteVolume` composite (ADC-533) -- the ``FiniteVolume(riemann=HLL(...),
-  reconstruction=MUSCL(...))`` authoring surface used across the runtime and the tests. It is homed
-  HERE and re-exported from ``pops.runtime._bricks_scheme`` (its historical site) so every existing
-  ``pops.FiniteVolume`` import path keeps working.
-
-The finite-volume residual is assembled by the ``pops::SpatialDiscretisation<Limiter,
-NumericalFlux>`` tag-type bundle (spatial_discretisation.hpp); there are no separate
-residual/divergence/source-assembly types, so these name that bundle.
+The physical flux, reconstructed variables, reconstruction and numerical Riemann flux are four
+distinct authorities. This module stores them as inert Python values; native runtime types are
+created only by :meth:`FiniteVolume.runtime_spatial` after the compile/bind boundary.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
+from collections.abc import Mapping
+from copy import copy
 from typing import Any
 
-from pops.descriptors import _native
-
-spatial = SimpleNamespace(
-    FiniteVolumeResidual=lambda **o: _native(
-        "fv_residual", "pops::SpatialDiscretisation", "fv", category="spatial", **o),
-    FluxDivergence=lambda **o: _native(
-        "flux_divergence", "pops::SpatialDiscretisation", "fv", category="spatial", **o),
-    SourceAssembly=lambda **o: _native(
-        "source_assembly", "pops::SpatialDiscretisation", "fv", category="spatial", **o),
-    # The whole finite-volume spatial brick selected per instance by the unified sim.install (Spec 3
-    # section 22): it carries the runtime scheme options (riemann / reconstruction / positivity_floor)
-    # that System.install lowers to the existing add_equation spatial args. ``riemann`` names the
-    # NUMERICAL Riemann flux (not the model's physical flux); ``reconstruction`` is the limiter
-    # (none/minmod/vanleer/weno5). It stores its scheme choice as STRING options, distinct from the
-    # module-level composite ``FiniteVolume`` below (which requires TYPED pops.numerics descriptors).
-    FiniteVolume=lambda **o: _native(
-        "finite_volume", "pops::SpatialDiscretisation", "fv", category="spatial", **o),
-)
+from pops.descriptors import Descriptor
 
 
-# --- The composite finite-volume authoring surface (ADC-533, homed here) ----------------------
-# reconstruction / riemann / variables typed-descriptor suggestions (mirror of the runtime tables).
-_LIMITER_SUGGEST = ("pops.numerics.reconstruction.limiters.Minmod() / .VanLeer(), "
-                    "pops.numerics.reconstruction.FirstOrder() / WENO5() / MUSCL(...)")
-_FLUX_SUGGEST = "pops.numerics.riemann.Rusanov() / HLL() / HLLC() / Roe()"
-_RECON_SUGGEST = "pops.numerics.variables.Conservative() / Primitive()"
+def _brick(value: Any, *, category: str, where: str) -> Any:
+    if isinstance(value, str) or getattr(value, "category", None) != category:
+        raise TypeError("%s requires a typed %s descriptor" % (where, category))
+    validate = getattr(value, "validate", None)
+    if not callable(validate):
+        raise TypeError("%s descriptor does not implement validate()" % where)
+    return value
 
 
-def FiniteVolume(limiter: Any = None, riemann: Any = None, variables: Any = None,
-                 positivity_floor: Any = None, wave_speed_cache: Any = False, *,
-                 reconstruction: Any = None, none: Any = False, minmod: Any = False,
-                 vanleer: Any = False, weno5: Any = False, primitive: Any = False) -> Any:
-    """Finite-volume scheme: a TYPED reconstruction + numerical Riemann flux + variable set.
+def _resolved_value(value: Any, resolver: Any) -> Any:
+    from pops.model import Handle
 
-    Homed in ``pops.numerics.spatial`` (Spec 5 criterion 7 / ADC-533) and re-exported at
-    ``pops.runtime._bricks_scheme.FiniteVolume`` and ``pops.FiniteVolume`` so every existing import
-    path keeps working. The NUMERICAL Riemann flux is named ``riemann`` (NOT ``flux``, reserved for
-    the PHYSICAL flux of the DSL model m.flux) so the two meanings do not collide. Spec 5 sec.7:
-    each argument is a TYPED ``pops.numerics`` descriptor (a bare string raises, pointing at the
-    typed object). Argument mapping:
+    if isinstance(value, Handle):
+        return resolver(value)
+    if isinstance(value, Mapping):
+        return {key: _resolved_value(item, resolver) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_resolved_value(item, resolver) for item in value)
+    return value
 
-    - ``limiter`` (Spec 5 sec.14.1 alias: ``reconstruction``; a reconstruction / limiter descriptor)
-      -> Spatial.limiter (``pops.numerics.reconstruction.FirstOrder()`` -> none, ``.limiters.Minmod()``
-      / ``.VanLeer()``, ``.WENO5()``, ``.MUSCL(limiter=...)``)
-    - ``riemann`` (``pops.numerics.riemann`` descriptor) -> Spatial.flux (Rusanov()/HLL()/HLLC()/Roe());
-      HLL() is the generic signed-wave path (requires model.wave_speeds), HLLC()/Roe() run on the
-      canonical Euler 2D layout or generically via the model hooks HasHLLCStructure / HasRoeDissipation
-    - ``variables`` (``pops.numerics.variables`` descriptor) -> Spatial.recon (Conservative()/Primitive())
 
-    The boolean-flag shortcuts of ``Spatial`` are forwarded identically:
-    ``none=/minmod=/vanleer=/weno5=`` select the limiter and ``primitive=`` selects the variable set.
-    Returns a ``Spatial`` (consumed as-is by add_block / add_equation). ``positivity_floor`` (ADC-76):
-    density floor of the face states (Zhang-Shu limiter), None/0 = inactive. ``wave_speed_cache``:
-    HLL wave speed cache (riemann=HLL() + explicit), cf. Spatial.
+def _resolved_brick(value: Any, resolver: Any) -> Any:
+    options = getattr(value, "options", None)
+    if not isinstance(options, Mapping) or not options:
+        return value
+    result = copy(value)
+    if hasattr(result, "_frozen"):
+        object.__setattr__(result, "_frozen", False)
+    object.__setattr__(result, "options", _resolved_value(dict(options), resolver))
+    return result
+
+
+def _data_value(value: Any) -> Any:
+    from pops.descriptors import BrickDescriptor
+    from pops.model import Handle
+    from pops.numerics.indicator_stencils import LinearAxisStencil
+
+    if isinstance(value, BrickDescriptor):
+        return _brick_data(value)
+    if isinstance(value, Handle):
+        if not value.is_resolved:
+            raise ValueError("finite-volume data projection requires resolved handles")
+        return value.canonical_identity()
+    if type(value) is LinearAxisStencil:
+        return value.to_data()
+    if isinstance(value, Mapping):
+        return {key: _data_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_data_value(item) for item in value]
+    return value
+
+
+def _brick_data(value: Any) -> dict[str, Any]:
+    return {
+        "name": value.name,
+        "category": value.category,
+        "native_id": value.native_id,
+        "scheme": value.scheme,
+        "options": _data_value(dict(value.options)),
+        "requirements": _data_value(dict(value.requirements)),
+        "capabilities": _data_value(dict(value.capabilities)),
+    }
+
+
+class FiniteVolume(Descriptor):
+    """Finite-volume method for one exact physical flux authority.
+
+    The high-level physics facade supplies one ``FluxHandle``.  A raw operator-first Module may
+    instead supply a non-empty ordered tuple of ``grid_operator`` handles: this represents the
+    exact flux sum selected by its rate operator, not several independently chosen methods.
+
+    No public ``order`` or ``ghost_depth`` argument exists: both are derived from
+    ``reconstruction``. Likewise, the CFL provider is derived from ``riemann`` and the model's
+    physical flux capabilities.
     """
-    from pops.descriptors import reject_string_selector
 
-    # Reject a bare string at THIS boundary so the message names the FiniteVolume parameter
-    # (``riemann`` / ``variables``), not the internal Spatial slot (``flux`` / ``recon``).
-    if isinstance(riemann, str):
-        reject_string_selector(riemann, "riemann", _FLUX_SUGGEST)
-    if isinstance(variables, str):
-        reject_string_selector(variables, "variables", _RECON_SUGGEST)
-    # Lazy import: pops.numerics must not carry a module-scope pops.runtime edge (the acyclic
-    # layering test). Spatial genuinely depends on the runtime route registry; the composite is
-    # homed here as the authoring entry point and defers to it.
-    from pops.runtime._bricks_scheme import Spatial
+    category = "finite_volume"
+    native_id = "pops::SpatialDiscretisation"
 
-    return Spatial(limiter=limiter, flux=riemann, recon=variables, reconstruction=reconstruction,
-                   none=none, minmod=minmod, vanleer=vanleer, weno5=weno5, primitive=primitive,
-                   positivity_floor=positivity_floor, wave_speed_cache=wave_speed_cache)
+    def __init__(
+        self,
+        *,
+        flux: Any,
+        variables: Any,
+        reconstruction: Any,
+        riemann: Any,
+        positivity_floor: Any = None,
+    ) -> None:
+        from pops.model import Handle
+
+        if isinstance(flux, Handle):
+            if flux.kind != "flux":
+                raise TypeError(
+                    "FiniteVolume(flux=) requires a physical FluxHandle or an ordered tuple "
+                    "of grid_operator handles"
+                )
+            flux_owner = flux.owner_path
+        else:
+            if not isinstance(flux, tuple):
+                raise TypeError(
+                    "FiniteVolume(flux=) requires a physical FluxHandle or an ordered tuple "
+                    "of grid_operator handles"
+                )
+            if not flux:
+                raise ValueError("FiniteVolume grid-operator flux pack must be non-empty")
+            if any(not isinstance(item, Handle) or item.kind != "grid_operator" for item in flux):
+                raise TypeError(
+                    "FiniteVolume grid-operator flux pack must contain only typed "
+                    "grid_operator handles"
+                )
+            flux_owner = flux[0].owner_path
+            if any(item.owner_path != flux_owner for item in flux[1:]):
+                raise ValueError(
+                    "FiniteVolume grid-operator flux pack spans different Models"
+                )
+        self.flux = flux
+        self.variables = _brick(
+            variables, category="variables", where="FiniteVolume.variables")
+        self.reconstruction = _brick(
+            reconstruction, category="reconstruction", where="FiniteVolume.reconstruction")
+        self.riemann = _brick(riemann, category="riemann", where="FiniteVolume.riemann")
+        if positivity_floor is not None:
+            if isinstance(positivity_floor, bool) or not isinstance(positivity_floor, (int, float)):
+                raise TypeError("FiniteVolume.positivity_floor must be a non-negative scalar or None")
+            if positivity_floor < 0:
+                raise ValueError("FiniteVolume.positivity_floor must be >= 0")
+        self.positivity_floor = positivity_floor
+        state = self.variables.options.get("state")
+        if state is not None and state.owner_path != flux_owner:
+            raise ValueError("FiniteVolume variables and physical flux belong to different Models")
+        velocity = self.riemann.options.get("velocity")
+        if velocity is not None and velocity.owner_path != flux_owner:
+            raise ValueError("FiniteVolume Riemann velocity and physical flux belong to different Models")
+
+    def options(self) -> dict[str, Any]:
+        return {
+            "flux": self.flux,
+            "variables": self.variables,
+            "reconstruction": self.reconstruction,
+            "riemann": self.riemann,
+            "positivity_floor": self.positivity_floor,
+        }
+
+    @property
+    def formal_order(self) -> int:
+        value = self.reconstruction.options.get("formal_order")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("reconstruction does not declare a valid formal_order")
+        return value
+
+    @property
+    def ghost_depth(self) -> int:
+        value = self.reconstruction.options.get("ghost_depth")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("reconstruction does not declare a valid ghost_depth")
+        return value
+
+    def requirements(self) -> Any:
+        from pops.descriptors_report import RequirementSet
+
+        return RequirementSet({
+            "physical_flux": (
+                self.flux.qualified_id
+                if not isinstance(self.flux, tuple)
+                else tuple(item.qualified_id for item in self.flux)
+            ),
+            "ghost_depth": self.ghost_depth,
+            "riemann_capabilities": tuple(
+                self.riemann.requirements.get("capabilities", ())),
+        })
+
+    def capabilities(self) -> Any:
+        from pops.descriptors_report import CapabilitySet
+
+        return CapabilitySet({
+            "formal_order": self.formal_order,
+            "ghost_depth": self.ghost_depth,
+            "conservative_variables": self.variables.scheme == "conservative",
+            "cfl_provider": self.riemann.name,
+        })
+
+    def validate(self, context: Any = None) -> bool:
+        self.variables.validate(context)
+        self.reconstruction.validate(context)
+        self.riemann.validate(context)
+        _ = self.formal_order, self.ghost_depth
+        return True
+
+    def amr_indicator_stencil(self, *, dimension: int) -> Any:
+        """Return the reconstruction-owned, typed discrete gradient lowering.
+
+        There is deliberately no scheme-name switch here.  A native or external reconstruction
+        must carry its exact axis coefficients; missing metadata is refused during AMR resolution.
+        """
+        from pops.numerics.indicator_stencils import (
+            LinearAxisStencil,
+            gradient_stencil,
+        )
+
+        authored = self.reconstruction.options.get("amr_gradient_stencil")
+        if type(authored) is LinearAxisStencil:
+            axis = authored
+        elif isinstance(authored, Mapping):
+            axis = LinearAxisStencil.from_data(dict(authored))
+        else:
+            raise NotImplementedError(
+                "reconstruction %r does not provide a typed AMR gradient stencil"
+                % self.reconstruction.name)
+        if max(axis.ghost_lower, axis.ghost_upper) > self.ghost_depth:
+            raise ValueError(
+                "reconstruction AMR gradient stencil exceeds its declared ghost_depth")
+        return gradient_stencil(axis, dimension=dimension)
+
+    def validate_rate_contract(self, contract: Any) -> bool:
+        """Prove this method discretizes the exact physical flux and evolved state."""
+        if not isinstance(contract, Mapping) or "flux" not in contract or "state" not in contract:
+            raise TypeError("FiniteVolume requires a rate contract containing flux and state")
+        if contract["flux"] != self.flux:
+            raise ValueError(
+                "FiniteVolume flux does not match the physical flux referenced by the rate")
+        state = self.variables.options.get("state")
+        if state is not None and state != contract["state"]:
+            raise ValueError(
+                "FiniteVolume variables do not reference the state differentiated by the rate")
+        return True
+
+    def resolve_references(self, resolver: Any) -> FiniteVolume:
+        if not callable(resolver):
+            raise TypeError("FiniteVolume.resolve_references requires a resolver")
+        return type(self)(
+            flux=(
+                resolver(self.flux)
+                if not isinstance(self.flux, tuple)
+                else tuple(resolver(item) for item in self.flux)
+            ),
+            variables=_resolved_brick(self.variables, resolver),
+            reconstruction=_resolved_brick(self.reconstruction, resolver),
+            riemann=_resolved_brick(self.riemann, resolver),
+            positivity_floor=self.positivity_floor,
+        )
+
+    def to_data(self) -> dict[str, Any]:
+        fluxes = self.flux if isinstance(self.flux, tuple) else (self.flux,)
+        if any(not item.is_resolved for item in fluxes):
+            raise ValueError("FiniteVolume.to_data requires resolved physical handles")
+        return {
+            "schema_version": 1,
+            "method": "finite_volume",
+            "flux": (
+                self.flux.canonical_identity()
+                if not isinstance(self.flux, tuple)
+                else [item.canonical_identity() for item in self.flux]
+            ),
+            "variables": _brick_data(self.variables),
+            "reconstruction": _brick_data(self.reconstruction),
+            "riemann": _brick_data(self.riemann),
+            "formal_order": self.formal_order,
+            "ghost_depth": self.ghost_depth,
+            "positivity_floor": self.positivity_floor,
+        }
+
+    def runtime_configuration(self) -> dict[str, Any]:
+        """Return the exact per-block native method identity, excluding physical ownership.
+
+        A block can evolve several rates whose physical flux handles differ while sharing one
+        reconstruction/Riemann/variable selection.  The native ABI installs that numerical
+        selection once per block; the resolved rate rows retain each physical flux identity.
+        """
+        data = self.to_data()
+        return {key: value for key, value in data.items() if key != "flux"}
+
+    def runtime_spatial(self) -> Any:
+        """Lower at the native boundary to the existing optimized runtime value."""
+        from pops.runtime._bricks_scheme import Spatial
+
+        return Spatial(
+            limiter=self.reconstruction,
+            flux=self.riemann,
+            recon=self.variables,
+            positivity_floor=self.positivity_floor,
+        )
 
 
-__all__ = ["spatial", "FiniteVolume"]
+__all__ = ["FiniteVolume"]

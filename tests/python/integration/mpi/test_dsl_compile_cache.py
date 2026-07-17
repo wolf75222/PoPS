@@ -1,224 +1,220 @@
-"""Ergonomie de m.compile(...) : auto-detection de `include`, auto-gestion de `so_path` et CACHE de
-build keye sur le modele. PUR-PYTHON / ergonomie : aucune numerique nouvelle, memes briques generees.
+"""The final Production lifecycle has deterministic cache hits and semantic misses.
 
-On verifie :
-(1) PUR-PYTHON (aucun compilateur requis) :
-    - pops_include() auto-detecte le dossier d'en-tetes (ici via POPS_INCLUDE, sinon le paquet) ;
-    - pops_cache_dir() respecte POPS_CACHE_DIR et cree le dossier ;
-    - la cle de cache (model_hash + abi_key + backend/target/name) DIFFERE quand le modele change
-      (param, formule, backend), et est STABLE pour un modele identique.
-(2) BOUT EN BOUT (saute sans compilateur / en-tetes) :
-    - m.compile(backend="aot") ET backend="production" SANS so_path/include -> CompiledModel valide,
-      branchable via add_equation et qui tourne (run) ;
-    - une 2e compilation du MEME modele est un cache HIT (PAS de recompilation : meme chemin, mtime
-      inchange, marqueur present) ;
-    - changer le modele (un parametre) BUSTE le cache (chemin different, recompilation) ;
-    - la forme a arguments EXPLICITES (so_path + include) marche toujours (retro-compat).
-
-Lance avec python3, meme PYTHONPATH que les autres tests DSL.
+The test compiles through ``validate -> resolve -> pops.compile`` only.  A second compile of the
+same resolved plan must reuse both native packages without invoking the compiler.  Changing one
+typed ``ConstParam`` is a semantic change: it produces a different plan/artifact and invokes the
+compiler for a new content-addressed package.
 """
-from pops.numerics.riemann import HLLC
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.numerics.variables import Primitive
-import os
-import shutil
-import tempfile
-import time
+from __future__ import annotations
+
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 import pops
-from pops.codegen.cache import _cache_so_path, pops_cache_dir
-from pops.codegen.loader import CompiledModel
-from pops.codegen.toolchain import pops_include
-from pops.ir.expr import Var
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.lib.time import ForwardEuler
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.params import ConstParam
+from pops.physics import Model
+from pops.time import FixedDt
 
-from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
-# Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+
+pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
+ROOT = Path(__file__).resolve().parents[4]
+# Four deliberate native package compilations on a cold cache can exceed the process-isolation
+# default on slower CI runners.  The workflow timeout remains the outer hard bound.
 POPS_PROCESS_TIMEOUT = 900
-INCLUDE = repo_include()
-GAMMA = 1.6667  # gamma NON STANDARD (5/3)
 
 
-def build_euler(name="euler_cache", gamma=GAMMA):
-    """Euler 2D via la facade Model (param gamma nomme, roles canoniques)."""
-    m = Model(name)
-    rho, rhou, rhov, E = m.conservative_vars(
-        "rho", "rho_u", "rho_v", "E",
-        roles=["Density", "MomentumX", "MomentumY", "Energy"])
-    g = m.param("gamma", gamma)
-    u = rhou / rho
-    v = rhov / rho
-    p = (g - 1.0) * (E - 0.5 * rho * (u * u + v * v))
-    H = (E + p) / rho
-    c = sqrt(g * p / rho)
-    m.flux(x=[rhou, rhou * u + p, rhou * v, rho * H * u],
-           y=[rhov, rhov * u, rhov * v + p, rho * H * v])
-    m.eigenvalues(x=[u - c, u, u + c], y=[v - c, v, v + c])
-    prho, pu, pv, pp = m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([prho, prho * pu, prho * pv,
-                         pp / (g - 1.0) + 0.5 * prho * (pu * pu + pv * pv)])
-    # ADC-590 : riemann='hllc' generique exige la capability EMISE (plus de fallback Euler implicite).
-    m.enable_hllc()
-    return m
+def _resolved_plan(*, speed: float):
+    frame = Rectangle(
+        "production-cache-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("production-cache-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    speed_value = model.value(model.param(ConstParam("speed", speed)))
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (speed_value * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (speed_value + 0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("production-cache-case")
+    block = case.block("tracer", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(1.0e-3))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=frame,
+            cells=(8, 8),
+            periodic=PeriodicAxes(frame.axes),
+        )
+    )
+    return pops.resolve(
+        pops.validate(case),
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
 
 
-from tests.python.support.initial_states import euler_bubble_state
+_IDENTITY_DOMAINS = {
+    "semantic_identity": "semantic",
+    "artifact_spec_identity": "artifact-spec",
+    "binary_identity": "binary",
+    "artifact_identity": "artifact",
+}
 
 
-def initial_state(n):
-    return euler_bubble_state(n, GAMMA)
+def _component_identities(component) -> dict[str, object]:
+    identities = {name: getattr(component, name) for name in _IDENTITY_DOMAINS}
+    assert {
+        name: identity.domain for name, identity in identities.items()
+    } == _IDENTITY_DOMAINS
+    assert all(identity.token for identity in identities.values())
+    return identities
 
 
-def pure_python_checks():
-    """(1) Auto-detection + cle de cache : aucun compilateur requis."""
-    # pops_cache_dir respecte POPS_CACHE_DIR (override) et cree le dossier
-    cache = tempfile.mkdtemp()
-    old = os.environ.get("POPS_CACHE_DIR")
-    os.environ["POPS_CACHE_DIR"] = cache
-    try:
-        assert os.path.normpath(pops_cache_dir()) == os.path.normpath(cache), \
-            "pops_cache_dir doit honorer POPS_CACHE_DIR"
-        print("OK  pops_cache_dir() honore POPS_CACHE_DIR")
-
-        # pops_include : si POPS_INCLUDE pointe sur un include valide, il est retenu en priorite
-        if os.path.isdir(INCLUDE):
-            os.environ["POPS_INCLUDE"] = INCLUDE
-            assert os.path.normpath(pops_include()) == os.path.normpath(INCLUDE), \
-                "pops_include doit honorer POPS_INCLUDE"
-            del os.environ["POPS_INCLUDE"]
-            print("OK  pops_include() honore POPS_INCLUDE")
-
-        # cle de cache : meme modele -> meme chemin ; param/formule/backend differents -> chemin different
-        abi = "fakeabikey"
-        m = build_euler()
-        h = m._model_hash()
-        p_aot = _cache_so_path(h, abi, "aot", "system", None)
-        p_aot_again = _cache_so_path(h, abi, "aot", "system", None)
-        assert p_aot == p_aot_again, "cle de cache non deterministe pour un modele identique"
-        assert p_aot.startswith(os.path.normpath(cache)), "le .so en cache doit vivre dans le cache dir"
-
-        # backend / target / abi differents -> chemins distincts (memes model_hash)
-        assert _cache_so_path(h, abi, "production", "system", None) != p_aot, \
-            "backend different doit donner un chemin different"
-        assert _cache_so_path(h, abi, "production", "amr_system", None) != \
-            _cache_so_path(h, abi, "production", "system", None), \
-            "target different doit donner un chemin different"
-        assert _cache_so_path(h, "autreabi", "aot", "system", None) != p_aot, \
-            "abi_key differente doit donner un chemin different"
-
-        # un PARAMETRE different change model_hash, donc le chemin de cache (cache MISS)
-        m2 = build_euler(gamma=1.4)
-        assert m2._model_hash() != h, "un param different doit changer model_hash"
-        assert _cache_so_path(m2._model_hash(), abi, "aot", "system", None) != p_aot, \
-            "un param different doit buster le cache"
-
-        # une FORMULE differente change aussi model_hash : on ajoute une source non triviale
-        m3 = build_euler()
-        rho3 = Var("rho", "cons")
-        m3.source([0.0 * rho3, 0.0 * rho3, 0.0 * rho3, rho3])  # source != defaut -> formules differentes
-        assert m3._model_hash() != h, "une formule differente (source) doit changer model_hash"
-        assert _cache_so_path(m3._model_hash(), abi, "aot", "system", None) != p_aot, \
-            "une formule differente doit buster le cache"
-        print("OK  cle de cache : stable pour modele identique, distincte sur param/formule/backend/"
-              "target/abi")
-    finally:
-        if old is None:
-            os.environ.pop("POPS_CACHE_DIR", None)
-        else:
-            os.environ["POPS_CACHE_DIR"] = old
-        shutil.rmtree(cache, ignore_errors=True)
+def _native_evidence(artifact) -> dict[str, dict[str, tuple]]:
+    models = {
+        block.name: (Path(block.model.so_path), _component_identities(block.model))
+        for block in artifact.blocks
+    }
+    programs = {
+        row.layout_id: (
+            Path(row.program.so_path),
+            _component_identities(row.program),
+            row.identity,
+        )
+        for row in artifact.layout_programs
+    }
+    assert models and programs
+    assert all(path.is_file() for path, _identities in models.values())
+    assert all(path.is_file() for path, _identities, _layout_identity in programs.values())
+    assert all(row[2].domain == "layout-program" for row in programs.values())
+    paths = [row[0] for group in (models, programs) for row in group.values()]
+    assert len(paths) == len(set(paths))
+    return {"models": models, "programs": programs}
 
 
-def end_to_end_checks():
-    """(2) Bout en bout : compile SANS so_path/include -> CompiledModel valide + run ; cache HIT/MISS ;
-    forme explicite (retro-compat)."""
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> bout-en-bout saute")
-        return
-
-    n = 24
-    cache = tempfile.mkdtemp()
-    explicit = tempfile.mkdtemp()
-    old_cache = os.environ.get("POPS_CACHE_DIR")
-    old_inc = os.environ.get("POPS_INCLUDE")
-    os.environ["POPS_CACHE_DIR"] = cache
-    os.environ["POPS_INCLUDE"] = INCLUDE  # rend l'auto-detection robuste meme hors paquet installe
-    try:
-        for backend, exp_adder in (("aot", "add_compiled_block"), ("production", "add_native_block")):
-            m = build_euler("euler_%s" % backend)
-
-            # (a) compile SANS so_path NI include -> CompiledModel valide
-            cm = m.compile(backend=backend)
-            assert isinstance(cm, CompiledModel), "compile -> CompiledModel"
-            assert cm.adder == exp_adder, "%s : adder %r (attendu %r)" % (backend, cm.adder, exp_adder)
-            assert cm.so_path and os.path.exists(cm.so_path), "%s : .so absente" % backend
-            assert os.path.normpath(cm.so_path).startswith(os.path.normpath(cache)), \
-                "%s : .so hors du cache dir" % backend
-            assert cm.n_vars == 4 and cm.abi_key and cm.model_hash, "metadonnees CompiledModel"
-            print("OK  %s : compile() SANS so_path/include -> %s (cache %s)"
-                  % (backend, cm.adder, os.path.basename(cm.so_path)))
-
-            # (b) branchable via add_equation et tourne
-            s = System(n=n, periodic=True)
-            s.add_equation("gas", cm, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                               variables=Primitive()))
-            s.set_poisson(rhs="charge_density", solver="geometric_mg")
-            s.set_state("gas", initial_state(n))
-            nsteps = s.run(t_end=0.02, cfl=0.4)
-            assert nsteps > 0 and np.all(np.isfinite(np.array(s.get_state("gas")))), \
-                "%s : run instable" % backend
-            print("OK  %s : add_equation + run(%d pas) -> etat fini" % (backend, nsteps))
-
-            # (c) 2e compile du MEME modele -> cache HIT : meme chemin, PAS de recompilation
-            mtime1 = os.path.getmtime(cm.so_path)
-            time.sleep(1.1)  # resolution mtime : un vrai recompile changerait l'horodatage
-            cm_hit = m.compile(backend=backend)
-            assert cm_hit.so_path == cm.so_path, "%s : cache HIT chemin different" % backend
-            assert os.path.getmtime(cm_hit.so_path) == mtime1, \
-                "%s : cache HIT a RECOMPILE (mtime change)" % backend
-            print("OK  %s : 2e compile() = cache HIT (meme chemin, mtime inchange, pas de recompile)"
-                  % backend)
-
-            # (d) changer un PARAMETRE buste le cache : chemin different, recompilation
-            m_diff = build_euler("euler_%s" % backend, gamma=1.4)  # gamma different -> model_hash different
-            cm_miss = m_diff.compile(backend=backend)
-            assert cm_miss.so_path != cm.so_path, "%s : param change n'a pas buste le cache" % backend
-            assert os.path.exists(cm_miss.so_path), "%s : cache MISS n'a pas compile" % backend
-            print("OK  %s : param different = cache MISS (chemin different, recompilation)" % backend)
-
-        # (e) retro-compat : forme a arguments EXPLICITES (so_path + include) marche toujours
-        m = build_euler("euler_explicit")
-        ex_path = os.path.join(explicit, "explicit.so")
-        cm_ex = m.compile(ex_path, INCLUDE, backend="aot")
-        assert cm_ex.so_path == ex_path and os.path.exists(ex_path), "so_path explicite casse"
-        s = System(n=n, periodic=True)
-        s.add_equation("gas", cm_ex, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC(),
-                                                              variables=Primitive()))
-        s.set_poisson(rhs="charge_density", solver="geometric_mg")
-        s.set_state("gas", initial_state(n))
-        assert s.run(t_end=0.02, cfl=0.4) > 0, "run via so_path explicite instable"
-        print("OK  retro-compat : compile(so_path, include, ...) explicite marche toujours")
-    finally:
-        for k, v in (("POPS_CACHE_DIR", old_cache), ("POPS_INCLUDE", old_inc)):
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-        shutil.rmtree(cache, ignore_errors=True)
-        shutil.rmtree(explicit, ignore_errors=True)
+def _native_paths(evidence: dict[str, dict[str, tuple]]) -> tuple[Path, ...]:
+    return tuple(
+        row[0]
+        for kind in ("models", "programs")
+        for row in evidence[kind].values()
+    )
 
 
-def main():
-    pure_python_checks()
-    end_to_end_checks()
-    print("test_dsl_compile_cache : tout est vert")
+def _nonuniform_initial_state() -> np.ndarray:
+    coordinates = (np.arange(8, dtype=np.float64) + 0.5) / 8.0
+    xx, yy = np.meshgrid(coordinates, coordinates, indexing="ij")
+    field = 1.0 + 0.25 * np.sin(2.0 * np.pi * xx) * np.cos(2.0 * np.pi * yy)
+    return np.ascontiguousarray(field[np.newaxis, :, :])
 
 
-if __name__ == "__main__":
-    main()
+def _run_one_step(artifact, initial: np.ndarray) -> np.ndarray:
+    runtime = pops.bind(artifact, initial_state={"tracer": initial.copy()})
+    report = pops.run(runtime, t_end=1.0e-3, max_steps=1)
+    assert report.accepted_steps == 1
+    result = np.asarray(runtime.get_state("tracer"), dtype=np.float64).reshape(initial.shape)
+    assert np.isfinite(result).all()
+    return result.copy()
+
+
+def test_production_cache_hit_skips_compiler_and_semantic_change_misses(
+    isolated_native_cache, native_cxx, kokkos_root, monkeypatch
+):
+    del native_cxx, kokkos_root  # fixtures make missing native prerequisites explicit skips
+    baseline_plan = _resolved_plan(speed=1.0)
+    baseline = pops.compile(baseline_plan)
+    baseline.verify()
+    baseline_evidence = _native_evidence(baseline)
+    baseline_paths = _native_paths(baseline_evidence)
+    cache_root = Path(isolated_native_cache).resolve()
+    assert all(path.resolve().is_relative_to(cache_root) for path in baseline_paths)
+    baseline_stats = {
+        path: (path.stat().st_mtime_ns, path.stat().st_size) for path in baseline_paths
+    }
+
+    import pops.codegen._compile_drivers as compile_drivers
+
+    real_compile = compile_drivers._run_compile
+    compile_calls = []
+
+    def observed_compile(command, context):
+        compile_calls.append((tuple(command), context))
+        return real_compile(command, context)
+
+    monkeypatch.setattr(compile_drivers, "_run_compile", observed_compile)
+
+    hit = pops.compile(baseline_plan)
+    hit.verify()
+    assert compile_calls == []
+    assert hit.semantic_identity == baseline.semantic_identity
+    assert hit.artifact_identity == baseline.artifact_identity
+    assert _native_evidence(hit) == baseline_evidence
+    initial = _nonuniform_initial_state()
+    speed_one = _run_one_step(hit, initial)
+    assert compile_calls == []
+    assert {
+        path: (path.stat().st_mtime_ns, path.stat().st_size) for path in baseline_paths
+    } == baseline_stats
+
+    changed_plan = _resolved_plan(speed=2.0)
+    assert changed_plan.plan_identity != baseline_plan.plan_identity
+    changed = pops.compile(changed_plan)
+    changed.verify()
+    contexts = [str(context) for _command, context in compile_calls]
+    assert len(compile_calls) == 2
+    assert len([context for context in contexts if "compile_native" in context]) == 1
+    assert len([context for context in contexts if "compile_problem" in context]) == 1
+    assert changed.semantic_identity != baseline.semantic_identity
+    assert changed.artifact_identity != baseline.artifact_identity
+    changed_evidence = _native_evidence(changed)
+    for kind in ("models", "programs"):
+        assert changed_evidence[kind].keys() == baseline_evidence[kind].keys()
+        for name, baseline_row in baseline_evidence[kind].items():
+            changed_row = changed_evidence[kind][name]
+            assert changed_row[0] != baseline_row[0]
+            for identity_name in (
+                "semantic_identity",
+                "artifact_spec_identity",
+                "artifact_identity",
+            ):
+                assert changed_row[1][identity_name] != baseline_row[1][identity_name]
+            if kind == "programs":
+                assert changed_row[2] != baseline_row[2]
+
+    calls_after_miss = tuple(compile_calls)
+    speed_two = _run_one_step(changed, initial)
+    assert tuple(compile_calls) == calls_after_miss
+    numerical_scale = max(float(np.linalg.norm(initial)), 1.0)
+    roundoff = np.finfo(np.float64).eps * numerical_scale
+    assert np.linalg.norm(speed_one - initial) > roundoff
+    assert np.linalg.norm(speed_two - initial) > roundoff
+    assert np.linalg.norm(speed_two - speed_one) > roundoff

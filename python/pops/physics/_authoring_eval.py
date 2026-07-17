@@ -3,7 +3,7 @@
 Host-side evaluators (``flux`` / ``max_wave_speed`` / ``wave_speeds_value`` /
 ``source_value`` / ``projection_value``-adjacent helpers) plus ``check`` /
 ``check_model``. Methods only; all touched attributes are created by
-``HyperbolicModel.__init__``. Imports numpy, :mod:`pops.ir` and the aux/role
+``HyperbolicModel.__init__``. Imports numpy, :mod:`pops._ir` and the aux/role
 helpers; codegen-free and ``_pops``-free.
 """
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from pops.ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
+from pops._ir.visitors import _expr_uses_cons_or_prim  # noqa: F401
 
 from .aux import roles_for
 
@@ -24,15 +24,37 @@ else:
 
 def _fd_step(u: Any, rel: float, floor: float) -> Any:
     """Relative finite-difference step ``rel*|u| + floor`` -- the single source of the FD-step SHAPE
-    used by both Jacobian oracles. The per-site ``rel``/``floor`` stay EXPLICIT arguments: the
-    wave-speed FD mirror passes the declared fd_eps and 1e-30 (to match module_emit_brick's emitted
-    kernel bit-for-bit), while the non-circular spectral-radius reference passes its own 1e-6 / 1e-7.
-    Single-sourcing the shape must not move either value (would shift FD-based goldens)."""
+    used by the non-circular spectral-radius reference. Its ``rel``/``floor`` remain explicit because
+    they are independent from the compiled wave-speed Jacobian's unit-scaled column step."""
     return rel * np.abs(u) + floor
 
 
 class _EvalMixin(_HyperbolicModel):
     """numpy evaluators and the numerical model self-check."""
+
+    def _host_state_array(self, U: Any, *, where: str) -> np.ndarray:
+        """Normalize one host-oracle state without entering the native runtime path."""
+
+        try:
+            state = np.asarray(U)
+        except (TypeError, ValueError):
+            raise TypeError(
+                "%s state must be a scalar/array or a rectangular component sequence" % where
+            ) from None
+        if state.dtype.hasobject or state.dtype.kind not in "biufc":
+            raise TypeError(
+                "%s state must be a rectangular numeric component sequence" % where)
+        if state.ndim == 0:
+            if self.n_vars != 1:
+                raise ValueError(
+                    "%s scalar state is valid only for a one-component model" % where)
+            state = state.reshape((1,))
+        component_count = len(state)
+        if component_count != self.n_vars:
+            raise ValueError(
+                "%s state has %d component(s); model %r requires %d"
+                % (where, component_count, self.name, self.n_vars))
+        return state
 
     def _env(self, U: Any, aux: Any) -> dict:
         """Environment: cons (from U), aux (provided), then derived primitives (insertion
@@ -45,10 +67,13 @@ class _EvalMixin(_HyperbolicModel):
         return env
 
     def flux(self, U: Any, aux: Any, dir: Any) -> Any:
-        """Physical flux in direction dir (0=x, 1=y). U: numpy (n_vars, ...)."""
-        env = self._env(U, aux)
+        """Physical flux in direction dir (0=x, 1=y), evaluated as a host-side oracle."""
+        state = self._host_state_array(U, where="flux")
+        env = self._env(state, aux)
         comps = self._flux["x" if dir == 0 else "y"]
-        return np.stack([np.broadcast_to(c.eval(env), U[0].shape) for c in comps], axis=0)
+        sample_shape = state.shape[1:]
+        return np.stack(
+            [np.broadcast_to(np.asarray(c.eval(env)), sample_shape) for c in comps], axis=0)
 
     def max_wave_speed(self, U: Any, aux: Any, dir: Any) -> Any:
         """max_k max_cells ``|lambda_k|``: Rusanov / CFL bound. Source: eigenvalues
@@ -74,23 +99,26 @@ class _EvalMixin(_HyperbolicModel):
         nv = self.n_vars
         nsmp = int(np.asarray(U[0]).reshape(-1).shape[0])
         if ws["eig"] == "fd":
-            base = np.stack([np.broadcast_to(np.asarray(c.eval(env), dtype=float), (nsmp,))
-                             if hasattr(c, "eval") else np.full((nsmp,), float(c))
-                             for c in (self._flux[key])], axis=0)
             J = np.empty((nsmp, nv, nv))
             Uflat = np.stack([np.broadcast_to(np.asarray(env[c], dtype=float), (nsmp,))
                               for c in self.cons_names], axis=0)
             # ADC-617: use the SAME relative FD step as the emitted C++ kernel (module_emit_brick),
-            # so this numpy oracle stays consistent with the compiled wave speeds. None -> 1e-6.
+            # including a unit reference scale so zero-valued components remain perturbable.
+            # None -> 1e-6.
             fd_rel = 1e-6 if ws.get("fd_eps") is None else float(ws["fd_eps"])
             for k in range(nv):
-                eps = _fd_step(Uflat[0], fd_rel, 1e-30)
+                eps = fd_rel * np.maximum(np.abs(Uflat[k]), 1.0)
                 Up = Uflat.copy()
+                Um = Uflat.copy()
                 Up[k] += eps
+                Um[k] -= eps
                 envp = self._env(Up, {n: env[n] for n in self.aux_names} if self.aux_names else None)
+                envm = self._env(Um, {n: env[n] for n in self.aux_names} if self.aux_names else None)
                 Fp = np.stack([np.broadcast_to(np.asarray(c.eval(envp), dtype=float), (nsmp,))
                                for c in self._flux[key]], axis=0)
-                J[:, :, k] = ((Fp - base) / eps).T
+                Fm = np.stack([np.broadcast_to(np.asarray(c.eval(envm), dtype=float), (nsmp,))
+                               for c in self._flux[key]], axis=0)
+                J[:, :, k] = ((Fp - Fm) / (2.0 * eps)).T
         else:
             rows = ws["rows"][key]
             J = np.empty((nsmp, nv, nv))
@@ -164,18 +192,6 @@ class _EvalMixin(_HyperbolicModel):
             return np.zeros_like(U)
         env = self._env(U, aux)
         return np.stack([np.broadcast_to(s.eval(env), U[0].shape) for s in self._source], axis=0)
-
-    def to_python_flux(self, aux: Any = None) -> Any:
-        """Produces a pops.experimental.PythonFlux (host backend) from the formulas: the model RUNS
-        (interpreted on CPU). aux: dict name -> array (auxiliary fields), frozen for this flux.
-
-        NON-PRODUCTION / TESTS-ONLY: PythonFlux computes a numpy residual in Python, so it lives
-        under pops.experimental, off the public pops surface."""
-        from pops.experimental import PythonFlux
-        a = aux or {}
-        return PythonFlux(
-            lambda U, d: self.flux(U, a, d),
-            lambda U: max(self.max_wave_speed(U, a, 0), self.max_wave_speed(U, a, 1)))
 
     def check(self) -> bool:
         """Checks that every referenced variable (primitives, flux, eigenvalues, source) is
@@ -383,4 +399,3 @@ class _EvalMixin(_HyperbolicModel):
             raise ValueError("check_model('%s'): %d failure(s):\n  - %s"
                              % (self.name, len(failures), "\n  - ".join(failures)))
         return report
-

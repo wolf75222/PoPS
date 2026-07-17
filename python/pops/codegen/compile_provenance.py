@@ -11,9 +11,8 @@ the source fed to the compiler. The ``.so`` bytes and the cache key are therefor
 ``debug`` is on or off -- the banner is inert provenance, not an input to the build. ``compile_problem``
 proves this by compiling the banner-free ``src`` and only decorating the sidecar copy.
 
-The sidecar and its ``.cachekey`` companion are written atomically (temp file + ``os.replace``) so a
-crashed / concurrent compile never leaves a half-written provenance file that the cache-HIT guard
-would then read.
+The final artifact-identity sidecar is written atomically (temp file + ``os.replace``) so a crashed
+or concurrent compile never leaves a half-written record that the cache-HIT guard would then read.
 """
 from __future__ import annotations
 
@@ -23,15 +22,30 @@ import json
 import os
 
 
-# The cache-key sidecar suffix: ``<so-name>.cachekey`` sits next to the ``.so`` and records the
-# keys + toolchain line the cache HIT guard re-verifies (CONTRACTS6 decision 1). Plain text, one
-# field per line, so a human (or a shell one-liner) can read it without importing pops.
-CACHEKEY_SUFFIX = ".cachekey"
+ARTIFACT_SIDECAR_SUFFIX = ".pops-artifact.json"
+_ARTIFACT_SIDECAR_PROTOCOL = "pops.artifact-sidecar.v1"
 
 
-def cachekey_path(so_path: Any) -> Any:
-    """The ``<so-name>.cachekey`` sidecar path next to @p so_path (ADC-536 stale/ABI guard)."""
-    return so_path + CACHEKEY_SUFFIX
+def lowering_provenance_data(program: Any) -> list[dict[str, Any]]:
+    """Return detached lowering lineage without mutating the authored Program."""
+    if program is None:
+        return []
+    from pops.provenance import ProvenanceRecord
+    rows = []
+    for value in getattr(program, "_values", ()):
+        rows.append({
+            "node_id": value.id,
+            "provenance": ProvenanceRecord.derive(
+                (value.provenance,), transformation="lower",
+                owner=program.owner_path, authoring_api="pops.codegen._compile",
+            ).to_data(),
+        })
+    return rows
+
+
+def artifact_sidecar_path(so_path: Any) -> Any:
+    """Return the final artifact-identity sidecar path for ``so_path``."""
+    return so_path + ARTIFACT_SIDECAR_SUFFIX
 
 
 def _atomic_write(path: Any, text: Any) -> None:
@@ -47,75 +61,137 @@ def _atomic_write(path: Any, text: Any) -> None:
     os.replace(tmp, path)
 
 
-def write_cachekey_sidecar(so_path: Any, *, cache_key: Any, abi_key: Any, toolchain: Any) -> None:
-    """Atomically write the ``<so>.cachekey`` sidecar the cache-HIT guard re-verifies (ADC-536).
+def write_artifact_sidecar(
+    so_path: Any, *, semantic_identity: Any, spec_identity: Any,
+) -> tuple[Any, Any]:
+    """Authenticate a fresh binary and atomically persist its final identities."""
+    from pops.identity import artifact_identity, binary_identity
 
-    Records the full ``cache_key``, the ``abi_key`` and a single ``toolchain`` line (compiler + std),
-    one ``key=value`` per line. Written on every fresh compile so a subsequent cache HIT can prove
-    the on-disk ``.so`` was built for the SAME key; a missing sidecar (a legacy ``.so``) or a
-    mismatch is a loud refusal, never a silent reuse."""
-    text = "cache_key=%s\nabi_key=%s\ntoolchain=%s\n" % (cache_key, abi_key, toolchain)
-    _atomic_write(cachekey_path(so_path), text)
+    binary = binary_identity(so_path)
+    artifact = artifact_identity(spec_identity, binary)
+    payload = {
+        "protocol": _ARTIFACT_SIDECAR_PROTOCOL,
+        "semantic_identity": semantic_identity.token,
+        "artifact_spec_identity": spec_identity.token,
+        "binary_identity": binary.token,
+        "artifact_identity": artifact.token,
+    }
+    _atomic_write(
+        artifact_sidecar_path(so_path),
+        json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+    )
+    return binary, artifact
 
 
-def read_cachekey_sidecar(so_path: Any) -> Any:
-    """Read the ``<so>.cachekey`` sidecar into a dict, or ``None`` when it is absent (ADC-536).
+def publish_staged_artifact(
+    staging_path: Any,
+    destination_path: Any,
+    *,
+    semantic_identity: Any,
+    spec_identity: Any,
+) -> tuple[Any, Any]:
+    """Authenticate and publish a staged binary, committing its sidecar last.
 
-    ``None`` means the ``.so`` predates the sidecar (a legacy artifact); the caller treats that as a
-    stale/ABI-unverifiable artifact and refuses it. A present-but-malformed sidecar yields whatever
-    ``key=value`` lines parsed (the guard compares the fields it needs and refuses on a mismatch)."""
-    path = cachekey_path(so_path)
+    The caller owns the destination's identity-specific inter-process lock.  Both replacements are
+    same-directory atomic operations: readers can never observe compiler writes at the final binary
+    path, and the final sidecar is the commit record published only after the complete binary.
+    """
+    staging_path = os.path.abspath(os.fspath(staging_path))
+    destination_path = os.path.abspath(os.fspath(destination_path))
+    if os.path.dirname(staging_path) != os.path.dirname(destination_path):
+        raise ValueError("staged artifact publication requires one filesystem directory")
+    binary, artifact = write_artifact_sidecar(
+        staging_path,
+        semantic_identity=semantic_identity,
+        spec_identity=spec_identity,
+    )
+    os.replace(staging_path, destination_path)
+    os.replace(
+        artifact_sidecar_path(staging_path),
+        artifact_sidecar_path(destination_path),
+    )
+    return binary, artifact
+
+
+def read_artifact_sidecar(so_path: Any) -> Any:
+    """Read the exact current artifact sidecar schema, or ``None`` when absent."""
+    path = artifact_sidecar_path(so_path)
     if not os.path.isfile(path):
         return None
-    fields = {}
-    with open(path, "r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            fields[key] = value
-    return fields
+    with open(path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    expected = {
+        "protocol", "semantic_identity", "artifact_spec_identity", "binary_identity",
+        "artifact_identity",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected:
+        raise StaleArtifactError(
+            "compiled artifact sidecar must contain exactly %s" % sorted(expected))
+    if payload["protocol"] != _ARTIFACT_SIDECAR_PROTOCOL:
+        raise StaleArtifactError("compiled artifact sidecar protocol is unsupported")
+    if any(not isinstance(payload[key], str) for key in expected - {"protocol"}):
+        raise StaleArtifactError("compiled artifact sidecar identities must be strings")
+    return payload
+
+
+def read_artifact_identities(so_path: Any) -> dict[str, Any]:
+    """Return typed identities from a verified-schema sidecar."""
+    from pops.identity import Identity
+
+    payload = read_artifact_sidecar(so_path)
+    if payload is None:
+        raise StaleArtifactError("compiled artifact has no identity sidecar")
+    result = {
+        key: Identity.from_token(payload[key])
+        for key in (
+            "semantic_identity", "artifact_spec_identity", "binary_identity",
+            "artifact_identity",
+        )
+    }
+    expected_domains = {
+        "semantic_identity": "semantic",
+        "artifact_spec_identity": "artifact-spec",
+        "binary_identity": "binary",
+        "artifact_identity": "artifact",
+    }
+    for key, domain in expected_domains.items():
+        if result[key].domain != domain:
+            raise StaleArtifactError("%s must have domain %s" % (key, domain))
+    return result
 
 
 class StaleArtifactError(RuntimeError):
     """A cached ``.so`` whose sidecar is missing or disagrees with the freshly computed keys."""
 
 
-def verify_cached_program_so(so_path: Any, *, cache_key: Any, abi_key: Any) -> None:
-    """Fail LOUD on a cache HIT whose sidecar is missing or disagrees with the fresh keys (ADC-536).
+def verify_cached_artifact(
+    so_path: Any, *, semantic_identity: Any, spec_identity: Any,
+) -> tuple[Any, Any]:
+    """Re-hash a cached binary and refuse missing, foreign, or corrupt artifacts."""
+    from pops.identity import artifact_identity, binary_identity
 
-    On a cache HIT the ``.so`` is reused WITHOUT recompiling, so nothing else re-checks that the
-    on-disk artifact matches the current headers / compiler / route set. This guard reads the
-    ``<so>.cachekey`` sidecar and compares the recorded ``cache_key`` / ``abi_key`` with the ones
-    just computed from the live inputs. A missing sidecar (a ``.so`` built before this guard) or any
-    mismatch RAISES :class:`StaleArtifactError` naming the ``.so``, the expected-vs-found key, and
-    how to clear the cache -- never a warn-and-reuse (owner directive: fail loud).
-    """
-    found = read_cachekey_sidecar(so_path)
+    found = read_artifact_sidecar(so_path)
     if found is None:
         raise StaleArtifactError(
-            "pops.compile: the cached .so %r has no %s sidecar, so its ABI / cache identity cannot "
-            "be verified. It was built before the stale-artifact guard (ADC-536) and is refused as "
-            "unverifiable rather than reused blindly.\n"
-            "Remedy: delete the stale artifact to force a clean rebuild:\n"
-            "  rm %s%s*\n"
-            "or set POPS_CACHE_DIR to a fresh directory."
-            % (so_path, CACHEKEY_SUFFIX, os.path.splitext(so_path)[0], ".*"))
-    found_cache = found.get("cache_key")
-    found_abi = found.get("abi_key")
-    if found_cache != cache_key or found_abi != abi_key:
+            "pops.compile: cached artifact %r has no %s sidecar and is unverifiable"
+            % (so_path, ARTIFACT_SIDECAR_SUFFIX))
+    binary = binary_identity(so_path)
+    artifact = artifact_identity(spec_identity, binary)
+    expected = {
+        "semantic_identity": semantic_identity.token,
+        "artifact_spec_identity": spec_identity.token,
+        "binary_identity": binary.token,
+        "artifact_identity": artifact.token,
+    }
+    mismatches = {
+        key: (value, found.get(key)) for key, value in expected.items()
+        if found.get(key) != value
+    }
+    if mismatches:
         raise StaleArtifactError(
-            "pops.compile: the cached .so %r is STALE -- its %s sidecar does not match the freshly "
-            "computed keys (a foreign/corrupt .so at the keyed path, or a toolchain / header change "
-            "that the cache file name did not capture).\n"
-            "  cache_key expected=%s found=%s\n"
-            "  abi_key   expected=%s found=%s\n"
-            "It is refused (never reused) to avoid a cryptic dlopen 'symbol not found'.\n"
-            "Remedy: delete the stale artifact to force a clean rebuild:\n"
-            "  rm %s %s"
-            % (so_path, CACHEKEY_SUFFIX, cache_key, found_cache, abi_key, found_abi,
-               so_path, cachekey_path(so_path)))
+            "pops.compile: cached artifact %r failed identity verification: %r"
+            % (so_path, mismatches))
+    return binary, artifact
 
 
 def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: Any,
@@ -124,7 +200,8 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
     """Return the C++ block-comment provenance banner for the persisted debug ``.cpp`` (ADC-536).
 
     The banner documents WHAT the ``.so`` was built from and HOW: the serialized Program IR (the
-    exact ``_serialize()`` blob ``_ir_hash`` digests), the program / ABI / cache hashes, the compile
+    full documentary ``_serialize()`` blob (the identity hash uses its provenance-free projection),
+    the program / ABI / cache hashes, the compile
     + link flags, the compiler and C++ standard, the redacted compile command and the route registry
     components. It is a C++ block comment (``/* ... */``), inert to the compiler.
 
@@ -134,8 +211,10 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
     closed early by the content.
     """
     ir = "(no Program IR: this handle carries no serializable time Program)"
+    lowering = "[]"
     if program is not None and hasattr(program, "_serialize"):
         ir = json.dumps(program._serialize(), indent=2, sort_keys=True)
+        lowering = json.dumps(lowering_provenance_data(program), indent=2, sort_keys=True)
     model_name = getattr(model, "name", None) or getattr(program, "name", None) or "problem"
     lines = [
         "pops.compile provenance banner (ADC-536) -- INERT, sidecar-only, not compiled",
@@ -152,8 +231,11 @@ def build_debug_banner(program: Any, model: Any, *, program_hash: Any, abi_key: 
         "compile_command  : %s" % command,
         "route_registry   : %s" % registry,
         "",
-        "serialized Program IR (the WHAT _ir_hash digests):",
+        "serialized Program IR (documentary provenance included; excluded from _ir_hash):",
         ir,
+        "",
+        "lowering provenance (documentary; excluded from identities):",
+        lowering,
     ]
     body = "\n".join(lines).replace("*/", "* /")
     return "/*\n%s\n*/\n" % body

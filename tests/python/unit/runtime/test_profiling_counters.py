@@ -2,8 +2,8 @@
 """Spec 3 section 29 profiling COUNTERS (ADC-459): kernel count, scratch peak, cache hits/misses,
 scheduled nodes due/skipped -- surfaced by sim.profile_report() and counted in the C++ runtime.
 
-This complements test_profiling.py (which covers the timing report + the "steps" counter). Here we
-assert the named §29 counter LINES appear with sane values. It builds a real NATIVE block (no DSL
+This complements the typed profiling API and native C++ profiler tests. Here we assert the named
+counter lines appear with sane values. It builds a real NATIVE block (no DSL
 compile, so it needs only _pops) and steps it under profiling: the native step's elliptic field solve
 is the kernel-dispatch chokepoint (System::Impl::solve_fields counts "kernels"), so "kernels" moves on
 the host path. The cache hit/skip + nodes due/skipped counters only move under a COMPILED .so step body
@@ -12,21 +12,21 @@ Kokkos/ROMEO, so here we assert those lines simply EXIST and read 0 on the nativ
 
 Real engine only: it builds a real System and self-skips only if _pops/numpy is unavailable.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
-    print("skip test_profiling_counters (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_profiling_counters (%s)' % msg)
 
 
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -44,12 +44,12 @@ def chk(cond, label):
 print("== §29 counters on a stepped native block ==")
 N = 16
 sim = System(n=N, L=1.0, periodic=True)
-sim.add_block("gas",
-              pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                        transport=pops.IsothermalFlux(),
-                        source=pops.NoSource(),
-                        elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-              spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()), time=pops.Explicit())
+sim.add_equation("gas",
+              engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                        transport=engine.IsothermalFlux(),
+                        source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+              spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()), time=engine.Explicit())
 rho = np.ones((N, N), dtype=float)
 sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
 
@@ -78,7 +78,7 @@ for name in ("cache_hits", "cache_misses", "nodes_due", "nodes_skipped"):
     chk(("%s=" % name) not in report,
         "%s absent on the native path (compiled-scheduler counter, ROMEO)" % name)
 
-# (3) the step counter still works (parity with test_profiling.py).
+# (3) the step counter still works.
 chk("steps=3" in report, "step counter == 3")
 
 sim.reset_profiling()
@@ -87,13 +87,13 @@ chk("kernels=" not in sim.profile_report(), "reset clears the counters")
 # profiling OFF stays zero-overhead: a stepped, never-enabled System records nothing.
 print("== profiling off records no counters ==")
 sim_off = System(n=N, L=1.0, periodic=True)
-sim_off.add_block("gas",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                            transport=pops.IsothermalFlux(),
-                            source=pops.NoSource(),
-                            elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit())
+sim_off.add_equation("gas",
+                  engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                            transport=engine.IsothermalFlux(),
+                            source=engine.NoSource(),
+                            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit())
 sim_off.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
 sim_off.step(1e-3)
 chk(sim_off.profile_report().find("kernels=") == -1, "disabled profiler counts no kernels")

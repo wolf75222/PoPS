@@ -8,7 +8,8 @@ This enables Adams-Bashforth 2: ``U^{n+1} = U + dt*(3/2 R_n - 1/2 R_{n-1})`` the
 
   - ``P.history(name, lag=1)`` -> a State-typed value (the value @p lag macro-steps back);
   - ``P.store_history(name, value)`` -> a side-effecting op (copy the value into the current slot);
-  - ``pops.lib.time.adams_bashforth2(P, block)`` -> the AB2 IR (store-then-read, cold start = FE step 0).
+  - ``pops.lib.time.adams_bashforth2(P, block, state)`` -> the AB2 IR
+    (store-then-read, cold start = FE step 0).
 
 The codegen lowers ``history`` -> ``ctx.history(...)``, ``store_history`` -> ``ctx.store_history(...)``,
 and appends ``ctx.rotate_histories()`` at the END of the step body when any history is used.
@@ -21,7 +22,8 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
     lowers; emit_cpp_program contains ctx.history / ctx.store_history / ctx.rotate_histories; the IR hash
     distinguishes history names and lags; the validation guards fire.
 
-(B) End-to-end AB2 parity (skips unless the full toolchain is present): a 1-variable model (rho) with
+(B) End-to-end AB2 parity (explicitly skips only when the native toolchain is absent): a 1-variable
+    model (rho) with
     ZERO flux and a manufactured LINEAR source S(rho) = c*rho (so R = c*rho CHANGES every step), stepped
     N macro-steps; compare the final state to an OFFLINE reference running the IDENTICAL AB2 recurrence
     with the same FE cold start, cell by cell, to machine precision (spec test 37). Self-skips (exit 0)
@@ -31,10 +33,23 @@ mirrors this exactly (FE step 0, AB2 thereafter), so the comparison is to machin
     stepped WITHOUT ever storing it -> sim.step surfaces a RuntimeError containing
     "history 'missing.R' with lag=1 was requested but not initialized".
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+try:
+    from pops.codegen import _compile_drivers as compile_drivers
+    from pops.codegen.program_codegen import emit_cpp_program
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.numerics.terms import DefaultSource
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
+    from typed_program_support import state_refs, typed_state
+except Exception as exc:  # noqa: BLE001 -- optional outside a native-capable checkout
+    require_native_or_skip("test_time_history cannot import its runtime: %s" % exc)
 
 
 def _pops_time():
@@ -43,25 +58,119 @@ def _pops_time():
         import pops.time as t
         import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_history (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip("test_time_history pops.time unavailable: %s" % exc)
     return t
+
+
+def _require_native_toolchain(section):
+    missing = missing_native_compile_requirement(repo_include(), default_cxx())
+    if missing:
+        require_native_or_skip("test_time_history %s: %s" % (section, missing))
 
 
 _C = 0.75  # source coefficient: S(rho) = _C * rho (a linear ODE rho' = c rho; R changes every step)
 
 
+def _ab2_program(t, name="ab2", model=None, order=2):
+    from pops.physics._facade import Model
+
+    if model is None:
+        model = Model(name + "_model")
+        model.conservative_vars("u")
+    rate = model.rate(name + "_rate", flux=False, sources=("default",))
+    block, state = state_refs(t.Program("refs"), "plasma", model=model.module)
+    return lt.AdamsBashforth(block[state], rate=rate, order=order)
+
+
 # ---- (A) codegen / IR: pure Python, always runs ----
 def test_history_builds_state_value(t):
     P = t.Program("p")
-    U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
     P.store_history("blk.R", R)
-    Rp = P.history("blk.R", lag=1)
+    Rp = P.history("blk.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
     assert Rp.vtype == "state", "P.history returns a State-typed value (got %r)" % Rp.vtype
     assert Rp.is_field(), "a history value is a grid field (affine algebra applies)"
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value(
+        "history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True, "the history Program must validate"
+
+
+def test_store_history_materializes_a_frozen_dense_policy(t):
+    from pops.time._history.persistence import Dense
+
+    P = t.Program("manual_dense")
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    P.store_history("blk.R", R)
+    ring_slots, policy = P._history_persistence["blk.R"]
+    assert ring_slots == 2 and isinstance(policy, Dense)
+    try:
+        policy.extra = "mutable"
+    except RuntimeError as exc:
+        assert "frozen" in str(exc)
+    else:
+        raise AssertionError("the Program-owned persistence descriptor must be frozen")
+
+
+def test_store_history_snapshots_policy_and_tracks_largest_lag(t):
+    from pops.time._history.persistence import Interval
+
+    P = t.Program("manual_interval")
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    supplied = Interval(3)
+    P.store_history("blk.R", R, depth=3, checkpoint_policy=supplied)
+    supplied.k = 1
+    P.history("blk.R", lag=3, space=U.space, block=U.block, state_ref=U.state_ref)
+    ring_slots, policy = P._history_persistence["blk.R"]
+    assert ring_slots == 4 and isinstance(policy, Interval) and policy.k == 3
+    assert policy is not supplied and P._histories["blk.R"] == 3
+
+
+def test_non_dense_store_requires_a_final_depth_before_the_first_read(t):
+    from pops.time._history.persistence import Interval
+
+    P = t.Program("manual_interval_needs_depth")
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    try:
+        P.store_history("blk.R", R, checkpoint_policy=Interval(3))
+    except ValueError as exc:
+        assert "requires depth=" in str(exc)
+    else:
+        raise AssertionError("a selective policy must not depend on later read ordering")
+
+
+def test_first_store_can_replace_read_materialized_dense_but_not_an_existing_store(t):
+    from pops.time._history.persistence import Interval
+
+    P = t.Program("read_then_store")
+    U = typed_state(P, "blk")
+    P.history("blk.R", lag=3, space=U.space, block=U.block, state_ref=U.state_ref)
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    P.store_history("blk.R", R, checkpoint_policy=Interval(3))
+    assert isinstance(P._history_persistence["blk.R"][1], Interval)
+    try:
+        P.store_history("blk.R", R)
+    except ValueError as exc:
+        assert "cannot change" in str(exc)
+    else:
+        raise AssertionError("a second store must not change the compiled persistence policy")
+
+
+def test_adams_bashforth_multistep_presets_compile_dense_ring_policies(t):
+    from pops.time._history.persistence import Dense
+
+    for order, expected_lag in ((2, 1), (3, 2)):
+        P = _ab2_program(t, name="ab%d" % order, order=order)
+        assert len(P._history_persistence) == 1, dict(P._history_persistence)
+        history_name, (ring_slots, policy) = next(iter(P._history_persistence.items()))
+        assert history_name.endswith(".rate")
+        assert ring_slots == expected_lag + 1 and isinstance(policy, Dense)
+        assert P._histories[history_name] == expected_lag
+        assert P.validate() is True
 
 
 def test_store_history_requires_a_field(t):
@@ -87,26 +196,26 @@ def test_history_lag_must_be_positive_int(t):
 
 
 def test_ab2_macro_lowers(t):
-    P = t.Program("ab2")
-    lt.adams_bashforth2(P, "plasma")
+    P = _ab2_program(t)
     assert P.validate() is True, "the AB2 macro must validate"
-    src = P.emit_cpp_program()
-    for frag in ('ctx.history("plasma.R", 1)', 'ctx.store_history("plasma.R"',
-                 "ctx.rotate_histories();"):
+    src = emit_cpp_program(P)
+    for frag in ('ctx.history("plasma.rate", 1)', 'ctx.store_history("plasma.rate"',
+                 "ctx.rotate_histories("):
         assert frag in src, "the AB2 codegen must contain %r\n%s" % (frag, src)
     # The AB2 coefficients: +3/2 dt on R_n, -1/2 dt on R_{n-1}.
-    assert "1.5 * dt" in src and "-0.5 * dt" in src, "AB2 weights 3/2, -1/2 on dt\n%s" % src
+    assert ("pops::Real(3) / pops::Real(2)" in src
+            and "pops::Real(-1) / pops::Real(2)" in src), \
+        "AB2 exact weights 3/2, -1/2 on dt\n%s" % src
 
 
 def test_store_before_read_in_body(t):
     """The store is emitted BEFORE the lag-1 READ (the cold-start fill makes step 0 valid). The read is
     the history line bound to a MultiFab& (``pops::MultiFab& ... = ctx.history(...)``); the bare
     ``ctx.history(...)`` at the top is only the depth-locking registration."""
-    P = t.Program("ab2")
-    lt.adams_bashforth2(P, "plasma")
-    src = P.emit_cpp_program()
+    P = _ab2_program(t)
+    src = emit_cpp_program(P)
     body = src[src.index("ctx.install"):]
-    read = body.index("= ctx.history(\"plasma.R\", 1);")  # the bound read, not the bare registration
+    read = body.index("= ctx.history(\"plasma.rate\", 1);")  # the bound read, not the bare registration
     assert body.index("ctx.store_history") < read, \
         "store_history must precede the lag-1 read in the step body\n%s" % body
     assert read < body.index("ctx.rotate_histories"), \
@@ -114,21 +223,28 @@ def test_store_before_read_in_body(t):
 
 
 def test_non_history_schemes_emit_no_rotate(t):
-    for sched in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
-        P = t.Program(sched)
-        getattr(lt, sched)(P, "blk")
-        src = P.emit_cpp_program()
-        assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % sched
-        assert "ctx.history(" not in src, "%s must not read a history" % sched
+    for factory in (lt.ForwardEuler, lt.SSPRK2, lt.SSPRK3, lt.RK4):
+        from pops.physics._facade import Model
+        model = Model(factory.__name__ + "_model")
+        model.conservative_vars("u")
+        rate = model.rate("rate", flux=False, sources=())
+        block, state = state_refs(t.Program("refs"), "blk", model=model)
+        P = factory(block[state], rate=rate)
+        src = emit_cpp_program(P)
+        assert "ctx.rotate_histories" not in src, "%s must not rotate (no history)" % factory.__name__
+        assert "ctx.history(" not in src, "%s must not read a history" % factory.__name__
 
 
 def _hist_program(t, name, lag):
     P = t.Program("h")
-    U = P.state("blk")
-    R = P._rhs_legacy(state=U, sources=["default"])
+    U = typed_state(P, "blk")
+    R = P.rhs(state=U, terms=[DefaultSource()])
     P.store_history(name, R)
-    Rp = P.history(name, lag=lag)
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    Rp = P.history(
+        name, lag=lag, space=U.space, block=U.block, state_ref=U.state_ref)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value(
+        "history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     return P
 
 
@@ -144,12 +260,15 @@ def test_absent_history_program_lowers(t):
     """A Program that reads a never-stored history still BUILDS and LOWERS (the failure is at runtime,
     spec test 38). The store is absent; the read still emits ctx.history."""
     P = t.Program("miss")
-    U = P.state("blk")
-    Rp = P.history("missing.R", lag=1)
-    R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    U = typed_state(P, "blk")
+    Rp = P.history(
+        "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    endpoint = typed_state(P, "blk", state_name="U").next
+    P.commit(endpoint, P.value(
+        "missing_history_delta", U + P.dt * (R - Rp), at=endpoint.point))
     assert P.validate() is True
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     assert 'ctx.history("missing.R", 1)' in src, src
     assert "ctx.store_history" not in src, "the absent-history program never stores"
 
@@ -158,7 +277,7 @@ def test_absent_history_program_lowers(t):
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (so R = c*rho changes
     every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -185,40 +304,33 @@ def _offline_ab2(rho0, dt, nsteps):
 
 
 def _run_section_b(t):
+    _require_native_toolchain("section B")
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip("test_time_history section B imports unavailable: %s" % exc)
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
+        require_native_or_skip(
+            "test_time_history section B requires the install_program binding")
 
-    from pops.physics.facade import Model
 
-    P = t.Program("ab2_step")
-    lt.adams_bashforth2(P, "blk")
-    try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("ab2_prog"), time=P)
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
-        return None
+    model = _passive_source_model("ab2_prog")
+    rate = model.rate("ab2_rate", flux=False, sources=("default",))
+    block, state = state_refs(t.Program("refs"), "blk", model=model.module)
+    P = lt.AdamsBashforth(block[state], rate=rate, order=2)
+    compiled = compile_drivers.compile_problem(model=model, time=P)
 
-    assert compiled.program_name == "ab2_step", "handle carries the program name"
+    assert compiled.program_name == "AdamsBashforth2", "handle carries the program name"
 
-    try:
-        compiled_model = _passive_source_model("ab2_block").compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
-        return None
+    compiled_model = _passive_source_model("ab2_block").compile(backend="production")
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -250,42 +362,37 @@ def _run_section_b(t):
 
 # ---- (C) absent-history rejection (spec test 38): skips unless the full toolchain is present ----
 def _run_section_c(t):
+    _require_native_toolchain("section C")
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001
-        print("-- (C) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip("test_time_history section C imports unavailable: %s" % exc)
 
     n = 8
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (C) skipped: _pops lacks the install_program binding (rebuild _pops) --")
-        return None
+        require_native_or_skip(
+            "test_time_history section C requires the install_program binding")
 
-    from pops.physics.facade import Model
 
     # A Program that READS missing.R but NEVER stores it -> the runtime read must fail loud.
+    program_model = _passive_source_model("miss_prog")
     P = t.Program("miss_step")
-    U = P.state("blk")
-    Rp = P.history("missing.R", lag=1)
-    R = P._rhs_legacy(state=U, sources=["default"])
-    P.commit("blk", P.linear_combine(U + P.dt * (R - Rp)))
+    U = typed_state(P, "blk", model=program_model)
+    Rp = P.history(
+        "missing.R", lag=1, space=U.space, block=U.block, state_ref=U.state_ref)
+    R = P.rhs(state=U, terms=[DefaultSource()])
+    endpoint = typed_state(P, "blk", state_name="U", model=program_model).next
+    P.commit(endpoint, P.value(
+        "missing_history_delta", U + P.dt * (R - Rp), at=endpoint.point))
 
-    try:
-        compiled = pops.codegen.compile_problem(model=_passive_source_model("miss_prog"), time=P)
-    except RuntimeError as exc:
-        print("-- (C) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
-        return None
-    try:
-        compiled_model = _passive_source_model("miss_block").compile(backend="production")
-    except RuntimeError as exc:
-        print("-- (C) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
-        return None
+    compiled = compile_drivers.compile_problem(model=program_model, time=P)
+    compiled_model = _passive_source_model("miss_block").compile(backend="production")
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_state("blk", np.stack([np.ones((n, n))]))
     sim.install_program(compiled.so_path)
     try:

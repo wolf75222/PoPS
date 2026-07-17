@@ -172,7 +172,8 @@ POPS_HD inline Real hqr_copysign(Real mag, Real sgn) {
 
 /// Accumulate an eigenvalue (re, im) into the current extremes. A named function rather than a
 /// local lambda: device caution (nvcc and lambdas inside __host__ __device__ code).
-POPS_HD inline void record_eig(Real re, Real im, Real& lmin, Real& lmax, Real& max_im, bool& first) {
+POPS_HD inline void record_eig(Real re, Real im, Real& lmin, Real& lmax, Real& max_im,
+                               bool& first) {
   if (first || re < lmin)
     lmin = re;
   if (first || re > lmax)
@@ -189,7 +190,7 @@ POPS_HD inline void record_eig(Real re, Real im, Real& lmin, Real& lmax, Real& m
 /// the cap (@p max_iter_per_eig iterations per active block), false otherwise.
 template <int N>
 POPS_HD inline bool hqr_minmax(Real (&H)[N][N], Real& lmin, Real& lmax, Real& max_im,
-                              int max_iter_per_eig) {
+                               int max_iter_per_eig) {
   constexpr Real kEps = std::numeric_limits<Real>::epsilon();  // follows the Real type
   Real anorm = Real(0);  // norm of the Hessenberg part (deflation criterion for the s == 0 cases)
   for (int i = 0; i < N; ++i)
@@ -349,7 +350,7 @@ POPS_HD inline bool hqr_minmax(Real (&H)[N][N], Real& lmin, Real& lmax, Real& ma
 /// mirror of !EigBounds::converged, for whoever wants only the flag (e.g. OR over several blocks).
 template <int N>
 POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per_eig = 100,
-                                        bool* fallback = nullptr) {
+                                         bool* fallback = nullptr) {
   static_assert(N >= 1, "real_eig_minmax: N >= 1");
   static_assert(N <= 16,
                 "real_eig_minmax: block limited to 16x16 (stack buffer O(N^2) per device "
@@ -405,7 +406,7 @@ POPS_HD inline EigBounds real_eig_minmax(const Real (&A)[N][N], int max_iter_per
 /// predicates directly.
 template <int N>
 POPS_HD inline Spectrum real_spectrum(const Real (&A)[N][N], Real im_tol = kEigImagTol,
-                                     int max_iter_per_eig = 100) {
+                                      int max_iter_per_eig = 100) {
   const EigBounds b = real_eig_minmax(A, max_iter_per_eig);
   if (!b.converged)
     return Spectrum::kUnknown;  // non-convergence is EXPLICIT, never kReal
@@ -419,7 +420,7 @@ namespace detail {
 /// clean: fixed stack buffers, bounded loops, no allocation.
 template <int N>
 POPS_HD inline bool mat_inverse(const Real (&A)[N][N], Real (&inv)[N][N],
-                               Real pivot_tol = Real(1e-300)) {
+                                Real pivot_tol = Real(1e-300)) {
   Real M[N][N];
   for (int i = 0; i < N; ++i)
     for (int j = 0; j < N; ++j) {
@@ -499,8 +500,8 @@ POPS_HD inline Real mat_norm_inf(const Real (&A)[N][N]) {
 /// POPS_HD, no allocation, N <= 16 (the dense-eig stack-buffer limit).
 template <int N>
 POPS_HD inline bool roe_abs_apply(const Real (&A)[N][N], const Real (&dU)[N], Real (&out)[N],
-                                 int max_iter = 80, Real tol = Real(1e-13),
-                                 Real im_tol = Real(1e-5), int max_iter_per_eig = 100) {
+                                  int max_iter = 80, Real tol = Real(1e-13),
+                                  Real im_tol = Real(1e-5), int max_iter_per_eig = 100) {
   // ADC-645: im_tol / max_iter_per_eig forward to the real-spectrum gate (defaults = the
   // real_spectrum defaults, so an unconfigured call is bit-identical).
   static_assert(N >= 1 && N <= 16, "roe_abs_apply: 1 <= N <= 16");

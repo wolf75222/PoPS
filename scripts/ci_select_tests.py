@@ -3,8 +3,9 @@
 
 The policy is intentionally conservative. C++ selection is COMPOSITIONAL per file (ADC-646):
 each changed file contributes its own impact and the selection is their union -- an
-``include/pops/`` header adds its include-closure suites, a ``python/bindings`` translation
-unit adds the test targets that compile it, a ``python/pops/codegen`` emitter adds the
+``include/pops/`` header adds its include-closure suites, a ``src/runtime`` translation
+unit adds the test targets that compile it, a pybind adapter adds the bindings suites, and a
+``python/pops/codegen`` emitter adds the
 codegen / native-loader group, a ``tests/cpp`` source adds its own target, and docs / non-codegen
 ``python/pops`` / ``tests/python`` add nothing. A global-includer or missing header, or any
 unmapped build input (cmake / workflows / scripts / CMakeLists / the manifest), fails safe to ALL.
@@ -17,13 +18,14 @@ The module is stdlib-only and runs before any ``pip install`` in CI.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 import json
 import os
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from typing import Iterable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_import_closure  # noqa: E402
@@ -33,17 +35,32 @@ import ci_shard_binpack  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "tests/test_manifest.toml"
+CPP_DURATIONS_JSON = ROOT / "tests/cpp/test_durations.json"
+CPP_BUILD_DURATIONS_JSON = ROOT / "tests/cpp/build_durations.json"
+# CTest's catalog is the sum of per-target wall times. The preset can execute four
+# independent tests concurrently, so convert that aggregate to critical-path seconds
+# before combining it with the build catalog's already-normalized shard-wall estimate.
+CPP_CTEST_PARALLEL_JOBS = 4.0
 
 
 CPP_BROAD_FILES = {
+    ".github/workflows/ci.yml",
     "CMakeLists.txt",
     "CMakePresets.json",
+    "scripts/ci_include_graph.py",
+    "scripts/ci_route_mode.py",
+    "scripts/ci_select_tests.py",
+    "scripts/ci_shard_binpack.py",
     "tests/CMakeLists.txt",
+    "tests/cpp/build_durations.json",
+    "tests/cpp/test_durations.json",
+    "src/CMakeLists.txt",
     "tests/cpp/test_sources.cmake",
     "tests/test_manifest.toml",
 }
 
 CPP_BROAD_PREFIXES = (
+    ".github/actions/setup-kokkos/",
     "cmake/",
     "include/pops/core/",
     "include/pops/parallel/",
@@ -51,14 +68,22 @@ CPP_BROAD_PREFIXES = (
 )
 
 PYTHON_BROAD_FILES = {
+    ".github/workflows/ci.yml",
     "pyproject.toml",
     "python/CMakeLists.txt",
+    "scripts/ci_import_closure.py",
+    "scripts/ci_route_mode.py",
+    "scripts/ci_select_tests.py",
+    "scripts/ci_shard_binpack.py",
+    "src/CMakeLists.txt",
     "python/pops/__init__.py",
     "tests/python/conftest.py",
+    "tests/python/test_durations.json",
     "tests/test_manifest.toml",
 }
 
 PYTHON_BROAD_PREFIXES = (
+    ".github/actions/setup-kokkos/",
     "python/bindings/",
     "tests/python/support/",
 )
@@ -80,17 +105,25 @@ CPP_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("include/pops/runtime/amr/",), ("amr", "runtime")),
     (("include/pops/runtime/",), ("runtime",)),
     (("include/pops/validation/",), ("physics", "validation")),
-    (("python/bindings/amr/",), ("amr", "runtime", "codegen")),
-    (("python/bindings/system/",), ("runtime", "physics", "codegen")),
+    (("src/runtime/amr/", "src/runtime/builders/amr/"), ("amr", "runtime", "codegen")),
+    (("src/runtime/system/",), ("runtime", "physics", "codegen")),
+    (("src/runtime/builders/",), ("runtime", "physics", "amr", "codegen")),
+    (("python/bindings/core/",), ("runtime", "physics", "amr", "codegen")),
     (("scripts/gen_solver_kernel.py",), ("codegen", "elliptic")),
 )
 
 PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("python/pops/_report.py", "python/pops/_inspect.py"), ("reporting",)),
+    (("python/pops/boundary/",), ("boundary", "mesh", "numerics")),
+    (("python/pops/domain/",), ("domain", "mesh", "problem")),
+    (("python/pops/fields/",), ("fields", "physics", "elliptic", "runtime")),
+    (("python/pops/initial/",), ("initial", "problem", "runtime")),
+    (("python/pops/identity/",), ("identity", "codegen", "runtime")),
     (("python/pops/mesh/",), ("mesh", "amr")),
     (("python/pops/runtime/amr/",), ("amr", "runtime")),
     (("python/pops/runtime/",), ("runtime",)),
     (("python/pops/solvers/", "python/pops/linalg/"), ("elliptic",)),
-    (("python/pops/codegen/", "python/pops/ir/", "python/pops/lib/"), ("codegen",)),
+    (("python/pops/codegen/", "python/pops/_ir/", "python/pops/lib/"), ("codegen",)),
     (("python/pops/model/",), ("runtime", "physics")),
     (("python/pops/physics/", "python/pops/moments/"), ("physics", "numerics")),
     (("python/pops/numerics/",), ("numerics",)),
@@ -106,15 +139,24 @@ PYTHON_PATH_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
 AREA_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
     "amr": ("amr", "mesh", "compliance"),
     "bindings": ("bindings", "runtime", "native_loader"),
+    "boundary": ("boundary", "mesh", "numerics"),
     "codegen": ("codegen", "native_loader", "compiler", "bindings"),
     "coupling": ("coupling", "runtime", "elliptic", "amr", "physics"),
+    "domain": ("domain", "mesh", "problem"),
     "elliptic": ("elliptic", "solvers", "compliance"),
+    "examples": ("examples", "runtime", "io", "time", "amr", "physics"),
+    "fields": ("fields", "physics", "elliptic", "runtime"),
     "io": ("io", "runtime"),
+    "identity": ("identity", "codegen", "runtime"),
+    "initial": ("initial", "problem", "runtime"),
     "mesh": ("mesh", "amr"),
+    "moments": ("moments", "physics", "numerics"),
     "native_loader": ("native_loader", "codegen", "compiler"),
     "numerics": ("numerics", "elliptic", "solvers", "time"),
+    "output": ("output", "io", "runtime"),
     "physics": ("physics", "numerics", "compliance"),
     "problem": ("problem", "runtime"),
+    "reporting": ("reporting", "descriptors", "problem", "runtime"),
     "runtime": ("runtime", "bindings", "native_loader", "compliance"),
     "solvers": ("solvers", "elliptic"),
     "time": ("time", "numerics", "solvers"),
@@ -128,21 +170,19 @@ CPP_INCLUDE_PREFIX = "include/pops/"
 CPP_HEADER_SUFFIXES = (".hpp", ".h", ".hh", ".hxx", ".inc", ".ipp", ".tpp")
 
 # ADC-646 per-file C++ impact classification.
-# A ``python/bindings/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
-# (``pops_runtime_system`` / ``pops_runtime_amr``) that most test targets link. The precise
-# per-target linkage is not encoded in the sanctioned target-source knowledge (test manifest,
-# tests/cpp/test_sources.cmake, seam_combinations.cmake), so a binding-TU edit maps to the
-# bindings LABEL GROUP -- the same areas the coarse logic already used for bindings -- NOT
-# select-all. The ``.cpp``/``.hpp`` suffixes below are the compiled units; any other binding
-# artifact (cmake fragment, ``.cpp.in`` seam template) is a build input and fails open to ALL.
+# A ``src/runtime/**`` C++ translation unit is compiled into the shared runtime OBJECT libs
+# (``pops_runtime_system`` / ``pops_runtime_amr`` / ``pops_runtime_output``) that test targets link.
+# The precise
+# per-target linkage is recovered from the central source manifest and test consumers. The
+# ``.cpp``/``.hpp`` suffixes below are compiled units; any other runtime artifact (CMake fragment
+# or ``.cpp.in`` seam template) is a build input and fails open to ALL.
+CPP_RUNTIME_PREFIX = "src/runtime/"
+CPP_RUNTIME_TU_SUFFIXES = (".cpp", ".hpp", ".h", ".hh", ".hxx")
+# ``python/bindings`` now contains only module/init adapters. These feed only ``_pops`` and map to
+# the bindings label group; they are never treated as runtime implementation ownership.
 CPP_BINDING_PREFIX = "python/bindings/"
 CPP_BINDING_TU_SUFFIXES = (".cpp", ".hpp", ".h", ".hh", ".hxx")
 CPP_BINDING_AREAS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
-    (("python/bindings/amr/",), ("amr", "runtime", "codegen")),
-    (("python/bindings/system/",), ("runtime", "physics", "codegen")),
-    # The ``_pops`` module entry TUs (``core/init/init_*.cpp`` / ``core/bindings.cpp``) wire the
-    # whole binding surface; when one is the ONLY match it feeds only ``_pops``, so it maps to the
-    # broad bindings label group (its documented fallback), not a raw select-all.
     (("python/bindings/core/",), ("runtime", "physics", "amr", "codegen")),
 )
 # ADC-646: a DSL codegen emitter under ``python/pops/codegen/**`` only changes the C++ that is
@@ -173,7 +213,7 @@ CPP_SMOKE_TARGETS = (
 )
 
 PYTHON_SMOKE_TESTS = (
-    "tests/python/integration/bindings/test_bindings.py",
+    "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py",
     "tests/python/unit/runtime/test_capabilities.py",
 )
 
@@ -227,7 +267,7 @@ def add_reason(reasons: dict[str, set[str]], item: str, reason: str) -> None:
     reasons.setdefault(item, set()).add(reason)
 
 
-def manifest_cpp_suites(manifest: dict) -> list[dict]:
+def manifest_cpp_suites(manifest: dict, *, include_mpi: bool = False) -> list[dict]:
     suites: list[dict] = []
     for suite in manifest.get("cpp", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -238,16 +278,176 @@ def manifest_cpp_suites(manifest: dict) -> list[dict]:
         # selection or the gate hits `ninja: unknown target`. The manifest label/mpi_nproc
         # is the primary filter; the `mpi` NAME SEGMENT check is a belt-and-braces guard for
         # a suite that forgets the label (see #435, test_amr_regrid_mpi_parity).
-        if "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_"):
+        if not include_mpi and (
+            "mpi" in labels or suite.get("mpi_nproc") or "mpi" in name.split("_")
+        ):
             continue
         sources = [normalize(str(source)) for source in suite.get("sources", [])]
         if not sources:
             raise SystemExit(f"C++ suite {name} has no sources in tests/test_manifest.toml")
-        suites.append({"name": name, "labels": labels, "sources": sources})
+        ranks_by_field: dict[str, tuple[int, ...]] = {}
+        for field in ("mpi_nproc", "mpi_variants"):
+            raw_ranks = suite.get(field, [])
+            if not isinstance(raw_ranks, list):
+                raise SystemExit(f"C++ suite {name} has invalid {field}; expected a TOML array")
+            ranks = tuple(raw_ranks)
+            if any(type(rank) is not int or rank <= 0 for rank in ranks):
+                raise SystemExit(
+                    f"C++ suite {name} has invalid {field}; ranks must be positive integers"
+                )
+            if len(ranks) != len(set(ranks)):
+                raise SystemExit(f"C++ suite {name} has duplicate ranks in {field}")
+            if ranks != tuple(sorted(ranks)):
+                raise SystemExit(f"C++ suite {name} must sort {field} in ascending order")
+            ranks_by_field[field] = ranks
+        mpi_nproc = ranks_by_field["mpi_nproc"]
+        mpi_variants = ranks_by_field["mpi_variants"]
+        if ("mpi" in labels) != bool(mpi_nproc):
+            raise SystemExit(
+                f"C++ suite {name} must pair its mpi label with an exact mpi_nproc rank set"
+            )
+        if mpi_variants and ("mpi" in labels or mpi_nproc):
+            raise SystemExit(
+                f"C++ suite {name} cannot mix mpi_variants with an MPI-only label/mpi_nproc"
+            )
+        suites.append(
+            {
+                "name": name,
+                "labels": labels,
+                "sources": sources,
+                "mpi_nproc": mpi_nproc,
+                "mpi_variants": mpi_variants,
+            }
+        )
     return sorted(suites, key=lambda item: item["name"])
 
 
+def cpp_targets_with_label(manifest: dict, label: str) -> list[str]:
+    """Return the exact manifest-owned C++ targets required by ``label``.
+
+    Dedicated backend jobs use this instead of duplicating target names in workflow YAML. MPI
+    targets are intentionally excluded from the ordinary serial selector but remain first-class
+    manifest suites for this label projection.  The MPI projection additionally includes ordinary
+    serial executables declaring ``mpi_variants``: CTest launches those same binaries under MPI,
+    so the dedicated job must build them even though their primary suite is not MPI-only.
+    """
+    if not isinstance(label, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", label):
+        raise SystemExit("C++ suite label must contain only letters, digits, '.', '_' or '-'")
+    targets = sorted(
+        suite["name"]
+        for suite in manifest_cpp_suites(manifest, include_mpi=True)
+        if label in suite["labels"] or (label == "mpi" and suite["mpi_variants"])
+    )
+    if not targets:
+        raise SystemExit(
+            f"no C++ suites carry label {label!r} in tests/test_manifest.toml"
+        )
+    return targets
+
+
+def cpp_mpi_ctest_plan(manifest: dict) -> dict[str, int]:
+    """Return every manifest-owned MPI CTest name and its exact process count.
+
+    MPI-only suites and serial suites with ``mpi_variants`` both register CTest
+    names as ``<target>_np<n>``.  Keeping the complete projection here lets CI
+    authenticate the configured inventory by identity, label and ``PROCESSORS``
+    instead of accepting any unrelated set with the same aggregate count.
+    """
+    plan: dict[str, int] = {}
+    for suite in manifest_cpp_suites(manifest, include_mpi=True):
+        for nproc in (*suite["mpi_nproc"], *suite["mpi_variants"]):
+            name = f"{suite['name']}_np{nproc}"
+            if name in plan:
+                raise SystemExit(f"duplicate manifest-owned MPI CTest name: {name}")
+            plan[name] = nproc
+    if not plan:
+        raise SystemExit("test manifest declares no MPI CTest launches")
+    return dict(sorted(plan.items()))
+
+
+def cpp_mpi_ctest_count(manifest: dict) -> int:
+    """Return the number of exact manifest-owned MPI CTest launches."""
+    return len(cpp_mpi_ctest_plan(manifest))
+
+
+def manifest_python_mpi_entrypoints(manifest: dict) -> list[dict]:
+    """Return the exact Python scripts that must run under a real MPI launcher.
+
+    Ordinary ``[[python.suite]]`` rows remain pytest collection units.  A suite may additionally
+    declare ``mpi_entrypoints`` for script-style contracts whose ``__main__`` path turns internal
+    check failures into a non-zero process status.  Keeping ranks and paths beside the owning suite
+    makes the manifest -- not workflow YAML -- the single authority for distributed Python tests.
+    """
+    entries: list[dict] = []
+    seen_paths: set[str] = set()
+    for suite in manifest.get("python", {}).get("suite", []):
+        name = str(suite.get("name", ""))
+        suite_path = normalize(str(suite.get("path", ""))).rstrip("/")
+        labels = {str(label) for label in suite.get("labels", [])}
+        raw_entries = suite.get("mpi_entrypoints", [])
+        if not isinstance(raw_entries, list):
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} has invalid mpi_entrypoints; "
+                "expected a TOML array"
+            )
+        if raw_entries and "mpi" not in labels:
+            raise SystemExit(
+                f"Python suite {name or '<unnamed>'} declares mpi_entrypoints without an mpi label"
+            )
+        for raw in raw_entries:
+            if not isinstance(raw, dict):
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has a non-table mpi_entrypoint"
+                )
+            path = normalize(str(raw.get("path", "")))
+            nproc = raw.get("nproc")
+            candidate = Path(path)
+            if (
+                not path
+                or candidate.is_absolute()
+                or ".." in candidate.parts
+                or "\t" in path
+                or "\n" in path
+                or candidate.suffix != ".py"
+            ):
+                raise SystemExit(
+                    f"Python suite {name or '<unnamed>'} has invalid MPI entrypoint path {path!r}"
+                )
+            if not suite_path or not path.startswith(suite_path + "/"):
+                raise SystemExit(
+                    f"Python MPI entrypoint {path!r} is outside owning suite {suite_path!r}"
+                )
+            if type(nproc) is not int or nproc < 2:
+                raise SystemExit(
+                    f"Python MPI entrypoint {path!r} needs an exact nproc integer >= 2"
+                )
+            if not (ROOT / path).is_file():
+                raise SystemExit(f"Python MPI entrypoint does not exist: {path}")
+            if path in seen_paths:
+                raise SystemExit(f"duplicate Python MPI entrypoint: {path}")
+            seen_paths.add(path)
+            entries.append({"suite": name, "path": path, "nproc": nproc})
+    return sorted(entries, key=lambda item: (item["path"], item["nproc"]))
+
+
 def manifest_python_suites(manifest: dict) -> list[dict]:
+    # CI selects the repository snapshot, not arbitrary untracked scratch files in a developer
+    # checkout.  This also keeps local plans stable when editors create suffixed copies beside a
+    # test.  A source archive without Git falls back to its complete filesystem tree.
+    try:
+        tracked_output = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "tests/python"],
+            cwd=ROOT,
+            stderr=subprocess.DEVNULL,
+        )
+        tracked = {
+            item.decode("utf-8") for item in tracked_output.split(b"\0") if item
+        }
+    except (FileNotFoundError, subprocess.CalledProcessError, UnicodeDecodeError):
+        tracked = None
+    mpi_entrypoint_paths = {
+        entry["path"] for entry in manifest_python_mpi_entrypoints(manifest)
+    }
     suites: list[dict] = []
     for suite in manifest.get("python", {}).get("suite", []):
         name = str(suite.get("name", ""))
@@ -258,7 +458,15 @@ def manifest_python_suites(manifest: dict) -> list[dict]:
         if "architecture" in labels:
             continue
         suite_path = ROOT / path
-        files = sorted(str(p.relative_to(ROOT)) for p in suite_path.glob("test_*.py"))
+        # A suite path owns its full subtree, matching the manifest coverage fence.  Using
+        # ``glob`` here silently omitted nested families such as unit/mesh/amr even though the
+        # manifest correctly declared their parent suite.
+        files = sorted(
+            str(p.relative_to(ROOT))
+            for p in suite_path.rglob("test_*.py")
+            if (tracked is None or str(p.relative_to(ROOT)) in tracked)
+            and str(p.relative_to(ROOT)) not in mpi_entrypoint_paths
+        )
         if not files:
             raise SystemExit(f"Python suite {name} has no test_*.py files under {path}")
         suites.append({"name": name, "path": path, "labels": labels, "files": files})
@@ -275,38 +483,40 @@ def is_cpp_header(path: str) -> bool:
 
 
 def is_cpp_binding_tu(path: str) -> bool:
-    """True if ``path`` is a compiled ``python/bindings/**`` C++ translation unit."""
+    """True if ``path`` is a compiled pybind module/init adapter."""
     return path.startswith(CPP_BINDING_PREFIX) and path.endswith(CPP_BINDING_TU_SUFFIXES)
 
 
-# tests/CMakeLists.txt is the target-source map for the shared runtime OBJECT libs.
+def is_cpp_runtime_tu(path: str) -> bool:
+    """True if ``path`` is a compiled ``src/runtime/**`` source or private header."""
+    return path.startswith(CPP_RUNTIME_PREFIX) and path.endswith(CPP_RUNTIME_TU_SUFFIXES)
+
+
+# src/CMakeLists.txt is the target-source map; tests/CMakeLists.txt owns only consumers.
 TESTS_CMAKE = ROOT / "tests" / "CMakeLists.txt"
-# The heavy binding TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
+RUNTIME_CMAKE = ROOT / "src" / "CMakeLists.txt"
+# The heavy runtime TUs are compiled ONCE into these OBJECT libs (ADC-336 / ADC-632 / ADC-335)
 # and spliced into every consuming test target. A change to a TU in one of them impacts exactly
-# that lib's consumers, so we read both the lib's source list and its consumers from the one file.
-_BINDING_OBJECT_LIBS = ("pops_runtime_system", "pops_runtime_amr")
+# that lib's consumers, so we read the central source list and the test consumer list together.
+_RUNTIME_OBJECT_LIBS = (
+    "pops_runtime_system",
+    "pops_runtime_amr",
+    "pops_runtime_output",
+)
 
 
 def _cmake_object_lib_sources(text: str, libname: str) -> set[str]:
-    """Repo-relative ``python/bindings/**`` sources listed in ``add_library(<lib> OBJECT ...)``.
-
-    Also folds in the ``POPS_AMR_SEAM`` list variable spliced into ``pops_runtime_amr`` (the two
-    hand-written riemann dispatchers). Generated ``.cpp`` seams live under the build tree, not the
-    repo, so they are not source paths a changeset can name -- their source-of-truth is the seam
-    ``.cpp.in`` template, handled by the broad-file / unmapped guards.
-    """
+    """Repo-relative native sources in the central object-library source manifest."""
     sources: set[str] = set()
-    match = re.search(
-        r"add_library\(\s*" + re.escape(libname) + r"\s+OBJECT\b(.*?)\)", text, re.DOTALL
-    )
+    source_var = {
+        "pops_runtime_system": "POPS_RUNTIME_SYSTEM_SOURCES",
+        "pops_runtime_amr": "POPS_RUNTIME_AMR_SOURCES",
+        "pops_runtime_output": "POPS_RUNTIME_OUTPUT_SOURCES",
+    }[libname]
+    match = re.search(r"set\(\s*" + source_var + r"\b(.*?)\)", text, re.DOTALL)
     if match:
-        for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
-            sources.add(hit.group(1))
-    if libname == "pops_runtime_amr":
-        seam = re.search(r"set\(\s*POPS_AMR_SEAM\b(.*?)\)", text, re.DOTALL)
-        if seam:
-            for hit in re.finditer(r"\.\./(python/bindings/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", seam.group(1)):
-                sources.add(hit.group(1))
+        for hit in re.finditer(r"\b(runtime/[^\s)]+\.(?:cpp|hpp|h|hh|hxx))", match.group(1)):
+            sources.add("src/" + hit.group(1))
     return sources
 
 
@@ -326,33 +536,42 @@ def _cmake_object_lib_consumers(text: str, libname: str) -> set[str]:
     return consumers
 
 
-_binding_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
+_runtime_map_cache: dict[str, tuple[dict[str, set[str]], dict[str, set[str]]]] = {}
 
 
-def _binding_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
-    """Return ``(lib_sources, lib_consumers)`` parsed from ``tests/CMakeLists.txt`` (memoized).
+def _runtime_object_lib_map() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Return central ``(lib_sources, lib_consumers)`` maps (memoized).
 
-    ``lib_sources[lib]`` is the set of ``python/bindings/**`` ``.cpp``/``.hpp`` compiled into the
+    ``lib_sources[lib]`` is the set of ``src/runtime/**`` ``.cpp``/``.hpp`` compiled into the
     OBJECT lib; ``lib_consumers[lib]`` is the set of test-target names that link it. A change to
     ``tests/CMakeLists.txt`` is a broad-file force-all (``CPP_BROAD_FILES``), so a stale parse can
     never under-select on a changeset that edited the map.
     """
-    key = str(TESTS_CMAKE)
-    if key not in _binding_map_cache:
-        text = TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore") if TESTS_CMAKE.is_file() else ""
-        sources = {lib: _cmake_object_lib_sources(text, lib) for lib in _BINDING_OBJECT_LIBS}
-        consumers = {lib: _cmake_object_lib_consumers(text, lib) for lib in _BINDING_OBJECT_LIBS}
-        _binding_map_cache[key] = (sources, consumers)
-    return _binding_map_cache[key]
+    key = str(RUNTIME_CMAKE) + "\0" + str(TESTS_CMAKE)
+    if key not in _runtime_map_cache:
+        runtime_text = (
+            RUNTIME_CMAKE.read_text(encoding="utf-8", errors="ignore")
+            if RUNTIME_CMAKE.is_file()
+            else ""
+        )
+        tests_text = (
+            TESTS_CMAKE.read_text(encoding="utf-8", errors="ignore")
+            if TESTS_CMAKE.is_file()
+            else ""
+        )
+        sources = {lib: _cmake_object_lib_sources(runtime_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
+        consumers = {lib: _cmake_object_lib_consumers(tests_text, lib) for lib in _RUNTIME_OBJECT_LIBS}
+        _runtime_map_cache[key] = (sources, consumers)
+    return _runtime_map_cache[key]
 
 
-def _binding_header_included_by(path: str, lib_sources: set[str]) -> bool:
-    """True if the binding header ``path`` is ``#include``d by any ``.cpp`` TU in ``lib_sources``.
+def _runtime_header_included_by(path: str, lib_sources: set[str]) -> bool:
+    """True if a private runtime header is ``#include``d by a source in ``lib_sources``.
 
-    Binding TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
+    Runtime TUs include their private headers with quoted RELATIVE paths (e.g. ``system_impl.hpp``
     next to ``system_fields.cpp``), so a change to that header impacts the same OBJECT lib as the
     TUs. Matched by basename against each TU's quoted includes -- best-effort source parse, safe:
-    a miss falls back to the bindings label group (a superset), never under-selection.
+    a miss is treated as an unregistered runtime input and fails open to all tests.
     """
     target_base = Path(path).name
     for source in lib_sources:
@@ -368,23 +587,22 @@ def _binding_header_included_by(path: str, lib_sources: set[str]) -> bool:
     return False
 
 
-def binding_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
-    """Map a ``python/bindings/**`` C++ file to the serial test targets that compile it.
+def runtime_tu_targets(path: str, all_target_set: set[str]) -> tuple[set[str], list[str]]:
+    """Map a ``src/runtime/**`` C++ file to serial tests consuming its object library.
 
     Resolves ``path`` to the runtime OBJECT lib(s) it belongs to -- either it IS one of the lib's
     listed ``.cpp``/``.hpp`` sources, or (for a private header) it is ``#include``d by one of the
     lib's ``.cpp`` TUs -- and returns that lib's serial consumer targets. Returns
-    ``(targets, matched_libs)``. An empty ``matched_libs`` means the TU feeds only the ``_pops``
-    module entry TUs (``init_*.cpp`` / ``bindings.cpp``), not any test target: the caller then
-    falls back to the bindings LABEL GROUP (never select-all).
+    ``(targets, matched_libs)``. An empty ``matched_libs`` means the source is missing from the
+    central manifest and must fail open rather than silently under-select.
     """
-    lib_sources, lib_consumers = _binding_object_lib_map()
+    lib_sources, lib_consumers = _runtime_object_lib_map()
     matched: list[str] = []
     targets: set[str] = set()
-    for lib in _BINDING_OBJECT_LIBS:
+    for lib in _RUNTIME_OBJECT_LIBS:
         sources = lib_sources[lib]
         belongs = path in sources or (
-            path.endswith((".hpp", ".h", ".hh", ".hxx")) and _binding_header_included_by(path, sources)
+            path.endswith((".hpp", ".h", ".hh", ".hxx")) and _runtime_header_included_by(path, sources)
         )
         if belongs:
             matched.append(lib)
@@ -451,7 +669,215 @@ def shard(items: list[str], index: int | None, total: int | None) -> list[str]:
     try:
         return ci_shard_binpack.shard_files(items, index, total)
     except ci_shard_binpack.PartitionError as exc:
-        raise SystemExit(f"shard partition invariant violated: {exc}")
+        raise SystemExit(f"shard partition invariant violated: {exc}") from exc
+
+
+def cpp_target_weights(targets: list[str]) -> dict[str, float]:
+    """Return modeled shard-wall seconds for build then CTest of each target.
+
+    ``build_durations.json`` is deliberately separate from CTest timings.  Its heavy rows are
+    cold-CI measurements of the Ninja ``pops_heavy_test_tu=1`` serial pool; its light rows are the
+    measured parallel-share floor.  Treating every target as the old constant 100 CPU-seconds hid
+    five-minute template TUs and placed two of them on the same shard.  Both catalogs are exact:
+    adding a manifest target without seeding build and test costs fails before any build starts.
+    """
+    measured_build_seconds = ci_shard_binpack.load_durations(CPP_BUILD_DURATIONS_JSON)
+    measured_test_seconds = ci_shard_binpack.load_durations(CPP_DURATIONS_JSON)
+    missing_weights = sorted(
+        set(targets) - (measured_build_seconds.keys() & measured_test_seconds.keys())
+    )
+    if missing_weights:
+        raise SystemExit(
+            "C++ build/test duration catalogs are missing selected targets: "
+            + ", ".join(missing_weights)
+        )
+    return {
+        target: measured_build_seconds[target]
+        + measured_test_seconds[target] / CPP_CTEST_PARALLEL_JOBS
+        for target in targets
+    }
+
+
+def cpp_target_shards(targets: list[str], total: int) -> list[list[str]]:
+    """Return a deterministic, build-and-test-balanced exact partition of C++ targets."""
+    if total <= 0:
+        raise SystemExit(f"invalid C++ shard total: {total}")
+    if len(targets) != len(set(targets)):
+        raise SystemExit("C++ shard partition input contains duplicate targets")
+    weights = cpp_target_weights(targets)
+    try:
+        shards = ci_shard_binpack.assign_shards(targets, total, weights)
+        ci_shard_binpack.verify_partition(targets, shards, excluded=())
+    except ci_shard_binpack.PartitionError as exc:
+        raise SystemExit(f"C++ shard partition invariant violated: {exc}") from exc
+    return shards
+
+
+def cpp_test_regex(names: Iterable[str]) -> str:
+    """Match CTest names belonging to the supplied manifest targets / standalone tests."""
+    escaped = [re.escape(name) for name in names]
+    return "^(" + "|".join(escaped) + r")(\.|$)" if escaped else "$^"
+
+
+def cpp_target_label_regex(names: Iterable[str]) -> str:
+    """Match the per-build-target CTest labels installed by pops_add_gtest_suite."""
+    escaped = [re.escape(f"cpp-target:{name}") for name in names]
+    return "^(" + "|".join(escaped) + ")$" if escaped else "$^"
+
+
+def _read_ctest_inventory(path: str) -> list[dict]:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"cannot read CTest JSON inventory {path}: {exc}") from exc
+    tests = payload.get("tests")
+    if not isinstance(tests, list):
+        raise SystemExit("CTest JSON inventory has no tests array")
+    return [test for test in tests if isinstance(test, dict)]
+
+
+def _ctest_labels(test: dict) -> set[str]:
+    test_name = test.get("name")
+    labels: set[str] = set()
+    properties = test.get("properties", [])
+    if not isinstance(properties, list):
+        return labels
+    for prop in properties:
+        if not isinstance(prop, dict) or prop.get("name") != "LABELS":
+            continue
+        value = prop.get("value", [])
+        if isinstance(value, str):
+            encoded_labels = (value,)
+        elif isinstance(value, list):
+            encoded_labels = tuple(item for item in value if isinstance(item, str))
+        else:
+            encoded_labels = ()
+        # CTest's JSON inventory is the selection authority: each LABELS entry
+        # is atomic.  A semicolon proves CMake overescaped the property.
+        malformed = [label for label in encoded_labels if ";" in label]
+        if malformed:
+            raise SystemExit(
+                "CTest target-label contract failed; test "
+                f"{test_name!r} has non-atomic LABELS entries: "
+                + ", ".join(repr(label) for label in malformed)
+            )
+        labels.update(label for label in encoded_labels if label)
+    return labels
+
+
+def _ctest_processors(test: dict) -> int:
+    values = [
+        prop.get("value")
+        for prop in test.get("properties", [])
+        if isinstance(prop, dict) and prop.get("name") == "PROCESSORS"
+    ] if isinstance(test.get("properties", []), list) else []
+    name = test.get("name")
+    # CTest omits properties equal to their default from JSON; absent
+    # PROCESSORS therefore has the exact scheduler meaning one.
+    if not values:
+        return 1
+    if len(values) != 1:
+        raise SystemExit(
+            f"CTest MPI contract failed; test {name!r} must expose one PROCESSORS property"
+        )
+    value = values[0]
+    if type(value) is int and value > 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value > 0:
+        return int(value)
+    if isinstance(value, str) and value.isdigit() and int(value) > 0:
+        return int(value)
+    raise SystemExit(
+        f"CTest MPI contract failed; test {name!r} has invalid PROCESSORS={value!r}"
+    )
+
+
+def verify_cpp_target_labels(args: argparse.Namespace) -> int:
+    """Fail unless every selected build target owns discovered CTest cases.
+
+    ``gtest_discover_tests`` names cases after their GTest suite rather than their
+    CMake executable, so the C++ shards execute through exact ``cpp-target:*``
+    labels.  Verifying the labels from CTest's JSON model before execution keeps
+    a malformed CMake property list from turning a shard into a false-green
+    ``No tests were found`` run.
+    """
+    targets = list(dict.fromkeys(args.targets))
+    if not targets:
+        raise SystemExit("C++ target-label verification requires at least one target")
+
+    tests = _read_ctest_inventory(args.ctest_json)
+
+    expected = {f"cpp-target:{target}": target for target in targets}
+    hits: dict[str, list[str]] = {target: [] for target in targets}
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        test_name = test.get("name")
+        if not isinstance(test_name, str):
+            continue
+        labels = _ctest_labels(test)
+        for label in labels & expected.keys():
+            hits[expected[label]].append(test_name)
+
+    missing = [target for target in targets if not hits[target]]
+    if missing:
+        details = ", ".join(
+            f"{target} (expected cpp-target:{target})" for target in missing
+        )
+        raise SystemExit(
+            "CTest target-label contract failed; selected targets without discovered cases: "
+            + details
+        )
+
+    print(
+        f"verified {len(targets)} C++ target labels across "
+        f"{sum(len(names) for names in hits.values())} discovered cases"
+    )
+    return 0
+
+
+def verify_cpp_mpi_ctests(args: argparse.Namespace) -> int:
+    """Authenticate the exact configured MPI CTest names, labels and ranks."""
+    expected = cpp_mpi_ctest_plan(load_manifest())
+    actual: dict[str, int] = {}
+    for test in _read_ctest_inventory(args.ctest_json):
+        name = test.get("name")
+        if not isinstance(name, str):
+            continue
+        labels = _ctest_labels(test)
+        # Packaging/configuration smokes legitimately carry an ``mpi`` label but
+        # are not rank-launched backend tests and have no PROCESSORS contract.
+        # The dedicated execution fence selects the exact backend+mpi intersection.
+        if not {"backend", "mpi"} <= labels or "python" in labels:
+            continue
+        if name in actual:
+            raise SystemExit(f"CTest MPI contract failed; duplicate test name {name!r}")
+        actual[name] = _ctest_processors(test)
+
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected))
+    rank_mismatches = sorted(
+        (name, expected[name], actual[name])
+        for name in set(expected) & set(actual)
+        if expected[name] != actual[name]
+    )
+    if missing or unexpected or rank_mismatches:
+        details: list[str] = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if unexpected:
+            details.append("unexpected=" + ",".join(unexpected))
+        if rank_mismatches:
+            details.append(
+                "PROCESSORS=" + ",".join(
+                    f"{name}:manifest={wanted}:ctest={configured}"
+                    for name, wanted, configured in rank_mismatches
+                )
+            )
+        raise SystemExit("CTest MPI contract differs from tests/test_manifest.toml; " + "; ".join(details))
+
+    print(f"verified {len(expected)} exact manifest-owned MPI CTest launches")
+    return 0
 
 
 def write_explain_file(path: str | None, payload: dict) -> None:
@@ -472,11 +898,12 @@ def classify_cpp_impact(
     all-or-nothing rule where a single non-header file collapsed the whole change to coarse
     labels. Returns ``(selected, full_reasons, areas, impact)``:
 
-    * ``selected`` -- the union of every file's include-closure / binding-label / codegen-label /
+    * ``selected`` -- the union of every file's include-closure / runtime-target / binding-label /
+      codegen-label /
       direct-test targets;
     * ``full_reasons`` -- non-empty iff some file forces a FULL selection (a global-includer or
       missing header, or an unmapped build-input path); the caller then escalates to ALL;
-    * ``areas`` -- the label areas contributed by binding / codegen files (for the summary line);
+    * ``areas`` -- the label areas contributed by runtime/binding/codegen files;
     * ``impact`` -- ``{file: {"kind": ..., "targets": [...]/"labels": [...]/...}}`` for the
       ``--explain-file`` plan, so every file's reason is auditable.
 
@@ -484,10 +911,10 @@ def classify_cpp_impact(
 
     * ``include/pops/**`` header -> ``include-impact`` (its source-closure suites) or, when the
       header is a global includer / absent, ``all`` (soundness / fail-open);
-    * ``python/bindings/**`` ``.cpp``/``.hpp`` -> ``binding-tu-targets`` (the serial consumers of
-      the runtime OBJECT lib that compiles it) or, when it feeds only ``_pops``, ``binding-labels``
-      (the bindings label group); any other ``python/bindings/**`` artifact (seam template, cmake
-      fragment) -> ``all`` (build input, fail-open);
+    * ``src/runtime/**`` ``.cpp``/``.hpp`` -> ``runtime-tu-targets`` (the serial consumers of its
+      central OBJECT lib); an unregistered source or other build input fails open to ``all``;
+    * ``python/bindings/**`` adapters -> ``binding-labels``; non-source adapter build inputs fail
+      open to ``all``;
     * ``tests/cpp/**`` ``.cpp`` -> ``test-target`` (that one suite, when it is a serial target);
     * ``python/pops/codegen/**`` -> ``codegen-labels`` (the native_loader / compiled-model group);
     * other ``python/pops/**``, ``docs/**``, ``tutorials/**``, ``tests/python/**``, top-level
@@ -540,37 +967,43 @@ def classify_cpp_impact(
             impact[path] = {"kind": "include-impact", "targets": sorted(hit_targets)}
             continue
 
-        if path.startswith(CPP_BINDING_PREFIX):
-            if is_cpp_binding_tu(path):
-                tu_targets, matched_libs = binding_tu_targets(path, all_target_set)
-                if matched_libs:
-                    # The TU is compiled into a runtime OBJECT lib: select exactly that lib's
-                    # test consumers (the precise "targets that compile this TU").
-                    selected.update(tu_targets)
-                    for target in tu_targets:
-                        add_reason(reasons, target, "binding-tu:" + ",".join(sorted(matched_libs)))
+        if path.startswith(CPP_RUNTIME_PREFIX):
+            if is_cpp_runtime_tu(path):
+                tu_targets, matched_libs = runtime_tu_targets(path, all_target_set)
+                if not matched_libs:
                     impact[path] = {
-                        "kind": "binding-tu-targets",
-                        "object_libs": sorted(matched_libs),
-                        "targets": sorted(tu_targets),
+                        "kind": "all",
+                        "reason": "runtime-source-not-in-central-manifest",
                     }
-                else:
-                    # The TU feeds only the ``_pops`` module (an ``init_*.cpp`` entry / private
-                    # header of the module glue), not any test target -> bindings label group.
-                    file_areas = areas_for(path, CPP_BINDING_AREAS)
-                    areas.update(file_areas)
-                    hit = select_cpp_by_labels(suites, file_areas, reasons)
-                    selected.update(hit)
-                    impact[path] = {
-                        "kind": "binding-labels",
-                        "labels": sorted(expand_area_labels(file_areas)),
-                        "targets": sorted(hit),
-                    }
+                    full_reasons.append(f"{path}:runtime-source-not-in-central-manifest")
+                    continue
+                selected.update(tu_targets)
+                for target in tu_targets:
+                    add_reason(reasons, target, "runtime-tu:" + ",".join(sorted(matched_libs)))
+                impact[path] = {
+                    "kind": "runtime-tu-targets",
+                    "object_libs": sorted(matched_libs),
+                    "targets": sorted(tu_targets),
+                }
             else:
-                # A ``python/bindings`` build input (seam template, cmake fragment): the include
-                # graph does not model it -> fail open to ALL.
+                impact[path] = {"kind": "all", "reason": "runtime-build-input"}
+                full_reasons.append(f"{path}:runtime-build-input")
+            continue
+
+        if path.startswith(CPP_BINDING_PREFIX):
+            if not is_cpp_binding_tu(path):
                 impact[path] = {"kind": "all", "reason": "binding-build-input"}
                 full_reasons.append(f"{path}:binding-build-input")
+                continue
+            file_areas = areas_for(path, CPP_BINDING_AREAS)
+            areas.update(file_areas)
+            hit = select_cpp_by_labels(suites, file_areas, reasons)
+            selected.update(hit)
+            impact[path] = {
+                "kind": "binding-labels",
+                "labels": sorted(expand_area_labels(file_areas)),
+                "targets": sorted(hit),
+            }
             continue
 
         if path.startswith("tests/cpp/") and path.endswith(".cpp"):
@@ -665,13 +1098,35 @@ def plan_cpp(args: argparse.Namespace) -> int:
     else:
         mode = "subset" if selected else "none"
         targets = sorted(selected)
-        regex = "^(" + "|".join(re.escape(t) for t in targets) + r")(\.|$)" if targets else "$^"
+        regex = cpp_test_regex(targets)
+
+    shard_index_arg = getattr(args, "shard_index", None)
+    shard_total_arg = getattr(args, "shard_total", None)
+    if shard_index_arg is None and shard_total_arg is None:
+        shard_index = 0
+        shard_total = 1
+    elif shard_index_arg is None or shard_total_arg is None:
+        raise SystemExit("C++ sharding requires both --shard-index and --shard-total")
+    else:
+        shard_index = shard_index_arg
+        shard_total = shard_total_arg
+    if shard_index < 0 or shard_index >= shard_total:
+        raise SystemExit(f"invalid C++ shard {shard_index}/{shard_total}")
+
+    target_shards = cpp_target_shards(targets, shard_total)
+    shard_targets = target_shards[shard_index]
+    shard_regex = cpp_test_regex(shard_targets)
+    shard_label_regex = cpp_target_label_regex(shard_targets)
 
     summary = f"{mode}: {len(targets)}/{len(all_targets)} C++ tests"
+    shard_summary = (
+        f"{len(shard_targets)} targets in shard {shard_index}/{shard_total}"
+    )
     print(summary)
+    print(shard_summary)
     if areas:
         print("areas=" + ",".join(sorted(areas)))
-    for target in targets:
+    for target in shard_targets:
         print(target)
 
     write_github_outputs(
@@ -682,8 +1137,16 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "cpp_regex": regex,
             "cpp_count": str(len(targets)),
             "cpp_total": str(len(all_targets)),
+            "cpp_shard_index": str(shard_index),
+            "cpp_shard_total": str(shard_total),
+            "cpp_shard_targets": " ".join(shard_targets),
+            "cpp_shard_regex": shard_regex,
+            "cpp_shard_label_regex": shard_label_regex,
+            "cpp_shard_count": str(len(shard_targets)),
+            "cpp_shard_counts": ",".join(str(len(shard)) for shard in target_shards),
             "cpp_areas": ",".join(sorted(areas)) if areas else "-",
             "cpp_summary": summary,
+            "cpp_shard_summary": shard_summary,
         },
     )
     write_explain_file(
@@ -697,11 +1160,89 @@ def plan_cpp(args: argparse.Namespace) -> int:
             "full_reasons": full_reasons,
             "selected_count": len(targets),
             "total_count": len(all_targets),
+            "shard_index": shard_index,
+            "shard_total": shard_total,
+            "shard_count": len(shard_targets),
+            "shard_counts": [len(shard) for shard in target_shards],
+            "shard_targets": shard_targets,
+            "shard_regex": shard_regex,
+            "shard_label_regex": shard_label_regex,
+            "target_shards": target_shards,
             "selected": targets,
             "selected_reasons": {key: sorted(value) for key, value in sorted(reasons.items()) if key in targets},
             # ADC-646: per-file impact -- {file: {kind, targets/labels/reason}} -- so the plan
             # spells out why each changed file did (or did not) pull suites into the selection.
             "impact": {key: impact[key] for key in sorted(impact)},
+        },
+    )
+    return 0
+
+
+def plan_cpp_label(args: argparse.Namespace) -> int:
+    """Project one exact C++ manifest label into build targets for a dedicated CI job."""
+    manifest = load_manifest()
+    targets = cpp_targets_with_label(manifest, args.label)
+    mpi_ctest_plan = cpp_mpi_ctest_plan(manifest) if args.label == "mpi" else {}
+    mpi_ctest_count = len(mpi_ctest_plan)
+    summary = f"label {args.label}: {len(targets)} C++ targets"
+    if args.label == "mpi":
+        summary += f", {mpi_ctest_count} CTest launches"
+    print(summary)
+    for target in targets:
+        print(target)
+    write_github_outputs(
+        getattr(args, "github_output", None),
+        {
+            "cpp_label": args.label,
+            "cpp_label_targets": " ".join(targets),
+            "cpp_label_count": str(len(targets)),
+            "cpp_label_ctest_count": str(mpi_ctest_count),
+            "cpp_label_summary": summary,
+        },
+    )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "cpp-label",
+            "label": args.label,
+            "selected_count": len(targets),
+            "ctest_count": mpi_ctest_count,
+            "ctest_names": list(mpi_ctest_plan),
+            "selected": targets,
+        },
+    )
+    return 0
+
+
+def plan_python_mpi(args: argparse.Namespace) -> int:
+    """Write the manifest-owned real-MPI Python launch plan for the dedicated CI job."""
+    entries = manifest_python_mpi_entrypoints(load_manifest())
+    if not entries:
+        raise SystemExit("no Python MPI entrypoints declared in tests/test_manifest.toml")
+    plan_path = Path(args.plan_file)
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(
+        "".join(f"{entry['nproc']}\t{entry['path']}\n" for entry in entries),
+        encoding="utf-8",
+    )
+    summary = f"{len(entries)} manifest-owned Python MPI entrypoints"
+    print(summary)
+    for entry in entries:
+        print(f"np={entry['nproc']} {entry['path']}")
+    write_github_outputs(
+        getattr(args, "github_output", None),
+        {
+            "python_mpi_count": str(len(entries)),
+            "python_mpi_plan_file": str(plan_path),
+            "python_mpi_summary": summary,
+        },
+    )
+    write_explain_file(
+        getattr(args, "explain_file", None),
+        {
+            "kind": "python-mpi",
+            "selected_count": len(entries),
+            "selected": entries,
         },
     )
     return 0
@@ -918,7 +1459,7 @@ def plan_verify(args: argparse.Namespace) -> int:
         ci_shard_binpack.verify_partition(selected, shards, ci_shard_binpack.EXCLUDED_FROM_SHARDS)
     except ci_shard_binpack.PartitionError as exc:
         print(f"::error::shard partition is not an exact cover: {exc}")
-        raise SystemExit(1)
+        raise SystemExit(1) from exc
 
     excluded_present = sorted(set(selected) & excluded)
     loads = [round(sum(1 for _ in shard), 0) for shard in shards]
@@ -947,8 +1488,31 @@ def main() -> int:
     cpp.add_argument("--changed-files", required=True)
     cpp.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
     cpp.add_argument("--explain-file")
+    cpp.add_argument("--shard-index", type=int)
+    cpp.add_argument("--shard-total", type=int)
     cpp.add_argument("--force-all", action="store_true")
     cpp.set_defaults(func=plan_cpp)
+
+    cpp_label = sub.add_parser("cpp-label")
+    cpp_label.add_argument("--label", required=True)
+    cpp_label.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    cpp_label.add_argument("--explain-file")
+    cpp_label.set_defaults(func=plan_cpp_label)
+
+    cpp_target_labels = sub.add_parser("verify-cpp-target-labels")
+    cpp_target_labels.add_argument("--ctest-json", required=True)
+    cpp_target_labels.add_argument("--targets", nargs="+", required=True)
+    cpp_target_labels.set_defaults(func=verify_cpp_target_labels)
+
+    cpp_mpi_ctests = sub.add_parser("verify-cpp-mpi-ctests")
+    cpp_mpi_ctests.add_argument("--ctest-json", required=True)
+    cpp_mpi_ctests.set_defaults(func=verify_cpp_mpi_ctests)
+
+    py_mpi = sub.add_parser("python-mpi")
+    py_mpi.add_argument("--plan-file", required=True)
+    py_mpi.add_argument("--github-output", default=os.environ.get("GITHUB_OUTPUT"))
+    py_mpi.add_argument("--explain-file")
+    py_mpi.set_defaults(func=plan_python_mpi)
 
     py = sub.add_parser("python")
     py.add_argument("--changed-files", required=True)

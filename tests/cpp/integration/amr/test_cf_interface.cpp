@@ -26,12 +26,12 @@ struct RegLite {
 
 TEST(test_cf_interface, Runs) {
   // --- SubcyclingSchedule : cadence Berger-Oliger ratio 2 ---
-  SubcyclingSchedule s2(2);
+  SubcyclingSchedule s2(0, 1, amr::Rational(2, 1), amr::RemainderPolicy::IntegralOnly);
   EXPECT_EQ(s2.count(), 2) << "sched_count";
   EXPECT_EQ(s2.dt_sub(Real(1)), Real(1) / 2) << "sched_dt_sub";  // bit-identique a dt / r
   EXPECT_TRUE(s2.frac(0) == Real(0) / 2 && s2.frac(1) == Real(1) / 2) << "sched_frac";
-  SubcyclingSchedule s_def;  // ratio par defaut = 2
-  EXPECT_EQ(s_def.count(), 2) << "sched_defaut";
+  EXPECT_EQ(s2.clocks.parent_level(), 0) << "sched_parent_level";
+  EXPECT_EQ(s2.clocks.child_level(), 1) << "sched_child_level";
 
   // --- CoarseFineInterface : couverture depuis un BoxArray fin ---
   // patch fin [4..11]^2 -> empreinte grossiere [2..5]^2 (PatchRange). Region grossiere 8x8.

@@ -31,7 +31,8 @@ using ManifestFn = const char* (*)();
 // still unified the registry across images -- so loading under it is exactly the regression condition.
 std::string load_manifest(const char* so_path) {
   pops::dynlib::handle h = pops::dynlib::open(so_path);
-  EXPECT_TRUE(pops::dynlib::valid(h)) << "dlopen('" << so_path << "'): " << pops::dynlib::last_error();
+  EXPECT_TRUE(pops::dynlib::valid(h))
+      << "dlopen('" << so_path << "'): " << pops::dynlib::last_error();
   if (!pops::dynlib::valid(h))
     return "";
   auto fn = reinterpret_cast<ManifestFn>(pops::dynlib::sym(h, "pops_brick_manifest"));
@@ -57,10 +58,12 @@ TEST(ExternalBrickIsolation, EachSoManifestListsOnlyItsOwnBricks) {
   // A's manifest carries A's two ids and NEITHER of B's.
   EXPECT_TRUE(contains(a, "iso_a_riemann")) << "A manifest lists its own riemann id";
   EXPECT_TRUE(contains(a, "iso_a_precond")) << "A manifest lists its own preconditioner id";
-  EXPECT_FALSE(contains(a, "iso_b_riemann")) << "A manifest must NOT leak B's id (registry isolation)";
+  EXPECT_FALSE(contains(a, "iso_b_riemann"))
+      << "A manifest must NOT leak B's id (registry isolation)";
 
   // B's manifest carries B's id and NEITHER of A's -- the regression direction (B loaded after A).
   EXPECT_TRUE(contains(b, "iso_b_riemann")) << "B manifest lists its own riemann id";
-  EXPECT_FALSE(contains(b, "iso_a_riemann")) << "B manifest must NOT leak A's id (registry isolation)";
+  EXPECT_FALSE(contains(b, "iso_a_riemann"))
+      << "B manifest must NOT leak A's id (registry isolation)";
   EXPECT_FALSE(contains(b, "iso_a_precond")) << "B manifest must NOT leak A's preconditioner id";
 }

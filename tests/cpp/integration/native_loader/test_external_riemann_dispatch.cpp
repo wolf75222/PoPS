@@ -20,8 +20,7 @@
 #include "gtest_compat.hpp"
 #include <pops/runtime/program/external_riemann_brick.hpp>
 
-#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // compiled_block::residual (native ref)
-#include <pops/physics/bricks/bricks.hpp>                         // CompositeModel / Euler / ...
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel / Euler / ...
 
 #include "test_harness.hpp"  // pops::test::Checker
 
@@ -48,15 +47,15 @@ std::string brick_source() {
 #include <pops/runtime/program/external_riemann_brick.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 
-// The user's flux: same single-interface contract as pops::RusanovFlux (numerical_flux.hpp). Here it
-// forwards to RusanovFlux so the test can assert bit-identical dispatch; a real brick would compute
-// its own interface flux. POPS_HD: device-callable, no virtuals.
+// The user's flux: the same narrow PhysicalFlux + two typed traces + FaceContext contract as
+// pops::RusanovFlux. Here it forwards to RusanovFlux so the test can assert bit-identical dispatch;
+// a real brick would compute its own interface flux. POPS_HD: device-callable, no virtuals.
 struct UserRusanov {
-  template <class Model>
-  POPS_HD typename Model::State operator()(const Model& m, const typename Model::State& UL,
-                                          const pops::Aux& AL, const typename Model::State& UR,
-                                          const pops::Aux& AR, int dir) const {
-    return pops::RusanovFlux{}(m, UL, AL, UR, AR, dir);
+  template <pops::PhysicalFlux Physical>
+  POPS_HD pops::FluxEvaluation<typename Physical::State> operator()(
+      const Physical& physical, const typename Physical::Trace& left,
+      const typename Physical::Trace& right, const pops::FaceContext& face) const {
+    return pops::RusanovFlux{}(physical, left, right, face);
   }
 };
 
@@ -64,7 +63,9 @@ namespace user_brick {
 using Model = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
 }
 
-POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", UserRusanov, user_brick::Model, "max_wave_speed");
+POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(
+    "my_riemann", UserRusanov, user_brick::Model,
+    "physical_flux,provider_pack,stability_bound");
 POPS_DEFINE_BRICK_MANIFEST();
 )CPP";
   // clang-format on
@@ -98,8 +99,8 @@ bool compile_brick(const std::string& src, const std::string& so) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src + " -o " + so;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src + " -o " + so;
 #if defined(POPS_HAS_KOKKOS)
   // Match the module's Kokkos ABI: its interface includes (Kokkos + libomp), defines and options.
   cmd += include_flags(POPS_TEST_KOKKOS_INC);
@@ -182,7 +183,8 @@ static int pops_run_test_external_riemann_dispatch() {
   // (1) dlopen + manifest visibility + requirements surface.
   ExternalBrickHandle handle(so, "my_riemann");
   chk(handle.id() == "my_riemann", "handle_id");
-  chk(handle.requirements() == "max_wave_speed", "requirements_surface");
+  chk(handle.requirements() == "physical_flux,provider_pack,stability_bound",
+      "requirements_surface");
   chk(handle.residual() != nullptr, "residual_resolved");
   // The dlopen registered the manifest in this image's process catalog too.
   const auto* entry = pops::runtime::program::BrickRegistry::instance().lookup("my_riemann");
@@ -198,10 +200,10 @@ static int pops_run_test_external_riemann_dispatch() {
   // External brick: the resolved entry point dispatches build_block<Minmod, UserRusanov> inside the .so.
   handle.residual()(U.data(), Rext.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/1, "minmod",
                     /*recon_prim=*/0, /*pos_floor=*/0.0);
-  // Native reference: the SAME path with the native rusanov flux (compiled_block::residual -> make_block).
-  pops::compiled_block::residual<RefModel>(U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy,
-                                          /*periodic=*/true, "minmod", "rusanov",
-                                          /*recon_prim=*/false);
+  // Native reference: the same static leaf with the built-in Rusanov policy.
+  pops::runtime::program::detail::external_residual<RefModel, pops::RusanovFlux>(
+      U.data(), Rnat.data(), /*aux=*/nullptr, n, dx, dy, /*periodic=*/true, "minmod",
+      /*recon_prim=*/false, /*pos_floor=*/0.0);
   double dmax = 0.0, nrm = 0.0;
   for (std::size_t k = 0; k < Rext.size(); ++k) {
     const double d = std::fabs(Rext[k] - Rnat[k]);
@@ -229,5 +231,7 @@ static int pops_run_test_external_riemann_dispatch() {
 }
 
 TEST(test_external_riemann_dispatch, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_riemann_dispatch, "test_external_riemann_dispatch"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_external_riemann_dispatch,
+                                    "test_external_riemann_dispatch"),
+            0);
 }

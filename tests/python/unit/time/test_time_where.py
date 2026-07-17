@@ -3,7 +3,7 @@
 
 ``P.where(mask, a, b)`` is a PER-CELL select -- ``out(i,j,c) = mask ? a(i,j,c) : b(i,j,c)``
 COMPONENT-WISE -- lowered to a condition INSIDE a Kokkos for_each_cell kernel (a ternary), NOT the
-scalar runtime branch ``if_``. The 0/1 mask is built per cell with ``P.cell_ge`` / ``cell_gt`` /
+scalar runtime branch ``P.branch``. The 0/1 mask is built per cell with ``P.cell_ge`` / ``cell_gt`` /
 ``cell_lt`` / ``cell_le`` (a threshold on component 0 of a field).
 
 (A) Codegen (pure Python, always runs): ``cell_ge`` + ``where`` build + lower to the select kernel
@@ -17,18 +17,21 @@ scalar runtime branch ``if_``. The 0/1 mask is built per cell with ``P.cell_ge``
     SOME take b (non-vacuous). Self-skips without numpy / _pops / a compiler / Kokkos / install_program
     (never faking the engine).
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen import _compile_drivers as compile_drivers
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_where (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_where (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -38,27 +41,29 @@ def _clamp_program(t, *, name="where_clamp", floor=0.5):
     Uses only linear_combine + cell_ge + where, so the Program lowers with NO model (solve_fields is
     inert / absent); the select is decided per cell entirely in C++."""
     P = t.Program(name)
-    U = P.state("blk")
-    half = P.linear_combine("half", 0.5 * U)        # the 'b' branch: 0.5 * U
+    U = typed_state(P, "blk")
+    half = P.value("half", 0.5 * U)        # the 'b' branch: 0.5 * U
     mask = P.cell_ge(U, floor, name="mask")          # 1 where U >= floor, else 0
     clamped = P.where(mask, U, half, name="clamped")  # per-cell: U if mask else 0.5*U
-    P.commit("blk", clamped)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    result = P.value("clamped_next", 1 * clamped, at=endpoint.point)
+    P.commit(endpoint, result)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
 def test_cell_ge_is_scalar_field(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     m = P.cell_ge(U, 0.5)
     assert m.vtype == "scalar_field", "cell_ge returns a 1-component mask scalar_field (got %r)" % m.vtype
-    assert m.attrs["cmp"] == ">=" and m.attrs["value"] == 0.5, m.attrs
+    assert m.attrs["cmp"] == ">=" and m.attrs["value"].to_python() == 0.5, m.attrs
     assert P._ncomp(m) == 1, "the mask is 1-component"
 
 
 def test_cell_compare_variants(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     assert P.cell_gt(U, 1.0).attrs["cmp"] == ">"
     assert P.cell_ge(U, 1.0).attrs["cmp"] == ">="
     assert P.cell_lt(U, 1.0).attrs["cmp"] == "<"
@@ -67,23 +72,23 @@ def test_cell_compare_variants(t):
 
 def test_where_result_type(t):
     P = t.Program("p")
-    U = P.state("blk")
-    a = P.linear_combine("a", 1.0 * U)
-    b = P.linear_combine("b", 0.5 * U)
+    U = typed_state(P, "blk")
+    a = P.value("a", 1.0 * U)
+    b = P.value("b", 0.5 * U)
     m = P.cell_ge(U, 0.5)
     w = P.where(m, a, b)
     assert w.vtype == "state", "where over states returns a State (got %r)" % w.vtype
-    assert w.block == "blk", "where inherits a's block"
+    assert w.block is a.block and w.block.local_id == "blk", "where inherits a's block"
     assert [i.op for i in w.inputs] == ["cell_compare", "linear_combine", "linear_combine"], \
         "where inputs = (mask, a, b)"
 
 
 def test_where_codegen(t):
     P = _clamp_program(t)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ("ctx.alloc_scalar_field(1, 1)",          # the mask field
                  "pops::for_each_cell",                      # the per-cell select kernel
-                 "static_cast<pops::Real>(0.5))",            # the threshold in the compare kernel
+                 "fieldA(i, j, 0) >= 0.5",                   # exact threshold lowering
                  "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0)",  # 0/1 mask
                  "for (int c = 0; c < ncomp_; ++c)",        # component-wise select
                  "(mask_ncomp_ == 1) ? 0 : c",              # shared vs per-component mask
@@ -137,7 +142,7 @@ def test_where_accepts_per_component_mask(t):
 
 def test_where_rejects_mismatched_vtype(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     sf = P.scalar_field("sf", ncomp=1)
     m = P.cell_ge(U, 0.5)
     try:
@@ -148,20 +153,20 @@ def test_where_rejects_mismatched_vtype(t):
         raise AssertionError("where must reject a / b of different value types")
 
 
-def test_cell_compare_rejects_non_float_threshold(t):
+def test_cell_compare_rejects_non_scalar_threshold(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.cell_ge(U, U)  # a per-cell field threshold is a later phase
     except TypeError as exc:
-        assert "float threshold" in str(exc), str(exc)
+        assert "exact scalar threshold" in str(exc), str(exc)
     else:
-        raise AssertionError("cell_compare must reject a non-float threshold")
+        raise AssertionError("cell_compare must reject a non-scalar threshold")
 
 
 def test_cell_compare_rejects_bad_cmp(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         P.cell_compare(U, 0.5, "==")
     except ValueError as exc:
@@ -175,18 +180,18 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 8
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     # A minimal 1-variable model with NO Poisson coupling: solve_fields is inert and the select needs
     # no fields. A complete compilable block (flux + primitive + eigenvalue).
@@ -202,11 +207,11 @@ def _run_section_b(t):
 
     floor = 0.5
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("where_prog"),
             time=_clamp_program(t, name="where_step", floor=floor))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
+        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:160])
         return None
 
     assert compiled.program_name == "where_step", "handle carries the program name"
@@ -214,11 +219,11 @@ def _run_section_b(t):
     try:
         compiled_model = passive_model("where_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
+        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:160])
         return None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     # An IC that STRADDLES the floor: a sine swinging through 0.5 so some cells are >= floor and some
     # are < floor (the select must genuinely vary per cell -- non-vacuous).
     x = (np.arange(n) + 0.5) / n

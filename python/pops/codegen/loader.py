@@ -12,15 +12,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops.codegen._loader_dump import CompiledProblemDumpMixin
 
-class CompiledProblem:
+
+class CompiledProblem(CompiledProblemDumpMixin):
     """An advanced, INTERNAL compiled handle: a generated ``problem.so`` (a
     compiled time Program) plus the metadata to install + reproduce it. It is
     produced by the low-level ``pops.codegen.compile_problem(...)`` driver and,
     for the public path, wrapped by ``pops.compile(...)``; wire a runnable
     simulation from it with ``pops.bind(compiled, ...)`` (ADC-523). The concrete
-    class stays off the top-level surface -- annotate against the inspectable
-    ``pops.CompiledArtifact`` protocol instead. The bound Program drives
+    class stays off the top-level surface; callers consume the authenticated object returned by
+    ``pops.compile`` through its inspection protocol. The bound Program drives
     ``sim.step(dt)`` entirely in C++ via ``ProgramContext``.
 
     The ``.so`` is compiled against the pops headers with the SAME Kokkos
@@ -43,9 +45,45 @@ class CompiledProblem:
                  libraries: Any = None, problem_hash: Any = None, cache_key: Any = None,
                  compile_command: Any = None, generated_sources: Any = None,
                  codegen_env: Any = None, module_manifest: Any = None,
-                 module_hash: Any = None, external_bricks: Any = None) -> None:
+                 module_hash: Any = None, external_bricks: Any = None,
+                 problem_snapshot: Any = None, bind_schema: Any = None,
+                 program_param_routes: Any = None, generated_cpp: Any = None,
+                 lowering_coverage: Any = None, program_graph: Any = None) -> None:
         self.so_path = so_path
-        self.program = program          # the pops.time.Program that was lowered
+        # Code emission has completed before the loader is constructed.  Retain a clone-owned,
+        # registry-free Program for inspection/runtime metadata, never the authoring Program graph.
+        from pops.time._program.api import Program
+        resolved_program = program
+        if isinstance(program, Program):
+            from pops.time._program.detach import detach_compiled_program
+            resolved_program = detach_compiled_program(program)
+        self.program = resolved_program
+        if program_graph is None and self.program is not None:
+            program_graph = self.program.to_graph()
+        if program_graph is not None:
+            from pops.time import ProgramGraph
+
+            if type(program_graph) is not ProgramGraph:
+                raise TypeError("CompiledProblem program_graph must be an exact ProgramGraph")
+            if self.program is None:
+                raise ValueError("CompiledProblem cannot carry a ProgramGraph without a Program")
+            resolved_graph = self.program.to_graph()
+            if resolved_graph.graph_hash != program_graph.graph_hash:
+                raise ValueError(
+                    "CompiledProblem ProgramGraph does not match the resolved lowering Program"
+                )
+        self.program_graph = program_graph
+        if self.program is None:
+            self.program_block_routes = ()
+        else:
+            from pops.time.references import block_name
+
+            self.program_block_routes = tuple(
+                sorted(
+                    (index, block_name(reference))
+                    for reference, index in self.program._block_indices().items()
+                )
+            )
         self.model = model              # the physical model (optional; added as a block in the MVP)
         # The self-describing Module manifest (ADC-585): the operator-first central representation of
         # the resolved model (spaces / params / aux / typed operators / native routes), superseding
@@ -55,13 +93,24 @@ class CompiledProblem:
         # open).
         self.module_manifest = module_manifest
         if module_manifest is not None and abi_key is not None:
-            module_manifest.abi_requirements["abi_key"] = abi_key
+            binder = getattr(module_manifest, "with_abi_key", None)
+            if not callable(binder):
+                raise TypeError(
+                    "CompiledProblem: module_manifest must provide with_abi_key() so ABI binding "
+                    "does not mutate shared manifest state")
+            self.module_manifest = binder(abi_key)
+        from pops.codegen._compiled_module_view import CompiledModuleView
+        self._module_view = CompiledModuleView(model, self.module_manifest)
         # The operator-first Module hash (ADC-557 I5): the compile-time identity of the canonical
         # compile IR, frozen on the handle so a post-compile in-place model mutation can be DETECTED
         # loudly (parity with the block-name drift check). None for a model with no backing Module.
         self._module_hash = module_hash
-        self.program_name = getattr(program, "name", None)
-        self.program_hash = program._ir_hash() if hasattr(program, "_ir_hash") else None
+        self.program_name = getattr(self.program, "name", None)
+        program_ir_hash = getattr(self.program, "_ir_hash", None)
+        self.program_hash = program_ir_hash() if callable(program_ir_hash) else None
+        self.program_graph_hash = (
+            self.program_graph.graph_hash if self.program_graph is not None else None
+        )
         self.abi_key = abi_key          # cache key: header signature | compiler | C++ standard
         self.cxx = cxx
         self.std = std
@@ -77,29 +126,82 @@ class CompiledProblem:
         # passed. manifest() lists them so the artifact self-describes its external dependencies.
         self.external_bricks = [dict(r) for r in external_bricks] if external_bricks else []
         # Compiled-artifact metadata (Spec 5 sec.12.4, #48-49): set by compile_problem. The
-        # problem hash is the program-SOURCE hash (the WHAT the .so was built from -- distinct from
-        # program_hash, the IR hash of the in-memory Program); cache_key is the (problem_hash|abi)
-        # identity the out-of-source cache file name carries; compile_command is the redacted
+        # problem hash is the artifact-input hash (program source plus an optional frozen Problem
+        # snapshot -- distinct from program_hash, the in-memory Program IR hash); cache_key is the
+        # identity the out-of-source cache file name/sidecar carries; compile_command is the redacted
         # compiler invocation; generated_sources are the .cpp files written for inspection (debug=).
         # None on a route that does not record a value (e.g. an externally constructed handle) -- a
         # documented absence, not a fabricated value (cf. the property accessors below).
         self._problem_hash = problem_hash
         self._cache_key = cache_key
+        self._problem_snapshot = problem_snapshot
         self._compile_command = compile_command
         self._generated_sources = list(generated_sources) if generated_sources else []
+        # Exact banner-free translation unit lowered by compile_problem.  Public orchestration
+        # replaces the authoring model by an immutable native loader after compilation; retaining
+        # source text lets dump_cpp() remain exact without re-entering that discarded builder.
+        self._generated_cpp = generated_cpp
+        self.lowering_coverage = lowering_coverage
         # Active codegen POPS_* environment snapshot (Spec 5 sec.12.4, #47-48): the resolved
         # CodegenEnv that governed this compile (log level, codegen dir, keep-generated, dump flags,
-        # cache dir, profile, autotune, and the UNSAFE jit-backdoor gate). Recorded so the env state
+        # cache dir, profile, and the UNSAFE jit-backdoor gate). Recorded so the env state
         # is inspectable in inspect(); None for a handle built outside compile_problem (no env was
         # resolved -- a documented absence, not a fabricated default).
         self._codegen_env = codegen_env
+        # The immutable parameter contract. The low-level compile_problem driver may not have a
+        # whole Problem and therefore leaves it absent; pops.compile attaches the schema captured
+        # from its frozen Problem before sealing this handle.
+        self.bind_schema = bind_schema
+        # Immutable ABI routing facts captured while the compiler still owns the full authoring
+        # model. Public orchestration may replace ``model`` by a CompiledModel loader afterwards;
+        # bind therefore never has to re-run model analysis from a builder.
+        # ``None`` means the low-level handle never captured this ABI table; an empty tuple means
+        # compilation captured it and proved that the Program reads no runtime parameter.  Keeping
+        # that distinction lets bind fail closed instead of re-entering codegen from ``model``.
+        self.program_param_routes = (
+            None if program_param_routes is None else tuple(program_param_routes)
+        )
+        self.install_plan = None
+        self.semantic_identity = None
+        self.artifact_spec_identity = None
+        self.binary_identity = None
+        self.artifact_identity = None
+
+    @property
+    def target(self) -> str:
+        plan = self.install_plan
+        return plan.target if plan is not None else "system"
+
+    @property
+    def layout(self) -> Any:
+        plan = self.install_plan
+        return plan.layout if plan is not None else None
+
+    @property
+    def authoring_snapshot(self) -> Any:
+        """Complete immutable authoring identity used to compile this artifact."""
+        return self._problem_snapshot
 
     def _seal(self) -> None:
-        """Make this handle immutable (ADC-563): ``pops.compile`` seals it after its last attach.
+        """Make this handle deeply immutable after orchestration's last attach.
 
         The advanced ``pops.codegen.compile_problem`` route returns an unsealed handle (its callers
         legitimately attach orchestration metadata); the PUBLIC artifact is sealed."""
-        object.__setattr__(self, "_sealed", True)
+        if self.program is not None and not getattr(
+                self.program, "_compiled_detached", False):
+            raise TypeError(
+                "CompiledProblem cannot be sealed with a live/foreign time builder; public "
+                "pops.compile requires a detached pops.Program"
+            )
+        from pops.codegen._artifact_freeze import seal_attributes
+
+        seal_attributes(self)
+
+    def _discard_authoring(self) -> None:
+        """Drop the last formula-model builder after all compile metadata was captured."""
+        if getattr(self, "_sealed", False):
+            raise RuntimeError("cannot discard authoring from a sealed compiled program")
+        self.model = None
 
     def __setattr__(self, name: Any, value: Any) -> None:
         if getattr(self, "_sealed", False):
@@ -125,10 +227,10 @@ class CompiledProblem:
 
     @property
     def problem_hash(self) -> Any:
-        """Stable hash of the program SOURCE the ``.so`` was compiled from (sec.12.4, #48).
+        """Stable hash of the artifact inputs the ``.so`` was compiled for (sec.12.4, #48).
 
-        The sha256 of the emitted C++ program text -- the cache identity (the WHAT). ``None`` for a
-        handle built outside ``compile_problem`` (it records no source hash); use
+        The sha256 of the emitted C++ source plus the optional frozen AuthoringSnapshot identity --
+        the cache identity (the WHAT). ``None`` for a handle built outside ``compile_problem``; use
         :attr:`program_hash` for the in-memory Program's IR hash, which is always available."""
         return self._problem_hash
 
@@ -166,8 +268,8 @@ class CompiledProblem:
 
         A :class:`pops.codegen.env.CodegenEnv` recording the EFFECTIVE settings (env defaults already
         overridden by any explicit argument): log level, codegen dir, keep-generated, dump-IR /
-        dump-CPP, cache dir, profile, autotune level, and the UNSAFE :attr:`CodegenEnv.jit_backdoor`
-        gate. Surfaced in :meth:`inspect` so the active env state is never hidden (criterion #47).
+        dump-CPP, cache dir and profile. Surfaced in :meth:`inspect` so the active
+        environment state is never hidden (criterion #47).
         ``None`` for a handle built outside ``compile_problem``."""
         return self._codegen_env
 
@@ -181,14 +283,6 @@ class CompiledProblem:
         change what bind lowers). ``None`` for a model with no backing Module."""
         return self._module_hash
 
-    def runtime_param_routes(self) -> Any:
-        """``(per_block, defaults)`` routing the Program's RUNTIME parameters to the per-PROGRAM-block
-        ``set_program_params`` vectors (ADC-510): per_block maps a program block index to its param names
-        in within-block index order (matching the ``.so`` metadata + the lowered read), defaults a name to
-        its declaration value. Built via the SAME ``program_param_entries`` the codegen emits. No bind."""
-        from pops.codegen.program_emit_params import program_param_routes
-        return program_param_routes(self.program, self.model)
-
     # --- operator introspection (Spec 2, S2-5): metadata read from the carried model,
     # no need to load or run the .so.
     def _intro_model(self) -> Any:
@@ -199,43 +293,54 @@ class CompiledProblem:
 
     def list_operators(self) -> Any:
         """Names of the typed operators of the compiled module (registration order)."""
+        if self._module_view.available:
+            return list(self._module_view.operator_names())
         return self._intro_model().operator_registry().names()
 
     def list_state_spaces(self) -> Any:
         """Names of the compiled module's state spaces."""
+        if self._module_view.available:
+            return list(self._module_view.state_spaces)
         return self._intro_model().list_state_spaces()
 
     def list_field_spaces(self) -> Any:
         """Names of the compiled module's field spaces."""
+        if self._module_view.available:
+            return list(self._module_view.field_spaces)
         return self._intro_model().list_field_spaces()
 
     def operator_signature(self, name: Any) -> Any:
         """The pops.model.Signature of operator ``name`` in the compiled module."""
+        if self._module_view.available:
+            return self._module_view.signature(name)
         return self._intro_model().operator_registry().get(name).signature
 
     def operator_requirements(self, name: Any) -> dict:
         """The requirements dict of operator ``name``."""
+        if self._module_view.available:
+            return self._module_view.requirements(name)
         return dict(self._intro_model().operator_registry().get(name).requirements)
 
     def operator_capabilities(self, name: Any) -> dict:
         """The capabilities dict of operator ``name``."""
+        if self._module_view.available:
+            return self._module_view.capabilities(name)
         return dict(self._intro_model().operator_registry().get(name).capabilities)
 
     # --- bind-input + memory introspection (Spec 5 sec.12.2 / 12.3, #44-46) ---
     # These read the carried metadata (the lowered Program + the physical model); they do NOT
     # compile, bind, dlopen or read any runtime array.
     def arguments(self) -> Any:
-        """The runtime inputs this artifact expects at ``System.install`` (Spec 5 sec.12.2, #44-45).
+        """The runtime inputs this artifact expects at ``pops.bind`` (Spec 5 sec.12.2, #44-45).
 
         Returns an :class:`pops.codegen.inspect_compiled.Arguments` listing -- WITHOUT any bind or
         runtime data -- the instances (state space / components / required), params (type / kind /
-        required), aux (layout / required), solvers (problem / solver), outputs and the runtime
-        layout the artifact expects. Sourced from the carried Program (the blocks it commits, the
-        field solves it performs) and the physical model (its state / params / aux). It is DISTINCT
-        from :meth:`requirements`-style compile constraints: ``arguments`` lists what you must SUPPLY
-        to bind. It allocates and reads nothing."""
-        from pops.codegen.inspect_compiled import build_arguments
-        return build_arguments(self)
+        required), aux (layout / required), outputs and the resolved runtime layout. Field
+        discretizations and solver providers are compile-time plan evidence, never bind inputs.
+        It is DISTINCT from :meth:`requirements`-style compile constraints: ``arguments`` lists
+        only concrete values you must SUPPLY to bind. It allocates and reads nothing."""
+        from pops.codegen.inspect_compiled import build_component_arguments
+        return build_component_arguments(self)
 
     def manifest(self) -> Any:
         """The RICH self-describing manifest of this artifact (Spec 5 sec.13.12, #36).
@@ -260,12 +365,13 @@ class CompiledProblem:
         AMR-patch / halo / MPI-buffer byte budgets, computed as a FORMULA over the mesh shape and
         the artifact's static cost (``Program.estimate``) + component counts. It NEVER allocates a
         ``MultiFab``; every assumption is in :attr:`MemoryEstimate.assumptions` and the estimate is
-        CONSERVATIVE. @p mesh an ``pops.mesh.CartesianMesh`` (or an int / 2-tuple of extents); @p
+        CONSERVATIVE. @p mesh an exact ``pops.mesh.CartesianGrid`` over a framed Rectangle; @p
         platform an optional hint (``"mpi"`` adds the halo-exchange buffer); @p layout an optional
-        ``pops.mesh.layouts.AMR`` / ``Uniform`` for an AMR hierarchy estimate (conservative;
+        ``pops.layouts.AMR`` / ``Uniform`` for an AMR hierarchy estimate (conservative;
         full-refinement worst case)."""
         from pops.codegen.inspect_compiled import build_memory_estimate
-        return build_memory_estimate(self, mesh, platform=platform, layout=layout)
+        return build_memory_estimate(
+            self, mesh, platform=platform, layout=layout or self.layout)
 
     def scratch_plan(self) -> Any:
         """The scratch-buffer liveness plan of this artifact's time Program (Spec 5 sec.13.11.3, #38).
@@ -277,7 +383,7 @@ class CompiledProblem:
         solver buffers. Computed by a liveness analysis over the carried Program IR
         (``Program.scratch_liveness`` / ``buffer_reuse_report``); the step-body reuse is EXACT, the
         persistent solver counts are conservative and labelled so. It NEVER binds, dlopens or
-        allocates -- it is inspectable BEFORE ``System.install``. Raises a clear error if this handle
+        allocates -- it is inspectable BEFORE ``pops.bind``. Raises a clear error if this handle
         carries no Program."""
         from pops.codegen.scratch_plan import build_scratch_plan
         return build_scratch_plan(self._require_program("scratch_plan"), model=self.model)
@@ -310,146 +416,14 @@ class CompiledProblem:
         from pops.codegen.inspect_report import build_requirements
         return build_requirements(self)
 
-    def inspect_capabilities(self) -> Any:
-        """The descriptor capability rows relevant to THIS compiled artifact (sec.12.1).
-
-        Delegates to the top-level :func:`pops.inspect_capabilities` machinery (the descriptor-sourced
-        capability matrix) and SCOPES it to the descriptor categories a compiled time Program can
-        select at bind -- the Riemann / reconstruction / limiter / projection bricks and the mesh
-        layouts (the solver / field catalogs are bind inputs, kept too). Returns the same printable
-        :class:`pops.CapabilityMatrix`. PURE: it imports only the inert authoring catalogs, never
-        ``_pops`` (cf. :func:`pops.inspect_capabilities`)."""
-        from pops._capabilities import inspect_capabilities, CapabilityMatrix
-        matrix = inspect_capabilities()
-        scoped = [e for e in matrix if e.category in self._CAPABILITY_CATEGORIES]
-        return CapabilityMatrix(scoped)
-
-    def capability_matrix(self) -> Any:
-        """The ADC-549 native route matrix for this compiled artifact.
-
-        Unlike :meth:`inspect_capabilities`, which scopes the descriptor catalog, this reports the
-        route support columns ADC-549 requires: feature, layout, backend, platform, MPI, GPU,
-        status, limitation and error_message. It is metadata-only: it builds the rich manifest from
-        the carried Program/model and never dlopens or binds the ``.so``.
-        """
-        from pops._capabilities import native_capability_matrix
-        manifest = self.manifest()
-        layout = "system"
-        try:
-            layout = self.arguments().layout_runtime.get("layout", "system")
-        except Exception:
-            pass
-        return native_capability_matrix(
-            owner=self.program_name or "compiled-problem", layout=layout,
-            flags=manifest.supports(), source="manifest")
-
-    # Descriptor categories a compiled time Program selects from at bind (a spatial brick + a layout
-    # + a field solver); the capability scope of inspect_capabilities().
-    _CAPABILITY_CATEGORIES = ("riemann", "reconstruction", "limiter", "projection", "layout",
-                              "solver", "field")
-
-    def dump_ir(self, path: Any = None) -> Any:
-        """Write the serialized Program IR (JSON) -- the SAME serialization ``_ir_hash`` digests.
-
-        EXPOSES the existing codegen: the lowered ``pops.time.Program``'s ``_serialize()`` blob (its
-        nodes, commits, block order, optional dt bound) as indented, sort-keyed JSON -- byte-stable
-        run to run, the WHAT the ``.so`` was built from. Writes to @p path if given (returns the
-        path), else returns the JSON string. Raises a clear error if this handle carries no Program."""
-        import json
-        program = self._require_program("dump_ir")
-        blob = json.dumps(program._serialize(), indent=2, sort_keys=True)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(blob)
-            return path
-        return blob
-
-    def dump_cpp(self, target: Any) -> Any:
-        """Write the generated C++ source of the problem ``.so`` (REUSES the existing emit).
-
-        Calls the EXISTING ``Program.emit_cpp_program(model=...)`` codegen (the same source
-        ``compile_problem`` compiles) and writes it. @p target is a directory (the source is written
-        as ``<program_name>.cpp`` inside it) OR a path ending in ``.cpp`` (written verbatim); the
-        parent directory must exist. Returns the written file path. The carried model is passed so a
-        Program whose IR names a model source / linear kernel lowers (without it such a Program raises
-        the SAME NotImplementedError the compile path raises -- it is not faked). Raises a clear error
-        if this handle carries no Program."""
-        import os
-        program = self._require_program("dump_cpp")
-        src = program.emit_cpp_program(model=self.model)
-        name = self.program_name or "problem"
-        if str(target).endswith(".cpp"):
-            out_path = str(target)
-            parent = os.path.dirname(out_path) or "."
-        else:
-            parent = str(target)
-            out_path = os.path.join(parent, "%s.cpp" % name)
-        if not os.path.isdir(parent):
-            raise NotADirectoryError(
-                "dump_cpp: the target directory %r does not exist; create it first "
-                "(dump_cpp does not allocate or create directories)." % (parent,))
-        with open(out_path, "w", encoding="utf-8") as handle:
-            handle.write(src)
-        return out_path
-
-    def dump_schedule(self, path: Any = None) -> Any:
-        """Write the schedule / commit order of the Program (the block advance order).
-
-        EXPOSES the lowered schedule WITHOUT running it: the committed blocks in the runtime block
-        index order (``_block_indices``: the order the Program first declares each block via
-        ``P.state``, the order ``install_program`` binds them), each with the IR id of its committed
-        State value. A plain, deterministic text listing. Writes to @p path if given (returns the
-        path), else returns the string. Raises a clear error if this handle carries no Program."""
-        program = self._require_program("dump_schedule")
-        commits = program.commits()
-        order = program._block_indices() if hasattr(program, "_block_indices") else {}
-        ordered = sorted(commits, key=lambda b: order.get(b, len(order)))
-        lines = ["schedule for Program %r (block commit order):" % (self.program_name or "problem")]
-        for block in ordered:
-            state = commits[block]
-            lines.append("  %2d  commit %-14s <- %s"
-                         % (order.get(block, -1), block, getattr(state, "name", "?")))
-        if not ordered:
-            lines.append("  (no committed block)")
-        text = "\n".join(lines)
-        if path is not None:
-            with open(str(path), "w", encoding="utf-8") as handle:
-                handle.write(text)
-            return path
-        return text
-
-    def _require_program(self, who: Any) -> Any:
-        """Return the carried Program, or raise a clear error naming what is missing (never fake)."""
-        program = self.program
-        if program is None:
-            raise ValueError(
-                "%s: this CompiledProblem carries no Program (the lowered pops.time.Program is "
-                "unavailable on this handle), so the IR / C++ / schedule cannot be dumped." % who)
-        return program
-    def inspect_amr(self, layout: Any = None) -> Any:
-        """STATIC AMR report on this compiled artifact (Spec 5 sec.8.12 / sec.8.4).
-
-        A whole-system Program compiled for the AMR target (``pops.compile(problem, layout=AMR(...))``,
-        ADC-634) carries its compile-time layout on ``self._layout``, so a bare call with no argument
-        reports THAT hierarchy (its refine / regrid / patches tags), mirroring
-        ``CompiledModel.inspect_amr``. An explicit @p layout argument always wins; a handle with no
-        ``_layout`` (a ``target='system'`` Program, or one built outside ``pops.compile``) falls back
-        to the native AMR envelope report -- never a fabricated hierarchy the artifact does not carry.
-        Delegates to the top-level :func:`pops.inspect_amr`. @p layout an optional AMR / Uniform layout
-        descriptor (default: the carried ``_layout``, else the native envelope).
-        """
-        from pops import inspect_amr
-        if layout is None:
-            layout = getattr(self, "_layout", None)
-        return inspect_amr(layout)
-
     def __str__(self) -> str:
         """A short, deterministic, array-free summary (Spec 5 sec.12.1, #40-41).
 
         Prints the program name, a short program-source/IR hash, a short ABI key and the validated
         library count -- never the ``.so`` contents and never a ``<...object at 0x...>`` repr. The
         hash makes two artifacts of the same program look identical run to run (deterministic)."""
-        short_hash = (self._problem_hash or self.program_hash or "")[:12] or "none"
+        hash_value = self._problem_hash or self.program_hash
+        short_hash = hash_value[:12] if isinstance(hash_value, str) and hash_value else "none"
         short_abi = (self.abi_key or "")[:12] or "none"
         return ("CompiledProblem(name=%s, hash=%s, backend=%s, libraries=%d)"
                 % (self.program_name or "problem", short_hash, short_abi, len(self.libraries)))

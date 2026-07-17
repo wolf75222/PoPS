@@ -5,11 +5,57 @@
 
 include(CMakeFindDependencyMacro)
 
+# A package configured with the native collective HDF5 backend exports HDF5::HDF5 and MPI_C
+# transitively. Enable C only for that exact installed feature; serial and MPI-only consumers remain
+# CXX-only.
+if(@POPS_HAS_HDF5@ AND NOT CMAKE_C_COMPILER_LOADED)
+  enable_language(C)
+endif()
+
 if(@POPS_HAS_KOKKOS@)
   find_dependency(Kokkos REQUIRED)
 endif()
+if(@POPS_HAS_HDF5@)
+  # POPS_HAS_HDF5 is an installed collective capability, never a serial/stub HDF5 mode.
+  find_dependency(MPI REQUIRED COMPONENTS C CXX)
+elseif(@POPS_HAS_MPI@)
+  find_dependency(MPI REQUIRED COMPONENTS CXX)
+endif()
 if(@POPS_HAS_MPI@)
-  find_dependency(MPI REQUIRED)
+  # Recompute the exact consumer MPI development identity with the same implementation used by the
+  # package build. Merely finding MPI::MPI_CXX is insufficient: another vendor/version would
+  # otherwise inherit the package POPS_MPI_ABI while compiling against different native files.
+  include("${CMAKE_CURRENT_LIST_DIR}/PopsMpiContract.cmake")
+  pops_configure_mpi_contract("")
+  if(NOT POPS_NATIVE_MPI_ABI STREQUAL "@POPS_NATIVE_MPI_ABI@")
+    set(pops_FOUND FALSE)
+    set(pops_NOT_FOUND_MESSAGE
+      "PoPS MPI ABI mismatch: package=@POPS_NATIVE_MPI_ABI@ consumer=${POPS_NATIVE_MPI_ABI}. "
+      "Use the same concrete MPI headers/libraries as the package build.")
+    return()
+  endif()
+endif()
+if(@POPS_HAS_HDF5@)
+  set(HDF5_PREFER_PARALLEL TRUE)
+  find_dependency(HDF5 REQUIRED COMPONENTS C)
+  if(NOT HDF5_IS_PARALLEL)
+    set(pops_FOUND FALSE)
+    set(pops_NOT_FOUND_MESSAGE
+      "This PoPS package requires the parallel HDF5 C backend used at build time")
+    return()
+  endif()
+  # A parallel HDF5 package is only valid when its native shared object consumes the exact same
+  # MPI runtime as MPI_C and MPI_CXX above.  Target names are not proof: package configurations can
+  # rebind MPI::MPI_C while the HDF5 binary remains linked to another vendor installation.
+  pops_configure_parallel_hdf5_mpi_contract(POPS_CONSUMER_HDF5_MPI_ABI)
+  if(NOT POPS_CONSUMER_HDF5_MPI_ABI STREQUAL "@POPS_NATIVE_HDF5_MPI_ABI@")
+    set(pops_FOUND FALSE)
+    set(pops_NOT_FOUND_MESSAGE
+      "PoPS parallel HDF5/MPI pair mismatch: package=@POPS_NATIVE_HDF5_MPI_ABI@ "
+      "consumer=${POPS_CONSUMER_HDF5_MPI_ABI}. Use the exact native HDF5 and MPI artifacts "
+      "selected when PoPS was built.")
+    return()
+  endif()
 endif()
 # NB: pas de bloc OpenMP ici. Le backend OpenMP autonome a ete retire (ADC-263) et
 # @POPS_USE_OPENMP@ n'est plus defini (il s'expansait en `if()` toujours faux -- mort). Pour un

@@ -445,8 +445,8 @@ TEST(test_polar_fluid_transport, MmsFullFluidSystemConvergesAtOrderTwo) {
   const double p2 = std::log2(e[1] / e[2]);
   const double kSeuil = 1.7;
   EXPECT_TRUE(p1 >= kSeuil && p2 >= kSeuil && std::isfinite(e[2]))
-      << "ordre observe WENO5 (L2) : " << p1 << " (48->96), " << p2 << " (96->192), seuil="
-      << kSeuil << ", e[2]=" << e[2];
+      << "ordre observe WENO5 (L2) : " << p1 << " (48->96), " << p2
+      << " (96->192), seuil=" << kSeuil << ", e[2]=" << e[2];
 }
 
 // (C) Conservation de la masse sur une avance SSPRK3 avec paroi radiale.

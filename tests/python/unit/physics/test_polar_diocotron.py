@@ -15,8 +15,10 @@ import math
 
 import numpy as np
 
-import pops
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
+from pops.runtime._engine_descriptors import Dirichlet
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 48
 L_MODE = 4
@@ -46,13 +48,13 @@ def _mode_amplitude(sim, l):
 
 
 def test_polar_diocotron_mode_grows_and_conserves():
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.add_block(
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim.add_equation(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(), elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(weno5=True), time=pops.Explicit(method="ssprk3"))
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(), elliptic=engine.ChargeDensity(charge=1.0)),
+        spatial=engine.Spatial(weno5=True), time=engine.Explicit(method="ssprk3"))
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _hollow_ring_density())
 
     m0 = sim.mass("ne")

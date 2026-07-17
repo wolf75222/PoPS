@@ -28,18 +28,17 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
-
-fails = 0
+import pops.runtime._engine_descriptors as engine
+from pops.math import sqrt
+from pops.physics._facade import Model
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 INCLUDE = repo_include()
+fails = 0
 
 
 def chk(cond, label):
@@ -51,15 +50,16 @@ def chk(cond, label):
 
 def err_msg(fn):
     try:
-        fn(); return ""
+        fn()
+        return ""
     except Exception as ex:  # noqa: BLE001
         return str(ex)
 
 
 def gas():  # Euler compressible 4-var : a pressure() + wave_speeds()
-    return pops.Model(state=pops.FluidState("compressible", gamma=1.4),
-                     transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                     elliptic=pops.ChargeDensity(charge=0.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=1.4),
+                     transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                     elliptic=engine.ChargeDensity(charge=0.0))
 
 
 def smooth_rho(n):
@@ -69,8 +69,8 @@ def smooth_rho(n):
 
 def run_gas(riemann, n=48, nsteps=10, cfl=0.2):
     s = System(n=n, L=1.0, periodic=True)
-    s.add_block("gas", model=gas(), spatial=pops.Spatial(weno5=True, flux=riemann),
-                time=pops.Explicit())
+    s.add_equation("gas", model=gas(), spatial=engine.Spatial(weno5=True, flux=riemann),
+                time=engine.Explicit())
     s.set_poisson()
     s.set_density("gas", smooth_rho(n))
     for _ in range(nsteps):
@@ -95,7 +95,7 @@ if missing:
     if fails:
         print(f"test_hll_isothermal : {fails} ECHEC(S)")
         sys.exit(1)
-    skip_process_test(f"(3)/(4) test_hll_isothermal : {missing}")
+    require_native_or_skip(f"(3)/(4) test_hll_isothermal : {missing}")
 
 
 def iso3(declare_p):
@@ -104,7 +104,8 @@ def iso3(declare_p):
     m = Model("iso3_%s" % ("withp" if declare_p else "nop"))
     rho, mx, my = m.conservative_vars("rho", "mx", "my", roles=["Density", "MomentumX", "MomentumY"])
     cs2 = 0.5
-    u = m.primitive("u", mx / rho); v = m.primitive("v", my / rho)
+    u = m.primitive("u", mx / rho)
+    v = m.primitive("v", my / rho)
     if declare_p:
         m.primitive("p", cs2 * rho)  # declaree -> wave_speeds emis (meme hors primitive_vars)
     c = sqrt(cs2)
@@ -124,11 +125,12 @@ try:
 
     def build(cm, riem):
         s = System(n=40, L=1.0, periodic=True)
-        s.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem,
-                                                              variables=Conservative()),
-                       time=pops.Explicit(method="ssprk2"))
+        s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=WENO5(), flux=riem,
+                                                              recon=Conservative()),
+                       time=engine.Explicit(method="ssprk2"))
         s.set_poisson()
-        z = np.zeros((40, 40)); r = 1.0 + 0.2 * smooth_rho(40) / smooth_rho(40).max()
+        z = np.zeros((40, 40))
+        r = 1.0 + 0.2 * smooth_rho(40) / smooth_rho(40).max()
         s.set_primitive_state("f", rho=r, u=z, v=z)
         return s
 

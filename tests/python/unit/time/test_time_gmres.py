@@ -2,12 +2,12 @@
 """pops.time GMRES Krylov solver for the compiled time program (epic ADC-399 / ADC-420).
 
 ADC-420 adds restarted GMRES(m) to the matrix-free Krylov core (pops::gmres_solve in
-generic_krylov.hpp) and exposes it as ``P.solve_linear(method="gmres", restart=m)``. GMRES is the
+generic_krylov.hpp) and exposes it through ``P.solve(LinearProblem(...), solver=GMRES(...))``. GMRES is the
 robust choice for a NON-symmetric operator: where CG needs an SPD A and stagnates on a non-self-adjoint
 one, GMRES minimises the residual over the Krylov subspace and converges.
 
 (A) Codegen + validation (pure Python, always runs): a Helmholtz operator ``A(in) = in - alpha*Lap(in)``
-    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``pops::gmres_solve`` with the
+    solved by gmres lowers to the apply lambda + ``ctx.laplacian`` + ``ctx.solve_linear_matfree`` with the
     restart length; the restart default (30) and an override both appear in the generated C++; the
     validation errors fire (max_iter absent/<=0; restart<=0 or non-int for gmres; restart passed to a
     non-gmres method).
@@ -26,18 +26,23 @@ one, GMRES minimises the residual over the Krylov subspace and converges.
 The non-symmetric C++ guard (CG stagnates while gmres recovers phi_exact) is also pinned directly in
 tests/cpp/unit/elliptic/test_generic_krylov.cpp, which is fully validatable on every backend without the Python toolchain.
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen import _compile_drivers as compile_drivers
+from typed_program_support import typed_state
+
+from pops.linalg import LinearProblem
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.time import FailRun
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_gmres (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_gmres (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -45,23 +50,25 @@ _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*Lap (SPD part)
 _BETA = 2.0   # advection strength of the non-symmetric term beta*d/dx (breaks self-adjointness)
 
 
-def _krylov(method):
-    """Map a method name to its TYPED pops.solvers.krylov descriptor (Spec 5 sec.7: solve_linear
-    takes a typed solver, not a string -- the test still parametrizes by the name for clarity)."""
+def _krylov(method, *, max_iter, rel_tol=None, restart=None):
+    """Build the exact typed Krylov descriptor selected by the test."""
     from pops.solvers import krylov
-    # ADC-535: the Krylov descriptors carry a mandatory max_iter; solve_linear uses only its
-    # .scheme here (its own max_iter= is the authoritative budget), so any positive budget serves.
+    options = {"max_iter": max_iter}
+    if rel_tol is not None:
+        options["rel_tol"] = rel_tol
+    if restart is not None:
+        options["restart"] = restart
     return {"cg": krylov.CG, "bicgstab": krylov.BiCGStab,
-            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](max_iter=50)
+            "richardson": krylov.Richardson, "gmres": krylov.GMRES}[method](**options)
 
 
 def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300, restart=30,
                  alpha=_ALPHA):
     """(I - alpha*Lap) phi = U, committed back into the 1-component block (its state == a scalar field).
 
-    A pure (SPD) Helmholtz apply; solve_linear drives the runtime GMRES loop. No model needed."""
+    A pure (SPD) Helmholtz apply; Program.solve drives the runtime GMRES loop. No model needed."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -70,9 +77,14 @@ def _spd_program(t, *, name="gmres_spd", method="gmres", tol=1e-9, max_iter=300,
         return x - alpha * lap  # out = in - alpha*Lap(in)
 
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter,
-                         restart=restart)
-    P.commit("blk", phi)
+    phi = P.solve(
+        LinearProblem(A, U),
+        solver=_krylov(
+            method, max_iter=max_iter, rel_tol=tol, restart=restart),
+    ).consume(action=FailRun())
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.value("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -84,7 +96,7 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
     d fx/dx (the x-flux read from in, the y-flux zero) -- a skew-symmetric term that makes A
     non-self-adjoint, so CG stagnates while GMRES converges."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -100,11 +112,14 @@ def _nonsym_program(t, *, name="gmres_nonsym", tol=1e-9, max_iter=300, restart=3
         return x - alpha * lap + beta * dxdir  # out = in - alpha*Lap(in) + beta*d(in)/dx
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=_krylov(method), tol=tol, max_iter=max_iter)
-    if method == "gmres":
-        kw["restart"] = restart  # restart is gmres-only (rejected for cg/bicgstab)
-    phi = P.solve_linear(**kw)
-    P.commit("blk", phi)
+    solver = _krylov(
+        method, max_iter=max_iter, rel_tol=tol,
+        restart=(restart if method == "gmres" else None),
+    )
+    phi = P.solve(LinearProblem(A, U), solver=solver).consume(action=FailRun())
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.value("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -116,38 +131,40 @@ def _helmholtz(P, x):
 
 # ---- (A) codegen + validation: pure Python, always runs ----
 def test_gmres_codegen(t):
-    src = _spd_program(t, method="gmres").emit_cpp_program()
-    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "pops::gmres_solve",
+    src = emit_cpp_program(_spd_program(t, method="gmres"))
+    for frag in ("pops::ApplyFn apply_A", "ctx.laplacian", "ctx.solve_linear_matfree",
                  "pops::ApplyFn{}"):  # identity (empty) preconditioner
         assert frag in src, "the generated gmres solve must contain %r\n%s" % (frag, src)
 
 
 def test_gmres_restart_default_in_codegen(t):
-    src = _spd_program(t, restart=30).emit_cpp_program()
-    # The trailing gmres_solve argument is the restart length (default 30).
-    assert ", 30);" in src and "pops::gmres_solve" in src, "the default restart 30 must lower\n%s" % src
+    src = emit_cpp_program(_spd_program(t, restart=30))
+    assert ", 30," in src and "ctx.solve_linear_matfree" in src, \
+        "the default restart 30 must lower\n%s" % src
 
 
 def test_gmres_restart_override_in_codegen(t):
-    src = _spd_program(t, restart=12).emit_cpp_program()
-    assert ", 12);" in src and "pops::gmres_solve" in src, "an overridden restart must lower\n%s" % src
+    src = emit_cpp_program(_spd_program(t, restart=12))
+    assert ", 12," in src and "ctx.solve_linear_matfree" in src, \
+        "an overridden restart must lower\n%s" % src
 
 
 def test_gmres_now_valid_method(t):
     # gmres used to be rejected as unknown; it is now a first-class method.
     P = _spd_program(t, method="gmres")
-    assert P.validate() is True, "the gmres solve_linear Program must validate"
+    assert P.validate() is True, "the GMRES Program.solve graph must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
 
 def test_gmres_max_iter_required(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for bad in (None, 0, -5):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=bad)
+            P.solve(
+                LinearProblem(A, U), solver=_krylov("gmres", max_iter=bad))
         except ValueError as exc:
             assert "dynamic solver loops require max_iter" in str(exc), str(exc)
         else:
@@ -156,31 +173,41 @@ def test_gmres_max_iter_required(t):
 
 def test_gmres_restart_validation(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
-    for bad in (0, -3, 1.5, True):  # a positive int is required (True is rejected: bool is not allowed)
+    for bad in (0, -3, 1.5, True, 51):
+        # a positive int in the native GMRES basis range is required (True is rejected: bool is not allowed)
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=bad)
+            P.solve(
+                LinearProblem(A, U),
+                solver=_krylov("gmres", max_iter=10, restart=bad),
+            )
         except ValueError as exc:
             assert "restart" in str(exc), str(exc)
         else:
             raise AssertionError("restart=%r must raise for gmres" % (bad,))
     # a positive int restart is accepted
-    phi = P.solve_linear(operator=A, rhs=U, method=_krylov("gmres"), max_iter=10, restart=8)
-    assert phi.attrs["restart"] == 8, "the restart is stored on the IR node"
+    P.solve(
+        LinearProblem(A, U), solver=_krylov("gmres", max_iter=10, restart=8),
+    ).consume(action=FailRun())
+    token = next(value for value in P._values if value.op == "solve_linear")
+    assert token.attrs["restart"] == 8, "the restart is stored on the IR node"
 
 
 def test_restart_rejected_for_non_gmres(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
     P.set_apply(A, lambda P, out, x: _helmholtz(P, x))
     for method in ("cg", "bicgstab", "richardson"):
         try:
-            P.solve_linear(operator=A, rhs=U, method=_krylov(method), max_iter=10, restart=20)
-        except ValueError as exc:
-            assert "restart only applies" in str(exc), str(exc)
+            P.solve(
+                LinearProblem(A, U),
+                solver=_krylov(method, max_iter=10, restart=20),
+            )
+        except TypeError as exc:
+            assert "restart" in str(exc) and "unexpected keyword" in str(exc), str(exc)
         else:
             raise AssertionError("restart on method=%r must raise" % (method,))
 
@@ -249,7 +276,7 @@ def _discrete_nonsym(n, alpha, beta):
 def _passive_model(name):
     """A minimal 1-variable block with NO flux and NO Poisson coupling: the block's single conservative
     variable doubles as the scalar field the matrix-free solve writes."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -263,24 +290,25 @@ def _passive_model(name):
 def _run_one(t, pops, np, program, name):
     """Compile + install + step @p program on a 1-variable block, return the stepped state and rho0,
     or None if the toolchain is unavailable."""
+    import pops.runtime._engine_descriptors as engine
+
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
-    from pops.physics.facade import Model
 
     try:
-        compiled = pops.codegen.compile_problem(model=_passive_model(name + "_prog"), time=program)
+        compiled = compile_drivers.compile_problem(model=_passive_model(name + "_prog"), time=program)
         compiled_model = _passive_model(name + "_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: could not build the .so: %s --' % str(exc)[:200])
         return None
 
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -298,7 +326,7 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     tol = 1e-9

@@ -136,11 +136,11 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
   // --- Run the GENERATED custom solver (the lowered @pops.lib.solver IR) ---
   MultiFab x_gen(ba, dm, 1, 1);
   x_gen.set_val(0.0);
-  const KrylovResult r_gen = richardson_gen_solve(op, x_gen, rhs);
+  const SolveReport r_gen = richardson_gen_solve(op, x_gen, rhs);
   const Real err_gen = max_abs_diff(x_gen, phi_exact_mf);
   std::printf("generated : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r_gen.converged ? "CONVERGED" : "FAILED", r_gen.iters, r_gen.rel_residual, err_gen);
-  EXPECT_TRUE(r_gen.converged) << "generated_converged";
+              r_gen.solved() ? "CONVERGED" : "FAILED", r_gen.iters, r_gen.rel_residual, err_gen);
+  EXPECT_TRUE(r_gen.solved()) << "generated_converged";
   EXPECT_TRUE(r_gen.iters > 1) << "generated_iters_gt_1 iters=" << r_gen.iters;
   EXPECT_TRUE(err_gen < 1e-5) << "generated_recovers_exact err_gen=" << err_gen;
 
@@ -153,11 +153,11 @@ TEST(test_solver_codegen_generated, generated_kernel_matches_native_richardson) 
   ApplyFn A = [&](MultiFab& out, const MultiFab& in) { op(out, in); };
   const Real bnorm = std::sqrt(pops::dot(rhs, rhs));
   const Real rel_tol = kAbsTol / bnorm;
-  const KrylovResult r_ref = richardson_solve(A, x_ref, rhs, kOmega, rel_tol, 1000000);
+  const SolveReport r_ref = richardson_solve(A, x_ref, rhs, kOmega, rel_tol, 1000000);
   const Real err_ref = max_abs_diff(x_ref, phi_exact_mf);
   std::printf("native    : %s in %d iters (rel=%.2e) | max|x - exact| = %.3e\n",
-              r_ref.converged ? "CONVERGED" : "FAILED", r_ref.iters, r_ref.rel_residual, err_ref);
-  EXPECT_TRUE(r_ref.converged) << "native_converged";
+              r_ref.solved() ? "CONVERGED" : "FAILED", r_ref.iters, r_ref.rel_residual, err_ref);
+  EXPECT_TRUE(r_ref.solved()) << "native_converged";
 
   // --- PARITY: the generated kernel IS the native Richardson iteration (same omega / tol / op). ---
   // Both start from x = 0 with identical omega and the same discrete operator, so they trace the same

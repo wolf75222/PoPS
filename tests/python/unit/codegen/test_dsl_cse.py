@@ -5,6 +5,7 @@ valeur, seulement le nombre de calculs) mais que la version CSE factorise effect
 'cseK_' presentes, et moins d'appels std::sqrt (la vitesse du son calculee une fois). Reutilise la
 brique Euler et le harnais de comparaison a pops::Euler de test_dsl_brick.
 """
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -43,7 +44,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> comparaison numerique sautee")
+        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> comparaison numerique sautee')
         print("test_dsl_cse : OK (forme seulement)")
         return
 

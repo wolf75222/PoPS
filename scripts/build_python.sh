@@ -4,21 +4,23 @@
 # `pops` env and pins the per-platform toolchain); then this script, on every (re)build:
 #
 #   - activates the conda env `pops` (override: POPS_ENV_NAME), without tripping `set -u`;
-#   - sizes the heavy-TU Ninja pool (POPS_HEAVY_TU_POOL) from cores AND free RAM so the split module TUs
-#     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default is 1, the
-#     CI out-of-memory guard). Pre-set POPS_HEAVY_TU_POOL to pin it by hand.
+#   - sizes the production-module heavy-TU Ninja pool (POPS_HEAVY_MODULE_TU_POOL) from cores AND free RAM so the split module TUs
+#     compile in PARALLEL without OOM (each -O3 leaf peaks at several GB; the CMake default remains the
+#     memory-constrained size-1 guard). Pre-set POPS_HEAVY_MODULE_TU_POOL to pin it by hand.
 #   - exports the Kokkos / CMake discovery vars (Kokkos_ROOT, POPS_KOKKOS_ROOT, CMAKE_PREFIX_PATH) and a
 #     STABLE, cross-worktree ccache (CCACHE_DIR + CCACHE_BASEDIR -> a file already compiled in another
 #     worktree is reused instead of recompiled);
 #   - runs `pip install . --no-build-isolation` so the build reuses the env's pinned
 #     scikit-build-core / pybind11 (the SAME stack as the toolchain) instead of a fresh pip build env;
-#   - ends on `import pops; pops.doctor()`.
+#   - ends on the runtime-layer environment doctor.
 #
 #   bash scripts/build_python.sh            # build + install into the active env
 #   bash scripts/build_python.sh --clean    # drop the scikit-build wheel cache first
 #   bash scripts/build_python.sh --fresh    # --clean AND `ccache -C`: a true COLD compile (measuring)
-#   bash scripts/build_python.sh --mpi      # also build the distributed MPI backend (POPS_USE_MPI=ON)
-#   POPS_HEAVY_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
+#   bash scripts/build_python.sh --mpi      # distributed MPI + native parallel-HDF5 backend
+#   bash scripts/build_python.sh --wheel-dir /tmp/wheels
+#                                           # build, retain, then install that exact wheel
+#   POPS_HEAVY_MODULE_TU_POOL=4 bash scripts/build_python.sh    # pin the pool by hand (skip auto-sizing)
 #   bash scripts/build_python.sh -- -e      # pass extra args through to pip (here: editable install)
 #
 # NOT `set -u`: `conda activate` references unset variables in its own shell hook.
@@ -26,34 +28,39 @@ set -eo pipefail
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+source "$HERE/scripts/conda_runtime.sh"
 
 # --- arguments --------------------------------------------------------------------------------------
 DO_CLEAN=0
 DO_FRESH=0
 WITH_MPI=0
+WHEEL_DIR=""
 EXTRA_PIP=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) DO_CLEAN=1 ;;
     --fresh) DO_CLEAN=1; DO_FRESH=1 ;;
     --mpi)   WITH_MPI=1 ;;
+    --wheel-dir)
+      shift
+      [[ $# -gt 0 ]] || { echo "--wheel-dir requires a directory" >&2; exit 2; }
+      WHEEL_DIR="$1"
+      ;;
     -h|--help)
       sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
       exit 0 ;;
     --) shift; EXTRA_PIP=("$@"); break ;;
-    *) echo "unknown argument: $1 (use --clean | --fresh | --mpi | --help, or -- <pip args>)" >&2
+    *) echo "unknown argument: $1 (use --clean | --fresh | --mpi | --wheel-dir DIR | --help, or -- <pip args>)" >&2
        exit 2 ;;
   esac
   shift
 done
 
 # --- conda present + env active ----------------------------------------------------------------------
-if ! command -v conda >/dev/null 2>&1; then
+if ! pops_load_conda; then
   echo "conda not found. Run 'bash scripts/setup_env.sh' first (it bootstraps the env and toolchain)." >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "$(conda info --base)/etc/profile.d/conda.sh"
 if ! conda env list | awk '{print $1}' | grep -qx "$ENV_NAME"; then
   echo "conda env '$ENV_NAME' is missing. Create it first: bash scripts/setup_env.sh" >&2
   exit 1
@@ -70,26 +77,27 @@ else
   mem_bytes=$(( mem_kb * 1024 ))
 fi
 mem_gb=$(( mem_bytes / 1024 / 1024 / 1024 ))
-if [[ -n "${POPS_HEAVY_TU_POOL:-}" ]]; then
-  pool="$POPS_HEAVY_TU_POOL"
-  echo "heavy-TU pool: $pool (from POPS_HEAVY_TU_POOL)"
+if [[ -n "${POPS_HEAVY_MODULE_TU_POOL:-}" ]]; then
+  pool="$POPS_HEAVY_MODULE_TU_POOL"
+  echo "production module heavy-TU pool: $pool (from POPS_HEAVY_MODULE_TU_POOL)"
 else
   ram_cap=$(( mem_gb / 4 )); [[ $ram_cap -lt 1 ]] && ram_cap=1
   pool=$ncpu; [[ $pool -gt $ram_cap ]] && pool=$ram_cap
-  echo "heavy-TU pool: $pool (min of ${ncpu} cores and ${ram_cap} = ${mem_gb}GB/4; export POPS_HEAVY_TU_POOL to override)"
+  echo "production module heavy-TU pool: $pool (min of ${ncpu} cores and ${ram_cap} = ${mem_gb}GB/4; export POPS_HEAVY_MODULE_TU_POOL to override)"
 fi
 
 # --- discovery vars + stable cross-worktree ccache --------------------------------------------------
 export CMAKE_PREFIX_PATH="${CONDA_PREFIX}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 export Kokkos_ROOT="${Kokkos_ROOT:-$CONDA_PREFIX}"
 export POPS_KOKKOS_ROOT="${POPS_KOKKOS_ROOT:-$CONDA_PREFIX}"
-# A ccache shared by every checkout, with absolute paths rewritten relative to the repo root that owns
-# all worktrees (git common dir's parent), so the same TU compiled in another worktree is a cache hit.
-main_root="$(git -C "$HERE" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-main_root="${main_root%/.git}"
-[[ -n "$main_root" && -d "$main_root" ]] || main_root="$HERE"
+# The build and its doctor must always validate this checkout, not whichever worktree last persisted
+# POPS_INCLUDE in the shared conda environment.
+export POPS_INCLUDE="$HERE/include"
+# A stable cache directory is shared by every checkout. Each worktree uses its own root as base_dir:
+# ccache then rewrites its absolute source/build paths to the same relative paths in every worktree.
+# Using the main checkout as base_dir does not cover linked worktrees created as siblings.
 export CCACHE_DIR="${CCACHE_DIR:-$HOME/.cache/adc-ccache}"
-export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$main_root}"
+export CCACHE_BASEDIR="${CCACHE_BASEDIR:-$HERE}"
 echo "ccache: dir=$CCACHE_DIR basedir=$CCACHE_BASEDIR"
 
 # --- clean / fresh ----------------------------------------------------------------------------------
@@ -110,19 +118,60 @@ if [[ $DO_FRESH -eq 1 ]]; then
 fi
 
 # --- build + install --------------------------------------------------------------------------------
-[[ $WITH_MPI -eq 1 ]] && { export POPS_USE_MPI=ON; echo "MPI backend: ON"; }
+if [[ $WITH_MPI -eq 1 ]]; then
+  # The final distributed runtime contract includes its native collective writer.  A serial HDF5
+  # discovery is rejected by CMake; there is no reduced-capability `--mpi` artifact.
+  export POPS_USE_MPI=ON
+  export POPS_USE_HDF5=ON
+  echo "MPI backend: ON; native parallel HDF5: ON"
+fi
 cd "$HERE"
-pip_args=(install -v . -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+if [[ -n "$WHEEL_DIR" && "$WHEEL_DIR" != /* ]]; then
+  WHEEL_DIR="$HERE/$WHEEL_DIR"
+fi
+if [[ -n "$WHEEL_DIR" ]]; then
+  mkdir -p "$WHEEL_DIR"
+  shopt -s nullglob
+  existing_wheels=("$WHEEL_DIR"/*.whl)
+  if [[ ${#existing_wheels[@]} -ne 0 ]]; then
+    echo "--wheel-dir must be empty; refusing stale release artifacts in $WHEEL_DIR" >&2
+    exit 2
+  fi
+  pip_args=(wheel -v . --no-deps --wheel-dir "$WHEEL_DIR" \
+    -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+else
+  pip_args=(install -v . -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+fi
 if python -c "import scikit_build_core, pybind11" >/dev/null 2>&1; then
-  pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_TU_POOL="$pool")
+  if [[ -n "$WHEEL_DIR" ]]; then
+    pip_args=(wheel -v . --no-deps --no-build-isolation --wheel-dir "$WHEEL_DIR" \
+      -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+  else
+    pip_args=(install -v . --no-build-isolation -C cmake.define.POPS_HEAVY_MODULE_TU_POOL="$pool")
+  fi
 else
   echo "note: scikit-build-core/pybind11 not in '$ENV_NAME'; using pip build isolation"
   echo "      (slower, unpinned build deps). Add 'scikit-build-core' to environment.yml + 'conda env update' to fix."
 fi
 echo "--- python -m pip ${pip_args[*]} ${EXTRA_PIP[*]} ---"
 python -m pip "${pip_args[@]}" "${EXTRA_PIP[@]}"
+if [[ -n "$WHEEL_DIR" ]]; then
+  built_wheels=("$WHEEL_DIR"/pops-*.whl)
+  if [[ ${#built_wheels[@]} -ne 1 ]]; then
+    echo "release build must produce exactly one pops wheel in $WHEEL_DIR" >&2
+    exit 1
+  fi
+  echo "--- installing exact retained wheel ${built_wheels[0]} ---"
+  python -m pip install --force-reinstall --no-deps "${built_wheels[0]}"
+  echo "release wheel: ${built_wheels[0]}"
+fi
 
 # --- diagnose ---------------------------------------------------------------------------------------
+# ADC-647: pip/scikit-build may rewrite the copied extension after the linker signed its build-tree
+# output. Resolve the exact installed module without importing pops, ad-hoc sign it on Darwin, and
+# verify both the signature and its ad-hoc identity. Any failure stops before import/doctor.
+PYTHONPATH= PYTHONNOUSERSITE=1 python "$HERE/scripts/codesign_pops_extensions.py"
 echo ""
-echo "--- import pops; pops.doctor() ---"
-python -c "import pops; print('pops', pops.__version__); pops.doctor()"
+echo "--- pops.runtime.doctor.doctor() ---"
+PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python -c "import pops; from pops.runtime.doctor import doctor; print('pops', pops.__version__); doctor()"

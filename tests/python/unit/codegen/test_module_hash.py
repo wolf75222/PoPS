@@ -1,22 +1,25 @@
 """Spec 2 (S2-7): Module.module_hash covers the ModuleSpec (spaces + typed operators).
 
-module_hash folds the spaces, parameters, aux and -- per operator -- name, kind, signature,
-capabilities, requirements and a body identity. It is deterministic for an identical module and
-invalidated by an operator body / signature / capability / space change, so a compiled artifact
-keyed on it is rebuilt when the operator spec changes. The dsl codegen sensitivity to a formula
-change stays with the existing Model._model_hash; module_hash adds the operator-spec layer.
+module_hash folds the spaces, parameters, aux, authenticated operator aliases and -- per operator
+-- name, kind, signature, capabilities, requirements and a body identity. It is deterministic for
+an identical module and invalidated by an operator body / signature / capability / alias / space
+change, so a compiled artifact keyed on it is rebuilt when the operator spec changes. The dsl
+codegen sensitivity to a formula change stays with the existing Model._model_hash; module_hash adds
+the operator-spec layer.
 Pure Python; skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
+
+import pytest
 
 try:
     from pops import model
-    from pops.ir.expr import Const, Var
-    from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
+    from pops._ir.expr import Const, Var
+    from pops.math import sqrt
+    from pops.physics._facade import Model
+    from pops.params import RuntimeParam
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_module_hash (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_module_hash (pops unavailable: %s)' % exc)
 
 
 def test_deterministic():
@@ -24,7 +27,7 @@ def test_deterministic():
         mod = model.Module("m")
         u = mod.state_space("U", ("rho", "mx", "my"), roles={"rho": "Density"})
         f = mod.field_space("fields", ("phi", "grad_x", "grad_y"))
-        mod.parameters(alpha=1.0)
+        mod.parameters(RuntimeParam("alpha", default=1.0))
         mod.aux_fields(B_z="cell_scalar")
         mod.operator(name="fields_from_state", signature=(u,) >> f,
                      kind="field_operator", expr="POISSON")
@@ -45,6 +48,69 @@ def test_signature_change_invalidates():
     m2.operator(name="op", signature=(u2, f2) >> model.Rate(u2), kind="local_rate", expr="E")
     assert m1.module_hash() != m2.module_hash()
     print("OK  a signature change invalidates module_hash")
+
+
+def test_public_operator_alias_change_invalidates():
+    def build(alias=None):
+        module = model.Module("aliased")
+        state = module.state_space("U", ("rho",))
+        module.operator(
+            name="flux_default", signature=(state,) >> model.Rate(state),
+            kind="grid_operator", expr="F",
+        )
+        if alias is not None:
+            module.operator_registry().register_alias(alias, "flux_default")
+        return module
+
+    assert build("transport").module_hash() != build().module_hash()
+    assert build("transport").module_hash() != build("advection").module_hash()
+    print("OK  an authenticated public operator alias invalidates module_hash")
+
+
+def test_typed_operator_binding_change_invalidates():
+    def build(subject_name=None, target="flux_default"):
+        module = model.Module("bound")
+        state = module.state_space("U", ("rho",))
+        for name in ("flux_default", "flux_alternate"):
+            module.operator(
+                name=name,
+                signature=(state,) >> model.Rate(state),
+                kind="grid_operator",
+                expr=name,
+            )
+        if subject_name is not None:
+            subject = model.Handle(subject_name, kind="flux", owner=module.owner_path)
+            declarations = model.DeclarationIndex(owner=module.owner_path, handles=(subject,))
+            declarations = module._register_operator_binding_authority(declarations)
+            module._bind_operator(
+                subject,
+                module.operator_handle(target),
+                declarations=declarations,
+            )
+        return module
+
+    assert build("transport").module_hash() != build().module_hash()
+    assert build("transport").module_hash() != build("advection").module_hash()
+    assert build("transport").module_hash() != build("transport", "flux_alternate").module_hash()
+
+    def build_many(names):
+        module = build()
+        subjects = tuple(
+            model.Handle(name, kind="flux", owner=module.owner_path) for name in names
+        )
+        declarations = model.DeclarationIndex(owner=module.owner_path, handles=subjects)
+        declarations = module._register_operator_binding_authority(declarations)
+        for subject in subjects:
+            module._bind_operator(
+                subject,
+                module.operator_handle("flux_default"),
+                declarations=declarations,
+            )
+        return module
+
+    assert build_many(("transport", "advection")).module_hash() \
+        == build_many(("advection", "transport")).module_hash()
+    print("OK  a typed scientific-to-operator binding invalidates module_hash")
 
 
 def test_expr_body_change_invalidates():
@@ -87,6 +153,74 @@ def test_callable_body_change_invalidates():
     print("OK  a decorated-body source change invalidates module_hash")
 
 
+def test_callable_instances_hash_by_code_and_strict_state_not_address_repr():
+    class Scale:
+        def __init__(self, factor):
+            self.factor = factor
+
+        def __call__(self, state):
+            return self.factor, state
+
+    def build(body):
+        mod = model.Module("callable-instance")
+        state = mod.state_space("U", ("rho",))
+        mod.operator(
+            "source", signature=(state,) >> model.Rate(state),
+            kind="local_source", expr=body)
+        return mod.module_hash()
+
+    assert build(Scale(2)) == build(Scale(2))
+    assert build(Scale(2)) != build(Scale(3))
+
+
+def test_callable_private_slots_and_referenced_globals_invalidate_hash():
+    class SlottedScale:
+        __slots__ = ("__factor",)
+
+        def __init__(self, factor):
+            self.__factor = factor
+
+        def __call__(self, state):
+            return self.__factor, state
+
+    def build(body):
+        mod = model.Module("callable-dependencies")
+        state = mod.state_space("U", ("rho",))
+        mod.operator(
+            "source", signature=(state,) >> model.Rate(state),
+            kind="local_source", expr=body)
+        return mod.module_hash()
+
+    assert build(SlottedScale(2)) != build(SlottedScale(3))
+
+    namespace = {"__name__": __name__, "FACTOR": 2}
+    exec("def source(state):\n    return FACTOR, state\n", namespace)
+    source = namespace["source"]
+    first = build(source)
+    namespace["FACTOR"] = 3
+    assert first != build(source)
+
+
+def test_opaque_body_and_opaque_hash_metadata_fail_loud_without_repr_fallback():
+    state = model.StateSpace("U", ("rho",))
+
+    opaque_body = model.Module("opaque-body")
+    opaque_body.state_space("U", ("rho",))
+    opaque_body.operator(
+        "source", signature=(state,) >> model.Rate(state),
+        kind="local_source", expr=object())
+    with pytest.raises(TypeError, match="opaque.*to_data"):
+        opaque_body.module_hash()
+
+    opaque_metadata = model.Module("opaque-metadata")
+    opaque_metadata.state_space("U", ("rho",))
+    opaque_metadata.operator(
+        "source", signature=(state,) >> model.Rate(state),
+        kind="local_source", capabilities={"opaque": object()}, expr="source")
+    with pytest.raises(TypeError, match="opaque.*to_data"):
+        opaque_metadata.module_hash()
+
+
 def test_capability_and_space_change_invalidate():
     u = model.StateSpace("U", ("rho", "mx"))
     base = model.Module("m")
@@ -108,6 +242,31 @@ def test_capability_and_space_change_invalidate():
                          capabilities={"produces_rate": True}, expr="E")
     assert base.module_hash() != other_space.module_hash()
     print("OK  a capability or a state-space change invalidates module_hash")
+
+
+def test_layout_storage_roles_and_typed_signature_change_invalidate():
+    def build(*, layout="cell", storage="multifab", roles=None, operator_components=("rho",)):
+        mod = model.Module("m")
+        mod.state_space(
+            "U", ("rho",), roles=roles or {"rho": "Density"},
+            layout=layout, storage=storage,
+        )
+        op_space = model.StateSpace(
+            "U", operator_components, roles=roles or {"rho": "Density"},
+            layout=layout, storage=storage,
+        )
+        mod.operator(
+            name="L", signature=() >> model.LocalLinearOperator(op_space, op_space),
+            kind="local_linear_operator", expr="L",
+        )
+        return mod.module_hash()
+
+    baseline = build()
+    assert baseline != build(layout="face")
+    assert baseline != build(storage="array")
+    assert baseline != build(roles={"rho": "Mass"})
+    assert baseline != build(operator_components=("energy",))
+    print("OK  layout/storage/roles and full operator spaces invalidate module_hash")
 
 
 def test_requirements_change_invalidates():
@@ -153,9 +312,15 @@ def test_dsl_backed_module_hashes():
 def main():
     test_deterministic()
     test_signature_change_invalidates()
+    test_public_operator_alias_change_invalidates()
+    test_typed_operator_binding_change_invalidates()
     test_expr_body_change_invalidates()
     test_callable_body_change_invalidates()
+    test_callable_instances_hash_by_code_and_strict_state_not_address_repr()
+    test_callable_private_slots_and_referenced_globals_invalidate_hash()
+    test_opaque_body_and_opaque_hash_metadata_fail_loud_without_repr_fallback()
     test_capability_and_space_change_invalidate()
+    test_layout_storage_roles_and_typed_signature_change_invalidate()
     test_requirements_change_invalidates()
     test_eigenvalues_change_invalidates()
     test_dsl_backed_module_hashes()

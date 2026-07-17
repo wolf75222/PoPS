@@ -42,15 +42,15 @@ def test_brick_availability_is_explainable_for_a_planned_brick():
     assert isinstance(status, Availability)
     assert status.status == "no"
     assert status.reason
-    assert status.alternatives  # points at pops.inspect_capabilities()
+    assert status.alternatives  # points at the typed catalog and pops.inspect()
     # A native brick is available.
     native = BrickDescriptor("HLL", "native", category="riemann", native_id="pops::HLLFlux")
     assert native.available().ok
 
 
 def test_availability_never_returns_a_bare_bool_on_the_descriptor_family():
-    from pops.mesh.cartesian import CartesianMesh  # noqa: PLC0415
-    status = CartesianMesh(n=8).available()
+    from pops.mesh import PolarMesh  # noqa: PLC0415
+    status = PolarMesh(0.1, 1.0, 8, 16).available()
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
 

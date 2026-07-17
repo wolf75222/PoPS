@@ -17,7 +17,6 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/elliptic/mg/composite_fac_poisson.hpp>
-
 #include <pops/mesh/layout/box_array.hpp>
 #include <pops/mesh/layout/distribution_mapping.hpp>
 #include <pops/mesh/execution/for_each.hpp>
@@ -29,8 +28,11 @@
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <utility>
 
 using namespace pops;
+
 static constexpr double kPi = 3.14159265358979323846;
 
 static double u_exact(double x, double y) {
@@ -101,7 +103,8 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
       for (int i = b.lo[0]; i <= b.hi[0]; ++i)
         a(i, j, 0) = f_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
   }
-  const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
+  const Real rfac =
+      fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
   device_fence();
 
   EXPECT_TRUE(std::isfinite(rfac)) << "FAC residu fini: rfac=" << rfac;
@@ -178,8 +181,76 @@ TEST(CompositeFacPoissonTest, fine_patch_improves_accuracy_over_coarse_only) {
   comm_finalize();
 }
 
-// ADC-614: set_options(CompositeFacOptions{}) + no-argument solve() is BIT-IDENTICAL to the explicit
-// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol) -- the installed-options path
+TEST(CompositeFacPoissonTest, constant_reaction_matches_screened_mms_on_both_fac_paths) {
+  comm_init();
+  const int n = 32;
+  const int r = 2;
+  const Real reaction = Real(40);
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
+  const Geometry geom_f = geom_c.refine(r);
+  const BoxArray ba_c = BoxArray::from_domain(dom, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  const int Ic0 = n / 4, Ic1 = 3 * n / 4 - 1;
+  const Box2D fine_box{{r * Ic0, r * Ic0}, {r * Ic1 + r - 1, r * Ic1 + r - 1}};
+
+  auto solve_screened = [&](bool force_general) {
+    CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+    fac.set_reaction(reaction);
+    fac.force_general_path_for_test(force_general);
+    auto native_rhs = [&](Real x, Real y) {
+      // Public: -lap(u) + kappa*u = (18*pi^2+kappa)u. CompositeFAC stores the
+      // native sign-equivalent equation lap(u)-kappa*u = -(18*pi^2+kappa)u.
+      return -(Real(18) * Real(kPi) * Real(kPi) + reaction) *
+             Real(u_exact(static_cast<double>(x), static_cast<double>(y)));
+    };
+    for (int li = 0; li < fac.rhs_coarse().local_size(); ++li) {
+      Array4 rhs = fac.rhs_coarse().fab(li).array();
+      const Box2D box = fac.rhs_coarse().box(li);
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          rhs(i, j, 0) = native_rhs(geom_c.x_cell(i), geom_c.y_cell(j));
+    }
+    for (int li = 0; li < fac.rhs_fine().local_size(); ++li) {
+      Array4 rhs = fac.rhs_fine().fab(li).array();
+      const Box2D box = fac.rhs_fine().box(li);
+      for (int j = box.lo[1]; j <= box.hi[1]; ++j)
+        for (int i = box.lo[0]; i <= box.hi[0]; ++i)
+          rhs(i, j, 0) = native_rhs(geom_f.x_cell(i), geom_f.y_cell(j));
+    }
+
+    const Real residual = fac.solve(/*max_iters=*/60, /*fine_sweeps=*/100,
+                                    /*rel_tol=*/Real(1e-10), /*abs_tol=*/Real(0));
+    device_fence();
+    double error = 0.0;
+    const int guard = 3;
+    for (int li = 0; li < fac.phi_fine().local_size(); ++li) {
+      const ConstArray4 phi = fac.phi_fine().fab(li).const_array();
+      const Box2D box = fac.phi_fine().box(li);
+      for (int j = box.lo[1] + r * guard; j <= box.hi[1] - r * guard; ++j)
+        for (int i = box.lo[0] + r * guard; i <= box.hi[0] - r * guard; ++i)
+          error = std::fmax(error,
+                            std::fabs(phi(i, j, 0) - u_exact(geom_f.x_cell(i), geom_f.y_cell(j))));
+    }
+    return std::pair<double, double>{all_reduce_max(static_cast<double>(residual)),
+                                     all_reduce_max(error)};
+  };
+
+  const auto legacy = solve_screened(/*force_general=*/false);
+  const auto general = solve_screened(/*force_general=*/true);
+  EXPECT_LT(legacy.first, 1e-5);
+  EXPECT_LT(general.first, 1e-5);
+  // Omitting kappa or using the public RHS without the native sign conversion yields O(1e-1)
+  // amplitude error for this reaction. This bound is therefore a direct sign/carrier regression.
+  EXPECT_LT(legacy.second, 3e-2);
+  EXPECT_LT(general.second, 3e-2);
+  comm_finalize();
+}
+
+// set_options(CompositeFacOptions{}) + no-argument solve() matches the explicit default contract.
+// solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultRelTol, kFACDefaultAbsTol) -- the
+// installed-options path
 // defaults to the kFAC* constants. An override changes the composite residual (the knobs are read).
 TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) {
   comm_init();
@@ -211,13 +282,13 @@ TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) 
 
   CompositeFacPoisson explicit_fac(geom_c, ba_c, bc, fine_box, r);
   fill(explicit_fac);
-  const Real r_explicit =
-      explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps, kFACDefaultTol);
+  const Real r_explicit = explicit_fac.solve(kFACDefaultMaxIters, kFACDefaultFineSweeps,
+                                             kFACDefaultRelTol, kFACDefaultAbsTol);
 
   CompositeFacPoisson installed_fac(geom_c, ba_c, bc, fine_box, r);
   fill(installed_fac);
   installed_fac.set_options(CompositeFacOptions{});  // defaults = kFAC*
-  const Real r_installed = installed_fac.solve();     // no-argument overload reads the options
+  const Real r_installed = installed_fac.solve();    // no-argument overload reads the options
 
   EXPECT_EQ(r_explicit, r_installed) << "default installed options must match the explicit solve";
 
@@ -226,11 +297,34 @@ TEST(CompositeFacPoissonTest, installed_options_default_matches_explicit_solve) 
   fill(tuned_fac);
   CompositeFacOptions tuned;
   tuned.max_iters = 60;
-  tuned.tol = Real(1e-12);
+  tuned.rel_tol = Real(1e-12);
   tuned_fac.set_options(tuned);
   const Real r_tuned = tuned_fac.solve();
   EXPECT_TRUE(std::isfinite(r_tuned));
   EXPECT_LE(r_tuned, r_explicit) << "a tighter tol / more iters cannot worsen the residual";
+
+  comm_finalize();
+}
+
+TEST(CompositeFacPoissonTest, nonfinite_composite_residual_fails_closed) {
+  comm_init();
+  const int n = 16, r = 2;
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom_c{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba_c = BoxArray::from_domain(dom, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+  const Box2D fine_box{{n / 2, n / 2}, {n - 1, n - 1}};
+  CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, r);
+
+  fac.rhs_coarse().fab(0).array()(1, 1, 0) = std::numeric_limits<Real>::quiet_NaN();
+  const Real residual = fac.solve(/*max_iters=*/0, /*fine_sweeps=*/0,
+                                  /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
+  const SolveReport& report = fac.last_solve_report();
+  EXPECT_TRUE(std::isinf(residual));
+  EXPECT_EQ(report.iters, 0);
+  EXPECT_EQ(report.status, SolveStatus::kInvalidEvaluation);
+  EXPECT_EQ(report.action, SolveAction::kRejectAttempt);
 
   comm_finalize();
 }

@@ -70,8 +70,10 @@ class AmrRuntimeView:
     def _block_names(self) -> Any:
         try:
             return list(self._sim._s.block_names())
-        except RuntimeError:
-            return []
+        except RuntimeError as exc:
+            if _NOT_BUILT in str(exc):
+                return []
+            raise
 
     def _per_level(self) -> Any:
         """Per-level patch census from patch_boxes() + patch_rectangles(), level 0 = base box."""
@@ -111,16 +113,18 @@ class AmrRuntimeView:
             coarse_local_boxes=coarse_local, coarse_total_boxes=coarse_total)
 
     def explain_regrid(self) -> Any:
-        """Return a :class:`RegridReport` of the regrid cadence + union-tag criteria."""
+        """Return the regrid policy plus live completed-regrid/topology counters."""
         regrid_every = int(self._sim._regrid_every)
         frozen = regrid_every == 0
+        regrid_count = int(self._sim._s.checkpoint_regrid_count())
+        topology_epoch = int(self._sim._s.checkpoint_topology_epoch())
         # The union-of-tags criteria shape, as the multi-block route documents it (the exact
         # threshold lives on the native model; we name the criteria, not a fabricated number).
-        # Refinement is declared on the AMR layout (AMR(refine=Refine.on(subject).above(value))).
+        # Refinement is declared by the structured AMR layout's tagging authority.
         criteria = [
-            "per-block variable threshold (AMR(refine=Refine.on(variable/role).above(threshold)); "
+            "per-block variable threshold (AMR tagging predicate on variable/role; "
             "default the density, component 0)",
-            "grad phi (AMR(refine=Refine.on(phi).gradient_above(threshold)); multi-block only, "
+            "grad phi (AMR tagging predicate; multi-block only, "
             "disabled when the threshold <= 0)",
         ]
         notes = []
@@ -129,7 +133,14 @@ class AmrRuntimeView:
                          "(bit-identical, no dynamic regrid).")
         else:
             notes.append("a cell is tagged when ANY criterion fires (cell-by-cell OR).")
-        return RegridReport(regrid_every=regrid_every, frozen=frozen, criteria=criteria, notes=notes)
+        return RegridReport(
+            regrid_every=regrid_every,
+            frozen=frozen,
+            regrid_count=regrid_count,
+            topology_epoch=topology_epoch,
+            criteria=criteria,
+            notes=notes,
+        )
 
     def explain_ghosts(self) -> Any:
         """Return a :class:`GhostReport`; the per-level ghost depth is honestly unavailable."""
@@ -150,34 +161,32 @@ class AmrRuntimeView:
 
     def explain_checkpoint(self) -> Any:
         """Return a :class:`CheckpointReport` of the live system's restartability (sec.8.11)."""
-        constraints = ["single block", "single rank", "frozen hierarchy (regrid_every == 0)"]
+        constraints = ["same bound composition and compiled Program",
+                       "authenticated v3 accepted-state payload",
+                       "same native rank count for exact rank-local ownership and Program state"]
         violations = []
-        # Block count: a multi-block AmrRuntime engine is not checkpointable in v1.
         try:
             n_blocks = int(self._sim._s.n_blocks())
         except RuntimeError:
             n_blocks = len(self._block_names())
-        if n_blocks > 1:
-            violations.append("multi-block (n_blocks=%d): the v1 checkpoint is single-block "
-                              "(AmrRuntime engine carries no per-block restart yet)." % n_blocks)
-        if int(self._sim._regrid_every) != 0:
-            violations.append("regrid_every=%d != 0: a bit-identical resume requires a frozen "
-                              "hierarchy (the post-restart regrid would re-diverge)."
-                              % int(self._sim._regrid_every))
-        notes = ["MPI np>1 is rejected at checkpoint time (single-rank v1); rank count is a "
-                 "runtime property, not read here.",
-                 "composite multi-level Poisson restart: unavailable (single-level System has "
-                 "bit-identical checkpoint/restart including under MPI)."]
+        if n_blocks == 0:
+            violations.append("no block is installed, so there is no accepted hierarchy to persist")
+        notes = [
+            "v3 persists every block/level, owner-rank map, aux and qualified field warm start.",
+            "active regridding is supported: topology epoch, regrid count, exact level clocks, "
+            "history identities and lagged conservative flux publications are restored.",
+            "the public restart guarantee is bit-identical accepted-state continuation; there is "
+            "no implicit weaker regrid-on-restart fallback.",
+        ]
         return CheckpointReport(
             restartable=not violations, constraints=constraints, violations=violations, notes=notes)
 
     def hierarchy_snapshot(self) -> Any:
-        """Return a :class:`HierarchySnapshot`: config envelope (reusing :func:`pops.inspect_amr`)
-        composed with the live patch table."""
+        """Return the native config envelope composed with the live patch table."""
         # Config envelope from the inert authoring report (native max_levels / ratio / limitations).
-        from pops import inspect_amr  # runtime layer may import the flat root facade.
+        from pops._capabilities_inspect import _native_amr_envelope
 
-        envelope = inspect_amr().to_dict()
+        envelope = _native_amr_envelope().to_dict()
         regrid_every = int(self._sim._regrid_every)
         patch_table = self.patch_table()
         return HierarchySnapshot(
@@ -197,11 +206,11 @@ class AmrRuntimeView:
         :class:`HierarchySnapshot` (config envelope + live patches), the live
         :class:`PatchReport` again as its own key, the :class:`RegridReport` (cadence + union-tag
         criteria), and the capability ``limitations`` (the non-available native-route rows from
-        :func:`pops.native_capability_report`, the same source :mod:`pops.problem`'s route matrix
+        the native capability report, from the same source as :mod:`pops.problem`'s route matrix,
         reads). This REPLACES the pre-ADC-589 shape (bare ``HierarchySnapshot``); the snapshot
         itself is unchanged and still reachable directly via :meth:`hierarchy_snapshot`.
         """
-        from pops import native_capability_report
+        from pops._capabilities import native_capability_report
 
         limitations = [row.to_dict() for row in native_capability_report().routes
                        if row.status != "available"]

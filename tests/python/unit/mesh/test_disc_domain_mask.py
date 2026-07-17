@@ -21,20 +21,23 @@ cartesien plein. La conservation FV du sous-domaine actif est validee cote C++
 Lance comme un simple script python3 (pas pytest : la CI lance ces tests directement). Se saute
 proprement si le module _pops n'est pas importable (build absent).
 """
+from tests.python.support.requirements import require_native_or_skip
 
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
-import sys
+from pops.mesh.geometry import DiscDomain
+from pops.mesh.polar import PolarMesh
 
 import numpy as np
 
 try:
-    import pops
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    from pops.runtime._engine_descriptors import (
+        BackgroundDensity, Explicit, FluidState, IsothermalFlux, Model, NoSource, Periodic, Spatial,
+    )
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:  # pragma: no cover - environnement sans build
-    print("skip  module pops absent (PYTHONPATH ? build ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ? build ?) : %s' % e)
 
 
 fails = 0
@@ -48,13 +51,12 @@ def chk(cond, label):
 
 
 def iso_model(cs2=1.0, alpha=3.0, n0=1.0):
-    """Fluide isotherme NATIF (briques natives, aucun compilateur C++ : CI-safe, meme chemin que
-    test_schur_conservation.py). Roles Density / MomentumX / MomentumY (3 var)."""
-    return pops.Model(
-        state=pops.FluidState(kind="isothermal", cs2=cs2),
-        transport=pops.IsothermalFlux(),
-        source=pops.NoSource(),
-        elliptic=pops.BackgroundDensity(alpha=alpha, n0=n0),
+    """Fluide isotherme natif, sans compilation C++; roles Density/MomentumX/MomentumY."""
+    return Model(
+        state=FluidState(kind="isothermal", cs2=cs2),
+        transport=IsothermalFlux(),
+        source=NoSource(),
+        elliptic=BackgroundDensity(alpha=alpha, n0=n0),
     )
 
 
@@ -70,12 +72,12 @@ def ring(n, L, cx=0.5, cy=0.5):
 
 def _build(n, L):
     sim = System(n=n, L=L, periodic=True)
-    sim.set_poisson(bc="periodic")
+    sim.set_poisson(bc=Periodic())
     rho0 = ring(n, L)
     sim.add_equation("s", model=iso_model(n0=float(rho0.mean())),
-                     spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(),
-                                              variables=Conservative()),
-                     time=pops.Explicit())
+                     spatial=Spatial(limiter=Minmod(), flux=Rusanov(),
+                                     recon=Conservative()),
+                     time=Explicit())
     # Vitesse initiale CONSTANTE non nulle : le transport advecte la bosse (test non trivial).
     sim.set_primitive_state("s", rho=rho0, u=0.7 + 0.0 * rho0, v=-0.4 + 0.0 * rho0)
     return sim
@@ -122,7 +124,7 @@ def test_disc_mask_matches_levelset():
     n, L = 48, 1.0
     cx, cy, R = 0.5, 0.5, 0.3
     sim = _build(n, L)
-    sim.set_disc_domain(cx, cy, R)
+    sim.set_disc_domain(DiscDomain(center=(cx, cy), radius=R))
     mk = np.array(sim.disc_mask())
 
     # Reference : level set hypot(x_cell - cx, y_cell - cy) - R < 0 au CENTRE des cellules.
@@ -155,7 +157,7 @@ def test_guards():
     sim = _build(n, L)
     raised = False
     try:
-        sim.set_disc_domain(0.5, 0.5, 0.0)  # R <= 0 doit lever
+        sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.0))
     except Exception:
         raised = True
     chk(raised, "(c) set_disc_domain(R=0) leve (rayon R > 0 requis)")
@@ -163,8 +165,8 @@ def test_guards():
     # Polaire : l'anneau est deja borne par ses parois radiales -> set_disc_domain doit lever.
     raised_polar = False
     try:
-        simp = System(mesh=pops.PolarMesh(nr=16, ntheta=16, r_min=0.2, r_max=1.0))
-        simp.set_disc_domain(0.0, 0.0, 0.5)
+        simp = System(mesh=PolarMesh(nr=16, ntheta=16, r_min=0.2, r_max=1.0))
+        simp.set_disc_domain(DiscDomain(center=(0.0, 0.0), radius=0.5))
     except Exception:
         raised_polar = True
     chk(raised_polar,

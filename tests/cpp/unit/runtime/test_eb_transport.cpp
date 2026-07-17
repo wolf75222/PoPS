@@ -267,7 +267,8 @@ TEST(EbTransport, MassConservedToMachinePrecisionOnDisc) {
     // des flux internes, bords fermes). Borne juste au-dessus du bruit machine (accumulation 60 pas).
     EXPECT_TRUE(rel_drift < 1e-12)
         << "masse EB conservee a la machine (aucun flux ne franchit le mur immerge ; drift < "
-           "1e-12), got drift=" << rel_drift;
+           "1e-12), got drift="
+        << rel_drift;
     // Temoin que la dynamique a TOURNE (conservation non triviale) : l'etat a bouge.
     {
       device_fence();
@@ -331,7 +332,8 @@ TEST(EbTransport, EncompassingDiscIsBitIdenticalToCartesianOperator) {
     // la division par kappa = 1 et la ponderation par alpha = 1 sont l'identite -> diff EXACTEMENT 0.
     EXPECT_TRUE(max_abs_diff == 0.0)
         << "sans coupe : residu EB BIT-IDENTIQUE au residu cartesien (alpha=1, kappa=1 -> "
-           "identite), got " << max_abs_diff;
+           "identite), got "
+        << max_abs_diff;
   }
 }
 
@@ -369,7 +371,8 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     const double kappa_raw = double(cf.kappa);
     ASSERT_TRUE(kappa_raw < double(kEbKappaMin))
         << "la dalle mince produit bien kappa < kappa_min (le clamp DOIT agir : test non vide); "
-           "kappa_brut=" << kappa_raw << " kappa_min=" << double(kEbKappaMin);
+           "kappa_brut="
+        << kappa_raw << " kappa_min=" << double(kEbKappaMin);
 
     // Etat variant en X (les faces y de la rangee coupee sont FERMEES : seul le flux x compte ; il faut
     // donc une variation en x pour que div_x != 0 -> residu non nul a amplifier par 1/kappa).
@@ -387,8 +390,7 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
 
     // Residu CLAMPE (defaut) vs NON clampe (kappa_min = kappa_raw -> clamp inactif sur cette cellule).
     MultiFab R_clamp(ba, dm, 1, 0), R_raw(ba, dm, 1, 0);
-    assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R_clamp, false,
-                                         kEbKappaMin);
+    assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R_clamp, false, kEbKappaMin);
     assemble_rhs_eb<Minmod, RusanovFlux>(model, U, aux, ls, geom, R_raw, false, Real(kappa_raw));
     sync_host();
 
@@ -396,8 +398,7 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     const ConstArray4 rw = R_raw.fab(0).const_array();
     // Sur la rangee centrale coupee, le residu clampe doit etre FINI et, terme a terme, valoir
     // (kappa_raw / kappa_min) fois le residu non clampe (meme flux au numerateur, denominateur clampe).
-    const double ratio_expected =
-        kappa_raw / double(kEbKappaMin);  // < 1 : le clamp ATTENUE
+    const double ratio_expected = kappa_raw / double(kEbKappaMin);  // < 1 : le clamp ATTENUE
     double max_rel_err = 0.0, max_abs_clamp = 0.0, max_abs_raw = 0.0;
     bool clamp_finite = true;
     for (int i = dom.lo[0]; i <= dom.hi[0]; ++i) {
@@ -421,7 +422,8 @@ TEST(EbTransport, SmallCellClampBoundsResidualAmplification) {
     // le residu serait 1/ratio fois plus grand -> instabilite du pas fixe).
     EXPECT_TRUE(max_rel_err < 1e-12)
         << "R_clamp == (kappa_raw/kappa_min) * R_raw : le clamp borne 1/kappa a 1/kappa_min "
-           "(exact), got err rel=" << max_rel_err;
+           "(exact), got err rel="
+        << max_rel_err;
     EXPECT_TRUE(ratio_expected < 1.0)
         << "le clamp ATTENUE bien (kappa_raw < kappa_min : amplification reduite, stabilite "
            "assuree)";

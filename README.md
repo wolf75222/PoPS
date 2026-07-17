@@ -19,10 +19,11 @@
 ---
 
 PoPS is a compiled solver engine, not a Python numerical library and not a scenario repository.
-Python authors an inert, typed `pops.Problem`: physics model, finite-volume descriptors,
-field problems, time program, outputs, and runtime parameters, with the mesh layout supplied at
-`pops.compile(problem, layout=...)`. `pops.compile(...)` lowers that assembly to generated or native
-C++; `pops.bind(...)` creates the runtime; `sim.run(...)` advances with C++/Kokkos/MPI kernels.
+Python authors an inert, typed `pops.Case`: physics model, finite-volume descriptors,
+field problems, time program, outputs, and runtime parameters. The explicit typed pipeline is
+`validate(case) → resolve(validated, layout=...) → compile(resolved) → bind(artifact, ...)`.
+Compilation lowers the resolved assembly to generated or native C++; binding creates the runtime;
+`pops.run(sim, **run_controls)` advances it with C++/Kokkos/MPI kernels.
 Python never runs a per-cell loop.
 
 Named applications such as diocotron, Euler-Poisson, two-fluid, and validation setups live in
@@ -37,9 +38,10 @@ dU/dt + div F(U, fields, aux) = S(U, fields, aux)
 D phi                         = f(U)
 ```
 
-Field outputs are exposed through named auxiliary channels. The standard Poisson contract provides
-`phi`, `grad_x`, and `grad_y`; a model may also declare named aux fields such as `B_z` or `T_e`.
-All these names are metadata for the generated C++ path, not Python callbacks.
+Field outputs are exposed through owner-qualified, typed field handles. Each field operator declares
+its own output schema (scalar, vector, tensor, components and frame); consumers bind those handles
+without relying on reserved names such as `phi` or `grad_x`. Names remain optional metadata for the
+generated C++ path, never Python callbacks or runtime lookup authority.
 
 ## Table of contents
 
@@ -55,9 +57,11 @@ All these names are metadata for the generated C++ path, not Python callbacks.
 
 - **C++20** compiler: AppleClang 16+, GCC 13+, Clang 17+ (`nvcc_wrapper` for the CUDA target).
 - **CMake >= 3.21**: the build is driven by presets ([CMakePresets.json](CMakePresets.json)).
-- **[Kokkos](https://kokkos.org) 4.2+**: the only on-node backend, required. No need to
+- **[Kokkos](https://kokkos.org) 4.4.01**: the exact promised release, with Serial and OpenMP
+  execution spaces. It is the only on-node backend and is required. No need to
   pre-install it; if it is not found, CMake fetches and builds it (FetchContent).
-- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*.
+- **MPI** *(optional, `-DPOPS_USE_MPI=ON`: halos and distributed FFT)*, with
+  `MPI_THREAD_MULTIPLE` support for the native runtime.
 - **HDF5** parallel *(optional, `-DPOPS_USE_HDF5=ON`: DataWriter)*.
 - **Python 3.12 + numpy** *(optional, the `pops` bindings; conda env via `scripts/setup_env.sh`)*.
 
@@ -74,6 +78,8 @@ bash scripts/build_python.sh   # build + install, then pops.doctor()
 `scripts/setup_env.sh` creates the conda environment and pins the platform toolchain.
 `scripts/build_python.sh` builds and installs `pops`, exports the discovery variables, and
 finishes with `pops.doctor()`.
+Use `bash scripts/build_python.sh --mpi` for the final distributed artifact; that strict route
+enables both MPI and its native parallel-HDF5 writer and fails if either backend is unavailable.
 
 ### C++ core only
 
@@ -93,11 +99,12 @@ Parallel presets are available when the required backend dependencies are visibl
 
 ```bash
 cmake --preset parallel && cmake --build --preset parallel && ctest --preset parallel  # threaded, Kokkos OpenMP
-cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI
+cmake --preset mpi      && cmake --build --preset mpi      && ctest --preset mpi        # distributed, MPI + parallel HDF5
 ```
 
-Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). Runtime thread
-control is exposed through `pops.set_threads()`.
+Each preset writes into its own folder (`build`, `build-kokkos`, `build-mpi`). For an OpenMP build,
+set `OMP_NUM_THREADS` (and, where required by the Kokkos installation, `KOKKOS_NUM_THREADS`) before
+launching Python or use the scheduler's native CPU/thread controls.
 
 ### Uninstall
 
@@ -134,78 +141,40 @@ target_link_libraries(my_app PRIVATE pops::pops)
 ```
 
 Define a type that satisfies the `PhysicalModel` concept and compose it with the C++ coupling and
-time machinery. This is the low-level engine path. Most users should author a typed Python `Problem`
+time machinery. This is the low-level engine path. Most users should author a typed Python `Case`
 and let PoPS generate and bind the corresponding C++ artifact.
 
 ### From Python
 
-The public Python path is typed and compiled. Strings name user objects such as blocks, fields, and
-program nodes; typed objects choose algorithms and routes. The reduced example below couples a
-scalar density to a Poisson field and advances it through a generated C++ program:
+The public Python path is typed and compiled. Physics, numerics, boundaries, the explicit time
+`Program`, layout, consumers, and execution controls each have one authority. Final executable
+references are collected under [`examples/final`](examples/final); the complete scalar-advection
+case runs directly:
 
-```python
-import numpy as np
-import pops
-from pops.time import Program
-from pops.lib.time import ssprk3
-from pops.physics import Model
-from pops.math import laplacian, grad, div, ddt
-from pops.mesh.cartesian import CartesianMesh
-from pops.mesh.layouts import Uniform
-from pops.fields import PoissonProblem
-from pops.fields.bcs import Periodic
-from pops.fields.rhs import ChargeDensity
-from pops.solvers.elliptic import GeometricMG
-from pops.numerics.riemann import Rusanov
-from pops.numerics.reconstruction.limiters import Minmod
-from pops.codegen import Production
-
-m = Model("diocotron")
-U = m.state("U", components=["ne"], roles={"ne": "density"})
-(ne,) = U
-phi = m.field("phi")
-m.solve_field("fields_from_state",
-              equation=(-laplacian(phi) == ne),
-              outputs={"phi": phi, "grad_x": grad(phi).x, "grad_y": grad(phi).y},
-              solver=GeometricMG())
-E = m.vector_field("E", x=-grad(phi).x, y=-grad(phi).y)
-flux = m.flux("F", on=U, x=[ne * E.y], y=[ne * (-E.x)], waves={"x": [E.y], "y": [-E.x]})
-m.rate("explicit_rate", ddt(U) == -div(flux))
-m.check()
-
-poisson = PoissonProblem(name="phi", unknown="phi",
-                         equation=(-laplacian("phi") == ChargeDensity.from_blocks("ne")),
-                         bcs=(Periodic(),), solver=GeometricMG())
-
-time = Program("advance")
-ssprk3(time, "ne")
-
-problem = (pops.Problem(name="diocotron")
-           .block("ne", physics=m,
-                  spatial=pops.FiniteVolume(reconstruction=Minmod(), riemann=Rusanov()))
-           .field(poisson)
-           .time(time))
-
-compiled = pops.compile(problem, layout=Uniform(CartesianMesh(n=96, L=1.0, periodic=True)),
-                        backend=Production())
-sim = pops.bind(compiled, state={"ne": ne0})        # ne0: initial density (2D array)
-sim.run(t_end=0.1, cfl=0.4)
-sim.write("ne.npz", format="npz")                   # save the block states (npz; "vtk" also available)
+```bash
+python examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py
 ```
 
-For an adaptive run, swap the layout to `pops.mesh.layouts.AMR(mesh, max_levels=2, ratio=2)` and
-author the refinement with typed `pops.mesh.amr` policies. `pops.bind` builds the AMR runtime from
-that layout. Users do not pass a public target string and do not instantiate the AMR runtime as the
-front door.
+Its final lifecycle is exactly `Case -> validate -> resolve -> compile -> bind -> run`.
+`pops.bind` receives concrete value families directly (`params=`, `initial_state=`, `aux=`,
+`resources=`, `initial_values=`); users never construct an install plan or runtime engine. See the
+[complete source](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py) for explicit
+SSPRK2 construction, qualified handles, AMR policies, outputs, diagnostics, and checkpointing.
+The same acceptance corpus also executes the
+[multiphysics](examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py),
+[IMEX-AMR](examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py), and
+[HyQMOM15](examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py) cases.
 
 ## Documentation
 
-The documentation corpus is being rebuilt from the retained foundation:
+The documentation corpus describes the final public lifecycle and its current implementation:
 
 - [Architecture](docs/ARCHITECTURE.md): current technical map of the core.
+- [Final technical specification](docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md):
+  normative Python/C++ contract and acceptance matrix.
 - [Algorithms](docs/ALGORITHMS.md): numerical methods and implementation notes.
 - [Versioning](docs/VERSIONING.md): public API scope and release process.
-- [Documentation quality](docs/DOC_QUALITY.md): rules for rebuilding the docs.
+- [Documentation quality](docs/DOC_QUALITY.md): maintained corpus and conformance rules.
 - [Contributing](CONTRIBUTING.md): build, test, review, and PR workflow.
 - [Security](SECURITY.md): vulnerability reporting policy.
 - [Changelog](CHANGELOG.md): notable changes.
@@ -228,8 +197,8 @@ The documentation corpus is being rebuilt from the retained foundation:
 PoPS follows [Semantic Versioning](https://semver.org). The public API under guarantee and
 the bump rules are declared in [docs/VERSIONING.md](docs/VERSIONING.md). Available versions and
 their change logs: the [Releases page](https://github.com/wolf75222/PoPS/releases) and
-[CHANGELOG.md](CHANGELOG.md). The project is in `0.y.z` initial development: the public API may
-still change until `1.0.0`.
+[CHANGELOG.md](CHANGELOG.md). Version `1.0.0` establishes the stable public contract; subsequent
+compatibility and deprecation decisions follow those Semantic Versioning rules.
 
 ## Contributing
 

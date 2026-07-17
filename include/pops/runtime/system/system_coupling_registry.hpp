@@ -1,8 +1,8 @@
 #pragma once
 
-#include <pops/core/foundation/types.hpp>  // Real
+#include <pops/core/foundation/types.hpp>                   // Real
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsProgram (per-cell frequency bytecode)
-#include <pops/coupling/source/coupling_operator.hpp>       // CouplingOperatorView (inspect metadata)
+#include <pops/coupling/source/coupling_operator.hpp>  // CouplingOperatorView (inspect metadata)
 
 #include <functional>
 #include <string>

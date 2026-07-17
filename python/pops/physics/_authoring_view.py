@@ -3,7 +3,7 @@
 A DERIVED, typed view of the model as spaces + a registry of typed operators
 (:mod:`pops.model`). It carries NO numerics and does NOT touch the model hash or
 the codegen. Methods only; the touched attributes are created by
-``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops.ir`
+``HyperbolicModel.__init__``. Imports only :mod:`pops.model` and :mod:`pops._ir`
 (no codegen, no ``_pops``).
 """
 from __future__ import annotations
@@ -37,14 +37,31 @@ class _OperatorViewMixin(_HyperbolicModel):
         components and canonical physical roles. Derived; carries no data."""
         role_list = roles_for(self.cons_names, self.cons_roles)
         roles = dict(zip(self.cons_names, role_list, strict=True))
-        return _model.StateSpace(name=name, components=tuple(self.cons_names),
-                                 roles=roles, layout="cell")
+        metadata = self._state_space_metadata
+        return _model.StateSpace(
+            name=name,
+            components=tuple(self.cons_names),
+            roles=roles,
+            layout=metadata["layout"],
+            storage=metadata["storage"],
+            representation=metadata["representation"],
+            centering=metadata["centering"],
+            units=metadata["units"],
+            frame=metadata["frame"],
+            clock=metadata["clock"],
+        )
 
     def field_space(self, name: str = "fields") -> Any:
         """Typed :class:`pops.model.FieldSpace` view of the auxiliary surface the model
-        reads (canonical aux + named aux fields, in read order, de-duplicated)."""
-        comps = []
-        for nm in list(self.aux_names) + list(self.aux_extra_names):
+        reads (canonical aux in ABI order, then named fields in declaration order).
+
+        Formula authoring order cannot determine storage identity: a source may read gradients
+        before a later Poisson declaration materializes the potential.  Canonical components
+        therefore retain the single ``AUX_CANONICAL`` order shared with the native ABI.
+        """
+        read = set(self.aux_names)
+        comps = [nm for nm in AUX_CANONICAL if nm in read]
+        for nm in self.aux_extra_names:
             if nm not in comps:
                 comps.append(nm)
         return _model.FieldSpace(name=name, components=tuple(comps), layout="cell")
@@ -60,7 +77,11 @@ class _OperatorViewMixin(_HyperbolicModel):
         ``(State) -> State``. The implicit defaults surface as ``flux_default`` /
         ``source_default`` / ``fields_from_state``. Pure view: no hash / codegen impact.
         """
-        reg = _model.OperatorRegistry()
+        cache = self._operator_registry_cache
+        cached = cache.get(state_name)
+        if cached is not None:
+            return cached
+        reg = _model.OperatorRegistry(owner=self.owner_path)
         state = self.state_space(state_name)
         fields = self.field_space()
         aux_set = self._aux_name_set()
@@ -76,13 +97,13 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": False, "linear": False, "produces_rate": True,
                               "requires_ghosts": 1, "supports_device": True,
                               "default": True},
-                source="dsl.flux"))
+                source=None))
         for nm in sorted(self._flux_terms):
             reg.register(_model.Operator(
                 nm, "grid_operator", _model.Signature([state], _model.Rate(state)),
                 capabilities={"local": False, "linear": False, "produces_rate": True,
                               "requires_ghosts": 1, "supports_device": True},
-                source="dsl.flux_term"))
+                source=None))
 
         # Local sources (local_source: State[, Fields] -> Rate(State)).
         if self._source is not None:
@@ -95,7 +116,12 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "produces_rate": True, "supports_device": True,
                               "default": True},
                 requirements=self._aux_requirements(self._source),
-                source="dsl.source"))
+                lowering={"source": "default"},
+                source=None))
+            # ``source_term("default", ...)`` returns a readable ``default`` handle,
+            # while the lowering registry keeps the unambiguous ``source_default`` key.
+            # The alias is an explicit registry declaration, never inferred by resolution.
+            reg.register_alias("default", "source_default")
         for nm in sorted(self._source_terms):
             exprs = self._source_terms[nm]
             rf = reads_fields(exprs)
@@ -106,7 +132,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": True, "linear": False, "requires_fields": rf,
                               "produces_rate": True, "supports_device": True},
                 requirements=self._aux_requirements(exprs),
-                source="dsl.source_term"))
+                source=None))
 
         # Local linear operators (local_linear_operator: Fields? -> L(State, State)).
         for nm in sorted(self._linear_sources):
@@ -119,21 +145,23 @@ class _OperatorViewMixin(_HyperbolicModel):
                 capabilities={"local": True, "linear": True, "solve_i_minus_a": True,
                               "matrix_available": True, "supports_device": True},
                 requirements=self._aux_requirements(coeffs),
-                source="dsl.linear_source"))
+                source=None))
 
         # Field operators (field_operator: State -> FieldSpace).
         if self._elliptic is not None:
             reg.register(_model.Operator(
                 "fields_from_state", "field_operator",
-                # The Poisson solve PRODUCES the canonical electrostatic triple; an externally
-                # imposed aux (e.g. B_z) read by sources is part of field_space() but not produced
-                # here, so the produced FieldSpace is the triple, not the full read surface.
-                _model.Signature([state], _model.FieldSpace(
-                    "fields", components=("phi", "grad_x", "grad_y"))),
+                # FieldSpace types the complete context AVAILABLE to downstream operators after the
+                # solve, including imposed aux such as B_z.  FieldContext.outputs separately records
+                # the triple physically produced by this Poisson solve, so availability is never
+                # confused with ownership/production.
+                _model.Signature([state], fields),
                 capabilities={"requires_solver": True, "supports_device": True,
                               "default": True},
                 requirements={"elliptic_operator": "poisson"},
-                source="dsl.elliptic_rhs"))
+                lowering={"field_provider": {"key": "fields_from_state"}},
+                source=None,
+                body=self._elliptic))
         for nm in sorted(self._elliptic_fields):
             info = self._elliptic_fields[nm]
             reg.register(_model.Operator(
@@ -142,7 +170,12 @@ class _OperatorViewMixin(_HyperbolicModel):
                                  _model.FieldSpace(nm, components=tuple(info["aux"]))),
                 capabilities={"requires_solver": True, "supports_device": True},
                 requirements={"elliptic_operator": info["operator"]},
-                source="dsl.elliptic_field"))
+                lowering={
+                    "field_provider": {"key": nm},
+                    "gradient_sign": info["gradient_sign"],
+                },
+                source=None,
+                body=info["rhs"]))
 
         # Pointwise projection (projection: State -> State).
         if self._proj is not None:
@@ -150,7 +183,7 @@ class _OperatorViewMixin(_HyperbolicModel):
                 "projection", "projection", _model.Signature([state], state),
                 capabilities={"local": True, "idempotent": True,
                               "supports_device": True},
-                source="dsl.projection"))
+                source=None))
 
         # Composite rate operators (local_rate: State[, Fields] -> Rate(State)); aliases
         # for ctx.rhs(flux=, sources=, fluxes=), carried as a lowering hint for P.call.
@@ -172,6 +205,40 @@ class _OperatorViewMixin(_HyperbolicModel):
                               "produces_rate": True, "supports_device": True},
                 lowering={"flux": cfg["flux"], "sources": cfg["sources"],
                           "fluxes": cfg["fluxes"]},
-                source="dsl.rate_operator"))
+                source=None))
+        for alias, target in sorted(self._aliases.items()):
+            reg.register_alias(alias, target)
+        # Deep-freeze seals derived caches as mapping proxies. A missing view remains computable
+        # after freeze, but must not mutate the sealed model merely to memoize it.
+        if isinstance(cache, dict):
+            cache[state_name] = reg
         return reg
 
+    def operator_alias(self, alias: Any, target: Any) -> Any:
+        """Persist one public alias in the authoritative derived-registry recipe."""
+        if not isinstance(alias, str) or not alias or not alias.isidentifier():
+            raise ValueError("operator alias must be a valid non-empty identifier")
+        if not isinstance(target, str) or not target:
+            raise ValueError("operator alias target must be a non-empty string")
+        registry = self.operator_registry()
+        operator = registry.get(target)
+        if alias in registry.names() or alias in registry.aliases():
+            raise ValueError("operator alias %r collides with an existing declaration" % alias)
+
+        previous_cache = self._operator_registry_cache
+        self._aliases[alias] = target
+        self._invalidate_authoring_views()
+        try:
+            rebuilt = self.operator_registry()
+            handle = _model.OperatorHandle(
+                alias,
+                kind=operator.kind,
+                owner=self.owner_path,
+                signature=operator.signature,
+                registered_operator_name=target,
+            )
+            return rebuilt.declaration_index().authenticate(handle)
+        except BaseException:
+            del self._aliases[alias]
+            self._operator_registry_cache = previous_cache
+            raise

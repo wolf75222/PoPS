@@ -110,7 +110,7 @@ class CapabilityEntry:
 
 
 class CapabilityMatrix:
-    """The structured, printable result of :func:`inspect_capabilities`.
+    """Internal structured descriptor-catalog report.
 
     Holds the :class:`CapabilityEntry` rows grouped by category; :meth:`to_dict` returns a
     plain nested dict and :meth:`__str__` a short, deterministic table. It is inert.

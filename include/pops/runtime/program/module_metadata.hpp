@@ -8,14 +8,14 @@
 // INTROSPECTION and install-time requirement validation. It is read ONCE at install; the step body
 // never touches it, so operators stay inlined and there is NO string lookup in any hot kernel.
 //
-// Backward compatible: a .so generated before Spec 2 exports no ``pops_module_*`` symbols, so
-// read_module_metadata returns ``present == false`` and the caller simply skips module introspection.
+#include <pops/runtime/dynamic/dynlib.hpp>
+
 #include <cstdint>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <dlfcn.h>
 
 namespace pops {
 namespace runtime {
@@ -32,95 +32,152 @@ using SpaceId = std::uint32_t;
 /// One operator's metadata, as exported by the .so.
 struct OperatorMetadata {
   OperatorId id = 0;
+  std::string owner;  ///< canonical model owner
   std::string name;
   std::string kind;          ///< one of the Spec-2 operator kinds (local_rate, field_operator, ...)
   std::string signature;     ///< human-readable typed signature
   std::string requirements;  ///< JSON, e.g. {"kind":"local_source","aux":["grad_x","grad_y"]}
 };
 
-/// The GeneratedModule descriptor read from a problem.so. ``present`` is false when the .so exports
-/// no module descriptor (a pre-Spec-2 .so) -- callers then skip module introspection / validation.
+/// The mandatory GeneratedModule descriptor read from a problem.so.
 struct ModuleMetadata {
-  bool present = false;
   std::vector<OperatorMetadata> operators;
   std::vector<std::string> state_spaces;
+  std::vector<std::string> state_space_owners;
   std::vector<std::string> field_spaces;
+  std::vector<std::string> field_space_owners;
 
-  /// The operator with this name, or nullptr if none.
-  const OperatorMetadata* find(const std::string& name) const {
+  /// The exact owner-qualified operator, or nullptr if none.
+  const OperatorMetadata* find(const std::string& owner, const std::string& name) const {
     for (const auto& op : operators) {
-      if (op.name == name) {
+      if (op.owner == owner && op.name == name) {
         return &op;
       }
     }
     return nullptr;
   }
+
+  /// Unqualified lookup succeeds only when the name is globally unique.
+  const OperatorMetadata* find(const std::string& name) const {
+    const OperatorMetadata* result = nullptr;
+    for (const auto& op : operators) {
+      if (op.name == name) {
+        if (result != nullptr)
+          return nullptr;
+        result = &op;
+      }
+    }
+    return result;
+  }
 };
 
 namespace detail {
 
-/// Call a ``const char* (int)`` accessor at index @p i; empty string if the symbol is absent.
-inline std::string module_str(void* handle, const char* symbol, int i) {
-  using Fn = const char* (*)(int);
-  // dlsym yields a void*; the cast to a function pointer is the standard (and only) idiom.
-  auto* fn = reinterpret_cast<Fn>(dlsym(handle, symbol));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (fn == nullptr) {
-    return std::string();
-  }
-  const char* s = fn(i);
-  return s != nullptr ? std::string(s) : std::string();
+template <class Fn>
+inline Fn require_module_symbol(pops::dynlib::handle handle, const char* symbol) {
+  auto fn = reinterpret_cast<Fn>(pops::dynlib::sym(handle, symbol));
+  if (fn == nullptr)
+    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
+                             "' is missing; regenerate the artifact");
+  return fn;
 }
 
-/// Read a ``(count, name)`` string table (state/field spaces) from the handle.
-inline std::vector<std::string> module_names(void* handle, const char* count_symbol,
-                                             const char* name_symbol) {
-  std::vector<std::string> out;
+inline std::string require_module_string(const char* (*fn)(int), const char* symbol, int i) {
+  const char* s = fn(i);
+  if (s == nullptr || s[0] == '\0')
+    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
+                             "' returned an empty value at index " + std::to_string(i));
+  return std::string(s);
+}
+
+inline int require_module_count(pops::dynlib::handle handle, const char* symbol) {
   using CountFn = int (*)();
-  auto* count = reinterpret_cast<CountFn>(dlsym(handle, count_symbol));  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-  if (count == nullptr) {
-    return out;
-  }
+  const CountFn count = require_module_symbol<CountFn>(handle, symbol);
   const int n = count();
+  constexpr int kMaxMetadataRows = 1 << 20;
+  if (n < 0 || n > kMaxMetadataRows)
+    throw std::runtime_error(std::string("compiled Program metadata symbol '") + symbol +
+                             "' returned invalid count " + std::to_string(n));
+  return n;
+}
+
+/// Read one mandatory owner-qualified state/field-space table.
+inline std::pair<std::vector<std::string>, std::vector<std::string>> module_spaces(
+    pops::dynlib::handle handle, const char* count_symbol, const char* name_symbol,
+    const char* owner_symbol) {
+  using StringFn = const char* (*)(int);
+  const int n = require_module_count(handle, count_symbol);
+  const StringFn name = require_module_symbol<StringFn>(handle, name_symbol);
+  const StringFn owner = require_module_symbol<StringFn>(handle, owner_symbol);
+  std::vector<std::string> names;
+  std::vector<std::string> owners;
+  names.reserve(static_cast<std::size_t>(n));
+  owners.reserve(static_cast<std::size_t>(n));
+  std::set<std::pair<std::string, std::string>> identities;
   for (int i = 0; i < n; ++i) {
-    out.push_back(module_str(handle, name_symbol, i));
+    std::string current_name = require_module_string(name, name_symbol, i);
+    std::string current_owner = require_module_string(owner, owner_symbol, i);
+    if (!identities.emplace(current_owner, current_name).second)
+      throw std::runtime_error(std::string("compiled Program metadata contains duplicate space '") +
+                               current_owner + "." + current_name + "'");
+    names.push_back(std::move(current_name));
+    owners.push_back(std::move(current_owner));
   }
-  return out;
+  return {std::move(names), std::move(owners)};
 }
 
 }  // namespace detail
 
-/// Read the GeneratedModule metadata from an already-dlopen'd problem.so @p dl_handle. Returns a
-/// descriptor with ``present == false`` (and empty vectors) when the handle is null or exports no
-/// ``pops_module_operator_count`` symbol (a pre-Spec-2 .so).
-inline ModuleMetadata read_module_metadata(void* dl_handle) {
+/// Read and authenticate the complete GeneratedModule metadata from an already-open problem module.
+/// Every count/accessor family is mandatory; missing, empty, duplicated, or malformed metadata fails
+/// before the program can be installed.
+inline ModuleMetadata read_module_metadata(pops::dynlib::handle dl_handle) {
+  if (!pops::dynlib::valid(dl_handle))
+    throw std::runtime_error("compiled Program metadata requires a valid module handle");
   ModuleMetadata meta;
-  if (dl_handle == nullptr) {
-    return meta;
-  }
-  using CountFn = int (*)();
-  auto* count = reinterpret_cast<CountFn>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-      dlsym(dl_handle, "pops_module_operator_count"));
-  if (count == nullptr) {
-    return meta;  // pre-Spec-2 .so: no GeneratedModule descriptor
-  }
-  meta.present = true;
-  const int n = count();
+  using StringFn = const char* (*)(int);
+  const int n = detail::require_module_count(dl_handle, "pops_module_operator_count");
+  const StringFn owner =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_owner");
+  const StringFn name =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_name");
+  const StringFn kind =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_kind");
+  const StringFn signature =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_signature");
+  const StringFn requirements =
+      detail::require_module_symbol<StringFn>(dl_handle, "pops_module_operator_requirements");
   if (n > 0) {
     meta.operators.reserve(static_cast<std::size_t>(n));
   }
+  std::set<std::pair<std::string, std::string>> operator_identities;
   for (int i = 0; i < n; ++i) {
     OperatorMetadata op;
     op.id = static_cast<OperatorId>(i);
-    op.name = detail::module_str(dl_handle, "pops_module_operator_name", i);
-    op.kind = detail::module_str(dl_handle, "pops_module_operator_kind", i);
-    op.signature = detail::module_str(dl_handle, "pops_module_operator_signature", i);
-    op.requirements = detail::module_str(dl_handle, "pops_module_operator_requirements", i);
+    op.owner = detail::require_module_string(owner, "pops_module_operator_owner", i);
+    op.name = detail::require_module_string(name, "pops_module_operator_name", i);
+    op.kind = detail::require_module_string(kind, "pops_module_operator_kind", i);
+    op.signature = detail::require_module_string(signature, "pops_module_operator_signature", i);
+    op.requirements =
+        detail::require_module_string(requirements, "pops_module_operator_requirements", i);
+    if (op.requirements.front() != '{' || op.requirements.back() != '}')
+      throw std::runtime_error("compiled Program operator '" + op.owner + "." + op.name +
+                               "' has malformed requirements metadata");
+    if (!operator_identities.emplace(op.owner, op.name).second)
+      throw std::runtime_error("compiled Program metadata contains duplicate operator '" +
+                               op.owner + "." + op.name + "'");
     meta.operators.push_back(std::move(op));
   }
-  meta.state_spaces =
-      detail::module_names(dl_handle, "pops_module_state_space_count", "pops_module_state_space_name");
-  meta.field_spaces =
-      detail::module_names(dl_handle, "pops_module_field_space_count", "pops_module_field_space_name");
+  auto states =
+      detail::module_spaces(dl_handle, "pops_module_state_space_count",
+                            "pops_module_state_space_name", "pops_module_state_space_owner");
+  meta.state_spaces = std::move(states.first);
+  meta.state_space_owners = std::move(states.second);
+  auto fields =
+      detail::module_spaces(dl_handle, "pops_module_field_space_count",
+                            "pops_module_field_space_name", "pops_module_field_space_owner");
+  meta.field_spaces = std::move(fields.first);
+  meta.field_space_owners = std::move(fields.second);
   return meta;
 }
 
@@ -167,7 +224,8 @@ inline std::vector<std::string> required_string_list(const std::string& requirem
 /// "geometric_mg". Returns "" when the key is absent. Dependency-free, same closed-vocabulary scan as
 /// required_string_list; used for the scalar requirement kinds (solver, capability, schedule) of
 /// Spec criterion 24.
-inline std::string requirement_string(const std::string& requirements_json, const std::string& key) {
+inline std::string requirement_string(const std::string& requirements_json,
+                                      const std::string& key) {
   auto is_space = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
   // @p key is the quoted JSON key (e.g. "\"solver\""). Match it as a genuine KEY, not as an array
   // element or a value substring: the first non-space char before it must be '{' or ',', and the

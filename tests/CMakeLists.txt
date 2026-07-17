@@ -11,6 +11,10 @@ include(FetchContent)
 find_package(GTest 1.17 CONFIG QUIET)
 if(NOT GTest_FOUND)
   message(STATUS "GoogleTest not found in the environment; fetching v1.17.0")
+  # GoogleTest is a build-only test dependency.  Its upstream install rules must never leak into
+  # `cmake --install` for the PoPS SDK (and must not require unbuilt gmock archives when a package
+  # consumer smoke installs the header-only core).
+  set(INSTALL_GTEST OFF CACHE BOOL "Do not install PoPS' private GoogleTest dependency" FORCE)
   FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git
@@ -78,7 +82,7 @@ function(pops_infer_test_labels out source)
 endfunction()
 
 function(pops_add_gtest_suite)
-  set(options ENABLE_EXPORTS NO_DISCOVER)
+  set(options ENABLE_EXPORTS NO_DISCOVER RUNTIME_DISCOVERY)
   set(oneValueArgs NAME TIMEOUT RESOURCE_LOCK)
   set(multiValueArgs SOURCES EXTRA_LIBS LABELS COMPILE_DEFINITIONS RESOURCE_GROUPS)
   cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -116,22 +120,81 @@ function(pops_add_gtest_suite)
     target_compile_definitions(${ARG_NAME} PRIVATE ${ARG_COMPILE_DEFINITIONS})
   endif()
 
-  set(_pops_test_properties
-    LABELS "${ARG_LABELS}"
-    TIMEOUT ${ARG_TIMEOUT})
-  if(ARG_RESOURCE_LOCK)
-    list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
-  endif()
-  if(ARG_RESOURCE_GROUPS)
-    list(APPEND _pops_test_properties RESOURCE_GROUPS "${ARG_RESOURCE_GROUPS}")
-  endif()
+  set(_pops_test_labels "${ARG_LABELS};cpp-target:${ARG_NAME}")
 
   if(NOT ARG_NO_DISCOVER)
-    gtest_discover_tests(${ARG_NAME}
-      DISCOVERY_MODE PRE_TEST
-      DISCOVERY_TIMEOUT 60
-      XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
-      PROPERTIES ${_pops_test_properties})
+    if(ARG_RUNTIME_DISCOVERY)
+      # Runtime discovery is an explicit escape hatch for a future suite whose
+      # parameterized or generated names cannot be recovered from its sources.
+      # Keep it POST_BUILD: PRE_TEST would enumerate every executable on each
+      # CTest inventory and again on execution, which is especially costly for
+      # CI's label-authenticated shards.
+      set(_pops_test_list "${ARG_NAME}_TESTS")
+      set(_pops_test_properties TIMEOUT ${ARG_TIMEOUT})
+      if(ARG_RESOURCE_LOCK)
+        list(APPEND _pops_test_properties RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+      endif()
+      gtest_discover_tests(${ARG_NAME}
+        DISCOVERY_MODE POST_BUILD
+        DISCOVERY_TIMEOUT 60
+        XML_OUTPUT_DIR "${_pops_gtest_xml_dir}/${ARG_NAME}"
+        TEST_LIST "${_pops_test_list}"
+        PROPERTIES ${_pops_test_properties})
+
+      # ``gtest_discover_tests(PROPERTIES ...)`` transports an alternating
+      # property/value list through a generated CMake script.  Assign list-valued
+      # LABELS/RESOURCE_GROUPS after discovery so CTest receives atomic labels.
+      set(_pops_list_properties_file
+        "${CMAKE_CURRENT_BINARY_DIR}/${ARG_NAME}_list_properties.cmake")
+      set(_pops_resource_groups_assignment "")
+      if(ARG_RESOURCE_GROUPS)
+        set(_pops_resource_groups_assignment
+          "    RESOURCE_GROUPS [==[${ARG_RESOURCE_GROUPS}]==]\n")
+      endif()
+      file(GENERATE OUTPUT "${_pops_list_properties_file}" CONTENT
+"foreach(_pops_discovered_test IN LISTS ${_pops_test_list})
+  set_tests_properties(\"\${_pops_discovered_test}\" PROPERTIES
+    LABELS [==[${_pops_test_labels}]==]
+${_pops_resource_groups_assignment}  )
+endforeach()
+")
+      set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES
+        "${_pops_list_properties_file}")
+    else()
+      # All current PoPS suites use ordinary TEST/TEST_F declarations.  Register
+      # them at configure time so CTest reads one CTestTestfile.cmake instead of
+      # two generated include scripts per executable on every inventory/run.
+      # Omitting SKIP_DEPENDENCY intentionally makes CMake reconfigure whenever
+      # a test declaration changes.
+      gtest_add_tests(
+        TARGET ${ARG_NAME}
+        SOURCES ${ARG_SOURCES}
+        TEST_LIST _pops_discovered_tests)
+      if(NOT _pops_discovered_tests)
+        message(FATAL_ERROR
+          "No GoogleTest cases found in ${ARG_NAME}; use NO_DISCOVER for a manually registered suite")
+      endif()
+
+      set_tests_properties(${_pops_discovered_tests} PROPERTIES
+        LABELS "${_pops_test_labels}"
+        TIMEOUT "${ARG_TIMEOUT}")
+      if(ARG_RESOURCE_LOCK)
+        set_tests_properties(${_pops_discovered_tests} PROPERTIES
+          RESOURCE_LOCK "${ARG_RESOURCE_LOCK}")
+      endif()
+      if(ARG_RESOURCE_GROUPS)
+        set_tests_properties(${_pops_discovered_tests} PROPERTIES
+          RESOURCE_GROUPS "${ARG_RESOURCE_GROUPS}")
+      endif()
+
+      # Preserve the per-case GoogleTest XML artifacts previously provided by
+      # gtest_discover_tests(XML_OUTPUT_DIR) without adding CTest include files.
+      file(MAKE_DIRECTORY "${_pops_gtest_xml_dir}/${ARG_NAME}")
+      foreach(_pops_discovered_test IN LISTS _pops_discovered_tests)
+        set_property(TEST "${_pops_discovered_test}" APPEND PROPERTY ENVIRONMENT
+          "GTEST_OUTPUT=xml:${_pops_gtest_xml_dir}/${ARG_NAME}/${_pops_discovered_test}.xml")
+      endforeach()
+    endif()
   endif()
 endfunction()
 
@@ -174,6 +237,36 @@ function(pops_add_mpi_gtest_suite name)
   endforeach()
 endfunction()
 
+# A lifecycle test needs complete control over main(): its first executable statement must be the
+# embedding application's MPI_Init_thread, before PoPS or a test framework can touch MPI.  Keep this
+# registration separate from the GoogleTest wrapper so that ownership and finalization are proved by
+# a real process lifecycle rather than by a fixture or mocked state.
+function(pops_add_mpi_standalone_suite name)
+  set(options)
+  set(oneValueArgs)
+  set(multiValueArgs RANKS)
+  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+  if(NOT ARG_RANKS)
+    set(ARG_RANKS 1 2)
+  endif()
+
+  pops_test_source(_src ${name})
+  add_executable(${name} "${_src}")
+  set_target_properties(${name} PROPERTIES NO_SYSTEM_FROM_IMPORTED ON)
+  target_link_libraries(${name} PRIVATE pops::pops pops_dev_options)
+  target_compile_features(${name} PRIVATE cxx_std_${POPS_CXX_STD})
+
+  foreach(_np IN LISTS ARG_RANKS)
+    add_test(NAME ${name}_np${_np}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${_np}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:${name}> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(${name}_np${_np} PROPERTIES
+      LABELS "backend;mpi;medium"
+      PROCESSORS ${_np}
+      TIMEOUT 60)
+  endforeach()
+endfunction()
+
 function(pops_native_loader_definitions out)
   set(${out}
     POPS_TEST_CXX="${CMAKE_CXX_COMPILER}"
@@ -183,85 +276,28 @@ function(pops_native_loader_definitions out)
     PARENT_SCOPE)
 endfunction()
 
-set_property(GLOBAL APPEND PROPERTY JOB_POOLS pops_heavy_tu=${POPS_HEAVY_TU_POOL})
-
 function(pops_cap_opt_for_kokkos_ram target)
   target_compile_options(${target} PRIVATE
     $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
-  set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
+  set_target_properties(${target} PROPERTIES JOB_POOL_COMPILE pops_heavy_test_tu)
 endfunction()
 
-# --- ADC-336 (P0-A) : les deux TU lourdes du runtime compilees UNE SEULE FOIS par config -----------
-# Avant, ~23 executables de test re-listaient python/bindings/system/base/system.cpp et/ou python/bindings/amr/amr_system.cpp en source
-# (chacune une compilation cc1plus de plusieurs Go / centaines de secondes -- la meme TU recompilee
-# jusqu'a 20x dans un build de tests). On les compile UNE fois dans deux bibliotheques OBJECT, splicees
-# dans chaque executable consommateur EXACTEMENT comme si la .cpp y etait encore listee : memes objets,
-# donc tous les symboles (y compris POPS_EXPORT) presents, et -rdynamic les exporte toujours.
-# Parite bit-a-bit : la cible de reference est ce que ces tests compilaient deja -- pops::pops seul,
-# AUCUN pops_dev_options, AUCUN define POPS_* (les POPS_TEST_* des loaders natifs sont PRIVATE a leur .cpp
-# et inutilises par la TU lourde) -- donc on n'ajoute rien.
-# -O0 PUBLIC : cape la TU lourde ET se propage a la .cpp de chaque test consommateur, pour que le chemin
-# add_compiled_model (instancie dans la .cpp du test) reste au MEME -O que le chemin add_block (dans cet
-# objet partage). L'ancien cap par cible couvrait les deux a -O0 ; le preserver garde l'ensemble
-# (TU, flags) identique a aujourd'hui et evite toute derive de bits par contraction FMA a -O3 (GCC).
-# Le pool ninja pops_heavy_tu (taille 1, declare ci-dessus) reste PRIVATE : seule la TU lourde se
-# serialise (anti-OOM), pas les petites .cpp de test.
-# _pops (python/CMakeLists.txt) n'est PAS touche : il compile deja chaque TU une fois avec ses propres
-# flags de production (POPS_HEADER_SIG/visibilite/...), et AUCUN preset ne co-construit tests+python
-# (POPS_BUILD_TESTS et POPS_BUILD_PYTHON sont mutuellement exclusifs dans CMakePresets.json) -- cette
-# bibliotheque est donc strictement tests-only et ne peut pas etre partagee avec _pops.
-# ADC-593: the per-route block-build seam TUs (system/{isothermal,compressible}, amr/block, amr/compiled)
-# are GENERATED from the same declarative manifest the _pops module uses (python/bindings/
-# seam_combinations.cmake), into ${CMAKE_CURRENT_BINARY_DIR}/generated_seams here. The C++ test targets
-# splice the SAME generated leaves the module compiles, so a manifest row is the ONE place a (transport,
-# flux) leaf is registered for both the module and the tests. amr_system.cpp / system.cpp CALL the seams,
-# so the generated leaves must be compiled/linked wherever those heavy TUs are.
-include(${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/seam_combinations.cmake)
-set(POPS_GENERATED_SEAMS_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_seams)
-set(POPS_SYSTEM_GENERATED_SEAMS "")
-set(POPS_AMR_GENERATED_SEAMS "")
-foreach(_seam_row ${POPS_SEAM_COMBINATIONS})
-  string(REPLACE "|" ";" _cols "${_seam_row}")
-  list(GET _cols 1 _side)
-  if(_side STREQUAL "system")
-    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_SYSTEM_GENERATED_SEAMS)
-  else()
-    pops_generate_seam("${_seam_row}" "${POPS_GENERATED_SEAMS_DIR}" POPS_AMR_GENERATED_SEAMS)
-  endif()
-endforeach()
-
-# ADC-632: system.cpp is split by responsibility into sibling TUs sharing the binding-private
-# system_impl.hpp (install / fields / io / profiling / program); the OBJECT lib compiles the same
-# six TUs the _pops module does, so every consumer keeps the full System facade symbol set.
-add_library(pops_runtime_system OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_install.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_fields.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_io.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_profiling.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_program.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/system/base/system_polar.cpp
-            ${POPS_SYSTEM_GENERATED_SEAMS})
-# ADC-335: the AMR transport-seam TUs (multi-block build_amr_block_<t> + single-block
-# build_amr_compiled_<t>). amr_system.cpp CALLS them, so they must be compiled/linked wherever
-# amr_system.cpp is -- the pops_runtime_amr object lib AND the ENABLE_EXPORTS native-loader tests that
-# re-list amr_system.cpp directly (below). One list, reused, so none is forgotten. The two thin riemann
-# DISPATCHERS (amr_block_compressible.cpp / amr_compiled_compressible.cpp) stay hand-written; the per-flux
-# leaves come from POPS_AMR_GENERATED_SEAMS.
-set(POPS_AMR_SEAM
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/block/compressible/amr_block_compressible.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/compiled/compressible/amr_compiled_compressible.cpp
-    ${POPS_AMR_GENERATED_SEAMS})
-add_library(pops_runtime_amr    OBJECT ${CMAKE_CURRENT_SOURCE_DIR}/../python/bindings/amr/amr_system.cpp ${POPS_AMR_SEAM})
-foreach(_rt pops_runtime_system pops_runtime_amr)
-  target_link_libraries(${_rt} PUBLIC pops::pops ${CMAKE_DL_LIBS})
-  target_compile_options(${_rt} PUBLIC
-    $<$<AND:$<CONFIG:Release,RelWithDebInfo,MinSizeRel>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-O0>)
-  set_target_properties(${_rt} PROPERTIES JOB_POOL_COMPILE pops_heavy_tu)
-endforeach()
+# The central object targets are defined, configured and populated exclusively by src/CMakeLists.txt.
+# Test executables below consume them through EXTRA_LIBS; this file never repeats runtime sources.
 
 # Generated C++ solver kernel used by test_solver_codegen_generated.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+  add_test(
+    NAME test_component_catalog_generated
+    COMMAND ${CMAKE_COMMAND} -E env
+            "PYTHONDONTWRITEBYTECODE=1"
+            "PYTHONPATH=${CMAKE_SOURCE_DIR}/python"
+            "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/generate_component_catalog.py" --check)
+  set_tests_properties(test_component_catalog_generated PROPERTIES
+    LABELS "python;architecture;generated")
+
   set(_pops_gen_solver_hpp "${CMAKE_CURRENT_BINARY_DIR}/pops_generated_solver.hpp")
   file(GLOB_RECURSE _pops_gen_solver_pysrc CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/python/pops/*.py")
   add_custom_command(
@@ -282,32 +318,39 @@ set(POPS_CPP_STANDARD_TESTS
   test_external_brick
   test_external_brick_json
   test_runtime_environment
+  test_step_attempt_rejected_header_only
+  test_world_communicator
+  test_residual_operator
   test_capability_report
+  test_canonical_identity
   test_box2d
   test_fab2d
   test_box_array
   test_multifab
+  test_multiblock_interface_scheduler
   test_sync_residence
   test_reduce
   test_reduce_abs_sum
   test_dense_eig
   test_route_ids
   test_brick_catalog
+  test_component_interfaces
   test_fill_boundary
   test_fill_boundary_cache
   test_copy_schedule_cache
   test_physical_bc
+  test_prepared_boundary_plan
   test_geometry
   test_refinement
   test_ref_ratio
   test_amr_hierarchy
+  test_amr_tensor_fac_provider
   test_cluster
   test_regrid
   test_flux_register
   test_coverage_mask
   test_patch_range
   test_cf_interface
-  test_program_reflux_ledger
   test_amr_diagnostics
   test_load_balance
   test_poisson_smoother
@@ -338,19 +381,16 @@ set(POPS_CPP_STANDARD_TESTS
   test_polar_poisson_mms
   test_polar_tensor_elliptic_mms
   test_polar_schur_multibox
-  test_polar_condensed_schur_source_stepper
   test_krylov_solver
   test_numerical_defaults
+  test_flux_interfaces
   test_fallback_diagnostics
   test_structured_solver_diagnostics
   test_public_validation_errors
   test_program_context_schur_free
+  test_platform_manifest
   test_generic_krylov
   test_solver_codegen_generated
-  test_schur_condensation
-  test_condensed_schur_source_stepper
-  test_amr_condensed_schur_source_stepper
-  test_amr_condensed_schur_composite
   test_dispatch_tags
   test_scheme_dispatch
   test_model_registry
@@ -394,16 +434,13 @@ set(POPS_CPP_STANDARD_TESTS
   test_aux_single_source
   test_weno_convergence
   test_splitting
-  test_strang_splitting
   test_imex_ap
   test_ap_limit
-  test_lorentz_eliminator
   test_polar_transport_mms
   test_polar_system_step
   test_polar_mms_vr
   test_polar_fluid_transport
   test_polar_lorentz_source
-  test_dynamic_model
   test_block_builder
   test_block_inverse
   test_weno5_ssprk3
@@ -416,20 +453,15 @@ set(POPS_CPP_STANDARD_TESTS
   test_riemann_capabilities
   test_newton_robustness
   test_elliptic_interface
+  test_field_nullspace
   test_field_context
-  test_field_problem_registry
-  test_field_registry_uniform_amr
   test_system_registries
 )
 
 foreach(_test IN LISTS POPS_CPP_STANDARD_TESTS)
   pops_add_test(${_test})
 endforeach()
-
-# The Cartesian-vs-polar radial-diffusion comparison runs two full advections and sits close to the
-# 600 s default cap on slow CI runners (timed out on identical binaries across consecutive master
-# runs, ADC-624); labels stay inferred (unit physics fast).
-pops_add_gtest_suite(NAME test_polar_ring_advection TIMEOUT 1800)
+pops_cap_opt_for_kokkos_ram(test_multiblock_interface_scheduler)
 
 if(TARGET test_solver_codegen_generated AND TARGET pops_gen_solver_kernel)
   target_include_directories(test_solver_codegen_generated PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
@@ -450,16 +482,17 @@ pops_test_source(_src test_config_model_validation)
 pops_add_gtest_suite(NAME test_config_model_validation SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
 
 pops_test_source(_src test_native_aux_named)
-pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_native_loader_definitions(_native_defs)
+pops_add_gtest_suite(NAME test_native_aux_named SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_compiled_model_parity)
-pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
+pops_add_gtest_suite(NAME test_compiled_model_parity SOURCES "${_src}")
 
 pops_test_source(_src test_weno5_compiled_model)
 pops_add_gtest_suite(NAME test_weno5_compiled_model SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
 
 pops_test_source(_src test_amr_compiled_model)
-pops_add_gtest_suite(NAME test_amr_compiled_model SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+pops_add_gtest_suite(NAME test_amr_compiled_model SOURCES "${_src}")
 
 pops_test_source(_src test_amr_seed_no_refine)
 pops_add_gtest_suite(NAME test_amr_seed_no_refine SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -475,7 +508,7 @@ pops_add_gtest_suite(NAME test_amr_distribute_coarse_serial SOURCES "${_src}" EX
 
 pops_test_source(_src test_amr_native_loader)
 pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_native_loader SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
 
 pops_test_source(_src test_external_riemann_dispatch)
 pops_native_loader_definitions(_native_defs)
@@ -489,8 +522,7 @@ endif()
 pops_add_gtest_suite(NAME test_external_riemann_dispatch SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_external_riemann_defs})
 
 pops_test_source(_src test_amr_weno5_native)
-pops_native_loader_definitions(_native_defs)
-pops_add_gtest_suite(NAME test_amr_weno5_native SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr ENABLE_EXPORTS RESOURCE_LOCK native_loader COMPILE_DEFINITIONS ${_native_defs})
+pops_add_gtest_suite(NAME test_amr_weno5_native SOURCES "${_src}")
 
 pops_test_source(_src test_amr_riemann_native)
 pops_native_loader_definitions(_native_defs)
@@ -502,6 +534,9 @@ pops_add_gtest_suite(NAME test_amr_imex_native SOURCES "${_src}" EXTRA_LIBS ${CM
 
 pops_test_source(_src test_amr_system_contract)
 pops_add_gtest_suite(NAME test_amr_system_contract SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_ssprk2)
+pops_add_gtest_suite(NAME test_amr_ssprk2 SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_amr_system_twoblock)
 pops_add_gtest_suite(NAME test_amr_system_twoblock SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
@@ -529,6 +564,22 @@ pops_add_gtest_suite(NAME test_amr_multiblock_regrid_union SOURCES "${_src}" EXT
 
 pops_test_source(_src test_amr_history_ring)
 pops_add_gtest_suite(NAME test_amr_history_ring SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+# Link-only ABI fence: the source itself references the out-of-line StepAttemptRejected key
+# function/typeinfo, while the target requests only the AMR facade. The link therefore proves that
+# pops_runtime_amr carries the one runtime-core authority transitively (no System dependency).
+pops_test_source(_src test_step_attempt_rejected_amr_link)
+pops_add_gtest_suite(
+  NAME test_step_attempt_rejected_amr_link
+  SOURCES "${_src}"
+  EXTRA_LIBS pops_runtime_amr
+  LABELS unit runtime amr fast)
+
+pops_test_source(_src test_program_reflux_ledger)
+pops_add_gtest_suite(NAME test_program_reflux_ledger SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
+
+pops_test_source(_src test_amr_transfer_properties)
+pops_add_gtest_suite(NAME test_amr_transfer_properties SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_amr)
 
 pops_test_source(_src test_aux_runtime_bz)
 pops_add_gtest_suite(NAME test_aux_runtime_bz SOURCES "${_src}" EXTRA_LIBS ${CMAKE_DL_LIBS} pops_runtime_system)
@@ -603,6 +654,8 @@ add_dependencies(test_external_brick_isolation pops_iso_fixture_a pops_iso_fixtu
 
 
 if(POPS_HAS_MPI)
+  pops_add_mpi_standalone_suite(test_mpi_external_lifecycle RANKS 1 2)
+
   set(POPS_MPI_RANKS_test_mpi_polar_schur 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_mbox_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_hybrid_mbox_parity 1 2 4)
@@ -610,20 +663,28 @@ if(POPS_HAS_MPI)
   set(POPS_MPI_RANKS_test_mpi_amr_compiled_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_twoblock_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_amr_distributed_coarse 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_amr_program_reflux 2 4)
   set(POPS_MPI_RANKS_test_mpi_composite_fac 1 2 4)
   set(POPS_MPI_RANKS_test_amr_regrid_mpi_parity 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_solve_fields 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_fft 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_coupled_source 1 2 4)
+  set(POPS_MPI_RANKS_test_mpi_field_plan_consensus 2)
   set(POPS_MPI_RANKS_test_mpi_system_gather_scatter 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_system_io_gather 1 2 4)
   set(POPS_MPI_RANKS_test_mpi_array_reduce 4)
+  set(POPS_MPI_RANKS_test_mpi_multiblock_interface_scheduler 2)
   set(POPS_MPI_RANKS_test_mpi_coupler_inject 4)
   set(POPS_MPI_RANKS_test_mpi_fft_distributed 4)
   set(POPS_MPI_RANKS_test_mpi_fillboundary 4)
   set(POPS_MPI_RANKS_test_mpi_poisson 4)
   set(POPS_MPI_RANKS_test_mpi_redistribute 4)
   set(POPS_MPI_RANKS_test_mpi_smoke 4)
+  set(POPS_MPI_RANKS_test_krylov_solver 1 2 4)
+  set(POPS_MPI_RANKS_test_fill_boundary_cache 1 2 4)
+  set(POPS_MPI_RANKS_test_copy_schedule_cache 1 2 4)
+  set(POPS_MPI_RANKS_test_amr_system_bz_multibox 2 4)
+  set(POPS_MPI_RANKS_test_world_communicator 1 2)
 
   set(POPS_CPP_MPI_ONLY_TESTS
     test_mpi_polar_schur
@@ -633,14 +694,17 @@ if(POPS_HAS_MPI)
     test_mpi_amr_compiled_parity
     test_mpi_amr_twoblock_parity
     test_mpi_amr_distributed_coarse
+    test_mpi_amr_program_reflux
     test_mpi_composite_fac
     test_amr_regrid_mpi_parity
     test_mpi_system_solve_fields
     test_mpi_system_fft
     test_mpi_coupled_source
+    test_mpi_field_plan_consensus
     test_mpi_system_gather_scatter
     test_mpi_system_io_gather
     test_mpi_array_reduce
+    test_mpi_multiblock_interface_scheduler
     test_mpi_coupler_inject
     test_mpi_fft_distributed
     test_mpi_fillboundary
@@ -649,6 +713,14 @@ if(POPS_HAS_MPI)
     test_mpi_smoke
   )
 
+  # The HDF5 proof exists only when the collective native backend was actually configured.  The
+  # standard `mpi` and `ci-mpi` presets request that backend strictly; a custom MPI-only consumer
+  # does not receive a green skipped target that would pretend to validate absent HDF5 code.
+  if(POPS_HAS_PARALLEL_HDF5)
+    set(POPS_MPI_RANKS_test_mpi_hdf5_collective 1 2)
+    list(APPEND POPS_CPP_MPI_ONLY_TESTS test_mpi_hdf5_collective)
+  endif()
+
   foreach(_test IN LISTS POPS_CPP_MPI_ONLY_TESTS)
     set(_extra_libs)
     # test_mpi_system_* + test_mpi_coupled_source need the System runtime; test_mpi_amr_* +
@@ -656,31 +728,42 @@ if(POPS_HAS_MPI)
     # a `$`-anchored pattern would only match the bare prefix and leave e.g.
     # test_mpi_amr_twoblock_parity / test_mpi_system_solve_fields without their runtime object
     # lib, so the link fails with undefined AmrSystem/System symbols.
-    if(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
+    if(_test STREQUAL "test_mpi_hdf5_collective")
+      list(APPEND _extra_libs pops_runtime_output)
+    elseif(_test STREQUAL "test_mpi_field_plan_consensus")
+      list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system pops_runtime_amr)
+    elseif(_test MATCHES "^test_mpi_system_" OR _test STREQUAL "test_mpi_coupled_source")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_system)
     elseif(_test MATCHES "^test_mpi_amr_" OR _test STREQUAL "test_amr_regrid_mpi_parity")
       list(APPEND _extra_libs ${CMAKE_DL_LIBS} pops_runtime_amr)
     endif()
     pops_add_mpi_gtest_suite(${_test} EXTRA_LIBS ${_extra_libs} RANKS ${POPS_MPI_RANKS_${_test}})
   endforeach()
+  set_tests_properties(test_mpi_field_plan_consensus_np2 PROPERTIES TIMEOUT 30)
+  # This regression consumes two MPI processor slots and exercises transport, not on-node
+  # threading. Keep one Kokkos worker per rank so the CTest PROCESSORS=2 accounting is honest.
+  set_tests_properties(test_mpi_amr_program_reflux_np2 test_mpi_amr_program_reflux_np4 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1")
+  # This regression proves MPI trace transport and intentionally does not exercise on-node
+  # threading.  One Kokkos worker per rank avoids OpenMP oversubscription and matches CTest's
+  # PROCESSORS=2 accounting.
+  set_tests_properties(test_mpi_multiblock_interface_scheduler_np2 PROPERTIES
+    ENVIRONMENT "OMP_NUM_THREADS=1")
 
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_krylov_solver ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_schur_condensation ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_condensed_schur_source_stepper ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_fill_boundary_cache ${_np})
-  endforeach()
-  foreach(_np 1 2 4)
-    pops_add_mpi_rank_test(test_copy_schedule_cache ${_np})
-  endforeach()
-  foreach(_np 2 4)
-    pops_add_mpi_rank_test(test_amr_system_bz_multibox ${_np})
+  # These are ordinary serial suites with additional MPI launch variants. Their rank sets are
+  # declared authoritatively as `mpi_variants` in tests/test_manifest.toml; the source-only
+  # architecture gate compares this projection and these CMake registrations exactly.
+  set(POPS_CPP_MPI_VARIANT_TESTS
+    test_krylov_solver
+    test_fill_boundary_cache
+    test_copy_schedule_cache
+    test_amr_system_bz_multibox
+    test_world_communicator
+  )
+  foreach(_test IN LISTS POPS_CPP_MPI_VARIANT_TESTS)
+    foreach(_np IN LISTS POPS_MPI_RANKS_${_test})
+      pops_add_mpi_rank_test(${_test} ${_np})
+    endforeach()
   endforeach()
 endif()
 
@@ -694,4 +777,4 @@ foreach(_t ${_pops_dir_targets})
     math(EXPR _pops_capped "${_pops_capped}+1")
   endif()
 endforeach()
-message(STATUS "pops tests: ${_pops_capped} heavy runtime targets capped (-O0 + pops_heavy_tu pool)")
+message(STATUS "pops tests: ${_pops_capped} heavy runtime targets capped (-O0 + pops_heavy_test_tu pool)")

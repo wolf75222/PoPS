@@ -153,6 +153,8 @@ TEST(test_cut_fraction, weights_are_bit_identical_to_historical_inline_formula) 
   std::printf("bit-identite : %ld cellules actives, %ld coupees, max_diff=%.3e\n", active,
               cut_cells, static_cast<double>(max_diff));
   EXPECT_TRUE(max_diff == Real(0)) << "bit_identite_poids_diff_exacte_0";
-  EXPECT_GT(active, 1800) << "balayage_couvre_le_disque";  // pi*R^2/h^2 = pi*0.4^2*64^2 ~ 2058 cellules
-  EXPECT_GT(cut_cells, 100) << "beaucoup_de_cellules_coupees";  // le bord du disque genere des coupures
+  EXPECT_GT(active, 1800)
+      << "balayage_couvre_le_disque";  // pi*R^2/h^2 = pi*0.4^2*64^2 ~ 2058 cellules
+  EXPECT_GT(cut_cells, 100)
+      << "beaucoup_de_cellules_coupees";  // le bord du disque genere des coupures
 }

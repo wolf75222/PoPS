@@ -2,18 +2,17 @@
 
 A field problem can declare auxiliary fields it reads or derives: a :class:`StaticAux`
 holds a fixed value supplied once, a :class:`DerivedAux` is computed from a PoPS
-expression (in C++, not Python). The per-field aux halo / ghost policy
-:class:`pops.mesh.aux.AuxHalo` is re-exported here under the name Spec 5 sec.14.2.4 uses
-(``pops.fields.aux.AuxHalo``); it is the SAME mesh descriptor, not a copy.
+expression (in C++, not Python). Per-field halo policy belongs uniquely to
+:class:`pops.mesh.AuxHalo`.
 
 Inert descriptors; they compute nothing.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 from pops.descriptors import Descriptor
-
 
 class StaticAux(Descriptor):
     """A static auxiliary field named :paramref:`name`, holding a fixed :paramref:`value`."""
@@ -49,21 +48,13 @@ class DerivedAux(Descriptor):
         return self._name
 
     def options(self) -> dict:
-        return {"name": self._name, "kind": "derived",
-                "expression": getattr(self.expression, "name", repr(self.expression))
-                if self.expression is not None else None}
+        return {
+            "name": self._name,
+            "kind": "derived",
+            "expression": getattr(self.expression, "name", repr(self.expression))
+            if self.expression is not None
+            else None,
+        }
 
 
-# Re-export the per-field aux halo descriptor under the Spec 5 sec.14.2.4 name
-# ``pops.fields.aux.AuxHalo``. It is the SAME mesh descriptor (a thin re-export, not a
-# copy). Resolved lazily via module __getattr__ so ``pops.fields`` keeps importing only
-# pops.descriptors at module scope (the mesh package is not pulled in until AuxHalo is
-# actually referenced).
-def __getattr__(name: str) -> Any:
-    if name == "AuxHalo":
-        from pops.mesh.aux import AuxHalo
-        return AuxHalo
-    raise AttributeError("module %r has no attribute %r" % (__name__, name))
-
-
-__all__ = ["StaticAux", "DerivedAux", "AuxHalo"]
+__all__ = ["StaticAux", "DerivedAux"]

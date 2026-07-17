@@ -1,49 +1,106 @@
-"""pops.lib.time.predictor_corrector -- Predictor-corrector scheme (operator-first, Spec 2).
-
-Exports: predictor_corrector_local_linear.
-"""
+"""Canonical local-linear predictor--corrector Program factory."""
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
-from ._helpers import _opcall, _operator_handle, program_macro
+from pops.solvers import DenseLU
+from pops.time import LocalLinear
+
+from ._factory import (
+    call_at, call_field_at, field_handle, instance_state, operator_handle,
+    program_factory, resolve_solve_action,
+)
+from ._helpers import _stage_point
 
 
-@program_macro
-def predictor_corrector_local_linear(P: Any, block: Any, *, fields_operator: Any,
-                                     explicit_rate_operator: Any, implicit_operator: Any,
-                                     state_space: Any = "U", commit: Any = True) -> Any:
-    """Generic predictor-corrector for ``dU/dt = R(U, fields) + L(fields) U`` (Spec 2, operator-first).
+def _build_predictor_corrector(
+    program: Any,
+    state: Any,
+    fields: Any,
+    explicit: Any,
+    implicit: Any,
+    solve_action: Any,
+) -> None:
+    fields = field_handle(fields, "PredictorCorrector fields")
+    explicit = operator_handle(explicit, "PredictorCorrector explicit")
+    implicit = operator_handle(implicit, "PredictorCorrector implicit")
+    temporal = instance_state(program, state, "PredictorCorrector")
+    initial = temporal.n
+    predictor = _stage_point(
+        program, "predictor", partitions={"explicit": 0, "implicit": 1})
+    fields_initial = call_field_at(
+        program, fields, initial, name="fields_n", point=predictor,
+        solve_action=solve_action)
+    rate_initial = call_at(
+        program, explicit, initial, fields_initial, name="rate_n", point=predictor)
+    linear_initial = call_at(
+        program, implicit, fields_initial, name="linear_n", point=predictor)
+    predictor_rhs = program.value(
+        "predictor_rhs", initial + program.dt * rate_initial, at=predictor)
+    predicted = program.solve(
+        LocalLinear(
+            operator=program.I - program.dt * linear_initial,
+            rhs=predictor_rhs, fields=fields_initial),
+        solver=DenseLU(), name="predictor_solve",
+    ).consume(action=solve_action)
+    predicted = program.value("predicted_state", predicted, at=predictor)
 
-    Composes THREE typed operators by name -- a field operator ``fields_operator: U -> Fields``, an
-    explicit rate ``explicit_rate_operator: (U, Fields) -> Rate(U)`` and a local linear operator
-    ``implicit_operator: Fields -> LocalLinearOperator(U, U)`` -- into one trapezoidal step with the
-    L term treated implicitly via local solves::
+    corrector = _stage_point(
+        program, "corrector", partitions={"explicit": 1, "implicit": 1})
+    fields_predicted = call_field_at(
+        program, fields, predicted, name="fields_predicted", point=corrector,
+        solve_action=solve_action)
+    rate_predicted = call_at(
+        program, explicit, predicted, fields_predicted,
+        name="rate_predicted", point=corrector,
+    )
+    linear_predicted = call_at(
+        program, implicit, fields_predicted,
+        name="linear_predicted", point=corrector,
+    )
+    applied = program.apply(
+        linear_predicted, predicted, fields=fields_predicted, name="implicit_predicted")
+    applied = program.value("implicit_predicted", applied, at=corrector)
+    half = Fraction(1, 2)
+    corrector_rhs = program.value(
+        "corrector_rhs",
+        initial
+        + half * program.dt * rate_initial
+        + half * program.dt * rate_predicted
+        + half * program.dt * applied,
+        at=temporal.next.point,
+    )
+    corrected = program.solve(
+        LocalLinear(
+            operator=program.I - half * program.dt * linear_predicted,
+            rhs=corrector_rhs, fields=fields_predicted),
+        solver=DenseLU(), name="corrector_solve",
+    ).consume(action=solve_action)
+    endpoint = program.value(
+        "predictor_corrector_step", corrected, at=temporal.next.point)
+    program.commit(temporal.next, endpoint)
 
-        U*    = (I - dt L_n)^{-1} (U^n + dt R_n)
-        U^n+1 = (I - 1/2 dt L*)^{-1} (U^n + 1/2 dt R_n + 1/2 dt R* + 1/2 dt L* U*)
 
-    It mentions no physics; ``state_space`` is informational. Each of ``fields_operator`` /
-    ``explicit_rate_operator`` / ``implicit_operator`` is a typed :class:`pops.model.OperatorHandle`
-    from an ``m.*`` declarer, not a name string. Requires ``P.bind_operators(module)``.
-    """
-    fields_operator = _operator_handle(fields_operator, "fields_operator")
-    explicit_rate_operator = _operator_handle(explicit_rate_operator, "explicit_rate_operator")
-    implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
-    u_n = P.state(block)
-    fields_n = _opcall(P, fields_operator, u_n, value_name="fields_n")
-    r_n = _opcall(P, explicit_rate_operator, u_n, fields_n, value_name="R_n")
-    l_n = _opcall(P, implicit_operator, fields_n, value_name="L_n")
-    u_star = P.solve_local_linear("U_star", operator=P.I - P.dt * l_n,
-                                  rhs=P.linear_combine("U_star_rhs", u_n + P.dt * r_n),
-                                  fields=fields_n)
-    fields_star = _opcall(P, fields_operator, u_star, value_name="fields_star")
-    r_star = _opcall(P, explicit_rate_operator, u_star, fields_star, value_name="R_star")
-    l_star = _opcall(P, implicit_operator, fields_star, value_name="L_star")
-    c_star = P.apply(l_star, u_star, fields=fields_star, name="C_star")
-    q = P.linear_combine("Q", u_n + 0.5 * P.dt * r_n + 0.5 * P.dt * r_star + 0.5 * P.dt * c_star)
-    u_np1 = P.solve_local_linear("U_np1", operator=P.I - 0.5 * P.dt * l_star, rhs=q,
-                                 fields=fields_star)
-    if commit:
-        P.commit(block, u_np1)
-    return u_np1
+def PredictorCorrector(
+    state: Any,
+    *,
+    fields: Any,
+    explicit: Any,
+    implicit: Any,
+    solve_action: Any = None,
+) -> Any:
+    """Return a trapezoidal predictor--corrector Program from three typed operators."""
+    action = resolve_solve_action(solve_action, "PredictorCorrector")
+    return program_factory(
+        "PredictorCorrector",
+        _build_predictor_corrector,
+        state,
+        fields,
+        explicit,
+        implicit,
+        action,
+    )
+
+
+__all__ = ["PredictorCorrector"]

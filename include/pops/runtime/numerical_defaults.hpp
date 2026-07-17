@@ -49,8 +49,10 @@ inline constexpr int kMGDefaultCoarseThreshold = 0;
 // Composite FAC defaults.
 inline constexpr int kFACDefaultMaxIters = 30;
 inline constexpr int kFACDefaultFineSweeps = 400;
-inline constexpr Real kFACDefaultTol = Real(1e-9);
+inline constexpr Real kFACDefaultRelTol = Real(1e-9);
+inline constexpr Real kFACDefaultAbsTol = Real(0);
 inline constexpr Real kFACInitialCoarseRelTol = Real(1e-12);
+inline constexpr Real kFACInitialCoarseAbsTol = Real(0);
 inline constexpr int kFACInitialCoarseMaxCycles = 100;
 
 // FFT Poisson route facts.
@@ -115,17 +117,18 @@ struct EbThresholds {
 };
 
 /// The composite FAC Poisson knobs (ADC-614): the AMR composite elliptic solver's outer iteration
-/// budget, per-fine-patch SOR sweeps, composite-residual tolerance, the internal coarse-level
-/// GeometricMG tolerance/cycles, and the verbose diagnostics flag. Defaults are the kFAC* constants,
-/// so a CompositeFacPoisson driven with a default-constructed options struct reproduces today's
-/// composite solve bit-for-bit.
+/// budget, per-fine-patch SOR sweeps, mixed composite-residual tolerance, the internal coarse-level
+/// GeometricMG tolerance/cycles, and the verbose diagnostics flag. The outer solve stops at
+/// max(rel_tol * ||R(0)||inf, abs_tol), where R(0) is the exact composite affine forcing.
 struct CompositeFacOptions {
-  int max_iters = kFACDefaultMaxIters;               ///< FAC two-way iterations.
-  int fine_sweeps = kFACDefaultFineSweeps;           ///< SOR sweeps per fine-patch solve.
-  Real tol = kFACDefaultTol;                         ///< composite-residual stop.
-  Real coarse_rel_tol = kFACInitialCoarseRelTol;     ///< internal coarse GeometricMG rel_tol.
-  int coarse_cycles = kFACInitialCoarseMaxCycles;    ///< internal coarse GeometricMG max_cycles.
-  bool verbose = false;                              ///< record the per-iteration residual trace.
+  int max_iters = kFACDefaultMaxIters;             ///< FAC two-way iterations.
+  int fine_sweeps = kFACDefaultFineSweeps;         ///< SOR sweeps per fine-patch solve.
+  Real rel_tol = kFACDefaultRelTol;                ///< relative composite-residual tolerance.
+  Real abs_tol = kFACDefaultAbsTol;                ///< absolute composite-residual floor.
+  Real coarse_rel_tol = kFACInitialCoarseRelTol;   ///< internal coarse GeometricMG rel_tol.
+  Real coarse_abs_tol = kFACInitialCoarseAbsTol;   ///< internal coarse GeometricMG abs_tol.
+  int coarse_cycles = kFACInitialCoarseMaxCycles;  ///< internal coarse GeometricMG max_cycles.
+  bool verbose = false;                            ///< record the per-iteration residual trace.
 };
 
 struct EffectiveNewtonOptions {
@@ -193,45 +196,13 @@ struct EffectivePoissonOptions {
   int pre_smooth = kMGDefaultPreSmooth;
   int post_smooth = kMGDefaultPostSmooth;
   int bottom_sweeps = kMGDefaultBottomSweeps;
-  int coarse_threshold = kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
+  int coarse_threshold =
+      kMGDefaultCoarseThreshold;  ///< ADC-644: total-cell coarsening ceiling (0 = off).
   std::string smoother = "red_black_gauss_seidel";
   std::string coarse = "direct_small_grid";
   bool has_epsilon_field = false;
   bool has_anisotropic_epsilon = false;
   bool has_reaction_field = false;
-};
-
-struct EffectiveSourceStageOptions {
-  std::string block;
-  std::string kind;
-  std::string geometry;
-  double theta = 0.5;
-  double alpha = static_cast<double>(kPhysicalDefaultAlpha);
-  double requested_krylov_tol = 0.0;
-  int requested_krylov_max_iters = 0;
-  double effective_krylov_tol = static_cast<double>(kKrylovDefaultRelTol);
-  int effective_krylov_max_iters = kSchurKrylovCartesianMaxIters;
-  std::string density;
-  std::string momentum_x;
-  std::string momentum_y;
-  std::string energy;
-  int bz_aux_component = -1;
-  // ADC-614: the EFFECTIVE composite-FAC knobs of a MULTI-LEVEL condensed Schur stage (default or
-  // overridden). Defaults are the kFAC* constants; requested_* mirror what set_source_stage received
-  // (0 = "left default"). Present for every AMR source stage (inert on the uniform System stage).
-  double requested_fac_tol = 0.0;
-  int requested_fac_max_iters = 0;
-  int effective_fac_max_iters = kFACDefaultMaxIters;
-  int effective_fac_fine_sweeps = kFACDefaultFineSweeps;
-  double effective_fac_tol = static_cast<double>(kFACDefaultTol);
-  double effective_fac_coarse_rel_tol = static_cast<double>(kFACInitialCoarseRelTol);
-  int effective_fac_coarse_cycles = kFACInitialCoarseMaxCycles;
-  bool fac_verbose = false;
-  // ADC-645: the stage's Krylov-preconditioner knobs. requested 0/"" = left default; the effective
-  // values are the historical stepper defaults (ONE MG V-cycle; RadialLine on polar).
-  int requested_n_precond_vcycles = 0;
-  int effective_n_precond_vcycles = 1;
-  std::string polar_precond;  ///< effective polar preconditioner ("" on a cartesian stage)
 };
 
 struct EffectiveRefinementOptions {
@@ -264,9 +235,6 @@ struct EffectiveOptionsReport {
   std::string runtime;
   std::vector<EffectiveBlockOptions> blocks;
   EffectivePoissonOptions poisson;
-  std::vector<EffectiveSourceStageOptions> source_stages;
-  std::string time_scheme = "lie";
-  std::string gauss_policy = "restart";
   bool has_amr = false;
   EffectiveRefinementOptions amr_refinement;
   EffectiveEbOptions eb;  ///< ADC-615: effective cut-cell / EB thresholds.

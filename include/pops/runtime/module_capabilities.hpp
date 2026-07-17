@@ -4,7 +4,7 @@
 /// @brief Authoritative STATIC capability facts of the built _pops module (Spec 5 sec.13.12 /
 ///        sec.13.12.1, criteria #36/#37).
 ///
-/// MOTIVATION. ``pops._capabilities.inspect_capabilities`` walks the inert Python descriptor catalog;
+/// MOTIVATION. Python's internal descriptor report walks the inert catalog;
 /// that walk is "Python-derived, not authoritative" (Spec 5 sec.13.12). The transport capabilities a
 /// module actually provides -- which backend it was compiled with, whether MPI / GPU is real, whether
 /// the route carries a stride, named aux fields, a partial IMEX mask -- are decided by the C++ build,
@@ -16,15 +16,16 @@
 /// it. ``supports_partial_imex_mask`` is FALSE: a tree-wide grep finds NO partial-IMEX-mask code path,
 /// so claiming it would be a lie. ``supports_gpu`` is TRUE only under Kokkos AND a real device backend
 /// token (CUDA/HIP); a Kokkos-Serial / OpenMP CPU build reports FALSE. ``supports_stride`` is
-/// route-dependent (the production / native route carries a stride; the AOT / prototype route hardcodes
-/// stride=1), so the facts are queried per @p target.
+/// route-dependent (the installed production package carries a stride while the route-agnostic module
+/// report does not describe one), so the facts are queried per @p target.
 ///
 /// This is a pure free-function / POD header: no System state, no out-of-line definition (kept out of
-/// System::Impl on purpose, so the C++ MockImpl in tests/test_strang_splitting.cpp is untouched).
+/// System::Impl on purpose, so lightweight C++ runtime mocks can share it).
 
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/config/generated_component_catalog.hpp>
+#include <pops/runtime/config/generated_release_contract.hpp>
 #include <pops/runtime/runtime_environment.hpp>
-#include <pops/runtime/system/field_problem_registry.hpp>  // FieldProblemRegistry field-problem rows (ADC-596)
 
 #include <string>
 #include <vector>
@@ -37,29 +38,30 @@ namespace pops {
 /// the textual pops::abi_key() (compiler / std / header signature): that detects a toolchain ABI break,
 /// this versions the capability *vocabulary*.
 inline constexpr int kAbiVersion = 3;
+static_assert(kAbiVersion == release_contract::kReleaseNativeAbiVersion,
+              "native ABI and generated release contract drifted");
 
 /// Version of the structured capability-report schema exposed by native_capability_report().
 /// This versions the report envelope independently from the capability vocabulary above.
 inline constexpr int kCapabilityReportSchemaVersion = 1;
 
-/// The lowering route whose static capabilities are queried. The two generated backends differ in one
-/// honest way: the production / native loader carries a real cell stride, the AOT / prototype flat-array
-/// path hardcodes stride=1 (cf. compiled_block_abi.hpp make_grid). ``kModule`` reports the route-agnostic
-/// facts (the AND-conservative stride, i.e. false).
-enum class CapabilityTarget { kModule, kProduction, kAot };
+/// The lowering route whose static capabilities are queried. ``kProduction`` describes the sole
+/// compiled-package route; ``kModule`` reports route-agnostic facts and therefore leaves stride false.
+enum class CapabilityTarget { kModule, kProduction };
 
 /// The STATIC transport capabilities the built _pops module provides (Spec 5 sec.13.12). A small POD of
 /// booleans + the ABI version, sourced from compile-time tokens only -- it allocates nothing, touches no
 /// System, runs no kernel.
 struct ModuleCapabilities {
-  int abi_version;                  ///< pops::kAbiVersion (this build's capability-contract revision).
-  bool supports_uniform;            ///< single-level uniform grid (always available).
-  bool supports_amr;                ///< adaptive mesh refinement runtime (AmrSystem; always built in).
-  bool supports_mpi;                ///< real MPI transport (POPS_HAS_MPI); false on a serial module.
-  bool supports_gpu;               ///< real GPU device backend (Kokkos AND a CUDA/HIP token).
-  bool supports_stride;             ///< the route carries a cell stride (production: yes; aot: no).
-  bool supports_named_fields;       ///< named aux-field transport (named_aux, aux_field; always built).
-  bool supports_partial_imex_mask;  ///< partial IMEX mask -- FALSE: no C++ path backs it (do not lie).
+  int abi_version;             ///< pops::kAbiVersion (this build's capability-contract revision).
+  bool supports_uniform;       ///< single-level uniform grid (always available).
+  bool supports_amr;           ///< adaptive mesh refinement runtime (AmrSystem; always built in).
+  bool supports_mpi;           ///< real MPI transport (POPS_HAS_MPI); false on a serial module.
+  bool supports_gpu;           ///< real GPU device backend (Kokkos AND a CUDA/HIP token).
+  bool supports_stride;        ///< the route carries a cell stride (production: yes; aot: no).
+  bool supports_named_fields;  ///< named aux-field transport (named_aux, aux_field; always built).
+  bool
+      supports_partial_imex_mask;  ///< partial IMEX mask -- FALSE: no C++ path backs it (do not lie).
 };
 
 /// One native route/capability row in the structured report. ``status`` is one of
@@ -123,8 +125,8 @@ inline constexpr bool kHasMpi =
 ///   - ``supports_uniform`` / ``supports_amr`` = true (both runtimes are built into _pops);
 ///   - ``supports_mpi`` = POPS_HAS_MPI;
 ///   - ``supports_gpu`` = POPS_HAS_KOKKOS AND a device token (else false, conservatively honest);
-///   - ``supports_stride`` = true for the production / native route, false for the AOT / prototype route
-///     (which hardcodes stride=1) and for the route-agnostic ``kModule`` query;
+///   - ``supports_stride`` = true for the production package and false for the route-agnostic
+///     ``kModule`` query;
 ///   - ``supports_named_fields`` = true (the named-aux transport exists, kAuxNamedBase / aux_field);
 ///   - ``supports_partial_imex_mask`` = false (NO C++ path backs it -- reporting true would be a lie).
 inline ModuleCapabilities module_capabilities(CapabilityTarget target = CapabilityTarget::kModule) {
@@ -144,21 +146,17 @@ inline const char* capability_target_name(CapabilityTarget target) {
   switch (target) {
     case CapabilityTarget::kProduction:
       return "production";
-    case CapabilityTarget::kAot:
-      return "aot";
     case CapabilityTarget::kModule:
     default:
       return "module";
   }
 }
 
-inline CapabilityRouteReport capability_route(std::string feature, std::string status,
-                                              std::string reason, std::string layout = "uniform|amr",
-                                              std::string backend = "production",
-                                              std::string platform = "host", bool mpi = false,
-                                              bool gpu = false, std::string requested = {},
-                                              std::string available_route = {},
-                                              std::string alternative = {}) {
+inline CapabilityRouteReport capability_route(
+    std::string feature, std::string status, std::string reason,
+    std::string layout = kLayoutRouteTokensCsv, std::string backend = "production",
+    std::string platform = "host", bool mpi = false, bool gpu = false, std::string requested = {},
+    std::string available_route = {}, std::string alternative = {}) {
   CapabilityRouteReport row{};
   row.route_id = feature;
   row.feature = std::move(feature);
@@ -183,78 +181,75 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
     const ModuleCapabilities& caps, const RuntimeEnvironmentReport& env) {
   const bool mpi = caps.supports_mpi;
   const bool gpu = caps.supports_gpu;
-  const std::string amr_note = "native AMR envelope: max_levels<=2 and ratio=2";
+  const std::string amr_note = "hierarchy depth is resource-policy controlled; native ratio=2";
   return {
       capability_route("supports_uniform", status_from_bool(caps.supports_uniform),
                        "single-level Uniform layout", "uniform", "module", "host", mpi, gpu,
                        "layout=Uniform", "layout=Uniform"),
       capability_route("supports_amr", status_from_bool(caps.supports_amr), amr_note, "amr",
                        "production", "host", mpi, gpu, "layout=AMR",
-                       "backend='production' target='amr_system'",
-                       "use Uniform or AMR(max_levels<=2, ratio=2)"),
+                       "backend='production' target='amr_system'", "use Uniform or AMR(ratio=2)"),
       capability_route("supports_mpi", status_from_bool(caps.supports_mpi),
-                       "MPI transport is compiled only when POPS_USE_MPI=ON", "uniform|amr",
+                       "MPI transport is compiled only when POPS_USE_MPI=ON", kLayoutRouteTokensCsv,
                        "production", "mpi", mpi, gpu, "platform=MPI", "serial/OpenMP build",
                        "rebuild with -DPOPS_USE_MPI=ON"),
       capability_route("supports_gpu", status_from_bool(caps.supports_gpu),
-                       "GPU device backend requires a Kokkos CUDA/HIP build", "uniform|amr",
+                       "GPU device backend requires a Kokkos CUDA/HIP build", kLayoutRouteTokensCsv,
                        "production", "gpu", mpi, gpu, "platform=GPU", "host CPU platform",
                        "use KokkosOpenMP/KokkosSerial or a CUDA/HIP build"),
       capability_route("supports_stride", status_from_bool(caps.supports_stride),
                        "real cell stride is carried only by the production/native route",
-                       "uniform|amr", "production", "host", mpi, gpu, "strided cell access",
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu, "strided cell access",
                        "backend='production'", "compile with backend='production'"),
       capability_route("supports_named_fields", status_from_bool(caps.supports_named_fields),
-                       "named aux-field transport", "uniform|amr", "production", "host", mpi,
-                       gpu, "named aux fields", "native named-field transport"),
-      capability_route("supports_partial_imex_mask",
-                       status_from_bool(caps.supports_partial_imex_mask),
-                       "no C++ route backs a partial IMEX mask", "uniform|amr", "production",
-                       "host", mpi, gpu, "partial IMEX mask",
-                       "full source implicit / split routes",
-                       "use IMEX/IMEXRK/Split without partial masks"),
-      capability_route("supports_custom_communicator",
-                       status_from_bool(env.supports_custom_communicator),
-                       "no C++ route accepts a caller-provided MPI_Comm", "uniform|amr", "none",
-                       "mpi", mpi, gpu, "communicator != MPI_COMM_WORLD",
-                       "MPI_COMM_WORLD or serial",
-                       "run on MPI_COMM_WORLD until ParallelContext lands"),
+                       "named aux-field transport", kLayoutRouteTokensCsv, "production", "host",
+                       mpi, gpu, "named aux fields", "native named-field transport"),
+      capability_route(
+          "supports_partial_imex_mask", status_from_bool(caps.supports_partial_imex_mask),
+          "no C++ route backs a partial IMEX mask", kLayoutRouteTokensCsv, "production", "host",
+          mpi, gpu, "partial IMEX mask", "full source implicit / split routes",
+          "use IMEX/IMEXRK/Split without partial masks"),
+      capability_route(
+          "supports_custom_communicator", status_from_bool(env.supports_custom_communicator),
+          "no C++ route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv, "none", "mpi",
+          mpi, gpu, "communicator != MPI_COMM_WORLD", "MPI_COMM_WORLD or serial",
+          "use ExecutionContext.mpi_world() or a serial context"),
       capability_route("layout:Uniform", "available", "2D single-level Cartesian/Polar layout",
                        "uniform", "module", "host", mpi, gpu),
       capability_route("layout:AMR", status_from_bool(caps.supports_amr),
-                       "max_levels<=2 and ratio=2; unsupported ratios/levels validate before bind",
-                       "amr", "production", "host", mpi, gpu, "AMR(max_levels>2 or ratio!=2)",
-                       "AMR(max_levels<=2, ratio=2)", "use Uniform or the native AMR envelope"),
-      capability_route("spatial:finite_volume", "available",
-                       "2D finite-volume route; prototype backend is host-only", "uniform|amr",
-                       "production|aot|prototype", "host", mpi, gpu),
+                       "resource-policy-controlled depth and native ratio=2", "amr", "production",
+                       "host", mpi, gpu, "AMR(ratio!=2)", "AMR(ratio=2)",
+                       "use Uniform or the native AMR envelope"),
+      capability_route("spatial:finite_volume", "available", "2D finite-volume production route",
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:rusanov", "available", "requires model max_wave_speed",
-                       "uniform|amr", "production|aot|prototype", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:hll", "available", "requires physical_flux and wave_speeds",
-                       "uniform|amr", "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:hllc", "available",
                        "requires Euler/HLLC model capabilities; polar route is unavailable",
-                       "uniform|amr", "production|aot", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("riemann:roe", "available",
                        "requires Roe dissipation capability; polar route is unavailable",
-                       "uniform|amr", "production|aot", "host", mpi, gpu),
-      capability_route("reconstruction:firstorder", "available", "ghost_depth=1", "uniform|amr",
-                       "production|aot|prototype", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
+      capability_route("reconstruction:firstorder", "available", "ghost_depth=1",
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("reconstruction:muscl", "available",
-                       "ghost_depth=2; native limiters minmod/vanleer", "uniform|amr",
-                       "production|aot|prototype", "host", mpi, gpu),
-      capability_route("reconstruction:weno5", "available", "ghost_depth=3; high-order route is native",
-                       "uniform|amr", "production|aot", "host", mpi, gpu),
+                       "ghost_depth=2; native limiters minmod/vanleer", kLayoutRouteTokensCsv,
+                       "production", "host", mpi, gpu),
+      capability_route("reconstruction:weno5", "available",
+                       "ghost_depth=3; high-order route is native", kLayoutRouteTokensCsv,
+                       "production", "host", mpi, gpu),
       capability_route("limiter:mc", "unavailable",
-                       "catalogued but no native C++ limiter symbol exists", "uniform|amr", "none",
-                       "host", mpi, gpu, "limiter=MC()", "Minmod() or VanLeer()",
+                       "catalogued but no native C++ limiter symbol exists", kLayoutRouteTokensCsv,
+                       "none", "host", mpi, gpu, "limiter=MC()", "Minmod() or VanLeer()",
                        "use pops.numerics.reconstruction.limiters.Minmod()"),
       capability_route("limiter:superbee", "unavailable",
-                       "catalogued but no native C++ limiter symbol exists", "uniform|amr", "none",
-                       "host", mpi, gpu, "limiter=Superbee()", "Minmod() or VanLeer()",
+                       "catalogued but no native C++ limiter symbol exists", kLayoutRouteTokensCsv,
+                       "none", "host", mpi, gpu, "limiter=Superbee()", "Minmod() or VanLeer()",
                        "use pops.numerics.reconstruction.limiters.VanLeer()"),
       capability_route("elliptic:geometric_mg", "available",
-                       "native multigrid route; supports variable epsilon", "uniform|amr",
+                       "native multigrid route; supports variable epsilon", kLayoutRouteTokensCsv,
                        "production", "host", mpi, gpu),
       capability_route("elliptic:fft", "available",
                        "periodic, constant coefficient, power-of-two uniform grid only", "uniform",
@@ -266,110 +261,79 @@ inline std::vector<CapabilityRouteReport> native_capability_routes(
       capability_route("elliptic:mg_fac_defaults", "partial",
                        "geometric MG/FAC defaults and debug diagnostics are still header-local; "
                        "central SolverDefaults/logger follow-up is required",
-                       "uniform|amr", "production", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("elliptic:fft_amr", "unavailable",
                        "FFT requires a single uniform periodic mesh, not AMR", "amr", "none",
                        "host", mpi, gpu, "solver=FFT() with layout=AMR", "GeometricMG() on AMR",
                        "use pops.solvers.elliptic.GeometricMG()"),
-      capability_route("elliptic:field_problem_registry", "available",
-                       "the default and named field problems are described by one native "
-                       "FieldProblemRegistry (id/outputs/solver/route), validated before bind "
-                       "on both the Uniform and AMR routes (ADC-596)",
-                       "uniform|amr", "production", "host", mpi, gpu),
       capability_route("mesh:2d_storage_arithmetic", "partial",
                        "native mesh/storage/arithmetic primitives are Box2D/Fab2D/MultiFab 2D; "
                        "Dim!=2 is rejected before runtime",
-                       "uniform|amr", "production", "host", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("amr:refinement_ratio", "partial",
                        "AMR hierarchy, patch ranges, reflux and subcycling are ratio=2 only; "
                        "validate_amr_refinement_ratio() rejects other ratios",
                        "amr", "production", "host", mpi, gpu),
-      capability_route("parallel:mpi_world_communicator", "partial",
-                       "MPI collectives use MPI_COMM_WORLD; a caller-provided communicator is not "
-                       "a supported native route yet",
-                       "uniform|amr", "production", "mpi", mpi, gpu),
+      capability_route("parallel:mpi_world_communicator", status_from_bool(caps.supports_mpi),
+                       mpi ? "exact MPI_COMM_WORLD execution is proved by the native module and "
+                             "ExecutionContext"
+                           : "this native module was not built with POPS_USE_MPI=ON",
+                       kLayoutRouteTokensCsv, "production", "mpi", mpi, gpu,
+                       "ExecutionContext.mpi_world()",
+                       mpi ? "ExecutionContext.mpi_world()" : "serial ExecutionContext",
+                       mpi ? "" : "rebuild with -DPOPS_USE_MPI=ON"),
       capability_route("parallel:custom_communicator", "unavailable",
-                       "no native route accepts a caller-provided MPI_Comm", "uniform|amr", "none",
-                       "mpi", mpi, gpu, "communicator != MPI_COMM_WORLD", "MPI_COMM_WORLD or serial",
-                       "run on MPI_COMM_WORLD until ParallelContext lands"),
+                       "no native route accepts a caller-provided MPI_Comm", kLayoutRouteTokensCsv,
+                       "none", "mpi", mpi, gpu, "communicator != MPI_COMM_WORLD",
+                       "MPI_COMM_WORLD or serial",
+                       "use ExecutionContext.mpi_world() or a serial context"),
       capability_route("precision:single_or_mixed", "unavailable",
-                       "pops::Real is hardcoded to double; no PrecisionPolicy route exists",
-                       "uniform|amr", "none", "host", mpi, gpu,
+                       "PrecisionPolicy is representable, but the native providers currently "
+                       "instantiate pops::Real as binary64 only",
+                       kLayoutRouteTokensCsv, "none", "host", mpi, gpu,
                        "precision=single or precision=mixed", "precision=double",
-                       "use double precision or implement a native PrecisionPolicy"),
+                       "use double precision or implement a non-binary64 native provider"),
       capability_route("runtime:kokkos_lifecycle", "partial",
                        "Kokkos is lazily initialized by PoPS on first allocation/kernel unless "
                        "the caller already initialized it",
-                       "uniform|amr", "production", "host|gpu", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host|gpu", mpi, gpu),
       capability_route("runtime:allocator_lifetime", "partial",
                        "Kokkos builds use a process-lifetime ManagedArena; blocks are released "
                        "by a Kokkos finalize hook",
-                       "uniform|amr", "production", "host|gpu", mpi, gpu),
+                       kLayoutRouteTokensCsv, "production", "host|gpu", mpi, gpu),
       capability_route("krylov:cg_bicgstab_gmres_richardson", "available",
-                       "matrix-free Krylov over native MultiFab primitives", "uniform|amr",
+                       "matrix-free Krylov over native MultiFab primitives", kLayoutRouteTokensCsv,
                        "production", "host", mpi, gpu),
-      capability_route("schur:condensed_source", "partial",
-                       "Schur condensation/source kernels are specialised to 2D plus Bz/Lorentz "
-                       "coupling; no generic 3D route",
-                       "uniform|amr", "production", "host", mpi, gpu),
+      capability_route("program:hierarchy_scoped_solve", "partial",
+                       "Program.solve and its provider protocol are physics-independent; AMR "
+                       "hierarchy lowering currently supports one top-level linear solve with "
+                       "CompositeTensorFAC()",
+                       kLayoutRouteTokensCsv, "production", "host", mpi, gpu),
       capability_route("program_context:system", "available",
                        "compiled ProgramContext install on System", "uniform", "production", "host",
                        mpi, gpu),
       capability_route("program_context:amr", status_from_bool(caps.supports_amr),
                        "AMR program install requires target='amr_system'", "amr", "production",
                        "host", mpi, gpu),
-      capability_route("runtime:native_loader_legacy_metadata", "partial",
-                       "old native modules without metadata fall back to u0.. names, empty roles, "
-                       "legacy default gamma and host prototype copies",
-                       "uniform|amr", "aot|dynamic|prototype", "host", mpi, gpu),
-      capability_route("output:npz_vtk_hdf5", "available",
-                       "runtime output writers; AMR VTK is coarse + patch metadata", "uniform|amr",
-                       "runtime", "host", mpi, gpu),
-      capability_route("output:plotfile_uniform", "unavailable",
-                       "Plotfile is an AMR per-level format; Uniform System has no writer",
-                       "uniform", "none", "host", mpi, gpu,
-                       "OutputPolicy(format=Plotfile()) on Uniform", "HDF5() or npz on Uniform",
-                       "use HDF5() or bind an AMR output route"),
-      capability_route("checkpoint:system_v1", "available",
-                       "npz rank-0 gather checkpoint/restart v1", "uniform", "runtime", "host", mpi,
-                       gpu),
+      capability_route("output:scientific_v1", "available",
+                       "typed SERIAL/ROOT/COLLECTIVE/PER_RANK publication; each format advertises "
+                       "its exact supported modes",
+                       kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
+      capability_route("checkpoint:accepted_state_v3", "available",
+                       "single-file strict accepted-state checkpoint; MPI_COMM_WORLD uses one "
+                       "rank-0 publication with collective capture and consensus",
+                       kLayoutRouteTokensCsv, "runtime", "host|mpi", mpi, gpu),
       capability_route("checkpoint:parallel_hdf5", "unavailable",
-                       "parallel HDF5 checkpoint is not a native checkpoint route", "uniform|amr",
-                       "none", "mpi", mpi, gpu, "checkpoint(parallel=True)",
-                       "checkpoint(parallel=False) or write(format='hdf5', parallel=True)",
-                       "use checkpoint(parallel=False)"),
-      capability_route("checkpoint:amr_dynamic_regrid", "unavailable",
-                       "bit-identical AMR checkpoint requires a frozen hierarchy", "amr", "none",
-                       "host", mpi, gpu, "AMR checkpoint with dynamic regrid",
-                       "AMR checkpoint with regrid_every=0",
-                       "use AmrSystem.write for visualization or freeze regrid"),
+                       "parallel HDF5 checkpoint is not a native checkpoint route",
+                       kLayoutRouteTokensCsv, "none", "mpi", mpi, gpu,
+                       "restartable checkpoint encoded as parallel HDF5",
+                       "strict accepted-state v3 NPZ checkpoint",
+                       "use RuntimeInstance.checkpoint() or the typed Checkpoint consumer"),
+      capability_route("checkpoint:amr_dynamic_regrid", status_from_bool(caps.supports_amr),
+                       "strict v3 accepted-state restart; non-Dense history replay keeps rank "
+                       "count",
+                       "amr", "runtime", "host", mpi, gpu),
   };
-}
-
-/// Per-field-problem report rows from a live FieldProblemRegistry (ADC-596): each entry becomes one
-/// ``field_problem:<id>`` route naming its equation, solver, output handles and the route it was
-/// validated for. Descriptive; it reads the registry, never mutates it or the numerics. @p route is
-/// the layout the entries are reported for (Uniform vs AMR) so the ``layout`` column is accurate.
-inline std::vector<CapabilityRouteReport> field_problem_routes(const FieldProblemRegistry& reg,
-                                                               LayoutRoute route, bool mpi = false,
-                                                               bool gpu = false) {
-  std::vector<CapabilityRouteReport> rows;
-  const char* layout = (route == LayoutRoute::Uniform) ? "uniform" : "amr";
-  for (const FieldProblemEntry& e : reg.entries()) {
-    std::string outputs;
-    for (const AuxChannel& c : e.layout.channels()) {
-      if (!outputs.empty())
-        outputs += ", ";
-      outputs += c.handle;
-    }
-    rows.push_back(capability_route(
-        "field_problem:" + e.id,
-        "available",
-        std::string("equation=") + to_string(e.equation) + ", solver=" + to_string(e.solver) +
-            ", outputs=[" + outputs + "]",
-        layout, "production", "host", mpi, gpu));
-  }
-  return rows;
 }
 
 inline NativeCapabilityReport native_capability_report(

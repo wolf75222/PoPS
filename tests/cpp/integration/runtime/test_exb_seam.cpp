@@ -1,5 +1,5 @@
 // C++ equivalent of the ExB row of tests/python/unit/runtime/test_seam_combinations.py
-// (test_system_seam_combinations): the python smoke drives a native pops.System with
+// (test_system_generated_seam_advances): the Python smoke drives the native System engine seam with
 // model=pops.Model(state=Scalar(), transport=ExB(B0=...), source=NoSource(),
 // elliptic=BackgroundDensity(...)) and asserts step_cfl returns a finite, positive dt. There was no C++
 // counterpart exercising the SAME (transport="exb", flux=None) seam through System::add_block(ModelSpec)
@@ -72,7 +72,8 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   double n0 = 0;
   for (double v : rho)
     n0 += v;
-  n0 /= (static_cast<double>(n) * n);  // background = mean density -> neutral source (periodic Poisson)
+  n0 /= (static_cast<double>(n) *
+         n);  // background = mean density -> neutral source (periodic Poisson)
 
   SystemConfig cfg;
   cfg.n = n;
@@ -103,8 +104,9 @@ static int pops_run_test_exb_seam(int argc, char** argv) {
   std::printf("EXBSEAM dt=%.3e m0=%.17e m1=%.17e dm=%.3e\n", dt, m0, m1, dm);
 
   if (chk.fails() == 0)
-    std::printf("OK test_exb_seam (System + ModelSpec exb/none/background: step_cfl advances, mass "
-               "conserved)\n");
+    std::printf(
+        "OK test_exb_seam (System + ModelSpec exb/none/background: step_cfl advances, mass "
+        "conserved)\n");
   return chk.failed();
 }
 

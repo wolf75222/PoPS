@@ -63,7 +63,9 @@ struct TwoFieldChargeDensityRhsKernel {
   ConstArray4 u0, u1;
   Real a0, a1;
   int c0, c1;
-  POPS_HD void operator()(int i, int j) const { r(i, j, 0) = a0 * u0(i, j, c0) + a1 * u1(i, j, c1); }
+  POPS_HD void operator()(int i, int j) const {
+    r(i, j, 0) = a0 * u0(i, j, c0) + a1 * u1(i, j, c1);
+  }
 };
 
 }  // namespace detail

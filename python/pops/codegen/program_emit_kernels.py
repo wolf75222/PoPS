@@ -14,9 +14,11 @@ its public surface is unchanged.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
-from pops.time.values import Value, _to_affine  # noqa: F401
+from pops._ir.literals import scalar_cpp
+from pops.time.values import ProgramValue, _to_affine  # noqa: F401
 
 # Emission-only op tables (formerly Program class constants; the lowering owns them).
 # Ops the Phase-4b codegen lowers ONLY when a physical model is supplied (they read the model's
@@ -25,15 +27,18 @@ _MODEL_OPS = ("source", "apply", "solve_local_linear", "solve_local_nonlinear")
 
 _ALLOWED_OPS = frozenset({"state", "solve_fields", "solve_fields_from_blocks", "rhs",
                           "linear_combine", "linear_source",
-                          "reduce", "compare", "while", "range", "if", "matrix_free_operator",
+                          "reduce", "scalar_op", "compare", "hmin", "max_wave_speed", "cfl",
+                          "while", "range", "subcycle", "branch", "synchronize",
+                          "acceptance_guard", "matrix_free_operator",
                           "scalar_field", "laplacian", "gradient", "divergence", "solve_linear",
+                          "solve_outcome", "solve_outcome_component",
                           "apply_in", "apply_out", "history", "store_history",
                           "fill_boundary", "project", "record_scalar",
                           "cell_compare", "where", "rhs_jacvec",
                           "apply_laplacian_coeff",
                           "condensed_coeffs", "condensed_rhs", "condensed_reconstruct",
                           "condensed_energy",
-                          "coupled_rate", "coupled_rate_out"})
+                          "coupled_rate", "coupled_rate_out", "solve_coupled_implicit"})
 
 _PROFILE_SKIP_OPS = frozenset({"state", "history", "hmin", "cfl"})
 
@@ -113,7 +118,7 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
     aff = _to_affine(result)._merge()
     terms = [(v, c.as_dict()) for v, c in aff]
     lines = ["%s->set_val(static_cast<pops::Real>(0));" % acc]
-    c_target = {0: 0.0}
+    c_target = {0: 0}
     for value, coeff in terms:
         tok = sub[value.id]
         ref = "const_cast<pops::MultiFab&>(in)" if tok == "in" else (
@@ -121,15 +126,20 @@ def _emit_field_combine(result: Any, target: Any, sub: Any, acc: Any) -> list:
         if tok == target:
             c_target = coeff
         else:
-            lines.append("ctx.axpy(*%s, %s, %s);" % (acc, _coeff_cpp(coeff), ref))
-    lines.append("ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s);"
-                 % (target, _coeff_cpp(c_target), target, acc))
+            lines.append("ctx.axpy(*%s, %s, %s, dt, %s);"
+                         % (acc, _coeff_cpp(coeff), ref, _coeff_metadata_cpp(coeff)))
+    lines.append(
+        "ctx.lincomb(%s, %s, %s, static_cast<pops::Real>(1), *%s, dt, %s, {{0, 1, 1}});"
+        % (target, _coeff_cpp(c_target), target, acc, _coeff_metadata_cpp(c_target)))
     return lines
 
 
 def _coeff_cpp(powers: Any) -> str:
-    """Render a dt-polynomial coefficient (``power -> float`` dict) as a C++ ``pops::Real`` expression
-    in the closure's ``dt`` parameter: ``{1: 1.0}`` -> ``static_cast<pops::Real>(dt)``,
+    """Render an exact dt-polynomial coefficient as a C++ ``pops::Real`` expression.
+
+    Literal kind is preserved until this target-lowering boundary: integer, rational, decimal and
+    binary64 inputs get distinct canonical spellings instead of a shared intermediate ``float``.
+    In the closure's ``dt`` parameter, ``{1: 1.0}`` -> ``static_cast<pops::Real>(dt)``,
     ``{1: 0.5}`` -> ``static_cast<pops::Real>(0.5 * dt)``, ``{0: 2.0}`` ->
     ``static_cast<pops::Real>(2.0)``. Drops a unit factor and a zero polynomial collapses to 0."""
     if not powers:
@@ -137,10 +147,38 @@ def _coeff_cpp(powers: Any) -> str:
     terms = []
     for power, coeff in sorted(powers.items()):
         factors = ["dt"] * int(power)
-        if float(coeff) != 1.0 or not factors:
-            factors = [repr(float(coeff))] + factors
+        if coeff != 1 or not factors:
+            factors = [scalar_cpp(coeff)] + factors
         terms.append(" * ".join(factors))
     return "static_cast<pops::Real>(%s)" % " + ".join(terms)
+
+
+def _coeff_metadata_terms(powers: Any) -> tuple[tuple[int, int, int], ...]:
+    """Return one checked exact native-ledger term per nonzero dt monomial."""
+    terms = []
+    for power, coefficient in sorted(powers.items()):
+        if isinstance(power, bool) or not isinstance(power, int) or power < 0:
+            raise TypeError("AMR conservative coefficient has an invalid dt power")
+        value = coefficient.to_python() if hasattr(coefficient, "to_python") else coefficient
+        try:
+            ratio = Fraction.from_float(value) if isinstance(value, float) else Fraction(value)
+        except (TypeError, ValueError, ZeroDivisionError) as error:
+            raise TypeError(
+                "AMR conservative coefficient is not an exact rational literal") from error
+        if ratio:
+            signed_limit = (1 << 63) - 1
+            if (power > (1 << 31) - 1 or ratio.numerator < -signed_limit
+                    or ratio.numerator > signed_limit or ratio.denominator > signed_limit):
+                raise OverflowError(
+                    "AMR conservative coefficient cannot be represented by the native exact ledger")
+            terms.append((power, ratio.numerator, ratio.denominator))
+    return tuple(terms)
+
+
+def _coeff_metadata_cpp(powers: Any) -> str:
+    """Render the same dt polynomial as checked exact native-ledger metadata."""
+    return "{%s}" % ", ".join(
+        "{%d, %d, %d}" % term for term in _coeff_metadata_terms(powers))
 
 
 # --- Phase-4b: lower a model's split-source / local-linear ops to per-cell C++ kernels ----------
@@ -162,7 +200,7 @@ def _named_fluxes(v: Any) -> Any:
     named fluxes is rejected (the centered-FV named-flux stencil differs from the Riemann rhs_into
     stencil, so they cannot be summed)."""
     fluxes = v.attrs.get("fluxes")
-    if not fluxes or fluxes == ["default"]:
+    if not fluxes or tuple(fluxes) == ("default",):
         return None
     named = [f for f in fluxes if f != "default"]
     if len(named) != len(fluxes):
@@ -192,8 +230,8 @@ def _has_runtime_param(exprs: Any) -> bool:
     A runtime-param read lowers to ``params.get(<index>)``; the kernel binds a ``params`` local from
     ``ctx.program_params(<block>)`` (ADC-510) so a compiled time Program reads the CURRENT value
     without recompiling (mirror of the AOT-native RuntimeParams member, P7-b)."""
-    from pops.ir.values import RuntimeParamRef
-    from pops.ir.visitors import _children
+    from pops._ir.values import RuntimeParamRef
+    from pops._ir.visitors import _children
     stack = list(exprs)
     while stack:
         e = stack.pop()
@@ -246,7 +284,7 @@ def _kernel_open(out_var: Any, state_var: Any, params_block: Any = None) -> list
     distribution map as the blocks (``aux(ba, dm, ...)`` in System::Impl), and a scratch state comes
     from ``scratch_state_like(state(0))`` which copies that ``(ba, dm)`` -- so ``out``, the input
     state and ``aux`` share one ``(ba, dm)`` and ``fab(li)`` is the same box on every rank. This is the
-    same co-distribution the existing aux-reading kernels (compiled_block_abi / source bricks) rely on.
+    same co-distribution the authenticated native component and source kernels rely on.
 
     @p params_block (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads, or None
     when no formula reads a runtime parameter. When set, bind ``const pops::RuntimeParams params =
@@ -290,8 +328,8 @@ def _emit_cell_compare_kernel(field_var: Any, mask_var: Any, cmp: Any, value: An
         "  const pops::Array4 maskA = %s.fab(li).array();" % mask_var,
         "  const pops::ConstArray4 fieldA = %s.fab(li).const_array();" % field_var,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % mask_var,
-        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s static_cast<pops::Real>(%s)) "
-        "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0);" % (cmp, repr(float(value))),
+        "    maskA(i, j, 0) = (fieldA(i, j, 0) %s %s) "
+        "? static_cast<pops::Real>(1) : static_cast<pops::Real>(0);" % (cmp, scalar_cpp(value)),
         "  });",
         "}",
     ]
@@ -327,10 +365,14 @@ def _emit_where_kernel(mask_var: Any, a_var: Any, b_var: Any, out_var: Any) -> l
 # string literal, {hash} the IR hash, {prelude} the INSTALL-TIME C++ (persistent scratch + matrix-free
 # apply lambdas, captured into the step closure by [=]), {body} the step-closure body (both already
 _PROGRAM_CPP_TEMPLATE = '''\
-// GENERATED by pops.time.Program.emit_cpp_program (epic ADC-399 / ADC-401). Do not edit by hand.
+// GENERATED by pops.codegen.program_codegen.emit_cpp_program (epic ADC-399 / ADC-401). Do not edit.
 // A compiled time Program installed across the stable .so ABI: it drives sim.step(dt) entirely in
 // C++ via ProgramContext, reusing the PoPS runtime (no MultiFab / flux / solver reimplementation).
+#if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI)
+#error "generated Program loaders require the shared runtime exception ABI consumer contract"
+#endif
 #include <pops/runtime/program/program_context.hpp>
+#include <pops/runtime/program/step_transaction.hpp>
 {coeff_elliptic_include}{block_inverse_include}#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/storage/fab2d.hpp>          // Array4 / ConstArray4 (per-cell handles)
@@ -352,11 +394,13 @@ extern "C" const char* pops_program_hash() {{ return "{hash}"; }}
 {block_names}
 {module_metadata}
 {program_params}
+{field_boundaries}
 extern "C" void pops_install_program(void* sys) {{
   pops::runtime::program::ProgramContext ctx(sys);
 {prelude}
   ctx.install([=](double dt) {{
     (void)dt;
+    ctx.begin_step(dt);
 {body}
   }});
 }}

@@ -48,8 +48,10 @@ import math
 
 import numpy as np
 
-import pops
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+import pops.runtime._engine_descriptors as engine
+from pops.mesh import PolarMesh
+from pops.runtime._engine_descriptors import Dirichlet
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 # Parametres geometriques
 RMIN, RMAX = 0.30, 1.00
@@ -128,19 +130,19 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
     Voir docstring du module pour la motivation et la strategie.
     """
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.add_block(
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim.add_equation(
         "ne",
-        model=pops.Model(
-            state=pops.Scalar(),
-            transport=pops.ExB(B0=1.0),
-            source=pops.NoSource(),
-            elliptic=pops.ChargeDensity(charge=1.0),
+        model=engine.Model(
+            state=engine.Scalar(),
+            transport=engine.ExB(B0=1.0),
+            source=engine.NoSource(),
+            elliptic=engine.ChargeDensity(charge=1.0),
         ),
-        spatial=pops.Spatial(minmod=True),
-        time=pops.Explicit(),
+        spatial=engine.Spatial(minmod=True),
+        time=engine.Explicit(),
     )
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
 
     # --- etat initial ---
@@ -201,37 +203,5 @@ def test_polar_conservation_with_nonzero_radial_flux():
 
 
 if __name__ == "__main__":
-    import pops as _pops_mod
-    import numpy as _np2
-    import math as _math2
-
-    _sim = _pops_mod.System(mesh=_pops_mod.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    _sim.add_block(
-        "ne",
-        model=_pops_mod.Model(
-            state=_pops_mod.Scalar(),
-            transport=_pops_mod.ExB(B0=1.0),
-            source=_pops_mod.NoSource(),
-            elliptic=_pops_mod.ChargeDensity(charge=1.0),
-        ),
-        spatial=_pops_mod.Spatial(minmod=True),
-        time=_pops_mod.Explicit(),
-    )
-    _sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
-    _sim.set_density("ne", _asymmetric_density(NR, NTH, RMIN, RMAX, A_ASYM, L_MODE))
-    _m0 = _sim.mass("ne")
-    _var0 = _radial_variance(_sim, "ne", NR, NTH)
-    print("var0 = %.6e (esperance: 0 car perturbation azimutale moyenne nulle)" % _var0)
-    _dt = _sim.step_cfl(0.3)
-    print("dt_cfl = %.6e" % _dt)
-    for _ in range(NSTEPS):
-        _sim.step(_dt)
-    _m1 = _sim.mass("ne")
-    _var1 = _radial_variance(_sim, "ne", NR, NTH)
-    _rel = abs(_m1 - _m0) / abs(_m0)
-    _dvar = abs(_var1 - _var0)
-    print("var_final = %.6e  dvar = %.6e  (> 1e-9 requis)" % (_var1, _dvar))
-    print("conservation masse : ecart relatif = %.3e  (< 1e-11 requis)" % _rel)
-    assert _dvar > 1e-9, "ECHEC C4 : dvar=%.3e" % _dvar
-    assert _rel < 1e-11, "ECHEC C3 : rel=%.3e" % _rel
+    test_polar_conservation_with_nonzero_radial_flux()
     print("OK test_polar_conservation_radial_flux")

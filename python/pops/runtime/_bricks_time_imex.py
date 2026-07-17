@@ -3,14 +3,16 @@
 Split out of :mod:`pops.runtime._bricks_time` for the 500-line cap (ADC-550): the mask
 normalization helpers ``_role_to_stable`` / ``_norm_implicit`` and the implicit-source time
 policies ``IMEX`` / ``SourceImplicit`` / ``SourceImplicitBE`` / ``IMEXRK``. ``_bricks_time``
-re-imports every name and ``pops.runtime.bricks`` re-exports them, so no public import path
-changes. The split / Schur policies (``Split`` / ``Strang`` / ``CondensedSchur``) and ``Role``
-stay in their own modules.
+re-imports every name; private native-engine adapters consume them through
+``pops.runtime._engine_descriptors``. Global solves and operator splitting are explicit ``Program``
+graphs; reusable public factories live under ``pops.lib.time``. These records are lowering values,
+not alternate public presets.
 """
 from __future__ import annotations
 
 from typing import Any
 
+from pops.runtime._numeric import exact_real, positive_int, strict_bool
 from pops.runtime.defaults import (
     NEWTON_DEFAULT_ABS_TOL,
     NEWTON_DEFAULT_DAMPING,
@@ -20,6 +22,34 @@ from pops.runtime.defaults import (
     NEWTON_DEFAULT_REL_TOL,
 )
 from pops.runtime.routes import TIME_IMEX, TIME_IMEXRK_ARS222
+
+
+def _cadence(label: str, substeps: Any, stride: Any) -> tuple[int, int]:
+    return (
+        positive_int(substeps, where=label + ".substeps"),
+        positive_int(stride, where=label + ".stride"),
+    )
+
+
+def _newton_controls(
+    label: str, max_iters: Any, rel_tol: Any, abs_tol: Any, fd_eps: Any,
+    diagnostics: Any, damping: Any, fail_policy: Any,
+) -> tuple[Any, ...]:
+    if not isinstance(fail_policy, str) or fail_policy not in ("none", "warn", "throw"):
+        raise ValueError(
+            "%s.newton_fail_policy must be 'none'|'warn'|'throw' (got %r)"
+            % (label, fail_policy))
+    return (
+        positive_int(max_iters, where=label + ".newton_max_iters"),
+        exact_real(rel_tol, where=label + ".newton_rel_tol", minimum=0),
+        exact_real(abs_tol, where=label + ".newton_abs_tol", minimum=0),
+        exact_real(fd_eps, where=label + ".newton_fd_eps", minimum=0, minimum_open=True),
+        strict_bool(diagnostics, where=label + ".newton_diagnostics"),
+        exact_real(
+            damping, where=label + ".newton_damping", minimum=0, minimum_open=True,
+            maximum=1),
+        fail_policy,
+    )
 
 
 def _role_to_stable(name: Any) -> Any:
@@ -59,7 +89,8 @@ def _norm_implicit(label: Any, implicit_vars: Any, implicit_roles: Any) -> Any:
         try:
             out = [str(v) for v in x]
         except TypeError:
-            raise ValueError("%s: %s must be a list of strings (received %r)" % (label, what, x))
+            raise ValueError(
+                "%s: %s must be a list of strings (received %r)" % (label, what, x)) from None
         return out
     names = as_list(implicit_vars, "implicit_vars")
     roles = [_role_to_stable(r) for r in as_list(implicit_roles, "implicit_roles")]
@@ -78,16 +109,16 @@ class IMEX:
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. Explicit): the block is held
       while (macro_step + 1) % M != 0, then advances by an effective step M*dt at the end of the window. Between
       two catch-ups, its STALE state contributes to the system Poisson. Default 1 = every macro-step,
-      bit-identical. Backend 'aot': stride > 1 rejected (cf. Explicit).
+      bit-identical. Production models carry the cadence explicitly.
     - ``implicit_vars``: names of the conserved variables to treat IMPLICITLY in the source step;
       the others stay explicit (forward Euler). The mask is CARRIED BY THIS POLICY / the block,
       NOT by the model -> the SAME model is reused with different implicit treatments.
       Default [] (+ implicit_roles []) = model default (Model::is_implicit, or all implicit by
       default), BIT-IDENTICAL. Resolved on the C++ side against the block names (an absent name raises an error).
-      E.g. pops.IMEX(implicit_vars=["rho_u", "rho_v"]).
+      E.g. the private engine record ``IMEX(implicit_vars=["rho_u", "rho_v"])``.
     - ``implicit_roles``: same mask but by physical ROLE ("density", "momentum_x", "energy", ...)
       instead of the name (cf. System.variable_roles). Union with implicit_vars. E.g.
-      pops.IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"]).
+      ``IMEX(implicit_roles=["MomentumX", "MomentumY", "Energy"])``.
     - ``newton_max_iters``: iteration budget of the local Newton (default 2 = historical constant).
     - ``newton_rel_tol`` / ``newton_abs_tol``: per-cell stopping criterion
       ||F||_inf <= abs_tol + rel_tol*||F0||_inf (0/0 = disabled, bit-identical historical loop).
@@ -111,27 +142,13 @@ class IMEX:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if int(substeps) < 1:
-            raise ValueError("IMEX: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("IMEX: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("IMEX: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("IMEX: newton_damping in (0, 1] (got %r)" % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("IMEX: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.substeps = int(substeps)
-        self.stride = int(stride)
+        self.substeps, self.stride = _cadence("IMEX", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit("IMEX", implicit_vars, implicit_roles)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "IMEX", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
+             newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 class SourceImplicit:
@@ -143,19 +160,19 @@ class SourceImplicit:
 
     IMPORTANT -- this is NOT a global implicit PDE solver. A global implicit solver
     (flux + source + Poisson all implicit, Newton-Krylov or global Schur) is a distinct
-    future effort. SourceImplicit = source-only IMEX (strictly equivalent to IMEX/pops.Implicit,
-    bit-identical numerics).
+    future effort. ``SourceImplicit`` and the private ``IMEX`` record select the same source-only
+    engine route with bit-identical numerics.
 
-    WHEN TO USE IT (SourceImplicit LOCAL vs pops.CondensedSchur GLOBAL) -- both mechanisms
-    treat a stiff source implicitly, but at different scales:
+    WHEN TO USE IT (local source solve vs global ``Program.solve``) -- both mechanisms can treat a
+    stiff contribution implicitly, but at different scales:
 
     - SourceImplicit is LOCAL: the implicit part couples only the components of A SINGLE CELL
       (backward-Euler solved by per-cell Newton), there is NO spatial coupling between
       cells. Suited to purely local stiff terms (relaxation, reactions, friction).
-    - pops.CondensedSchur (via pops.Split) is GLOBAL: it assembles and solves a tensor
-      elliptic operator by Schur (Krylov BiCGStab) that COUPLES the whole domain. Suited to
-      non-local stiff Lorentz / electrostatic coupling (e.g. magnetized Euler-Poisson from the
-      Hoffart paper, arXiv:2510.11808). A local stiff source does NOT need Schur.
+    - an explicit ``Program.solve(LinearProblem(...), solver=...)`` is GLOBAL: its matrix-free
+      operator may couple the whole domain, and a hierarchy provider can span all AMR levels.
+      This is the appropriate route for non-local stiff Lorentz / electrostatic coupling. A local
+      stiff source does not need that global solve.
 
     - ``substeps=N``: substeps per macro-step (cf. Explicit). Default 1.
     - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. Explicit). Default 1.
@@ -174,29 +191,14 @@ class SourceImplicit:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if int(substeps) < 1:
-            raise ValueError("SourceImplicit: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("SourceImplicit: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("SourceImplicit: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("SourceImplicit: newton_damping in (0, 1] (got %r)"
-                             % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("SourceImplicit: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.substeps = int(substeps)
-        self.stride = int(stride)
+        self.substeps, self.stride = _cadence("SourceImplicit", substeps, stride)
         self.implicit_vars, self.implicit_roles = _norm_implicit(
             "SourceImplicit", implicit_vars, implicit_roles)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "SourceImplicit", newton_max_iters, newton_rel_tol, newton_abs_tol,
+             newton_fd_eps, newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 # PRECISE name of the scheme wired by IMEX / SourceImplicit (audit 2026-06): ForwardEuler transport
@@ -210,28 +212,31 @@ class IMEXRK:
 
     Ascher-Ruuth-Spiteri scheme (1997): the hyperbolic transport L = -div F is treated by the
     EXPLICIT tableau, the stiff source S by the IMPLICIT tableau (LOCAL per-cell backward-Euler,
-    Newton, like pops.IMEX) -- but with coupled stages that raise the GLOBAL ORDER TO 2 (transport
-    AND source), whereas pops.IMEX stays a ForwardEuler(transport) + backward-Euler(source) of order 1.
+    Newton, like the private ``IMEX`` policy) -- but with coupled stages that raise the GLOBAL ORDER
+    TO 2 (transport and source), whereas that policy stays ForwardEuler(transport) plus
+    backward-Euler(source), order 1.
 
     Coefficients: gamma = 1 - 1/sqrt(2), delta = 1 - 1/(2 gamma). Tableaus (stiffly accurate):
     explicit A_E = [[0,0,0],[gamma,0,0],[delta,1-delta,0]], b_E = [delta,1-delta,0];
     implicit A_I = [[0,0,0],[0,gamma,0],[0,1-gamma,gamma]], b_I = [0,1-gamma,gamma].
 
-    DISTINCT FAMILY from pops.IMEX (kind="imexrk_ars222" != "imex"): the pops.IMEX default (local
-    backward-Euler, order 1) is UNCHANGED / bit-identical. SCOPE: CARTESIAN System only -- AMR, the
-    polar grid, compiled models (.so: prototype/aot/production) and the Strang/Schur splittings
-    REJECT it explicitly (use pops.IMEX / pops.Explicit on those paths).
+    DISTINCT FAMILY from the private ``IMEX`` policy (kind="imexrk_ars222" != "imex"): its local
+    backward-Euler default remains unchanged and bit-identical. SCOPE: CARTESIAN System only -- AMR, the
+    polar grid, production compiled models and the Strang/Schur splittings
+    REJECT it explicitly. Public authoring uses an explicit ``pops.Program`` or ``pops.lib.time``
+    factory instead of selecting these engine policies.
 
     - ``scheme``: "ars222" (only wired scheme; another name raises an explicit error).
-    - ``substeps=N``: substeps per macro-step (cf. pops.Explicit). Default 1.
-    - ``stride=M``: block cadence, hold-then-catch-up semantics (cf. pops.Explicit). Default 1.
-    - ``newton_*``: SAME options as pops.IMEX (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
+    - ``substeps=N``: substeps per macro-step (cf. the private explicit engine policy). Default 1.
+    - ``stride=M``: block cadence, hold-then-catch-up semantics. Default 1.
+    - ``newton_*``: same options as the private ``IMEX`` policy
+      (max_iters/rel_tol/abs_tol/fd_eps/damping/fail_policy/
       diagnostics) -- they parametrize BOTH implicit stage solves of the scheme. Defaults =
       historical constants (max_iters=2, fd_eps=1e-7), without extra cost.
 
-    FULLY IMPLICIT SOURCE: unlike pops.IMEX, IMEXRK does NOT expose implicit_vars /
+    FULLY IMPLICIT SOURCE: unlike the private ``IMEX`` policy, ``IMEXRK`` does not expose implicit_vars /
     implicit_roles (the ARS(2,2,2) stage-consistency relation assumes a homogeneous solve). A partial
-    mask is rejected on the C++ side; for a partial per-component IMEX, use pops.IMEX.
+    mask is rejected on the C++ side; the partial engine route uses the private ``IMEX`` record.
     """
 
     kind = TIME_IMEXRK_ARS222  # typed time route (ADC-584)
@@ -244,30 +249,16 @@ class IMEXRK:
                  newton_diagnostics: bool = False,
                  newton_damping: Any = NEWTON_DEFAULT_DAMPING,
                  newton_fail_policy: Any = NEWTON_DEFAULT_FAIL_POLICY) -> None:
-        if scheme != "ars222":
+        if not isinstance(scheme, str) or scheme != "ars222":
             raise ValueError("IMEXRK: scheme 'ars222' (only wired IMEX-RK scheme; got %r)"
                              % (scheme,))
-        if int(substeps) < 1:
-            raise ValueError("IMEXRK: substeps >= 1 (got %r)" % (substeps,))
-        if int(stride) < 1:
-            raise ValueError("IMEXRK: stride >= 1 (got %r)" % (stride,))
-        if int(newton_max_iters) < 1:
-            raise ValueError("IMEXRK: newton_max_iters >= 1 (got %r)" % (newton_max_iters,))
-        if not (0.0 < float(newton_damping) <= 1.0):
-            raise ValueError("IMEXRK: newton_damping in (0, 1] (got %r)" % (newton_damping,))
-        if newton_fail_policy not in ("none", "warn", "throw"):
-            raise ValueError("IMEXRK: newton_fail_policy 'none'|'warn'|'throw' (got %r)"
-                             % (newton_fail_policy,))
-        self.scheme = str(scheme)
-        self.substeps = int(substeps)
-        self.stride = int(stride)
-        self.newton_max_iters = int(newton_max_iters)
-        self.newton_rel_tol = float(newton_rel_tol)
-        self.newton_abs_tol = float(newton_abs_tol)
-        self.newton_fd_eps = float(newton_fd_eps)
-        self.newton_diagnostics = bool(newton_diagnostics)
-        self.newton_damping = float(newton_damping)
-        self.newton_fail_policy = str(newton_fail_policy)
+        self.scheme = scheme
+        self.substeps, self.stride = _cadence("IMEXRK", substeps, stride)
+        (self.newton_max_iters, self.newton_rel_tol, self.newton_abs_tol,
+         self.newton_fd_eps, self.newton_diagnostics, self.newton_damping,
+         self.newton_fail_policy) = _newton_controls(
+             "IMEXRK", newton_max_iters, newton_rel_tol, newton_abs_tol, newton_fd_eps,
+             newton_diagnostics, newton_damping, newton_fail_policy)
 
 
 __all__ = ["_role_to_stable", "_norm_implicit", "IMEX", "SourceImplicit", "SourceImplicitBE",

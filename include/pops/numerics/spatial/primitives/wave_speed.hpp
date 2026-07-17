@@ -21,7 +21,7 @@
 #include <pops/mesh/execution/for_each.hpp>  // reduce_max_cell, reduce_min_cell
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux, aux_comps
-#include <pops/parallel/comm.hpp>                  // all_reduce_max, all_reduce_min
+#include <pops/parallel/comm.hpp>                             // all_reduce_max, all_reduce_min
 
 #include <algorithm>
 #include <limits>

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Spec 5 sec.12.5 (criteria 41-44): the TYPED profiling surface.
 
-``pops.Profile`` (Profile.Basic() / Profile.Advanced(), not profile="advanced") + the
+``pops.runtime._profile.Profile`` (Profile.Basic() / Profile.Advanced(), not
+profile="advanced") + the
 ``PerformanceSummary`` wrapper (printable __str__, to_dict / to_json, by_program_node /
-by_native_brick / by_solver / by_memory) + the ``System.profile(...)`` context manager that
-enables the native profiler on __enter__ and disables it on __exit__.
+by_native_brick / by_solver / by_memory).
 
 Two kinds of check:
 
@@ -12,21 +12,18 @@ Two kinds of check:
   typed objects + the report parser against the EXACT native report format
   (profiler.hpp report()). They do NOT fake the engine: they parse a literal sample of what the C++
   Profiler emits, which is the contract this wrapper is built to read.
-* ENGINE -- a real native System under the context manager: asserts enable/disable, the
-  off-by-default contract, and that a stepped block's report flows into a PerformanceSummary. Skipped
-  (not failed) if _pops / numpy is unavailable; never faked.
-
-The heavy per-brick / scheduler / memory counters are Kokkos-gated (compiled .so step on ROMEO); the
-typed views DECLARE those measures unavailable here rather than fabricating them -- asserted below.
+The final ``RuntimeInstance`` deliberately has no profiling-control method. Profiling is selected by
+the execution contract and exposed through inspection; this unit test therefore validates only the
+inert typed records and their one internal owner. Native profiling integration belongs to installed
+runtime inspection tests.
 """
 import json
 import os
 
 import pytest
 
-from pops.runtime.profile import (PerformanceSummary, Profile, _parse_report,
+from pops.runtime._profile import (PerformanceSummary, Profile, _parse_report,
                                    _Unavailable)
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 
 # A literal sample of the native report (profiler.hpp report()): two coarse phases, a per-node scope,
@@ -210,91 +207,14 @@ def test_empty_summary_has_no_data_message():
     assert summ.scopes() == {} and summ.counters() == {}
 
 
-# ---- (D) ENGINE: the context manager over a real native System ------------------------------
-def _make_stepped_system():
-    """A real native System with one isothermal block, ready to step. Returns (pops, sim, np)."""
-    import numpy as np
+def test_profile_types_stay_at_their_direct_module_owner():
+    import pops.runtime._profile as profile_module
+    from pops import runtime
 
-    import pops
-    from pops.numerics.reconstruction import FirstOrder
-    from pops.numerics.riemann import Rusanov
-
-    n = 16
-    sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block(
-        "gas",
-        pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                   transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                   elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-        time=pops.Explicit())
-    rho = np.ones((n, n), dtype=float)
-    sim.set_state("gas", np.stack([rho, 0.1 * rho, 0.0 * rho]))
-    return pops, sim, np
-
-
-def test_engine_exports_typed_surface():
-    pops = pytest.importorskip("pops")
-    assert hasattr(pops, "Profile") and hasattr(pops, "PerformanceSummary")
-    assert pops.Profile.Basic().level == "basic"
-
-
-def test_engine_context_manager_enables_then_disables():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
-    # off by default -- a plain System never enabled.
-    assert sim.is_profiling() is False
-    with sim.profile(pops.Profile.Basic()) as prof:
-        assert sim.is_profiling() is True, "context manager enables on __enter__"
-        sim.step(1e-3)
-        sim.step(1e-3)
-        summary_inside = prof.summary()
-        assert isinstance(summary_inside, pops.PerformanceSummary)
-    # disabled on __exit__.
-    assert sim.is_profiling() is False, "context manager disables on __exit__"
-    summary = prof.summary()
-    assert isinstance(summary, pops.PerformanceSummary)
-    assert summary.counters().get("steps") == 2
-    assert "step" in summary.scopes()
-
-
-def test_engine_off_by_default_contract():
-    """A plain run (no with sim.profile()) records NOTHING: profiling stays disabled."""
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
-    sim.step(1e-3)
-    assert sim.is_profiling() is False
-    summ = PerformanceSummary(sim.profile_report())
-    # the native report on a never-enabled profiler carries no counters.
-    assert summ.counters() == {}, "off-by-default: no heavy timers without an explicit profile()"
-
-
-def test_engine_profile_rejects_non_profile_arg():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
-    with pytest.raises(TypeError):
-        sim.profile("advanced")
-
-
-def test_engine_profile_no_arg_uses_env_default():
-    try:
-        pops, sim, _ = _make_stepped_system()
-    except Exception as exc:  # noqa: BLE001
-        pytest.skip("pops/_pops/numpy unavailable: %s" % exc)
-    saved = os.environ.get("POPS_PROFILE")
-    try:
-        os.environ["POPS_PROFILE"] = "advanced"
-        with sim.profile() as prof:
-            sim.step(1e-3)
-        assert prof.summary().profile.level == "advanced"
-    finally:
-        if saved is None:
-            os.environ.pop("POPS_PROFILE", None)
-        else:
-            os.environ["POPS_PROFILE"] = saved
+    assert profile_module.Profile is Profile
+    assert profile_module.PerformanceSummary is PerformanceSummary
+    assert Profile.__module__ == "pops.runtime._profile"
+    assert PerformanceSummary.__module__ == "pops.runtime._profile"
+    assert not hasattr(runtime, "Profile")
+    assert not hasattr(runtime, "PerformanceSummary")
+    assert Profile.Basic().level == "basic"

@@ -117,7 +117,7 @@ TEST(AuxSystemBz, SharedAuxChannelWidensToMaxAndBzGrowReadsWhileScalarIgnores) {
     assembler.block_residual<NoSlope, RusanovFlux>(assembler.system().block<1>(),
                                                    assembler.system().block<1>().U(), R,
                                                    /*recompute_aux=*/false);
-    EXPECT_TRUE(norm_inf(R) < 1e-14) << "blockB_ignores_extra_comp (||R||_inf = " << norm_inf(R)
-                                     << ")";
+    EXPECT_TRUE(norm_inf(R) < 1e-14)
+        << "blockB_ignores_extra_comp (||R||_inf = " << norm_inf(R) << ")";
   }
 }

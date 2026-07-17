@@ -184,5 +184,7 @@ static int pops_run_test_mpi_hybrid_mbox_parity(int argc, char** argv) {
 }
 
 TEST(test_mpi_hybrid_mbox_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_hybrid_mbox_parity, "test_mpi_hybrid_mbox_parity"), 0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&pops_run_test_mpi_hybrid_mbox_parity, "test_mpi_hybrid_mbox_parity"),
+      0);
 }

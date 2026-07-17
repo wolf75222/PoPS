@@ -26,17 +26,17 @@ Without the compiled ``_pops`` extension the whole module skips (``System`` cann
 
 Pytest + __main__ guard (CI runs ``python3 <file>``).
 """
+from tests.python.support.requirements import require_native_or_skip
 import sys
 
 try:
-    import pops._pops  # noqa: F401  -- System / AmrSystem need the native runtime
     import pops
-    from pops import time as adctime
+    import pops._pops  # noqa: F401  -- System / AmrSystem need the native runtime
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+    from tests.python.support.typed_program import program_states, synthetic_module
+    from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 except Exception as exc:  # noqa: BLE001 -- _pops not built in this interpreter
-    print("skip test_print_readability_runtime (_pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_print_readability_runtime (_pops unavailable: %s)' % exc)
 
 _MAX_PRINT_LEN = 800
 
@@ -61,14 +61,14 @@ def _synthetic_compiled():
     """A SYNTHETIC ``CompiledProblem``: a real lowered ``Program`` + a real ``CompiledModel``, NO
     compile (same inert construction as ``test_compiled_introspection``). Nothing here compiles a
     ``.so`` or touches the runtime; only ``CompiledProblem``'s pure-Python metadata wrapper runs."""
-    P = adctime.Program("demo")
-    dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields("phi", U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P = pops.Program("demo")
+    module = synthetic_module("demo_state", components=("rho", "mx", "my"))
+    _case, states = program_states(P, module, ("plasma",))
+    temporal = states["plasma"]
+    U = temporal.n
+    P.commit(temporal.next, P.value("U1", 1.0 * U, at=temporal.next.point))
     m = CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend="production",
         cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=0, params={},
         caps={"cpu": True}, abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23")

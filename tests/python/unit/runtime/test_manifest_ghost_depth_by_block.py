@@ -5,7 +5,7 @@ CONTRACTS6 decision 4: the bind stream validates each block's initial-state ghos
 MANIFEST value, so the manifest must carry the halo depth keyed by block, not just a single scalar.
 This module pins, at the pure metadata level (no compile / bind / .so):
 
-  1  ``CompiledArtifactManifest`` has a ``ghost_depth_by_block`` dict field;
+  1  ``CompiledArtifactManifest`` has an immutable ``ghost_depth_by_block`` mapping;
   2  it round-trips through ``to_dict`` / ``from_dict`` (additive field, schema still v1);
   3  ``build_arguments`` populates ``layout_runtime["ghost_depth_by_block"]`` keyed by each
      committed block, with the same depth as the scalar ``ghost_depth``;
@@ -14,11 +14,23 @@ This module pins, at the pure metadata level (no compile / bind / .so):
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
 import sys
+from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("pops")
+pops = pytest.importorskip("pops")
+from pops.codegen._plans import ResolvedBlock, ResolvedSimulationPlan  # noqa: E402
+from pops.codegen._compiled_artifact import (  # noqa: E402
+    CompiledBlockArtifact,
+    CompiledSimulationArtifact,
+)
+from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.external.artifact_manifest import CompiledArtifactManifest  # noqa: E402
+from pops.identity import make_identity  # noqa: E402
+from pops.model import Module  # noqa: E402
+from pops.model.bind_schema import BindSchema  # noqa: E402
+from tests.python.unit.runtime._typed_program import typed_program_states  # noqa: E402
+from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
 # --- 1 + 2: the field exists and round-trips ---------------------------------------------------
@@ -35,15 +47,14 @@ def test_ghost_depth_by_block_round_trips_through_dict():
     m = CompiledArtifactManifest(model_name="gas", ghost_depth=2,
                                  ghost_depth_by_block={"ions": 2})
     data = m.to_dict()
-    assert data["ghost_depth_by_block"] == {"ions": 2}, "serialized in to_dict"
+    assert data["payload"]["ghost_depth_by_block"] == {"ions": 2}, "serialized in to_dict"
     # Additive field: from_dict accepts it (schema stays v1, no unknown-field error).
     back = CompiledArtifactManifest.from_dict(data)
     assert back.ghost_depth_by_block == {"ions": 2}, "reconstructed by from_dict"
 
 
 def test_ghost_depth_by_block_is_serializable_plain_values():
-    # The bind stream (and the ADC-564 typed-report conversion) wrap it unchanged: plain dict of
-    # name -> int, JSON-ready.
+    # The wire view consumed by the bind stream/reports is a detached plain dict of name -> int.
     import json
     m = CompiledArtifactManifest(model_name="gas", ghost_depth_by_block={"ions": 2})
     json.dumps(m.to_dict())  # must not raise
@@ -51,39 +62,106 @@ def test_ghost_depth_by_block_is_serializable_plain_values():
 
 # --- 3: build_arguments populates the per-block map keyed by committed block --------------------
 
-class _FakeProgram:
-    def __init__(self, blocks):
-        self._blocks = blocks
-        self._values = []
+def _compiled(blocks, *, ghost_depth=2):
+    """Build the exact compiled artifact around a real typed Program, without a shared object."""
+    module = Module("ghost-depth-model")
+    state = module.state_space("U", ("rho", "mx", "my"))
+    declarations = tuple((name, state) for name in blocks)
+    program, _, problem, endpoints = typed_program_states(
+        "gas_program", module, declarations)
+    program.commit_many({
+        endpoint.next: program.value(
+            "%s_next" % name, endpoint.n, at=endpoint.next.point)
+        for name, endpoint in endpoints.items()
+    })
 
-    def commits(self):
-        return {name: object() for name in self._blocks}
+    model = CompiledModel(
+        so_path="/nonexistent/ghost-depth.so", backend="production",
+        cons_names=("rho", "mx", "my"),
+        cons_roles=("Density", "MomentumX", "MomentumY"),
+        prim_names=("rho", "mx", "my"), n_vars=3, gamma=1.4, n_aux=0,
+        params={}, caps={}, abi_key="SIG|c++|c++23", model_hash="ghost-depth-model",
+        cxx="c++", std="c++23",
+    )
+    model.artifact_identity = make_identity(
+        "artifact", {"fixture": "ghost-depth-model", "blocks": list(blocks)})
+    schema = BindSchema.from_problem(problem)
+    snapshot = problem.freeze()
+    layout_plan, layout_coverage = resolved_layout_contract(
+        None, target="system", block_names=blocks)
+    plan = ResolvedSimulationPlan(
+        snapshot=snapshot,
+        target="system",
+        backend="production",
+        layout=None,
+        layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "system" for row in layout_plan.layouts
+        },
+        time={"program": "gas_program"},
+        blocks=tuple(
+            ResolvedBlock(
+                name, {"model": "ghost-depth-model"},
+                None if ghost_depth is None else {"ghost_depth": ghost_depth},
+                "production", ("U",), ("test::%s::state::U" % name,))
+            for name in blocks
+        ),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
+        field_plans={},
+        libraries=(),
+        requirements={},
+        capabilities={"cpu": True},
+        lowering_coverage=layout_coverage,
+    )
 
+    class _CompiledProgram:
+        so_path = "/nonexistent/ghost-depth-problem.so"
+        target = "system"
+        backend = "production"
+        abi_key = "SIG|c++|c++23"
+        cxx = "c++"
+        std = "c++23"
+        program_name = "gas_program"
+        program_block_routes = tuple(enumerate(blocks))
+        program_param_routes = ()
 
-class _FakeModel:
-    name = "gas"
-    cons_names = ["rho", "mx", "my"]
-    cons_roles = None
-    caps = {}
-    params = {}
-    aux_extra_names = []
+        def commits(self):
+            return program.commits()
 
+        @property
+        def _values(self):
+            return program._values
 
-class _FakeCompiled:
-    def __init__(self, blocks):
-        self.program = _FakeProgram(blocks)
-        self.model = _FakeModel()
-        self.program_name = "gas_program"
-        self.abi_key = "SIG|c++|c++23"
+        def to_data(self):
+            return {"kind": "compiled-program", "name": self.program_name}
 
-    def arguments(self):
-        from pops.codegen.inspect_compiled import build_arguments
-        return build_arguments(self)
+        def arguments(self):
+            from pops.codegen.inspect_compiled import build_arguments
+
+            return build_arguments(self.artifact)
+
+        def manifest(self):
+            from pops.external.artifact_manifest import build_compiled_manifest
+
+            return build_compiled_manifest(self.artifact)
+
+    compiled_program = _CompiledProgram()
+    artifact = CompiledSimulationArtifact(
+        plan=plan,
+        program=compiled_program,
+        blocks=tuple(
+            CompiledBlockArtifact(
+                resolved.name, model, resolved.spatial, resolved.state_spaces)
+            for resolved in plan.blocks),
+    )
+    compiled_program.artifact = artifact
+    return artifact
 
 
 def test_build_arguments_keys_ghost_depth_by_block():
     from pops.codegen.inspect_compiled import build_arguments
-    args = build_arguments(_FakeCompiled(["ions", "electrons"]))
+    args = build_arguments(_compiled(("ions", "electrons")))
     lr = args.layout_runtime
     assert set(lr["ghost_depth_by_block"]) == {"ions", "electrons"}, "one entry per committed block"
     # Every block shares the scalar depth today (one physics model per Program).
@@ -92,11 +170,47 @@ def test_build_arguments_keys_ghost_depth_by_block():
         "per-block depth agrees with the scalar"
 
 
+def test_build_arguments_derives_weno_depth_and_refuses_missing_plan_depth():
+    from pops.codegen.inspect_compiled import build_arguments
+
+    args = build_arguments(_compiled(("ions",), ghost_depth=3))
+    assert args.layout_runtime["ghost_depth"] == 3
+    assert args.layout_runtime["ghost_depth_by_block"] == {"ions": 3}
+    with pytest.raises(ValueError, match="no exact ghost depth"):
+        build_arguments(_compiled(("ions",), ghost_depth=None))
+
+
+def test_compiled_ghost_depth_is_maximum_of_spatial_and_field_plans():
+    from pops.codegen.inspect_compiled import _ghost_depth, _ghost_depth_by_block
+
+    spatial_depth = 2
+    field_depths = (1, 4)
+    block = SimpleNamespace(
+        name="ions", numerics=None, spatial={"ghost_depth": spatial_depth})
+    field_plans = {
+        "potential": SimpleNamespace(native_options={
+            "output_route": {"owner_block": "ions"},
+            "method": {"ghost_depth": field_depths[0]},
+        }),
+        "screened_potential": SimpleNamespace(native_options={
+            "output_route": {"owner_block": "ions"},
+            "method": {"ghost_depth": field_depths[1]},
+        }),
+    }
+    compiled = SimpleNamespace(
+        plan=SimpleNamespace(blocks=(block,), field_plans=field_plans))
+
+    expected = max(spatial_depth, *field_depths)
+    assert field_depths[1] > spatial_depth, "fixture must exercise a field deeper than spatial"
+    assert _ghost_depth_by_block(compiled, ("ions",)) == {"ions": expected}
+    assert _ghost_depth(compiled) == expected
+
+
 # --- 4: build_compiled_manifest threads the per-block map ---------------------------------------
 
 def test_build_compiled_manifest_threads_per_block_ghost_depth():
     from pops.external.artifact_manifest import build_compiled_manifest
-    manifest = build_compiled_manifest(_FakeCompiled(["ions"]))
+    manifest = build_compiled_manifest(_compiled(("ions",)))
     assert manifest.ghost_depth_by_block == {"ions": manifest.ghost_depth}, \
         "the manifest carries per-block ghost depth from arguments()"
 

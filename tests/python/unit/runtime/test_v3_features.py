@@ -8,8 +8,7 @@
       fail_policy acceptee) ; newton_diagnostics (rapport newton_report) cable en MULTI-BLOCS natif,
       REJETE en mono-bloc (le coupleur n'agrege pas de rapport) ;
   (C) set_conservative_state MULTI-BLOCS : l'etat complet (avec quantite de mouvement) seede le
-      grossier (la masse et la dynamique different du seed densite au repos) ; et AmrSystem.write
-      npz ecrit un champ PAR bloc par NOM (pas seulement le bloc 0, revue v3) ;
+      grossier (la masse et la dynamique different du seed densite au repos) ;
   (D, compilateur) enable_hllc : riemann='hllc' accepte sur un modele DSL 3-var NON Euler via la
       capability emise ; rejete sans elle ; source_jacobian : parite de trajectoire avec les FD ;
       garde CODEGEN : source_jacobian sans source leve a compile() (pas seulement check()).
@@ -25,18 +24,19 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
+from pops.math import sqrt
+from pops.physics._facade import Model
 from pops.physics.multispecies import CoupledSource
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
-
-fails = 0
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
+
+fails = 0
 INCLUDE = repo_include()
 
 
@@ -48,10 +48,10 @@ def chk(cond, label):
 
 
 def iso_model(charge=1.0):
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=charge),
-                     elliptic=pops.ChargeDensity(charge=charge))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.PotentialForce(charge=charge),
+                     elliptic=engine.ChargeDensity(charge=charge))
 
 
 def gaussian(n):
@@ -64,9 +64,9 @@ def gaussian(n):
 print("== (A) CoupledSource.frequency : borne dt <= cfl/mu sur le macro-pas ==")
 n = 16
 sim = System(n=n, L=1.0, periodic=True)
-sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-sim.add_block("a", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-sim.add_block("b", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
+sim.add_equation("a", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
+sim.add_equation("b", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
 sim.set_density("a", gaussian(n).ravel())
 sim.set_density("b", gaussian(n).ravel())
 src = CoupledSource("friction").frequency(500.0)  # mu = 500 -> dt = 0.4/500 = 8e-4 << transport
@@ -96,12 +96,13 @@ chk(abs(dt2 - 0.4 / 500.0) < 1e-15 and sim.last_dt_bound() == "coupled_source:fr
 # --- (B) options Newton sur AMR ------------------------------------------------------
 print("== (B) AMR : options Newton cablees (mono ET multi), newton_report multi, rejet diag mono ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_temporal_relations([2], [1], ["integral_only"])
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
-amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-              time=pops.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
-amr.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-              time=pops.Explicit())
+amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
+              time=engine.IMEX(newton_max_iters=4, newton_fail_policy="warn"))
+amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
+              time=engine.Explicit())
 amr.set_density("e1", gaussian(16).ravel())
 amr.set_density("e2", gaussian(16).ravel())
 amr.step(2e-3)
@@ -109,22 +110,24 @@ chk(np.all(np.isfinite(np.asarray(amr.density("e1")))),
     "multi-blocs : IMEX(newton_max_iters=4, fail_policy='warn') tourne fini")
 # MONO-BLOC + options Newton : DESORMAIS cable (coupleur AmrCouplerMP) -> tourne fini (plus de rejet).
 mono = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+mono.set_temporal_relations([2], [1], ["integral_only"])
+mono.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 mono.set_refinement(1e30)
-mono.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
-               time=pops.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
+mono.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+               time=engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-10))
 mono.set_density("e", gaussian(16).ravel())
 mono.step(2e-3)  # build paresseux mono-bloc : les options sont threadees au coupleur, ne leve plus
 chk(np.all(np.isfinite(np.asarray(mono.density("e")))),
     "mono-bloc : IMEX(newton_max_iters=5, rel_tol) tourne fini (options cablees, plus de rejet)")
 # newton_diagnostics en MULTI-BLOCS natif : newton_report('e1') dict coherent.
 amrd = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amrd.set_temporal_relations([2], [1], ["integral_only"])
+amrd.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amrd.set_refinement(1e30)
-amrd.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-               time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amrd.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-               time=pops.Explicit())
+amrd.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
+               time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
+amrd.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
+               time=engine.Explicit())
 amrd.set_density("e1", gaussian(16).ravel())
 amrd.set_density("e2", gaussian(16).ravel())
 amrd.step(2e-3)
@@ -134,10 +137,11 @@ chk(rep["enabled"] and np.isfinite(rep["max_residual"]) and rep["n_failed"] == 0
     f"converged {rep['converged']})")
 # newton_diagnostics en MONO-BLOC : rejet au build (le coupleur n'agrege pas de rapport).
 monod = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+monod.set_temporal_relations([2], [1], ["integral_only"])
+monod.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 monod.set_refinement(1e30)
-monod.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
-                time=pops.IMEX(newton_diagnostics=True))
+monod.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+                time=engine.IMEX(newton_diagnostics=True))
 monod.set_density("e", gaussian(16).ravel())
 try:
     monod.step(2e-3)  # build paresseux mono-bloc -> rejet explicite de newton_diagnostics
@@ -148,10 +152,11 @@ except RuntimeError as e:
 # --- (C) set_conservative_state multi-blocs ------------------------------------------
 print("== (C) set_conservative_state multi-blocs : etat complet seede (avec derive) ==")
 amr3 = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr3.set_temporal_relations([2], [1], ["integral_only"])
+amr3.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr3.set_refinement(1e30)
-amr3.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
-amr3.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()))
+amr3.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()))
+amr3.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()))
 rho0 = gaussian(16)
 u0 = 0.3 * np.ones((16, 16))
 amr3.set_conservative_state("e1", np.stack([rho0, rho0 * u0, 0.0 * rho0]))
@@ -164,24 +169,13 @@ chk(np.all(np.isfinite(d_after)), "multi-blocs + etat complet : pas fini")
 # bougerait quasiment pas en 1 pas) : preuve que la quantite de mouvement a ete seedee.
 chk(float(np.max(np.abs(d_after - d_before))) > 1e-5,
     "la quantite de mouvement seedee advecte la densite (etat complet actif)")
-# AmrSystem.write multi-blocs (revue vague 3) : un champ PAR bloc, par NOM (e1 ET e2) -- pas
-# seulement le bloc 0 sous une cle generique.
-wdir = tempfile.mkdtemp()
-try:
-    fnpz = amr3.write(os.path.join(wdir, "amr_out"), format="npz")
-    with np.load(fnpz) as z:
-        chk("density_e1" in z.files and "density_e2" in z.files and "phi" in z.files,
-        f"AmrSystem.write npz multi-blocs : density_e1 + density_e2 + phi (cles {z.files})")
-finally:
-    shutil.rmtree(wdir, ignore_errors=True)
-
 # --- (D) DSL : enable_hllc + source_jacobian (compilateur requis) ---------------------
 missing = missing_compiler_requirement(INCLUDE)
 if missing:
     if fails:
         print(f"FAIL test_v3_features : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(D) test_v3_features : {missing}")
+    require_native_or_skip(f"(D) test_v3_features : {missing}")
 
 
 def iso3_dsl(name, hllc=False, jac=False):
@@ -216,8 +210,8 @@ try:
     chk(getattr(cm_h, "has_hllc", False), "CompiledModel.has_hllc = True (capability emise)")
     sh = System(n=24, L=1.0, periodic=True)
     sh.set_poisson()
-    sh.add_equation("f", model=cm_h, spatial=pops.FiniteVolume(limiter=Minmod(), riemann=HLLC()),
-                    time=pops.Explicit())
+    sh.add_equation("f", model=cm_h, spatial=engine.Spatial(limiter=Minmod(), flux=HLLC()),
+                    time=engine.Explicit())
     z = np.zeros((24, 24))
     sh.set_primitive_state("f", rho=gaussian(24), u=z, v=z)
     for _ in range(5):
@@ -228,8 +222,8 @@ try:
                                             backend="production")
     try:
         s2 = System(n=16, L=1.0, periodic=True)
-        s2.add_equation("f", model=cm_nh, spatial=pops.FiniteVolume(limiter=Minmod(),
-                                                                   riemann=HLLC()))
+        s2.add_equation("f", model=cm_nh, spatial=engine.Spatial(limiter=Minmod(),
+                                                                   flux=HLLC()))
         chk(False, "hllc sans capability sur 3-var aurait du lever")
     except (ValueError, RuntimeError) as e:
         chk("hllc" in str(e), f"rejet sans capability : {str(e)[:70]}")
@@ -244,8 +238,8 @@ try:
     def run_imex(cm):
         s = System(n=16, L=1.0, periodic=True)
         s.set_poisson()
-        s.add_equation("f", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
-                       time=pops.IMEX())
+        s.add_equation("f", model=cm, spatial=engine.Spatial(limiter=Minmod()),
+                       time=engine.IMEX())
         z16 = np.zeros((16, 16))
         s.set_primitive_state("f", rho=gaussian(16), u=0.2 + z16, v=z16)
         for _ in range(4):

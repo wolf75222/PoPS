@@ -16,9 +16,9 @@
 #include <gtest/gtest.h>
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, CompressibleFlux, NoSource, ChargeDensity
-#include <pops/numerics/fv/numerical_flux.hpp>      // HLLCFlux, RoeFlux
-#include <pops/numerics/fv/reconstruction.hpp>      // Minmod
-#include <pops/numerics/spatial_operator.hpp>    // assemble_rhs, compute_face_fluxes, load_state
+#include <pops/numerics/fv/numerical_flux.hpp>  // HLLCFlux, RoeFlux
+#include <pops/numerics/fv/reconstruction.hpp>  // Minmod
+#include <pops/numerics/spatial_operator.hpp>   // assemble_rhs, compute_face_fluxes, load_state
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // advance_amr, AmrLevelMP
 
 #include <pops/mesh/index/box2d.hpp>
@@ -107,7 +107,8 @@ TEST(test_amr_spatial_parity, Runs) {
     // HLLC + primitif : div(face fluxes) == assemble_rhs, exactement.
     rhs_system(HLLCFlux{}, true, Rs);
     rhs_amr(HLLCFlux{}, true, Ra);
-    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13) << "HLLC+primitif : div(compute_face_fluxes) == assemble_rhs";
+    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13)
+        << "HLLC+primitif : div(compute_face_fluxes) == assemble_rhs";
     EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "HLLC+primitif : residu non trivial";
 
     // le primitif change le residu vs le conservatif (la reconstruction joue).
@@ -117,7 +118,8 @@ TEST(test_amr_spatial_parity, Runs) {
     // Roe + primitif : meme parite bit-identique.
     rhs_system(RoeFlux{}, true, Rs);
     rhs_amr(RoeFlux{}, true, Ra);
-    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13) << "Roe+primitif : div(compute_face_fluxes) == assemble_rhs";
+    EXPECT_TRUE(maxdiff(Rs, Ra) < 1e-13)
+        << "Roe+primitif : div(compute_face_fluxes) == assemble_rhs";
     EXPECT_TRUE(norm_inf(Rs) > 1e-6) << "Roe+primitif : residu non trivial";
   }
 
@@ -135,11 +137,13 @@ TEST(test_amr_spatial_parity, Runs) {
     MultiFab Up = one_step(true);
     MultiFab Uc = one_step(false);
 
-    EXPECT_TRUE(std::isfinite(norm_inf(Up)) && norm_inf(Up) < 1e6) << "advance_amr primitif : etat fini";
+    EXPECT_TRUE(std::isfinite(norm_inf(Up)) && norm_inf(Up) < 1e6)
+        << "advance_amr primitif : etat fini";
     EXPECT_TRUE(std::fabs(sum(Up) - sum0) < 1e-9)
         << "advance_amr primitif : masse conservee (periodique)";
     EXPECT_TRUE(std::fabs(sum(Uc) - sum0) < 1e-9) << "advance_amr conservatif : masse conservee";
     // recon_prim a bien traverse advance_amr -> compute_face_fluxes : les deux pas different.
-    EXPECT_TRUE(maxdiff(Up, Uc) > 1e-9) << "advance_amr : recon_prim plumbing (primitif != conservatif)";
+    EXPECT_TRUE(maxdiff(Up, Uc) > 1e-9)
+        << "advance_amr : recon_prim plumbing (primitif != conservatif)";
   }
 }

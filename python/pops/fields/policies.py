@@ -1,79 +1,150 @@
-"""pops.fields.policies -- inert field-solve cadence policies (Spec 5 sec.13.11.2).
+"""Typed stale/off-schedule field-read policies and explicit failure actions."""
 
-A field solve does not always run every macro-step: a self-consistent Poisson coupling
-may be held over several steps and only recomputed on a cadence, or recomputed only when a
-residual exceeds a threshold. The CADENCE (WHEN to solve) is a :class:`pops.time.Schedule`;
-the POLICY here decides what happens on a step where the solve is NOT due:
-
-* :class:`HoldPrevious` -- reuse the cached field from the last solve (requires a cacheable
-  output, so the result can be stored and re-read);
-* :class:`Recompute` -- always recompute, never reuse a cached value (the default cadence
-  behaviour, surfaced as an explicit typed policy).
-
-Both are inert typed :class:`~pops.descriptors.Descriptor` objects: they declare their
-cacheability / math-admissibility through :meth:`capabilities` / :meth:`requirements` and
-compute nothing. The C++ runtime / codegen consumes the recorded cadence; see
-:meth:`pops.fields.FieldProblem.solve`.
-"""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
-from pops.descriptors import Descriptor
-from pops.descriptors_report import CapabilitySet, RequirementSet
+
+class FieldReadError(RuntimeError):
+    """A field read is stale, off-schedule, or invalid for its consumer."""
 
 
-class FieldSolvePolicy(Descriptor):
-    """Base of the field-solve cadence policies (what to do when a solve is not due).
-
-    A policy is inert: it only declares whether it reuses a cached field (so the field
-    output must be cacheable) through :meth:`capabilities` / :meth:`requirements`. The
-    runtime honours it; the policy computes nothing.
-    """
-
-    category = "field_solve_policy"
+class FieldAttemptRejected(FieldReadError):
+    """A provisional step attempt must be rejected because a field cannot be supplied."""
 
 
-class HoldPrevious(FieldSolvePolicy):
-    """Hold the previously solved field on a step where the solve is not due.
-
-    Reuses the cached field from the last solve, so it REQUIRES a cacheable output (the
-    field must be storable and re-readable between solves). Declares ``reuses_cache`` so a
-    consumer can check math-admissibility before the runtime is touched.
-    """
-
-    def requirements(self) -> Any:
-        return RequirementSet({"cacheable_output": True})
-
-    def capabilities(self) -> Any:
-        return CapabilitySet({"reuses_cache": True, "recomputes": False})
-
-    def options(self) -> dict:
-        return {"policy": "hold_previous"}
-
-    def __repr__(self) -> str:
-        return "HoldPrevious()"
+class FieldConsumer(Enum):
+    PROGRAM = "program"
+    DIAGNOSTIC = "diagnostic"
+    OUTPUT = "output"
+    TAGGING = "tagging"
 
 
-class Recompute(FieldSolvePolicy):
-    """Recompute the field on every due step; never reuse a cached value.
+class FieldFailureAction:
+    """Small extension interface controlling a failed hold/recompute request."""
 
-    The explicit typed form of the default cadence behaviour. Requires nothing of the
-    output (no cache is read), and declares ``recomputes`` so the distinction from
-    :class:`HoldPrevious` is inspectable.
-    """
+    __pops_ir_immutable__ = True
 
-    def requirements(self) -> Any:
-        return RequirementSet({})
+    def fail(self, message: str) -> None:
+        raise NotImplementedError
 
-    def capabilities(self) -> Any:
-        return CapabilitySet({"reuses_cache": False, "recomputes": True})
-
-    def options(self) -> dict:
-        return {"policy": "recompute"}
-
-    def __repr__(self) -> str:
-        return "Recompute()"
+    def to_data(self) -> dict[str, Any]:
+        raise NotImplementedError
 
 
-__all__ = ["FieldSolvePolicy", "HoldPrevious", "Recompute"]
+@dataclass(frozen=True, slots=True)
+class FailFieldRead(FieldFailureAction):
+    def fail(self, message: str) -> None:
+        raise FieldReadError(message)
+
+    def to_data(self) -> dict[str, Any]:
+        return {"action": "fail_field_read"}
+
+
+@dataclass(frozen=True, slots=True)
+class RejectFieldAttempt(FieldFailureAction):
+    def fail(self, message: str) -> None:
+        raise FieldAttemptRejected(message)
+
+    def to_data(self) -> dict[str, Any]:
+        return {"action": "reject_field_attempt"}
+
+
+class FieldReadPolicy:
+    """Closed semantic role with open typed implementations."""
+
+    __pops_ir_immutable__ = True
+
+    def to_data(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+
+def _failure(value: Any) -> FieldFailureAction:
+    if not isinstance(value, FieldFailureAction):
+        raise TypeError("field read policy on_failure must be a FieldFailureAction")
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class HoldLastValue(FieldReadPolicy):
+    """Reuse the last accepted value on the same layout only."""
+
+    on_failure: FieldFailureAction
+
+    def __post_init__(self) -> None:
+        _failure(self.on_failure)
+
+    def to_data(self) -> dict[str, Any]:
+        return {"policy": "hold_last_value", "on_failure": self.on_failure.to_data()}
+
+
+@dataclass(frozen=True, slots=True)
+class RecomputeAtDiagnostic(FieldReadPolicy):
+    on_failure: FieldFailureAction
+    consumer = FieldConsumer.DIAGNOSTIC
+
+    def __post_init__(self) -> None:
+        _failure(self.on_failure)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "policy": "recompute",
+            "consumer": self.consumer.value,
+            "on_failure": self.on_failure.to_data(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecomputeAtOutput(FieldReadPolicy):
+    on_failure: FieldFailureAction
+    consumer = FieldConsumer.OUTPUT
+
+    def __post_init__(self) -> None:
+        _failure(self.on_failure)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "policy": "recompute",
+            "consumer": self.consumer.value,
+            "on_failure": self.on_failure.to_data(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecomputeAtTagging(FieldReadPolicy):
+    on_failure: FieldFailureAction
+    consumer = FieldConsumer.TAGGING
+
+    def __post_init__(self) -> None:
+        _failure(self.on_failure)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "policy": "recompute",
+            "consumer": self.consumer.value,
+            "on_failure": self.on_failure.to_data(),
+        }
+
+
+RECOMPUTE_POLICIES = (
+    RecomputeAtDiagnostic,
+    RecomputeAtOutput,
+    RecomputeAtTagging,
+)
+
+
+__all__ = [
+    "FailFieldRead",
+    "FieldAttemptRejected",
+    "FieldConsumer",
+    "FieldFailureAction",
+    "FieldReadError",
+    "FieldReadPolicy",
+    "HoldLastValue",
+    "RecomputeAtDiagnostic",
+    "RecomputeAtOutput",
+    "RecomputeAtTagging",
+    "RejectFieldAttempt",
+]

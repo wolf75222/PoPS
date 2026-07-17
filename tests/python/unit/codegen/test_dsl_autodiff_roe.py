@@ -26,21 +26,20 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.ir.expr import Expr, Var
-from pops.ir.lowering import diff
-from pops.ir.ops import left, right, sqrt
-from pops.physics.facade import Model
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
-
-fails = 0
+import pops.runtime._engine_descriptors as engine
+from pops._ir.expr import Expr, Var
+from pops._ir.lowering import diff
+from pops._ir.ops import left, right, sqrt
+from pops.physics._facade import Model
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 INCLUDE = repo_include()
 CS2 = 0.5  # vitesse du son au carre (isotherme / pseudo-pression p = cs2 rho)
+fails = 0
 
 
 def chk(cond, label):
@@ -228,7 +227,7 @@ if missing:
     if fails:
         print(f"FAIL test_dsl_autodiff_roe : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(c) test_dsl_autodiff_roe : {missing}")
+    require_native_or_skip(f"(c) test_dsl_autodiff_roe : {missing}")
 
 
 def iso_roe_hand(name):
@@ -318,15 +317,15 @@ try:
     s_hand = System(n=n, L=1.0, periodic=True)
     s_hand.set_poisson()
     s_hand.add_equation("f", model=cm_hand,
-                        spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                        time=pops.Explicit())
+                        spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                        time=engine.Explicit())
     s_hand.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
     s_ref = System(n=n, L=1.0, periodic=True)
     s_ref.set_poisson()
     s_ref.add_equation("f", model=cm_ref,
-                       spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Roe()),
-                       time=pops.Explicit())
+                       spatial=engine.Spatial(limiter=Minmod(), flux=Roe()),
+                       time=engine.Explicit())
     s_ref.set_primitive_state("f", rho=rho0, u=z + 0.1, v=z)
 
     for _ in range(8):

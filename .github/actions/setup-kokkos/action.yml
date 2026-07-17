@@ -2,10 +2,9 @@ name: 'Setup Kokkos (PIC, cached)'
 description: >
   Installe les deps de build (Eigen, Ninja, ccache) et une install Kokkos PIC MISE EN CACHE (Serial
   par defaut, OpenMP en option via exec-space), puis expose son prefixe via l'output `kokkos-prefix`.
-  Avec les defauts (serial + gcc) la cle de cache est IDENTIQUE a celle du gate ci.yml
-  (kokkos-<os>-<version>-<commit>-serial-cxx20-gcc-pic) : quality.yml reutilise le Kokkos
-  deja construit par le gate (et inversement), evitant toute reconstruction. Chaque
-  (exec-space, compiler) a sa propre cle.
+  Avec les defauts (serial + gcc) la cle de cache est IDENTIQUE a celle du gate ci.yml : elle
+  inclut image runner, architecture et version exacte du compilateur pour interdire toute reuse
+  ABI-incompatible. quality.yml reutilise donc le Kokkos du gate uniquement sur le meme toolchain.
   Factorise les etapes repetees par les jobs warnings / tidy / sanitizers / tsan / codeql.
 
 inputs:
@@ -22,9 +21,9 @@ inputs:
     default: ''
   compiler:
     description: >
-      Compilateur de l'install Kokkos : gcc (defaut) ou clang. Le defaut gcc conserve la cle de
-      cache historique du gate ci.yml ; clang produit une install SEPAREE (cle distincte), utilisee
-      par les jobs qualite bases sur clang.
+      Compilateur de l'install Kokkos : gcc (defaut) ou clang. La cle inclut l'image du runner,
+      son architecture et la version exacte du compilateur ; chaque toolchain produit donc une
+      installation ABI-compatible distincte.
     default: 'gcc'
   exec-space:
     description: >
@@ -37,6 +36,9 @@ outputs:
   kokkos-prefix:
     description: 'Prefixe d''install Kokkos (a exporter en KOKKOS_PREFIX pour les presets ci-*)'
     value: ${{ steps.paths.outputs.prefix }}
+  cache-platform:
+    description: 'Identite exacte image/architecture/compilateur pour les caches ABI-dependants'
+    value: ${{ steps.cache-platform.outputs.key }}
 
 runs:
   using: composite
@@ -55,14 +57,34 @@ runs:
         if [ "${{ inputs.exec-space }}" = "openmp" ]; then OMP_DEP="libomp-dev"; fi
         sudo apt-get install -y libeigen3-dev ninja-build ccache $OMP_DEP ${{ inputs.extra-apt }}
 
+    - name: Resolve runner and compiler cache identity
+      id: cache-platform
+      shell: bash
+      run: |
+        case "${{ inputs.compiler }}" in
+          gcc)   CXX_BIN=g++ ;;
+          clang) CXX_BIN=clang++ ;;
+          *) echo "unsupported Kokkos compiler: ${{ inputs.compiler }}" >&2; exit 2 ;;
+        esac
+        image="${ImageOS:-}"
+        if [ -z "$image" ]; then
+          . /etc/os-release
+          image="${ID}${VERSION_ID}"
+        fi
+        version="$("$CXX_BIN" -dumpfullversion -dumpversion 2>/dev/null \
+          || "$CXX_BIN" -dumpversion)"
+        version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
+        echo "key=${image}-${RUNNER_ARCH}-${{ inputs.compiler }}-${version}" >> "$GITHUB_OUTPUT"
+
     # Avec les defauts (serial + gcc), la cle est IDENTIQUE a celle du gate ci.yml -> cache partage
-    # (gros gain : pas de reconstruction Kokkos). Chaque (exec-space, compiler) isole sa propre cle.
+    # uniquement sur la meme image/architecture/version de compilateur. Chaque execution space reste
+    # isole car l'installation Kokkos differe.
     - name: Cache Kokkos install (${{ inputs.exec-space }} ${{ inputs.kokkos-version }}, ${{ inputs.compiler }})
       id: kokkos-cache
       uses: actions/cache@v6
       with:
         path: ${{ steps.paths.outputs.prefix }}
-        key: kokkos-${{ runner.os }}-${{ inputs.kokkos-version }}-${{ inputs.kokkos-commit }}-${{ inputs.exec-space }}-cxx20-${{ inputs.compiler }}-pic
+        key: kokkos-${{ runner.os }}-${{ steps.cache-platform.outputs.key }}-${{ inputs.kokkos-version }}-${{ inputs.kokkos-commit }}-${{ inputs.exec-space }}-cxx20-pic
 
     - name: Build + install Kokkos (${{ inputs.exec-space }}, PIC, ${{ inputs.compiler }})
       if: steps.kokkos-cache.outputs.cache-hit != 'true'

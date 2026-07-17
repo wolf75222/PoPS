@@ -4,9 +4,9 @@ The condensed-implicit electrostatic push eliminates the implicit Lorentz rotati
 against a gradient-linear Poisson coupling. Its per-cell block linearization is the ROTATION GENERATOR
 ``J = [[0, B_z], [-B_z, 0]]`` on the momentum subset (mx, my): with ``M = I - theta*dt*J`` this is the
 Schur brick's ``B = [[1, -w], [w, 1]]`` (``w = theta*dt*B_z``, the retiring ``LorentzEliminator``). This
-module authors that ``J`` on a model as a plain ``m.local_linear_map`` -- the DSL spelling that the
-generic ``condensed_implicit`` / ``condensed_schur`` macro lowers through the block_inverse codegen,
-with NO Schur/Lorentz vocabulary in the emitted kernels.
+module authors that ``J`` on a model as a plain ``m.local_linear_map``. An explicit ``Program`` graph
+combines it with the matrix-free field operator and solver; the block-inverse codegen therefore needs
+no Schur/Lorentz vocabulary in its emitted kernels.
 
 ``J`` reads B_z from the shared aux (canonical component 3, filled by ``solve_fields``) and NOTHING
 else, so its coefficients are constant in U over the block -- the eliminable-source contract
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-#: The canonical operator name the ``condensed_schur`` macro's generic route references. Authoring the
-#: J under this name lets the macro bind it without the caller passing an operator handle.
+#: Canonical readable name used by the provided authoring helper. The helper returns the typed
+#: handle; time macros never recover it from this string.
 LORENTZ_J_NAME = "electrostatic_lorentz_J"
 
 

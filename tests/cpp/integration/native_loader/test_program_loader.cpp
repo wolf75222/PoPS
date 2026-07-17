@@ -2,11 +2,12 @@
 // dlopens a generated problem.so and installs its compiled time Program across the ABI boundary.
 //
 // We compile AT RUNTIME a stub problem.so -- the role the codegen (Phase 2c-ii) will fill -- that
-// exports pops_program_abi_key() + pops_install_program(void* sys); the installer wraps the System in a
-// ProgramContext and installs the SAME Forward-Euler closure as the in-process test_program_runtime.
+// exports pops_program_abi_key(), the required block-identity table, and
+// pops_install_program(void* sys); the installer wraps the System in a ProgramContext and installs the
+// SAME Forward-Euler closure as the in-process test_program_runtime.
 // We then sim.install_program(so) + sim.step(dt) and check bit-parity against a reference Forward-Euler
 // step computed from the same primitives (solve_fields + eval_rhs + U + dt*R). This validates the
-// dlopen + ABI-key guard + RTLD_GLOBAL resolution of the seam accessors, end to end.
+// dlopen + ABI-key guard + globally visible host seams with a locally scoped package, end to end.
 //
 // Skips (exit 0) under Kokkos (a nu CPU loader is ABI-incompatible with the device module) or when no
 // C++ compiler is known to the build -- same policy as test_amr_native_loader. CMake injects
@@ -72,29 +73,57 @@ void add_gas(System& s) {
 // The generated problem.so: a Forward-Euler Program installed via ProgramContext. This is exactly the
 // source the Phase 2c-ii codegen will emit (here hand-written for an autonomous C++ test). The ABI key
 // is the preprocessor LITERAL (not the inline abi_key_string(), which would be interposed via RTLD).
-std::string loader_source() {
+std::string loader_source(bool include_block_identities = true) {
   // clang-format off
-  return R"CPP(
+  std::string source = R"CPP(
 #include <pops/runtime/program/program_context.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
+#include <pops/runtime/config/route_ids.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/core/foundation/types.hpp>
 extern "C" const char* pops_program_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_program_route_manifest() { return pops::kRouteRegistrySignature; }
 extern "C" const char* pops_program_name() { return "forward_euler_stub"; }
+extern "C" int pops_module_operator_count() { return 1; }
+extern "C" int pops_module_state_space_count() { return 1; }
+extern "C" int pops_module_field_space_count() { return 0; }
+extern "C" const char* pops_module_operator_owner(int) { return "gas"; }
+extern "C" const char* pops_module_operator_name(int) { return "rhs"; }
+extern "C" const char* pops_module_operator_kind(int) { return "local_rate"; }
+extern "C" const char* pops_module_operator_signature(int) { return "(U) -> Rate(U)"; }
+extern "C" const char* pops_module_operator_requirements(int) {
+  return "{\"kind\":\"local_rate\"}";
+}
+extern "C" const char* pops_module_state_space_name(int) { return "U"; }
+extern "C" const char* pops_module_state_space_owner(int) { return "gas"; }
+extern "C" const char* pops_module_field_space_name(int) { return ""; }
+extern "C" const char* pops_module_field_space_owner(int) { return ""; }
+)CPP";
+  if (include_block_identities) {
+    source += R"CPP(
+extern "C" int pops_program_block_count() { return 1; }
+extern "C" const char* pops_program_block_name(int i) { return i == 0 ? "gas" : ""; }
+)CPP";
+  }
+  source += R"CPP(
 extern "C" void pops_install_program(void* sys) {
   pops::runtime::program::ProgramContext ctx(sys);
+  ctx.configure_primary_clock("clock.macro");
   ctx.install([ctx](double dt) {
+    ctx.begin_step(dt);
+    ctx.set_stage_time(0, 1);
     ctx.solve_fields();
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       pops::MultiFab& U = ctx.state(b);
       pops::MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
+      ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, static_cast<pops::Real>(dt), R);
     }
   });
 }
 )CPP";
   // clang-format on
+  return source;
 }
 
 bool compile_loader(const std::string& src_path, const std::string& so_path) {
@@ -104,8 +133,8 @@ bool compile_loader(const std::string& src_path, const std::string& so_path) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src_path + " -o " + so_path;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
 #if defined(__APPLE__)
   cmd += " -undefined dynamic_lookup";  // undefined System symbols resolved at load from the exe
 #endif
@@ -156,13 +185,39 @@ static int pops_run_test_program_loader(int argc, char** argv) {
                           std::to_string(static_cast<long>(std::clock()));
   const std::string src = tmp + ".cpp";
   const std::string so = tmp + ".so";
+  const std::string legacy_src = tmp + "_missing_block_identities.cpp";
+  const std::string legacy_so = tmp + "_missing_block_identities.so";
   {
     std::ofstream f(src);
     f << loader_source();
   }
-  if (!compile_loader(src, so)) {
+  {
+    std::ofstream f(legacy_src);
+    f << loader_source(false);
+  }
+  if (!compile_loader(src, so) || !compile_loader(legacy_src, legacy_so)) {
     std::printf("skip test_program_loader (echec de compilation du stub .so -- en-tetes/std ?)\n");
     return 0;
+  }
+
+  int fails = 0;
+  // A pre-spec library with no explicit block identity table must never install by add-order. The
+  // old positional fallback could silently bind the right equations to the wrong instances.
+  System missing_identity(cfg);
+  add_gas(missing_identity);
+  try {
+    missing_identity.install_program(legacy_so);
+    std::printf("FAIL Program without a block identity table installed positionally\n");
+    ++fails;
+  } catch (const std::runtime_error& e) {
+    const std::string message = e.what();
+    if (message.find("block identity table") == std::string::npos ||
+        message.find("pops_program_block_count") == std::string::npos ||
+        message.find("pops_program_block_name") == std::string::npos ||
+        message.find("Positional") == std::string::npos) {
+      std::printf("FAIL missing block identity table diagnostic: %s\n", message.c_str());
+      ++fails;
+    }
   }
 
   System sim(cfg);
@@ -173,7 +228,6 @@ static int pops_run_test_program_loader(int argc, char** argv) {
   sim.step(dt);  // SystemStepper dispatches to the installed Program
   const std::vector<double> Up = sim.get_state("gas");
 
-  int fails = 0;
   double err = 0, change = 0;
   for (std::size_t k = 0; k < Up.size(); ++k) {
     err = std::fmax(err, std::fabs(Up[k] - Uref[k]));

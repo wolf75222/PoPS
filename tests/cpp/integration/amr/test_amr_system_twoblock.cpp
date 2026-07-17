@@ -22,8 +22,8 @@
 
 #include <pops/coupling/base/elliptic_rhs.hpp>  // add_scaled_component (RHS de reference assemble main)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>     // facade AmrSystem
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>  // norm_inf
@@ -91,8 +91,8 @@ TEST(test_amr_system_twoblock, Runs) {
     AmrBuildParams bp;
     bp.mesh.n = N;
     bp.mesh.L = L;
-    bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs PR1)
-    bp.poisson.bc = BCRec{};  // periodique
+    bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs PR1)
+    bp.poisson.bc = BCRec{};   // periodique
     const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
 
     std::vector<AmrRuntimeBlock> blocks;
@@ -107,8 +107,10 @@ TEST(test_amr_system_twoblock, Runs) {
                                                   /*has_density=*/true, 1.4, 1, false, false));
     });
 
-    AmrRuntime rt(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
+    AmrRuntime rt(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
                   S.replicated_coarse, S.wall);
+    rt.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+        0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
     EXPECT_EQ(rt.n_blocks(), 2) << "twoblock_engine_two_blocks";
     EXPECT_EQ(rt.nlev(), 2) << "twoblock_engine_two_levels";
 
@@ -153,6 +155,7 @@ TEST(test_amr_system_twoblock, Runs) {
     cfg.regrid_every = 0;  // multi-blocs PR1 : hierarchie figee
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
     sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);  // SCHEMA DIFFERENT du bloc 0
@@ -207,6 +210,7 @@ TEST(test_amr_system_twoblock, Runs) {
     cfg.L = L;
     cfg.regrid_every = 10;  // > 0
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     sim.add_block("ions", exb_charge(q0, B0), "none", "rusanov", "conservative", "explicit", 1);
     sim.add_block("electrons", exb_charge(q1, B0), "minmod", "rusanov", "conservative", "explicit",
                   1);

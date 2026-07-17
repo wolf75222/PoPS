@@ -19,15 +19,18 @@ covered host-side by test_name_binding_codegen.py.
 
 Runs as a plain script (``python3 test_name_binding_runtime.py``, the CI invocation) and under pytest.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import Flux, SourceTerm
+from pops.codegen import _compile_drivers as compile_drivers
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from tests.python.support.typed_program import program_states
 
 
 def _skip(msg):
-    print("skip test_name_binding_runtime (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_name_binding_runtime (%s)' % msg)
 
 
 fails = 0
@@ -52,7 +55,7 @@ def raises_with(fn, needle):
 def passive_model(name):
     """A 1-variable PASSIVE-transport scalar (rho): linear advection flux + a named linear sink, EMPTY
     default source (mirrors test_time_multiblock; avoids the default-source path so the step is exact)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     a = 0.7
@@ -66,13 +69,20 @@ def passive_model(name):
     return m
 
 
-def two_block_program(t, name="nb_two_block"):
+def two_block_program(t, model, name="nb_two_block"):
     """Forward-Euler passive transport of blocks "a" then "b" (P.state order a=0, b=1)."""
     P = t.Program(name)
+    _case, states = program_states(P, model, ("a", "b"))
     for blk in ("a", "b"):
-        U = P.state(blk)
-        R = P._rhs_legacy(name="R_" + blk, state=U, flux=True, sources=["decay"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
+        temporal = states[blk]
+        U = temporal.n
+        R = P.rhs(
+            name="R_" + blk,
+            state=U,
+            terms=[Flux(), SourceTerm(model.module.operator_handle("decay"))],
+        )
+        P.commit(temporal.next, P.value(
+            blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
 
 
@@ -80,9 +90,8 @@ def _run():
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
         import pops.time as t
-        from pops.physics.facade import Model
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops / pops.time unavailable
         _skip("pops / pops.time / numpy unavailable: %s" % exc)
 
@@ -102,7 +111,9 @@ def _run():
 
     # Compile the 2-block .so ONCE (production model + compiled Program). Needs compiler + Kokkos.
     try:
-        comp = pops.codegen.compile_problem(model=passive_model("nb_model"), time=two_block_program(t))
+        model = passive_model("nb_model")
+        comp = compile_drivers.compile_problem(
+            model=model, time=two_block_program(t, model))
     except (RuntimeError, ValueError) as exc:  # no compiler / no Kokkos / .so compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
@@ -114,8 +125,8 @@ def _run():
                 cm = passive_model("nb_blk_" + blk).compile(backend="production")
             except RuntimeError as exc:  # no compiler / no Kokkos
                 _skip("model compile could not build the .so: %s" % str(exc)[:160])
-            sim.add_equation(blk, cm, spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                             time=pops.Explicit(method="euler"))
+            sim.add_equation(blk, cm, spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                             time=engine.Explicit(method="euler"))
         for blk in add_order:
             sim.set_state(blk, ic[blk][None, :, :])
         return sim

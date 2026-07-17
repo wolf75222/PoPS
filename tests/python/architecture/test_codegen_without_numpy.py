@@ -28,7 +28,7 @@ def test_gen_solver_kernel_runs_without_numpy():
     assert GEN_SOLVER.exists(), "missing %s" % GEN_SOLVER
     out = os.path.join(tempfile.mkdtemp(), "pops_generated_solver.hpp")
     # Force `import numpy` to fail (sys.modules[name] = None raises ModuleNotFoundError), then run the
-    # real build-time codegen exactly as CMake does. A numpy import anywhere in the pops.lib/pops.ir
+    # real build-time codegen exactly as CMake does. A numpy import anywhere in the pops.lib/pops._ir
     # import chain would abort it -- which is the regression this test guards.
     code = (
         "import sys; sys.modules['numpy'] = None; "
@@ -37,7 +37,7 @@ def test_gen_solver_kernel_runs_without_numpy():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, (
-        "gen_solver_kernel.py failed without numpy (pops.lib / pops.ir must import numpy-free; "
+        "gen_solver_kernel.py failed without numpy (pops.lib / pops._ir must import numpy-free; "
         "numpy is for the host .eval() interpreter only):\n%s" % proc.stderr
     )
     assert os.path.exists(out) and os.path.getsize(out) > 0, "no kernel header emitted"

@@ -65,7 +65,8 @@ TEST(CacheManager, AccumulateDtSumsSkippedDtAndStoreResetsIt) {
   c.accumulate_dt(2, 0.001);
   c.accumulate_dt(2, 0.002);
   c.accumulate_dt(2, 0.0005);
-  EXPECT_TRUE(std::fabs(c.accumulated_dt(2) - 0.0035) < 1e-12) << "accum_sum";  // real sum, not N*dt
+  EXPECT_TRUE(std::fabs(c.accumulated_dt(2) - 0.0035) < 1e-12)
+      << "accum_sum";            // real sum, not N*dt
   c.store(2, make_mf(1.0), 10);  // recompute resets the accumulator
   EXPECT_TRUE(std::fabs(c.accumulated_dt(2)) < 1e-15) << "accum_reset_on_store";
 }

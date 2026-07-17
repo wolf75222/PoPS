@@ -1,22 +1,113 @@
 #include "../bindings_detail.hpp"
 
+#if !defined(POPS_RUNTIME_SHARED_EXCEPTION_ABI) || !defined(POPS_EXPORT_BUILDING_MODULE)
+#error "the _pops host must build the shared runtime exception ABI as its exporting producer"
+#endif
+
 #include <pops/core/state/aux_names.hpp>  // ADC-291: canonical aux name<->component table + bounds
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
+#include <pops/parallel/world_communicator.hpp>
 #include <pops/runtime/config/runtime_params.hpp>  // ADC-610: kMaxRuntimeParams (mirrored to Python)
+#include <pops/runtime/config/platform_manifest.hpp>  // ADC-683: explicit launch contracts
+#include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/runtime/module_capabilities.hpp>  // ADC-479 (#36/#37): authoritative static capability facts
 #include <pops/runtime/runtime_environment.hpp>  // ADC-609: runtime environment/precision/communicator report
 
+#include <utility>
+#include <vector>
+
+#ifndef POPS_MPI_INCLUDE
+#define POPS_MPI_INCLUDE ""
+#endif
+#ifndef POPS_MPI_COMPILER
+#define POPS_MPI_COMPILER ""
+#endif
+#ifndef POPS_MPI_STANDARD
+#define POPS_MPI_STANDARD ""
+#endif
+#ifndef POPS_MPI_COMPILE_OPTIONS
+#define POPS_MPI_COMPILE_OPTIONS ""
+#endif
+#ifndef POPS_MPI_COMPILE_DEFINITIONS
+#define POPS_MPI_COMPILE_DEFINITIONS ""
+#endif
+#ifndef POPS_MPI_LINK_OPTIONS
+#define POPS_MPI_LINK_OPTIONS ""
+#endif
+#ifndef POPS_MPI_LINK_LIBRARIES
+#define POPS_MPI_LINK_LIBRARIES ""
+#endif
+#ifndef POPS_MPI_HEADER_PATHS
+#define POPS_MPI_HEADER_PATHS ""
+#endif
+#ifndef POPS_MPI_HEADER_HASHES
+#define POPS_MPI_HEADER_HASHES ""
+#endif
+#ifndef POPS_MPI_LIBRARY_PATHS
+#define POPS_MPI_LIBRARY_PATHS ""
+#endif
+#ifndef POPS_MPI_LIBRARY_HASHES
+#define POPS_MPI_LIBRARY_HASHES ""
+#endif
+
+namespace pops::detail {
+
+/// Binding-only friend used by the capability-gated Python freeze transaction.
+///
+/// The public C++ ModelSpec API deliberately has no restore operation: freeze() is irreversible
+/// for native callers.  This access type is defined only in the binding translation unit, so an
+/// ordinary consumer of the public header cannot name or invoke a rollback operation.
+struct ModelSpecFreezeTransactionAccess {
+  [[nodiscard]] static bool snapshot(const ModelSpec& spec) noexcept { return spec.frozen_; }
+  static void restore(ModelSpec& spec, bool state) noexcept { spec.frozen_ = state; }
+};
+
+}  // namespace pops::detail
+
 namespace {
+
+py::tuple pipe_tuple(const std::string& serialized) {
+  if (serialized.empty())
+    return py::tuple(0);
+  std::vector<std::string> values;
+  std::size_t begin = 0;
+  while (begin <= serialized.size()) {
+    const auto end = serialized.find('|', begin);
+    values.emplace_back(serialized.substr(begin, end - begin));
+    if (end == std::string::npos)
+      break;
+    begin = end + 1;
+  }
+  py::tuple result(values.size());
+  for (std::size_t index = 0; index < values.size(); ++index)
+    result[index] = values[index];
+  return result;
+}
+
+void require_freeze_transaction_capability(const py::handle& capability) {
+  const py::object expected =
+      py::module_::import("pops.problem._freeze_transaction").attr("_FREEZE_CAPABILITY");
+  if (!capability.is(expected))
+    throw std::runtime_error(
+        "ModelSpec freeze rollback requires the private PoPS transaction capability");
+}
+
+template <typename Field>
+void bind_model_spec_property(py::class_<pops::ModelSpec>& binding, const char* name,
+                              Field pops::ModelSpec::* member) {
+  using T = typename Field::value_type;
+  binding.def_property(
+      name, [member](const pops::ModelSpec& spec) { return T((spec.*member).get()); },
+      [member](pops::ModelSpec& spec, T value) { spec.*member = std::move(value); });
+}
 
 pops::CapabilityTarget parse_capability_target(const std::string& target, const char* where) {
   if (target == "production")
     return pops::CapabilityTarget::kProduction;
-  if (target == "aot")
-    return pops::CapabilityTarget::kAot;
   if (target == "module" || target.empty())
     return pops::CapabilityTarget::kModule;
   throw std::invalid_argument(std::string(where) +
-                              ": target must be 'module', 'production' or 'aot' (got '" + target +
-                              "')");
+                              ": target must be 'module' or 'production' (got '" + target + "')");
 }
 
 py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
@@ -41,10 +132,73 @@ py::dict runtime_environment_to_dict(const pops::RuntimeEnvironmentReport& r) {
   d["mpi_ranks"] = r.mpi_ranks;
   d["communicator"] = r.communicator;
   d["supports_custom_communicator"] = r.supports_custom_communicator;
+  d["mpi_initialized_by_pops"] = r.mpi_initialized_by_pops;
+  d["mpi_atexit_finalize_registered"] = r.mpi_atexit_finalize_registered;
+  d["mpi_thread_level"] = r.mpi_thread_level;
+  d["mpi_ownership"] = r.mpi_ownership;
   d["allocator_mode"] = r.allocator_mode;
   d["comm_allocator_mode"] = r.comm_allocator_mode;
   d["allocator_lifetime"] = r.allocator_lifetime;
   return d;
+}
+
+py::dict runtime_backend_manifest_to_dict(const std::string& backend, const std::string& target,
+                                          const std::string& communicator) {
+  const auto runtime = pops::runtime_environment_report();
+  std::string evidence;
+  if (communicator == "serial") {
+    if (runtime.mpi_active) {
+      throw std::runtime_error(
+          "serial RuntimeBackendManifest requested while native MPI_COMM_WORLD is active");
+    }
+    evidence = "pops.native.2d-float64-host.v1";
+  } else if (communicator == "MPI_COMM_WORLD") {
+    if (!runtime.mpi_compiled || !runtime.mpi_active || runtime.communicator != "MPI_COMM_WORLD") {
+      throw std::runtime_error(
+          "MPI_COMM_WORLD RuntimeBackendManifest requires an MPI-enabled module in an active "
+          "MPI world launch");
+    }
+    evidence = "pops.native.2d-float64-host-mpi-world.v1";
+  } else {
+    throw std::invalid_argument("runtime_backend_manifest supports only serial or MPI_COMM_WORLD");
+  }
+  const auto manifest =
+      pops::platform::proven_host_backend(backend, target, pops::abi_key(), communicator, evidence);
+  py::dict precision;
+  precision["storage"] =
+      pops::platform::require_text(manifest.precision.storage, "precision.storage");
+  precision["compute"] =
+      pops::platform::require_text(manifest.precision.compute, "precision.compute");
+  precision["accumulation"] =
+      pops::platform::require_text(manifest.precision.accumulation, "precision.accumulation");
+  precision["reduction"] =
+      pops::platform::require_text(manifest.precision.reduction, "precision.reduction");
+  py::dict capabilities;
+  capabilities["dimensions"] = pops::platform::require_int_set(
+      pops::platform::capability(manifest, "dimensions"), "capabilities.dimensions");
+  capabilities["centerings"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "centerings"), "capabilities.centerings");
+  capabilities["scalars"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "scalars"), "capabilities.scalars");
+  capabilities["layouts"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "layouts"), "capabilities.layouts");
+  capabilities["ownership"] = pops::platform::require_text_set(
+      pops::platform::capability(manifest, "ownership"), "capabilities.ownership");
+  capabilities["generic_field_view"] = true;
+  py::dict result;
+  result["schema_version"] = pops::platform::kPlatformContractSchemaVersion;
+  result["backend"] = pops::platform::require_text(manifest.backend, "backend");
+  result["target"] = pops::platform::require_text(manifest.target, "target");
+  result["abi"] = pops::platform::require_text(manifest.abi, "abi");
+  result["precision"] = std::move(precision);
+  result["device"] = pops::platform::require_text(manifest.device, "device");
+  result["memory_spaces"] =
+      pops::platform::require_text_set(manifest.memory_spaces, "memory_spaces");
+  result["communicator"] = pops::platform::require_text(manifest.communicator, "communicator");
+  result["capabilities"] = std::move(capabilities);
+  result["evidence"] = evidence;
+  result["identity"] = pops::platform::identity_token("runtime-backend-manifest", manifest);
+  return result;
 }
 
 py::dict module_capabilities_to_dict(const pops::ModuleCapabilities& c,
@@ -107,9 +261,124 @@ py::dict native_capability_report_to_dict(const pops::NativeCapabilityReport& re
 // ADC-365: module attributes/globals + SystemConfig + ModelSpec (registered first so System/
 // AmrSystem signatures resolve them).
 void init_core(py::module_& m) {
+#ifdef POPS_HAS_MPI
+  // An MPI-enabled module is an explicitly distributed runtime.  Initialize/attach from C++ while
+  // the module is imported so compile-time platform discovery sees the real world topology before
+  // ExecutionContext is materialized.  WorldCommunicator owns finalization only when it performed
+  // MPI_Init_thread itself; an externally initialized MPI remains externally owned.
+  (void)pops::WorldCommunicator::world();
+#endif
+
   m.doc() =
       "PoPS (lib): runtime multi-species composition. System composes a "
       "system block by block; the compute stays compiled C++.";
+
+  // Exact native distributed resources.  Neither class has a Python constructor: all consumers
+  // receive the same process-world singleton and the singleton-owned MPI_DOUBLE identity.  The
+  // byte-only collective methods release the GIL while C++ executes MPI.
+  py::class_<pops::NativeMpiDatatype>(m, "_NativeMpiDatatype")
+      .def_property_readonly(
+          "identity",
+          [](const pops::NativeMpiDatatype& datatype) { return std::string(datatype.identity()); })
+      .def_property_readonly("fortran_handle", &pops::NativeMpiDatatype::fortran_handle);
+
+  py::class_<pops::WorldCommunicator>(m, "_NativeWorldCommunicator")
+      .def_property_readonly("rank", &pops::WorldCommunicator::rank)
+      .def_property_readonly("size", &pops::WorldCommunicator::size)
+      .def_property_readonly("active", &pops::WorldCommunicator::active)
+      .def_property_readonly(
+          "identity",
+          [](const pops::WorldCommunicator& world) { return std::string(world.identity()); })
+      .def_property_readonly("initialized_by_pops", &pops::WorldCommunicator::initialized_by_pops)
+      .def_property_readonly("atexit_finalize_registered",
+                             &pops::WorldCommunicator::atexit_finalize_registered)
+      .def_property_readonly("thread_level", &pops::WorldCommunicator::thread_level)
+      .def_property_readonly("fortran_handle", &pops::WorldCommunicator::fortran_handle)
+      .def_property_readonly("datatype_float64", &pops::WorldCommunicator::datatype_float64,
+                             py::return_value_policy::reference_internal)
+      .def(
+          "is_float64_datatype",
+          [](const pops::WorldCommunicator& world, const py::handle& candidate) {
+            try {
+              return world.owns_float64_datatype(candidate.cast<const pops::NativeMpiDatatype&>());
+            } catch (const py::cast_error&) {
+              return false;
+            }
+          },
+          py::arg("candidate"))
+      .def("barrier",
+           [](const pops::WorldCommunicator& world) {
+             py::gil_scoped_release release;
+             world.barrier();
+           })
+      .def(
+          "broadcast_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload, int root) {
+            std::string native = payload.cast<std::string>();
+            {
+              py::gil_scoped_release release;
+              native = world.broadcast_bytes(std::move(native), root);
+            }
+            return py::bytes(native);
+          },
+          py::arg("payload"), py::arg("root") = 0)
+      .def(
+          "allgather_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload) {
+            const std::string native = payload.cast<std::string>();
+            std::vector<std::string> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = world.allgather_bytes(native);
+            }
+            py::tuple result(gathered.size());
+            for (std::size_t index = 0; index < gathered.size(); ++index)
+              result[index] = py::bytes(gathered[index]);
+            return result;
+          },
+          py::arg("payload"))
+      .def(
+          "gather_bytes",
+          [](const pops::WorldCommunicator& world, const py::bytes& payload,
+             int root) -> py::object {
+            const std::string native = payload.cast<std::string>();
+            std::optional<std::vector<std::string>> gathered;
+            {
+              py::gil_scoped_release release;
+              gathered = world.gather_bytes(native, root);
+            }
+            if (!gathered)
+              return py::none();
+            py::tuple result(gathered->size());
+            for (std::size_t index = 0; index < gathered->size(); ++index)
+              result[index] = py::bytes((*gathered)[index]);
+            return result;
+          },
+          py::arg("payload"), py::arg("root") = 0);
+
+  m.def(
+      "mpi_world", []() -> pops::WorldCommunicator& { return pops::WorldCommunicator::world(); },
+      py::return_value_policy::reference,
+      "Return the exact native process-world authority (serial singleton in a non-MPI build).");
+
+  // Native iterative solves have one authoritative result contract.  Register it before System so
+  // every method returning SolveReport (notably System::solve_fields) has a concrete Python value
+  // type.  Status/action are exposed as their stable semantic names instead of leaking C++ enum
+  // ordinals into the private bootstrap ABI.
+  py::class_<pops::SolveReport>(m, "_SolveReport")
+      .def_readonly("iters", &pops::SolveReport::iters)
+      .def_readonly("rel_residual", &pops::SolveReport::rel_residual)
+      .def_readonly("reference_residual_norm", &pops::SolveReport::reference_residual_norm)
+      .def_readonly("residual_norm", &pops::SolveReport::residual_norm)
+      .def_property_readonly("status",
+                             [](const pops::SolveReport& report) { return report.status_name(); })
+      .def_property_readonly("action",
+                             [](const pops::SolveReport& report) { return report.action_name(); })
+      .def_readonly("reason", &pops::SolveReport::reason)
+      .def("valid", &pops::SolveReport::valid)
+      .def("solved", &pops::SolveReport::solved)
+      .def("solved_value_available", &pops::SolveReport::solved_value_available)
+      .def("failed", &pops::SolveReport::failed);
 
   // Module ABI key (compiler + C++ standard + signature of the pops headers). The DSL reads it
   // (diagnostic); add_native_block compares it to the key baked into a native loader.
@@ -117,8 +386,8 @@ void init_core(py::module_& m) {
         "Module ABI key (compiler, C++ standard, signature of the pops headers).");
 
   // MPI rank / rank count of the communicator (0 / 1 in serial or when MPI is not initialized, cf.
-  // pops/parallel/comm.hpp). Exposed so the IO facade (sim.write / sim.checkpoint) writes the file
-  // only on rank 0 after a collective gather (state_global / potential_global).
+  // pops/parallel/comm.hpp). The private runtime uses these values to authenticate the exact
+  // ExecutionContext topology; publication and checkpoint ownership live in RuntimeInstance.
   m.def("my_rank", &pops::my_rank, "MPI rank of the process (0 in serial).");
   m.def("n_ranks", &pops::n_ranks, "Number of MPI ranks (1 in serial).");
 
@@ -136,30 +405,45 @@ void init_core(py::module_& m) {
 
   // Compute backend COMPILED into the module: True if _pops was built with Kokkos
   // (-DPOPS_USE_KOKKOS=ON -> POPS_HAS_KOKKOS), hence capable of multi-thread (OpenMP device) / GPU.
-  // pops.set_threads / pops.parallel_info use it to warn that a SERIAL module ignores the thread
-  // setting. A serial build exposes False; no false negative.
+  // Runtime diagnostics use it to report whether threaded/device execution is available. A serial
+  // build exposes False; no false negative.
 #ifdef POPS_HAS_KOKKOS
   m.attr("__has_kokkos__") = true;
 #else
   m.attr("__has_kokkos__") = false;
 #endif
 
-  // MPI seam COMPILED into the module (POPS_HAS_MPI via the pops INTERFACE under -DPOPS_USE_MPI=ON) plus
-  // the MPI include dir(s) used by the build (POPS_MPI_INCLUDE, baked by CMake; '|'-joined). The DSL
-  // "production"/"aot" loaders are compiled OUTSIDE CMake and inherit none of this: dsl.py reads these
-  // attributes (_native_mpi_flags) to re-bake -DPOPS_HAS_MPI + -I<inc> so the loader uses comm.hpp's
-  // REAL MPI rather than its serial stubs (n_ranks()=1). Without it a distributed layout built inside
-  // the loader replicates on every rank (ADC-319). A serial module exposes False / empty.
+  // Central, closed compile-definition manifest replayed by every native plugin compiler. The host
+  // defines both SHARED_EXCEPTION_ABI and BUILDING_MODULE; generated loaders replay only the former,
+  // so they consume the host's one exported StepAttemptRejected key function/typeinfo.
+  py::dict native_loader_contract;
+  native_loader_contract["schema_version"] = 1;
+  native_loader_contract["compile_definitions"] =
+      py::make_tuple("POPS_RUNTIME_SHARED_EXCEPTION_ABI");
+  m.attr("__native_loader_contract__") = std::move(native_loader_contract);
+
+  // Exact, replayable MPI::MPI_CXX build manifest.  Codegen re-hashes every path immediately before
+  // compilation, so an in-place MPI upgrade cannot reuse the cached ABI digest with different bytes.
 #if defined(POPS_HAS_MPI)
   m.attr("__has_mpi__") = true;
-#if defined(POPS_MPI_INCLUDE)
-  m.attr("__mpi_include__") = POPS_MPI_INCLUDE;
-#else
-  m.attr("__mpi_include__") = "";
-#endif
+  py::dict mpi_contract;
+  mpi_contract["schema_version"] = 1;
+  mpi_contract["abi_sha256"] = POPS_MPI_ABI;
+  mpi_contract["compiler"] = POPS_MPI_COMPILER;
+  mpi_contract["standard"] = POPS_MPI_STANDARD;
+  mpi_contract["include_dirs"] = pipe_tuple(POPS_MPI_INCLUDE);
+  mpi_contract["compile_options"] = pipe_tuple(POPS_MPI_COMPILE_OPTIONS);
+  mpi_contract["compile_definitions"] = pipe_tuple(POPS_MPI_COMPILE_DEFINITIONS);
+  mpi_contract["link_options"] = pipe_tuple(POPS_MPI_LINK_OPTIONS);
+  mpi_contract["link_libraries"] = pipe_tuple(POPS_MPI_LINK_LIBRARIES);
+  mpi_contract["header_paths"] = pipe_tuple(POPS_MPI_HEADER_PATHS);
+  mpi_contract["header_sha256"] = pipe_tuple(POPS_MPI_HEADER_HASHES);
+  mpi_contract["library_paths"] = pipe_tuple(POPS_MPI_LIBRARY_PATHS);
+  mpi_contract["library_sha256"] = pipe_tuple(POPS_MPI_LIBRARY_HASHES);
+  m.attr("__mpi_contract__") = std::move(mpi_contract);
 #else
   m.attr("__has_mpi__") = false;
-  m.attr("__mpi_include__") = "";
+  m.attr("__mpi_contract__") = py::none();
 #endif
 
   // Path of the COMPILER that built this module (POPS_CXX_COMPILER, injected by CMake). Since the ABI
@@ -180,6 +464,13 @@ void init_core(py::module_& m) {
 #else
   m.attr("__version__") = "unknown";
 #endif
+  m.attr("__release_contract_sha256__") = pops::release_contract::kContractSha256;
+  m.attr("__public_api_version__") = pops::release_contract::kPublicApiVersion;
+  m.attr("__semantic_ir_version__") = pops::release_contract::kSemanticIrVersion;
+  m.attr("__normalization_version__") = pops::release_contract::kNormalizationVersion;
+  m.attr("__component_registry_version__") = pops::release_contract::kComponentRegistryVersion;
+  m.attr("__checkpoint_schema_version__") =
+      pops::release_contract::kCheckpointEnvelopeSchemaVersion;
 
   // AUTHORITATIVE STATIC capability facts (Spec 5 sec.13.12 / sec.13.12.1, criteria #36/#37). The
   // (backend, layout, platform) transport capabilities the built module ACTUALLY provides, sourced from
@@ -188,7 +479,7 @@ void init_core(py::module_& m) {
   // descriptor walk against this so the two cannot SILENTLY disagree; problem.explain_routes sources the
   // route matrix from it. We expose kAbiVersion separately (it versions the capability vocabulary, not
   // the toolchain ABI key) and module_capabilities(target) returns a plain dict (route-dependent: the
-  // production / native route carries a stride, the aot / prototype route does not).
+  // production package carries a stride while the route-agnostic module report does not).
   m.attr("__abi_version__") = static_cast<int>(pops::kAbiVersion);
   m.def(
       "module_capabilities",
@@ -200,8 +491,8 @@ void init_core(py::module_& m) {
       py::arg("target") = "module",
       "Authoritative static capability facts of the built module (Spec 5 sec.13.12, #36): "
       "{abi_version, supports_uniform/amr/mpi/gpu/stride/named_fields/partial_imex_mask}, sourced "
-      "from the C++ compile-time tokens. target in {'module','production','aot'} selects the route "
-      "(stride differs aot vs production).");
+      "from the C++ compile-time tokens. target in {'module','production'} selects whether "
+      "route-specific production facts are included.");
 
   m.def(
       "capability_report",
@@ -210,29 +501,29 @@ void init_core(py::module_& m) {
             pops::native_capability_report(parse_capability_target(target, "capability_report")));
       },
       py::arg("target") = "module",
-      "Structured native capability report: schema_version, ABI, runtime facts, capability flags and "
-      "route rows. Pretty strings are views of this object; callers should not parse text reports.");
+      "Structured native capability report: schema_version, ABI, runtime facts, capability flags "
+      "and "
+      "route rows. Pretty strings are views of this object; callers should not parse text "
+      "reports.");
 
   m.def(
       "runtime_environment_report",
-      []() {
-        return runtime_environment_to_dict(pops::runtime_environment_report());
-      },
+      []() { return runtime_environment_to_dict(pops::runtime_environment_report()); },
       "Runtime environment facts: Kokkos lifecycle/ownership, MPI communicator, precision and "
       "allocator lifetime. Reading it does not initialize Kokkos or MPI.");
 
+  m.def("runtime_backend_manifest", &runtime_backend_manifest_to_dict, py::arg("backend"),
+        py::arg("target"), py::arg("communicator"),
+        "Explicit 2D/float64/host RuntimeBackendManifest for serial or the active exact "
+        "MPI_COMM_WORLD route. Custom communicators are rejected.");
+
   m.def(
-      "numerical_defaults_report",
-      []() {
-        return numerical_defaults_report_to_dict();
-      },
+      "numerical_defaults_report", []() { return numerical_defaults_report_to_dict(); },
       "Structured native numerical/solver/physical defaults. Reading it is metadata-only.");
 
   m.def(
       "fallback_diagnostics_report",
-      []() {
-        return fallback_diagnostics_report_to_dict(pops::fallback_diagnostics_report());
-      },
+      []() { return fallback_diagnostics_report_to_dict(pops::fallback_diagnostics_report()); },
       "Structured fallback/degraded-route diagnostics and policies. Reading it is metadata-only.");
   m.def("reset_fallback_diagnostics", &pops::reset_fallback_diagnostics_counters,
         "Reset process-local fallback/degraded-route diagnostic counters.");
@@ -258,8 +549,8 @@ void init_core(py::module_& m) {
   }
 
   // REAL state of the Kokkos init (lazy: first Fab allocation, through ANY path --
-  // System, AmrSystem, DSL .so...). pops.set_threads relies on this rather than on a Python
-  // flag that only saw System/AmrSystem: the "too late" warning becomes reliable.
+  // System, AmrSystem, DSL .so...). Internal environment diagnostics rely on this rather than on a
+  // Python flag that only saw System/AmrSystem, so a "too late" report remains reliable.
   // Serial build: always False (nothing to initialize, the thread setting is moot).
   m.def(
       "kokkos_is_initialized",
@@ -270,8 +561,7 @@ void init_core(py::module_& m) {
         return false;
 #endif
       },
-      "True if the module's Kokkos runtime is already initialized (set_threads then arrives too "
-      "late).");
+      "True if the module's Kokkos runtime is already initialized.");
 
   py::class_<SystemConfig>(m, "SystemConfig")
       .def(py::init<>())
@@ -279,7 +569,7 @@ void init_core(py::module_& m) {
       .def_readwrite("L", &SystemConfig::L)
       .def_readwrite("periodic", &SystemConfig::periodic)
       // Opt-in geometry ("polar grid" work, Phase 1). "cartesian" (default) = bit-identical;
-      // "polar" = global ring carried by pops.PolarMesh. Polar fields ignored if geometry=="cartesian".
+      // "polar" = global ring carried by pops.mesh.PolarMesh. Polar fields ignored for cartesian.
       .def_readwrite("geometry", &SystemConfig::geometry)
       .def_readwrite("nr", &SystemConfig::nr)
       .def_readwrite("ntheta", &SystemConfig::ntheta)
@@ -288,21 +578,60 @@ void init_core(py::module_& m) {
       .def_readwrite("theta_boxes", &SystemConfig::theta_boxes);
 
   // ModelSpec: composition of generic bricks (transport/source/elliptic + parameters).
-  // No named scenario; the pops.Model(...) sugar on the Python side fills these fields.
-  py::class_<ModelSpec>(m, "ModelSpec")
-      .def(py::init<>())
-      .def_readwrite("transport", &ModelSpec::transport)
-      .def_readwrite("source", &ModelSpec::source)
-      .def_readwrite("elliptic", &ModelSpec::elliptic)
-      .def_readwrite("B0", &ModelSpec::B0)
-      .def_readwrite("gamma", &ModelSpec::gamma)
-      .def_readwrite("cs2", &ModelSpec::cs2)
-      .def_readwrite("vacuum_floor", &ModelSpec::vacuum_floor)
-      .def_readwrite("qom", &ModelSpec::qom)
-      .def_readwrite("q", &ModelSpec::q)
-      .def_readwrite("alpha", &ModelSpec::alpha)
-      .def_readwrite("n0", &ModelSpec::n0)
-      .def_readwrite("sign", &ModelSpec::sign)
-      .def_readwrite("four_pi_G", &ModelSpec::four_pi_G)
-      .def_readwrite("rho0", &ModelSpec::rho0);
+  // No named scenario; the private Python ModelSpec composer fills these engine fields.
+  auto model_spec = py::class_<ModelSpec>(m, "ModelSpec");
+  model_spec.def(py::init<>())
+      .def("freeze", &ModelSpec::freeze,
+           "Seal ModelSpec authoring; subsequent Python property writes fail.")
+      .def_property_readonly("frozen", &ModelSpec::frozen, "Whether ModelSpec authoring is sealed.")
+      .def(
+          "_semantic_data",
+          [](const ModelSpec& spec) {
+            py::dict data;
+            data["kind"] = "native-model-spec";
+            data["transport"] = spec.transport.get();
+            data["source"] = spec.source.get();
+            data["elliptic"] = spec.elliptic.get();
+            data["B0"] = spec.B0.get();
+            data["gamma"] = spec.gamma.get();
+            data["cs2"] = spec.cs2.get();
+            data["vacuum_floor"] = spec.vacuum_floor.get();
+            data["qom"] = spec.qom.get();
+            data["q"] = spec.q.get();
+            data["alpha"] = spec.alpha.get();
+            data["n0"] = spec.n0.get();
+            data["sign"] = spec.sign.get();
+            data["four_pi_G"] = spec.four_pi_G.get();
+            data["rho0"] = spec.rho0.get();
+            return data;
+          },
+          "Return the closed scientific projection consumed by PoPS semantic identity.")
+      .def(
+          "_pops_freeze_snapshot",
+          [](const ModelSpec& spec, const py::handle& capability) {
+            require_freeze_transaction_capability(capability);
+            return pops::detail::ModelSpecFreezeTransactionAccess::snapshot(spec);
+          },
+          py::arg("capability"))
+      .def(
+          "_pops_freeze_restore",
+          [](ModelSpec& spec, const py::handle& capability, bool state) {
+            require_freeze_transaction_capability(capability);
+            pops::detail::ModelSpecFreezeTransactionAccess::restore(spec, state);
+          },
+          py::arg("capability"), py::arg("state"));
+  bind_model_spec_property(model_spec, "transport", &ModelSpec::transport);
+  bind_model_spec_property(model_spec, "source", &ModelSpec::source);
+  bind_model_spec_property(model_spec, "elliptic", &ModelSpec::elliptic);
+  bind_model_spec_property(model_spec, "B0", &ModelSpec::B0);
+  bind_model_spec_property(model_spec, "gamma", &ModelSpec::gamma);
+  bind_model_spec_property(model_spec, "cs2", &ModelSpec::cs2);
+  bind_model_spec_property(model_spec, "vacuum_floor", &ModelSpec::vacuum_floor);
+  bind_model_spec_property(model_spec, "qom", &ModelSpec::qom);
+  bind_model_spec_property(model_spec, "q", &ModelSpec::q);
+  bind_model_spec_property(model_spec, "alpha", &ModelSpec::alpha);
+  bind_model_spec_property(model_spec, "n0", &ModelSpec::n0);
+  bind_model_spec_property(model_spec, "sign", &ModelSpec::sign);
+  bind_model_spec_property(model_spec, "four_pi_G", &ModelSpec::four_pi_G);
+  bind_model_spec_property(model_spec, "rho0", &ModelSpec::rho0);
 }

@@ -14,17 +14,17 @@ transforms / ``MomentOrdering`` / ``VlasovSources`` / ``MomentHierarchy``); they
 algorithm choice, so they stay lightweight handles and are NOT descriptors. ``MomentOrdering``
 in particular has a single forced layout, so it is a handle, not a route chooser.
 
-Pure Python: only ``import pops`` (the compiled _pops loads as a side effect, but nothing
-here builds or runs a moment model).
+Pure Python: this imports only the public descriptor surface; nothing here builds or runs a
+native moment model.
 """
 import sys
 
 import pytest
 
-pops = pytest.importorskip("pops")
-
 from pops import moments  # noqa: E402
 from pops.descriptors import Availability, Descriptor, DescriptorProtocol  # noqa: E402
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.physics import Model  # noqa: E402
 
 
 def test_exact_speeds_descriptor_contract():
@@ -74,13 +74,14 @@ def test_magnetic_moment_source_descriptor_contract():
 
 
 def test_hyqmom15_closure_descriptor_contract():
-    closure = moments.HyQMOM15Closure(variant="levermore")
+    closure = moments.HyQMOM15Closure()
     assert isinstance(closure, (Descriptor, DescriptorProtocol))
     assert closure.name == "HyQMOM15Closure"
     assert closure.category == "closure"
     assert closure.order == 4
     opts = closure.options()
-    assert opts["variant"] == "levermore" and opts["order"] == 4
+    assert opts["order"] == 4
+    assert opts["local_operator"]["kind"] == "local_moment_closure"
     assert closure.capabilities().to_dict()["provides"] == "order_4_standardized_moments"
     assert closure.validate() is True
     # The descriptor is still the closure callable (Spec 5 sec.6 does not change its role).
@@ -89,8 +90,8 @@ def test_hyqmom15_closure_descriptor_contract():
                     "S13": 0.0, "S04": 3.0}
     out = closure(standardized)
     assert set(out) == {"S%d%d" % (p, 5 - p) for p in range(6)}
-    # The unvalidated custom variant is gated (ship-authoring / gate-runtime pattern).
-    with pytest.raises(NotImplementedError):
+    # User physics goes through @closure(4), never a reserved string variant.
+    with pytest.raises(TypeError):
         moments.HyQMOM15Closure(variant="custom")
 
 
@@ -122,6 +123,11 @@ def test_handles_are_not_descriptors():
             "%s is a builder/handle and must not be a Descriptor" % name)
 
 
+def test_moment_model_has_no_transport_noop_surface():
+    specification = moments.CartesianVelocityMoments(order=2)
+    assert not hasattr(specification, "add_transport")
+
+
 def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     # The MomentHierarchy snapshot carries the speeds / projection descriptors; they remain
     # inspectable route choosers even when reached through the snapshot.
@@ -135,14 +141,57 @@ def test_hierarchy_snapshot_exposes_inspectable_descriptors():
     assert snapshot.projection.capabilities().to_dict()["guard_level"] == "bare"
 
 
+def test_moment_coefficients_preserve_typed_storage_and_numeric_values():
+    eps = RuntimeParam("eps_runtime", default=2.5)
+    q_over_m = RuntimeParam("q_over_m_runtime", default=-3.0)
+    specification = (moments.CartesianVelocityMoments(order=2)
+                     .add_poisson_coupling(eps=eps)
+                     .add_vlasov_electric_source("grad_x", "grad_y", q_over_m)
+                     .add_magnetic_source(-0.25))
+    first = specification.build("typed_moment_coefficients_a").module.params()
+    second = specification.build("typed_moment_coefficients_b").module.params()
+
+    assert eps.is_owned is False and q_over_m.is_owned is False
+    for parameters in (first, second):
+        assert parameters["eps_runtime"] == eps
+        assert parameters["q_over_m_runtime"] == q_over_m
+        assert parameters["eps_runtime"] is not eps
+        assert parameters["q_over_m_runtime"] is not q_over_m
+        assert isinstance(parameters["omega_c"], ConstParam)
+        assert parameters["omega_c"].value == -0.25
+    assert first["eps_runtime"] is not second["eps_runtime"]
+    assert first["eps_runtime"].owner_identity != second["eps_runtime"].owner_identity
+
+
+def test_moment_coefficients_refuse_implicit_string_and_bool_coercions():
+    with pytest.raises(TypeError, match="q_over_m"):
+        moments.CartesianVelocityMoments(2).add_vlasov_electric_source(
+            "grad_x", "grad_y", "q_over_m")
+    with pytest.raises(TypeError, match="eps"):
+        moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=True)
+    with pytest.raises(TypeError, match="robust"):
+        moments.CartesianVelocityMoments(2, robust=1)
+
+
+def test_moment_coefficients_cannot_clone_another_registry_owner():
+    already_owned = RuntimeParam("owned_eps", default=1.0)
+    Model("coefficient_owner").param(already_owned)
+    with pytest.raises(ValueError, match=r"already owned.*shared owner or tie"):
+        moments.CartesianVelocityMoments(2).add_poisson_coupling(eps=already_owned)
+
+    claimed_after_recording = RuntimeParam("late_owned_eps", default=1.0)
+    specification = moments.CartesianVelocityMoments(2).add_poisson_coupling(
+        eps=claimed_after_recording)
+    Model("late_coefficient_owner").param(claimed_after_recording)
+    with pytest.raises(ValueError, match=r"already owned.*shared owner or tie"):
+        specification.build("late_owned_moment_model")
+
+
 # ---------------------------------------------------------------------------------------------
 # ADC-543: the generic construction vocabulary is additive and the four issue contracts hold.
 # ---------------------------------------------------------------------------------------------
-def test_moment_projection_alias_and_realizable_set_descriptor():
-    # MomentProjection is the SAME descriptor as RealizabilityProjection (an identity alias);
-    # the existing asserts on RealizabilityProjection therefore cover it unchanged.
-    assert moments.MomentProjection is moments.RealizabilityProjection
-    # RealizableSet is a NEW inert descriptor describing the realizable cone at an order.
+def test_realizability_projection_and_realizable_set_have_unique_names():
+    assert not hasattr(moments, "MomentProjection")
     cone = moments.RealizableSet(4)
     assert isinstance(cone, (Descriptor, DescriptorProtocol))
     assert cone.name == "RealizableSet"
@@ -150,8 +199,7 @@ def test_moment_projection_alias_and_realizable_set_descriptor():
     assert cone.options() == {"order": 4}
     caps = cone.capabilities()
     assert caps.to_dict()["constraints"] == "m00_positive,cov_psd,schur"
-    # Both the alias and the new descriptor answer available() with an Availability, not a bool.
-    for descriptor in (moments.MomentProjection(), cone):
+    for descriptor in (moments.RealizabilityProjection(), cone):
         status = descriptor.available()
         assert isinstance(status, Availability) and not isinstance(status, bool)
         assert status.ok is True
@@ -177,36 +225,31 @@ def test_realizable_set_descriptor_protocol_round_trip():
         cone.order = 2
 
 
-def test_wave_speed_capability_and_single_home():
+def test_wave_speed_capability_has_one_canonical_home():
     # ExactSpeeds is the MOMENT wave-speed axis (how exact speeds are computed): a typed
     # CapabilitySet, kept as the moments chooser.
     exact = moments.ExactSpeeds()
     assert isinstance(exact.capabilities().to_dict(), dict)
     assert exact.capabilities().to_dict()["exact_speeds"] is True
-    # The canonical WaveSpeedProvider (which SOURCE HLL binds) is re-exported from pops.moments
-    # but stays a SINGLE class -- identical to pops.numerics.riemann.waves.WaveSpeedProvider.
-    from pops.numerics.riemann.waves import WaveSpeedProvider as canonical
-    assert moments.WaveSpeedProvider is canonical
-    provider = moments.WaveSpeedProvider("jacobian")
+    from pops.numerics.riemann.waves import WaveSpeedProvider
+    assert not hasattr(moments, "WaveSpeedProvider")
+    provider = WaveSpeedProvider("jacobian")
     assert provider.capabilities().supports("signed_pair") is True
-    assert moments.WaveSpeedProvider("max_wave_speed").capabilities().supports("signed_pair") is False
+    assert WaveSpeedProvider("max_wave_speed").capabilities().supports("signed_pair") is False
 
 
 def test_hyqmom15_model_is_inspectable_and_runtime_free():
     # The provided HyQMOM15 model builds to an authoring physics object whose Module lists the
     # typed transport + source operators and the 15 conservative names, with no runtime leakage
     # (mirrors the ADC-566 lib boundary: models lower runtime-free to pops.model.Module).
-    try:
-        from pops.lib.models.moments import HyQMOM15
-    except Exception as exc:  # pragma: no cover - bare tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.lib.models.moments import HyQMOM15
     model = HyQMOM15.vlasov_poisson_magnetic(order=4)
     module = getattr(model, "module", model)
     assert hasattr(module, "operator_registry")
     op_names = module.operator_registry().names()
-    assert "flux_default" in op_names and "source_default" in op_names
+    assert {"flux_default", "electric", "magnetic_rotation", "transport"} <= set(op_names)
     # 15 conservative components (the order-4 hierarchy), canonical names.
-    components = model._m.state_space().components
+    components = model._dsl._m.state_space().components
     assert len(components) == 15 and components[0] == "M00"
     # No compiled / runtime leakage on the authoring object.
     for runtime_attr in ("so_path", "abi_key"):

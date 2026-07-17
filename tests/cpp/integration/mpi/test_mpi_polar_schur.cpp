@@ -1,5 +1,5 @@
 // PARITE / CONVERGENCE MPI MULTI-RANG du solveur elliptique POLAIRE TENSORIEL (PolarTensorKrylovSolver)
-// et, par extension, de l'etage Schur polaire (PolarCondensedSchurSourceStepper) dont c'est le verrou.
+// et, par extension, du solveur tensoriel utilise par le Program polaire genere.
 //
 // CONTEXTE. Le solveur polaire etait MONO-RANG (garde-fou dur si n_ranks()>1). Ce PR le rend MULTI-RANG
 // MPI par decoupage AZIMUTAL (theta seul) : chaque box couvre la plage RADIALE complete (le sweep Thomas
@@ -163,8 +163,8 @@ static void fill_local(MultiFab& mf, const PolarGeometry& g, F fn) {
 // le BoxArray en ROUND-ROBIN sur les rangs (DistributionMapping interne ; cf. PolarTensorKrylovSolver).
 // Rend (iters, converged) ; ECRIT la solution locale dans phi_out (DOIT etre alloue avec le MEME
 // round-robin que le solveur pour que les boxes locales coincident). Le tenseur est A = I.
-static PolarKrylovResult solve_mms(const PolarGeometry& g, const BoxArray& ba, Problem prob, int m,
-                                   MultiFab& phi_out) {
+static SolveReport solve_mms(const PolarGeometry& g, const BoxArray& ba, Problem prob, int m,
+                             MultiFab& phi_out) {
   BCRec bc;
   bc.ylo = bc.yhi = BCType::Periodic;  // theta periodique
   if (prob == Problem::Dirichlet) {
@@ -187,7 +187,7 @@ static PolarKrylovResult solve_mms(const PolarGeometry& g, const BoxArray& ba, P
     fill_local(solver.rhs(), g, [&](double r, double th) { return f_neu(r, th, m); });
 
   solver.phi().set_val(0.0);  // depart froid
-  PolarKrylovResult kr = solver.solve(1e-11, 4000);
+  SolveReport kr = solver.solve(1e-11, 4000);
 
   // recopie la solution locale dans phi_out (memes ba/dm -> memes boxes locales).
   for (int li = 0; li < phi_out.local_size(); ++li) {
@@ -280,9 +280,9 @@ static int pops_run_test_mpi_polar_schur(int argc, char** argv) {
       // -----------------------------------------------------------------------------------------------
       BoxArray ba_mono(std::vector<Box2D>{dom});
       MultiFab phi_ref(ba_mono, rr(ba_mono), 1, 1);
-      PolarKrylovResult kr_ref = solve_mms(g, ba_mono, prob, m, phi_ref);
+      SolveReport kr_ref = solve_mms(g, ba_mono, prob, m, phi_ref);
       const double err_ref = err_l2_global(phi_ref, g, prob, m);  // collectif
-      chk(kr_ref.converged, "ref_mono_converge");
+      chk(kr_ref.solved(), "ref_mono_converge");
 
       // -----------------------------------------------------------------------------------------------
       // DECOUPAGE THETA reparti sur les rangs (round-robin). nseg boites en theta (chaque box = plage r
@@ -293,14 +293,14 @@ static int pops_run_test_mpi_polar_schur(int argc, char** argv) {
       const int nseg = (np >= 2) ? np * 2 : 8;
       BoxArray bad = theta_split(nr, nth, nseg);
       MultiFab phid(bad, rr(bad), 1, 1);
-      PolarKrylovResult krd = solve_mms(g, bad, prob, m, phid);
+      SolveReport krd = solve_mms(g, bad, prob, m, phid);
       const double errd = err_l2_global(phid, g, prob, m);  // collectif
       const double derr = std::fabs(errd - err_ref);
       if (me == 0)
         std::printf(
             "[np=%d %-14s] mono: iters=%d err=%.6e | theta(%d box): iters=%d err=%.6e | d=%.3e\n",
             np, pname, kr_ref.iters, err_ref, nseg, krd.iters, errd, derr);
-      chk(krd.converged, "dist_converge");
+      chk(krd.solved(), "dist_converge");
       // PARITE de la solution : meme operateur + meme precond (invariant au decoupage theta) -> meme erreur
       // discrete vs l'exact, a la tolerance du solveur (1e-11 rel) + reassociation FP des all_reduce.
       chk(derr <= 1e-8, "dist_err_matches_mono");

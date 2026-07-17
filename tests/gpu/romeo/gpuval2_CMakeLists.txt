@@ -2,7 +2,7 @@
 # Usage (sur le noeud armgpu, cf. romeo_gpuval2_build.sh) :
 #   cmake -S . -B build -DCMAKE_CXX_COMPILER=<nvcc_wrapper> -DKokkos_ROOT=<kinstall> \
 #         -DPOPS_INCLUDE=<include> -DCMAKE_BUILD_TYPE=Release
-# Les trois harness sont HEADER-ONLY (assemble_rhs / advance_amr / GeometricMG via for_each POPS_HD).
+# Les harness sont HEADER-ONLY (assemble_rhs / advance_amr / GeometricMG via for_each POPS_HD).
 # Le MEME source compile aussi en Serial pur (g++ -DPOPS_HAS_KOKKOS off) pour l'oracle hote.
 cmake_minimum_required(VERSION 3.16)
 project(gpuval2 CXX)
@@ -29,6 +29,19 @@ add_executable(gpu_aux_validate gpu_aux_validate.cpp)
 target_include_directories(gpu_aux_validate PRIVATE ${POPS_INCLUDE})
 target_compile_definitions(gpu_aux_validate PRIVATE POPS_HAS_KOKKOS)
 target_link_libraries(gpu_aux_validate PRIVATE Kokkos::kokkos)
+
+# Targeted ordering gate: asynchronous for_each_cell launches followed immediately by
+# pops::scale(MultiFab&, factor), with a blocking reduction as the first host observation.
+add_executable(gpu_scale_async_validate gpu_scale_async_validate.cpp)
+target_include_directories(gpu_scale_async_validate PRIVATE ${POPS_INCLUDE})
+target_compile_definitions(gpu_scale_async_validate PRIVATE POPS_HAS_KOKKOS)
+target_link_libraries(gpu_scale_async_validate PRIVATE Kokkos::kokkos)
+
+# Targeted ordering gate: asynchronous periodic RHS -> host FFT solve -> blocking residual.
+add_executable(gpu_fft_async_validate gpu_fft_async_validate.cpp)
+target_include_directories(gpu_fft_async_validate PRIVATE ${POPS_INCLUDE})
+target_compile_definitions(gpu_fft_async_validate PRIVATE POPS_HAS_KOKKOS)
+target_link_libraries(gpu_fft_async_validate PRIVATE Kokkos::kokkos)
 
 # (5) FACADE AmrSystemCoupler entiere (limite device (b)) : instancie le coupleur de systeme sur AMR
 # (CoupledSystem 2 blocs + Poisson de systeme + solve_fields + step). Ne compilait PAS sous nvcc avant

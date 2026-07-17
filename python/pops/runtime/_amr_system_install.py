@@ -1,9 +1,9 @@
 """AmrSystem install/bind mixin (ADC-619 split).
 
-The low-level ``pops.bind`` install seam of :class:`pops.runtime.amr_system.AmrSystem`:
-``_install_compiled`` (the native / compiled install orchestration) plus its field-solver,
-named-elliptic-field and aux helpers (``_install_solver`` / ``_declared_elliptic_fields`` /
-``_install_aux``). Split out of ``amr_system`` for the 500-line cap; mixed into ``AmrSystem``
+The low-level ``pops.bind`` install seam of :class:`pops.runtime._amr_system.AmrSystem`:
+``_install_compiled`` (the native / compiled install orchestration) plus its resolved-field-plan
+and aux helpers (``_install_field_plan`` / ``_install_aux``). Split out of ``amr_system`` for the
+500-line cap; mixed into ``AmrSystem``
 via inheritance and operating on ``self._s`` (the native facade), ``self._aux_field_index`` and
 the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`` /
 ``_finish_program_install``).
@@ -11,9 +11,10 @@ the other AmrSystem methods (``add_equation`` / ``set_density`` / ``set_poisson`
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, cast
 
-from pops.runtime._system_unified_install import validate_install_arguments
+from pops.runtime._bind_validation import validate_install_arguments
 
 if TYPE_CHECKING:
     from pops.runtime._amr_system_contract import _AmrSystem
@@ -25,8 +26,10 @@ class _AmrSystemInstall(_AmrSystem):
     """``pops.bind`` install seam for :class:`AmrSystem` (mixed in; operates on ``self``)."""
 
     def _install_compiled(self, compiled: Any = None, *, instances: Any = None, params: Any = None,
-                          aux: Any = None, solvers: Any = None, cadence: Any = None,
-                          outputs: Any = None, diagnostics: Any = None) -> Any:
+                          aux: Any = None, field_plans: Any = None,
+                          bind_schema: Any = None, initial_values: Any = (),
+                          bootstrap_plan: Any = None, amr_transfer: Any = None,
+                          install_plan: Any = None) -> Any:
         """INTERNAL low-level install seam on the AMR hierarchy (Spec 5 sec.11) -- signature parity
         with ``System._install_compiled``. NOT the public entry point: author the run with
         ``pops.bind(...)``, which dispatches System / AmrSystem and calls this seam.
@@ -35,53 +38,66 @@ class _AmrSystemInstall(_AmrSystem):
         any native mutation -- an install missing a REQUIRED argument the artifact declares, with one
         clear actionable error), then lowers to the AMR layer:
 
-          - NATIVE install (``compiled=None``): wires each instance with ``add_equation`` (native
-            bricks / a CompiledModel target='amr_system'), sets the field solvers (``set_poisson``),
+          - NATIVE install (``compiled=None``): wires each InstallPlan ``CompiledModel`` with
+            ``add_equation``, installs each resolved field plan,
             the aux inputs (``set_magnetic_field`` / ``set_aux_field``) and each instance's initial
             density (``set_density``). This is the real AMR add path; a full run is Kokkos-gated.
           - COMPILED install (a ``compiled`` handle carrying a time Program, epic ADC-511 / ADC-508 /
             ADC-634): the same wiring, then ``install_program(so_path)`` installs the compiled Program
             on the AMR hierarchy (the .so must export ``pops_install_program_amr``: compile it with
             ``target='amr_system'``). The runtime params (``params=``) route to ``set_program_params``
-            and the cadence (``cadence=``) to ``set_program_cadence`` -- the AMR counterparts of the
-            System routes. The per-level macro-step driver is the AmrProgramContext seam (ADC-508); a
+            through the same Program transaction contract as Uniform. The per-level macro-step driver
+            is the AmrProgramContext seam (ADC-508); a
             Program using a deferred op (Schur / history / named-flux) compiles against it and throws
             the honest AmrProgramContext backstop only when that op is reached at run.
 
         @param compiled a compiled time-Program handle, or ``None`` for a native AMR install.
-        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <model>,
+        @param instances dict {name: {"initial": array, "spatial": <brick>, "model": <CompiledModel>,
             "time": <policy>}}; the block is bound by the dict KEY.
-        @param params runtime parameters of a COMPILED time Program (dsl.Param kind='runtime'),
-            routed to ``set_program_params`` per PROGRAM block. A native AMR install (``compiled=None``)
-            has no ``set_block_params`` (the native AMR .so loader does not transport runtime params),
-            so a non-empty ``params=`` there raises rather than dropping them silently.
+        @param params canonical block-qualified runtime values resolved by BindSchema. Complete
+            per-package vectors are fixed before native closures are built; Program-owned values
+            route independently through ``set_program_params``.
         @param aux dict {field_name: array}: "B_z" -> set_magnetic_field, "T_e" rejected (derived),
             any other -> set_aux_field on the declaring block.
-        @param solvers dict {field: <solver>}: lowered to set_poisson (default Poisson field only).
-        @param cadence optional pops.time.CompiledTime(substeps=, stride=): the compiled Program's GLOBAL
-            macro-step cadence, applied with ``set_program_cadence`` AFTER install_program. A native
-            AMR install has no Program, so a non-None cadence there raises (set substeps / stride on
-            the native time policy instead).
+        @param field_plans resolved compile-time field discretizations keyed by field name.
         """
         # RUNTIME FREEZE (ADC-592): a second install on an already-bound AMR engine is a re-composition
         # and is refused explicitly -- the compiled artifact is bound exactly once.
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "_install_compiled")
-        instances = instances or {}
-        params = params or {}
-        aux = aux or {}
-        solvers = solvers or {}
+        if install_plan is not None:
+            from pops.runtime._bound_snapshot import _require_exact_install_inputs
+
+            install_plan = _require_exact_install_inputs(
+                self, compiled, instances, field_plans, aux, params, install_plan)
+            if bind_schema is not install_plan.artifact.bind_schema:
+                raise ValueError("AMR bind schema must be the exact value from the InstallPlan")
+            if bootstrap_plan is not install_plan.bootstrap_plan:
+                raise ValueError("AMR bootstrap plan must be the exact value from the InstallPlan")
+            if amr_transfer is not install_plan.amr_transfer:
+                raise ValueError("AMR transfer must be the exact value from the InstallPlan")
+            compiled = install_plan.artifact
+            instances = install_plan.instances
+            params = install_plan.params
+            aux = install_plan.aux
+            field_plans = install_plan.artifact.plan.field_plans
+        else:
+            instances = instances or {}
+            params = {} if params is None else params
+            aux = aux or {}
+            field_plans = field_plans or {}
 
         # (0) EARLY VALIDATION (shared with System._install_compiled): reject a compiled install missing a
         # required declared argument BEFORE any native mutation. Inert (reads arguments() metadata).
-        validate_install_arguments(self, compiled, instances, params, aux, solvers)
+        validate_install_arguments(
+            self, compiled, instances, params, aux, field_plans=field_plans)
+        if amr_transfer is not None:
+            self._install_bootstrap_routes(amr_transfer)
 
         # COMPILED vs NATIVE. COMPILED: `compiled` carries a .so_path time Program (installed in step 5,
-        # with the section-24 .so validation) + a PHYSICAL model (the per-block model an instance falls
-        # back on). NATIVE: `compiled is None` -- each instance carries its OWN native model. Validate the
-        # handle up front, BEFORE any native mutation (no half-configured AMR hierarchy).
+        # with the section-24 .so validation). Every block model comes exclusively from InstallPlan;
+        # neither route falls back to compiled.model or a live authoring builder.
         so_path = None
-        compiled_model = None
         if compiled is not None:
             so_path = getattr(compiled, "so_path", None)
             if so_path is None:
@@ -89,193 +105,342 @@ class _AmrSystemInstall(_AmrSystem):
                     "pops.bind: compiled handle has no .so_path (got %r); pass a compile_problem(...) "
                     "result (target='amr_system'), or compiled=None for a native AMR install (each "
                     "instance carries its own native model)." % type(compiled).__name__)
-            compiled_model = getattr(compiled, "model", None)
-        # (7) OUTPUT / CHECKPOINT policies and DIAGNOSTIC measures flow onto the AMR engine exactly
-        # like the Uniform System (ADC-542 / addendum C.1): AmrSystem.run() fires each at its cadence
-        # through the AMR per-level output driver + the composite-reduction diagnostics path. Stored
-        # here; the run-loop hook lives on AmrSystem.
-        if outputs:
-            self._output_policies = list(outputs)
-        if diagnostics:
-            self._diagnostic_measures = list(diagnostics)
+        # (1) RESOLVED FIELD PLANS first (parity with System: configure native solvers before
+        # adding blocks and before install_program). Field identity, provider and hierarchy policy
+        # were resolved at compile time; bind only materializes that immutable plan.
+        for field, field_plan in field_plans.items():
+            self._install_field_plan(field, field_plan)
 
-        # (1) FIELD SOLVERS first (parity with System: set_poisson before adding blocks AND before
-        # install_program -- the section-24 solver requirement reads the configured solver). The DECLARED
-        # named elliptic fields (ADC-428), collected from the per-instance models, widen the accepted
-        # solver-field set beyond the default Poisson names: a solver selection for a model-declared named
-        # field routes (the native loader wired register_elliptic_field), a typo is rejected against the
-        # declared set. Mirror of System._install with _declared_elliptic_fields.
-        declared_fields = self._declared_elliptic_fields(instances)
-        for field, solver_brick in solvers.items():
-            self._install_solver(field, solver_brick, declared_fields)
+        # (2) INSTANCES: resolve every package first, then project complete BindSchema vectors before
+        # installing any block. The per-instance detached CompiledModel is mandatory.
+        from pops.codegen.loader import CompiledModel
 
-        # (2) INSTANCES: add each named block (add_equation, binds the Program block of that name), then
-        # set its initial density. The block model is the per-instance "model" if given, else the
-        # PHYSICAL model carried by the compiled handle (compiled.model) -- NOT the handle itself (the
-        # time Program .so installed in step 5). resolved_models is reused by step-4b (ADC-514) to route
-        # the native per-block runtime params to set_block_params: it maps each instance name to the
-        # model add_equation received (a ModelSpec has no runtime param; a target='amr_system'
-        # CompiledModel exposes runtime_param_names).
         resolved_models = {}
+        lowered_instances = {}
         for name, spec in instances.items():
-            if not isinstance(spec, dict):
-                raise TypeError("pops.bind: instances[%r] must be a dict "
+            if not isinstance(spec, Mapping):
+                raise TypeError("pops.bind: instances[%r] must be a mapping "
                                 "(initial/spatial/time/model); got %r"
                                 % (name, type(spec).__name__))
-            model = spec.get("model", compiled_model)
-            if model is None:
-                raise ValueError(
-                    "pops.bind: instance %r has no block model -- supply "
-                    "instances[%r]['model'] (an pops.Model(...) / a target='amr_system' "
-                    "CompiledModel), or pass a compiled handle that carries one "
-                    "(compile_problem(model=...))." % (name, name))
+            model = spec.get("model")
+            if not isinstance(model, CompiledModel):
+                raise TypeError(
+                    "pops.bind: instances[%r] must carry a detached target='amr_system' "
+                    "CompiledModel from InstallPlan; re-run pops.resolve(case) and "
+                    "pops.compile(plan)" % name
+                )
             spatial = spec.get("spatial")
             time = spec.get("time")
-            self.add_equation(name, model, spatial=spatial, time=time)
             resolved_models[name] = model
+            lowered_instances[name] = (model, spatial, time)
+
+        if bind_schema is None and compiled is not None:
+            bind_schema = getattr(compiled, "bind_schema", None)
+        if bind_schema is not None:
+            from pops.runtime._install_param_routing import route_block_params
+            per_block_params = route_block_params(resolved_models, bind_schema, params)
+        elif params:
+            raise ValueError(
+                "pops.bind: parameter values require a compiled artifact carrying BindSchema"
+            )
+        else:
+            per_block_params = {}
+
+        for name, (model, spatial, time) in lowered_instances.items():
+            self.add_equation(
+                name, model, spatial=spatial, time=time,
+                _bind_params=per_block_params.get(name, []),
+            )
+
+        for field_plan in field_plans.values():
+            self._register_field_plan_output(field_plan, resolved_models)
+            self._install_field_reaction(field_plan, params)
 
         # (3) AUX fields: B_z -> set_magnetic_field; named -> set_aux_field. After the blocks exist
         # (a named aux resolves against the block's declared aux table) and BEFORE install_program.
         for field_name, field in aux.items():
             self._install_aux(field_name, field)
 
-        # (4) INITIAL state per instance (set_density on the AMR coarse base level).
-        for name, spec in instances.items():
-            initial = spec.get("initial")
-            if initial is not None:
-                self.set_density(name, initial)
+        # (4) INITIAL state: AMR has one typed InitialConditionPlan authority. Uniform
+        # ``initial_state`` block tables never enter this installer.
+        initial_rows = tuple(initial_values)
+        if any(spec.get("initial") is not None for spec in instances.values()):
+            raise ValueError(
+                "AMR installation accepts no initial_state block table; use the resolved "
+                "InitialConditionPlan and initial_values"
+            )
+        seen_initial = set()
+        for subject_id, name, initial, space, centering, method, source in initial_rows:
+            if method == "analytic":
+                route = source.get("native_route")
+                if route == "constant_field":
+                    components = [
+                        float.fromhex(value["binary64"])
+                        if isinstance(value, Mapping) and "binary64" in value
+                        else float(cast(Any, value))
+                        for value in source.get("components", ())
+                    ]
+                    self._s._register_analytic_constant(
+                        subject_id, name or "", space, centering, components
+                    )
+                elif route == "gaussian_field":
+                    center = source.get("center", {})
+                    if space != "cell" or set(center) != {"x", "y"}:
+                        raise ValueError(
+                            "pops.bind: gaussian_field requires one cell state and x/y center"
+                        )
+                    def native_float(value: Any) -> float:
+                        return float.fromhex(value["binary64"]) \
+                            if isinstance(value, Mapping) and "binary64" in value \
+                            else float(cast(Any, value))
 
-        # (4b) NATIVE per-block RUNTIME PARAMS (ADC-514, parity with System step 4): route each instance's
-        # declared runtime params (dsl.Param kind='runtime') to set_block_params, so a native AMR install
-        # (compiled=None) now HONORS params= WITHOUT recompiling. reject_unknown is True on the native
-        # install (a name declared by no instance is a loud error, no silent drop); on the COMPILED-Program
-        # install it is False -- an unconsumed name may be a Program-lowered param routed in step 5b, so the
-        # remainder is threaded to _finish_program_install. Returns the names consumed by an instance.
-        #
-        # PROGRAM PARAMS WIN ON A COMPILED-PROGRAM INSTALL (ADC-634): each AMR block is a target='amr_system'
-        # CompiledModel that ALSO declares the model's runtime params, so route_block_params would GREEDILY
-        # consume a name the installed whole-system Program reads through ctx.program_params (a name declared
-        # by BOTH). But with a Program installed the native per-block time policy is superseded -- the
-        # Program's lowered kernels read the PROGRAM RuntimeParams (set_program_params), NOT the native
-        # set_block_params store -- so a Program-declared name MUST reach step 5b. Withhold those names from
-        # the native route (they still reach set_program_params below); a name declared ONLY by an instance
-        # (no Program kernel reads it) still routes natively. The Uniform route never hit this: its instances
-        # carry the physical Model (no runtime_param_names), so nothing was consumed there.
-        program_names = self._program_param_names(compiled)
-        native_params = {k: v for k, v in params.items() if k not in program_names}
-        consumed = self._install_block_params(resolved_models, native_params,
-                                              reject_unknown=(compiled is None))
-        program_params = {k: v for k, v in params.items() if k not in consumed}
+                    self._s._register_analytic_gaussian(
+                        subject_id, name or "", native_float(center["x"]),
+                        native_float(center["y"]), native_float(source["background"]),
+                        native_float(source["amplitude"]),
+                        native_float(source["inverse_width"]),
+                    )
+                else:
+                    raise NotImplementedError(
+                        "pops.bind: no native analytic provider for route %r" % route)
+                continue
+            if space == "cell":
+                if name not in instances:
+                    raise ValueError("pops.bind: initial state targets unknown block %r" % name)
+                if name in seen_initial:
+                    raise ValueError(
+                        "pops.bind: multiple initial physical states target block %r" % name
+                    )
+                seen_initial.add(name)
+                self._s._bind_bootstrap_block_subject(subject_id, name)
+                self.set_conservative_state(name, initial)
+            elif space in {"face", "node"}:
+                self._s._register_bootstrap_array(subject_id, centering, initial)
+            else:
+                raise NotImplementedError(
+                    "pops.bind: native bootstrap has no payload carrier for space %r" % space
+                )
 
-        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the REMAINING runtime
-        # params and apply the global cadence (or reject a leftover params= / cadence= on a NATIVE install).
+        # (4b) Boundary-kernel parameters are independent from package parameters fixed in step 2.
+        for field_plan in field_plans.values():
+            self._install_field_boundary_parameters(field_plan, params, compiled=compiled)
+
+        if bootstrap_plan is not None:
+            from pops.runtime._amr_bootstrap_execution import execute_native_bootstrap
+
+            self._bootstrap_execution = execute_native_bootstrap(
+                self,
+                bootstrap_plan,
+                initial_rows,
+                {
+                    name: field_plan.native_options["provider_slot"]
+                    for name, field_plan in field_plans.items()
+                },
+            )
+
+        # (5/5b/6) COMPILED time Program: install_program on the AMR hierarchy, route the remaining
+        # runtime params and attach the typed step-transaction contract.
         # Extracted into the _AmrSystemProgram mixin (_finish_program_install) to keep this module small.
-        self._finish_program_install(compiled, so_path, program_params, cadence)
+        self._finish_program_install(compiled, so_path, bind_schema, params)
+
+        # The shared-interface scheduler authenticates the materialized per-level MultiFabs. Keep
+        # that structural install inside the bind transaction: after lazy runtime construction, before
+        # the BoundSnapshot and native lifecycle freeze.
+        if install_plan is not None:
+            from pops.runtime._runtime_authorities import finalize_runtime_authorities
+            finalize_runtime_authorities(self, install_plan)
 
         # (7) FREEZE (ADC-592): the AMR composition is fully lowered -- build the BoundSnapshot manifest
         # of WHAT was bound (build_amr_snapshot, in _bound_snapshot), then _finalize_bind marks the
-        # runtime 'bound' as the LAST act. The AMR route installs no whole-system Program, so
-        # program_hash / abi_key / cache_key are None; each block's own CompiledModel hash lands in the
-        # per-block snapshot row.
+        # runtime 'bound' as the LAST act. If this route installed a whole-system Program, its
+        # program/cache/ABI identity and transaction plan are retained alongside each block-model hash.
         from pops.runtime._bound_snapshot import build_amr_snapshot
-        snapshot = build_amr_snapshot(instances, solvers, aux, params)
+        snapshot = build_amr_snapshot(
+            self, compiled, instances, field_plans, aux, params,
+            install_plan=install_plan,
+        )
         self._finalize_bind(snapshot)  # freeze (ADC-592): _finalize_bind lives on _LifecycleMixin
 
-    @staticmethod
-    def _program_param_names(compiled: Any) -> Any:
-        """The runtime-parameter names the compiled whole-system Program reads (ADC-634).
+    def _install_bootstrap_routes(self, registry: Any) -> None:
+        from pops.mesh._amr.transfer import (
+            NativeAMRMaterializationKind,
+            ResolvedAMRTransfer,
+        )
 
-        Read from the handle's declared routing (``runtime_param_routes`` -> ``(routes, defaults)``, the
-        SAME metadata step 5b routes to ``set_program_params``); ``defaults`` keys ARE the Program-declared
-        names. On the AMR compiled-Program install these names win over the native per-block route (each
-        block is a CompiledModel that also declares them), so they are withheld from ``_install_block_params``
-        and reach ``set_program_params``. Empty set when the handle carries no Program or no runtime param
-        (a native install, or a param-free Program): the native route then behaves exactly as before."""
-        routes_fn = getattr(compiled, "runtime_param_routes", None)
-        if not callable(routes_fn):
-            return set()
-        routed: Any = routes_fn()  # (routes, defaults); typed Any: callable() narrows to -> object
-        return set(routed[1] or {})
+        if type(registry) is not ResolvedAMRTransfer:
+            raise TypeError("pops.bind: amr_transfer must be an exact AMRTransfer")
+        face_vectors = set()
+        for entry in registry.entries:
+            native = entry.native_materialization
+            provider_options = native.provider_identity.to_data().get("options", {})
+            paired = provider_options.get("paired_subjects")
+            if paired is not None:
+                pair = tuple(paired)
+                if len(pair) != 2 or any(not isinstance(value, str) for value in pair):
+                    raise ValueError("pops.bind: paired face provider has an invalid subject manifest")
+                face_vectors.add(pair)
+            key = entry.key.to_data()
+            if native.materialization is NativeAMRMaterializationKind.PHYSICAL:
+                options = native.options.to_data()
+                capabilities = native.capabilities.transfer
+                if capabilities is None:
+                    raise ValueError(
+                        "pops.bind: physical AMR descriptor omitted transfer capabilities"
+                    )
+                order, ghost = capabilities.order, capabilities.ghost_depth
+            else:
+                options = native.options.to_data()
+                order, ghost = 1, (0,)
+            dimensions = {row.accuracy.dimension for row in entry.requirements}
+            if len(dimensions) != 1:
+                raise ValueError("pops.bind: one native transfer route cannot mix dimensions")
+            ratios = {
+                tuple(row.accuracy.refinement_ratio) for row in entry.requirements
+            }
+            if len(ratios) != 1 or len(set(next(iter(ratios)))) != 1:
+                raise ValueError(
+                    "pops.bind: one native transfer route requires one isotropic ratio"
+                )
+            self._s._register_bootstrap_transfer_route(
+                entry.identity.token,
+                [row.subject.qualified_id for row in entry.requirements],
+                native.provider_qualified_id,
+                key["space"]["name"],
+                key["centering"]["name"],
+                key["representation"]["name"],
+                key["storage"]["name"],
+                key["operation"]["name"],
+                options["native_route"],
+                order,
+                ghost,
+                next(iter(dimensions)),
+                next(iter(ratios))[0],
+            )
+        for pair in sorted(face_vectors):
+            self._s._register_bootstrap_face_vector(pair)
 
-    def _install_block_params(self, resolved_models: Any, params: Any,
-                              reject_unknown: bool = True) -> Any:
-        """Route flat {param_name: value} to AmrSystem.set_block_params per instance (ADC-514, AMR mirror
-        of System._install_params). Uses the SHARED pure core route_block_params: build each declaring
-        instance's COMPLETE runtime-param vector (declaration defaults for unspecified names, in the
-        model's runtime_param_names order -- the SAME order add_compiled_model seeds the .so vector and
-        pops_compiled_param_names reports) and push it. @p reject_unknown (native install): raise on a
-        name declared by no instance (no silent drop); the COMPILED-Program install passes False (an
-        unconsumed name may be a Program-lowered param routed in step 5b). Returns the CONSUMED names so
-        the caller subtracts them from the program-param remainder."""
-        from pops.runtime._install_param_routing import route_block_params
-        per_block, unknown = route_block_params(resolved_models, params)
-        for name, values in per_block.items():
-            self.set_block_params(name, values)
-        if unknown and reject_unknown:
+    def _install_field_plan(self, field: Any, field_plan: Any) -> None:
+        """Install the complete resolved AMR field route before native block loaders run."""
+        from pops.codegen.field_install import ResolvedFieldInstallPlan
+        if not isinstance(field_plan, ResolvedFieldInstallPlan):
+            raise TypeError("install field_plans must contain ResolvedFieldInstallPlan values")
+        if field_plan.name != field or field_plan.target != "amr_system":
+            raise ValueError("resolved AMR field install plan identity/target mismatch")
+        field_plan.__post_init__()
+        options = field_plan.native_install_data()
+        provider = options["solver_provider"]
+        if provider["provider_kind"] != "builtin_v1":
+            raise RuntimeError(
+                "external FieldSolver v2 must have been refused for AMR during resolve")
+        routes = options["provider_pack"]
+        output_route = options["output_route"]
+        from pops.identity import canonical_bytes
+        if provider["solver"]["route"] != "geometric_mg":
+            raise ValueError("resolved AMR field plan requires builtin geometric_mg")
+        mg = options["mg_options"]
+        from pops.solvers._numeric import native_float
+        fac = options["fac_options"]
+        native_fac = None if fac is None else dict(fac)
+        if native_fac is not None:
+            for name in ("rel_tol", "abs_tol", "coarse_rel_tol", "coarse_abs_tol"):
+                if native_fac[name] is not None:
+                    native_fac[name] = native_float(
+                        native_fac[name], where="AMR field plan FAC option %s" % name)
+        slot = options["provider_slot"]
+        self._s.set_field_solver_plan(
+            slot, field_plan.identity.token, options["provider_identity_text"],
+            canonical_bytes(output_route["owner_identity"]).hex(),
+            output_route["owner_block"],
+            output_route["key"],
+            [canonical_bytes(route["provider_identity"]).hex()
+             for route in routes],
+            [route["owner_block"] for route in routes],
+            [route["key"] for route in routes],
+            [route["coefficient"] for route in routes],
+            provider["solver"]["route"], options["hierarchy"],
+            native_float(mg["abs_tol"],
+                         where="AMR field plan absolute tolerance"),
+            native_float(mg["rel_tol"],
+                         where="AMR field plan relative tolerance"),
+            mg["max_cycles"], mg["min_coarse"], mg["pre_smooth"],
+            mg["post_smooth"], mg["bottom_sweeps"],
+            mg["coarse_threshold"], native_fac)
+        topology = provider["topology"]
+        self._s._set_field_topology_authority(
+            slot, topology["provider_kind"], topology["provenance"],
+            topology["topology_digest"])
+        faces = options["boundary_faces"]
+        if faces is not None:
+            self._s.set_field_boundary_plan(
+                slot, [face["type"] for face in faces],
+                [face["alpha"] for face in faces],
+                [face["beta"] for face in faces],
+                [face["value"] for face in faces])
+        dependencies = options["boundary_dependencies"]
+        self._s.set_field_boundary_dependencies(
+            slot,
+            [row["owner_block"] for row in dependencies["states"]],
+            [row["component"] for row in dependencies["states"]],
+            [], [], [])
+        self._s.set_field_nullspace(
+            slot, options["nullspace"] == "constant", options["gauge"] == "mean_zero")
+        nonlinear = options.get("nonlinear")
+        if nonlinear is not None:
+            field_plan.nonlinear_provider.install(self._s, slot)
+
+    def _install_field_boundary_parameters(self, field_plan: Any, params: Any, *,
+                                           compiled: Any) -> None:
+        if not field_plan.native_options.get("boundary_kernel_required"):
+            return
+        if compiled is None:
             raise ValueError(
-                "pops.bind: params %s declared by no instance's runtime parameters (a runtime param "
-                "must be declared dsl.Param(..., kind='runtime') on the block's model and read by a "
-                "brick formula)" % (unknown,))
-        return set(params) - set(unknown)  # the names an instance consumed
-
-    # Field names the default AMR Poisson route already serves (the shared coarse elliptic solve).
-    _DEFAULT_POISSON_FIELDS = ("phi", "poisson", "charge_density", "default")
-
-    def _install_solver(self, field: Any, solver_brick: Any,
-                        declared_fields: Any = frozenset()) -> Any:
-        """Lower a field-solver selection to set_poisson (AMR, ADC-428).
-
-        The default Poisson field and any NAMED elliptic field a block's model DECLARES (via
-        m.elliptic_field, collected into @p declared_fields) are accepted: the named field's RHS is wired
-        by the native AMR loader (register_elliptic_field + set_block_elliptic_field) and solved by the
-        AmrRuntime engine each solve_fields, while the solver selection routes through set_poisson for
-        both (the AMR solver is always geometric_mg). A field name that is NEITHER the default Poisson
-        field NOR a declared named field is a TYPO -- rejected LOUD, naming the declared set. Mirror of
-        System._install_solver, minus the System-only solver options the AMR set_poisson lacks."""
-        if field not in self._DEFAULT_POISSON_FIELDS and field not in declared_fields:
-            declared = ", ".join(sorted(declared_fields)) or "(none declared)"
+                "dynamic AMR field boundaries require a compiled artifact that owns their "
+                "generated device launchers")
+        handles = field_plan.boundary_parameter_handles()
+        missing = [handle.qualified_id for handle in handles if handle not in params]
+        if missing:
             raise ValueError(
-                "pops.bind: solver selection names field %r, which is neither the default Poisson "
-                "field (%s) nor a named elliptic field any installed model declares (declared: %s). "
-                "Declare it with m.elliptic_field(%r, rhs=...), or fix the field name."
-                % (field, ", ".join(self._DEFAULT_POISSON_FIELDS), declared, field))
-        token = solver_brick if isinstance(solver_brick, str) else (
-            getattr(solver_brick, "scheme", None) or getattr(solver_brick, "name", None))
-        if token is None:
-            raise TypeError("pops.bind: solver must be a token string or an "
-                            "pops.solvers.<Solver>(...) descriptor; got %r"
-                            % type(solver_brick).__name__)
-        # ADC-645: GeometricMG(amr_composite=CompositeFAC(...)) opts the AMR FIELD solve into the
-        # native composite FAC path. None (default) forwards NOTHING extra, so the native call is
-        # byte-identical to the historical set_poisson(solver=token) (Option A).
-        composite = getattr(solver_brick, "amr_composite", None)
-        if composite is not None:
-            self.set_poisson(solver=token, **composite.set_poisson_kwargs())
-        else:
-            self.set_poisson(solver=token)
+                "dynamic AMR field boundary parameter pack is incomplete: %s" %
+                ", ".join(missing))
+        from pops.solvers._numeric import native_float
+        values = [native_float(params[handle], where="dynamic AMR field boundary parameter %s" %
+                               handle.qualified_id) for handle in handles]
+        self._s.set_field_boundary_parameters(
+            field_plan.native_options["provider_slot"], values)
 
-    @staticmethod
-    def _declared_elliptic_fields(instances: Any) -> Any:
-        """Collect the NAMED elliptic fields declared by the per-instance models (ADC-428). Reads each
-        model's declared names WITHOUT compiling: a target='amr_system' CompiledModel exposes
-        ``elliptic_field_names``; a raw physics/dsl Model exposes the ``_elliptic_fields`` mapping.
-        Returns a set (empty when no model declares a named field). Mirror of
-        System._declared_elliptic_fields (no compiled whole-system handle on the AMR path)."""
-        names = set()
-        for spec in (instances or {}).values():
-            if not isinstance(spec, dict):
-                continue
-            model = spec.get("model")
-            if model is None:
-                continue
-            explicit = getattr(model, "elliptic_field_names", None)
-            if explicit is not None:
-                names.update(explicit)
-                continue
-            raw = getattr(model, "_elliptic_fields", None)
-            if raw:
-                names.update(raw)
-        return names
+    def _install_field_reaction(self, field_plan: Any, params: Any) -> None:
+        """Bind one screened-Poisson scalar before the AMR runtime is materialized."""
+        effective = field_plan.native_reaction_value(params)
+        if effective is None:
+            return
+        self._s.set_field_reaction(
+            field_plan.native_options["provider_slot"], effective)
+
+    def _register_field_plan_output(self, field_plan: Any, models: Any) -> None:
+        route = field_plan.native_options["output_route"]
+        block = route["owner_block"]
+        model = models.get(block)
+        if model is None:
+            raise ValueError("AMR field output route names unknown block %r" % block)
+        from pops.physics.aux import aux_component_index
+
+        declared = tuple(getattr(model, "aux_extra_names", ()) or ())
+        components = tuple(route["components"])
+        try:
+            indices = [aux_component_index(component, declared) for component in components]
+        except ValueError as error:
+            raise ValueError(
+                "AMR field output route %r is absent from block %r native aux layout: %s"
+                % (field_plan.name, block, ", ".join(components))
+            ) from error
+        indices.extend([-1] * (3 - len(indices)))
+        gradient_sign = route.get("gradient_sign")
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError("AMR field output route has no valid GradientOutput sign")
+        if indices[1] < 0 and gradient_sign != 1:
+            raise ValueError("AMR field output route carries a sign without gradient components")
+        self._s.register_elliptic_field(
+            block, route["key"], indices[0], indices[1], indices[2], gradient_sign)
 
     def _install_aux(self, field_name: Any, field: Any) -> Any:
         """Lower an aux entry on AMR: 'B_z' -> set_magnetic_field; 'T_e' rejected (derived); any

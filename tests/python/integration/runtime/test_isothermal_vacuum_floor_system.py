@@ -11,19 +11,19 @@ Builds two identical isothermal Systems that differ ONLY by vacuum_floor and sho
 Native bricks only (no DSL / no compiler). source=NoSource isolates the transport (where the floor
 lives): phi is identical between the two runs, so any difference comes from the velocity bound.
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.variables import Conservative
 from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
-import sys
 
 import numpy as np
 
 try:
-    import pops
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    import pops.runtime._engine_descriptors as engine
+    from pops.runtime._engine_descriptors import Dirichlet
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
 except ImportError as e:
-    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
 
 def chk(cond, label):
@@ -35,18 +35,18 @@ def chk(cond, label):
 def run(n, L, vacuum_floor, rho_scale, nsteps, dt):
     """One short isothermal transport run; returns the conservative state (3, n, n)."""
     sim = System(n=n, L=L, periodic=False)
-    sim.set_poisson(bc="dirichlet")
+    sim.set_poisson(bc=Dirichlet())
     sim.set_magnetic_field(np.ones((n, n)))
     sim.add_equation(
         "ions",
-        model=pops.Model(
-            state=pops.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=vacuum_floor),
-            transport=pops.IsothermalFlux(),
-            source=pops.NoSource(),
-            elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0),
+        model=engine.Model(
+            state=engine.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=vacuum_floor),
+            transport=engine.IsothermalFlux(),
+            source=engine.NoSource(),
+            elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0),
         ),
-        spatial=pops.FiniteVolume(limiter=Minmod(), riemann=Rusanov(), variables=Conservative()),
-        time=pops.Explicit(),
+        spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov(), recon=Conservative()),
+        time=engine.Explicit(),
     )
     x = (np.arange(n) + 0.5) * (L / n)
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -85,7 +85,7 @@ def main():
 
     # (3) validation at the python boundary.
     try:
-        pops.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=-1.0)
+        engine.FluidState(kind="isothermal", cs2=1.0, vacuum_floor=-1.0)
         chk(False, "(3) vacuum_floor < 0 rejected")
     except ValueError:
         chk(True, "(3) vacuum_floor < 0 rejected")

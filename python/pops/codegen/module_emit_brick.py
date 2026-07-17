@@ -9,10 +9,12 @@ historical single-module form.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pops.codegen.cpp_writer import (
     _collect_eig_witnesses,
+    _cpp_identifier,
     _eig_witness_helpers,
 )
 from pops.codegen.module_emit_helpers import (
@@ -29,7 +31,8 @@ from pops.codegen.module_emit_riemann import (
     _emit_roe_provided,
     _emit_roe_roles,
 )
-from pops.ir.expr import Const
+from pops._ir.expr import Const
+from pops._ir.literals import scalar_cpp
 
 
 def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generated", cse: Any = True,
@@ -41,8 +44,8 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     Requires set_primitive_state(...) (Prim layout) and set_conservative_from([...]) (to_conservative,
     which the DSL cannot invert on its own). cse=True (default) factors the common
-    subexpressions (H, c...) into ``cseK_`` locals. Still to do (see ARCHITECTURE_CIBLE.md sect. 3) :
-    Kokkos/CUDA codegen, JIT."""
+    subexpressions (H, c...) into ``cseK_`` locals. The production loader instantiates the resulting
+    type inside Kokkos kernels; no host-vtable execution path is emitted."""
     if not model.prim_state:
         raise ValueError("emit_cpp_brick : call set_primitive_state(...) first")
     if model.cons_from is None or len(model.cons_from) != model.n_vars:
@@ -57,7 +60,7 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         raise ValueError("emit_cpp_brick : call set_eigenvalues(...), set_wave_speeds(...) "
                          "or set_wave_speeds_from_jacobian(...) first (source of "
                          "max_wave_speed / CFL)")
-    nm = name or (model.name.capitalize() + "Gen")
+    nm = _cpp_identifier(name or (model.name.capitalize() + "Gen"))
     nc, npr = model.n_vars, len(model.prim_state)
 
     def cons_locals() -> list:
@@ -120,28 +123,30 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     def ws_jac_body(ind: Any, lo: Any, hi: Any, key: Any = "x", fill: Any = None) -> list:
         # body of the jacobian computation -> extremes (@p lo/@p hi : destination names).
-        # eig='fd' : column-wise jacobian by finite differences of the COMPILED flux ;
+        # eig='fd' : column-wise jacobian by central finite differences of the COMPILED flux ;
         # eig='numeric' : fill of the sub-blocks from @p fill. @p key : direction
         # (chooses the block partition).
         ws = model._ws_jacobian
         nv = model.n_vars
-        # ADC-617: the FD wave-speed Jacobian relative step. None -> the historical "1e-6" literal
-        # VERBATIM (emitted C++ + model_hash byte-identical); a configured fd_eps replaces it and, since
-        # fd_eps enters the ws_jac part of model_hash, the compiled-module cache busts. The 1e-30 term
-        # stays a fixed division-by-zero floor (a guard, not a tuning knob).
-        fd_eps_lit = "1e-6" if ws.get("fd_eps") is None else repr(float(ws["fd_eps"]))
+        # ADC-617: the FD wave-speed Jacobian relative step. None keeps the public 1e-6 default; a
+        # configured fd_eps replaces it and participates in the compiled-module cache key. Scaling by
+        # max(|U_k|, 1) gives every column a meaningful perturbation, including zero-valued states.
+        fd_eps_lit = "1e-6" if ws.get("fd_eps") is None else scalar_cpp(ws["fd_eps"])
         L = []
         if ws["eig"] == "fd":
-            L.append("%sconst State F0_ = flux(U, a, dir);" % ind)
             L.append("%spops::Real Jf_[%d][%d];" % (ind, nv, nv))
-            L.append("%sconst pops::Real eps_ = pops::Real(%s) * (U[0] < 0 ? -U[0] : U[0])"
-                     " + pops::Real(1e-30);" % (ind, fd_eps_lit))
             L.append("%sfor (int k_ = 0; k_ < %d; ++k_) {" % (ind, nv))
             L.append("%s  State Up_ = U;" % ind)
+            L.append("%s  State Um_ = U;" % ind)
+            L.append("%s  const pops::Real eps_ = pops::Real(%s)"
+                     " * std::fmax(std::fabs(U[k_]), pops::Real(1));"
+                     % (ind, fd_eps_lit))
             L.append("%s  Up_[k_] += eps_;" % ind)
-            L.append("%s  const State Fk_ = flux(Up_, a, dir);" % ind)
-            L.append("%s  for (int i_ = 0; i_ < %d; ++i_) Jf_[i_][k_] = (Fk_[i_] - F0_[i_])"
-                     " / eps_;" % (ind, nv))
+            L.append("%s  Um_[k_] -= eps_;" % ind)
+            L.append("%s  const State Fp_ = flux(Up_, a, dir);" % ind)
+            L.append("%s  const State Fm_ = flux(Um_, a, dir);" % ind)
+            L.append("%s  for (int i_ = 0; i_ < %d; ++i_) Jf_[i_][k_] = (Fp_[i_] - Fm_[i_])"
+                     " / (pops::Real(2) * eps_);" % (ind, nv))
             L.append("%s}" % ind)
         for bi, b in enumerate(ws["blocks"][key]):
             nb = len(b)
@@ -171,13 +176,12 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
 
     cnames = ", ".join('"%s"' % c for c in model.cons_names)
     pnames = ", ".join('"%s"' % p for p in model.prim_state)
-    # Physical roles parallel to the names : C++ initializer of pops::VariableSet::roles. Emitted IF at
-    # least one component has a recognized role (otherwise empty roles -> brick identical to history,
-    # couplings fall back on the fallback indices). The roles let System
-    # resolve inter-species couplings by index_of(role) instead of a literal index.
+    # Physical roles parallel to the names: the current compiled-artifact ABI requires one explicit
+    # role descriptor per component. ``Custom`` is a real, intentional descriptor for a component
+    # without a canonical physical role; an empty roles vector would be ambiguous legacy metadata.
+    # Keeping the vectors total also makes metadata validation independent of particular model
+    # families (moments, passive scalars, user-defined systems, ...).
     def roles_init(roles: Any) -> Any:
-        if all(r == "Custom" for r in roles):
-            return None  # no useful role : we do not emit the 4th field (strict back-compat)
         return ", ".join("pops::VariableRole::%s" % r for r in roles)
 
     croles = roles_init(_roles_for(model.cons_names, model.cons_roles))
@@ -185,7 +189,9 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
     # P7-b : assign the runtime indices BEFORE any to_cpp() (a RuntimeParamRef raises otherwise).
     rt_member = model._runtime_params_member()
     S = [
+        "#include <array>",
         "#include <cmath>",  # std::sqrt / std::pow : self-sufficient brick (g++ does not pull cmath)
+        "#include <pops/numerics/fv/flux_interfaces.hpp>",
         "// brique HYPERBOLIQUE generee depuis le modele symbolique '%s' (pops.dsl.emit_cpp_brick)."
         % model.name,
         "// Satisfait pops::HyperbolicModel : flux + max_wave_speed + conversions + descripteurs.",
@@ -205,6 +211,22 @@ def emit_cpp_brick(model: Any, name: Any = None, namespace: Any = "pops_generate
         "  using Aux   = pops::Aux;",
         "  static constexpr int n_vars = %d;" % nc,
     ]
+    provider_rows = getattr(model, "_component_flux_provider_metadata", {}).get("entries", [])
+    S.append("  static constexpr int n_flux_providers = %d;" % len(provider_rows))
+    S.append(
+        "  inline static constexpr std::array<pops::QualifiedProviderRequirement, %d> "
+        "flux_provider_requirements{{" % len(provider_rows)
+    )
+    for row in provider_rows:
+        key, contract, provider = row["key"], row["contract"], row["provider"]
+        values = [
+            key["owner_qid"], key["space_kind"], key["space_name"], key["component"],
+            contract["representation"], contract["centering"], contract["unit"] or "",
+            contract["layout"], contract["value_kind"] or "", provider["producer"] or "",
+        ]
+        S.append("    {%s, %d}," %
+                 (", ".join(json.dumps(value) for value in values), provider["slot"]))
+    S.append("  }};")
     if rt_member:  # member pops::RuntimeParams params{count, {defaults}} (P7-b)
         S.append(rt_member.rstrip("\n"))
     # Foncteurs nommes des temoins de VP (EigWitness) : methodes statiques POPS_HD remplissant

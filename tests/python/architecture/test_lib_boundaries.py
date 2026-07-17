@@ -1,7 +1,7 @@
-"""ADC-566: pops.lib is a leaf, locked to models / time / presets.
+"""ADC-566/ADC-693: pops.lib is a leaf of ready implementations.
 
-``pops.lib`` holds ONLY ready-to-use things (provided models, provided time schemes, compose-and-go
-presets). It must stay a leaf of the import graph and must never become a second home for a central
+``pops.lib`` holds ONLY ready-to-use things (provided models, initializers, AMR policies and time
+schemes). It must stay a leaf of the import graph and must never become a second home for a central
 object (a flux, a solver, a field problem, an AMR descriptor, a runtime param). This file fences all
 four boundaries.
 
@@ -11,12 +11,13 @@ It EXTENDS, and does not re-implement, two existing fences (cited inline so the 
     ``_pops`` / ``pops.codegen`` / ``pops.runtime`` in the symbolic layers, lib included. THIS file's
     gate 2b adds the LAZY (in-function, ``col_offset > 0``) case for lib, which that fence leaves
     alone by design.
-  * ``test_import_graph.py`` locks the lib -> {ir, model, time, physics, moments} module edges. THIS
+  * ``test_import_graph.py`` locks the lib -> {_ir, model, time, physics, moments} module edges. THIS
     file asserts CONTENT (no central class defined or re-exported under lib) and the DIRECTORY set,
     which the layering fence does not check.
 
-Source-only AST scans (run without the native extension) plus skip-clean functional proofs that
-import ``pops``. ASCII only.
+Source-only AST scans plus installed-package functional proofs. The latter fail when the promised
+``pops`` installation is unavailable; an acceptance gate must never turn that defect into a skip.
+ASCII only.
 """
 import ast
 import pathlib
@@ -30,7 +31,7 @@ LIB = REPO_ROOT / "python" / "pops" / "lib"
 # The strict directory allow: pops.lib has exactly these immediate child packages. A new
 # python/pops/lib/riemann/ or .../solvers/ would grow this set and fail (an ALLOW of 3 named dirs,
 # not a broad pattern).
-_ALLOWED_LIB_CHILD_DIRS = {"models", "time", "presets"}
+_ALLOWED_LIB_CHILD_DIRS = {"amr", "initial", "models", "time"}
 
 # The HARD refusal list: lib is a leaf, so it must import none of these at ANY scope (module-scope OR
 # lazily inside a function). This is the delta over test_no_runtime_imports.py (module-scope only).
@@ -38,10 +39,10 @@ _FORBIDDEN_IMPORT_ROOTS = ("_pops", "pops.codegen", "pops.runtime", "pops._pops"
 
 # The descriptor/authoring packages lib MAY import (compose descriptors). Everything under pops.* that
 # is NOT in this set and NOT forbidden is flagged: a new pops.<other> edge from lib must be reviewed.
-# (numerics / solvers / mesh are descriptor catalogs used by the time schemes and presets.)
+# (numerics / solvers / mesh are descriptor catalogs used by provided implementations.)
 _ALLOWED_POPS_IMPORT_ROOTS = (
-    "pops",  # the facade (import pops) -- presets compose through it
-    "pops.ir",
+    "pops",  # the public facade used by ready-to-use compositions
+    "pops._ir",
     "pops.math",
     "pops.model",
     "pops.time",
@@ -58,11 +59,11 @@ _ALLOWED_POPS_IMPORT_ROOTS = (
 
 # Central object names that have exactly ONE public home elsewhere; lib must neither DEFINE nor
 # RE-EXPORT any of them (a second path). Canonical homes (asserted below): mesh AMR, elliptic
-# GeometricMG, params RuntimeParam, fields PoissonProblem/FieldProblem, numerics HLL/MUSCL/...,
+# GeometricMG, params RuntimeParam, fields FieldOperator/FieldDiscretization, numerics HLL/MUSCL/...,
 # time Program/Module.
 _CANONICAL_NAMES = {
     "HLL", "HLLC", "Roe", "Rusanov", "MUSCL", "WENO5",
-    "PoissonProblem", "FieldProblem", "GeometricMG", "FFT",
+    "FieldOperator", "FieldDiscretization", "GeometricMG", "FFT",
     "AMR", "RuntimeParam", "Program", "Module",
 }
 
@@ -106,11 +107,13 @@ def _import_targets(tree):
 
 
 # ---------------------------------------------------------------------------------------------
-# Gate 2a -- DIRECTORY fence: lib's child packages are exactly {models, time, presets}.
+# Gate 2a -- DIRECTORY fence: every lib child is an approved ready-implementation family.
 # ---------------------------------------------------------------------------------------------
 def test_lib_child_directories_are_the_strict_allow_set():
-    children = {p.name for p in LIB.iterdir()
-                if p.is_dir() and p.name != "__pycache__"}
+    children = {
+        p.name for p in LIB.iterdir()
+        if p.is_dir() and p.name != "__pycache__" and (p / "__init__.py").is_file()
+    }
     extra = children - _ALLOWED_LIB_CHILD_DIRS
     missing = _ALLOWED_LIB_CHILD_DIRS - children
     assert not extra, (
@@ -200,12 +203,12 @@ def test_canonical_homes_are_outside_lib():
     """Belt-and-braces: the canonical objects DO live in their documented non-lib home, so the
     content fence is guarding a real single-home invariant, not an empty set."""
     homes = {
-        "AMR": REPO_ROOT / "python/pops/mesh/layouts/__init__.py",
+        "AMR": REPO_ROOT / "python/pops/layouts/__init__.py",
         "GeometricMG": REPO_ROOT / "python/pops/solvers/elliptic/_descriptor.py",
         "RuntimeParam": REPO_ROOT / "python/pops/params/runtime.py",
-        "PoissonProblem": REPO_ROOT / "python/pops/fields/poisson.py",
-        "FieldProblem": REPO_ROOT / "python/pops/fields/problem.py",
-        "Program": REPO_ROOT / "python/pops/time/program.py",
+        "FieldOperator": REPO_ROOT / "python/pops/fields/operator.py",
+        "FieldDiscretization": REPO_ROOT / "python/pops/fields/discretization.py",
+        "Program": REPO_ROOT / "python/pops/time/_program/api.py",
     }
     missing = []
     for name, path in homes.items():
@@ -230,31 +233,10 @@ def test_lib_init_stays_thin():
         "refused, got %d" % (_LIB_INIT_LINE_CAP, lines))
 
 
-def test_lib_time_macros_return_a_core_program():
-    """Functional (skip-clean): each block-name-only lib.time macro produces a pops.time.Program.
-
-    The remaining macros (strang / imex / bdf / predictor_corrector) require extra scheme arguments;
-    they share the same @program_macro dispatch (lib/time/_helpers.py), so the four block-name-only
-    schemes are a representative proof that lib.time lowers to the core Program, not a lib stepper."""
-    try:
-        import pops.lib.time as lib_time
-        from pops.time import Program
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
-
-    for name in ("forward_euler", "ssprk2", "ssprk3", "rk4"):
-        program = getattr(lib_time, name)("plasma")
-        assert isinstance(program, Program), (
-            "pops.lib.time.%s must return a pops.time.Program, got %r" % (name, type(program)))
-
-
 def test_lib_models_lower_to_physics_without_runtime():
-    """Functional (skip-clean): a provided model lowers to a pops.model/physics object whose manifest
+    """Installed-package gate: a provided model lowers to a pops.model/physics object whose manifest
     carries NO runtime/compiled fields (no .so path, no abi_key)."""
-    try:
-        from pops.lib.models import Gaussian, HyQMOM15
-    except Exception as exc:  # pragma: no cover - bare source tree without importable pops.
-        pytest.skip("pops import unavailable: %s" % exc)
+    from pops.lib.models import Gaussian, HyQMOM15
 
     for factory in (lambda: HyQMOM15.vlasov_poisson_magnetic(order=4),
                     lambda: Gaussian.transport()):

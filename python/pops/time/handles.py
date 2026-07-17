@@ -1,278 +1,222 @@
-"""pops.time typed temporal-version handles (Spec 5 sec.5.3.1).
+"""Immutable, owner-qualified temporal declaration handles.
 
-Typed handles for the temporal versions of one block state -- the current state ``U.n``,
-the named stages ``U.stage(k)``, the end-of-step ``U.next``, and the lagged history
-``U.prev(lag)`` -- expressed as SUGAR over the existing SSA IR. There is NO new IR and NO
-Python runtime data here: every handle lowers to the EXACT primitive ops the positional
-``P.state`` / ``P.linear_combine`` / ``P.commit`` / ``P.history`` / ``P.store_history``
-style already builds, so a scheme written with handles produces a byte-identical
-``_ir_hash``.
-
-A :class:`TimeState` is a family of handles; a :class:`_Version` is one typed handle that
-PROXIES the affine algebra to its resolved :class:`pops.time.values.Value` once
-``T.define`` has lowered it. Before definition, using a stage in arithmetic raises a clear
-error; the handles themselves carry no ndarray.
+Temporal handles contain identity and inert type metadata only.  All mutable authoring
+state -- current-value caching, stage definitions, history configuration/resolution and
+endpoint caching -- belongs to :class:`pops.time.Program`.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from pops.time.history import CopyCurrent
+from pops.model.handles import Handle
+from pops.time.points import Clock, StagePoint, TimePoint
+from pops.time.references import block_name, canonical_handle, state_name
 
 
-def _proxy_value(handle: Any) -> Any:
-    """Return the resolved Value behind a handle, or raise the handle's undefined error."""
-    value = handle._resolved()
-    if value is None:
-        handle._undefined()
-    return value
+def _state_local_id(block: Any, state: Handle, clock: Clock, suffix: str) -> str:
+    """Unambiguous identity from state, clock and a structural suffix."""
+    block_id = canonical_handle(block).qualified_id
+    state_id = canonical_handle(state).qualified_id
+    clock_id = clock.qualified_id
+    return "%d:%s|%d:%s|%d:%s|%s" % (
+        len(block_id), block_id, len(state_id), state_id,
+        len(clock_id), clock_id, suffix)
 
 
-class _Version:
-    """A typed temporal-version handle for one block state (a stage, or ``.next``).
+def _validate_state_metadata(
+        where: str, block: Any, state: Any, space: Any, clock: Any) -> None:
+    from pops.problem.handles import BlockHandle
+    if not isinstance(block, BlockHandle):
+        raise TypeError("%s: block must be a BlockHandle" % where)
+    if not isinstance(state, Handle) or state.kind != "state" or not state.is_instance:
+        raise TypeError("%s: state must be a block-qualified state Handle" % where)
+    if state.block_ref is not block:
+        raise ValueError("%s: state is qualified by a different block" % where)
+    if space is not None and getattr(space, "kind", None) != "state":
+        raise TypeError("%s: space must be a StateSpace or None" % where)
+    if type(clock) is not Clock:
+        raise TypeError("%s: clock must be an exact Clock" % where)
 
-    Carries only its parent :class:`TimeState`, its ``key`` (an int stage index, a stage
-    name, or the string ``"next"``), and -- once :meth:`TimeState` lowers it via
-    ``T.define`` -- the resolved :class:`pops.time.values.Value`. It holds NO runtime data.
 
-    Before definition, every arithmetic use raises so a stage cannot be read before it is
-    written (SSA single assignment). After definition, ``__add__`` / ``__radd__`` /
-    ``__sub__`` / ``__rsub__`` / ``__mul__`` / ``__rmul__`` / ``__truediv__`` delegate to
-    the resolved Value's affine algebra, so a handle composes exactly like the Value would.
-    """
+class _ReadableTemporalHandle:
+    """Affine proxy whose resolution is exclusively owned by its Program table."""
 
-    def __init__(self, timestate: Any, key: Any) -> None:
-        self._timestate = timestate
-        self._key = key
-        self._value = None  # set by TimeState._define once T.define lowers this version
-
-    @property
-    def block(self) -> Any:
-        return self._timestate.block
+    __slots__ = ()
+    _program: Any
 
     @property
     def value(self) -> Any:
-        """The resolved Value (raises if the version was never defined)."""
-        return _proxy_value(self)
-
-    def _resolved(self) -> Any:
-        return self._value
+        return self._as_value()
 
     def _as_value(self) -> Any:
-        """The resolved Value, for the State-accepting boundaries (``solve_fields`` / ``rhs``)."""
-        return _proxy_value(self)
+        return self._program._resolve_time_value(self)
 
-    def _undefined(self) -> Any:
-        raise ValueError(
-            "stage %r is undefined (define it with T.define first)" % (self._key,))
-
-    # --- affine algebra: delegate to the resolved Value (else fail loud) -----------------
     def __add__(self, other: Any) -> Any:
-        return _proxy_value(self).__add__(other)
+        return self._as_value().__add__(other)
 
     def __radd__(self, other: Any) -> Any:
-        return _proxy_value(self).__radd__(other)
+        return self._as_value().__radd__(other)
 
     def __sub__(self, other: Any) -> Any:
-        return _proxy_value(self).__sub__(other)
+        return self._as_value().__sub__(other)
 
     def __rsub__(self, other: Any) -> Any:
-        return _proxy_value(self).__rsub__(other)
+        return self._as_value().__rsub__(other)
+
+    def __neg__(self) -> Any:
+        return self._as_value().__neg__()
 
     def __mul__(self, other: Any) -> Any:
-        return _proxy_value(self).__mul__(other)
+        return self._as_value().__mul__(other)
 
     def __rmul__(self, other: Any) -> Any:
-        return _proxy_value(self).__rmul__(other)
+        return self._as_value().__rmul__(other)
 
     def __truediv__(self, other: Any) -> Any:
-        return _proxy_value(self).__truediv__(other)
+        return self._as_value().__truediv__(other)
+
+    def __rmatmul__(self, other: Any) -> Any:
+        """Let a Program operator consume the resolved State without exposing storage here."""
+        return other.__matmul__(self._as_value())
+
+
+class StageHandle(_ReadableTemporalHandle, Handle):
+    """Immutable readable handle for one single-assignment temporal stage."""
+
+    __slots__ = ("_program", "block", "state", "key", "space", "clock", "point")
+
+    def __init__(self, *, program: Any, block: Any, state: Any,
+                 key: Any, clock: Any, point: Any, space: Any = None) -> None:
+        _validate_state_metadata("StageHandle", block, state, space, clock)
+        if not isinstance(key, str) or not key:
+            raise ValueError("StageHandle: key must be a non-empty string (got %r)" % (key,))
+        if type(point) is not StagePoint:
+            raise TypeError("StageHandle: point must be an exact StagePoint")
+        if point.name != key:
+            raise ValueError(
+                "StageHandle: key %r must match StagePoint name %r" % (key, point.name))
+        if any(candidate.clock != clock for candidate in point.partitions.values()):
+            raise ValueError("StageHandle: every partition point must use the TimeState clock")
+        suffix = "stage|str|%d:%s" % (len(key), key)
+        super().__init__(
+            _state_local_id(block, state, clock, suffix),
+            kind="state_stage", owner=program.owner_path)
+        object.__setattr__(self, "_program", program)
+        object.__setattr__(self, "block", block)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "key", key)
+        object.__setattr__(self, "space", space)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", point)
 
     def __repr__(self) -> str:
-        state = "undefined" if self._value is None else ("#%d" % self._value.id)
-        return "<_Version %s.%s key=%r %s>" % (
-            self._timestate.block, self._timestate.name, self._key, state)
+        return "StageHandle(block=%r, state=%r, key=%r)" % (
+            block_name(self.block), state_name(self.state), self.key)
 
 
-class _Prev:
-    """The lagged-history accessor of a :class:`TimeState` (``U.prev`` / ``U.prev(lag)``).
+class HistoryHandle(_ReadableTemporalHandle, Handle):
+    """Immutable readable handle for one lag of a Program-owned state-history ring.
 
-    ``U.prev`` is this object; calling it ``U.prev(lag)`` returns the history Value at that
-    lag (``P.history("<block>.<name>", lag)``). The bare ``U.prev`` PROXIES the lag-1
-    history through the affine algebra, so ``U.prev`` reads like ``U.prev(1)``. It is a
-    READ-ONLY handle: ``T.define(U.prev, ...)`` is rejected (the ring is produced by the
-    history policy, not by an SSA definition). Carries no runtime data.
+    ``U.prev`` is the lag-one handle. Calling it as ``U.prev(lag)`` returns the
+    Program-cached handle for that lag; resolution to a ProgramValue remains lazy.
     """
 
-    def __init__(self, timestate: Any) -> None:
-        self._timestate = timestate
+    __slots__ = ("_program", "block", "state", "lag", "space", "clock", "point")
+
+    def __init__(self, *, program: Any, block: Any, state: Any,
+                 lag: Any, clock: Any, space: Any = None) -> None:
+        _validate_state_metadata("HistoryHandle", block, state, space, clock)
+        if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:
+            raise ValueError("HistoryHandle: lag must be a Python int >= 1 (got %r)" % (lag,))
+        super().__init__(
+            _state_local_id(block, state, clock, "history|%d" % lag),
+            kind="state_history", owner=program.owner_path)
+        object.__setattr__(self, "_program", program)
+        object.__setattr__(self, "block", block)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "lag", lag)
+        object.__setattr__(self, "space", space)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", TimePoint(clock, step=-lag))
 
     def __call__(self, lag: Any = 1) -> Any:
-        return self._timestate._history(lag)
-
-    def _lag1(self) -> Any:
-        return self._timestate._history(1)
-
-    def _as_value(self) -> Any:
-        """The lag-1 history Value, for the State-accepting boundaries (bare ``U.prev``)."""
-        return self._lag1()
-
-    # --- affine algebra: bare U.prev behaves as U.prev(1) --------------------------------
-    def __add__(self, other: Any) -> Any:
-        return self._lag1().__add__(other)
-
-    def __radd__(self, other: Any) -> Any:
-        return self._lag1().__radd__(other)
-
-    def __sub__(self, other: Any) -> Any:
-        return self._lag1().__sub__(other)
-
-    def __rsub__(self, other: Any) -> Any:
-        return self._lag1().__rsub__(other)
-
-    def __mul__(self, other: Any) -> Any:
-        return self._lag1().__mul__(other)
-
-    def __rmul__(self, other: Any) -> Any:
-        return self._lag1().__rmul__(other)
-
-    def __truediv__(self, other: Any) -> Any:
-        return self._lag1().__truediv__(other)
+        return self._program._history_handle_from(self, lag)
 
     def __repr__(self) -> str:
-        return "<_Prev %s.%s>" % (self._timestate.block, self._timestate.name)
+        return "HistoryHandle(block=%r, state=%r, lag=%d)" % (
+            block_name(self.block), state_name(self.state), self.lag)
 
 
-class TimeState:
-    """A family of typed temporal-version handles for one block state (Spec 5 sec.5.3.1).
+class StateEndpointHandle(Handle):
+    """Immutable commit-only destination of one end-of-step state.
 
-    Built by ``P.state("U", block="plasma")``. Exposes:
-
-      - ``.n``        -- the current state ``U^n`` (a cached Value; read-only);
-      - ``.stage(k)`` -- a cached :class:`_Version` for stage ``k`` (int or str), undefined
-                         until ``T.define``;
-      - ``.next``     -- a cached :class:`_Version` for the end-of-step state ``U^{n+1}``;
-      - ``.prev`` / ``.prev(lag)`` -- the lagged history, requiring ``keep_history`` first.
-
-    The handles carry NO runtime arrays: ``.n`` is an SSA Value (an IR node, not data), the
-    versions hold only a key, and ``.prev`` holds only its parent.
+    It deliberately has no value resolution or symbolic algebra. Program.commit also
+    verifies that it is the exact endpoint issued and cached by that Program.
     """
 
-    def __init__(self, program: Any, block: Any, name: Any = "U") -> None:
-        if not isinstance(block, str) or not block:
-            raise ValueError("TimeState: block must be a non-empty string")
-        self.program = program
-        self.block = block
-        self.name = name or "U"
-        self._n = None
-        self._stages = {}
-        self._next = None
-        self._prev = _Prev(self)
-        self._history_depth = None
-        self._cold_start = None
-        self._checkpoint_policy = None
+    __slots__ = ("block", "state", "space", "clock", "point")
 
-    # --- the current state U^n (read-only) -----------------------------------------------
+    @property
+    def expression_readable(self) -> bool:
+        return False
+
+    def __init__(self, *, owner: Any, block: Any, state: Any,
+                 clock: Any, space: Any = None) -> None:
+        _validate_state_metadata("StateEndpointHandle", block, state, space, clock)
+        super().__init__(
+            _state_local_id(block, state, clock, "next"),
+            kind="state_endpoint", owner=owner)
+        object.__setattr__(self, "block", block)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "space", space)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", TimePoint(clock, step=1))
+
+
+class TimeState(Handle):
+    """Immutable family handle for ``U.n``, stages, history and ``U.next``."""
+
+    __slots__ = ("_program", "block", "state", "space", "clock", "point")
+
+    @property
+    def expression_readable(self) -> bool:
+        return False
+
+    def __init__(self, program: Any, block: Any, state: Any, *,
+                 clock: Any, space: Any = None) -> None:
+        _validate_state_metadata("TimeState", block, state, space, clock)
+        super().__init__(
+            _state_local_id(block, state, clock, "family"),
+            kind="time_state", owner=program.owner_path)
+        object.__setattr__(self, "_program", program)
+        object.__setattr__(self, "block", block)
+        object.__setattr__(self, "state", state)
+        object.__setattr__(self, "space", space)
+        object.__setattr__(self, "clock", clock)
+        object.__setattr__(self, "point", TimePoint(clock))
+
+    @property
+    def name(self) -> str:
+        return state_name(self.state)
+
     @property
     def n(self) -> Any:
-        """The current conservative state ``U^n`` (cached Value, byte-identical to the
-        positional ``P.state(block)``)."""
-        if self._n is None:
-            self._n = self.program.state(self.block)
-        return self._n
+        return self._program._current_time_value(self)
 
-    # --- stages / next (SSA versions, defined via T.define) ------------------------------
-    def stage(self, key: Any) -> Any:
-        """A cached :class:`_Version` handle for stage ``key`` (an int or str). Undefined
-        until lowered with ``T.define``; reusing the same key returns the same handle.
-
-        ``stage`` is the temporal-VERSION handle only (a numbered version of this block state). A free
-        intermediate value (an RHS, a scratch combine) does NOT need a stage: name it with the short
-        ``T.value("name", expr)`` (ADC-561), which lowers to the same IR as ``T.define("name", expr)``.
-        """
-        if not isinstance(key, (int, str)) or isinstance(key, bool):
-            raise ValueError("TimeState.stage: key must be an int or a str (got %r)" % (key,))
-        if key not in self._stages:
-            self._stages[key] = _Version(self, key)
-        return self._stages[key]
+    def stage(self, key: Any, *, point: Any) -> StageHandle:
+        return self._program._stage_handle(self, key, point)
 
     @property
-    def next(self) -> Any:
-        """A cached :class:`_Version` for the end-of-step state ``U^{n+1}``."""
-        if self._next is None:
-            self._next = _Version(self, "next")
-        return self._next
+    def next(self) -> StateEndpointHandle:
+        return self._program._endpoint_handle(self)
 
-    # --- lagged history (requires keep_history) ------------------------------------------
     @property
-    def prev(self) -> Any:
-        """The lagged-history accessor: ``U.prev`` (lag 1) or ``U.prev(lag)``."""
-        return self._prev
-
-    def _history(self, lag: Any) -> Any:
-        """Resolve the history Value at ``lag``, after validating ``keep_history`` set up a
-        deep-enough ring. Lowers to the existing ``P.history`` op."""
-        if isinstance(lag, bool) or not isinstance(lag, int) or lag < 1:
-            raise ValueError("TimeState.prev: lag must be a Python int >= 1 (got %r)" % (lag,))
-        if self._history_depth is None:
-            raise ValueError(
-                "%s.prev requires keep_history first: declare T.keep_history(%s, depth=...) "
-                "before reading a lagged state" % (self.block, self.name))
-        if lag > self._history_depth:
-            raise ValueError(
-                "%s.prev(%d) exceeds the kept history depth %d; raise the keep_history depth"
-                % (self.block, lag, self._history_depth))
-        return self.program.history(self._history_name(), lag)
-
-    def _history_name(self) -> Any:
-        return "%s.%s" % (self.block, self.name)
-
-    # --- lowering hooks driven by Program.define / Program.keep_history ------------------
-    def _is_n(self, version: Any) -> Any:
-        return version is self._n
-
-    def _define(self, version: Any, value: Any) -> Any:
-        """Lower a stage/next definition through the existing ``define`` path and bind the
-        resulting Value onto the handle (SSA single assignment)."""
-        if version is self._n:
-            raise ValueError("current state is read-only in Program")
-        if isinstance(version, _Prev):
-            raise ValueError("history is produced by the history policy")
-        if not isinstance(version, _Version) or version._timestate is not self:
-            raise ValueError("T.define: target is not a version handle of this TimeState")
-        if version._value is not None:
-            raise ValueError("SSA version already defined")
-        gen_name = "%s_%s_%s" % (self.block, self.name, version._key)
-        out = self.program.define(gen_name, value)
-        version._value = out
-        return out
-
-    def _keep_history(self, depth: Any, cold_start: Any = None,
-                      checkpoint_policy: Any = None) -> Any:
-        """Record the history depth / cold-start / checkpoint policy and lower a ``store_history`` of
-        the current state so the ring is populated each step.
-
-        ``checkpoint_policy`` (ADC-626) is a typed history-persistence policy
-        (:class:`pops.time.Dense` / :class:`~pops.time.Interval` / :class:`~pops.time.Revolve`)
-        selecting which ring slots a checkpoint stores; the gaps are recomputed at restart by
-        deterministic replay. ``None`` resolves to :class:`~pops.time.Dense` (the whole-ring historical
-        behaviour) via the named-constant default. The resolved policy is validated against @p depth
-        EAGERLY (author-time coherence -- k / snapshots vs depth) and recorded on the handle as
-        inspectable metadata; a bare string / object is refused (it is not a typed policy)."""
-        from pops.time.history_persistence import resolve_history_persistence
-        if isinstance(depth, bool) or not isinstance(depth, int) or depth < 1:
-            raise ValueError("keep_history: depth must be a Python int >= 1 (got %r)" % (depth,))
-        if cold_start is None:
-            cold_start = CopyCurrent()
-        policy = resolve_history_persistence(checkpoint_policy)
-        policy.validate_for(depth)  # author-time coherence; loud, never deferred to restart
-        self._history_depth = depth
-        self._cold_start = cold_start
-        self._checkpoint_policy = policy
-        # Record (depth, policy) on the Program keyed by the ring name so the compile-time pass
-        # (coherence + determinism) and the checkpoint reach it without retaining this handle.
-        self.program._history_persistence[self._history_name()] = (depth, policy)
-        return self.program.store_history(self._history_name(), self.n)
+    def prev(self) -> HistoryHandle:
+        return self._program._history_handle(self, 1)
 
     def __repr__(self) -> str:
-        return "TimeState(block=%r, name=%r)" % (self.block, self.name)
+        return "TimeState(block=%r, state=%r)" % (
+            block_name(self.block), state_name(self.state))
+
+
+__all__ = ["HistoryHandle", "StageHandle", "StateEndpointHandle", "TimeState"]

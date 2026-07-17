@@ -25,7 +25,8 @@ add_compiled_model). On verifie :
      CompiledModel target="system" est refuse par AmrSystem.add_equation (loader sans pops_install_native_amr).
   5) GARDE-FOU ABI : un loader AMR a cle pops_native_abi_key falsifiee est rejete par add_native_block.
 
-S'auto-saute (exit 0) sans compilateur C++ ou en-tetes pops (comme test_dsl_production).
+S'auto-saute explicitement sur une machine locale sans toolchain native. Dans une lane native de
+release, toute capacite manquante est un echec, jamais une couverture silencieusement retiree.
 """
 from pops.numerics.variables import Conservative, Primitive
 from pops.numerics.riemann import HLLC, Roe
@@ -38,16 +39,22 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
-from pops.runtime.system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from pops.math import sqrt
+from pops.physics._facade import Model
+from pops.runtime._system import AmrSystem, AmrSystemConfig  # ADC-545 advanced runtime seam
+from tests.python.support.initial_states import bubble_amr as _bubble
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
 GAMMA = 1.4
-from tests.python.support.requirements import repo_include
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 
@@ -98,9 +105,6 @@ def _build_euler_poisson():
     return m
 
 
-from tests.python.support.initial_states import bubble_amr as _bubble
-
-
 def _amr(n, L, branch, refine=1.2):
     cfg = AmrSystemConfig()
     cfg.n = n
@@ -114,12 +118,57 @@ def _amr(n, L, branch, refine=1.2):
     return s
 
 
+def _install_compiled_amr(system, component, *, weno5=False):
+    """Install a production AMR package through the authenticated runtime facade.
+
+    The historical ``system._s.add_native_block`` call bypassed the final Python contract and was
+    removed from the extension.  ``AmrSystem.add_equation`` is the supported dispatcher for a
+    ``CompiledModel(target='amr_system')``; it still reaches the same native loader boundary.
+    """
+    spatial = engine.Spatial(
+        weno5=True if weno5 else False,
+        minmod=not weno5,
+        flux=Rusanov(),
+        recon=Conservative(),
+    )
+    system.add_equation("gas", component, spatial=spatial, time=engine.Explicit())
+
+
+def _component_at(component, so_path):
+    """Detach valid metadata while substituting a deliberately mismatched ABI package path."""
+    return CompiledModel(
+        so_path=so_path,
+        backend=component.backend,
+        target=component.target,
+        cons_names=component.cons_names,
+        state_spaces=component.state_spaces,
+        cons_roles=component.cons_roles,
+        prim_names=component.prim_names,
+        n_vars=component.n_vars,
+        gamma=component.gamma,
+        n_aux=component.n_aux,
+        params=component.params,
+        caps=component.caps,
+        abi_key=component.abi_key,
+        model_hash=component.model_hash,
+        cxx=component.cxx,
+        std=component.std,
+        hllc=component.has_hllc,
+        roe=component.has_roe,
+        aux_extra_names=component.aux_extra_names,
+        wave_speeds=component.has_wave_speeds,
+        wave_speed_provider=component.wave_speed_provider,
+        elliptic_field_names=component.elliptic_field_names,
+        definition_identity=component.definition_identity,
+    )
+
+
 def main():
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
-        print("test_dsl_production_amr : OK (rien a compiler)")
-        return
+    cxx = default_cxx()
+    missing = missing_native_compile_requirement(INCLUDE, cxx)
+    if missing is not None:
+        require_native_or_skip(missing)
+    assert cxx is not None
 
     n, L = 48, 1.0
     tmp = tempfile.mkdtemp()
@@ -128,20 +177,17 @@ def main():
         et = _build_euler_transport()
         cm_t = et.compile(os.path.join(tmp, "euler_transport_amr.so"), INCLUDE,
                           backend="production", target="amr_system")
-        so_t = cm_t.so_path
         assert isinstance(cm_t, CompiledModel)
-        assert cm_t.adder == "add_native_block" and cm_t.target == "amr_system"
+        assert cm_t.backend == "production" and cm_t.target == "amr_system"
         assert cm_t.caps.get("amr") is True, "production caps amr=True (Phase D)"
-        spec_t = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                           transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                           elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+        spec_t = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                           transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                           elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
-        A = _amr(n, L, lambda s: s._s.add_native_block(
-            "gas", so_t, limiter="minmod", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1))
-        B = _amr(n, L, lambda s: s.add_block(
-            "gas", spec_t, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()))
+        A = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t))
+        B = _amr(n, L, lambda s: s.add_equation(
+            "gas", spec_t, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()))
         assert A.n_patches() == B.n_patches(), "n_patches initial production != add_block"
         dt = 2e-4
         for _ in range(12):
@@ -161,20 +207,17 @@ def main():
         ep = _build_euler_poisson()
         cm_p = ep.compile(os.path.join(tmp, "euler_poisson_amr.so"), INCLUDE,
                           backend="production", target="amr_system")
-        so_p = cm_p.so_path
-        spec_p = pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                           transport=pops.CompressibleFlux(), source=pops.GravityForce(),
-                           elliptic=pops.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
+        spec_p = engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                           transport=engine.CompressibleFlux(), source=engine.GravityForce(),
+                           elliptic=engine.GravityCoupling(sign=-1.0, four_pi_G=1.0, rho0=1.0))
 
         def poisson(s):
             s.set_poisson("charge_density", "geometric_mg")
 
-        C = _amr(n, L, lambda s: (s._s.add_native_block(
-            "gas", so_p, limiter="minmod", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1), poisson(s)))
-        D = _amr(n, L, lambda s: (s.add_block(
-            "gas", spec_p, spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()), poisson(s)))
+        C = _amr(n, L, lambda s: (_install_compiled_amr(s, cm_p), poisson(s)))
+        D = _amr(n, L, lambda s: (s.add_equation(
+            "gas", spec_p, spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()), poisson(s)))
         assert C.n_patches() == D.n_patches()
         m0c, m0d = C.mass(), D.mass()
         assert abs(m0c - m0d) < 1e-12 * (abs(m0d) + 1.0), "masse initiale production != add_block"
@@ -198,11 +241,11 @@ def main():
             """add_equation(riemann, recon) BIT-IDENTIQUE a add_block (dmax==0)."""
             R = _amr(n, L, lambda s: s.add_equation(
                 "gas", cm_t,
-                spatial=pops.FiniteVolume(limiter=Minmod(), riemann=riem, variables=recon)))
-            S = _amr(n, L, lambda s: s.add_block(
+                spatial=engine.Spatial(limiter=Minmod(), flux=riem, recon=recon)))
+            S = _amr(n, L, lambda s: s.add_equation(
                 "gas", spec_t,
-                spatial=pops.Spatial(minmod=True, flux=riem, recon=recon),
-                time=pops.Explicit()))
+                spatial=engine.Spatial(minmod=True, flux=riem, recon=recon),
+                time=engine.Explicit()))
             for _ in range(12):
                 R.step(dt)
                 S.step(dt)
@@ -241,7 +284,7 @@ def main():
         try:
             s_nop = AmrSystem(n=n, L=L, periodic=True)
             s_nop.add_equation("gas", cm_iso,
-                               spatial=pops.Spatial(minmod=True, flux=HLLC()))
+                               spatial=engine.Spatial(minmod=True, flux=HLLC()))
         except ValueError as ex:
             raised = True
             assert "hllc" in str(ex).lower()
@@ -251,12 +294,10 @@ def main():
         # --- (3w) WENO5 (3 ghosts) CABLE sur AMR : parite stricte production == add_block + != minmod.
         # Le coupleur alloue ses niveaux a Limiter::n_ghost (3) et le regrid herite n_grow() : le
         # stencil 5 points ne lit pas hors bornes (MEME mecanisme ghost que System, pas de duplication).
-        Aw = _amr(n, L, lambda s: s._s.add_native_block(
-            "gas", so_t, limiter="weno5", riemann="rusanov", recon="conservative",
-            time="explicit", gamma=GAMMA, substeps=1))
-        Bw = _amr(n, L, lambda s: s.add_block(
-            "gas", spec_t, spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
-            time=pops.Explicit()))
+        Aw = _amr(n, L, lambda s: _install_compiled_amr(s, cm_t, weno5=True))
+        Bw = _amr(n, L, lambda s: s.add_equation(
+            "gas", spec_t, spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()),
+            time=engine.Explicit()))
         assert Aw.n_patches() == Bw.n_patches(), "weno5 : n_patches initial production != add_block"
         for _ in range(12):
             Aw.step(dt)
@@ -274,7 +315,7 @@ def main():
         # Reutilise cm_t (transport pur) : pas de Poisson, tourne sans set_poisson.
         Gw = AmrSystem(n=n, L=L, periodic=True)
         Gw.add_equation("gas", cm_t,
-                        spatial=pops.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
+                        spatial=engine.Spatial(weno5=True, flux=Rusanov(), recon=Conservative()))
         Gw.set_refinement(1.2)
         Gw.set_density("gas", _bubble(n))
         for _ in range(4):
@@ -287,7 +328,7 @@ def main():
         E = AmrSystem(n=n, L=L, periodic=True)
         E.set_poisson("charge_density", "geometric_mg")
         E.add_equation("gas", cm_t,
-                       spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
+                       spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         E.set_refinement(1.2)
         E.set_density("gas", _bubble(n))
         for _ in range(4):
@@ -296,21 +337,13 @@ def main():
         print("OK  (3b) AmrSystem.add_equation(production, rusanov) tourne et reste physique")
 
         # --- (4) GARDE-FOUS de compilation / dispatch ---
-        raised = False
-        try:
-            ep.compile(os.path.join(tmp, "bad.so"), INCLUDE, backend="aot", target="amr_system")
-        except ValueError as ex:
-            raised = True
-            assert "amr_system" in str(ex)
-        assert raised, "compile(backend='aot', target='amr_system') aurait du lever"
-
         sys_cm = ep.compile(os.path.join(tmp, "ep_sys_cm.so"), INCLUDE,
                             backend="production", target="system")  # target System par defaut
         s = AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
             s.add_equation("gas", sys_cm,
-                           spatial=pops.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
+                           spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()))
         except ValueError as ex:
             raised = True
             assert "target='system'" in str(ex) or "amr_system" in str(ex)
@@ -319,11 +352,16 @@ def main():
 
         # --- (5) GARDE-FOU ABI : loader AMR a cle pops_native_abi_key falsifiee -> rejet ---
         bad_abi = _compile_wrong_abi(ep, os.path.join(tmp, "ep_amr_wrongabi.so"), cxx)
+        bad_component = _component_at(cm_p, bad_abi)
         s = AmrSystem(n=n, L=L, periodic=True)
         raised = False
         try:
-            s._s.add_native_block("gas", bad_abi, limiter="minmod", riemann="rusanov",
-                                  recon="conservative", time="explicit", gamma=GAMMA)
+            s.add_equation(
+                "gas",
+                bad_component,
+                spatial=engine.Spatial(minmod=True, flux=Rusanov(), recon=Conservative()),
+                time=engine.Explicit(),
+            )
         except RuntimeError as ex:
             raised = True
             assert "ABI" in str(ex), "message inattendu : %s" % ex
@@ -341,8 +379,8 @@ def _compile_wrong_abi(model, dst_so, cxx):
     On regenere (pas de patch binaire : sur macOS ARM cela invaliderait la signature et tuerait le
     process). Renvoie le chemin du .so."""
     from pops.codegen.toolchain import pops_loader_build_flags
-    # model est une facade Model : le HyperbolicModel backing (_m) porte emit_cpp_native_loader.
-    src = model._m.emit_cpp_native_loader(target="amr_system")
+    lowering = model.__pops_compiler_lowering__()
+    src = lowering.native_loader_source(target="amr_system")
     # PoPS est Kokkos-only : le loader inclut les en-tetes pops -> Kokkos + (macOS) -undefined
     # dynamic_lookup via pops_loader_build_flags. SIGNATURE D'EN-TETES FAUSSE conservee (le .so compile
     # mais doit etre REJETE a l'ABI par add_native_block).

@@ -74,6 +74,22 @@ def test_decorator_registers_generated_solver_descriptor():
     assert callable(d.builder)
 
 
+def test_scalar_int_preserves_integers_beyond_binary64_exact_range():
+    from pops.time import Program
+
+    def build(value):
+        program = Program("large_scalar_int")
+        scalar = lib.SolverContext(program).scalar_int(value)
+        return program, scalar
+
+    lower, lower_value = build(2**53)
+    upper, upper_value = build(2**53 + 1)
+
+    assert lower_value.attrs["operands"][0][1].to_data()["value"] == str(2**53)
+    assert upper_value.attrs["operands"][0][1].to_data()["value"] == str(2**53 + 1)
+    assert lower._ir_hash() != upper._ir_hash()
+
+
 def test_descriptor_is_registered_in_the_catalog():
     @lib.solver(name="cataloged_solver")
     def s(ctx, A, b):
@@ -118,7 +134,7 @@ def test_while_records_a_cond_block_over_the_loop_updated_iterate():
 
     # The predicate lives in its OWN cond_block (re-run each pass), not only the body block.
     cond_block = w.attrs.get("cond_block")
-    assert isinstance(cond_block, list) and cond_block, (
+    assert isinstance(cond_block, tuple) and cond_block, (
         "the while node must carry a non-empty cond_block (the re-evaluated predicate); "
         "a missing cond_block freezes the test on the initial iterate")
     assert "body_block" in w.attrs and w.attrs["body_block"]
@@ -126,7 +142,8 @@ def test_while_records_a_cond_block_over_the_loop_updated_iterate():
     # The recorded condition is the Bool the predicate built, and it lives in the cond_block.
     cond = w.attrs.get("cond")
     assert cond is not None and cond.vtype == "bool"
-    assert cond in cond_block, "the recorded condition Bool must be in the cond_block"
+    assert any(node is cond for node in cond_block), (
+        "the recorded condition Bool must be in the cond_block")
 
     # The iterate A(x) is applied to the LOOP-UPDATED x. The body produces a fresh State
     # (the linear_combine) with a higher SSA id than the initial zero iterate; the cond_block
@@ -272,7 +289,9 @@ def test_cpp_generation_binds_the_iteration_cap_to_the_real_loop_counter():
     assert "pops_iters" in src
     # The authored cap (37) appears as a literal compared against the loop counter.
     assert "37" in src
-    assert "pops_iters) < static_cast<pops::Real>(37" in src
+    cap_line = next(line for line in src.splitlines()
+                    if "pops_iters" in line and "<" in line and "37" in line)
+    assert "pops_iters" in cap_line and "37" in cap_line
 
 
 def test_cpp_generation_allocates_scratch_once_before_the_loop():

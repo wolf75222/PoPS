@@ -6,6 +6,7 @@ etats deterministes, et son resultat compare a l'interprete numpy (meme arbre, d
 Pur Python ; lance avec python3 (PYTHONPATH = paquet pops construit). Le compilateur est celui qui
 a deja servi a batir _pops, donc disponible dans le job CI correspondant.
 """
+from tests.python.support.requirements import require_native_or_skip
 import os
 import shutil
 import subprocess
@@ -13,8 +14,8 @@ import tempfile
 
 import numpy as np
 
-from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
+from pops.math import sqrt
+from pops.physics._model import HyperbolicModel
 
 GAMMA = 1.4
 
@@ -47,7 +48,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx:
-        print("skip  pas de compilateur C++ -> verification numerique sautee")
+        require_native_or_skip('skip  pas de compilateur C++ -> verification numerique sautee')
         print("test_dsl_codegen : OK (forme de la source seulement)")
         return
 
@@ -84,7 +85,8 @@ def main():
         U = np.array(s, dtype=float).reshape(4, 1, 1)
         for d in (0, 1):
             f_interp = e.flux(U, {}, d).reshape(4)
-            f_cpp = np.array(rows[k]); k += 1
+            f_cpp = np.array(rows[k])
+            k += 1
             assert np.allclose(f_interp, f_cpp, rtol=1e-12, atol=1e-12), \
                 "flux C++ != interprete (etat %s, dir %d) : %s vs %s" % (s, d, f_interp, f_cpp)
     print("OK  flux C++ genere == interprete numpy (%d etats x 2 directions, compile %s)"

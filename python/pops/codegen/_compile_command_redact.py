@@ -1,6 +1,6 @@
 """Redaction helper for the compile-command introspection string (Spec 5 sec.12.4, #49).
 
-Extracted from :mod:`pops.codegen.compile_drivers` to keep that module under the Spec-4 500-line
+Extracted from :mod:`pops.codegen._compile_drivers` to keep that module under the Spec-4 500-line
 budget. ``_redact_compile_command`` is a pure function (no codegen state) re-imported by
 ``compile_drivers`` and called once per fresh compile.
 """

@@ -50,6 +50,29 @@ def test_durations_keys_reference_real_files():
     assert not missing, f"timings JSON references files that no longer exist: {missing}"
 
 
+def test_duration_catalog_exactly_matches_manifest_selection_universe():
+    """Every selected file has an explicit weight; median fallback is emergency-only."""
+    selector = _load("ci_select_tests")
+    universe = {
+        path
+        for suite in selector.manifest_python_suites(selector.load_manifest())
+        for path in suite["files"]
+    }
+    durations = binpack.load_durations()
+    assert set(durations) == universe, (
+        "duration catalog drift: missing=%s stale=%s"
+        % (sorted(universe - set(durations)), sorted(set(durations) - universe))
+    )
+    raw = json.loads(
+        (REPO_ROOT / "tests/python/test_durations.json").read_text(encoding="utf-8")
+    )
+    meta = raw["_meta"]
+    estimated = set(meta["estimated_files"])
+    assert meta["total_files"] == len(universe)
+    assert meta["estimated_count"] == len(estimated)
+    assert estimated <= universe
+
+
 def test_excluded_files_exist():
     """Each dedicated-job (compile-cache) file the binpacker excludes really exists."""
     for rel in binpack.EXCLUDED_FROM_SHARDS:

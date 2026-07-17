@@ -2,14 +2,15 @@
 
 Verifie : (1) le flux d'Euler ECRIT en formules == flux d'Euler de reference (numpy), composante
 par composante ; (2) max_wave_speed coherent ; (3) check() detecte une variable non definie
-(verification de dependances) ; (4) le modele declare en formules TOURNE via pops.experimental.PythonFlux
-(masse conservee sur un domaine periodique). Pur Python (aucun binding) : lance avec python3.
+(verification de dependances) ; (4) un oracle vectorise reserve aux tests verifie la conservation
+sur un domaine periodique. Pur Python (aucun binding) : lance avec python3.
 """
 import numpy as np
 
-from pops.ir.expr import Var
-from pops.ir.ops import sqrt
-from pops.physics.model import HyperbolicModel
+from pops._ir.expr import Var
+from pops.math import sqrt
+from pops.physics._model import HyperbolicModel
+from tests.python.support.finite_volume_oracle import finite_volume_oracle
 
 GAMMA = 1.4
 
@@ -89,13 +90,13 @@ def main():
     U[0] = 1.0                      # rho uniforme
     U[3] = p0 / (GAMMA - 1.0)       # u = v = 0 -> E = p/(gamma-1)
     mass0 = float(U[0].sum())
-    pf = e.to_python_flux()
+    pf = finite_volume_oracle(e)
     for _ in range(40):
         U = U + pf.cfl_dt(U, h, 0.4) * pf.residual(U, h)
     drel = abs(float(U[0].sum()) - mass0) / mass0
     assert np.isfinite(U).all() and U[0].min() > 0, "etat non physique"
     assert drel < 1e-9, "masse non conservee (drel = %.2e)" % drel
-    print("OK  euler symbolique tourne via PythonFlux (masse conservee, drel %.1e)" % drel)
+    print("OK  oracle FV de test conserve la masse (drel %.1e)" % drel)
 
     print("test_dsl : tout est vert")
 

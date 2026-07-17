@@ -1,8 +1,8 @@
 """Runtime freeze lifecycle shared by System and AmrSystem (ADC-592).
 
 The runtime lifecycle is EXPLICIT: a composition is mutable while ``assembling`` (blocks, field
-problems, AMR layout, source stage, refinement, solver routes, aux layout), FROZEN once
-``pops.bind`` completes (``bound``), and only DATA / runtime-param / io / diagnostic operations
+problems, AMR layout, refinement, solver routes, aux layout), FROZEN once
+``pops.bind`` completes (``bound``), and only state/field DATA, io and diagnostic operations
 stay allowed on the running simulation. This module is the ONE place Uniform and AMR share the
 freeze semantics, so both engines refuse the same structural setters with the same
 bind-vocabulary error (issue requirement: shared semantics).
@@ -10,10 +10,10 @@ bind-vocabulary error (issue requirement: shared semantics).
 Two pieces are shared:
 
   - :data:`FROZEN_STRUCTURAL` -- the set of NATIVE structural setter names a bound engine must not
-    expose through its ``__getattr__`` native passthrough (the ``sim._engine.install_program``
+    expose through its ``__getattr__`` native passthrough (the ``instance.install_program``
     bypass closer, effective even under an old ``.so`` with no native ``mark_bound``);
   - :func:`freeze_error` -- the shared, precise ``RuntimeError`` message (never recommends a legacy
-    setter as the remedy; always points at ``pops.Problem`` + ``pops.compile`` + ``pops.bind``).
+    setter as the remedy; always points at ``pops.Case`` + ``pops.compile`` + ``pops.bind``).
 
 The Python-layer guard is bypass-proof WITHOUT the native ``mark_bound``: the engines carry a
 ``self._lifecycle`` string flag (``assembling`` at ``__init__``, ``bound`` after
@@ -34,26 +34,24 @@ else:
 # NATIVE structural setter names that the frozen engine must intercept in its ``__getattr__``
 # native passthrough (each exists on System and/or AmrSystem's C++ facade ``_s``). A bound engine
 # returns the freeze RuntimeError instead of the native callable for any of these, so
-# ``sim._engine.install_program(...)`` / ``sim._engine.set_refinement(...)`` cannot bypass the
-# freeze even when the native ``mark_bound`` is absent (old prebuilt ``.so``). The data-writing
-# setters (set_density / set_magnetic_field / set_aux_field_component / set_state / set_block_params
-# / set_program_params / set_clock / set_potential) are DELIBERATELY absent: they are allowed
-# runtime mutations.
+# ``instance.install_program(...)`` / ``instance.set_refinement(...)`` cannot bypass the
+# freeze even when the native ``mark_bound`` is absent. Raw parameter-carrier setters are also
+# structural after bind: only BindSchema may populate them. State/field/clock data remain mutable.
 FROZEN_STRUCTURAL = frozenset({
     # blocks / field problems / aux LAYOUT
-    "add_block", "add_equation", "add_dynamic_block", "add_compiled_block", "add_native_block",
+    "add_block", "add_equation", "_install_native_block",
     "set_poisson", "set_epsilon_field", "set_epsilon_anisotropic_field", "set_reaction_field",
     "set_aux_field_halo_component", "set_electron_temperature_from", "register_elliptic_field",
     "set_block_elliptic_field", "set_compiled_block",
-    # inter-species couplings / source stage
+    # inter-species couplings
     "add_ionization", "add_collision", "add_thermal_exchange", "add_coupled_source",
-    "set_source_stage", "set_time_scheme", "set_gauss_policy",
     # geometry / disc domain
     "set_disc_domain", "set_geometry_mode",
     # AMR refinement / layout
     "set_refinement", "set_phi_refinement", "set_conservative_state",
     # installed time Program
     "install_program", "install_program_step", "set_program_cadence", "add_dt_bound",
+    "set_program_params",
 })
 
 
@@ -61,16 +59,16 @@ def freeze_error(what: Any) -> Any:
     """The precise :class:`RuntimeError` for a structural mutation attempted after ``pops.bind``.
 
     @p what names the refused operation (a method / attribute name). The message speaks the BIND
-    vocabulary and points at the assembly path (``pops.Problem`` + ``pops.compile`` + ``pops.bind``);
+    vocabulary and points at the assembly path (``pops.Case`` + ``pops.compile`` + ``pops.bind``);
     it NEVER recommends a legacy setter as the remedy (no ``add_block`` / ``set_poisson`` /
     ``install_program`` / ``set_refinement`` as an alternative), so it cannot be read as a
     validation bypass.
     """
     return RuntimeError(
         "pops.bind: %r is frozen once pops.bind completes (runtime lifecycle 'bound'): the "
-        "composition (blocks / field problems / AMR layout / source stage / refinement / solver "
-        "routes / aux layout / installed Program) is declared on the pops.Problem and lowered with "
-        "pops.compile(...) + pops.bind(...); only runtime data / params / checkpoint / diagnostics "
+        "composition (blocks / field problems / AMR layout / refinement / solver "
+        "routes / aux layout / installed Program) is declared on the pops.Case and lowered with "
+        "pops.compile(...) + pops.bind(...); only state/field data, checkpoint and diagnostics "
         "may change on a bound simulation." % (what,))
 
 
@@ -78,7 +76,7 @@ def guard_assembling(engine: Any, what: Any) -> Any:
     """Raise :func:`freeze_error` when @p engine is already bound (the Python-layer structural guard).
 
     Called at the TOP of each Python-implemented structural method (add_block / add_equation /
-    set_poisson / set_source_stage / set_disc_domain / _install_compiled / ...). Enforces the freeze
+    set_poisson / set_disc_domain / _install_compiled / ...). Enforces the freeze
     at the Python layer WITHOUT the native ``mark_bound`` (bypass-proof on a prebuilt ``.so``): it
     reads the engine's ``_lifecycle`` flag, defaulting to ``assembling`` (so an engine constructed
     before this flag existed is never spuriously frozen). The default keeps a fresh engine mutable
@@ -86,25 +84,6 @@ def guard_assembling(engine: Any, what: Any) -> Any:
     """
     if getattr(engine, "_lifecycle", "assembling") != "assembling":
         raise freeze_error(what)
-
-
-def reject_compiled_time_route(time: Any, where: Any) -> Any:
-    """Refuse ``time=CompiledTime(...)`` on the native install seam (ADC-554).
-
-    A compiled ``Program`` is not a per-block transport POLICY: it OWNS the whole step and is installed
-    separately (``pops.bind(..., cadence=CompiledTime(...))`` drives its macro-step cadence), so a
-    ``CompiledTime`` handed as ``time=`` is a category error. It is refused with a structured message
-    pointing at the Problem time scheme and the cadence path -- NOT a bare ``AttributeError`` on ``.kind``.
-    ``CompiledTime`` stays importable / constructible in its ``cadence=`` role; only the bypass is blocked.
-    """
-    from pops.time.program import CompiledTime
-    if isinstance(time, CompiledTime):
-        raise TypeError(
-            "%s: time=CompiledTime(...) is not a transport time policy -- a compiled Program owns the "
-            "whole step and is installed separately (pops.bind(..., cadence=CompiledTime(...)) drives its "
-            "macro-step cadence). Declare the time scheme on the Problem; a pops.lib.time macro returns an "
-            "inspectable Program (the one IR route). CompiledTime is the cadence descriptor, never the "
-            "time= policy." % (where,))
 
 
 def derive_lifecycle_state(engine: Any) -> Any:
@@ -172,6 +151,38 @@ class _LifecycleMixin(_System):
         """The :class:`~pops.runtime._bound_snapshot.BoundSnapshot` of what ``pops.bind`` froze
         (``None`` before bind)."""
         return getattr(self, "_bound_snapshot", None)
+
+    @property
+    def bind_identity(self) -> Any:
+        """Domain-``bind`` identity of the frozen bind manifest."""
+        snapshot = getattr(self, "_bound_snapshot", None)
+        return getattr(snapshot, "bind_identity", None) if snapshot is not None else None
+
+    def _checkpoint_identities(self) -> tuple[Any, Any, Any]:
+        """Provide the three authenticated bind identities to checkpoint envelopes."""
+        snapshot = getattr(self, "_bound_snapshot", None)
+        if snapshot is None:
+            raise RuntimeError("checkpoint requires a completed pops.bind transaction")
+        return (
+            snapshot.semantic_identity,
+            snapshot.artifact_identity,
+            snapshot.bind_identity,
+        )
+
+    @property
+    def last_run_manifest(self) -> Any:
+        """The last canonical execution request, or ``None`` before :meth:`run`."""
+        return getattr(self, "_last_run_manifest", None)
+
+    @property
+    def last_run_identity(self) -> Any:
+        """Domain-``run`` identity of :attr:`last_run_manifest`."""
+        return getattr(self, "_last_run_identity", None)
+
+    @property
+    def last_restart_identity(self) -> Any:
+        """Authenticated domain-``restart`` identity of the last restored checkpoint."""
+        return getattr(self, "_last_restart_identity", None)
 
 
 __all__ = ["FROZEN_STRUCTURAL", "freeze_error", "guard_assembling", "derive_lifecycle_state",

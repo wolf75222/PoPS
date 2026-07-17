@@ -6,6 +6,8 @@ the declared runtime params, the supplied initial state), so they are exercised 
 Python objects -- no compiled ``.so``, no ``_pops``. The compiler-gated end-to-end refusal lives in
 the integration tier; this tier proves the refusal LOGIC.
 """
+from types import SimpleNamespace
+
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
@@ -46,11 +48,40 @@ class _Uniform:
         self.mesh = _Mesh(n)
 
 
+class _MultiLayout:
+    """Minimal exact multi-layout authority used by the pure bind gate."""
+
+    def __init__(self, assignments):
+        handles = {name: object() for name in assignments}
+        self.rows = tuple(SimpleNamespace(handle=handles[name], descriptor=layout)
+                          for name, layout in assignments.items())
+        self.plan = SimpleNamespace(assignments=tuple(
+            SimpleNamespace(
+                subject_kind="block",
+                subject=SimpleNamespace(local_id=name),
+                layout=handles[name],
+            )
+            for name in assignments
+        ))
+
+    def descriptor(self, handle):
+        matches = [row.descriptor for row in self.rows if row.handle is handle]
+        if len(matches) != 1:
+            raise KeyError("unknown layout handle")
+        return matches[0]
+
+
 class _AMR:
-    """An AMR layout stand-in: carries .base (the coarse mesh), like pops.mesh.layouts.AMR."""
+    """An AMR layout stand-in exposing capabilities() and runtime_layout_data()."""
 
     def __init__(self, n):
-        self.base = _Mesh(n)
+        self.n = n
+
+    def capabilities(self):
+        return {"layout": "amr"}
+
+    def runtime_layout_data(self):
+        return {"grid": {"cells": [self.n, self.n]}}
 
 
 class _Array:
@@ -59,6 +90,11 @@ class _Array:
     def __init__(self, shape, dtype="float64"):
         self.shape = tuple(shape)
         self.dtype = type("D", (), {"name": dtype})()
+
+
+class _BoundSubject:
+    def __init__(self, block):
+        self.block_ref = SimpleNamespace(local_id=block)
 
 
 def _one_block_args(components=1):
@@ -82,21 +118,25 @@ def test_haloed_initial_state_shape_passes():
     assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))}) == []
 
 
-def test_amr_density_initial_state_passes():
-    # The AMR install seeds the per-block coarse DENSITY via set_density (ADC-634): a 2D (n, n)
-    # density (or the flat (n*n,)) is accepted whatever the model's component count.
+def test_amr_initial_state_table_is_refused_for_every_shape():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64, 64))}) == []
-    assert bv.validate_initial_state(manifest, args, layout, {"ne": _Array((64 * 64,))}) == []
+    for shape in ((64, 64), (64 * 64,), (4, 64, 64), (3, 64, 64)):
+        lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array(shape)})
+        assert len(lines) == 1
+        assert "initial_state for AMR block 'ne' is not a supported authority" in lines[0]
+        assert "InitialConditionPlan" in lines[0]
+        assert "initial_values" in lines[0]
 
 
-def test_amr_full_state_is_refused_with_set_density_pointer():
-    # A full (components, n, n) state on AMR is refused: set_density consumes a density, and the
-    # message names the seeding contract.
+def test_typed_amr_initial_value_requires_complete_state():
     manifest, args, layout = _Manifest(), _one_block_args(4), _AMR(64)
-    lines = bv.validate_initial_state(manifest, args, layout, {"ne": _Array((4, 64, 64))})
+    subject = _BoundSubject("ne")
+    assert bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((4, 64, 64))}) == []
+    lines = bv.validate_bound_initial_values(
+        manifest, args, layout, {subject: _Array((64, 64))})
     assert len(lines) == 1
-    assert "set_density" in lines[0]
+    assert "BindArray requires the complete state" in lines[0]
 
 
 def test_wrong_shape_is_refused():
@@ -124,6 +164,43 @@ def test_missing_ghost_depth_manifest_is_refused_as_abi_incomplete():
     lines = bv.validate_initial_state(manifest, _one_block_args(1), _Uniform(64),
                                       {"ne": _Array((64, 64))})
     assert any("no ghost_depth" in l and "ABI-incomplete" in l for l in lines)
+
+
+def test_multi_layout_uses_exact_per_block_ghost_depth_and_mesh():
+    manifest = _Manifest(ghost_depth=None)
+    manifest.ghost_depth_by_block = {"fine": 3, "coarse": 1}
+    args = _Arguments({
+        "fine": {"state": "U", "components": 1, "required": True},
+        "coarse": {"state": "U", "components": 1, "required": True},
+    })
+    layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
+
+    assert bv.validate_initial_state(
+        manifest,
+        args,
+        layout,
+        {"fine": _Array((1, 22, 22)), "coarse": _Array((1, 10, 10))},
+    ) == []
+
+
+def test_multi_layout_refuses_partial_per_block_ghost_authority():
+    manifest = _Manifest(ghost_depth=3)
+    manifest.ghost_depth_by_block = {"fine": 3}
+    args = _Arguments({
+        "fine": {"state": "U", "components": 1, "required": True},
+        "coarse": {"state": "U", "components": 1, "required": True},
+    })
+    layout = _MultiLayout({"fine": _Uniform(16), "coarse": _Uniform(8)})
+
+    lines = bv.validate_initial_state(
+        manifest,
+        args,
+        layout,
+        {"fine": _Array((16, 16)), "coarse": _Array((8, 8))},
+    )
+    assert len(lines) == 1
+    assert "block 'coarse'" in lines[0]
+    assert "ghost_depth_by_block" in lines[0]
 
 
 def test_non_array_initial_state_is_refused():
@@ -181,15 +258,14 @@ def test_missing_abi_key_is_refused_as_unverifiable():
 
 
 def test_mpi_required_but_runtime_lacks_it_is_refused():
-    # The artifact REQUIRES MPI but the runtime does not provide it -> hard refusal.
-    manifest = _Manifest(abi_key="A", supports_mpi=True)
-    lines = bv.validate_bind_manifest(manifest, {"abi_key": "A", "supports_mpi": False})
+    arguments = SimpleNamespace(layout_runtime={"requires_mpi": True})
+    lines = bv.validate_layout_runtime_requirements(arguments, {"supports_mpi": False})
     assert any("MPI support mismatch" in l for l in lines)
 
 
 def test_gpu_required_but_runtime_lacks_it_is_refused():
-    manifest = _Manifest(abi_key="A", supports_gpu=True)
-    lines = bv.validate_bind_manifest(manifest, {"abi_key": "A", "supports_gpu": False})
+    arguments = SimpleNamespace(layout_runtime={"requires_gpu": True})
+    lines = bv.validate_layout_runtime_requirements(arguments, {"supports_gpu": False})
     assert any("GPU / Kokkos" in l for l in lines)
 
 
@@ -198,6 +274,12 @@ def test_more_capable_runtime_is_not_a_mismatch():
     # the runtime being MORE capable than the artifact needs is NOT a mismatch (directional gate).
     manifest = _Manifest(abi_key="A", supports_mpi=False, supports_gpu=False)
     facts = {"abi_key": "A", "supports_mpi": True, "supports_gpu": True}
+    assert bv.validate_bind_manifest(manifest, facts) == []
+
+
+def test_supported_feature_is_not_an_execution_requirement():
+    manifest = _Manifest(abi_key="A", supports_mpi=True, supports_gpu=True)
+    facts = {"abi_key": "A", "supports_mpi": False, "supports_gpu": False}
     assert bv.validate_bind_manifest(manifest, facts) == []
 
 
@@ -321,6 +403,29 @@ def test_supplied_operator_aux_passes():
     assert bv.validate_operator_aux(manifest, aux={"B_z": _Array((64, 64))}) == []
     # Also accepted when already declared on the sim (provided_named_aux).
     assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux={"B_z"}) == []
+
+
+def test_resolved_field_outputs_are_producers_not_bind_inputs():
+    registration = SimpleNamespace(native_options={
+        "output_route": {
+            # Semantic output labels may be "potential" + "gradient"; bind authority is the
+            # resolved scalar component route installed by the native field provider.
+            "components": ("relaxation_potential", "relaxation_gx", "relaxation_gy"),
+        },
+    })
+    artifact = SimpleNamespace(plan=SimpleNamespace(field_plans={"fields": registration}))
+
+    produced = bv.field_produced_aux(artifact)
+    assert produced == ("relaxation_gx", "relaxation_gy", "relaxation_potential")
+    manifest = _Manifest(aux_required=[
+        "relaxation_potential", "relaxation_gx", "relaxation_gy"])
+    assert bv.validate_operator_aux(manifest, aux={}, provided_named_aux=produced) == []
+
+
+def test_resolved_field_output_without_native_component_route_is_refused():
+    registration = SimpleNamespace(native_options={"output_route": {}})
+    with pytest.raises(TypeError, match="no exact native output components"):
+        bv.field_plan_produced_aux({"fields": registration})
 
 
 # ---------------------------------------------------------------------------

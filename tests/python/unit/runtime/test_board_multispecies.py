@@ -8,13 +8,14 @@ existing operator-first multi-block IR (PR #287/#299/#300) rather than a paralle
 * ``m.coupled_rate(...)`` -> the existing ``coupled_rate`` operator kind: a ``RateBundle``
   signature over the input species, the SAME operator the hand-written operator-first model
   registers;
-* ``m.solve_fields_from_species(...)`` -> a multi-input ``field_operator`` (the operator-first
-  surface of ``P.solve_fields_from_blocks``).
+* ``m.field_provider(..., on=species, ...)`` -> one executable block-owned field RHS contribution;
+  a case-owned ``FieldOperator`` composes the qualified providers and its callable field handle
+  consumes every participating state explicitly.
 
 The equivalence pinned here is structural AND at emit: a 3-fluid board model lowers to 3
-StateSpaces + a coupled_rate + a multi-block field operator, and a two-fluid board model emits the
-SAME C++ as the hand-written ``pops.model.Module`` reference (test 34.10). Arbitrary arity (3 + 4
-inputs) works; a wrong-species rate in an affine combine errors (test 34.11). This is the pure
+StateSpaces + a coupled_rate + one exact field provider per species, and a two-fluid board model
+emits the SAME C++ as the hand-written ``pops.model.Module`` reference (test 34.10). Arbitrary arity
+(3 + 4 inputs) works; a wrong-species rate in an affine combine errors (test 34.11). This is the pure
 authoring / IR-equivalence slice; the compiled multi-block ``.so`` collision STEP runs on ROMEO
 (Kokkos-only AOT), NOT here. Real engine only; skips cleanly if pops.time is unavailable, never
 faking.
@@ -22,21 +23,44 @@ faking.
 Runs BOTH as a script (``python3 test_board_multispecies.py``, the CI-style invocation) and under
 pytest (the test_* functions take no args and importorskip pops.time / pops.physics).
 """
-import sys
+from pops.codegen.program_codegen import emit_cpp_program
 
 import pytest
 
 adctime = pytest.importorskip("pops.time")
 physics = pytest.importorskip("pops.physics")
-from pops import model
-from pops.ir.expr import Var
+from pops import model  # noqa: E402
+from pops._ir.expr import Var  # noqa: E402
+from pops.descriptors import Descriptor  # noqa: E402
+from pops.fields import (  # noqa: E402
+    FieldDiscretization,
+    FieldOperator,
+    FieldProviderContribution,
+    FieldProviderPack,
+)
+from pops.math import ValueExpr, laplacian  # noqa: E402
+from pops.problem import Case  # noqa: E402
+from tests.python.support.physics_roles import planar_fluid_roles  # noqa: E402
+
+
+def _typed_program_states(name, module, declarations):
+    """Build exact per-species Case blocks for a multi-state Module."""
+    case = Case(name="%s_case" % name)
+    program = adctime.Program(name)
+    states = {}
+    for block_name, state_space in declarations:
+        state = module.state_handle(state_space)
+        block = case.block(block_name, module, states=(state,))
+        states[block_name] = program.state(block[state])
+    return program, module, case, states
 
 
 def _three_fluid_board():
     """A 3-fluid (electrons / ions / neutrals) board model with a coupled rate + field solve."""
     m = physics.Model("three_fluid")
-    e = m.species("electrons", state=["ne", "mex", "mey"],
-                  roles={"ne": "density", "mex": "momentum_x", "mey": "momentum_y"})
+    e = m.species(
+        "electrons", state=["ne", "mex", "mey"],
+        roles=planar_fluid_roles("ne", "mex", "mey"))
     i = m.species("ions", state=["ni", "mix", "miy"])
     n = m.species("neutrals", state=["nn", "mnx", "mny"])
     m.coupled_rate(
@@ -46,8 +70,10 @@ def _three_fluid_board():
             i: [e["ne"] - i["ni"], i["ni"], i["ni"]],
             n: [n["nn"], n["nn"], n["nn"]],
         })
-    m.solve_fields_from_species("fields", inputs=[e, i, n],
-                                outputs={"phi": None}, solver="geometric_mg")
+    fields = m.field("fields", components=("phi",))
+    m.field_provider("electron_charge", on=e, into=fields, value=e["ne"])
+    m.field_provider("ion_charge", on=i, into=fields, value=-i["ni"])
+    m.field_provider("neutral_charge", on=n, into=fields, value=n["nn"])
     return m, e, i, n
 
 
@@ -68,7 +94,8 @@ def _two_fluid_handwritten():
     e = mod.state_space("electron_state", ("ne", "mex", "mey"))
     i = mod.state_space("ion_state", ("ni", "mix", "miy"))
     bundle = model.RateBundle({"electron_state": model.Rate(e), "ion_state": model.Rate(i)})
-    ne, ni = Var("ne", "cons"), Var("ni", "cons")
+    ne = mod.state_symbols(e)[0]
+    ni = mod.state_symbols(i)[0]
     mod.operator(name="collision", signature=model.Signature((e, i), bundle),
                  kind="coupled_rate",
                  expr={"electron_state": [ni - ne, ne, ne], "ion_state": [ne - ni, ni, ni]})
@@ -77,12 +104,20 @@ def _two_fluid_handwritten():
 
 def _two_fluid_program(mod, e_space, i_space):
     """A forward-Euler collision step over the two-fluid module (board or hand-written)."""
-    P = adctime.Program("two_fluid_collision").bind_operators(mod)
-    e_n = P.state("electron_state", space=e_space)
-    i_n = P.state("ion_state", space=i_space)
-    C = P._call("collision", e_n, i_n)
-    P.commit_many({"electron_state": P.linear_combine("e1", e_n + P.dt * C["electron_state"]),
-                   "ion_state": P.linear_combine("i1", i_n + P.dt * C["ion_state"])})
+    collision = mod.operator_handle("collision")
+    P, _, _, states = _typed_program_states(
+        "two_fluid_collision", mod,
+        (("electron_state", e_space), ("ion_state", i_space)),
+    )
+    e_state, i_state = states["electron_state"], states["ion_state"]
+    e_n, i_n = e_state.n, i_state.n
+    C = collision(e_n, i_n)
+    P.commit_many({
+        e_state.next:
+            P.value("e1", e_n + P.dt * C[e_n.block], at=e_state.next.point),
+        i_state.next:
+            P.value("i1", i_n + P.dt * C[i_n.block], at=i_state.next.point),
+    })
     return P
 
 
@@ -111,21 +146,59 @@ def test_coupled_rate_lowers_to_coupled_rate_operator_with_a_bundle():
     assert len(op.signature.inputs) == 3
 
 
-def test_field_solve_lowers_to_a_multi_input_field_operator():
+def test_field_rhs_lowers_to_one_exact_provider_per_species():
     m, _e, _i, _n = _three_fluid_board()
-    op = m.module.operator_registry().get("fields")
-    assert op.kind == "field_operator"
-    assert len(op.signature.inputs) == 3  # over all three species (solve_fields_from_blocks surface)
-    assert isinstance(op.signature.output, model.FieldSpace)
+    module = m.module
+    fields = module.field_spaces()["fields"]
+    providers = {
+        name: module.operator_registry().get(name)
+        for name in ("electron_charge", "ion_charge", "neutral_charge")
+    }
+    assert isinstance(fields, model.FieldSpace)
+    assert {operator.kind for operator in providers.values()} == {"field_operator"}
+    assert all(operator.signature.output == fields for operator in providers.values())
+    assert {
+        operator.signature.inputs[0].name: len(operator.signature.inputs)
+        for operator in providers.values()
+    } == {"electrons": 1, "ions": 1, "neutrals": 1}
+    assert all(operator.body is not None and not callable(operator.body)
+               for operator in providers.values())
+
+
+def test_retired_multispecies_field_shortcut_is_absent():
+    assert not hasattr(physics.Model("no_silent_field_shortcut"), "solve_fields_from_species")
+
+
+def test_raw_multi_input_field_provider_is_rejected_by_module_lowering():
+    from pops.codegen.lowering_coverage import LoweringRejection
+    from pops.codegen.module_lowering import _module_to_model
+
+    module = model.Module("invalid_multi_provider")
+    electrons = module.state_space("electrons", ("ne",))
+    ions = module.state_space("ions", ("ni",))
+    fields = module.field_space("fields", ("phi",))
+    ne = module.state_symbols(electrons)[0]
+    ni = module.state_symbols(ions)[0]
+    module.operator(
+        name="combined_charge",
+        kind="field_operator",
+        signature=model.Signature((electrons, ions), fields),
+        expr=ne - ni,
+    )
+
+    with pytest.raises(LoweringRejection, match="owned by exactly one block") as error:
+        _module_to_model(module, state_space="electrons")
+    assert error.value.gate == "multi_state_field_provider_unsupported"
 
 
 def test_state_handle_indexes_by_component_name():
     m, e, _i, _n = _three_fluid_board()
     # e["ne"] is the conservative Var of that component (the board access of section 12.3/16),
-    # identical to the operator-first Var("ne", "cons"). Var has no __eq__ (== builds an
-    # expression), so compare by name + kind.
+    # qualified by StateSpace ownership. Var has no Boolean __eq__ (== builds an expression),
+    # so compare it to the canonical Module coordinate by name + kind.
     ne = e["ne"]
-    assert isinstance(ne, Var) and ne.name == "ne" and ne.kind == "cons"
+    canonical = m.module.state_symbols(m.module.state_spaces()[e.name])[0]
+    assert isinstance(ne, Var) and ne.name == canonical.name and ne.kind == "cons"
     with pytest.raises(KeyError):
         _ = e["not_a_component"]
 
@@ -149,13 +222,35 @@ def test_board_two_fluid_emits_identical_cpp_to_handwritten():
     # the lowered program emits BYTE-identical C++ to the hand-written operator-first program.
     bm, be, bi = _two_fluid_board()
     hmod, he, hi = _two_fluid_handwritten()
-    bsrc = _two_fluid_program(bm.module, be.space, bi.space).emit_cpp_program(model=None)
-    hsrc = _two_fluid_program(hmod, he, hi).emit_cpp_program(model=None)
+    board_spaces = bm.module.state_spaces()
+    bsrc = emit_cpp_program(_two_fluid_program(
+        bm.module, board_spaces[be.name], board_spaces[bi.name]), model=None)
+    hsrc = emit_cpp_program(_two_fluid_program(hmod, he, hi), model=None)
     assert bsrc == hsrc
     # one shared multi-state kernel binds both species, reads cons from each state (sanity)
     assert bsrc.count("pops::for_each_cell") == 1
-    assert "const pops::Real ne = u0A(i, j, 0);" in bsrc
-    assert "const pops::Real ni = u1A(i, j, 0);" in bsrc
+    assert be["ne"].name in bsrc
+    assert bi["ni"].name in bsrc
+
+
+def test_same_physical_component_name_needs_no_species_rename():
+    model_ = physics.Model("shared_density")
+    electrons = model_.species("electron_state", state=["density"])
+    ions = model_.species("ion_state", state=["density"])
+    model_.coupled_rate(
+        "collision",
+        inputs=[electrons, ions],
+        outputs={
+            electrons: [ions["density"] - electrons["density"]],
+            ions: [electrons["density"] - ions["density"]],
+        },
+    )
+    assert electrons["density"].name != ions["density"].name
+    spaces = model_.module.state_spaces()
+    source = emit_cpp_program(_two_fluid_program(
+        model_.module, spaces["electron_state"], spaces["ion_state"]), model=None)
+    assert electrons["density"].name in source
+    assert ions["density"].name in source
 
 
 def test_arbitrary_arity_four_inputs():
@@ -189,14 +284,20 @@ def test_wrong_species_rate_in_affine_combine_errors():
     m = physics.Model("tf")
     e = m.species("electrons", state=["ne"])
     i = m.species("ions", state=["ni"])
-    m.coupled_rate("collision", inputs=[e, i],
-                   outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
-    P = adctime.Program("s").bind_operators(m.module)
-    e_n = P.state("electrons", space=e.space)
-    i_n = P.state("ions", space=i.space)
-    C = P._call("collision", e_n, i_n)
-    with pytest.raises(ValueError, match="different state spaces"):
-        P.linear_combine("bad", e_n + P.dt * C["ions"])  # electron state + ion rate
+    collision = m.coupled_rate(
+        "collision", inputs=[e, i],
+        outputs={e: [i["ni"] - e["ne"]], i: [e["ne"] - i["ni"]]})
+    spaces = m.module.state_spaces()
+    P, _, _, states = _typed_program_states(
+        "s", m.module, (("electrons", spaces[e.name]), ("ions", spaces[i.name])))
+    e_n, i_n = states["electrons"].n, states["ions"].n
+    C = collision(e_n, i_n)
+    with pytest.raises(ValueError, match="incompatible state spaces"):
+        P.value(
+            "bad",
+            e_n + P.dt * C[i_n.block],  # electron state + ion rate
+            at=states["electrons"].next.point,
+        )
 
 
 def test_coupled_rate_output_component_count_must_match_state():
@@ -215,7 +316,7 @@ def test_multispecies_lowers_to_a_multiblock_module():
     from pops import model as _model_pkg
 
     m, _e, _i, _n = _three_fluid_board()
-    assert m.check() is None                              # model-level check is a single-species notion
+    assert m.check() is True                             # every state route + coupled body is valid
     # No direct compilation from the physics facade (the documented path is m.lower() -> pops.compile).
     assert not hasattr(m, "compile"), "physics.Model must not expose a direct compile()"
     module = m.lower()
@@ -224,18 +325,37 @@ def test_multispecies_lowers_to_a_multiblock_module():
     assert type(m).to_module is type(m).lower, "to_module() is the lower() alias"
 
 
+def test_multispecies_check_rejects_an_undeclared_coupled_coordinate():
+    # Model.check() must exercise the real coupled-rate compiler gate, not report success merely
+    # because a multi-StateSpace Module exists.  The authoring graph remains inspectable, but its
+    # undeclared coordinate can never reach native lowering silently.
+    m = physics.Model("invalid_two_fluid")
+    e = m.species("electrons", state=["ne"])
+    i = m.species("ions", state=["ni"])
+    m.coupled_rate(
+        "collision",
+        inputs=[e, i],
+        outputs={e: [Var("ghost", "cons")], i: [e["ne"] - i["ni"]]},
+    )
+
+    with pytest.raises(NotImplementedError, match="component of no input state"):
+        m.check()
+
+
 def test_single_species_is_byte_identical_to_state():
     # the N == 1 path is unchanged: m.species == m.state (no multi-block Module created).
     def via_state():
         m = physics.Model("euler")
-        m.state("U", components=["rho", "mx", "my"],
-                roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+        m.state(
+            "U", components=["rho", "mx", "my"],
+            roles=planar_fluid_roles("rho", "mx", "my"))
         return m
 
     def via_species():
         m = physics.Model("euler")
-        m.species("U", state=["rho", "mx", "my"],
-                  roles={"rho": "density", "mx": "momentum_x", "my": "momentum_y"})
+        m.species(
+            "U", state=["rho", "mx", "my"],
+            roles=planar_fluid_roles("rho", "mx", "my"))
         return m
 
     s = via_species()
@@ -249,14 +369,53 @@ def test_field_solve_call_lowers_to_solve_fields_from_blocks_over_all_species():
     # drop every species but the first and read only the first charge into the elliptic RHS.
     m, _e, _i, _n = _three_fluid_board()
     mod = m.module
-    P = adctime.Program("ms_fields").bind_operators(mod)
     sp = mod.state_spaces()
-    e_n = P.state("electrons", space=sp["electrons"])
-    i_n = P.state("ions", space=sp["ions"])
-    n_n = P.state("neutrals", space=sp["neutrals"])
-    f = P._call("fields", e_n, i_n, n_n)
-    assert f.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
-    assert len(f.inputs) == 3, "all three species contribute to the field solve (none dropped)"
+    P, _, case, states = _typed_program_states(
+        "ms_fields", mod,
+        (("electrons", sp["electrons"]),
+         ("ions", sp["ions"]),
+         ("neutrals", sp["neutrals"])),
+    )
+    e_n, i_n, n_n = (
+        states["electrons"].n, states["ions"].n, states["neutrals"].n)
+    blocks = case.blocks()
+    block = blocks["electrons"]
+    providers = FieldProviderPack((
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("electron_charge"), block=blocks["electrons"])),
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("ion_charge"), block=blocks["ions"])),
+        FieldProviderContribution(case.qualify(
+            mod.operator_handle("neutral_charge"), block=blocks["neutrals"])),
+    ))
+    unknown = block[mod.field_handle(mod.field_spaces()["fields"])]
+
+    class _Method(Descriptor):
+        category = "field_method"
+
+        def to_data(self):
+            return {"type": "unit-second-order"}
+
+    class _Solver(Descriptor):
+        category = "elliptic_solver"
+
+        def to_data(self):
+            return {"type": "unit-krylov"}
+
+    field_solve = case.field(
+        FieldOperator(
+            "fields",
+            unknown=unknown,
+            equation=-laplacian(ValueExpr(unknown)) == (
+                _e["ne"] - _i["ni"] + _n["nn"]),
+            providers=providers,
+        ),
+        FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+    )
+    f = field_solve(e_n, i_n, n_n).consume(action=adctime.FailRun())
+    token = f.inputs[0].inputs[0]
+    assert token.op == "solve_fields_from_blocks", "multi-input field op lowers to the coupled solve"
+    assert len(token.inputs) == 3, "all three species contribute to the field solve (none dropped)"
 
 
 def test_duplicate_species_name_raises():
@@ -281,4 +440,3 @@ def _run():
 
 if __name__ == "__main__":
     _run()
-    sys.exit(0)

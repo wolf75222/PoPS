@@ -21,8 +21,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._report import ReportTree
 from pops.descriptors import Availability, Descriptor
-from pops.descriptors_report import CapabilitySet, ValidationReport
+from pops.descriptors_report import CapabilitySet
 from pops.solvers.options import Chebyshev, CompositeFAC, DirectSmallGrid, RedBlackGaussSeidel
 from pops.solvers.requirements import capability_map
 from pops.solvers.tolerances import Absolute, Relative
@@ -39,11 +40,34 @@ _TOLERANCES = (Relative, Absolute)
 # so these are literals kept in lockstep with numerical_defaults.hpp by the pin test in
 # tests/python/unit/runtime/test_geometric_mg_options.py (effective report == defaults report).
 _MG_DEFAULT_REL_TOL = 1e-8
+_MG_DEFAULT_ABS_TOL = 0.0
 _MG_DEFAULT_MAX_CYCLES = 50
 _MG_DEFAULT_MIN_COARSE = 2
 _MG_DEFAULT_PRE_SMOOTH = 2
 _MG_DEFAULT_POST_SMOOTH = 2
 _MG_DEFAULT_BOTTOM_SWEEPS = 50
+_MG_DEFAULT_COARSE_THRESHOLD = 0
+
+
+def native_geometric_mg_defaults() -> dict[str, Any]:
+    """Closed native ``GeometricMgOptions`` carrier for routes where MG is ABI-inert.
+
+    The solver module is the Python authoring authority for these pinned native defaults.  Field
+    resolution snapshots this value once; bind/install must never reconstruct it from a live
+    descriptor or from another set of fallback literals.
+    """
+    return {
+        "schema_version": 1,
+        "kind": "geometric_mg_options",
+        "rel_tol": _MG_DEFAULT_REL_TOL,
+        "abs_tol": _MG_DEFAULT_ABS_TOL,
+        "max_cycles": _MG_DEFAULT_MAX_CYCLES,
+        "min_coarse": _MG_DEFAULT_MIN_COARSE,
+        "pre_smooth": _MG_DEFAULT_PRE_SMOOTH,
+        "post_smooth": _MG_DEFAULT_POST_SMOOTH,
+        "bottom_sweeps": _MG_DEFAULT_BOTTOM_SWEEPS,
+        "coarse_threshold": _MG_DEFAULT_COARSE_THRESHOLD,
+    }
 
 
 class GeometricMG(Descriptor):
@@ -72,7 +96,7 @@ class GeometricMG(Descriptor):
                  pre_sweeps: int = _MG_DEFAULT_PRE_SMOOTH,
                  post_sweeps: int = _MG_DEFAULT_POST_SMOOTH,
                  bottom_sweeps: int = _MG_DEFAULT_BOTTOM_SWEEPS,
-                 amr_composite: Any = None) -> None:
+                 fac: Any = None) -> None:
         # Default smoother is the natively-wired RedBlackGaussSeidel (ADC-613): the native V-cycle
         # uses a Gauss-Seidel smoother, so this keeps GeometricMG() working. Chebyshev stays a
         # selectable descriptor but validate() refuses it (no native Chebyshev smoother yet).
@@ -90,14 +114,14 @@ class GeometricMG(Descriptor):
         self.pre_sweeps = _check_positive_int(pre_sweeps, "pre_sweeps", minimum=0)
         self.post_sweeps = _check_positive_int(post_sweeps, "post_sweeps", minimum=0)
         self.bottom_sweeps = _check_positive_int(bottom_sweeps, "bottom_sweeps", minimum=0)
-        # ADC-645: opt-in composite FAC AMR FIELD solve. None (default) = the Option A coarse solve +
-        # gradient injection, bit-identical; a typed CompositeFAC opts the AMR set_poisson into the
-        # native composite path. A bare bool/string is rejected (typed slot, Spec 5 sec.7).
-        if amr_composite is not None and not isinstance(amr_composite, CompositeFAC):
+        # ADC-645: typed overrides for the AMR composite-FAC backend.  The field hierarchy policy,
+        # not this slot, selects level-local versus composite execution; None leaves every FAC knob
+        # at its native default.  A bare bool/string is rejected (typed slot, Spec 5 sec.7).
+        if fac is not None and not isinstance(fac, CompositeFAC):
             raise TypeError(
-                "GeometricMG(amr_composite=) must be a pops.solvers.options.CompositeFAC "
-                "descriptor or None, not %r; use CompositeFAC()." % (amr_composite,))
-        self.amr_composite = amr_composite
+                "GeometricMG(fac=) must be a pops.solvers.options.CompositeFAC "
+                "descriptor or None, not %r; use CompositeFAC()." % (fac,))
+        self.fac = fac
 
     @property
     def name(self) -> str:
@@ -105,7 +129,41 @@ class GeometricMG(Descriptor):
 
     def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, amr=True, mpi=True, gpu=True,
-                                            variable_epsilon=True, periodic_bc=True, wall_bc=True))
+                                            variable_epsilon=True, screened=True,
+                                            periodic_bc=True, wall_bc=True))
+
+    def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
+        del target, layout
+        return {
+            "native_solver": "geometric_mg",
+            "linear": True,
+            "screened": True,
+            "mg_options": self.native_mg_options(),
+            "fac_options": self.amr_fac_options(),
+        }
+
+    def native_mg_options(self) -> dict[str, Any]:
+        """Closed, identity-bearing POD snapshot consumed by field resolve/install."""
+        return {
+            "schema_version": 1,
+            "kind": "geometric_mg_options",
+            **self.mg_options(),
+        }
+
+    def amr_fac_options(self) -> dict[str, Any] | None:
+        """Canonical optional overrides for the native composite-FAC backend.
+
+        Hierarchy selection is deliberately absent: ``CompositeHierarchySolve`` owns that
+        decision.  ``None`` means the native ``CompositeFacOptions`` defaults, while an explicit
+        :class:`CompositeFAC` carries only authored overrides (unconfigured members stay ``None``).
+        """
+        if self.fac is None:
+            return None
+        return {
+            "schema_version": 1,
+            "kind": "composite_fac",
+            **self.fac.options(),
+        }
 
     def options(self) -> dict:
         view = {
@@ -120,9 +178,40 @@ class GeometricMG(Descriptor):
         }
         # ADC-645: present ONLY when set (omit-when-default), so an unconfigured GeometricMG()
         # options view -- and everything hashed from it -- is unchanged.
-        if self.amr_composite is not None:
-            view["amr_composite"] = self.amr_composite.name
+        if self.fac is not None:
+            view["fac"] = self.fac.name
         return view
+
+    def to_data(self) -> dict[str, Any]:
+        """Exact structural identity consumed through the generic descriptor protocol."""
+        return {
+            "scheme": self.scheme,
+            "smoother": {
+                "type": type(self.smoother).__name__,
+                "options": self.smoother.options(),
+            },
+            "coarse": {
+                "type": type(self.coarse).__name__,
+                "options": self.coarse.options(),
+            },
+            "tolerance": {
+                "type": type(self.tolerance).__name__,
+                "options": self.tolerance.options(),
+            },
+            "max_cycles": self.max_cycles,
+            "min_coarse": self.min_coarse,
+            "pre_sweeps": self.pre_sweeps,
+            "post_sweeps": self.post_sweeps,
+            "bottom_sweeps": self.bottom_sweeps,
+            "fac": (
+                None
+                if self.fac is None
+                else {
+                    "type": type(self.fac).__name__,
+                    "options": self.fac.options(),
+                }
+            ),
+        }
 
     def mg_options(self) -> dict:
         """The RESOLVED native V-cycle scalars set_poisson forwards to C++ (ADC-613).
@@ -152,13 +241,13 @@ class GeometricMG(Descriptor):
     def _resolved_tolerance(self) -> Any:
         """(rel_tol, abs_tol) for the native mixed criterion from the typed tolerance descriptor."""
         if isinstance(self.tolerance, Relative):
-            floor = self.tolerance.floor.abs_floor if self.tolerance.floor is not None else 0.0
-            return float(self.tolerance.rel), float(floor)
+            floor = self.tolerance.floor.abs_floor if self.tolerance.floor is not None else 0
+            return self.tolerance.rel, floor
         # Absolute: keep the native relative tolerance so rel_tol stays > 0 (the native solver
         # requires it) and the absolute floor dominates the mixed stop max(rel_tol*r0, abs_tol).
-        return _MG_DEFAULT_REL_TOL, float(self.tolerance.abs_tol)
+        return _MG_DEFAULT_REL_TOL, self.tolerance.abs_tol
 
-    def validate(self, context: Any = None) -> ValidationReport:
+    def validate(self, context: Any = None) -> ReportTree:
         """Refuse the sub-options with no native realisation STRUCTURALLY (ADC-613).
 
         The native ``GeometricMG`` V-cycle uses a Gauss-Seidel smoother and a Gauss-Seidel bottom
@@ -166,9 +255,13 @@ class GeometricMG(Descriptor):
         actionable alternative) rather than silently ignored -- honouring the audit rule that an
         unsupported sub-option refuses, never drops. Out-of-domain tolerances are rejected too.
         """
-        report = ValidationReport(subject=self)
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.elliptic_solver.report",
+            source="elliptic_solver", owner=self,
+            evidence={"descriptor": self.name, "scheme": self.scheme},
+        )
         if isinstance(self.smoother, Chebyshev):
-            report.error(
+            report = report.error(
                 "elliptic_solver", "smoother_not_wired",
                 "GeometricMG smoother %r has no native C++ kernel: the native V-cycle uses a "
                 "Gauss-Seidel smoother. Use RedBlackGaussSeidel()." % self.smoother.name,
@@ -176,12 +269,12 @@ class GeometricMG(Descriptor):
                 alternatives=["pops.solvers.options.RedBlackGaussSeidel()"])
         rel_tol, abs_tol = self._resolved_tolerance()
         if rel_tol <= 0.0:
-            report.error(
+            report = report.error(
                 "elliptic_solver", "rel_tol_out_of_domain",
                 "GeometricMG relative tolerance must be > 0; got %r." % rel_tol,
                 context={"rel_tol": rel_tol})
         if abs_tol < 0.0:
-            report.error(
+            report = report.error(
                 "elliptic_solver", "abs_tol_out_of_domain",
                 "GeometricMG absolute floor must be >= 0; got %r." % abs_tol,
                 context={"abs_tol": abs_tol})
@@ -198,10 +291,10 @@ class GeometricMG(Descriptor):
             extra={"smoother": self.smoother.lower(context),
                    "coarse": self.coarse.lower(context),
                    "tolerance": self.tolerance.lower(context),
-                   "mg_options": self.mg_options(),
-                   # ADC-645: the composite-FAC selection (None = Option A, omitted downstream).
-                   "amr_composite": (self.amr_composite.lower(context)
-                                     if self.amr_composite is not None else None)})
+                   "mg_options": self.native_mg_options(),
+                   # ADC-645: exact authoring identity plus the canonical backend-option carrier.
+                   "fac": (self.fac.lower(context) if self.fac is not None else None),
+                   "fac_options": self.amr_fac_options()})
 
     def inspect(self) -> Any:
         view = super().inspect()
@@ -239,8 +332,23 @@ class FFT(Descriptor):
     def capabilities(self) -> Any:
         return CapabilitySet(capability_map(uniform=True, mpi=True, gpu=True, periodic_bc=True))
 
+    def lower_field_solver(self, *, target: str, layout: Any) -> dict[str, Any]:
+        del layout
+        if target == "amr_system":
+            raise ValueError("FFT cannot lower a field solve on an AMR hierarchy")
+        return {
+            "native_solver": "fft_spectral" if self.spectral else "fft",
+            "linear": True,
+            # System::set_field_solver_plan has one closed GeometricMgOptions POD in its ABI even
+            # for direct FFT routes.  Capture the inert values now so bind never invents them.
+            "mg_options": native_geometric_mg_defaults(),
+        }
+
     def options(self) -> dict:
         return {"spectral": self.spectral}
+
+    def to_data(self) -> dict[str, Any]:
+        return {"scheme": self.scheme, "spectral": self.spectral}
 
     def available(self, context: Any = None) -> Any:
         # Spec 6 sec.8: FFT is mathematically incompatible with an AMR hierarchy (it needs a

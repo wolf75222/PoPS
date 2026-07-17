@@ -98,7 +98,8 @@ static int pops_run_test_composite_fac_variable_eps(int argc, char** argv) {
   fac.use_variable_coefficient(true);
   fill(fac.rhs_coarse(), geom_c, f_rhs);
   fill(fac.rhs_fine(), geom_f, f_rhs);
-  const Real rfac = fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*tol=*/1e-10);
+  const Real rfac =
+      fac.solve(/*max_iters=*/40, /*fine_sweeps=*/80, /*rel_tol=*/1e-10, /*abs_tol=*/0.0);
   device_fence();
 
   chk(std::isfinite(rfac) && rfac < 1e-6, "(convergence) FAC eps-variable converge (residu -> 0)");
@@ -155,5 +156,7 @@ static int pops_run_test_composite_fac_variable_eps(int argc, char** argv) {
 }
 
 TEST(test_composite_fac_variable_eps, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_variable_eps, "test_composite_fac_variable_eps"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_composite_fac_variable_eps,
+                                    "test_composite_fac_variable_eps"),
+            0);
 }

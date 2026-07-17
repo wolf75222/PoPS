@@ -5,10 +5,11 @@
 ///        `GetProcAddress`/`FreeLibrary` (Windows). Minimal surface for the pops runtime (native
 ///        loader / DSL `.dll`), ADC-99.
 ///
-/// POSIX: strictly equivalent to the historical usage (`RTLD_NOW | RTLD_LOCAL`). The DSL
-/// "production" path has a SPECIAL need (`RTLD_GLOBAL` promotion to resolve the symbols of
-/// `_pops` exported as `POPS_EXPORT` through the dlopen) that stays handled at its call site; on the
-/// Windows side the equivalent goes through `__declspec(dllexport)` (cf. export.hpp) + import library, ADC-100.
+/// POSIX packages are opened `RTLD_NOW | RTLD_LOCAL`: separately compiled semantic artifacts may
+/// reuse generated C++ names and must never interpose on one another. The DSL production call sites
+/// promote only the already-loaded `_pops` host image with `RTLD_GLOBAL | RTLD_NOLOAD`, so packages
+/// can resolve its `POPS_EXPORT` seams without exporting their own symbols process-wide. On Windows,
+/// the equivalent host resolution uses `__declspec(dllexport)` plus the import library (ADC-100).
 
 #include <string>
 

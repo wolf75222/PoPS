@@ -18,20 +18,18 @@
 // `.so`, resolves that entry-point function pointer ONCE at install time, and calls it; the per-cell
 // kernel then runs the statically-instantiated `UserFlux` functor with NO string comparison on the
 // hot path. The only string is the limiter (a 4-way `if` resolved once per install, mirroring the
-// native AOT block in compiled_block_abi.hpp).
+// built-in static-dispatch path).
 //
-// ABI (flat double arrays, component-major c*n*n + j*n + i, like System::copy_state): identical to
-// the AOT compiled block (compiled_block_abi.hpp) so the host marshals an external brick the same
-// way it marshals a generated one. Only the flux is fixed at the `.so`'s compile time instead of
-// dispatched by string.
+// ABI: flat double arrays, component-major c*n*n + j*n + i. This explicit component-package
+// protocol is independent from the model package installation ABI.
 
 #include <pops/runtime/program/external_brick.hpp>
 
-#include <pops/runtime/builders/compiled/compiled_block_abi.hpp>  // compiled_block::{make_grid,...}
+#include <pops/runtime/builders/compiled/flat_grid.hpp>
 #include <pops/runtime/builders/block/block_builder.hpp>  // build_block<Limiter, Flux>, block_n_ghost
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
-#include <pops/runtime/config/dispatch_tags.hpp>          // validate_limiter
-#include <pops/numerics/fv/reconstruction.hpp>            // NoSlope / Minmod / VanLeer / Weno5
+#include <pops/runtime/config/dispatch_tags.hpp>  // validate_limiter
+#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope / Minmod / VanLeer / Weno5
 
 #include <pops/runtime/dynamic/dynlib.hpp>  // portable dlopen<->LoadLibraryW (ADC-99)
 
@@ -54,7 +52,7 @@ BlockClosures external_make_block(const Model& m, const std::string& lim, const 
   const char* kCtx = "external riemann brick";
   return dispatch_limiter(parse_limiter_route(lim, kCtx), kCtx, [&](auto tag) {
     using L = typename decltype(tag)::type;
-    return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "ssprk2", {}, {}, nullptr,
+    return build_block<L, Flux>(m, ctx, /*imex=*/false, recon_prim, "explicit", {}, {}, nullptr,
                                 pos_floor);
   });
 }
@@ -67,17 +65,16 @@ template <class Model, class Flux>
 void external_residual(const double* U, double* R, const double* aux_in, int n, double dx,
                        double dy, bool periodic, const std::string& lim, bool recon_prim,
                        double pos_floor) {
-  compiled_block::LocalGrid lg =
-      compiled_block::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
+  flat_grid::LocalGrid lg = flat_grid::make_grid(n, dx, dy, periodic, aux_in, aux_comps<Model>());
   MultiFab Umf(lg.ba, lg.dm, Model::n_vars, block_n_ghost(lim)),
       Rmf(lg.ba, lg.dm, Model::n_vars, 0);
-  compiled_block::fill_interior(Umf, U, n, Model::n_vars);
+  flat_grid::fill_interior(Umf, U, n, Model::n_vars);
   const GridContext ctx{lg.dom, lg.bc, lg.geom, &lg.aux};
   Model model{};
   BlockClosures clo =
       external_make_block<Model, Flux>(model, lim, ctx, recon_prim, static_cast<Real>(pos_floor));
   clo.rhs_into(Umf, Rmf);
-  compiled_block::extract(Rmf, R, n, Model::n_vars);
+  flat_grid::extract(Rmf, R, n, Model::n_vars);
 }
 
 }  // namespace detail
@@ -177,6 +174,12 @@ class ExternalBrickHandle {
       e.category = field(rec, "category");
       e.requirements = field(rec, "requirements");
       e.capabilities = field(rec, "capabilities");
+      e.native_id = field(rec, "native_id");
+      e.supported_layouts = field(rec, "supported_layouts");
+      e.supported_platforms = field(rec, "supported_platforms");
+      e.params = field(rec, "params");
+      e.options = field(rec, "options");
+      e.exported_symbols = field(rec, "exported_symbols");
       if (!e.id.empty())
         BrickRegistry::instance().register_brick(e);
       pos = end + 1;
@@ -212,17 +215,21 @@ class ExternalBrickHandle {
 
 // Defines the static-dispatch ABI of an external Riemann brick `.so`: registers its identity in the
 // host catalog AND emits the entry point the host calls. Use ONCE at namespace scope:
-//   struct MyRiemann { template <class M> POPS_HD typename M::State operator()(...) const {...} };
+//   struct MyRiemann {
+//     template <pops::PhysicalFlux F>
+//     POPS_HD pops::FluxEvaluation<typename F::State>
+//     operator()(const F&, const typename F::Trace&, const typename F::Trace&,
+//                const pops::FaceContext&) const;
+//   };
 //   POPS_DEFINE_EXTERNAL_RIEMANN_BRICK("my_riemann", MyRiemann,
 //                                     pops::CompositeModel<pops::Euler, ...>, "pressure,wave_speeds");
 //   POPS_DEFINE_BRICK_MANIFEST();  // exports the manifest reader (once per .so)
 //
 // @p id          the brick id a user selects via pops.lib.riemann.User(id);
-// @p Flux        the NumericalFlux policy (numerics/fv/numerical_flux.hpp contract);
+// @p Flux        the narrow two-trace NumericalFlux policy (numerics/fv/numerical_flux.hpp);
 // @p Model       a TOP-LEVEL ALIAS of the CompositeModel the .so instantiates the flux against (write
 //                `using Model = pops::CompositeModel<...>;` first and pass the alias -- a bare
-//                CompositeModel<A, B, C> has a comma the preprocessor would split, exactly like
-//                POPS_DEFINE_COMPILED_BLOCK(MODEL));
+//                CompositeModel<A, B, C> has commas the preprocessor would split);
 // @p reqs_csv    the CSV of model capabilities the brick requires (surfaced in the manifest).
 //
 // The emitted pops_brick_residual instantiates build_block<Limiter, Flux> at the .so's compile time:
@@ -231,20 +238,19 @@ class ExternalBrickHandle {
 //
 // ABI WARNING: the brick `.so` MUST be compiled against the SAME Kokkos backend and version (and the
 // same pops headers) as the host binary that dlopens it -- the residual runs the host's Kokkos
-// runtime. A mismatched `.so` may dlopen yet fail unpredictably. There is no load-time Kokkos-ABI
-// check yet (a future safeguard); for now this is the caller's contract, mirroring the AOT
-// compiled-block path (POPS_DEFINE_COMPILED_BLOCK), which carries the same requirement.
+// runtime. Installation must therefore pass through the authenticated component loader, which
+// validates the exact component manifest and platform/ABI evidence before publishing the handle.
 #define POPS_DEFINE_EXTERNAL_RIEMANN_BRICK(id, Flux, Model, reqs_csv)                       \
   POPS_REGISTER_BRICK(id, "riemann", reqs_csv);                                             \
   extern "C" int pops_brick_nvars() {                                                       \
-    return Model::n_vars;                                                                  \
-  }                                                                                        \
+    return Model::n_vars;                                                                   \
+  }                                                                                         \
   extern "C" int pops_brick_naux() {                                                        \
     return pops::aux_comps<Model>();                                                        \
-  }                                                                                        \
+  }                                                                                         \
   extern "C" void pops_brick_residual(const double* U, double* R, const double* aux, int n, \
-                                     double dx, double dy, int periodic, const char* lim,  \
-                                     int recon_prim, double pos_floor) {                   \
+                                      double dx, double dy, int periodic, const char* lim,  \
+                                      int recon_prim, double pos_floor) {                   \
     ::pops::runtime::program::detail::external_residual<Model, Flux>(                       \
-        U, R, aux, n, dx, dy, periodic != 0, lim, recon_prim != 0, pos_floor);             \
+        U, R, aux, n, dx, dy, periodic != 0, lim, recon_prim != 0, pos_floor);              \
   }

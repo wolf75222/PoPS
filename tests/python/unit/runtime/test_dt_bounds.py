@@ -28,17 +28,17 @@ import tempfile
 
 import numpy as np
 
-import pops
-from pops.physics.facade import Model
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
-
-fails = 0
+import pops.runtime._engine_descriptors as engine
+from pops.physics._facade import Model
+from pops.runtime._engine_descriptors import Periodic
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 from tests.python.support.requirements import (
     missing_compiler_requirement,
     repo_include,
-    skip_process_test,
+    require_native_or_skip,
 )
 INCLUDE = repo_include()
+fails = 0
 
 
 def chk(cond, label):
@@ -49,10 +49,10 @@ def chk(cond, label):
 
 
 def iso_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=1.0),
-                     elliptic=pops.ChargeDensity(charge=1.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def gaussian(n):
@@ -63,9 +63,9 @@ def gaussian(n):
 
 def build(n=24):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
-                  time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    sim.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+                     time=engine.Explicit())
+    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     sim.set_density("ions", gaussian(n).ravel())
     return sim
 
@@ -108,10 +108,10 @@ print("== (C1) AMR mono-bloc : transport + borne globale + last_dt_bound ==")
 
 def build_amr(n=24):
     amr = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-    amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr.set_refinement(1e30)  # mono-niveau : le sujet est la POLITIQUE DE PAS, pas le raffinement
-    amr.add_block("ions", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
-                  time=pops.Explicit())
+    amr.add_equation("ions", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+                     time=engine.Explicit())
     amr.set_density("ions", gaussian(n).ravel())
     return amr
 
@@ -132,8 +132,9 @@ chk(amr2.last_dt_bound() == "global:cap_amr",
 
 print("== (C2) AMR multi-blocs : borne globale via AmrRuntime ==")
 amr3 = build_amr()
-amr3.add_block("e2", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()),
-               time=pops.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
+amr3.set_temporal_relations([2], [1], ["integral_only"])
+amr3.add_equation("e2", iso_model(), spatial=engine.Spatial(limiter=Minmod()),
+                  time=engine.Explicit())  # 2e bloc -> moteur multi-blocs (AmrRuntime)
 amr3.set_density("e2", gaussian(24).ravel())
 amr3.add_dt_bound("cap_multi", lambda: cap_amr)
 dta3 = amr3.step_cfl(0.4)
@@ -147,7 +148,7 @@ if missing:
     if fails:
         print(f"FAIL test_dt_bounds : {fails} echec(s)")
         sys.exit(1)
-    skip_process_test(f"(B) test_dt_bounds : {missing}")
+    require_native_or_skip(f"(B) test_dt_bounds : {missing}")
 
 
 def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):
@@ -171,8 +172,8 @@ def scalar_model(name, stab_speed=None, stab_dt=None, src_freq=None):
 
 def build_dsl(cm, n=16):
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_equation("s", model=cm, spatial=pops.FiniteVolume(limiter=Minmod()),
-                     time=pops.Explicit())
+    sim.add_equation("s", model=cm, spatial=engine.Spatial(limiter=Minmod()),
+                     time=engine.Explicit())
     sim.set_poisson()
     sim.set_density("s", gaussian(n).ravel())
     return sim
@@ -218,8 +219,11 @@ try:
     try:
         bad = Model("freq_sans_source")
         (r2,) = bad.conservative_vars("rho", roles=["Density"])
-        bad.flux(x=[1.0 * r2], y=[0.0 * r2]); bad.eigenvalues(x=[1.0 + 0.0 * r2], y=[0.0 * r2])
-        bad.primitive_vars(r2); bad.conservative_from([r2]); bad.elliptic_rhs(0.0 * r2)
+        bad.flux(x=[1.0 * r2], y=[0.0 * r2])
+        bad.eigenvalues(x=[1.0 + 0.0 * r2], y=[0.0 * r2])
+        bad.primitive_vars(r2)
+        bad.conservative_from([r2])
+        bad.elliptic_rhs(0.0 * r2)
         bad.source_frequency(10.0 + 0.0 * r2)
         bad.check()
         chk(False, "source_frequency sans source aurait du lever")
@@ -230,10 +234,10 @@ try:
     cm_dt_amr = scalar_model("scal_dt_amr", stab_dt=1e-4).compile(
         os.path.join(tmp, "scal_dt_amr.so"), INCLUDE, backend="production", target="amr_system")
     amr_dsl = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    amr_dsl.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     amr_dsl.set_refinement(1e30)
-    amr_dsl.add_equation("s", model=cm_dt_amr, spatial=pops.FiniteVolume(limiter=Minmod()),
-                         time=pops.Explicit())
+    amr_dsl.add_equation("s", model=cm_dt_amr, spatial=engine.Spatial(limiter=Minmod()),
+                         time=engine.Explicit())
     amr_dsl.set_density("s", gaussian(16).ravel())
     dt_amr = amr_dsl.step_cfl(cfl)
     chk(abs(dt_amr - 1e-4) < 1e-12, f"AMR DSL dt = 1e-4 ({dt_amr:.3e})")

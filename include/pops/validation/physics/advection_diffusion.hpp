@@ -11,8 +11,8 @@
 /// not used by adc_cases. Kept as a validation brick and as an example illustrating the
 /// DiffusiveModel trait (nu > 0 enables the parabolic term on the core side).
 ///
-/// The legacy include path <pops/physics/advection_diffusion.hpp> still works through a compat
-/// forwarder that aliases pops::validation::AdvectionDiffusion back into pops:: (deprecated).
+/// There is deliberately no production-namespace alias or compatibility include: validation
+/// models remain visibly separate from the generic production brick surface.
 
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
@@ -34,7 +34,7 @@ namespace pops::validation {
  */
 struct AdvectionDiffusion {
   using State = StateVec<1>;        ///< one conservative variable: the scalar u
-  using Aux = pops::Aux;             ///< auxiliary fields (unused, not coupled)
+  using Aux = pops::Aux;            ///< auxiliary fields (unused, not coupled)
   static constexpr int n_vars = 1;  ///< number of conservative variables
 
   Real ax = 1.0;  ///< advection velocity in x

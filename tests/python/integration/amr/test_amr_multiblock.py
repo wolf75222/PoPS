@@ -16,8 +16,9 @@ from pops.numerics.reconstruction.limiters import Minmod
 from pops.numerics.riemann import Rusanov
 import numpy as np
 
-import pops
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 
 def _bump(n, amp):
@@ -28,16 +29,17 @@ def _bump(n, amp):
 
 
 def _scalar_charge(q, B0=1.0):
-    return pops.Model(pops.Scalar(), pops.ExB(B0=B0), pops.NoSource(), pops.ChargeDensity(charge=q))
+    return engine.Model(engine.Scalar(), engine.ExB(B0=B0), engine.NoSource(), engine.ChargeDensity(charge=q))
 
 
 def _build(n=32, regrid_every=0):
     sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=regrid_every)
-    sim.add_block("ions", _scalar_charge(+1.0),
-                  spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-    sim.add_block("electrons", _scalar_charge(-1.0),
-                  spatial=pops.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
-    sim.set_poisson(bc="periodic")
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.add_equation("ions", _scalar_charge(+1.0),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()))
+    sim.add_equation("electrons", _scalar_charge(-1.0),
+                  spatial=engine.Spatial(limiter=Minmod(), flux=Rusanov()))  # SCHEMA DIFFERENT
+    sim.set_poisson(bc=Periodic())
     sim.set_density("ions", _bump(n, 0.40))
     sim.set_density("electrons", _bump(n, 0.20))
     return sim
@@ -75,8 +77,13 @@ def main():
     # (d) MONO-BLOC deterministe (chemin AmrCouplerMP intouche) : run x2 -> dmax == 0.
     def run_mono():
         s = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
-        s.add_block("ne", _scalar_charge(+1.0), spatial=pops.Spatial(limiter=FirstOrder(), flux=Rusanov()))
-        s.set_poisson(bc="periodic")
+        s.set_temporal_relations([2], [1], ["integral_only"])
+        s.add_equation(
+            "ne",
+            _scalar_charge(+1.0),
+            spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        )
+        s.set_poisson(bc=Periodic())
         s.set_density("ne", _bump(n, 0.40))
         s.advance(0.001, 10)
         return np.asarray(s.density())

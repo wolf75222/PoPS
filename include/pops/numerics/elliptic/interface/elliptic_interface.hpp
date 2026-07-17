@@ -72,7 +72,7 @@ concept EllipticOperator = requires(Op op) {
 // Contract = solve(rel_tol, max_iters) that returns a RESULT (the convention "solve
 // up to a relative tolerance in at most max_iters steps, returning a report").
 // The return type is NOT constrained to a precise struct: GeometricMG
-// returns int (number of V-cycles performed) and TensorKrylovSolver returns KrylovResult
+// returns int (number of V-cycles performed) and TensorKrylovSolver returns SolveReport
 // (iters + relative residual + convergence). The only REAL common invariant is: the return
 // is NOT void (it carries stopping information). The concept thus reflects this
 // reality via !std::same_as<void>, without imposing a shared result type that
@@ -92,7 +92,7 @@ concept EllipticOperator = requires(Op op) {
 template <class S>
 concept LinearSolver = EllipticSolver<S> && requires(S s, Real tol, int it) {
   // Tolerance variant: solves up to rel_tol (or max_iters) and returns a stopping
-  // report. Return type FREE but NON void (int for MG, KrylovResult for Krylov).
+  // report. Return type FREE but NON void (int for MG, SolveReport for Krylov).
   s.solve(tol, it);
   requires !std::same_as<decltype(s.solve(tol, it)), void>;
 };

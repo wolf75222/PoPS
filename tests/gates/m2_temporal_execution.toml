@@ -1,0 +1,150 @@
+schema_version = 1
+gate = "m2-temporal-execution"
+issues = ["ADC-648", "ADC-661", "ADC-662", "ADC-663", "ADC-664", "ADC-665", "ADC-666", "ADC-667"]
+deferred = []
+
+# Every requirement has one success proof and one refusal/rollback proof. Exact
+# nodeids make deletion or renaming a reviewed gate change rather than silent loss.
+[[check]]
+issue = "ADC-648"
+requirement = "amr_step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.AcceptedFacadeTransactionCommitsTopologyStateHistoryAndClock$"
+
+[[check]]
+issue = "ADC-648"
+requirement = "amr_step_transaction"
+polarity = "refusal"
+kind = "ctest"
+target = "test_amr_history_ring"
+test_regex = "^test_amr_history_ring\\.RejectedFacadeAttemptRestoresTopologyStateHistoryAndClock$"
+
+[[check]]
+issue = "ADC-661"
+requirement = "phase_pipeline"
+polarity = "positive"
+kind = "pytest"
+target = "pipeline"
+nodeid = "tests/python/unit/codegen/test_typed_phase_records.py::test_install_plan_is_bind_created_and_authenticates_all_inputs"
+
+[[check]]
+issue = "ADC-661"
+requirement = "phase_pipeline"
+polarity = "refusal"
+kind = "pytest"
+target = "architecture"
+nodeid = "tests/python/architecture/test_m1_semantic_core_gate.py::test_public_phase_functions_do_not_probe_or_swallow_unknown_shapes"
+
+[[check]]
+issue = "ADC-662"
+requirement = "program_graph"
+polarity = "positive"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/time/test_exact_program_graph.py::test_program_graph_has_exact_nodes_canonical_hash_and_no_builder_references"
+
+[[check]]
+issue = "ADC-662"
+requirement = "program_graph"
+polarity = "refusal"
+kind = "pytest"
+target = "program_graph"
+nodeid = "tests/python/unit/time/test_exact_program_graph.py::test_graph_rejects_forward_commit_and_opaque_builder_references"
+
+[[check]]
+issue = "ADC-663"
+requirement = "schedules"
+polarity = "positive"
+kind = "pytest"
+target = "schedule"
+nodeid = "tests/python/unit/time/test_typed_schedule.py::test_typed_schedule_serialization_and_rebuild_are_exact"
+
+[[check]]
+issue = "ADC-663"
+requirement = "schedules"
+polarity = "refusal"
+kind = "pytest"
+target = "schedule"
+nodeid = "tests/python/unit/time/test_typed_schedule.py::test_scheduled_read_without_off_policy_fails_before_native_lowering"
+
+[[check]]
+issue = "ADC-664"
+requirement = "residual_operator"
+polarity = "positive"
+kind = "pytest"
+target = "residual"
+nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_builds_newton_ir"
+
+[[check]]
+issue = "ADC-664"
+requirement = "residual_operator"
+polarity = "refusal"
+kind = "pytest"
+target = "residual"
+nodeid = "tests/python/unit/time/test_time_ops_polish.py::test_solve_local_nonlinear_validates_inputs"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "positive"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_reject_attempt_is_explicit_in_the_canonical_program_graph"
+
+[[check]]
+issue = "ADC-665"
+requirement = "solve_outcome"
+polarity = "refusal"
+kind = "pytest"
+target = "solve"
+nodeid = "tests/python/unit/time/test_solve_outcome_contract.py::test_solve_outcome_refuses_implicit_invalid_and_double_consumption"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "positive"
+kind = "ctest"
+target = "test_program_runtime"
+test_regex = "^ProgramRuntime\\.RejectedAttemptRestoresStateHistoryCacheDiagnosticsAndClock$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "step_transaction"
+polarity = "refusal"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/time/test_step_transaction_contract.py::test_step_transaction_report_refuses_partial_publication"
+
+[[check]]
+issue = "ADC-666"
+requirement = "restart"
+polarity = "positive"
+kind = "ctest"
+target = "test_checkpoint_history"
+test_regex = "^CheckpointHistory\\.RingRoundTripsBitEqualAcrossRestart$"
+
+[[check]]
+issue = "ADC-666"
+requirement = "restart"
+polarity = "refusal"
+kind = "ctest"
+target = "test_checkpoint_history"
+test_regex = "^CheckpointHistory\\.RestartRejectsMismatchedProgramHashVerbatim$"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "positive"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_accepted_attempt_advances_cursor_and_round_trips_exact_controller_state"
+
+[[check]]
+issue = "ADC-667"
+requirement = "temporal_restart"
+polarity = "refusal"
+kind = "pytest"
+target = "transaction"
+nodeid = "tests/python/unit/runtime/test_temporal_restart_state.py::test_rejection_preserves_native_cursor_and_makes_checkpoint_ineligible"

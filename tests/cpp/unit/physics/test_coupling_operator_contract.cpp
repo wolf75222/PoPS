@@ -95,7 +95,7 @@ TEST(CouplingOperatorContract, RoleDeclaredBothConservedAndCreatedRaises) {
 TEST(CouplingOperatorContract, DeclaredRoleWithNoTermRaises) {
   CouplingOperator op;
   op.label = "stale";
-  op.program = conservative_exchange();  // targets only momentum_x
+  op.program = conservative_exchange();          // targets only momentum_x
   op.conservation.conserved_roles = {"energy"};  // no term targets energy
   EXPECT_THROW(validate_coupling_contract(op, "test"), std::runtime_error);
 }

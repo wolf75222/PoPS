@@ -112,8 +112,8 @@ std::vector<int> revolve_slots(int depth, int snapshots) {
   // Equispaced anchors including both endpoints (round(i*(d-1)/(s-1))), matching _optimal_placement.
   std::vector<int> anchors;
   for (int i = 0; i < snapshots; ++i)
-    anchors.push_back(static_cast<int>(std::lround(
-        static_cast<double>(i) * (depth - 1) / (snapshots - 1))));
+    anchors.push_back(
+        static_cast<int>(std::lround(static_cast<double>(i) * (depth - 1) / (snapshots - 1))));
   std::sort(anchors.begin(), anchors.end());
   anchors.erase(std::unique(anchors.begin(), anchors.end()), anchors.end());
   return anchors;
@@ -165,7 +165,8 @@ void restore_replay_dump(const SystemConfig& cfg, const std::string& ring, int d
   ring_out = dump_ring(s, ring);
   live_state_out = s.state_global("gas");
   // The live state is identity across replay (the save/restore bracket).
-  EXPECT_TRUE(max_abs_diff(live_before, live_state_out) == 0.0) << "replay_is_identity_on_live_state";
+  EXPECT_TRUE(max_abs_diff(live_before, live_state_out) == 0.0)
+      << "replay_is_identity_on_live_state";
 }
 
 SystemConfig make_cfg() {
@@ -297,8 +298,8 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesMissingOldestSlot) {
     what = e.what();
   }
   EXPECT_TRUE(threw) << "missing_oldest_slot_refused";
-  EXPECT_TRUE(what.find("oldest slot") != std::string::npos) << "verbatim_oldest_slot_message: "
-                                                             << what;
+  EXPECT_TRUE(what.find("oldest slot") != std::string::npos)
+      << "verbatim_oldest_slot_message: " << what;
 }
 
 // (D) Replay requires an installed Program: rebuild without a program fails loud (never a silent skip).
@@ -321,6 +322,6 @@ TEST(CheckpointHistoryPolicy, RebuildRefusesWithoutInstalledProgram) {
     what = e.what();
   }
   EXPECT_TRUE(threw) << "no_program_refused";
-  EXPECT_TRUE(what.find("no compiled Program") != std::string::npos) << "verbatim_no_program: "
-                                                                     << what;
+  EXPECT_TRUE(what.find("no compiled Program") != std::string::npos)
+      << "verbatim_no_program: " << what;
 }

@@ -1,7 +1,7 @@
 """Compiled per-block model handle (ADC-619 split).
 
 :class:`CompiledModel` -- the result of ``m.compile(...)`` -- packages a per-block
-physics ``.so`` with the metadata needed to wire it (dispatch adder, names, roles,
+physics ``.so`` with the metadata needed to wire it (names, roles,
 gamma, n_aux, params, caps, abi_key, model_hash) plus its runtime-param routing,
 runtime re-verification, static AMR report and route matrix. Split out of
 ``pops.codegen.loader`` for the 500-line cap; ``pops.codegen.loader`` re-exports it
@@ -16,9 +16,7 @@ from typing import Any
 
 class CompiledModel:
     """Result of ``m.compile(...)``: packages the produced ``.so`` + EVERYTHING
-    needed to wire it correctly (dispatch adder, ABI diagnostic,
-    reproducibility). Replaces the historical pair (str so_path,
-    adder_for(backend)) with a single object.
+    needed to wire it correctly (fixed native ABI, metadata and reproducibility).
 
     The metadata is NOT re-read from the ``.so``: Python already holds
     names/roles/gamma/n_aux/params (the HyperbolicModel carries them);
@@ -26,19 +24,37 @@ class CompiledModel:
     diagnostics. cf. DSL_MODEL_DESIGN.md section 3.
     """
 
-    def __init__(self, so_path: Any, backend: Any, adder: Any, cons_names: Any, cons_roles: Any,
+    def __init__(self, so_path: Any, backend: Any, cons_names: Any, cons_roles: Any,
                  prim_names: Any, n_vars: Any, gamma: Any, n_aux: Any, params: Any, caps: Any,
                  abi_key: Any, model_hash: Any, cxx: Any, std: Any, target: Any = "system",
                  hllc: Any = False, roe: Any = False, aux_extra_names: Any = None,
-                 wave_speeds: Any = False, elliptic_field_names: Any = None) -> None:
+                 wave_speeds: Any = False, elliptic_field_names: Any = None,
+                 bind_schema: Any = None, definition_identity: Any = None,
+                 state_spaces: Any = ("U",), wave_speed_provider: Any = None,
+                 module_manifest: Any = None) -> None:
         self.has_hllc = bool(hllc)   # HLLC capability emitted (enable_hllc): hllc available beyond 4-var Euler
         self.has_roe = bool(roe)     # ROE hook emitted (enable_roe roles OR m.roe_dissipation provided): roe available beyond 4-var Euler
         self.has_wave_speeds = bool(wave_speeds)  # wave_speeds emitted (explicit pair OR 'p'): hll available
+        allowed_wave_speed_providers = {"explicit_pair", "jacobian", "pressure_derived"}
+        if self.has_wave_speeds:
+            if wave_speed_provider not in allowed_wave_speed_providers:
+                raise ValueError(
+                    "CompiledModel with wave speeds requires an exact detached "
+                    "wave_speed_provider: explicit_pair, jacobian, or pressure_derived"
+                )
+        elif wave_speed_provider is not None:
+            raise ValueError(
+                "CompiledModel without wave speeds cannot declare wave_speed_provider %r"
+                % (wave_speed_provider,)
+            )
+        self.wave_speed_provider = wave_speed_provider
         self.so_path = so_path
-        self.backend = backend       # "prototype" | "aot" | "production"
+        if backend != "production":
+            raise ValueError("CompiledModel backend must be the native production route")
+        self.backend = backend
         self.target = target         # "system" | "amr_system": targeted facade (native AMR loader if amr_system)
-        self.adder = adder           # method name (Amr)System: add_dynamic_block / add_compiled_block / add_native_block
         self.cons_names = list(cons_names)
+        self.state_spaces = list(state_spaces)
         self.cons_roles = list(cons_roles)
         self.prim_names = list(prim_names)
         self.n_vars = int(n_vars)
@@ -50,38 +66,111 @@ class CompiledModel:
         self.aux_extra_names = list(aux_extra_names) if aux_extra_names else []
         # Names of the model's NAMED elliptic fields (m.elliptic_field, ADC-419 / ADC-428): each is a
         # second-or-further elliptic solve the native loader wires via register_elliptic_field +
-        # set_block_elliptic_field after the block is installed. The install seam consults this set to
-        # decide whether a bind(solvers={field: ...}) selection names a DECLARED field (route it) or a
-        # typo (reject, naming the declared set). Empty for a model with only the default Poisson field.
+        # set_block_elliptic_field after the block is installed. The names remain detached compiled
+        # model evidence; the resolved simulation plan owns every solver/provider choice. Empty for a
+        # model with only the default Poisson field.
         self.elliptic_field_names = list(elliptic_field_names) if elliptic_field_names else []
-        self.params = dict(params)   # {name: Param}
+        # Compiler-owned declarations remain live until orchestration has finished attaching the
+        # bind schema.  ``_seal`` replaces this mapping by registry-free CompiledParameter values;
+        # no public artifact retains ParamHandle/Expr/OwnerPath authority through ``params``.
+        self.params = dict(params)
         self.caps = dict(caps)       # {cpu/mpi/amr/gpu: bool}
         self.abi_key = abi_key       # ABI key mirroring pops_header_signature + compiler/std
         self.model_hash = model_hash  # stable hash formulas+roles+n_aux+params
+        # Authenticated structural preimage of model.compile(). Public orchestration requires this
+        # to match the frozen compiler input; low-level test/runtime handles may leave it absent.
+        self.definition_identity = definition_identity
+        # Exact immutable trace captured from the same operator-first Module authority as the
+        # module_hash in definition_identity.  Public orchestration attaches and ABI-binds it after
+        # model.compile(); low-level handles may leave it absent but must never synthesize it later.
+        self.module_manifest = module_manifest
         self.cxx = cxx
         self.std = std
+        # Set directly only by advanced constructors. The public pops.compile route replaces this
+        # with the one BindSchema captured from the complete frozen Problem (all block instances).
+        self.bind_schema = bind_schema
+        self.install_plan = None
+        self.semantic_identity = None
+        self.artifact_spec_identity = None
+        self.binary_identity = None
+        self.artifact_identity = None
+
+    def _seal(self) -> None:
+        """Freeze a public per-block artifact after orchestration attaches metadata."""
+        stored = object.__getattribute__(self, "__dict__")
+        if stored.get("_sealed", False):
+            return
+        from pops.codegen._compiled_parameter import compiled_parameters
+        from pops.codegen._artifact_freeze import seal_attributes
+        from pops.codegen._compiled_model_boundary import seal_compiled_model
+
+        object.__setattr__(self, "params", compiled_parameters(stored["params"]))
+        seal_compiled_model(self)
+        seal_attributes(self)
+
+    @property
+    def authoring_snapshot(self) -> Any:
+        """Complete immutable authoring identity, or ``None`` on a low-level handle."""
+        return getattr(self, "_problem_snapshot", None)
+
+    def __setattr__(self, name: Any, value: Any) -> None:
+        if getattr(self, "_sealed", False):
+            raise AttributeError(
+                "CompiledModel is immutable after pops.compile: cannot set %r; "
+                "assemble a new Problem and recompile" % name
+            )
+        object.__setattr__(self, name, value)
 
     @property
     def capabilities(self) -> Any:
         """Typed capability handles of this compiled model (ADC-552): ``compiled.capabilities.
         wave_speeds`` returns the artifact's :class:`~pops.numerics.riemann.waves.WaveSpeedProvider`.
-        Derived from the carried authoring model when present, else from ``has_wave_speeds`` (a
-        generic signed-pair provider); raises a precise error when the artifact declares no wave
-        speeds (no silent None)."""
+        Reconstructed from the detached ``wave_speed_provider`` source kind authenticated by the
+        compiled artifact; raises a precise error when the artifact declares no wave speeds (no
+        authoring pointer and no guessed fallback)."""
         from pops.numerics.riemann.waves import _CapabilityHandles  # lazy: loader <-> numerics edge
         return _CapabilityHandles(self)
 
+    def __pops_artifact_model_metadata__(self) -> dict[str, Any]:
+        """Exact report data; consumers never probe optional model attributes."""
+        return {
+            "schema_version": 3,
+            "state_spaces": tuple(self.state_spaces),
+            "cons_names": tuple(self.cons_names),
+            "cons_roles": tuple(self.cons_roles),
+            "n_vars": self.n_vars,
+            "params": dict(self.params),
+            "aux_names": tuple(self.aux_extra_names),
+            "n_aux": self.n_aux,
+            "capabilities": dict(self.caps),
+            "wave_speed_provider": self.wave_speed_provider,
+        }
+
     @property
     def runtime_param_names(self) -> list:
-        """Names of the model's RUNTIME parameters (kind='runtime'), SORTED: this is the ORDER of
-        the indices on the C++ side (RuntimeParams) AND the order expected by
-        System.set_block_params(name, values) (P7-b). Empty if the model has only const params."""
-        return sorted(k for k, p in self.params.items() if getattr(p, "kind", "const") == "runtime")
+        """Runtime-carrier local IDs in the exact emitted within-model slot order."""
+        captured = getattr(self, "_runtime_param_names", None)
+        if captured is not None:
+            return list(captured)
+        result = []
+        for name, declaration in self.params.items():
+            kind = getattr(declaration, "kind", None)
+            kind = getattr(kind, "value", kind)
+            phase = getattr(declaration, "phase", None)
+            phase = getattr(phase, "value", phase)
+            if kind == "runtime" or (kind == "derived" and phase == "bind"):
+                result.append(name)
+        return sorted(result)
 
     def runtime_param_values(self) -> list:
         """DECLARATION values of the runtime params, parallel to runtime_param_names (default as
-        long as no set_block_params has been called)."""
-        return [self.params[k].value for k in self.runtime_param_names]
+        before the canonical BindSchema vector is injected at package installation."""
+        return [
+            self.params[name].default
+            if getattr(self.params[name], "has_default", False)
+            else None
+            for name in self.runtime_param_names
+        ]
 
     def check_runtime(self, n: Any = 16, state: Any = None, raise_on_error: Any = True,
                       rtol: Any = 1e-8, atol: Any = 1e-10) -> Any:
@@ -103,14 +192,14 @@ class CompiledModel:
                 "CompiledModel.check_runtime: only target='system' is re-verifiable in an "
                 "ephemeral System; a target='amr_system' loader is checked installed in its "
                 "AmrSystem (AMR test invariants), not in isolation.")
-        from pops import FiniteVolume, Explicit  # lazy: avoids a top-level runtime import
-        from pops.runtime.system import System  # advanced seam (ADC-545: off the public surface)
+        from pops.runtime._engine_descriptors import Explicit, Spatial
+        from pops.runtime._system import System  # advanced seam (ADC-545: off the public surface)
         from pops.numerics.reconstruction.limiters import Minmod
         from pops.numerics.riemann import Rusanov
         sim = System(n=int(n), L=1.0, periodic=True)
         sim.set_poisson()
         sim.add_equation("check", model=self,
-                         spatial=FiniteVolume(limiter=Minmod(), riemann=Rusanov()),
+                         spatial=Spatial(limiter=Minmod(), flux=Rusanov()),
                          time=Explicit())
         x = (np.arange(n) + 0.5) / float(n)
         X, Y = np.meshgrid(x, x, indexing="xy")
@@ -133,7 +222,7 @@ class CompiledModel:
     def arguments(self) -> Any:
         """The runtime inputs this AMR-route artifact expects at bind (Spec 5 sec.12.2, ADC-515).
 
-        The AMR route of ``pops.compile(problem, layout=AMR(...))`` returns the first block's
+        The AMR route of ``pops.compile(problem, layout=<structured AMR descriptor>)`` returns the first block's
         ``CompiledModel`` (there is no whole-system ``CompiledProblem`` on AMR: each block is a native
         ``add_native_block`` loader). So the ``arguments()`` seam ``CompiledProblem`` exposes on the
         Uniform route lives HERE too, built from the SAME :func:`~pops.codegen.inspect_compiled.
@@ -142,8 +231,26 @@ class CompiledModel:
         required), the model's declared params (type / kind / required), its named aux (layout /
         required) and the runtime layout the artifact targets (``layout='amr'`` for this handle). It
         allocates and reads nothing."""
-        from pops.codegen.inspect_compiled import build_arguments
-        return build_arguments(self)
+        from pops.codegen.inspect_compiled import build_component_arguments
+        return build_component_arguments(self)
+
+    def inspect(self) -> Any:
+        """Return the same inert compiled-artifact report as a whole-system handle."""
+        from pops.codegen.inspect_report import build_compiled_report
+
+        return build_compiled_report(self)
+
+    def requirements(self) -> Any:
+        """Return compile-time requirements for every model carried by the InstallPlan."""
+        from pops.codegen.inspect_report import build_requirements
+
+        return build_requirements(self)
+
+    def manifest(self) -> Any:
+        """Return the rich manifest consumed by the pre-bind refusal gates."""
+        from pops.external.artifact_manifest import build_compiled_manifest
+
+        return build_compiled_manifest(self)
 
     def estimate_memory(self, mesh: Any, *, platform: Any = None, layout: Any = None) -> Any:
         """A FORMULA-based memory estimate for this AMR-route artifact on ``mesh`` (sec.12.3, ADC-515).
@@ -152,52 +259,19 @@ class CompiledModel:
         and the model's component counts (state / aux / halo, plus the conservative AMR patch budget),
         via the SAME :func:`~pops.codegen.inspect_compiled.build_memory_estimate` with no Program (the
         no-Program branch skips Program-only scratch and solver categories). @p layout defaults to the
-        AMR layout this handle carries on ``_layout`` (``pops.compile``'s AMR route attaches it), so a
+        AMR layout carried by the immutable ``InstallPlan``, so a
         bare ``estimate_memory(mesh)`` auto-reports the AMR hierarchy budget (``layout='amr'``,
         conservative full-refinement worst case); an explicit @p layout / @p platform still wins. It
         NEVER allocates a ``MultiFab``; every assumption is in ``MemoryEstimate.assumptions``."""
         from pops.codegen.inspect_compiled import build_memory_estimate
         return build_memory_estimate(self, mesh, platform=platform,
-                                     layout=layout or getattr(self, "_layout", None))
-
-    def inspect_amr(self, layout: Any = None) -> Any:
-        """STATIC AMR report on this compiled MODEL (Spec 5 sec.8.12 / sec.8.4).
-
-        A ``CompiledModel`` produced off the AMR route (``pops.compile(problem, layout=AMR(...))``)
-        carries the compile-time layout on ``self._layout`` (ADC-555: the refine/regrid/patches
-        tags must appear in ``compiled.inspect_amr()``, not just ``layout.inspect()``), so a bare
-        call with no argument reports THAT layout when one is attached, rather than the generic
-        native envelope. An explicit @p layout argument always wins (it overrides the carried
-        one); a handle with no ``_layout`` (a ``target='system'`` model, or a stub built outside
-        ``pops.compile``) falls back to the native envelope, same as before. Delegates to the
-        top-level :func:`pops.inspect_amr`; never fabricates a hierarchy.
-        """
-        from pops import inspect_amr
-        if layout is None:
-            layout = getattr(self, "_layout", None)
-        return inspect_amr(layout)
-
-    def capability_matrix(self) -> Any:
-        """The ADC-549 native route matrix for this compiled model handle."""
-        from pops._capabilities import native_capability_matrix
-        flags = {
-            "supports_uniform": bool(self.caps.get("cpu", False)),
-            "supports_amr": bool(self.caps.get("amr", False)
-                                 and getattr(self, "target", "system") == "amr_system"),
-            "supports_mpi": bool(self.caps.get("mpi", False)),
-            "supports_gpu": bool(self.caps.get("gpu", False)),
-            "supports_stride": bool(getattr(self, "backend", None) == "production"),
-            "supports_named_fields": True,
-            "supports_partial_imex_mask": False,
-            "supports_custom_communicator": False,
-        }
-        return native_capability_matrix(
-            owner=getattr(self, "so_path", None) or "compiled-model",
-            layout="amr" if getattr(self, "target", "system") == "amr_system" else "system",
-            flags=flags, source="manifest")
+                                     layout=layout or (
+                                         self.install_plan.layout
+                                         if self.install_plan is not None else None))
 
     def __repr__(self) -> str:
         return ("CompiledModel(backend=%r, target=%r, so_path=%r, n_vars=%d, gamma=%r, n_aux=%d, "
-                "adder=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
+                "wave_speed_provider=%r, runtime_params=%r, abi_key=%.12s..., model_hash=%.12s...)"
                 % (self.backend, self.target, self.so_path, self.n_vars, self.gamma, self.n_aux,
-                   self.adder, self.runtime_param_names, self.abi_key or "", self.model_hash or ""))
+                   self.wave_speed_provider, self.runtime_param_names,
+                   self.abi_key or "", self.model_hash or ""))

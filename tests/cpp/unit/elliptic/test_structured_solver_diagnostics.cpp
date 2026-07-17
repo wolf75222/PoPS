@@ -47,8 +47,7 @@ TEST(test_structured_solver_diagnostics, Runs) {
 
     const RuntimeDiagnosticsReport& report = mg.diagnostics_report();
     ASSERT_TRUE(report.source == "pops.numerics.elliptic.geometric_mg") << "MG report source";
-    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0)
-        << "MG trace events recorded structurally";
+    ASSERT_TRUE(report.count("elliptic.mg.trace") > 0) << "MG trace events recorded structurally";
     ASSERT_TRUE(report.events.front().severity == "trace") << "MG trace severity";
   }
 
@@ -67,15 +66,15 @@ TEST(test_structured_solver_diagnostics, Runs) {
 
     CompositeFacPoisson fac(geom_c, ba_c, bc, fine_box, ratio);
     fac.set_verbose(true);
-    const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2, /*tol=*/Real(1e-8));
+    const Real residual = fac.solve(/*max_iters=*/1, /*fine_sweeps=*/2,
+                                    /*rel_tol=*/Real(1e-8), /*abs_tol=*/Real(0));
     const RuntimeDiagnosticsReport& report = fac.diagnostics_report();
     ASSERT_TRUE(std::isfinite(static_cast<double>(residual))) << "FAC residual finite";
     ASSERT_TRUE(report.source == "pops.numerics.elliptic.composite_fac_poisson")
         << "FAC report source";
     ASSERT_TRUE(report.count("elliptic.fac.residual") > 0)
         << "FAC residual events recorded structurally";
-    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson")
-        << "FAC event component";
+    ASSERT_TRUE(report.events.front().component == "CompositeFacPoisson") << "FAC event component";
   }
 
   std::printf("OK test_structured_solver_diagnostics\n");

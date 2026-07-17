@@ -16,16 +16,6 @@ sources = ["tests/cpp/integration/amr/test_amr_composite_source_conservation.cpp
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
-name = "test_amr_condensed_schur_composite"
-sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_composite.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
-name = "test_amr_condensed_schur_source_stepper"
-sources = ["tests/cpp/integration/amr/test_amr_condensed_schur_source_stepper.cpp"]
-labels = ["integration", "amr", "medium"]
-
-[[cpp.suite]]
 name = "test_amr_coupled_source_role_strict"
 sources = ["tests/cpp/integration/amr/test_amr_coupled_source_role_strict.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -121,6 +111,11 @@ sources = ["tests/cpp/integration/amr/test_amr_spatial_parity.cpp"]
 labels = ["integration", "amr", "medium"]
 
 [[cpp.suite]]
+name = "test_amr_ssprk2"
+sources = ["tests/cpp/integration/amr/test_amr_ssprk2.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
 name = "test_amr_stride_cadence"
 sources = ["tests/cpp/integration/amr/test_amr_stride_cadence.cpp"]
 labels = ["integration", "amr", "medium"]
@@ -129,6 +124,7 @@ labels = ["integration", "amr", "medium"]
 name = "test_amr_system_bz_multibox"
 sources = ["tests/cpp/integration/amr/test_amr_system_bz_multibox.cpp"]
 labels = ["integration", "amr", "medium"]
+mpi_variants = [2, 4]
 
 [[cpp.suite]]
 name = "test_amr_system_bz_pop"
@@ -194,6 +190,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_amr_program_reflux"
+sources = ["tests/cpp/integration/mpi/test_mpi_amr_program_reflux.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2, 4]
+
+[[cpp.suite]]
 name = "test_mpi_amr_twoblock_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_amr_twoblock_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -230,6 +232,18 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
 
 [[cpp.suite]]
+name = "test_mpi_external_lifecycle"
+sources = ["tests/cpp/integration/mpi/test_mpi_external_lifecycle.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
+name = "test_mpi_field_plan_consensus"
+sources = ["tests/cpp/integration/mpi/test_mpi_field_plan_consensus.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [2]
+
+[[cpp.suite]]
 name = "test_mpi_fft_distributed"
 sources = ["tests/cpp/integration/mpi/test_mpi_fft_distributed.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -242,6 +256,12 @@ labels = ["backend", "mpi", "medium"]
 mpi_nproc = [4]
 
 [[cpp.suite]]
+name = "test_mpi_hdf5_collective"
+sources = ["tests/cpp/integration/mpi/test_mpi_hdf5_collective.cpp"]
+labels = ["backend", "mpi", "medium"]
+mpi_nproc = [1, 2]
+
+[[cpp.suite]]
 name = "test_mpi_hybrid_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_hybrid_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
@@ -252,6 +272,12 @@ name = "test_mpi_mbox_parity"
 sources = ["tests/cpp/integration/mpi/test_mpi_mbox_parity.cpp"]
 labels = ["backend", "mpi", "medium"]
 mpi_nproc = [1, 2, 4]
+
+[[cpp.suite]]
+name = "test_mpi_multiblock_interface_scheduler"
+sources = ["tests/cpp/integration/mpi/test_mpi_multiblock_interface_scheduler.cpp"]
+labels = ["backend", "mpi", "runtime", "medium"]
+mpi_nproc = [2]
 
 [[cpp.suite]]
 name = "test_mpi_poisson"
@@ -387,6 +413,11 @@ sources = ["tests/cpp/integration/runtime/test_capability_report.cpp"]
 labels = ["integration", "runtime", "medium"]
 
 [[cpp.suite]]
+name = "test_canonical_identity"
+sources = ["tests/cpp/unit/core/test_canonical_identity.cpp"]
+labels = ["unit", "core", "fast"]
+
+[[cpp.suite]]
 name = "test_checkpoint_cache"
 sources = ["tests/cpp/integration/runtime/test_checkpoint_cache.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -437,16 +468,6 @@ sources = ["tests/cpp/unit/runtime/test_program_context_contract.cpp"]
 labels = ["unit", "runtime", "small"]
 
 [[cpp.suite]]
-name = "test_field_problem_registry"
-sources = ["tests/cpp/unit/runtime/test_field_problem_registry.cpp"]
-labels = ["unit", "runtime", "small"]
-
-[[cpp.suite]]
-name = "test_field_registry_uniform_amr"
-sources = ["tests/cpp/integration/runtime/test_field_registry_uniform_amr.cpp"]
-labels = ["integration", "runtime", "medium"]
-
-[[cpp.suite]]
 name = "test_facade_routing"
 sources = ["tests/cpp/integration/runtime/test_facade_routing.cpp"]
 labels = ["integration", "runtime", "medium"]
@@ -480,6 +501,17 @@ labels = ["integration", "runtime", "medium"]
 name = "test_runtime_environment"
 sources = ["tests/cpp/integration/runtime/test_runtime_environment.cpp"]
 labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_world_communicator"
+sources = ["tests/cpp/unit/parallel/test_world_communicator.cpp"]
+labels = ["unit", "parallel", "fast"]
+mpi_variants = [1, 2]
+
+[[cpp.suite]]
+name = "test_platform_manifest"
+sources = ["tests/cpp/unit/runtime/test_platform_manifest.cpp"]
+labels = ["unit", "runtime", "small"]
 
 [[cpp.suite]]
 name = "test_system_abstraction"
@@ -517,11 +549,6 @@ sources = ["tests/cpp/unit/numerics/test_block_inverse.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
-name = "test_dynamic_model"
-sources = ["tests/cpp/unit/codegen/test_dynamic_model.cpp"]
-labels = ["unit", "codegen", "fast"]
-
-[[cpp.suite]]
 name = "test_model_registry"
 sources = ["tests/cpp/unit/codegen/test_model_registry.cpp"]
 labels = ["unit", "codegen", "fast"]
@@ -549,11 +576,6 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_composite_fac_tensor"
 sources = ["tests/cpp/unit/elliptic/test_composite_fac_tensor.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_condensed_schur_source_stepper"
-sources = ["tests/cpp/unit/elliptic/test_condensed_schur_source_stepper.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
@@ -625,6 +647,7 @@ labels = ["unit", "elliptic", "fast"]
 name = "test_krylov_solver"
 sources = ["tests/cpp/unit/elliptic/test_krylov_solver.cpp"]
 labels = ["unit", "elliptic", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_newton_robustness"
@@ -657,11 +680,6 @@ sources = ["tests/cpp/unit/elliptic/test_poisson_smoother_cache.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
-name = "test_polar_condensed_schur_source_stepper"
-sources = ["tests/cpp/unit/elliptic/test_polar_condensed_schur_source_stepper.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
 name = "test_polar_poisson_mms"
 sources = ["tests/cpp/unit/elliptic/test_polar_poisson_mms.cpp"]
 labels = ["unit", "elliptic", "fast"]
@@ -674,11 +692,6 @@ labels = ["unit", "elliptic", "fast"]
 [[cpp.suite]]
 name = "test_polar_tensor_elliptic_mms"
 sources = ["tests/cpp/unit/elliptic/test_polar_tensor_elliptic_mms.cpp"]
-labels = ["unit", "elliptic", "fast"]
-
-[[cpp.suite]]
-name = "test_schur_condensation"
-sources = ["tests/cpp/unit/elliptic/test_schur_condensation.cpp"]
 labels = ["unit", "elliptic", "fast"]
 
 [[cpp.suite]]
@@ -750,11 +763,13 @@ labels = ["unit", "mesh", "fast"]
 name = "test_copy_schedule_cache"
 sources = ["tests/cpp/unit/mesh/test_copy_schedule_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_fill_boundary_cache"
 sources = ["tests/cpp/unit/mesh/test_fill_boundary_cache.cpp"]
 labels = ["unit", "mesh", "fast"]
+mpi_variants = [1, 2, 4]
 
 [[cpp.suite]]
 name = "test_geometry"
@@ -857,11 +872,6 @@ sources = ["tests/cpp/unit/numerics/test_splitting.cpp"]
 labels = ["unit", "numerics", "fast"]
 
 [[cpp.suite]]
-name = "test_strang_splitting"
-sources = ["tests/cpp/unit/numerics/test_strang_splitting.cpp"]
-labels = ["unit", "numerics", "fast"]
-
-[[cpp.suite]]
 name = "test_weno5_ssprk3"
 sources = ["tests/cpp/unit/numerics/test_weno5_ssprk3.cpp"]
 labels = ["unit", "numerics", "fast"]
@@ -937,11 +947,6 @@ sources = ["tests/cpp/unit/physics/test_isothermal_vacuum_floor.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_lorentz_eliminator"
-sources = ["tests/cpp/unit/physics/test_lorentz_eliminator.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_multirate_stride"
 sources = ["tests/cpp/unit/physics/test_multirate_stride.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -962,11 +967,6 @@ sources = ["tests/cpp/unit/physics/test_polar_mms_vr.cpp"]
 labels = ["unit", "physics", "fast"]
 
 [[cpp.suite]]
-name = "test_polar_ring_advection"
-sources = ["tests/cpp/unit/physics/test_polar_ring_advection.cpp"]
-labels = ["unit", "physics", "fast"]
-
-[[cpp.suite]]
 name = "test_polar_transport_mms"
 sources = ["tests/cpp/unit/physics/test_polar_transport_mms.cpp"]
 labels = ["unit", "physics", "fast"]
@@ -980,6 +980,11 @@ labels = ["unit", "physics", "fast"]
 name = "test_user_time_integrator"
 sources = ["tests/cpp/unit/physics/test_user_time_integrator.cpp"]
 labels = ["unit", "physics", "fast"]
+
+[[cpp.suite]]
+name = "test_amr_tensor_fac_provider"
+sources = ["tests/cpp/unit/runtime/test_amr_tensor_fac_provider.cpp"]
+labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
 name = "test_assembler_driver"
@@ -1027,6 +1032,16 @@ sources = ["tests/cpp/unit/runtime/test_spatial_discretisation.cpp"]
 labels = ["unit", "runtime", "fast"]
 
 [[cpp.suite]]
+name = "test_step_attempt_rejected_amr_link"
+sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_amr_link.cpp"]
+labels = ["unit", "runtime", "amr", "fast"]
+
+[[cpp.suite]]
+name = "test_step_attempt_rejected_header_only"
+sources = ["tests/cpp/unit/runtime/test_step_attempt_rejected_header_only.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
 name = "test_variable_role"
 sources = ["tests/cpp/unit/runtime/test_variable_role.cpp"]
 labels = ["unit", "runtime", "fast"]
@@ -1035,6 +1050,58 @@ labels = ["unit", "runtime", "fast"]
 name = "test_variable_user_role"
 sources = ["tests/cpp/unit/runtime/test_variable_user_role.cpp"]
 labels = ["unit", "runtime", "fast"]
+
+# Exact-cover fence: these CMake-registered targets predate the manifest-driven sharder.
+# They remain real CTest coverage and therefore must be selected, built, and run by one shard.
+[[cpp.suite]]
+name = "test_amr_transfer_properties"
+sources = ["tests/cpp/integration/amr/test_amr_transfer_properties.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_component_interfaces"
+sources = ["tests/cpp/unit/runtime/test_component_interfaces.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_field_nullspace"
+sources = ["tests/cpp/unit/elliptic/test_field_nullspace.cpp"]
+labels = ["unit", "elliptic", "fast"]
+
+[[cpp.suite]]
+name = "test_flux_interfaces"
+sources = ["tests/cpp/unit/numerics/test_flux_interfaces.cpp"]
+labels = ["unit", "numerics", "fast"]
+
+[[cpp.suite]]
+name = "test_multiblock_interface_scheduler"
+sources = ["tests/cpp/integration/runtime/test_multiblock_interface_scheduler.cpp"]
+labels = ["integration", "runtime", "medium"]
+
+[[cpp.suite]]
+name = "test_prepared_boundary_plan"
+sources = ["tests/cpp/unit/mesh/test_prepared_boundary_plan.cpp"]
+labels = ["unit", "mesh", "fast"]
+
+[[cpp.suite]]
+name = "test_program_reflux_ledger"
+sources = ["tests/cpp/integration/amr/test_program_reflux_ledger.cpp"]
+labels = ["integration", "amr", "medium"]
+
+[[cpp.suite]]
+name = "test_residual_operator"
+sources = ["tests/cpp/unit/runtime/test_residual_operator.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[cpp.suite]]
+name = "test_system_registries"
+sources = ["tests/cpp/unit/runtime/test_system_registries.cpp"]
+labels = ["unit", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_examples_final"
+path = "tests/python/examples/final"
+labels = ["integration", "python", "examples", "runtime", "io", "time", "amr", "physics", "medium"]
 
 [[python.suite]]
 name = "pops_python_integration_amr"
@@ -1047,19 +1114,33 @@ path = "tests/python/integration/bindings"
 labels = ["integration", "python", "bindings", "medium"]
 
 [[python.suite]]
+name = "pops_python_integration_dsl"
+path = "tests/python/integration/dsl"
+labels = ["integration", "python", "physics", "numerics", "codegen", "native_loader", "compiler", "runtime", "medium"]
+
+[[python.suite]]
 name = "pops_python_integration_io"
 path = "tests/python/integration/io"
-labels = ["integration", "python", "io", "medium"]
+labels = ["integration", "python", "io", "mpi", "amr", "runtime", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/io/test_hdf5_parallel.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_integration_mpi"
 path = "tests/python/integration/mpi"
 labels = ["integration", "python", "mpi", "medium"]
+mpi_entrypoints = [
+  { path = "tests/python/integration/mpi/test_amr_clean_route_program_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_amr_history_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_scientific_output_mpi.py", nproc = 2 },
+  { path = "tests/python/integration/mpi/test_uniform_history_checkpoint_mpi.py", nproc = 2 },
+]
 
 [[python.suite]]
 name = "pops_python_integration_native_loader"
 path = "tests/python/integration/native_loader"
-labels = ["integration", "python", "native_loader", "medium"]
+labels = ["integration", "python", "native_loader", "compiler", "medium"]
 
 [[python.suite]]
 name = "pops_python_integration_runtime"
@@ -1067,14 +1148,29 @@ path = "tests/python/integration/runtime"
 labels = ["integration", "python", "runtime", "medium"]
 
 [[python.suite]]
+name = "pops_python_unit_amr"
+path = "tests/python/unit/amr"
+labels = ["unit", "python", "amr", "mesh", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_boundary"
+path = "tests/python/unit/boundary"
+labels = ["unit", "python", "boundary", "mesh", "numerics", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_codegen"
 path = "tests/python/unit/codegen"
 labels = ["unit", "python", "codegen", "fast"]
 
 [[python.suite]]
-name = "pops_python_unit_compliance"
-path = "tests/python/unit/compliance"
-labels = ["unit", "python", "compliance", "runtime", "medium"]
+name = "pops_python_unit_domain"
+path = "tests/python/unit/domain"
+labels = ["unit", "python", "domain", "mesh", "problem", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_identity"
+path = "tests/python/unit/identity"
+labels = ["unit", "python", "identity", "codegen", "runtime", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_descriptors"
@@ -1082,9 +1178,34 @@ path = "tests/python/unit/descriptors"
 labels = ["unit", "python", "descriptors", "fast"]
 
 [[python.suite]]
+name = "pops_python_unit_fields"
+path = "tests/python/unit/fields"
+labels = ["unit", "python", "fields", "physics", "elliptic", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_initial"
+path = "tests/python/unit/initial"
+labels = ["unit", "python", "initial", "problem", "runtime", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_lib_time"
+path = "tests/python/unit/lib/time"
+labels = ["unit", "python", "time", "codegen", "solvers", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_reporting"
+path = "tests/python/unit/reporting"
+labels = ["unit", "python", "reporting", "fast"]
+
+[[python.suite]]
 name = "pops_python_unit_mesh"
 path = "tests/python/unit/mesh"
 labels = ["unit", "python", "mesh", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_moments"
+path = "tests/python/unit/moments"
+labels = ["unit", "python", "moments", "physics", "numerics", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_numerics"
@@ -1095,6 +1216,11 @@ labels = ["unit", "python", "numerics", "fast"]
 name = "pops_python_unit_physics"
 path = "tests/python/unit/physics"
 labels = ["unit", "python", "physics", "fast"]
+
+[[python.suite]]
+name = "pops_python_unit_output"
+path = "tests/python/unit/output"
+labels = ["unit", "python", "output", "io", "runtime", "fast"]
 
 [[python.suite]]
 name = "pops_python_unit_problem"

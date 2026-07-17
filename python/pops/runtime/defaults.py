@@ -1,6 +1,8 @@
 """Structured native numerical/solver/physical defaults."""
 from __future__ import annotations
 
+import importlib
+from collections.abc import Mapping
 from typing import Any
 
 
@@ -36,8 +38,10 @@ _CONSTANT_CLASSIFICATION: dict = {
     "kMGDefaultCoarseThreshold": "public_knob",
     "kFACDefaultMaxIters": "public_knob",
     "kFACDefaultFineSweeps": "public_knob",
-    "kFACDefaultTol": "public_knob",
+    "kFACDefaultRelTol": "public_knob",
+    "kFACDefaultAbsTol": "public_knob",
     "kFACInitialCoarseRelTol": "public_knob",
+    "kFACInitialCoarseAbsTol": "public_knob",
     "kFACInitialCoarseMaxCycles": "public_knob",
     "kFFTDefaultSpectral": "public_knob",
     "kFFTZeroMeanGauge": "internal_default",
@@ -74,7 +78,7 @@ _CONSTANT_CLASSIFICATION: dict = {
 def _static_report() -> dict:
     return {
         "schema_version": 1,
-        "source": "pops.runtime.defaults.static_fallback",
+        "source": "source-only",
         "newton": {
             "max_iters": 2,
             "rel_tol": 0.0,
@@ -104,9 +108,11 @@ def _static_report() -> dict:
         "fac": {
             "max_iters": 30,
             "fine_sweeps": 400,
-            "tol": 1e-9,
-            "initial_coarse_rel_tol": 1e-12,
-            "initial_coarse_max_cycles": 100,
+            "rel_tol": 1e-9,
+            "abs_tol": 0.0,
+            "coarse_rel_tol": 1e-12,
+            "coarse_abs_tol": 0.0,
+            "coarse_cycles": 100,
         },
         "fft": {
             "spectral_default": False,
@@ -153,18 +159,44 @@ def _static_report() -> dict:
     }
 
 
-def numerical_defaults_report() -> dict:
-    """Return structured native numerical, solver and physical defaults."""
-    try:
-        from pops import _pops  # noqa: PLC0415
+class NativeDefaultsReportError(RuntimeError):
+    """A loaded native extension cannot provide its numerical-defaults report."""
 
-        fn: Any = getattr(_pops, "numerical_defaults_report", None)
-        if callable(fn):
-            report: Any = fn()
-            return dict(report)
-    except Exception:
-        pass
-    return _static_report()
+
+def _native_extension() -> Any:
+    """Return the extension only when it is genuinely absent; preserve load failures."""
+    for name in ("_pops", "pops._pops"):
+        try:
+            return importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name != name:
+                raise
+    return None
+
+
+def numerical_defaults_report() -> dict:
+    """Return native defaults, or an explicitly labelled source-only report.
+
+    The source-only report is permitted exclusively when no extension can be imported.  Once an
+    extension is loaded, a missing, failing, or malformed native report is actionable and therefore
+    fails closed.
+    """
+    mod = _native_extension()
+    if mod is None:
+        return _static_report()
+    fn: Any = getattr(mod, "numerical_defaults_report", None)
+    if not callable(fn):
+        raise NativeDefaultsReportError(
+            "loaded _pops extension does not expose callable numerical_defaults_report()")
+    try:
+        raw = fn()
+        if not isinstance(raw, Mapping):
+            raise TypeError("native defaults report is not a mapping")
+        return dict(raw)
+    except Exception as exc:
+        raise NativeDefaultsReportError(
+            "_pops.numerical_defaults_report() failed or returned a malformed mapping"
+        ) from exc
 
 
 _DEFAULTS: Any = numerical_defaults_report()

@@ -3,18 +3,19 @@
 Symbols are re-exported via python/pops/lib/moments/__init__.py.
 
 The symbolic IR primitives (``Const`` / ``sqrt`` / ``abs_``) come from
-:mod:`pops.ir` at module scope (the IR is lightweight and lib may import it).
-The PDE-model facade (``physics.PdeModel``) is imported
-LAZILY inside :func:`build_moment_model` because :mod:`pops.physics` pulls the
-compile machinery transitively, and ``lib`` must stay importable without it.
+:mod:`pops._ir` at module scope (the IR is lightweight and lib may import it).
+The public blackboard model is imported LAZILY inside
+:func:`build_moment_model` so the symbolic helpers remain importable without
+constructing the compiler-facing model layer.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from math import comb
 from typing import Any
 
-from pops.ir.expr import Const as _Const
-from pops.ir.ops import sqrt as _sqrt, abs_ as _abs_
+from pops._ir.expr import Const as _Const
+from pops._ir.ops import sqrt as _sqrt, abs_ as _abs_
 
 
 def moment_indices(order: Any) -> list:
@@ -47,9 +48,107 @@ def _is_zero(e: Any) -> bool:
     return isinstance(e, _Const) and e.value == 0.0
 
 
+@dataclass(frozen=True)
+class MomentFluxExpressions:
+    """Generic symbolic result of closing one Cartesian moment hierarchy."""
+
+    moments: dict[tuple[int, int], Any]
+    x: tuple[Any, ...]
+    y: tuple[Any, ...]
+
+
+def moment_flux_expressions(author: Any, variables: Any, order: Any, closure: Any, *,
+                            robust: bool = False, eps_m00: Any = 1e-12,
+                            eps_cov: Any = 1e-12) -> MomentFluxExpressions:
+    """Build closure-local algebra independently of the surrounding Model facade.
+
+    ``author`` only needs ``primitive(name, expression)``.  This deliberately small protocol
+    lets the host expression evaluator and the blackboard ``physics.Model`` share the
+    exact M -> C -> S -> closure -> flux construction without model-name dispatch.
+    """
+    if isinstance(order, bool) or not isinstance(order, int) or order < 2:
+        raise ValueError("moment_flux_expressions: order must be an int >= 2")
+    idx = moment_indices(order)
+    supplied = tuple(variables)
+    if len(supplied) != len(idx):
+        raise ValueError(
+            "moment_flux_expressions: order %d requires %d variables, got %d"
+            % (order, len(idx), len(supplied))
+        )
+    M = dict(zip(idx, supplied, strict=True))
+
+    def floor(nm: Any, x: Any, eps: Any) -> Any:
+        return author.primitive(nm, ((x + eps) + _abs_(x - eps)) / 2.0)
+
+    M00 = floor("M00f", M[(0, 0)], eps_m00) if robust else M[(0, 0)]
+    u = author.primitive("u", M[(1, 0)] / M00)
+    v = author.primitive("v", M[(0, 1)] / M00)
+    mn = {pq: (1.0 if pq == (0, 0) else M[pq] / M00) for pq in idx}
+
+    C = {(0, 0): 1.0, (1, 0): 0.0, (0, 1): 0.0}
+    for degree in range(2, order + 1):
+        for q in range(degree + 1):
+            p = degree - q
+            expr: Any = None
+            for i in range(p + 1):
+                for j in range(q + 1):
+                    coef = float(comb(p, i) * comb(q, j) * (-1) ** (p - i + q - j))
+                    term = coef * _pow(u, p - i) * _pow(v, q - j)
+                    if (i, j) != (0, 0):
+                        term = term * mn[(i, j)]
+                    expr = term if expr is None else expr + term
+            C[(p, q)] = author.primitive("C%d%d" % (p, q), expr)
+
+    C20 = floor("C20f", C[(2, 0)], eps_cov) if robust else C[(2, 0)]
+    C02 = floor("C02f", C[(0, 2)], eps_cov) if robust else C[(0, 2)]
+    sx = author.primitive("sx", _sqrt(C20))
+    sy = author.primitive("sy", _sqrt(C02))
+    standardized = {"S20": 1.0, "S02": 1.0}
+    for (p, q), central in C.items():
+        if p + q >= 2 and (p, q) not in ((2, 0), (0, 2)):
+            standardized["S%d%d" % (p, q)] = author.primitive(
+                "S%d%d" % (p, q), central / (_pow(sx, p) * _pow(sy, q)))
+
+    from .closures.protocol import apply_local_closure
+
+    top = apply_local_closure(closure, order, standardized)
+    closed = dict(C)
+    for key, expression in top.items():
+        p, q = int(key[1]), int(key[2])
+        closed[(p, q)] = (
+            0.0 if _is_zero(expression) else author.primitive(
+                "C%d%d" % (p, q), expression * _pow(sx, p) * _pow(sy, q))
+        )
+
+    highest = {}
+    for q in range(order + 2):
+        p = order + 1 - q
+        expr = None
+        for i in range(p + 1):
+            for j in range(q + 1):
+                central = closed.get((i, j))
+                if central is None or _is_zero(central):
+                    continue
+                term = float(comb(p, i) * comb(q, j)) * _pow(u, p - i) * _pow(v, q - j)
+                if not (isinstance(central, float) and central == 1.0):
+                    term = term * central
+                expr = term if expr is None else expr + term
+        highest[(p, q)] = author.primitive("M%d%d" % (p, q), M00 * expr)
+
+    def raw(index: tuple[int, int]) -> Any:
+        return M[index] if index in M else highest[index]
+
+    return MomentFluxExpressions(
+        M,
+        tuple(raw((p + 1, q)) for p, q in idx),
+        tuple(raw((p, q + 1)) for p, q in idx),
+    )
+
+
 def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
                        exact_speeds: bool = True, robust: bool = False, eps_m00: Any = 1e-12,
-                       eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False) -> Any:
+                       eps_cov: Any = 1e-12, sources: Any = None, roe: bool = False,
+                       frame: Any = None) -> Any:
     """2D moment model with an arbitrary closure: flux and intermediates GENERATED.
 
     @p order: max order of the transported moments (order=2 -> 6 variables, order=4 -> 15).
@@ -72,98 +171,50 @@ def build_moment_model(name: Any, order: Any, closure: Any, blocks: Any = None,
        Jacobian at the arithmetic-mean interface state is eigendecomposed (|A| via the matrix-sign
        kernel pops::roe_abs_apply, spectral-radius Rusanov fallback), making riemann='roe' available
        for the moment system (no fluid roles / pressure needed). Additive to exact_speeds (which
-       still provides max_wave_speed for the CFL dt). Needs the 'aot' or 'production' backend.
-    @return pops.physics.PdeModel ready to compile (the caller may still add elliptic_rhs,
-       params, aux... before m.compile)."""
-    from pops import physics as _physics
-    if order < 2:
-        raise ValueError("build_moment_model: order >= 2 required (standardization relies "
-                         "on C20/C02; order %r)" % (order,))
-    idx = moment_indices(order)
-    m = _physics.PdeModel(name)
-    cons = m.conservative_vars(*moment_names(order))
-    M = dict(zip(idx, cons))
+       still provides max_wave_speed for the CFL dt). Emitted by the production backend.
+    @p frame: a typed Cartesian frame exposing the ``x`` and ``y`` axes; ``None`` selects
+       :class:`Cartesian2D`.
+    @return the canonical :class:`pops.physics.Model`, ready to attach to a Problem."""
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div
+    from pops.physics import Density, Model
 
-    def floor(nm: Any, x: Any, eps: Any) -> Any:
-        # max(x, eps) = ((x + eps) + |x - eps|) / 2: smooth floor, expressible in the AST.
-        return m.primitive(nm, ((x + eps) + _abs_(x - eps)) / 2.0)
+    if isinstance(order, bool) or not isinstance(order, int) or order < 2:
+        raise ValueError("build_moment_model: order must be an int >= 2 "
+                         "(standardization relies on C20/C02; order %r)" % (order,))
+    selected_frame = Cartesian2D() if frame is None else frame
+    axes = getattr(selected_frame, "axes", None)
+    if (not isinstance(axes, tuple) or len(axes) != 2
+            or tuple(getattr(axis, "name", None) for axis in axes) != ("x", "y")):
+        raise TypeError("build_moment_model frame must expose the typed Cartesian axes x and y")
 
-    M00 = floor("M00f", M[(0, 0)], eps_m00) if robust else M[(0, 0)]
-    u = m.primitive("u", M[(1, 0)] / M00)
-    v = m.primitive("v", M[(0, 1)] / M00)
-
-    # normalized raw moments m_pq = M_pq / M00 (no let: each used once)
-    mn = {pq: (1.0 if pq == (0, 0) else M[pq] / M00) for pq in idx}
-
-    # --- central moments: binomial transform, derived in a loop ---
-    # C_pq = sum_{i<=p, j<=q} comb(p,i) comb(q,j) (-u)^(p-i) (-v)^(q-j) m_ij
-    C = {(0, 0): 1.0, (1, 0): 0.0, (0, 1): 0.0}
-    for s in range(2, order + 1):
-        for q in range(s + 1):
-            p = s - q
-            expr: Any = None
-            for i in range(p + 1):
-                for j in range(q + 1):
-                    coef = float(comb(p, i) * comb(q, j) * (-1) ** (p - i + q - j))
-                    t = coef * _pow(u, p - i) * _pow(v, q - j)
-                    if (i, j) != (0, 0):
-                        t = t * mn[(i, j)]
-                    expr = t if expr is None else expr + t
-            C[(p, q)] = m.primitive("C%d%d" % (p, q), expr)
-
-    # --- standardization: S_pq = C_pq / (sx^p sy^q); S20 = S02 = 1 by construction ---
-    C20 = floor("C20f", C[(2, 0)], eps_cov) if robust else C[(2, 0)]
-    C02 = floor("C02f", C[(0, 2)], eps_cov) if robust else C[(0, 2)]
-    sx = m.primitive("sx", _sqrt(C20))
-    sy = m.primitive("sy", _sqrt(C02))
-    S = {"S20": 1.0, "S02": 1.0}
-    for (p, q), c in C.items():
-        if p + q >= 2 and (p, q) not in ((2, 0), (0, 2)):
-            S["S%d%d" % (p, q)] = m.primitive("S%d%d" % (p, q),
-                                              c / (_pow(sx, p) * _pow(sy, q)))
-
-    # --- closure (the ONLY physics) then de-standardization C'_pq = S'_pq sx^p sy^q ---
-    top = closure(S)
-    want = {"S%d%d" % (p, order + 1 - p) for p in range(order + 2)}
-    if set(top) != want:
-        raise ValueError("moments: the closure must return exactly the keys %s "
-                         "(got %s)" % (sorted(want), sorted(top)))
-    Call = dict(C)
-    for key, e in top.items():
-        p, q = int(key[1]), int(key[2])
-        Call[(p, q)] = (0.0 if _is_zero(e)
-                        else m.primitive("C%d%d" % (p, q), e * _pow(sx, p) * _pow(sy, q)))
-
-    # --- reconstruction of the order order+1 raw moments: inverse binomial ---
-    # m_pq = sum_{i<=p, j<=q} comb(p,i) comb(q,j) u^(p-i) v^(q-j) C_ij
-    Mtop = {}
-    for q in range(order + 2):
-        p = order + 1 - q
-        expr = None
-        for i in range(p + 1):
-            for j in range(q + 1):
-                cij = Call.get((i, j))
-                if cij is None or _is_zero(cij):
-                    continue
-                t = float(comb(p, i) * comb(q, j)) * _pow(u, p - i) * _pow(v, q - j)
-                if not (isinstance(cij, float) and cij == 1.0):
-                    t = t * cij
-                expr = t if expr is None else expr + t
-        Mtop[(p, q)] = m.primitive("M%d%d" % (p, q), M00 * expr)
-
-    # --- flux: order shift F_x[M_pq] = M_{p+1,q}, F_y[M_pq] = M_{p,q+1} ---
-    def raw(pq: Any) -> Any:
-        return M[pq] if pq in M else Mtop[pq]
-
-    m.flux(x=[raw((p + 1, q)) for (p, q) in idx],
-           y=[raw((p, q + 1)) for (p, q) in idx])
+    m = Model(name, frame=selected_frame)
+    state = m.state(
+        "U", components=tuple(moment_names(order)), roles={"M00": Density()})
+    expressions = moment_flux_expressions(
+        m, tuple(state), order, closure,
+        robust=robust, eps_m00=eps_m00, eps_cov=eps_cov)
+    flux = m.flux(
+        "transport",
+        frame=selected_frame,
+        state=state,
+        components={axes[0]: expressions.x, axes[1]: expressions.y},
+    )
 
     if exact_speeds:
         m.wave_speeds_from_jacobian(blocks=blocks)
     if roe:
         m.roe_from_jacobian()
+    rhs = -div(flux)
     if sources is not None:
-        m.source(sources(m, M))
-    m.primitive_vars(*cons)
-    m.conservative_from(list(cons))
+        source = m.source(
+            "source", on=state, value=sources(m, expressions.moments))
+        rhs = rhs + source
+    m.rate("transport", equation=ddt(state) == rhs)
     return m
+
+
+__all__ = [
+    "MomentFluxExpressions", "build_moment_model", "moment_flux_expressions",
+    "moment_indices", "moment_names",
+]

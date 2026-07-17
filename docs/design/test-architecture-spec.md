@@ -75,7 +75,7 @@ manifest generator.
 
 4. Give every parameterized test a stable readable parameter name.
    Parameter suffixes must be deterministic and CTest-safe. Use names such as
-   `Rusanov`, `HLLC`, `Weno5`, `Dirichlet`, `Neumann`, `KokkosSerial`, not raw
+   `Rusanov`, `HLLC`, `Weno5`, `Dirichlet`, `Neumann`, `HostSerial`, not raw
    tuple indices.
 
 5. Use GoogleTest matchers and `testing::AssertionResult` for numerical checks.
@@ -206,7 +206,7 @@ pytest owns Python runtime tests:
   registered markers.
 - No Python test file is executed as a standalone script in CI.
 - No global `fails` counters or `chk` helpers are allowed.
-- Tests that need `_pops`, Kokkos, MPI, a native compiler, or h5py MPI declare
+- Tests that need `_pops`, Kokkos, native MPI/parallel HDF5, or a native compiler declare
   that requirement through markers and fixtures.
 
 ### Pyright

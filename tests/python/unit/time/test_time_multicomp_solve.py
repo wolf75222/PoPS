@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """pops.time MULTI-COMPONENT matrix-free linear solve (epic ADC-399 / ADC-416).
 
-ADC-416 extends ``P.matrix_free_operator`` + ``P.solve_linear`` from scalar-only to vector /
+ADC-416 extends ``P.matrix_free_operator`` + typed ``P.solve(LinearProblem(...))`` from scalar-only to vector /
 state-valued (multi-component) fields -- the foundation the full condensed_schur macro builds on. The
 operator declares ``domain="state"`` (or ``"vector"``) with an ``ncomp``; its apply runs on an ncomp
 buffer and the runtime Krylov loop (``pops::cg_solve`` etc.) reduces its inner products over ALL
@@ -24,19 +24,26 @@ component 0 alone and leave the rest unsolved.
     same offline CG bit-for-bit. Self-skips (exit 0) without numpy / _pops / install_program / a compiler
     / a visible Kokkos -- never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen import _compile_drivers as compile_drivers
+from typed_program_support import typed_state
+
+from pops.linalg import LinearProblem
+from pops.model import StateSpace
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
 from pops.solvers import krylov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.time import FailRun
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_multicomp_solve (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_multicomp_solve (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -47,9 +54,10 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
     """(I - alpha*Lap) x = U on an ncomp-component block, committed back into the block state.
 
     The apply ``out = in - alpha*Lap(in)`` is built with P.laplacian (which now runs per component) +
-    the affine algebra; solve_linear drives the runtime multi-component Krylov loop."""
+    the affine algebra; Program.solve drives the runtime multi-component Krylov loop."""
     P = t.Program(name)
-    U = P.state("blk")
+    space = StateSpace("U", tuple("c%d" % component for component in range(ncomp)))
+    U = typed_state(P, "blk", space=space)
     kind = "scalar" if ncomp == 1 else "state"
     A = P.matrix_free_operator("A", domain=kind, range_=kind,
                                ncomp=(None if ncomp == 1 else ncomp))
@@ -61,10 +69,13 @@ def _mc_program(t, ncomp, *, name="mc_solve", method=None, tol=1e-10, max_iter=2
 
     if method is None:
         from pops.solvers.krylov import CG  # typed default (Spec 5 sec.7); CG lowers to "cg"
-        method = CG(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
+        method = CG(max_iter=max_iter, rel_tol=tol)
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit("blk", phi)
+    phi = P.solve(
+        LinearProblem(A, U), solver=method,
+    ).consume(action=FailRun())
+    endpoint = typed_state(P, "blk", state_name="U", space=space).next
+    P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
     return P
 
 
@@ -83,10 +94,15 @@ def test_state_operator_builds(t):
 
     from pops.solvers.krylov import CG
     P.set_apply(A, apply)
-    U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=CG(max_iter=50), tol=1e-10, max_iter=50)
+    space = StateSpace("U", ("c0", "c1"))
+    U = typed_state(P, "blk", space=space)
+    phi = P.solve(
+        LinearProblem(A, U), solver=CG(max_iter=50, rel_tol=1e-10),
+    ).consume(action=FailRun())
+    assert phi.vtype == "state", "a state-domain solve over a State rhs returns a State"
     assert phi.attrs["ncomp"] == 2, "the solution carries the operator ncomp"
-    P.commit("blk", phi)
+    endpoint = typed_state(P, "blk", state_name="U", space=space).next
+    P.commit(endpoint, P.value("solution_next", 1 * phi, at=endpoint.point))
     assert P.validate() is True, "the multi-component Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -137,24 +153,50 @@ def test_solve_rhs_component_count(t):
     P.set_apply(A, lambda P, out, x: x)
     rhs_small = P.scalar_field("rhs2", ncomp=2)  # too few components for the ncomp=3 operator
     try:
-        P.solve_linear(operator=A, rhs=rhs_small, max_iter=10)
+        P.solve(
+            LinearProblem(A, rhs_small), solver=krylov.CG(max_iter=10))
     except ValueError as exc:
         assert "component" in str(exc), str(exc)
     else:
         raise AssertionError("a rhs with too few components must raise")
-    # a scalar_field with >= ncomp components, and a State (n_cons checked at compile), are accepted
-    phi = P.solve_linear(operator=A, rhs=P.scalar_field("rhs3", ncomp=3), max_iter=10)
-    assert phi.attrs["ncomp"] == 3
-    P.solve_linear(operator=A, rhs=P.state("blk"), max_iter=10)  # State deferred -> accepted
+    # A scalar_field with >= ncomp components and a structurally matching typed State are accepted.
+    outcome = P.solve(
+        LinearProblem(A, P.scalar_field("rhs3", ncomp=3)),
+        solver=krylov.CG(max_iter=10),
+    )
+    token = next(value for value in P._values if value.op == "solve_linear")
+    assert token.attrs["ncomp"] == 3
+    outcome.consume(action=FailRun())
+    state_space = StateSpace("U", ("c0", "c1", "c2"))
+    P.solve(
+        LinearProblem(A, typed_state(P, "blk", space=state_space)),
+        solver=krylov.CG(max_iter=10),
+    ).consume(action=FailRun())
+
+
+def test_typed_state_component_count_is_checked_at_author_time(t):
+    from pops.model import StateSpace
+
+    P = t.Program("typed_ncomp")
+    rhs = typed_state(P, "blk", space=StateSpace("U", ("rho", "momentum")))
+    A = P.matrix_free_operator("A", domain="state", range_="state", ncomp=3)
+    P.set_apply(A, lambda _P, _out, x: x)
+    try:
+        P.solve(
+            LinearProblem(A, rhs), solver=krylov.CG(max_iter=10))
+    except ValueError as exc:
+        assert "StateSpace" in str(exc) and "2 component" in str(exc) and "ncomp=3" in str(exc), str(exc)
+    else:
+        raise AssertionError("typed StateSpace/operator ncomp mismatch must fail at author time")
 
 
 def test_multicomp_codegen(t):
-    src = _mc_program(t, 2).emit_cpp_program()
+    src = emit_cpp_program(_mc_program(t, 2))
     n = src.count("ctx.alloc_scalar_field(2, 1)")  # lap scratch + accumulator + solution
     assert n >= 3, "the 2-component solve allocates 2-component scratch/acc/solution\n%s" % src
-    assert "pops::cg_solve" in src and "ctx.laplacian" in src, src
+    assert "ctx.solve_linear_matfree" in src and "ctx.laplacian" in src, src
     # the scalar path still allocates 1-component fields only
-    src1 = _mc_program(t, 1).emit_cpp_program()
+    src1 = emit_cpp_program(_mc_program(t, 1))
     assert "ctx.alloc_scalar_field(1, 1)" in src1 and "alloc_scalar_field(2, 1)" not in src1, src1
 
 
@@ -209,7 +251,7 @@ def _passive_model(name, cons):
     """An n-variable block with NO flux and NO Poisson coupling: the Program never runs a rhs or
     solve_fields; the block's conservative variables double as the multi-component field the matrix-free
     solve writes. @p cons is the tuple of conservative-variable names."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     vars_ = m.conservative_vars(*cons)
     if not isinstance(vars_, tuple):
@@ -226,29 +268,32 @@ def _run_one(t, pops, np, ncomp, init):
     """Compile + install + step the (I - alpha*Lap) solve on an ncomp-component block, compare to the
     offline numpy CG on the SAME discrete operator. @p init is (ncomp, n, n) the initial state. Returns
     (out, phi_ref, iters) or None if the toolchain is unavailable."""
+    import pops.runtime._engine_descriptors as engine
+
     n = init.shape[1]
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
-    from pops.physics.facade import Model
 
     cons = tuple("c%d" % i for i in range(ncomp))
     tol = 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=_passive_model("mc_prog%d" % ncomp, cons),
-            time=_mc_program(t, ncomp, name="mc_step%d" % ncomp, method=krylov.CG(max_iter=200),
-                             tol=tol, max_iter=200))
+            time=_mc_program(
+                t, ncomp, name="mc_step%d" % ncomp,
+                method=krylov.CG(max_iter=200, rel_tol=tol),
+                tol=tol, max_iter=200))
         compiled_model = _passive_model("mc_block%d" % ncomp, cons).compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: could not build the .so: %s --' % str(exc)[:200])
         return None
 
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_state("blk", init)
     sim.install_program(compiled.so_path)
     sim.step(0.05)  # dt is irrelevant: the solve is dt-free
@@ -265,7 +310,7 @@ def _run_section_b(t):
 
         import pops
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 16

@@ -1,42 +1,177 @@
-"""pops.fields -- typed elliptic field-problem authoring (Spec 5 sec.5.5 / sec.9).
+"""Final field-operator contracts: physics, numerics and materialization stay separate."""
 
-The ``pops.fields`` package describes a self-consistent FIELD solve: an unknown computed
-by inverting an elliptic operator each step (the Poisson coupling of a plasma, a pressure
-projection, ...). The central object is :class:`FieldProblem` (with the Poisson-family
-shortcuts :class:`PoissonProblem` / :class:`ScreenedPoissonProblem` /
-:class:`AnisotropicPoissonProblem`); the supporting submodules declare the typed pieces:
-
-* :mod:`pops.fields.bcs` -- field-value boundary conditions + face selectors;
-* :mod:`pops.fields.rhs` -- typed right-hand-side sources (``ChargeDensity`` / ``FixedSource`` /
-  the composed ``SumRHS``);
-* :mod:`pops.fields.outputs` -- typed field outputs (``FieldOutput`` / ``GradientOutput`` /
-  ``DerivedField``);
-* :mod:`pops.fields.coefficients` -- scalar / reaction operator coefficients;
-* :mod:`pops.fields.nullspace` -- ``ConstantNullspace`` for singular operators;
-* :mod:`pops.fields.aux` -- static / derived aux fields + the re-exported ``AuxHalo``.
-
-Everything is inert; the runtime materialises and solves after validation. This typed authoring
-surface is DISTINCT from the flat elliptic-field brick catalog re-exported as
-:data:`pops.fields.catalog` (Spec 5 criterion 7: moved out of ``pops.lib.fields``).
-"""
 from __future__ import annotations
 
-from .problem import FieldProblem, SolveCadence, lower_field_solver
-from .poisson import (PoissonProblem, ScreenedPoissonProblem,
-                      AnisotropicPoissonProblem)
-from .policies import FieldSolvePolicy, HoldPrevious, Recompute
-from .nullspace import ConstantNullspace
-from .outputs import FieldOutput, GradientOutput, DerivedField
-from . import bcs, rhs, coefficients, nullspace, aux, policies, outputs
-# The elliptic-field brick catalog (criterion 7: moved out of pops.lib.fields). Bind the SimpleNamespace
-# as ``pops.fields.catalog`` (shadowing the submodule) so ``catalog.GeometricMG()`` resolves. It is a
-# flat BrickDescriptor catalog, DISTINCT from the typed FieldProblem authoring surface above.
+from .context import (
+    Accepted,
+    FieldContext,
+    FieldInput,
+    FieldMaterialization,
+    FieldValidity,
+    LayoutBinding,
+    Provisional,
+    RecomputeField,
+    UseHeldField,
+    UseMaterializedField,
+)
+from .discretization import (
+    CompositeHierarchySolve,
+    FieldDiscretization,
+    FieldDiscretizationProtocol,
+    FieldHierarchyPolicy,
+    InferHierarchyFromLayout,
+    LevelByLevelSolve,
+)
+from .gauges import FieldGauge, MeanValueGauge, PinnedValueGauge
+from .nullspace import (
+    ConnectedComponentsManifest,
+    ConstantNullspace,
+    NullspaceBasis,
+    NullspaceBasisVector,
+    NullspaceCompatibility,
+    RHSCompatibilityEvidence,
+)
+from .operator import (
+    FieldOperator,
+    FieldProviderContribution,
+    FieldProviderMeasure,
+    FieldProviderPack,
+    SourceDensity,
+)
+from .methods import CellCenteredSecondOrder
+from .boundary_values import (
+    BoundaryValue,
+    LogicalTimeCoordinate,
+    LogicalTimeValue,
+    boundary_value,
+    logical_time,
+)
+from .outputs import DerivedField, FieldOutput, GradientOutput
+from .poisson import (
+    AnisotropicPoissonOperator,
+    PoissonOperator,
+    ScreenedPoissonOperator,
+)
+from .providers import ExternalFieldSolver
+from .policies import (
+    FailFieldRead,
+    FieldAttemptRejected,
+    FieldConsumer,
+    FieldFailureAction,
+    FieldReadError,
+    FieldReadPolicy,
+    HoldLastValue,
+    RecomputeAtDiagnostic,
+    RecomputeAtOutput,
+    RecomputeAtTagging,
+    RejectFieldAttempt,
+)
+from .residual import (
+    DirichletContribution,
+    FieldBoundaryContribution,
+    FieldDependencyCoverage,
+    FieldResidualContract,
+    FieldResidualDependencies,
+    FieldRestartContract,
+    MixedContribution,
+    NeumannContribution,
+    PeriodicContribution,
+)
+from .solve import (
+    FieldArtifactUnavailable,
+    FieldOperatorDomain,
+    FieldSolveCapabilities,
+    FieldSolvePlan,
+    FieldSolveResolver,
+    PreconditionerBinding,
+    ResolvedHierarchyPolicy,
+    SolveOutcome,
+    SolveStatus,
+)
+from . import aux, bcs, coefficients, gauges, nullspace, outputs, policies, rhs
 from .catalog import fields as catalog
 
+
 __all__ = [
-    "FieldProblem", "SolveCadence", "lower_field_solver", "PoissonProblem",
-    "ScreenedPoissonProblem", "AnisotropicPoissonProblem",
-    "FieldSolvePolicy", "HoldPrevious", "Recompute", "ConstantNullspace",
-    "FieldOutput", "GradientOutput", "DerivedField",
-    "bcs", "rhs", "outputs", "coefficients", "nullspace", "aux", "policies", "catalog",
+    "Accepted",
+    "AnisotropicPoissonOperator",
+    "CompositeHierarchySolve",
+    "CellCenteredSecondOrder",
+    "BoundaryValue",
+    "ConnectedComponentsManifest",
+    "ConstantNullspace",
+    "DerivedField",
+    "DirichletContribution",
+    "FailFieldRead",
+    "FieldAttemptRejected",
+    "FieldArtifactUnavailable",
+    "FieldBoundaryContribution",
+    "FieldConsumer",
+    "FieldContext",
+    "FieldDiscretization",
+    "FieldDiscretizationProtocol",
+    "FieldDependencyCoverage",
+    "FieldFailureAction",
+    "FieldGauge",
+    "FieldHierarchyPolicy",
+    "FieldInput",
+    "FieldMaterialization",
+    "FieldOperator",
+    "FieldProviderContribution",
+    "FieldProviderMeasure",
+    "FieldProviderPack",
+    "FieldOperatorDomain",
+    "FieldOutput",
+    "FieldReadError",
+    "FieldReadPolicy",
+    "FieldResidualContract",
+    "FieldResidualDependencies",
+    "FieldRestartContract",
+    "FieldSolveCapabilities",
+    "FieldSolvePlan",
+    "FieldSolveResolver",
+    "FieldValidity",
+    "GradientOutput",
+    "HoldLastValue",
+    "InferHierarchyFromLayout",
+    "LayoutBinding",
+    "LogicalTimeCoordinate",
+    "LogicalTimeValue",
+    "LevelByLevelSolve",
+    "MeanValueGauge",
+    "MixedContribution",
+    "NeumannContribution",
+    "NullspaceBasis",
+    "NullspaceBasisVector",
+    "NullspaceCompatibility",
+    "PeriodicContribution",
+    "PinnedValueGauge",
+    "PoissonOperator",
+    "Provisional",
+    "PreconditionerBinding",
+    "RHSCompatibilityEvidence",
+    "RecomputeAtDiagnostic",
+    "RecomputeAtOutput",
+    "RecomputeAtTagging",
+    "RecomputeField",
+    "RejectFieldAttempt",
+    "ResolvedHierarchyPolicy",
+    "ScreenedPoissonOperator",
+    "ExternalFieldSolver",
+    "SolveOutcome",
+    "SolveStatus",
+    "SourceDensity",
+    "boundary_value",
+    "logical_time",
+    "UseHeldField",
+    "UseMaterializedField",
+    "aux",
+    "bcs",
+    "catalog",
+    "coefficients",
+    "gauges",
+    "nullspace",
+    "outputs",
+    "policies",
+    "rhs",
 ]

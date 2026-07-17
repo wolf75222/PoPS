@@ -17,7 +17,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>     // reconstruct_pp, require_reconstruction_ghosts
+#include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux
 
@@ -74,10 +74,6 @@ struct AssembleRhsMaskedKernel {
       return;
     }
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
-    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
-    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
-    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // x faces: reconstruction on either side, numerical flux, THEN mask gate (closed face
     // -> zero normal flux) -- an inactive neighbor cell closes the face between it and (i, j).
@@ -89,12 +85,18 @@ struct AssembleRhsMaskedKernel {
         reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rxp =
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
-    auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
-    if (!mask_active(mask, i - 1, j))
-      Fxm = typename Model::State{};
-    if (!mask_active(mask, i + 1, j))
-      Fxp = typename Model::State{};
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    typename Model::State Fxm{}, Fxp{};
+    if (mask_active(mask, i - 1, j)) {
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j, Rxm, ax, i, j, xface);
+      Fxm = apply_face_measure(evaluation.checked_density(), xface).value;
+    }
+    if (mask_active(mask, i + 1, j)) {
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp, ax, i + 1, j, xface);
+      Fxp = apply_face_measure(evaluation.checked_density(), xface).value;
+    }
 
     // y faces
     const auto Lym =
@@ -105,12 +107,18 @@ struct AssembleRhsMaskedKernel {
         reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
-    auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
-    if (!mask_active(mask, i, j - 1))
-      Fym = typename Model::State{};
-    if (!mask_active(mask, i, j + 1))
-      Fyp = typename Model::State{};
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    typename Model::State Fym{}, Fyp{};
+    if (mask_active(mask, i, j - 1)) {
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1, Rym, ax, i, j, yface);
+      Fym = apply_face_measure(evaluation.checked_density(), yface).value;
+    }
+    if (mask_active(mask, i, j + 1)) {
+      const auto evaluation =
+          evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp, ax, i, j + 1, yface);
+      Fyp = apply_face_measure(evaluation.checked_density(), yface).value;
+    }
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)

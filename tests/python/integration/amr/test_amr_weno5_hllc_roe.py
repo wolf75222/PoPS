@@ -9,7 +9,7 @@ Resultat : un utilisateur AmrSystem demandant un schema compressible weno5+hllc 
 desormais le cas weno5 (build_amr_block / build_amr_compiled supportent deja Weno5, cables sur
 rusanov/hll) -> parite STRICTE de surface System/AMR.
 
-Verifie (bloc NATIF pops.Model -> AUCUN compilateur requis ; le dispatch est exerce au BUILD) :
+Verifie (bloc NATIF engine.Model -> AUCUN compilateur requis ; le dispatch est exerce au BUILD) :
   - MONO-BLOC (un seul add_block -> dispatch_amr_compiled) : Euler compressible + weno5 + hllc TOURNE
     fini ; idem weno5 + roe. (Avant le fix : RuntimeError "limiter inconnu 'weno5'".)
   - MULTI-BLOCS (>= 2 add_block -> dispatch_amr_block) : deux blocs Euler weno5 + hllc TOURNENT finis.
@@ -25,8 +25,8 @@ import sys
 
 import numpy as np
 
-import pops
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 GAMMA = 1.4
 fails = 0
@@ -41,16 +41,16 @@ def chk(cond, label):
 
 def euler_spec():
     """Bloc natif compressible (4 var, pression -> capability HLLC/Roe canonique). Pas de compilateur."""
-    return pops.Model(state=pops.FluidState("compressible", gamma=GAMMA),
-                     transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("compressible", gamma=GAMMA),
+                     transport=engine.CompressibleFlux(), source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def iso_spec():
     """Bloc natif isotherme (3 var, PAS de pression -> hllc/roe rejetes par capability)."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=0.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(), source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=0.0, n0=0.0))
 
 
 def bump(n):
@@ -66,9 +66,10 @@ rho = bump(n)
 for riem in (HLLC(), Roe()):
     print(f"== mono-bloc Euler : weno5 + {riem.scheme} (dispatch_amr_compiled) ==")
     s = AmrSystem(n=n, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)  # mono-niveau : le sujet est le ROUTAGE du dispatch (exerce au build)
-    s.add_block("gas", euler_spec(),
-                spatial=pops.FiniteVolume(limiter=WENO5(), riemann=riem), time=pops.Explicit())
+    s.add_equation("gas", euler_spec(),
+                spatial=engine.Spatial(limiter=WENO5(), flux=riem), time=engine.Explicit())
     s.set_density("gas", rho.copy())
     for _ in range(3):
         s.step(1e-4)
@@ -78,9 +79,10 @@ for riem in (HLLC(), Roe()):
 # --- 2. MULTI-BLOCS (dispatch_amr_block) : deux blocs Euler weno5 + hllc -----------------------------
 print("== multi-blocs Euler : 2 blocs weno5 + hllc (dispatch_amr_block) ==")
 s = AmrSystem(n=n, L=1.0, periodic=True)
+s.set_temporal_relations([2], [1], ["integral_only"])
 s.set_refinement(1e30)
-s.add_block("a", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
-s.add_block("b", euler_spec(), spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
+s.add_equation("a", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
+s.add_equation("b", euler_spec(), spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
 s.set_density("a", rho.copy())
 s.set_density("b", rho.copy())
 for _ in range(3):
@@ -92,9 +94,10 @@ chk(np.all(np.isfinite(np.asarray(s.density("b")))), "multi-blocs weno5 + hllc :
 print("== isotherme 3-var : weno5 + hllc rejete par la CAPABILITE (pas par le limiteur) ==")
 try:
     s = AmrSystem(n=n, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
-    s.add_block("iso", iso_spec(),
-                spatial=pops.FiniteVolume(limiter=WENO5(), riemann=HLLC()), time=pops.Explicit())
+    s.add_equation("iso", iso_spec(),
+                spatial=engine.Spatial(limiter=WENO5(), flux=HLLC()), time=engine.Explicit())
     s.set_density("iso", rho.copy())
     s.step(1e-4)
     chk(False, "weno5 + hllc sur isotherme aurait du lever (capability)")

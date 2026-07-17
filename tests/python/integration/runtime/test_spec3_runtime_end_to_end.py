@@ -4,11 +4,11 @@
 This is the runtime counterpart to the emit-only Spec 3 tests (test_pernode_profiling,
 test_profiling_counters, scheduled_fields_subcycled_transport): those pin the GENERATED C++ or
 assert the scheduler counters are ABSENT on the native path and defer the runtime to ROMEO. Here we
-build a REAL board-flavoured Program, compile it to a problem.so against the loaded _pops toolchain
-(`pops.codegen.compile_problem`), install it, and STEP it -- so the spec's runtime acceptance criteria are
-RUNTIME-proven, not emit-asserted. It never fakes the engine.
+build a REAL operator-first Case and Program, compile them through the final
+``validate -> resolve -> compile -> bind`` lifecycle, and STEP the installed native engine -- so the
+spec's runtime acceptance criteria are RUNTIME-proven, not emit-asserted. It never fakes the engine.
 
-The Program holds a board-style field solve on an `every(N).hold()` schedule (Spec 3 sections 17-18,
+The Program holds a board-style field solve on `Schedule(Every(...), off=Hold())` (Spec 3,
 ADC-458): the Poisson solve `phi <- solve(-Laplace phi = alpha*rho)` recomputes only when DUE and the
 cached aux is restored in between. The held phi feeds a PotentialForce source, so a held step and a
 recompute step produce a genuinely different RHS -- the cache is observable, not cosmetic.
@@ -26,26 +26,43 @@ Asserted runtime criteria (each a Spec 3 acceptance criterion):
      the COMPILED-runtime counters test_profiling_counters could only assert ABSENT on the host path.
 
 Runs on the gate's Kokkos Serial shard (CI auto-discovers tests/python/**/test_*.py) and locally with
-`POPS_KOKKOS_ROOT=... KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1`. Self-skips cleanly (exit 0) when
-_pops/numpy is unavailable, the install_program / scheduler bindings are missing, or no compiler /
-visible Kokkos can build the .so -- never asserting a fake pass.
+`POPS_KOKKOS_ROOT=... KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1`. Missing native prerequisites are
+explicit local skips and required-lane failures; an unavailable
+extension, scheduler binding, compiler or Kokkos can never appear as a green required test.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import require_native_or_skip
 
 
 def _skip(msg):
-    print("skip test_spec3_runtime_end_to_end (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip("test_spec3_runtime_end_to_end: %s" % msg)
 
 
 try:
     import numpy as np
 
     import pops
+    from pops.domain import Rectangle
+    from pops.fields import (
+        CellCenteredSecondOrder,
+        ConstantNullspace,
+        FieldDiscretization,
+        FieldOutput,
+        GradientOutput,
+        MeanValueGauge,
+    )
+    from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+    from pops.frames import Cartesian2D
+    from pops.layouts import Uniform
+    from pops.math import ddt, div, laplacian, sqrt
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.numerics.terms import Flux
+    from pops.physics import Model
+    from pops.solvers.elliptic import GeometricMG
     from pops import time as adctime
+    from tests.python.support.native_execution_context import artifact_execution_context
 except Exception as exc:  # noqa: BLE001  -- numpy or _pops unavailable in this interpreter
     _skip("pops/numpy unavailable: %s" % exc)
 
@@ -59,78 +76,160 @@ def chk(cond, label):
         fails += 1
 
 
-# A real plasma block: isothermal Euler + Poisson (ChargeDensity elliptic) + the electrostatic
-# PotentialForce. The force reads the field solve's phi/grad, so holding the field solve between
-# refreshes is observable in the trajectory (a held phi forces a stale E into the momentum source).
-def plasma_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=1.0),
-                     elliptic=pops.ChargeDensity(charge=1.0))
-
-
 N = 24
 EVERY = 2  # the field solve recomputes every 2 macro-steps and holds the cached phi in between
+DT = 1e-3
 
 
-def make_sim():
-    sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", plasma_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
-    sim.set_poisson("charge_density", "geometric_mg")
+def _initial_state():
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
-    sim.set_state("ions", np.stack([rho, 0.4 * rho, -0.2 * rho]))
-    return sim
+    return np.ascontiguousarray(np.stack([rho, 0.4 * rho, -0.2 * rho]))
 
 
-def held_program(name="spec3_runtime_held"):
-    """A board-flavoured forward-Euler Program whose field solve is held every EVERY steps.
+def _build_case(name="spec3_runtime_held"):
+    """Build the complete final Case with one scheduled, case-owned field authority."""
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("%s-model" % name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    u, v = mx / rho, my / rho
+    pressure = 0.5 * rho
+    sound_speed = sqrt(0.5 + 0.0 * rho)
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (mx, mx * u + pressure, my * u),
+            y_axis: (my, mx * v, my * v + pressure),
+        },
+        waves={
+            x_axis: (u - sound_speed, u, u + sound_speed),
+            y_axis: (v - sound_speed, v, v + sound_speed),
+        },
+    )
+    potential = model.field("potential")
+    electric_x, electric_y = model.aux("electric_x"), model.aux("electric_y")
+    field_operator = model.field_operator(
+        "electrostatic",
+        unknown=potential,
+        equation=-laplacian(potential) == rho - 1.0,
+        outputs=(
+            FieldOutput("potential", potential),
+            GradientOutput("electric", potential, sign=-1),
+        ),
+    )
+    electric = model.source(
+        "electric_force",
+        on=state,
+        value=(0.0 * rho, rho * electric_x, rho * electric_y),
+    )
+    rate = model.rate(
+        "explicit_rhs", equation=ddt(state) == -div(flux) + electric)
+    # ``Hold`` is legal only when the exact authoritative provider declares that its
+    # materialized output can be retained. This is an authored capability, not an
+    # inference from the solver choice or from the field name.
+    model.module.operator_capabilities("electrostatic", cacheable=True)
+    electric_operator = model.operators["electric_force"]
 
-    P.fields(..., from_state=U) is the board sugar for P.solve_fields (test_time_board pins the IR
-    identity) and P.define for P.linear_combine. The every(EVERY).hold() schedule attaches a hold
-    policy to that solve_fields node (a solve_fields output is the System aux, which is cacheable), so
-    the codegen lowers it to `if (cache_should_update(id, N)) { solve_fields_from_state; store_aux }
-    else { restore_aux }`. The held aux feeds the rhs source, so a held step != a recompute step.
-    """
-    P = adctime.Program(name)
-    dt = P.dt
-    U = P.state("ions")
-    f = P.fields("phi", from_state=U)
-    f.attrs["schedule"] = adctime.every(EVERY).hold()  # hold the field solve between refreshes
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.define("U1", U + dt * R))
-    return P
+    case = pops.Case("%s-case" % name)
+    block = case.block("ions", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    field = case.field(
+        field_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            nullspace=ConstantNullspace(),
+            gauge=MeanValueGauge(0.0),
+        ),
+    )
+
+    program = adctime.Program(name)
+    temporal = program.state(block[state])
+    schedule = adctime.Schedule(
+        adctime.Every(adctime.AcceptedStep(program.clock), EVERY),
+        off=adctime.Hold(),
+    )
+    fields = field(
+        temporal.n, name="electrostatic", schedule=schedule
+    ).consume(action=adctime.FailRun())
+    rhs = program.rhs(
+        name="R",
+        state=temporal.n,
+        fields=fields,
+        terms=(Flux(), electric_operator),
+    )
+    program.commit(
+        temporal.next,
+        program.value(
+            "U1", temporal.n + program.dt * rhs, at=temporal.next.point),
+    )
+    program.step_strategy(adctime.FixedDt(DT))
+    case.program(program)
+    layout = Uniform(
+        CartesianGrid(
+            frame=frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(frame.axes),
+        )
+    )
+    return case, layout, program
 
 
-# --- toolchain probe: skip cleanly if the runtime chain is not buildable here ---------------------
-probe = System(n=8, L=1.0, periodic=True)
-if not hasattr(probe, "install_program") or not hasattr(probe, "step_cfl"):
-    _skip("_pops lacks install_program / step_cfl (rebuild _pops)")
-
-print("== compile the held-schedule Program to a problem.so ==")
+print("== compile the held-schedule Case through validate -> resolve -> compile ==")
 try:
-    compiled = pops.codegen.compile_problem(model=plasma_model(), time=held_program())
+    authored_case, authored_layout, authored_program = _build_case()
+    compiled = pops.compile(
+        pops.resolve(pops.validate(authored_case), layout=authored_layout)
+    )
 except RuntimeError as exc:  # no compiler / no visible Kokkos / .so compile failed
-    _skip("compile_problem could not build the .so: %s" % str(exc)[:200])
-chk(bool(compiled.program_hash), "compiled handle carries the IR hash (%s...)" % compiled.program_hash[:12])
+    _skip("public compile could not build the native artifact: %s" % str(exc)[:200])
+chk(
+    compiled.program_hash == authored_program.inspect().hash,
+    "compiled artifact authenticates the final Program hash (%s...)"
+    % compiled.program_hash[:12],
+)
 
 
-def install(sim):
-    """Install the compiled held-schedule program on a freshly composed sim."""
-    sim.install_program(compiled.so_path)
-    return sim
+def install():
+    """Bind one fresh runtime exclusively through the final public lifecycle."""
+    return pops.bind(
+        compiled,
+        initial_state={"ions": _initial_state()},
+        resources={"execution_context": artifact_execution_context(compiled)},
+    )
 
 
-DT = 1e-3
+def run_steps(sim, steps):
+    return pops.run(
+        sim,
+        t_end=float(sim.time()) + steps * DT,
+        max_steps=steps,
+    )
+
 
 # --- (2) the compiled step ADVANCES the state (do this first: it also primes the chain) -----------
 print("== (2) the compiled step advances the state ==")
-sim2 = install(make_sim())
+sim2 = install()
 u0 = np.array(sim2.get_state("ions"))
-dt_used = sim2.step_cfl(0.4)
+dt_used = sim2._executor._s.step_cfl(0.4)
 u1 = np.array(sim2.get_state("ions"))
 change = float(np.abs(u1 - u0).max())
 chk(dt_used > 0.0 and np.isfinite(dt_used), "step_cfl returned a finite positive dt (%.6g)" % dt_used)
@@ -139,8 +238,8 @@ chk(change > 0.0, "max|U^{n+1}-U^n| > 0 (real compiled run, not a no-op): %.3e" 
 
 # --- (1) NO Python frames are entered inside the compiled step (criterion 19) ---------------------
 print("== (1) no Python in sim.step (settrace + raise-on-call proxy) ==")
-sim1 = install(make_sim())
-raw = sim1._s  # the bound C++ System; raw.step_cfl is the pybind entry, no Python facade in between
+sim1 = install()
+raw = sim1._executor._s  # exact bound C++ System; no Python facade inside the pybind call
 
 # (1a) settrace cannot see into the .so -- that is the POINT. We count Python 'call' events between
 # the pybind entry and exit: a pure-C++ step body enters ZERO new Python frames. (settrace fires on
@@ -174,29 +273,23 @@ chk(len(py_calls) == 0,
     "zero Python call-frames entered inside the compiled step (got %d: %r)"
     % (len(py_calls), py_calls[:6]))
 
-# (1b) stronger proxy: the installed step body is a C++ closure (System::install_program dlopen'd the
-# .so and `pops_install_program` set program_step_, a std::function holding only C++ pointers). So the
-# Python `compiled` handle and the Python model objects can be DROPPED entirely and the step still
-# runs -- if the step needed any Python object, it would fault after these are gc'd. We dlopen the .so
-# afresh into a sim built from a model whose Python object is then deleted + gc-collected.
-orphan = System(n=N, L=1.0, periodic=True)
-_m = plasma_model()
-orphan.add_block("ions", _m,
-                 spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                 time=pops.Explicit(method="euler"))
-orphan.set_poisson("charge_density", "geometric_mg")
-_x = (np.arange(N) + 0.5) / N
-_X, _Y = np.meshgrid(_x, _x, indexing="ij")
-_rho = 1.0 + 0.3 * np.sin(2 * np.pi * _X) * np.cos(2 * np.pi * _Y)
-orphan.set_state("ions", np.stack([_rho, 0.4 * _rho, -0.2 * _rho]))
-orphan.install_program(compiled.so_path)  # the C++ closure now owns everything it needs
-del _m  # drop the Python model object the step would need IF it called back into Python
+# (1b) stronger proxy: public compile detaches the source Case/Program builders. Drop those exact
+# authoring objects, bind afresh from the immutable compiled artifact, then step its raw native
+# closure. If numerical execution retained or called a builder, the weakref or native step would fail.
+import weakref  # noqa: E402
+
+source_program_ref = weakref.ref(authored_program)
+del authored_case, authored_layout, authored_program
 gc.collect()
+chk(source_program_ref() is None,
+    "compiled artifact retains no source Program builder")
+orphan = install()
+orphan_raw = orphan._executor._s
 ou0 = np.array(orphan.get_state("ions"))
-orphan.step_cfl(0.4)  # must run on the C++ closure alone (no Python model object alive)
+orphan_raw.step_cfl(0.4)
 ou1 = np.array(orphan.get_state("ions"))
 chk(float(np.abs(ou1 - ou0).max()) > 0.0 and np.all(np.isfinite(ou1)),
-    "the compiled step runs after the Python model object is dropped + gc'd (C++-only closure)")
+    "the bound step runs after source authoring is collected (C++-only numerical closure)")
 
 # --- (3) CHECKPOINT == RESTART with the scheduler cache exercised (criterion 22/35) ---------------
 print("== (3) checkpoint == restart with a held schedule (cache cadence exercised) ==")
@@ -213,31 +306,27 @@ J = EVERY + 1    # checkpoint at a NON-due boundary (J % EVERY != 0): the held n
                  # cold-vs-warm value and diverge; bit-identity here proves the cache round-trips.
 
 # continuous reference: K held-schedule steps.
-ref = install(make_sim())
-for _ in range(K):
-    ref.step(DT)
+ref = install()
+run_steps(ref, K)
 ref_u = np.array(ref.get_state("ions"))
 ref_t = float(ref.time())
 ref_ms = ref.macro_step()
 
 # checkpoint mid-cadence (non-due) J, then continue to K.
-ck = install(make_sim())
-for _ in range(J):
-    ck.step(DT)
+ck = install()
+run_steps(ck, J)
 chk(ck.macro_step() == J and (J % EVERY) != 0,
     "checkpoint taken mid-cadence, non-due (macro_step=%d)" % J)
 path = ck.checkpoint(os.path.join(tmp, "spec3_chk"))
 chk(os.path.exists(path), "checkpoint written (%s)" % os.path.basename(path))
-for _ in range(K - J):  # keep the original sim going too (it should match ref independently)
-    ck.step(DT)
+run_steps(ck, K - J)  # original continuation must match independently
 
 # restart: REPLAY the composition + RE-INSTALL the same program, then resume to K.
-res = install(make_sim())
+res = install()
 res.restart(os.path.join(tmp, "spec3_chk"))
 chk(res.macro_step() == J and abs(res.time() - J * DT) < 1e-15,
     "clock restored (t=%.6g, macro_step=%d)" % (res.time(), res.macro_step()))
-for _ in range(K - J):
-    res.step(DT)
+run_steps(res, K - J)
 res_u = np.array(res.get_state("ions"))
 
 e_restart = float(np.abs(res_u - ref_u).max())
@@ -248,13 +337,13 @@ chk(abs(float(res.time()) - ref_t) < 1e-15 and res.macro_step() == ref_ms,
 
 # --- (4) PROFILING: per-node + kernels + scheduler cache counters at RUNTIME (criterion 40) -------
 print("== (4) profiling report surfaces per-node + kernels + scheduler-cache counters ==")
-prof = install(make_sim())
-prof.enable_profiling()
+prof = install()
+prof_engine = prof._executor
+prof_engine.enable_profiling()
 # Step across a full cache window so BOTH a recompute (due) and a hold (skip) happen: at EVERY=2,
 # step 0 is due (cold), step 1 holds, step 2 due, step 3 holds -> due and skipped both move.
-for _ in range(2 * EVERY):
-    prof.step(DT)
-report = prof.profile_report()
+run_steps(prof, 2 * EVERY)
+report = prof_engine.profile_report()
 print(report)
 
 
@@ -273,7 +362,7 @@ chk("step" in report, "report carries the coarse 'step' scope")
 kernels = _counter("kernels")
 chk(kernels is not None and kernels > 0, "kernels counter > 0 (=%r)" % kernels)
 # THE compiled-runtime counters test_profiling_counters could only assert ABSENT on the native path:
-# cache_should_update fires them at the held node's decision point.
+# schedule_decision fires them at the held node's exact typed decision point.
 nodes_due = _counter("nodes_due")
 nodes_skipped = _counter("nodes_skipped")
 cache_hits = _counter("cache_hits")

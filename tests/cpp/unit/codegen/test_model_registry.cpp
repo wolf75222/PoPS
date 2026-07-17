@@ -51,10 +51,11 @@ TEST(test_model_registry, membership_matrix_accepts_and_rejects) {
   EXPECT_TRUE(!is_transport("bogus") && !is_transport("") && !is_transport("EXB"))
       << "is_transport rejette inconnu / vide / casse";
   EXPECT_TRUE(is_source("none") && is_source("potential") && is_source("gravity") &&
-              is_source("magnetic") && is_source("lorentz") && is_source("potential_magnetic") &&
-              is_source("potential_lorentz"))
-      << "is_source accepte les sept orthographes builtin (alias inclus)";
-  EXPECT_TRUE(!is_source("bogus") && !is_source("")) << "is_source rejette inconnu / vide";
+              is_source("magnetic") && is_source("potential_magnetic"))
+      << "is_source accepts the five canonical builtin source ids";
+  EXPECT_TRUE(!is_source("lorentz") && !is_source("potential_lorentz") && !is_source("bogus") &&
+              !is_source(""))
+      << "parse-only aliases and unknown source ids are not catalog identities";
   EXPECT_TRUE(is_elliptic("charge") && is_elliptic("background") && is_elliptic("gravity"))
       << "is_elliptic accepte les trois elliptiques builtin";
   EXPECT_TRUE(!is_elliptic("bogus") && !is_elliptic("")) << "is_elliptic rejette inconnu / vide";
@@ -70,9 +71,9 @@ TEST(test_model_registry, message_helpers_are_byte_identical_to_legacy_throws) {
   EXPECT_EQ(transport_choices(), "'exb' | 'compressible' | 'isothermal'")
       << "transport_choices() (message validate_model_spec)";
   EXPECT_EQ(elliptic_choices(), "'charge' | 'background' | 'gravity'") << "elliptic_choices()";
-  EXPECT_TRUE(contains(source_choices(), "'none'") &&
-              contains(source_choices(), "'potential_lorentz'"))
-      << "source_choices() liste toutes les orthographes (none .. potential_lorentz)";
+  EXPECT_EQ(source_choices(),
+            "'none' | 'potential' | 'gravity' | 'magnetic' | 'potential_magnetic'")
+      << "source_choices() lists canonical identities only";
   EXPECT_EQ(unknown_transport_msg("foo"), "unknown transport 'foo' (exb|compressible|isothermal)")
       << "unknown_transport_msg byte-identique a l'ancien throw";
   EXPECT_EQ(unknown_elliptic_msg("foo"), "unknown elliptic 'foo' (charge|background|gravity)")
@@ -92,7 +93,8 @@ TEST(test_model_registry, validate_transport_and_elliptic_reject_explicitly) {
       << "message transport inconnu : fragment + tag + liste valide";
   EXPECT_FALSE(throws([] { validate_elliptic("charge"); }, msg))
       << "validate_elliptic(charge) accepte";
-  EXPECT_TRUE(throws([] { validate_elliptic("bogus"); }, msg)) << "validate_elliptic(bogus) rejette";
+  EXPECT_TRUE(throws([] { validate_elliptic("bogus"); }, msg))
+      << "validate_elliptic(bogus) rejette";
   EXPECT_TRUE(contains(msg, "unknown elliptic") && contains(msg, "bogus") &&
               contains(msg, "charge|background|gravity"))
       << "message elliptic inconnu : fragment + tag + liste valide";
@@ -134,13 +136,13 @@ TEST(test_model_registry, registry_perimeter_guard_only_generic_bricks) {
   constexpr int kNT = static_cast<int>(sizeof(kTransports) / sizeof(kTransports[0]));
   constexpr int kNS = static_cast<int>(sizeof(kSources) / sizeof(kSources[0]));
   constexpr int kNE = static_cast<int>(sizeof(kElliptics) / sizeof(kElliptics[0]));
-  EXPECT_TRUE(kNT == 3 && kNS == 7 && kNE == 3)
-      << "cardinalite des tables (3 transports, 7 sources, 3 elliptics)";
+  EXPECT_TRUE(kNT == 3 && kNS == 5 && kNE == 3)
+      << "canonical table cardinality (3 transports, 5 sources, 3 elliptics)";
   const std::string tr = transport_tags_csv();
   const std::string sr = source_tags_csv();
   const std::string el = elliptic_tags_csv();
   EXPECT_EQ(tr, "exb|compressible|isothermal") << "set transport verrouille (briques generiques)";
-  EXPECT_EQ(sr, "none|potential|gravity|magnetic|lorentz|potential_magnetic|potential_lorentz")
-      << "set source verrouille (briques generiques + alias)";
+  EXPECT_EQ(sr, "none|potential|gravity|magnetic|potential_magnetic")
+      << "source registry contains canonical generic bricks only";
   EXPECT_EQ(el, "charge|background|gravity") << "set elliptic verrouille (briques generiques)";
 }

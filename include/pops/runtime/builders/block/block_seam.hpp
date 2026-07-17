@@ -1,6 +1,6 @@
 #pragma once
 
-#include <pops/core/state/variables.hpp>         // VariableSet (block descriptor carried in BuiltBlock)
+#include <pops/core/state/variables.hpp>  // VariableSet (block descriptor carried in BuiltBlock)
 #include <pops/runtime/builders/block/block_builder.hpp>  // make_block + makers + BlockClosures + NewtonOptions/Report
 #include <pops/runtime/builders/block/block_builder_polar.hpp>  // make_block_polar + polar makers + PolarGridContext
 #include <pops/runtime/builders/factory/model_factory.hpp>  // dispatch_model_for + resolve_implicit_components + ModelSpec

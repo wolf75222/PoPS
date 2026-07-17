@@ -9,8 +9,9 @@
 //     cross-rang via fill_boundary, reflux et masse reduits par all_reduce.
 //
 // Propriete verifiee : l'evolution de la hierarchie est INVARIANTE AU NOMBRE DE RANGS. Le grossier
-// etant REPLIQUE (defaut AmrCouplerMP), density() et mass() sont des grandeurs GLOBALES identiques
-// sur chaque rang ; le decoupage du niveau fin entre rangs (et donc le chemin MPI : halos distants,
+// etant REPLIQUE (defaut AmrCouplerMP), density(), mass() et les vues de checkpoint
+// level_{state,potential}_global(0) sont des grandeurs GLOBALES identiques sur chaque rang ; le
+// decoupage du niveau fin entre rangs (et donc le chemin MPI : halos distants,
 // injection parallel_copy, reflux route vers la box parente distante) ne doit RIEN changer au
 // resultat bit a bit. On le controle de deux manieres complementaires :
 //   (1) CONSISTANCE CROSS-RANG dans le run : tous les rangs voient la MEME densite grossiere et la
@@ -27,14 +28,15 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>         // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>          // Euler (transport compressible)
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
+#include <pops/physics/fluids/euler.hpp>   // Euler (transport compressible)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 #include <pops/parallel/comm.hpp>  // comm_init, my_rank, n_ranks, all_reduce_*
 
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <vector>
 
 #if defined(POPS_HAS_KOKKOS)
@@ -63,6 +65,15 @@ static std::vector<double> four_bubbles(int n) {
       rho[static_cast<std::size_t>(j) * n + i] = r;
     }
   return rho;
+}
+
+static double max_abs_difference(const std::vector<double>& a, const std::vector<double>& b) {
+  if (a.size() != b.size())
+    return std::numeric_limits<double>::infinity();
+  double dmax = 0.0;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    dmax = std::fmax(dmax, std::fabs(a[i] - b[i]));
+  return dmax;
 }
 
 static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
@@ -108,6 +119,19 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
   const std::vector<double> dens = sys.density();  // grossier REPLIQUE : identique sur chaque rang
   const double mass = sys.mass();
   const int npf = sys.n_patches();
+  // Contract checkpoint MPI: level_state_global / level_potential_global gather owned fields, but
+  // level 0 is replicated. Reducing that level would multiply it by np. density()/potential() are
+  // independent production diagnostics for component 0 and phi, respectively.
+  const std::vector<double> state_global = sys.level_state_global(0);
+  const std::vector<double> phi = sys.potential();
+  const std::vector<double> phi_global = sys.level_potential_global(0);
+  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  const double state_density_dmax =
+      state_global.size() >= nn
+          ? max_abs_difference(std::vector<double>(state_global.begin(), state_global.begin() + nn),
+                               dens)
+          : std::numeric_limits<double>::infinity();
+  const double phi_dmax = max_abs_difference(phi_global, phi);
 
   // Checksum de la densite grossiere (somme + somme des carres + max) : signature bit-sensible du
   // champ final, comparable entre nombres de rangs par le script de build.
@@ -135,8 +159,8 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
     // Sortie machine-parsable (le script DIFF ces lignes entre np=1/2/4 ; np=1 = oracle mono-GPU).
     std::printf(
         "AMRMPI np=%d patches0=%d patchesF=%d | mass=%.17e | csum=%.17e csumsq=%.17e "
-        "cmax=%.17e | crossrank_spread=%.3e\n",
-        np, np0, npf, mass, csum, csumsq, cmax, spread);
+        "cmax=%.17e | crossrank_spread=%.3e | state0_vs_density=%.3e phi_vs_global=%.3e\n",
+        np, np0, npf, mass, csum, csumsq, cmax, spread, state_density_dmax, phi_dmax);
 #if defined(POPS_HAS_KOKKOS)
     const char* space = Kokkos::DefaultExecutionSpace::name();
 #else
@@ -147,6 +171,15 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 
     if (!(dens.size() == static_cast<std::size_t>(n) * n)) {
       std::printf("FAIL densite grossiere de mauvaise taille\n");
+      ++fails;
+    }
+    if (!(state_global.size() >= nn && state_density_dmax == 0.0)) {
+      std::printf("FAIL level_state_global(0) replique != densite (dmax=%.3e)\n",
+                  state_density_dmax);
+      ++fails;
+    }
+    if (!(phi_global.size() == phi.size() && phi_dmax == 0.0)) {
+      std::printf("FAIL level_potential_global(0) replique != potential (dmax=%.3e)\n", phi_dmax);
       ++fails;
     }
     if (!(cmax > 1e-6)) {
@@ -180,5 +213,7 @@ static int pops_run_test_mpi_amr_compiled_parity(int argc, char** argv) {
 }
 
 TEST(test_mpi_amr_compiled_parity, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_compiled_parity, "test_mpi_amr_compiled_parity"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_amr_compiled_parity,
+                                    "test_mpi_amr_compiled_parity"),
+            0);
 }

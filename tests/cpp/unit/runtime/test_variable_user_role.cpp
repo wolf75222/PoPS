@@ -1,15 +1,15 @@
 // ADC-292 : roles utilisateurs NOMMES + fin des fallbacks canoniques SILENCIEUX.
 //
 // Verrouille la couche de role string-keyee ajoutee a VariableSet (parallele a l'enum VariableRole,
-// label porte par user_roles) et le garde-fou des couplages nommes (coupling_role_index) :
+// label porte par user_roles) et la resolution stricte partagee (require_role_index) :
 //   (1) un ROLE UTILISATEUR nomme se resout par son label (index_of(string)) -- plus d'ambiguite de
 //       premiere-occurrence Custom ;
 //   (2) un nom de role CANONIQUE se resout toujours (par nom et par enum), meme en layout NON canonique ;
 //   (3) un role/label ABSENT renvoie -1 ;
 //   (4) roles_csv emet le label utilisateur et parse_roles_into le reconstruit (aller-retour ABI .so),
 //       en restant bit-identique pour un jeu purement canonique (user_roles vide) ;
-//   (5) coupling_role_index : bloc SANS roles -> fallback canonique conserve (compat) ; bloc AVEC roles
-//       mais sans le role requis -> LEVE en nommant le bloc et le role (plus aucun repli silencieux).
+//   (5) require_role_index refuse un descripteur incomplet, resout un role unique et refuse un role
+//       absent ou duplique. Aucun index canonique n'est devine.
 //
 // Test PUR (n'inclut que core/variables.hpp) : aucune dependance runtime, lie pops::pops seul.
 #include <gtest/gtest.h>
@@ -32,7 +32,8 @@ TEST(VariableUserRole, NamedUserRolesAndStrictCouplingFallback) {
   vs.roles = {R::MomentumX, R::Custom, R::Density};
   vs.user_roles = {"", "phi", ""};
 
-  EXPECT_EQ(vs.index_of("density"), 2) << "index_of_string:canonical_name_non_canonical_layout";  // (2)
+  EXPECT_EQ(vs.index_of("density"), 2)
+      << "index_of_string:canonical_name_non_canonical_layout";                             // (2)
   EXPECT_EQ(vs.index_of(R::Density), 2) << "index_of_enum:canonical_non_canonical_layout";  // (2)
   EXPECT_EQ(vs.index_of("momentum_x"), 0) << "index_of_string:canonical_name_resolves";
   EXPECT_EQ(vs.index_of("phi"), 1) << "index_of_string:user_label_resolves";                  // (1)
@@ -64,31 +65,36 @@ TEST(VariableUserRole, NamedUserRolesAndStrictCouplingFallback) {
   EXPECT_TRUE(canon.user_roles.empty()) << "parse_roles_into:canonical_csv_leaves_user_roles_empty";
   EXPECT_EQ(canon.index_of(R::Energy), 2) << "parse_roles_into:canonical_csv_roles_resolve";
 
-  // --- (5) coupling_role_index : fallback pour bloc SANS roles, LEVE pour bloc AVEC roles sans le role -
-  // Bloc SANS roles (legacy / dynamique sans roles declares) -> fallback canonique conserve.
+  // --- (5) require_role_index : metadonnees totales obligatoires, aucun fallback d'indice -----------
   pops::VariableSet roleless;
   roleless.kind = pops::VariableKind::Conservative;
   roleless.names = {"u0", "u1", "u2"};
   roleless.size = 3;  // roles + user_roles vides
-  EXPECT_EQ(pops::coupling_role_index(roleless, R::MomentumX, 1, "test", "blk"), 1)
-      << "coupling_role_index:roleless_block_keeps_fallback";
+  EXPECT_THROW((void)pops::require_role_index(roleless, R::MomentumX, "test", "blk"),
+               std::runtime_error)
+      << "require_role_index:roleless_block_is_invalid";
 
-  // Bloc AVEC roles QUI PORTE le role : on retourne son indice (non canonique : density en comp 2),
-  // jamais le fallback (0).
-  EXPECT_EQ(pops::coupling_role_index(vs, R::Density, 0, "test", "blk"), 2)
-      << "coupling_role_index:present_role_returns_index";
+  // Bloc total QUI PORTE le role : on retourne son indice non canonique (density en comp 2).
+  EXPECT_EQ(pops::require_role_index(vs, R::Density, "test", "blk"), 2)
+      << "require_role_index:present_role_returns_index";
 
   // Bloc AVEC roles mais SANS le role requis (vs ne porte pas Energy) -> LEVE en nommant bloc + role.
   bool threw = false, names_block = false, names_role = false;
   try {
-    (void)pops::coupling_role_index(vs, R::Energy, 3, "coupling role resolve", "fluid_a");
+    (void)pops::require_role_index(vs, R::Energy, "coupling role resolve", "fluid_a");
   } catch (const std::exception& e) {
     threw = true;
     const std::string m = e.what();
     names_block = m.find("fluid_a") != std::string::npos;
     names_role = m.find("energy") != std::string::npos;
   }
-  EXPECT_TRUE(threw) << "coupling_role_index:roles_bearing_missing_role_raises";
-  EXPECT_TRUE(names_block) << "coupling_role_index:error_names_block";
-  EXPECT_TRUE(names_role) << "coupling_role_index:error_names_role";
+  EXPECT_TRUE(threw) << "require_role_index:roles_bearing_missing_role_raises";
+  EXPECT_TRUE(names_block) << "require_role_index:error_names_block";
+  EXPECT_TRUE(names_role) << "require_role_index:error_names_role";
+
+  pops::VariableSet duplicate = vs;
+  duplicate.roles[1] = R::Density;
+  EXPECT_THROW((void)pops::require_role_index(duplicate, R::Density, "test", "dup"),
+               std::runtime_error)
+      << "require_role_index:duplicate_physical_role_is_ambiguous";
 }

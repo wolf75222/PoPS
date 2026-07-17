@@ -11,7 +11,7 @@ name: CI
 #    gate-python-architecture est source-only ; gate-cpp/gate-python sont Kokkos SERIAL, scindes et
 #    tournant EN PARALLELE. gate-cpp = ctest C++ ; gate-python = module _pops + suite tests/python.
 #    Avant ADC-171 c'etait UN seul job sequentiel (build C++ -> module Python -> tests Python) ;
-#    le split + jobs 4 + mold raccourcissent le chemin critique, et le routage epargne le gate
+#    le split, le sharding par duree et mold raccourcissent le chemin critique, et le routage epargne le gate
 #    inutile (une PR pur-Python ne paie que gate-python + architecture). Rapides grace aux caches (Kokkos
 #    installe + ccache + pip).
 #  - ci-full (push master, nightly cron, workflow_dispatch, ou PR portant le label `ci-full`) :
@@ -51,6 +51,16 @@ name: CI
 #      push-master when a build/backend path changed, on the nightly cron (03:17 UTC), on
 #      workflow_dispatch, and on a PR carrying the label ci-full.
 on:
+  # The release workflow calls this exact matrix for the tagged commit.  A tag therefore cannot
+  # publish merely because the macOS wheel is healthy while one of the declared Linux source
+  # routes (Serial, OpenMP, or MPI) is broken.
+  workflow_call:
+    inputs:
+      force_full:
+        description: Run the complete Serial, OpenMP, and MPI source matrix.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [master]
     paths-ignore:
@@ -103,6 +113,7 @@ jobs:
       cpp: ${{ steps.filter.outputs.cpp }}
       python: ${{ steps.filter.outputs.python }}
       python_arch: ${{ steps.filter.outputs.python_arch }}
+      mpi: ${{ steps.filter.outputs.mpi }}
       full: ${{ steps.filter.outputs.full }}
     steps:
       - uses: actions/checkout@v7
@@ -119,19 +130,94 @@ jobs:
               - 'tests/**/*.cpp'
               - 'tests/**/*.hpp'
               - 'tests/CMakeLists.txt'
+              - 'tests/cpp/test_sources.cmake'
+              - 'tests/cpp/build_durations.json'
+              - 'tests/cpp/test_durations.json'
+              - 'tests/test_manifest.toml'
               - 'cmake/**'
               - 'CMakeLists.txt'
               - 'CMakePresets.json'
+              - 'src/**'
               - 'python/bindings/**/*.cpp'
               - 'python/bindings/**/*.hpp'
               - 'python/CMakeLists.txt'
               - 'scripts/gen_solver_kernel.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_route_mode.py'
+              - '.github/actions/setup-kokkos/**'
+              - '.github/workflows/ci.yml'
             python:
               - 'python/**'
               - 'tests/python/**'
+              - 'tests/python/test_durations.json'
+              - 'tests/test_manifest.toml'
+              - 'pyproject.toml'
               - 'scripts/gen_solver_kernel.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_import_closure.py'
+              - 'scripts/ci_route_mode.py'
+              - '.github/actions/setup-kokkos/**'
+              - '.github/workflows/ci.yml'
             python_arch:
               - 'tests/python/architecture/**'
+              - 'schemas/**'
+              - 'pyproject.toml'
+              - 'environment.yml'
+              - 'CMakeLists.txt'
+              - 'CHANGELOG.md'
+              - 'README.md'
+              - 'docs/VERSIONING.md'
+              - 'tests/cpp/build_durations.json'
+              - 'tests/cpp/test_durations.json'
+              - 'tests/test_manifest.toml'
+              - 'scripts/generate_component_catalog.py'
+              - 'scripts/generate_release_contract.py'
+              - 'scripts/final_release_contract.py'
+              - 'scripts/release_preflight.py'
+              - 'scripts/run_final_gate.py'
+              - 'scripts/check_packaging_manifest.py'
+              - 'scripts/ci_import_closure.py'
+              - 'scripts/ci_include_graph.py'
+              - 'scripts/ci_select_tests.py'
+              - 'scripts/ci_shard_binpack.py'
+              - 'scripts/ci_route_mode.py'
+              - '.github/actions/**'
+              - '.github/workflows/**'
+            # Une modification du chemin distribue doit exercer MPI sur la PR sans dependre
+            # d'un label manuel. Les changements generaux restent couverts par ci-full/nightly.
+            mpi:
+              - 'include/pops/parallel/**'
+              - 'include/pops/runtime/**'
+              - 'include/**/*mpi*'
+              - 'src/runtime/**'
+              - 'src/**/*mpi*'
+              - 'src/CMakeLists.txt'
+              # The complete extension build/binding boundary owns one native module. Dispatchers,
+              # initializers and build-graph edits can all remove or alter MPI/HDF5 capability even
+              # when the edited filename contains no `mpi` token.
+              - 'python/CMakeLists.txt'
+              - 'python/bindings/**'
+              # The collective proof covers the complete publication stack, not only the final
+              # hdf5 adapter. Runtime and codegen modules form one installed MPI control plane:
+              # maintaining hand-picked filenames here lets MPI ABI replay or checkpoint/restart
+              # changes bypass the only real multi-process gate. Keep package boundaries authoritative.
+              - 'python/pops/output/**'
+              - 'python/pops/_native_collectives.py'
+              - 'python/pops/_platform_contracts.py'
+              - 'python/pops/codegen/**'
+              - 'python/pops/runtime/**'
+              - 'python/pops/runtime_environment.py'
+              - 'tests/**/mpi/**'
+              - 'tests/python/integration/io/test_hdf5_parallel.py'
+              - 'tests/CMakeLists.txt'
+              - 'tests/test_manifest.toml'
+              - 'scripts/ci_select_tests.py'
+              - 'cmake/**'
+              - 'CMakeLists.txt'
+              - 'CMakePresets.json'
             # Les changements de workflows/actions CI sont valides par revue + lint YAML local,
             # et ne compilent pas Kokkos par defaut. Ajouter `ci-kokkos` pour forcer les gates
             # Serial, ou `ci-full` pour MPI + OpenMP.
@@ -149,9 +235,13 @@ jobs:
               - 'CMakePresets.json'
               - 'pyproject.toml'
               - 'python/**'
+              - 'src/**'
               - 'scripts/**'
 
-  # Calcule si la suite COMPLETE (MPI + Kokkos OpenMP) doit tourner. Plein si :
+  # Autorite unique de routage. Elle calcule les gates obligatoires ET le mode complet ; chaque job
+  # et l'agregateur consomment ensuite ces memes sorties, donc un drift de `if:` ne peut jamais
+  # transformer un gate requis en skip passant.
+  # La suite COMPLETE (MPI + Kokkos OpenMP) tourne si :
   #  - run nocturne (schedule) OU declenchement manuel (workflow_dispatch) : INCONDITIONNEL
   #    (le cron est le filet anti-derive ; le dispatch, l'override de l'integrateur), OU
   #  - push sur master ET un chemin build/backend a bouge (needs.changes.outputs.full) : un push ne
@@ -165,49 +255,75 @@ jobs:
     needs: changes
     outputs:
       full: ${{ steps.decide.outputs.full }}
+      cpp_required: ${{ steps.decide.outputs.cpp_required }}
+      python_required: ${{ steps.decide.outputs.python_required }}
+      architecture_required: ${{ steps.decide.outputs.architecture_required }}
+      mpi_required: ${{ steps.decide.outputs.mpi_required }}
+      openmp_required: ${{ steps.decide.outputs.openmp_required }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - id: decide
         env:
+          CPP_PATHS: ${{ needs.changes.outputs.cpp }}
+          PYTHON_PATHS: ${{ needs.changes.outputs.python }}
+          ARCHITECTURE_PATHS: ${{ needs.changes.outputs.python_arch }}
+          MPI_PATHS: ${{ needs.changes.outputs.mpi }}
           FULL_PATHS: ${{ needs.changes.outputs.full }}
+          CI_KOKKOS: ${{ contains(github.event.pull_request.labels.*.name, 'ci-kokkos') }}
+          CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+          FORCE_FULL: ${{ inputs.force_full || false }}
         run: |
-          full=false
-          # Nocturne + manuel : suite complete inconditionnelle (backstop anti-derive + override).
-          if [ "${{ github.event_name }}" = "schedule" ] \
-             || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            full=true
-          fi
-          # Push master : suite complete UNIQUEMENT si un chemin build/backend a bouge (full_paths).
-          if [ "${{ github.event_name }}" = "push" ] && [ "$FULL_PATHS" = "true" ]; then
-            full=true
-          fi
-          # PR : opt-in explicite via le label ci-full.
-          if [ "${{ github.event_name }}" = "pull_request" ] \
-             && [ "${{ contains(github.event.pull_request.labels.*.name, 'ci-full') }}" = "true" ]; then
-            full=true
-          fi
-          echo "full=$full" >> "$GITHUB_OUTPUT"
-          echo "Mode plein (MPI + Kokkos OpenMP) : $full (event=${{ github.event_name }}, full_paths=$FULL_PATHS)"
+          python3 scripts/ci_route_mode.py decide \
+            --event-name "${{ github.event_name }}" \
+            --cpp-paths "$CPP_PATHS" \
+            --python-paths "$PYTHON_PATHS" \
+            --architecture-paths "$ARCHITECTURE_PATHS" \
+            --mpi-paths "$MPI_PATHS" \
+            --full-paths "$FULL_PATHS" \
+            --ci-kokkos "$CI_KOKKOS" \
+            --ci-full "$CI_FULL" \
+            --force-full "$FORCE_FULL" \
+            --github-output "$GITHUB_OUTPUT"
 
-  # GATE C++ (ADC-171). Ex-moitie C++ du job sequentiel build-and-test, isole pour tourner EN
-  # PARALLELE de gate-python. Pas de `needs: set-mode` (le gate Serial tourne dans tous les modes) ;
-  # `needs: changes` sert UNIQUEMENT au routage par chemins sur pull_request.
-  gate-cpp:
-    name: ubuntu-latest / Kokkos Serial (C++)
+  # GATE C++ (ADC-171). Les cibles selectionnees sont partitionnees en six shards deterministes
+  # dont l'union est verifiee par ci_select_tests.py avant exposition au workflow. Chaque shard
+  # construit TOUJOURS ses cibles explicites (meme en mode all) puis applique la regex CTest du meme
+  # shard : l'ensemble des executables n'est plus sur le chemin critique d'un runner unique.
+  gate-cpp-shards:
+    name: ubuntu-latest / Kokkos Serial (C++) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    needs: changes
+    # 30 min cold build + 15 min for the authenticated slow target.  The main step keeps five
+    # minutes for configure/inventory between those independently diagnosed phases; the outer job
+    # keeps ten more for checkout, toolchain/cache setup and the always() ccache save.  These are
+    # fail-safe ceilings and do not lengthen a healthy build.
+    timeout-minutes: 60
+    needs: [changes, set-mode]
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     # Tout evenement non-PR (push master / nightly / dispatch) lance le gate ; sur pull_request,
     # uniquement si un chemin C++ a bouge, ou si un label force explicitement Kokkos.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    if: needs.set-mode.outputs.cpp_required == 'true'
 
     env:
-      # ccache borne : evite que le cache enfle sans fin entre les runs.
+      # Un cache par shard, borne a 512 Mo : 3 Go maximum par generation. Chaque shard ne construit
+      # qu'environ un sixieme des cibles, ce qui evite le thrashing du cache monolithique.
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 2G
+      CCACHE_MAXSIZE: 512M
       # ADC-366 ccache cross-run/cross-checkout hit-rate (codegen-neutral, keys unchanged; paired with
       # -ffile-prefix-map on the cmake line below).
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
-      CCACHE_SLOPPINESS: locale,time_macros
+      CCACHE_SLOPPINESS: locale
+      # Cle exacte unique par tentative : cache/save peut persister le travail partiel d'un shard
+      # apres echec/annulation. Les restore prefixes restent limites au MEME shard (PR puis master) ;
+      # aucun fallback vers l'ancien cache monolithique de 1.3 Go, qui serait duplique six fois.
+      # `runner.*` is unavailable in job-level env expressions. Keep the portable suffix here and
+      # add the runner OS only at the cache steps, where that context is authenticated by Actions.
+      CCACHE_CACHE_KEY: kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       # Prefixe FIXE ou Kokkos est installe par l'action composite (meme chemin que kokkos-prefix) ;
       # mis en cache (le gros gain : pas de reconstruction de Kokkos a chaque run). Serial, PIC.
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
@@ -241,44 +357,50 @@ jobs:
             --changed-files "${{ steps.changed-files.outputs.path }}" \
             --explain-file "$RUNNER_TEMP/cpp-test-plan.json" \
             --github-output "$GITHUB_OUTPUT" \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-total 6 \
             "${force_args[@]}"
           cpp_summary=$(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
+          cpp_shard_summary=$(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           cpp_areas=$(grep '^cpp_areas=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)
           {
             echo "### affected C++ tests"
             echo ""
             echo "- ${cpp_summary}"
+            echo "- ${cpp_shard_summary}"
             echo "- areas: ${cpp_areas}"
-            echo "- plan: artifact \`gate-cpp-test-plan\`"
+            echo "- plan: artifact \`gate-cpp-test-plan-shard-${{ matrix.shard }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload C++ test plan
         uses: actions/upload-artifact@v7
         with:
-          name: gate-cpp-test-plan
+          name: gate-cpp-test-plan-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/cpp-test-plan.json
 
       # Action composite : apt deps (Eigen / Ninja / ccache) + mold, et install Kokkos Serial PIC
-      # MISE EN CACHE sous la cle kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -- IDENTIQUE aux
-      # jobs full et a quality.yml, donc Kokkos n'est jamais reconstruit. mold (editeur de liens rapide) n'est
+      # MISE EN CACHE sous la cle Kokkos image/architecture/GCC exacte -- IDENTIQUE aux jobs full
+      # et a quality.yml sur le meme toolchain. mold (editeur de liens rapide) n'est
       # ajoute qu'ici via extra-apt : il n'entre PAS dans les presets (portables pour le dev local mac).
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
           extra-apt: mold
 
-      # ccache : cle la plus specifique (os+job+ref+sha) en ecriture, restore-keys
-      # du plus precis au plus large (meme job sur la branche -> sur master -> n'importe).
-      # Cle INCHANGEE depuis l'ancien job build-and-test (kokkos-serial).
-      - name: Cache ccache (Kokkos Serial)
-        uses: actions/cache@v6
+      # actions/cache est immutable. restore/save separes + cle unique par tentative permettent a
+      # l'etape save sous `always()` de conserver les objets compiles avant un echec/une annulation.
+      - name: Restore ccache (Kokkos Serial, shard ${{ matrix.shard }})
+        id: ccache-restore
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
-            ccache-${{ runner.os }}-kokkos-serial-${{ github.ref }}-
-            ccache-${{ runner.os }}-kokkos-serial-refs/heads/master-
-            ccache-${{ runner.os }}-kokkos-serial-
+            ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-kokkos-serial-shard-${{ matrix.shard }}-refs/heads/master-
+
+      - name: Reset ccache stats (Kokkos Serial, shard ${{ matrix.shard }})
+        run: ccache --zero-stats
 
       # Flags du build : CMakePresets.json (preset ci-kokkos) = SOURCE UNIQUE DE VERITE, partagee
       # avec le dev local ; Kokkos_ROOT vient de $KOKKOS_PREFIX (install en cache ci-dessus) et
@@ -286,34 +408,76 @@ jobs:
       # POPS_TESTS_FAST_O0=ON : sous Kokkos, l'inlining -O3 des foncteurs device dans les ~242
       # cibles de test rendait le build du gate enorme. Les tests sont des controles de correction
       # sur grilles minuscules -> compiles a -O0 (build rapide ; la lib de production et _pops restent
-      # a -O3) ; le pool Ninja pops_heavy_tu=1 serialise en plus les TU system.cpp et borne la RAM
+      # a -O3) ; le pool Ninja pops_heavy_test_tu=1 serialise explicitement les TU runtime/tests -O0
+      # les plus gourmands sans reduire le parallelisme des autres cibles. Deux de ces TU en parallele
+      # depassent la marge memoire des runners publics et peuvent faire arreter le runner entier ;
+      # le pool de taille 1 est donc le garde anti-OOM commun aux presets CI et au defaut CMake.
+      # Le pool pops_heavy_module_tu=1 reste reserve au module de production
       # (cf. tests/CMakeLists.txt). Parallelisme jobs: 4 (runner public = 4 vCPU) dans les presets.
       # CMAKE_LINKER_TYPE=MOLD : mold pose en -D ICI uniquement (hors presets, cf. extra-apt mold).
       # SECONDS chronometre configure+build puis tests, ecrits dans GITHUB_STEP_SUMMARY (baseline ADC-171).
       - name: Configure + build + test (Kokkos Serial)
+        timeout-minutes: 50
         run: |
           SECONDS=0
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           # -ffile-prefix-map (ADC-366): codegen-neutral path rewrite for ccache cross-checkout hits (see
           # gate-python). CI-only -D; abi_key (compiler+header-content hash) untouched.
           cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
-            cmake --build --preset ci-kokkos
-          else
-            read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_targets }}"
-            if [ "${#cpp_targets[@]}" -eq 0 ]; then
-              echo "No affected C++ tests selected."
-              exit 0
-            fi
-            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
+          read -r -a cpp_targets <<< "${{ steps.test-plan.outputs.cpp_shard_targets }}"
+          if [ "${#cpp_targets[@]}" -eq 0 ]; then
+            echo "No affected C++ tests selected for shard ${{ matrix.shard }}."
+            exit 0
           fi
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} build" 30m \
+            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
           build_s=$SECONDS
           SECONDS=0
-          if [ "${{ steps.test-plan.outputs.cpp_mode }}" = "all" ]; then
-            ctest --preset ci-kokkos
-          else
-            ctest --preset ci-kokkos -R '${{ steps.test-plan.outputs.cpp_regex }}'
-          fi
+          # GTest exposes CTest names such as BrickCatalog.EntryRoundTrips, which do not
+          # necessarily start with their build target. Select through the target label installed
+          # by pops_add_gtest_suite so every discovered case of every built target runs exactly once.
+          # Inventory CTest once and fail target-by-target before execution: a missing/malformed
+          # target label must never turn this shard into a false-green "No tests were found" run.
+          ctest_inventory="$RUNNER_TEMP/ctest-shard-${{ matrix.shard }}.json"
+          ctest --preset ci-kokkos -N --show-only=json-v1 > "$ctest_inventory"
+          python3 scripts/ci_select_tests.py verify-cpp-target-labels \
+            --ctest-json "$ctest_inventory" \
+            --targets "${cpp_targets[@]}"
+          test_watchdog=7m
+          run_with_heartbeat "Kokkos Serial shard ${{ matrix.shard }} tests" "$test_watchdog" \
+            ctest --preset ci-kokkos -L '${{ steps.test-plan.outputs.cpp_shard_label_regex }}'
           test_s=$SECONDS
           {
             echo "### gate-cpp (Kokkos Serial, C++)"
@@ -323,6 +487,7 @@ jobs:
             echo "| configure + build | ${build_s} |"
             echo "| tests (ctest) | ${test_s} |"
             echo "| selection | ${{ steps.test-plan.outputs.cpp_summary }} |"
+            echo "| shard | ${{ steps.test-plan.outputs.cpp_shard_summary }} |"
             echo ""
             echo "Hit-rate ccache :"
             echo '```'
@@ -330,9 +495,43 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: ccache stats (Kokkos Serial)
-        if: always()
+      - name: ccache stats (Kokkos Serial, shard ${{ matrix.shard }})
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
         run: ccache -s
+
+      - name: Installed package smoke (CXX-only + HDF5 fail-closed)
+        if: matrix.shard == 0
+        run: |
+          ctest --preset ci-kokkos --output-on-failure \
+            --no-tests=error \
+            -R '^test_(installed_package_consumer|hdf5_without_mpi_rejected)$'
+
+      - name: Save ccache (Kokkos Serial, shard ${{ matrix.shard }})
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+
+  # Check historique stable pour la branch protection et l'agregateur global. Le resultat d'un
+  # job matrix est agrege par GitHub : un seul shard en echec/timeout/annulation fait echouer ce
+  # verdict ; un matrix skippe par le routage reste un succes explicite.
+  gate-cpp:
+    name: ubuntu-latest / Kokkos Serial (C++)
+    runs-on: ubuntu-latest
+    needs: [changes, set-mode, gate-cpp-shards]
+    if: always()
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+      - name: Verdict C++ shards
+        run: |
+          python3 scripts/ci_route_mode.py check \
+            --gate changes "${{ needs.changes.result }}" true \
+            --gate set-mode "${{ needs.set-mode.result }}" true \
+            --gate gate-cpp-shards "${{ needs.gate-cpp-shards.result }}" \
+              "${{ needs.set-mode.outputs.cpp_required }}"
 
   # GATE PYTHON ARCHITECTURE : tests source-only (pas de _pops, pas de Kokkos). Ils couvrent les
   # invariants de structure du package Python et doivent rester legers meme quand seule l'architecture
@@ -348,8 +547,8 @@ jobs:
   gate-python-architecture:
     name: ubuntu-latest / Python architecture
     runs-on: ubuntu-latest
-    needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.python == 'true' || needs.changes.outputs.python_arch == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    needs: [changes, set-mode]
+    if: needs.set-mode.outputs.architecture_required == 'true'
 
     steps:
       - uses: actions/checkout@v7
@@ -362,11 +561,21 @@ jobs:
           cache: pip
 
       - name: Spec 4 architecture tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
         run: |
           # numpy: a hard dependency of the package that pyright must RESOLVE now that the
           # ADC-628 include list covers all of python/pops (the tests themselves stay source-only).
           pip install --upgrade pip pytest pyright numpy
           python3 -m pytest tests/python/architecture -q
+
+      - name: M2 temporal gate manifest
+        run: python3 scripts/run_m2_gate.py --check-only
+
+      - name: Generated component catalog
+        env:
+          PYTHONPATH: ${{ github.workspace }}/python
+        run: python3 scripts/generate_component_catalog.py --check
 
       - name: Pyright
         run: pyright
@@ -377,11 +586,15 @@ jobs:
   gate-python-build:
     name: ubuntu-latest / Kokkos Serial (Python build)
     runs-on: ubuntu-latest
-    needs: changes
+    # A changed production header invalidates most -O3 runtime objects.  Bound a
+    # genuinely cold build rather than relying on partial ccache state from an
+    # earlier failed attempt; the exact-module cache still makes warm PRs fast.
+    timeout-minutes: 45
+    needs: [changes, set-mode]
     # Tout evenement non-PR lance le gate ; sur pull_request, des qu'un chemin C++ (cpp) OU Python
     # (python) a bouge -- une PR pur-Python paie ce job + architecture, pas gate-cpp. Le label
     # `ci-kokkos` force aussi ce gate pour valider l'infra Kokkos sans passer en full.
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    if: needs.set-mode.outputs.python_required == 'true'
 
     env:
       # ccache dedie au module Python (.ccache-py) : meme separation que l'ancien job build-and-test.
@@ -393,7 +606,10 @@ jobs:
       # cache KEYS are unchanged. Paired with -ffile-prefix-map on the cmake configure line below.
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
-      CCACHE_SLOPPINESS: locale,time_macros
+      CCACHE_SLOPPINESS: locale
+      # Unique per attempt so a bounded build can persist every valid object it produced, even when
+      # a later step fails. Restore prefixes deliberately remain compatible with PR/master history.
+      CCACHE_CACHE_KEY: python-build-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v7
@@ -401,7 +617,7 @@ jobs:
           fetch-depth: 1
 
       # Meme action composite que gate-cpp : apt deps + mold + Kokkos Serial PIC en cache (cle
-      # partagee kokkos-<os>-4.4.01-<commit>-serial-cxx20-gcc-pic -> aucune reconstruction).
+      # partagee uniquement sur la meme image/architecture/version GCC -> aucune reuse ABI invalide).
       - id: kokkos
         uses: ./.github/actions/setup-kokkos
         with:
@@ -412,13 +628,14 @@ jobs:
           python-version: '3.12'
           cache: pip
 
-      # ccache du module Python. Un seul job ecrit le cache de build ; les restore-keys gardent la
-      # compatibilite avec les anciennes cles sharded et les cles master.
-      - name: Cache ccache (Python module)
-        uses: actions/cache@v6
+      # Separate restore/save mirrors the C++ shards: an immutable, attempt-qualified key lets the
+      # `always()` save retain valid objects from a failed build instead of throwing the work away.
+      - name: Restore ccache (Python module)
+        id: python-ccache-restore
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-python-build-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
             ccache-${{ runner.os }}-python-build-${{ github.ref }}-
             ccache-${{ runner.os }}-python-build-refs/heads/master-
@@ -426,30 +643,28 @@ jobs:
             ccache-${{ runner.os }}-python-refs/heads/master-
             ccache-${{ runner.os }}-python-
 
-      # Compiler component of the built-module cache key: the gcc MAJOR version. The pybind11
-      # _pops.so is ABI-bound to its compiler, so a runner gcc bump MUST miss the module cache.
-      - name: Compiler key component
-        id: cxxkey
-        run: echo "gcc=$(gcc -dumpversion | cut -d. -f1)" >> "$GITHUB_OUTPUT"
+      - name: Reset ccache stats (Python module)
+        run: ccache --zero-stats
 
       # ADC-621 EVICTION GUARD for the pure-python fast path. The expensive artifact is the
-      # compiled _pops.so (the ~37 min header-PR build); on a PR that touches NO .so-affecting
+      # compiled _pops.so; on a PR that touches NO .so-affecting
       # input we want to reuse it instead of recompiling. The key hashes EVERY input that can change
       # the .so, so a stale binary can never be served:
-      #   * include/** + python/bindings/**  -- the C++ / pybind sources and headers;
+      #   * include/** + src/** + python/bindings/** -- native runtime and pybind adapter sources;
       #   * python/CMakeLists.txt + CMakeLists.txt + cmake/** + CMakePresets.json -- the build graph,
       #     compile flags and POPS_CXX_STD (the presets are the single source of the std/flags);
       #   * the Kokkos version + commit -- the .so links this exact Kokkos runtime (a bump must miss);
-      #   * the gcc major version -- the pybind ABI is compiler-bound.
+      #   * the exact runner image, architecture and gcc version -- the pybind ABI is toolchain-bound.
       # NO restore-keys: exact match only. A near-miss must rebuild, never reuse a stale .so. The
-      # pure-Python source copies (build-kokkos-py/python/pops/**/*.py) are NOT keyed here -- they are
-      # re-synced from the PR checkout after a hit (next step), so the cache serves only the binary.
+      # pure-Python/type source copies (build-kokkos-py/python/pops/**/*.{py,pyi} + py.typed) are NOT
+      # keyed here -- they are re-synced from the PR checkout after a hit (next step), so the cache
+      # serves only the binary.
       - name: Cache built module (_pops.so)
         id: modcache
         uses: actions/cache@v6
         with:
           path: build-kokkos-py/python/pops
-          key: pops-module-${{ runner.os }}-${{ hashFiles('include/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
+          key: pops-module-${{ runner.os }}-${{ steps.kokkos.outputs.cache-platform }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json') }}-kokkos4.4.01-15dc143e
 
       # Fast path: on an EXACT module-cache hit AND no C++/build path changed on this PR, the cached
       # .so is authoritative. Re-sync the PR's pure-Python sources over the cached copies (the .py are
@@ -459,11 +674,12 @@ jobs:
         if: ${{ github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true' }}
         run: |
           pip install --upgrade pip numpy pytest
-          # Overwrite the (unkeyed, possibly stale) copied .py with THIS checkout's pops sources.
+          # Overwrite the (unkeyed, possibly stale) copied Python/type sources with THIS checkout.
           # -I (ignore-times) forces a content sync even if an mtime+size collision would fool the
-          # default quick check; --exclude='*' protects the cached _pops*.so from --delete (only .py
-          # absent from the checkout are pruned). Mirrors the configure_file COPYONLY the build does.
-          rsync -aI --delete --include='*/' --include='*.py' --exclude='*' \
+          # default quick check; --exclude='*' protects the cached _pops*.so from --delete. Mirrors
+          # the package copy while retaining .pyi stubs and the PEP 561 py.typed marker.
+          rsync -aI --delete --include='*/' --include='*.py' --include='*.pyi' \
+            --include='py.typed' --exclude='*' \
             python/pops/ build-kokkos-py/python/pops/
           test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)" \
             || { echo "::error::module cache hit but no _pops*.so present"; exit 1; }
@@ -483,6 +699,9 @@ jobs:
       # exactement l'un des deux tourne et le module existe toujours pour l'artefact.
       - name: Build module Python `pops` (Kokkos Serial)
         if: ${{ !(github.event_name == 'pull_request' && steps.modcache.outputs.cache-hit == 'true' && needs.changes.outputs.cpp != 'true') }}
+        # The inner watchdog covers the measured cold-build floor while leaving
+        # bounded room inside the job for configure, reporting, and ccache save.
+        timeout-minutes: 42
         run: |
           pip install --upgrade pip numpy pytest
           SECONDS=0
@@ -490,15 +709,20 @@ jobs:
           # bakes into objects to relative, so ccache hits across checkouts/shards. Codegen-neutral (only
           # embedded path strings change; instructions/symbols identical) -> the abi_key (compiler+header
           # content hash) is untouched. CI-only -D, mirroring -DCMAKE_LINKER_TYPE=MOLD (presets stay clean).
-          # POPS_HEAVY_TU_POOL=2 (ADC-621): the heavy module TUs (system.cpp ~3021 LOC, amr_system.cpp
-          # ~2157 LOC) compile ~3-4 GB each at -O3 and the default pool=1 serializes them, so a header-
-          # touching PR pays ~37 min. This runner is Kokkos SERIAL (gcc, not nvcc: no CUDA template blow-up)
-          # on ubuntu-latest = 4 vCPU / 16 GB, so two ~4 GB TUs at once fit with headroom (~8 GB peak << 16),
-          # halving the heavy-TU critical path. wheels.yml already runs pool=2 on the smaller ~7 GB runner.
+          # POPS_HEAVY_MODULE_TU_POOL=4 (ADC-621): use the public Linux runner's four compile slots.
+          # Keeping the old value 2 serialized half of the generated-seam leaves.
+          # This measured CI-only override remains guarded by the cold-build watchdog
+          # and attempt cache; the CMake default stays the conservative size-1 OOM
+          # guard and wheel builders keep their platform-specific bounded pools.
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
           cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
-            -DPOPS_HEAVY_TU_POOL=2 \
+            -DPOPS_HEAVY_MODULE_TU_POOL=4 \
             -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
-          cmake --build --preset ci-kokkos-python
+          set +e
+          timeout --signal=TERM --kill-after=30s 40m \
+            cmake --build --preset ci-kokkos-python
+          build_status=$?
+          set -e
           build_s=$SECONDS
           {
             echo "### gate-python-build (module _pops, Kokkos Serial)"
@@ -512,6 +736,21 @@ jobs:
             ccache -s | grep -i hits || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          if [[ $build_status -eq 124 ]]; then
+            echo "::error::Python native build exceeded its 40-minute cold-build watchdog"
+          fi
+          exit "$build_status"
+
+      - name: ccache stats (Python module)
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        run: ccache -s
+
+      - name: Save ccache (Python module)
+        if: ${{ always() && steps.kokkos.outcome == 'success' }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
 
       - name: Upload Python module artifact
         uses: actions/upload-artifact@v7
@@ -530,8 +769,12 @@ jobs:
   gate-python:
     name: ubuntu-latest / Kokkos Serial (Python) shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    needs: [changes, gate-python-build]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    # Shards are independent (`fail-fast: false`) and must all report a result.  Native-loader
+    # tests can legitimately run a little over 30 minutes on a cold public runner; keep a bounded
+    # ten-minute margin so GitHub does not cancel an otherwise progressing shard near completion.
+    timeout-minutes: 40
+    needs: [changes, set-mode, gate-python-build]
+    if: needs.set-mode.outputs.python_required == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -551,7 +794,7 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
-      CCACHE_SLOPPINESS: locale,time_macros
+      CCACHE_SLOPPINESS: locale
       SHARD_INDEX: ${{ matrix.shard }}
       SHARD_TOTAL: ${{ strategy.job-total }}
       # ADC-548 (b): pin the DSL .so cache to a KNOWN dir and keep the generated source so a codegen
@@ -561,6 +804,9 @@ jobs:
       # redacted) banner .cpp -- neither changes the compiled .so bytes nor the cache key.
       POPS_CACHE_DIR: ${{ github.workspace }}/.pops-dsl-cache
       POPS_KEEP_GENERATED: "1"
+      # This lane installs the compiled extension, Kokkos and a C++ compiler. Native acceptance
+      # files must fail if any prerequisite/import/API disappears; a source-only local run may skip.
+      POPS_REQUIRE_NATIVE_TESTS: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -670,9 +916,11 @@ jobs:
       - name: Test module Python `pops` shard ${{ matrix.shard }} (Kokkos Serial)
         if: steps.test-plan.outputs.python_shard_count != '0'
         run: |
-          pip install --upgrade pip numpy pytest
+          # The full gate exercises the serial HDF5 writer used by the final examples. h5py remains
+          # an optional user dependency; CI installs that capability explicitly instead of skipping.
+          pip install --upgrade pip numpy pytest h5py
           export PYTHONPATH="$PWD/build-kokkos-py/python"
-          # adc_cpp est Kokkos-only : les tests DSL qui compilent un loader/.so (aot, production, ABI)
+          # PoPS est Kokkos-only : les tests DSL qui compilent un loader/.so production ou son ABI
           # incluent les en-tetes pops (-> for_each, #error sans Kokkos). Ils lisent le Kokkos a utiliser
           # via Kokkos_ROOT / POPS_KOKKOS_ROOT : on pointe le MEME Kokkos Serial que le module _pops.
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
@@ -746,24 +994,25 @@ jobs:
         if: always() && steps.test-plan.outputs.python_shard_count != '0'
         run: ccache -s
 
-  # GATE PYTHON COMPILE-CACHE (ADC-623). The DSL compile-cache test compiles ~8 native .so
-  # back-to-back at runtime (POPS_PROCESS_TIMEOUT = 900) -- on its own it was ~5 min of one
+  # GATE PYTHON COMPILE-CACHE (ADC-623). The final-lifecycle cache proof performs four deliberate
+  # cold native package compilations plus exact semantic hits/misses (POPS_PROCESS_TIMEOUT = 900).
   # shard's critical path plus its per-file process-isolation overhead. Isolated here into a
   # DEDICATED job so it no longer weighs on the sharded suite (scripts/ci_shard_binpack.py
   # excludes it from the shard partition; the exactness check accounts for the exclusion).
-  # A DSL out-of-source compile cache (POPS_CACHE_DIR) is persisted with actions/cache, keyed
-  # on the SAME inputs as the ADC-621 _pops.so module cache PLUS python/pops/** (the DSL
-  # codegen) and the test file, so a warm run skips the recompiles. Same routing/`if:` as
-  # gate-python: it runs whenever the sharded Python gate runs.
+  # The final DSL cache proof deliberately owns an isolated temporary native cache: it must prove
+  # one real cold compile, an exact semantic hit and a semantic miss on every run. Persisting that
+  # cache would make the miss assertion depend on previous CI history; ccache remains persisted and
+  # accelerates the underlying compiler work without changing the artifact-cache semantics.
   # ADC-548 (a): this dedicated job is the CODEGEN + MANIFEST + CACHE-ABI proof AND the
-  # generated-program compile/bind SMOKE -- its ~8 back-to-back native compiles emit -> .so -> load,
+  # generated-program compile/bind SMOKE -- its native compiles emit -> .so -> load,
   # exercising the write/verify of the <so>.cachekey sidecar and the backend/ABI cache key. On a
   # codegen failure it uploads the ADC-536 provenance sidecars (see the trailing failure step).
   gate-python-compile-cache:
     name: ubuntu-latest / Kokkos Serial (Python) compile-cache
     runs-on: ubuntu-latest
-    needs: [changes, gate-python-build]
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.cpp == 'true' || needs.changes.outputs.python == 'true' || contains(github.event.pull_request.labels.*.name, 'ci-kokkos') || contains(github.event.pull_request.labels.*.name, 'ci-full') }}
+    timeout-minutes: 30
+    needs: [changes, set-mode, gate-python-build]
+    if: needs.set-mode.outputs.python_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache-py
@@ -771,10 +1020,14 @@ jobs:
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: "true"
-      CCACHE_SLOPPINESS: locale,time_macros
-      # The DSL out-of-source compile cache lives here; persisted across runs by actions/cache.
-      POPS_CACHE_DIR: ${{ github.workspace }}/.pops-dsl-cache
-      COMPILE_CACHE_TEST: tests/python/integration/mpi/test_compile_cache_backend.py
+      CCACHE_SLOPPINESS: locale
+      COMPILE_CACHE_TEST: tests/python/integration/mpi/test_dsl_compile_cache.py
+      # This job owns the final native compile/cache acceptance.  A missing compiler, Kokkos
+      # install, compiled extension, or native API is a release failure here, never a green skip.
+      POPS_REQUIRE_NATIVE_TESTS: "1"
+      # `runner.temp` is likewise a step-only context. A workspace-local, ignored test temporary is
+      # deterministic and remains available to the failure-artifact upload steps.
+      COMPILE_CACHE_TMP: ${{ github.workspace }}/.pops-ci/compile-cache-test
 
     steps:
       - uses: actions/checkout@v7
@@ -802,23 +1055,6 @@ jobs:
           test -d build-kokkos-py/python/pops
           test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)"
 
-      - name: Compiler key component
-        id: cxxkey
-        run: echo "gcc=$(gcc -dumpversion | cut -d. -f1)" >> "$GITHUB_OUTPUT"
-
-      # Warm the DSL runtime .so cache. Key = the ADC-621 module-cache inputs (headers, bindings,
-      # build graph, Kokkos, gcc) PLUS python/pops/** (the DSL codegen that emits the .so) and the
-      # test file itself, since any of those changes the compiled artifact. restore-keys let a
-      # near-miss reuse a warm cache as a starting point (a stale .so is re-keyed by content in the
-      # out-of-source cache, so reuse is safe) instead of a fully cold recompile.
-      - name: Cache DSL compile artifacts (POPS_CACHE_DIR)
-        uses: actions/cache@v6
-        with:
-          path: ${{ env.POPS_CACHE_DIR }}
-          key: pops-dslcache-${{ runner.os }}-${{ hashFiles('include/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'python/pops/**', 'tests/python/integration/mpi/test_compile_cache_backend.py') }}-kokkos4.4.01-15dc143e-gcc${{ steps.cxxkey.outputs.gcc }}
-          restore-keys: |
-            pops-dslcache-${{ runner.os }}-
-
       - name: Cache ccache (Python runtime loaders)
         uses: actions/cache@v6
         with:
@@ -834,7 +1070,7 @@ jobs:
       - name: Test DSL compile-cache (Kokkos Serial)
         # ADC-548 (b): POPS_KEEP_GENERATED=1 persists the ADC-536 provenance sidecar -- the generated
         # <so>.cpp (banner = serialized IR + hashes + flags + toolchain + REDACTED compile command) --
-        # next to each .so in POPS_CACHE_DIR, alongside the <so>.cachekey the compile writes anyway.
+        # next to each .so in the test-owned isolated cache, alongside the <so>.cachekey.
         # The banner is inert (sidecar-only), so the .so bytes and the cache key are unchanged whether
         # this is set or not; on a codegen failure the trailing step uploads the sidecars for debug.
         env:
@@ -843,10 +1079,10 @@ jobs:
           pip install --upgrade pip numpy pytest
           export PYTHONPATH="$PWD/build-kokkos-py/python"
           export Kokkos_ROOT="${KOKKOS_PREFIX}" POPS_KOKKOS_ROOT="${KOKKOS_PREFIX}"
-          mkdir -p "$POPS_CACHE_DIR"
+          mkdir -p "$COMPILE_CACHE_TMP"
           SECONDS=0
           set +e
-          python3 -m pytest -q -ra "$COMPILE_CACHE_TEST"
+          python3 -m pytest -q -ra --basetemp="$COMPILE_CACHE_TMP" "$COMPILE_CACHE_TEST"
           rc=$?
           set -e
           test_s=$SECONDS
@@ -866,7 +1102,7 @@ jobs:
 
       # ADC-548 (b): on a codegen failure, ship the ADC-536 provenance sidecars for offline debug --
       # the generated .cpp (self-describing banner) and the .cachekey the compile persisted into
-      # POPS_CACHE_DIR. The banner uses the REDACTED compile command and lives only in the sidecar, so
+      # isolated pytest temp root. The banner uses the REDACTED compile command and lives only in the sidecar, so
       # this cannot leak a secret. if-no-files-found: ignore keeps a non-codegen failure from going red.
       - name: Upload codegen debug artifacts on failure
         if: failure()
@@ -874,9 +1110,9 @@ jobs:
         with:
           name: codegen-debug-compile-cache
           path: |
-            ${{ env.POPS_CACHE_DIR }}/**/*.cpp
-            ${{ env.POPS_CACHE_DIR }}/**/*.cachekey
-            ${{ env.POPS_CACHE_DIR }}/**/*.json
+            ${{ env.COMPILE_CACHE_TMP }}/**/*.cpp
+            ${{ env.COMPILE_CACHE_TMP }}/**/*.cachekey
+            ${{ env.COMPILE_CACHE_TMP }}/**/*.json
           if-no-files-found: ignore
           retention-days: 7
 
@@ -895,37 +1131,67 @@ jobs:
   gate:
     name: gate (agregation requise)
     runs-on: ubuntu-latest
-    needs: [changes, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache]
+    needs: [changes, set-mode, gate-cpp, gate-python-architecture, gate-python-build, gate-python, gate-python-compile-cache, mpi, kokkos-openmp]
     if: always()
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
       - name: Verdict
         run: |
-          echo "changes=${{ needs.changes.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }}"
-          if [ "${{ needs.changes.result }}" != "success" ]; then
-            echo "::error::routage (job changes) en echec : impossible de garantir quels gates devaient tourner"
-            exit 1
-          fi
-          for r in "${{ needs.gate-cpp.result }}" "${{ needs.gate-python-architecture.result }}" "${{ needs.gate-python-build.result }}" "${{ needs.gate-python.result }}" "${{ needs.gate-python-compile-cache.result }}"; do
-            case "$r" in
-              success|skipped) ;;
-              *) echo "::error::un gate obligatoire a echoue ou ete annule ($r)" ; exit 1 ;;
-            esac
-          done
-          echo "gates OK"
+          echo "changes=${{ needs.changes.result }} set-mode=${{ needs.set-mode.result }} gate-cpp=${{ needs.gate-cpp.result }} gate-python-architecture=${{ needs.gate-python-architecture.result }} gate-python-build=${{ needs.gate-python-build.result }} gate-python=${{ needs.gate-python.result }} gate-python-compile-cache=${{ needs.gate-python-compile-cache.result }} mpi=${{ needs.mpi.result }} kokkos-openmp=${{ needs.kokkos-openmp.result }}"
+          python3 scripts/ci_route_mode.py check \
+            --gate changes "${{ needs.changes.result }}" true \
+            --gate set-mode "${{ needs.set-mode.result }}" true \
+            --gate gate-cpp "${{ needs.gate-cpp.result }}" true \
+            --gate gate-python-architecture \
+              "${{ needs.gate-python-architecture.result }}" \
+              "${{ needs.set-mode.outputs.architecture_required }}" \
+            --gate gate-python-build "${{ needs.gate-python-build.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate gate-python "${{ needs.gate-python.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate gate-python-compile-cache \
+              "${{ needs.gate-python-compile-cache.result }}" \
+              "${{ needs.set-mode.outputs.python_required }}" \
+            --gate mpi "${{ needs.mpi.result }}" \
+              "${{ needs.set-mode.outputs.mpi_required }}" \
+            --gate kokkos-openmp "${{ needs.kokkos-openmp.result }}" \
+              "${{ needs.set-mode.outputs.openmp_required }}"
 
   mpi:
-    name: ubuntu-latest / MPI + Kokkos Serial
-    runs-on: ubuntu-latest
-    needs: set-mode
-    # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
-    if: needs.set-mode.outputs.full == 'true'
+    name: ubuntu-24.04 / MPI + Kokkos Serial + collective HDF5
+    # Fixed distro release: OpenMPI and parallel HDF5 C libraries come from one
+    # ABI-compatible Ubuntu package set. Python never owns an MPI communicator.
+    runs-on: ubuntu-24.04
+    # The native build, the 4-minute CTest watchdog, and the 35-minute Python
+    # MPI contract fence run sequentially.  Keep the job envelope larger than
+    # those fail-fast fences so GitHub never kills a healthy final test step.
+    timeout-minutes: 70
+    needs: [set-mode, changes]
+    # Suite complete, ou PR qui modifie directement le chemin distribue/MPI.
+    if: needs.set-mode.outputs.mpi_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 2G
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
+      # Attempt-qualified publication preserves every valid MPI object compiled before a later
+      # lifecycle/test failure. Restore prefixes remain branch/master scoped, so retries and the
+      # next corrective push reuse prior work without ever overwriting an immutable Actions cache.
+      CCACHE_CACHE_KEY: mpi-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
       KOKKOS_VERSION: 4.4.01
       KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-install
+      # The native matrix reaches np=4 and the HDF5 proof reaches np=2 on a
+      # small runner. The root switches are inert on GitHub's non-root runner
+      # and keep the launcher usable in equivalent containerized CI runs.
+      OMPI_MCA_rmaps_base_oversubscribe: "true"
+      PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
+      OMPI_ALLOW_RUN_AS_ROOT: "1"
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -935,20 +1201,36 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev libopenmpi-dev openmpi-bin ninja-build ccache
+          sudo apt-get install -y --no-install-recommends \
+            ccache libeigen3-dev libhdf5-openmpi-dev libopenmpi-dev ninja-build openmpi-bin \
+            pybind11-dev python3-dev python3-h5py \
+            python3-numpy python3-pytest
 
-      # Meme install Kokkos Serial (PIC) que le gate ; cle de cache partagee.
+      - name: Resolve runner and compiler cache identity
+        id: kokkos-platform
+        run: |
+          image="${ImageOS:-}"
+          if [ -z "$image" ]; then
+            . /etc/os-release
+            image="${ID}${VERSION_ID}"
+          fi
+          version="$(g++ -dumpfullversion -dumpversion)"
+          version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
+          echo "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"
+
+      # Meme install Kokkos Serial (PIC) que le gate, partagee uniquement si image, architecture et
+      # version exacte de GCC concordent : jamais de reuse ABI entre ubuntu-latest et une autre image.
       - name: Cache Kokkos install (Serial ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
         uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
-          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-serial-cxx20-gcc-pic
+          key: kokkos-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-serial-cxx20-pic
 
       - name: Build + install Kokkos (Serial, PIC)
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos
+          git clone --depth 1 -b "${KOKKOS_VERSION}" https://github.com/kokkos/kokkos.git /tmp/kokkos
           test "$(git -C /tmp/kokkos rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos -B /tmp/kbuild -G Ninja -DKokkos_ENABLE_SERIAL=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
@@ -956,115 +1238,417 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build /tmp/kbuild --parallel 4 --target install
 
-      - name: Cache ccache (MPI)
-        uses: actions/cache@v6
+      - name: Restore ccache (MPI)
+        id: mpi-ccache-restore
+        uses: actions/cache/restore@v6
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-mpi-${{ github.ref }}-${{ github.sha }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
           restore-keys: |
             ccache-${{ runner.os }}-mpi-${{ github.ref }}-
             ccache-${{ runner.os }}-mpi-refs/heads/master-
             ccache-${{ runner.os }}-mpi-
 
+      - name: Reset ccache stats (MPI)
+        run: ccache --zero-stats
+
+      - name: Select manifest-owned MPI tests
+        id: mpi-test-plan
+        run: |
+          mkdir -p build-mpi
+          python3 scripts/ci_select_tests.py cpp-label \
+            --label mpi \
+            --github-output "$GITHUB_OUTPUT" \
+            --explain-file build-mpi/mpi-test-plan.json
+          python3 scripts/ci_select_tests.py python-mpi \
+            --plan-file build-mpi/python-mpi-plan.tsv \
+            --github-output "$GITHUB_OUTPUT" \
+            --explain-file build-mpi/python-mpi-plan.json
+          test -s build-mpi/python-mpi-plan.tsv
+
       - name: Configure + build (MPI + Kokkos Serial)
         # Flags : preset ci-mpi (source unique, cf. CMakePresets.json) ; Kokkos_ROOT vient de
         # $KOKKOS_PREFIX (env du job, install en cache). ccache auto-detecte.
         run: |
-          cmake --preset ci-mpi
-          cmake --build --preset ci-mpi
+          mpi_cmake_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            # FindMPI propagates these preflags to every manifest-owned CTest launch.
+            # Non-OpenMPI launchers never receive an implementation-specific option.
+            mpi_cmake_args+=("-DMPIEXEC_PREFLAGS=--mca;orte_abort_on_non_zero_status;1")
+          fi
+          cmake --preset ci-mpi \
+            -DPOPS_BUILD_PYTHON=ON \
+            -DPOPS_USE_HDF5=ON \
+            -DPython_EXECUTABLE=/usr/bin/python3 \
+            "${mpi_cmake_args[@]}"
+          read -r -a mpi_targets <<< "${{ steps.mpi-test-plan.outputs.cpp_label_targets }}"
+          cmake --build --preset ci-mpi --parallel 4 --target _pops "${mpi_targets[@]}"
+
+      - name: Installed package smoke (MPI-only + collective HDF5)
+        run: |
+          # The configured CI package proves the full MPI+C+parallel-HDF5 export.
+          ctest --preset ci-mpi --output-on-failure \
+            --no-tests=error \
+            -R '^test_installed_package_consumer$'
+
+          # Configure a header-only MPI package without HDF5 to prove that its installed consumer
+          # remains CXX-only and never acquires MPI_C/HDF5 as incidental dependencies.
+          cmake -S . -B build-mpi-only-package -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DKokkos_ROOT="${KOKKOS_PREFIX}" \
+            -DPOPS_BUILD_TESTS=OFF \
+            -DPOPS_BUILD_PYTHON=OFF \
+            -DPOPS_INSTALL=ON \
+            -DPOPS_USE_MPI=ON \
+            -DPOPS_USE_HDF5=OFF
+          cmake \
+            -DPOPS_BINARY_DIR="${GITHUB_WORKSPACE}/build-mpi-only-package" \
+            -DPOPS_CONSUMER_SOURCE_DIR="${GITHUB_WORKSPACE}/tests/cmake/installed_package_consumer" \
+            -DPOPS_SMOKE_ROOT="${GITHUB_WORKSPACE}/build-mpi-only-package-smoke" \
+            -DPOPS_BUILD_CONFIG=Release \
+            -DPOPS_GENERATOR=Ninja \
+            -DPOPS_DEPENDENCY_PREFIX_PATH="${KOKKOS_PREFIX}" \
+            -DPOPS_Kokkos_DIR="${KOKKOS_PREFIX}/lib/cmake/Kokkos" \
+            -DPOPS_MPI_CXX_COMPILER="$(command -v mpicxx)" \
+            -DPOPS_EXPECT_MPI=ON \
+            -DPOPS_EXPECT_HDF5=OFF \
+            -DPOPS_EXPECT_PARALLEL_HDF5=OFF \
+            -DPOPS_EXPECT_C_LOADED=OFF \
+            -P tests/cmake/run_installed_package_smoke.cmake
 
       - name: Test (bit-identique np=1/2/4)
+        timeout-minutes: 5
         # Les runners n'ont que 2-4 slots ; mpirun -np 4 a besoin d'oversubscribe.
         # OMPI_MCA_* couvre OpenMPI 4.x, PRTE_MCA_* couvre OpenMPI 5.x.
-        env:
-          OMPI_MCA_rmaps_base_oversubscribe: "true"
-          PRTE_MCA_rmaps_default_mapping_policy: ":oversubscribe"
-        # `-L mpi` : ne (re)joue QUE le sous-ensemble distribue. Les tests serie tournent deja dans
-        # gate-cpp (preset ci-kokkos, SANS filtre -L) ; les rejouer ici (build MPI, mono-rang) etait
-        # redondant. Couverture globale inchangee. Garde anti-regression : si le backfill du label
-        # "mpi" (tests/CMakeLists.txt) cassait, la selection s'effondrerait -> plancher explicite
-        # (60 tests aujourd'hui ; ~8 sans backfill), echec bruyant plutot que perte silencieuse.
+        # Les filtres sont ancres et conjoints : `mpi` seul inclurait aussi les smokes CMake/package
+        # sans PROCESSORS, tandis que `backend` + `mpi` identifie exactement les lancements de rangs.
+        # La suite Python marquee `mpi` est exclue de ce fence C++ car son launcher pytest ordinaire
+        # n'ouvre aucun monde MPI ; ses vrais entrypoints sont lances sous mpiexec dans l'etape
+        # suivante. Le manifeste reste l'autorite exacte des noms, labels et rangs C++ MPI.
         run: |
-          mpi_n=$(ctest --preset ci-mpi -N -L mpi | awk -F': ' '/Total Tests:/{print $2}')
-          echo "Tests MPI selectionnes (-L mpi) : ${mpi_n:-0}"
-          if [ "${mpi_n:-0}" -lt 50 ]; then
-            echo "::error::Selection MPI effondree (${mpi_n:-0} < 50) : label \"mpi\" probablement absent (cf. backfill tests/CMakeLists.txt, ADC-366)"
-            exit 1
+          mpi_inventory="$RUNNER_TEMP/ctest-mpi-plan.json"
+          ctest --preset ci-mpi -N --show-only=json-v1 > "$mpi_inventory"
+          python3 scripts/ci_select_tests.py verify-cpp-mpi-ctests \
+            --ctest-json "$mpi_inventory"
+          set +e
+          timeout --signal=TERM --kill-after=30s 4m \
+            ctest --preset ci-mpi --output-on-failure \
+              -L '^backend$' -L '^mpi$' -LE '^python$'
+          ctest_status=$?
+          set -e
+          if [ "$ctest_status" -eq 124 ]; then
+            echo "::error::C++ MPI CTest exceeded its 4-minute watchdog"
           fi
-          ctest --preset ci-mpi -L mpi
+          exit "$ctest_status"
 
+      - name: Test Python MPI contracts + native lifecycle
+        timeout-minutes: 35
+        # Assemble the exact source package around the MPI-enabled extension produced above. The
+        # distro interpreter is intentional: apt's Python and serial h5py read the artifacts after
+        # the native C++ parallel-HDF5 writer has closed them.
+        env:
+          PYTHONPATH: ${{ github.workspace }}/build-mpi/python-package:${{ github.workspace }}
+          POPS_INCLUDE: ${{ github.workspace }}/include
+          POPS_KOKKOS_ROOT: ${{ github.workspace }}/.kokkos-install
+          Kokkos_ROOT: ${{ github.workspace }}/.kokkos-install
+          # Manifest-owned MPI entrypoints normally self-skip on developer machines without the
+          # required MPI/toolchain. In this dedicated lane every missing capability is a hard
+          # failure, never a green skip.
+          POPS_REQUIRE_MPI_TESTS: "1"
+        run: |
+          rm -rf build-mpi/python-package
+          mkdir -p build-mpi/python-package/pops
+          cp -R python/pops/. build-mpi/python-package/pops/
+          cp build-mpi/python/pops/_pops*.so build-mpi/python-package/pops/
+          /usr/bin/python3 - <<'PY'
+          import pops
+          from pops import _pops
+          import h5py
+
+          if not _pops.__has_mpi__:
+              raise SystemExit("collective HDF5 lifecycle requires an MPI-enabled _pops")
+          if not getattr(_pops, "__has_parallel_hdf5__", False):
+              raise SystemExit("collective HDF5 lifecycle requires native parallel HDF5")
+          if not hasattr(pops.ExecutionContext, "mpi_world"):
+              raise SystemExit("installed package lacks the exact MPI execution context")
+          print("h5py reader:", h5py.__version__)
+          print("pops:", pops.__version__, "mpi_module=", _pops.__has_mpi__,
+                "parallel_hdf5=", _pops.__has_parallel_hdf5__)
+          PY
+          mpi_failfast_args=()
+          if mpiexec --version 2>&1 | grep -Eqi 'Open MPI|OpenRTE'; then
+            mpi_failfast_args+=(--mca orte_abort_on_non_zero_status 1)
+            echo "OpenMPI detected: aborting the complete MPI job on the first non-zero rank"
+          else
+            echo "Non-OpenMPI launcher detected: using its portable command line"
+          fi
+          run_mpi() {
+            local label="$1"
+            shift
+            echo "::notice::${label}: watchdog=20m"
+            set +e
+            timeout --signal=TERM --kill-after=30s 20m \
+              mpiexec "${mpi_failfast_args[@]}" "$@"
+            local status=$?
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its 20-minute MPI watchdog"
+            elif [ "$status" -ne 0 ]; then
+              echo "::error::${label} failed (mpiexec status=${status})"
+            fi
+            return "$status"
+          }
+          while IFS=$'\t' read -r mpi_ranks mpi_test; do
+            test -n "$mpi_ranks" && test -f "$mpi_test"
+            echo "Running Python MPI contract: ${mpi_test} (np=${mpi_ranks})"
+            run_mpi "Python MPI contract ${mpi_test}" \
+              -n "$mpi_ranks" /usr/bin/python3 -u "$mpi_test"
+          done < build-mpi/python-mpi-plan.tsv
       - name: ccache stats (MPI)
         if: always()
         run: ccache -s
 
+      - name: Save ccache (MPI)
+        if: always()
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+
   kokkos-openmp:
-    name: ubuntu-latest / Kokkos (OpenMP)
+    # The OpenMP C++ proof is the same exact six-way target partition as the Serial gate:
+    # every non-MPI target belongs to exactly one shard and every built target must expose
+    # an authenticated CTest label before its cases can run.  The independent Python/native-ABI
+    # proof stays in its own lane because it builds one module rather than the C++ test graph.
+    name: ubuntu-latest / Kokkos (OpenMP, ${{ matrix.lane }})
     runs-on: ubuntu-latest
+    # C++ shards keep a 30-minute build watchdog and a 7-minute test watchdog (15 minutes only
+    # for the shard owning the measured slow polar-ring target).  The Python lane retains its
+    # existing 45-minute module-build guard.  The outer envelope is setup/cache/cleanup margin.
+    timeout-minutes: 70
     needs: set-mode
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: cpp-0
+            kind: cpp
+            shard: 0
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: cpp-1
+            kind: cpp
+            shard: 1
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: cpp-2
+            kind: cpp
+            shard: 2
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: cpp-3
+            kind: cpp
+            shard: 3
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: cpp-4
+            kind: cpp
+            shard: 4
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: cpp-5
+            kind: cpp
+            shard: 5
+            shard_total: 6
+            ccache_maxsize: 512M
+          - lane: python
+            kind: python
+            shard: 0
+            shard_total: 1
+            ccache_maxsize: 2G
     # Teste le backend KOKKOS avec l'espace d'execution OpenMP (CPU multi-thread). Le gate
     # build-and-test couvre deja Kokkos Serial (mono-thread) ; ce job ferme le multi-thread.
     # Suite complete uniquement (push master / nightly / dispatch / PR label `ci-full`).
-    if: needs.set-mode.outputs.full == 'true'
+    if: needs.set-mode.outputs.openmp_required == 'true'
 
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 2G
+      # Each C++ lane caches only its deterministic sixth of the target graph.  The Python lane
+      # keeps the pre-existing 2 GiB budget for its single production module build.
+      CCACHE_MAXSIZE: ${{ matrix.ccache_maxsize }}
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_SLOPPINESS: locale
       # Prefixe SEPARE du Kokkos Serial pour eviter toute collision de cache.
       # Meme version de Kokkos, espace d'execution OpenMP.
       KOKKOS_VERSION: 4.4.01
       KOKKOS_COMMIT: 15dc143e5f39949eece972a798e175c4b463d4b8
       KOKKOS_PREFIX: ${{ github.workspace }}/.kokkos-openmp-install
+      # Attempt-qualified, lane-specific publication lets an always() save retain
+      # valid objects from a failed bounded build without cpp/python cache races.
+      CCACHE_CACHE_KEY: kokkos-openmp-${{ matrix.lane }}-${{ github.ref }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
+      - name: Select complete OpenMP C++ shard
+        id: openmp-cpp-plan
+        if: matrix.kind == 'cpp'
+        run: |
+          python3 scripts/ci_select_tests.py cpp \
+            --changed-files /dev/null \
+            --force-all \
+            --shard-index "${{ matrix.shard }}" \
+            --shard-total "${{ matrix.shard_total }}" \
+            --github-output "$GITHUB_OUTPUT" \
+            --explain-file "$RUNNER_TEMP/openmp-cpp-test-plan.json"
+          {
+            echo "### OpenMP C++ test selection"
+            echo ""
+            echo "- ${{ matrix.lane }}: $(grep '^cpp_shard_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)"
+            echo "- complete suite: $(grep '^cpp_summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2-)"
+            echo "- plan: artifact \`openmp-cpp-test-plan-shard-${{ matrix.shard }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload OpenMP C++ test plan
+        if: matrix.kind == 'cpp'
+        uses: actions/upload-artifact@v7
+        with:
+          name: openmp-cpp-test-plan-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/openmp-cpp-test-plan.json
+
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libeigen3-dev ninja-build ccache
+          sudo apt-get install -y libeigen3-dev ninja-build ccache mold
 
-      # Cache du Kokkos DEJA INSTALLE, cle sur la version exacte + openmp + compilateur.
-      # La cle inclut "openmp" pour ne pas entrer en collision avec le cache serial.
+      - name: Resolve runner and compiler cache identity
+        id: kokkos-platform
+        run: |
+          image="${ImageOS:-}"
+          if [ -z "$image" ]; then
+            . /etc/os-release
+            image="${ID}${VERSION_ID}"
+          fi
+          version="$(g++ -dumpfullversion -dumpversion)"
+          version="$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-')"
+          echo "key=${image}-${RUNNER_ARCH}-gcc-${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        id: openmp-python
+        if: matrix.kind == 'python'
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # Cache du Kokkos DEJA INSTALLE. Image, architecture et version GCC exactes interdisent une
+      # reuse ABI-incompatible; "openmp" isole cette installation du cache Serial.
       - name: Cache Kokkos install (OpenMP ${{ env.KOKKOS_VERSION }})
         id: kokkos-cache
         uses: actions/cache@v6
         with:
           path: ${{ env.KOKKOS_PREFIX }}
-          key: kokkos-${{ runner.os }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-openmp-cxx20-gcc-pic
+          key: kokkos-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}-openmp-cxx20-pic
 
-      - name: Cache ccache (Kokkos OpenMP)
+      # The ccache working set for all 35 production objects is larger than its intentionally
+      # bounded 2 GiB rolling cache.  Authenticate and retain the much smaller final module too:
+      # unchanged native inputs can reuse the exact OpenMP binary even if ccache evicted an object.
+      # The key has no fallback: source, build graph, toolchain, or Kokkos drift must rebuild.
+      - name: Cache exact OpenMP Python module
+        id: openmp-python-module-cache
+        if: matrix.kind == 'python'
         uses: actions/cache@v6
         with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-kokkos-openmp-${{ github.ref }}-
-            ccache-${{ runner.os }}-kokkos-openmp-refs/heads/master-
-            ccache-${{ runner.os }}-kokkos-openmp-
+          path: build-kokkos-py/python/pops
+          key: pops-module-openmp-${{ runner.os }}-${{ steps.kokkos-platform.outputs.key }}-py${{ steps.openmp-python.outputs.python-version }}-${{ hashFiles('include/**', 'src/**', 'python/bindings/**', 'python/CMakeLists.txt', 'CMakeLists.txt', 'cmake/**', 'CMakePresets.json', 'pyproject.toml', '.github/workflows/ci.yml') }}-kokkos${{ env.KOKKOS_VERSION }}-${{ env.KOKKOS_COMMIT }}
 
       - name: Build + install Kokkos (OpenMP)
         # Reconstruit Kokkos UNIQUEMENT sur cache miss.
         # Kokkos_ENABLE_OPENMP=ON : l'exec space par defaut devient OpenMP.
         if: steps.kokkos-cache.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 -b ${KOKKOS_VERSION} https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
+          git clone --depth 1 -b "${KOKKOS_VERSION}" https://github.com/kokkos/kokkos.git /tmp/kokkos-omp
           test "$(git -C /tmp/kokkos-omp rev-parse HEAD)" = "${KOKKOS_COMMIT}"
           cmake -S /tmp/kokkos-omp -B /tmp/kbuild-omp -G Ninja -DKokkos_ENABLE_OPENMP=ON \
             -DCMAKE_INSTALL_PREFIX="${KOKKOS_PREFIX}" -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=20 -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build /tmp/kbuild-omp --parallel 4 --target install
+          # The exact Kokkos install above is the reusable artifact.  Its temporary compiler-cache
+          # entries must not consume the bounded PoPS shard cache restored by the next step.
+          rm -rf "${CCACHE_DIR}"
+          mkdir -p "${CCACHE_DIR}"
+
+      # Restore the PoPS object cache only after a possible Kokkos bootstrap.  Both builds use
+      # ccache, but Kokkos objects are covered by their own exact install cache and must not evict
+      # the deliberately small per-shard PoPS working set before it is consumed.
+      - name: Restore ccache (Kokkos OpenMP, ${{ matrix.lane }})
+        if: matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}
+          restore-keys: |
+            ccache-${{ runner.os }}-kokkos-openmp-${{ matrix.lane }}-${{ github.ref }}-
+            ccache-${{ runner.os }}-kokkos-openmp-${{ matrix.lane }}-refs/heads/master-
+
+      - name: Reset ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
+        if: matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true'
+        run: ccache --zero-stats
 
       - name: Configure + build (backend Kokkos OpenMP)
+        if: matrix.kind == 'cpp'
+        timeout-minutes: 35
         # MEME preset ci-kokkos que le job Serial (binaryDir build-kokkos) : seule l'install
         # Kokkos pointee par $KOKKOS_PREFIX differe ; les runners sont des machines distinctes.
         run: |
-          cmake --preset ci-kokkos
-          cmake --build --preset ci-kokkos
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          cmake --preset ci-kokkos -DCMAKE_LINKER_TYPE=MOLD \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"
+          if [ "${#cpp_targets[@]}" -eq 0 ]; then
+            echo "::error::OpenMP C++ shard ${{ matrix.shard }} selected no targets from the forced complete suite"
+            exit 1
+          fi
+          run_with_heartbeat "Kokkos OpenMP C++ shard ${{ matrix.shard }} build" 30m \
+            cmake --build --preset ci-kokkos --target "${cpp_targets[@]}"
 
       - name: Test (ctest, backend Kokkos OpenMP)
+        if: matrix.kind == 'cpp'
+        timeout-minutes: 17
         # OMP_NUM_THREADS=2 : le runner GitHub est petit (2 vCPU) ; sans borne,
         # Kokkos detecte le nombre de coeurs logiques et lance N threads qui se
         # battent, ce qui provoque des suites-tests lentes ou tues (OOM/timeout).
@@ -1074,12 +1658,41 @@ jobs:
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
-        run: ctest --preset ci-kokkos
+        run: |
+          read -r -a cpp_targets <<< "${{ steps.openmp-cpp-plan.outputs.cpp_shard_targets }}"
+          ctest_inventory="$RUNNER_TEMP/ctest-openmp-shard-${{ matrix.shard }}.json"
+          ctest --preset ci-kokkos -N --show-only=json-v1 > "$ctest_inventory"
+          python3 scripts/ci_select_tests.py verify-cpp-target-labels \
+            --ctest-json "$ctest_inventory" \
+            --targets "${cpp_targets[@]}"
+          test_watchdog=7m
+          set +e
+          timeout --signal=TERM --kill-after=30s "$test_watchdog" \
+            ctest --preset ci-kokkos --parallel 2 \
+              -L '${{ steps.openmp-cpp-plan.outputs.cpp_shard_label_regex }}'
+          ctest_status=$?
+          set -e
+          if [ "$ctest_status" -eq 124 ]; then
+            echo "::error::Kokkos OpenMP shard ${{ matrix.shard }} CTest exceeded its ${test_watchdog} watchdog"
+          fi
+          exit "$ctest_status"
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: pip
+      - name: Install OpenMP Python test dependencies
+        if: matrix.kind == 'python'
+        run: pip install --upgrade pip numpy pytest h5py
+
+      - name: Reuse exact OpenMP module and sync Python sources
+        if: matrix.kind == 'python' && steps.openmp-python-module-cache.outputs.cache-hit == 'true'
+        run: |
+          # Pure-Python and typing sources are intentionally outside the native cache key.  Force
+          # their contents from this checkout while protecting the authenticated cached _pops.so.
+          rsync -aI --delete --include='*/' --include='*.py' --include='*.pyi' \
+            --include='py.typed' --exclude='*' \
+            python/pops/ build-kokkos-py/python/pops/
+          test -n "$(find build-kokkos-py/python/pops -maxdepth 1 -name '_pops*.so' -print -quit)" \
+            || { echo "::error::exact OpenMP module cache hit but no _pops*.so present"; exit 1; }
+          echo "Exact authenticated OpenMP module cache hit; native rebuild skipped." \
+            >> "$GITHUB_STEP_SUMMARY"
 
       # GARDE-FOU ABI std (regression GH200). Sous Kokkos le module _pops est compile en C++20
       # (POPS_CXX_STD=20, CUDA 12.x sans -std=c++23) tandis que le DSL backend="production" figeait
@@ -1089,22 +1702,69 @@ jobs:
       # les tests qui compilent un modele production et appellent add_native_block : ils echoueraient
       # avec l'ancien defaut c++23, ils passent avec le std aligne sur le loader.
       - name: Build module Python `pops` (backend Kokkos OpenMP)
-        env:
-          CCACHE_DIR: ${{ github.workspace }}/.ccache
-          CCACHE_MAXSIZE: 2G
+        if: matrix.kind == 'python' && steps.openmp-python-module-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 47
         run: |
-          pip install --upgrade pip numpy pytest
-          cmake --preset ci-kokkos-python
-          cmake --build --preset ci-kokkos-python
+          # Keep this runtime lane capability-equivalent to the serial Python gate for the final
+          # examples and output reopen checks; collective HDF5 stays in the dedicated MPI job.
+          run_with_heartbeat() {
+            local label="$1"
+            local limit="$2"
+            shift 2
+            local started=$SECONDS
+            echo "::notice::${label}: watchdog=${limit}"
+            set +e
+            timeout --signal=TERM --kill-after=30s "$limit" "$@" &
+            local command_pid=$!
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                kill -0 "$command_pid" 2>/dev/null || exit 0
+                mem_available_mib=$(awk '/MemAvailable:/ {printf "%.0f", $2 / 1024}' /proc/meminfo)
+                active_compilers=$(pgrep -c -x cc1plus || true)
+                echo "::notice::${label}: alive elapsed=$((SECONDS - started))s mem_available=${mem_available_mib}MiB cc1plus=${active_compilers} load=$(cut -d' ' -f1-3 /proc/loadavg)"
+              done
+            ) &
+            local heartbeat_pid=$!
+            wait "$command_pid"
+            local status=$?
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            set -e
+            if [ "$status" -eq 124 ]; then
+              echo "::error::${label} exceeded its ${limit} watchdog"
+            elif [ "$status" -eq 137 ] || [ "$status" -eq 143 ]; then
+              echo "::error::${label} was terminated by signal (status=${status})"
+            fi
+            return "$status"
+          }
+          export NINJA_STATUS='[%f/%t elapsed=%es active=%r] '
+          # Cold OpenMP evidence (job 87543770170) showed cc1plus=1 throughout, 20/37 objects
+          # after 43 minutes, and 9.4--14.9 GiB still available.  The post-split production TUs
+          # therefore use two of the runner's four compile slots: measured peak per-TU memory can
+          # approach 5.5 GiB, so a third concurrent heavy TU would not fit the 15 GiB runner safely.
+          # Two-way concurrency still halves the observed one-TU critical path and fits the
+          # unchanged 45-minute cold-build watchdog without relying on an OOM-prone assumption.
+          # The same 35-object graph completed cold with pool=4 in 29 minutes on the Serial lane.
+          cmake --preset ci-kokkos-python -DCMAKE_LINKER_TYPE=MOLD \
+            -DPOPS_HEAVY_MODULE_TU_POOL=2 \
+            -DCMAKE_CXX_FLAGS="-ffile-prefix-map=${{ github.workspace }}=."
+          run_with_heartbeat "Kokkos OpenMP Python module build" 45m \
+            cmake --build --preset ci-kokkos-python
 
       # ADC-548 (a): this add_native_block section is the bind-RUN / ProgramContext EXECUTION smoke --
       # it compiles a production model at runtime and actually RUNS it (System + AMR) via
       # add_native_block, the counterpart to the compile/bind smoke carried on the fast gate
       # (gate-python-compile-cache). The full lane carries the bind-RUN proof; the gate lane the compile-BIND.
       - name: Test ABI natif (production -> add_native_block, std aligne sur le loader c++20)
+        if: matrix.kind == 'python'
+        timeout-minutes: 15
         env:
           OMP_NUM_THREADS: "2"
           OMP_PROC_BIND: "false"
+          # The OpenMP runtime lane has built every native prerequisite above.  Keep the three
+          # script-mode ABI/production contracts fail-closed if one of those capabilities regresses.
+          POPS_REQUIRE_NATIVE_TESTS: "1"
           # PARITE KOKKOS du loader runtime : le module _pops est compile AVEC Kokkos ; sans cette
           # variable, dsl.py compile le loader SANS -DPOPS_HAS_KOKKOS -> cle d'ABI kokkos=0 vs
           # kokkos=1 du module -> rejet explicite (jeton ajoute expres : cette divergence etait
@@ -1133,6 +1793,13 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: ccache stats (Kokkos OpenMP)
-        if: always()
+      - name: ccache stats (Kokkos OpenMP, ${{ matrix.lane }})
+        if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}
         run: ccache -s
+
+      - name: Save ccache (Kokkos OpenMP, ${{ matrix.lane }})
+        if: ${{ always() && (matrix.kind != 'python' || steps.openmp-python-module-cache.outputs.cache-hit != 'true') }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ env.CCACHE_CACHE_KEY }}

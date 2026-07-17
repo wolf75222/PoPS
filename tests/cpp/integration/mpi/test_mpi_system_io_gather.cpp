@@ -45,12 +45,13 @@
 
 #include "gtest_compat.hpp"
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/fluids/euler.hpp>      // Euler (bloc fluide a 4 composantes, etat conservatif riche)
-#include <pops/physics/bricks/source.hpp>     // NoSource
+#include <pops/physics/fluids/euler.hpp>  // Euler (bloc fluide a 4 composantes, etat conservatif riche)
+#include <pops/physics/bricks/source.hpp>                // NoSource
 #include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>
+#include <pops/parallel/world_communicator.hpp>
 
 #include <cmath>
 #include <cstdio>
@@ -140,10 +141,30 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
   {
     const std::vector<double> dG = sys.density_global("gas");
     const std::vector<double> sG = sys.state_global("gas");
+    const std::vector<OutputPiece> local = sys.output_state_local_pieces("gas", 0);
+    const std::vector<OutputPiece> root =
+        sys.output_state_root_pieces(WorldCommunicator::world(), "gas", 0);
     chk(dG.size() == nn, "T1_density_global_size");
     chk(sG.size() == 4 * nn, "T1_state_global_size");
     chk(dG == rho_ref, "T1_density_global_eq_ref_no_double_count");
     chk(sG == Uref, "T1_state_global_eq_ref_no_double_count");
+    chk(local.size() == (owns ? 1u : 0u), "T1_output_state_local_ownership");
+    chk(root.size() == (owns ? 1u : 0u), "T1_output_state_root_ownership");
+    if (owns && !local.empty()) {
+      const OutputPiece& piece = local.front();
+      chk(piece.box.level == 0 && piece.box.ilo == 0 && piece.box.jlo == 0 &&
+              piece.box.ihi == n - 1 && piece.box.jhi == n - 1,
+          "T1_output_state_local_box");
+      chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
+          "T1_output_state_local_metadata");
+      chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_local_values");
+    }
+    if (owns && !root.empty()) {
+      const OutputPiece& piece = root.front();
+      chk(piece.global_box_index == 0 && piece.owner_rank == 0 && !piece.replicated,
+          "T1_output_state_root_metadata");
+      chk(piece.ncomp == 4 && piece.values == sG, "T1_output_state_root_values");
+    }
   }
 
   // === T2 : apres des pas COLLECTIFS, gather == accesseur local sur le proprietaire ============
@@ -234,5 +255,6 @@ static int pops_run_test_mpi_system_io_gather(int argc, char** argv) {
 }
 
 TEST(test_mpi_system_io_gather, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_system_io_gather, "test_mpi_system_io_gather"), 0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&pops_run_test_mpi_system_io_gather, "test_mpi_system_io_gather"), 0);
 }

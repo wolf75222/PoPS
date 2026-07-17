@@ -19,7 +19,7 @@
 ///   a de-replicated coarse level would wrongly switch back to replicated;
 /// - recon_prim selects the primitive reconstruction (cf. assemble_rhs) instead of conservative;
 ///   false (default) = strictly bit-identical;
-/// - kSsprk3 requires imex == false (rejected otherwise, enforced on the engine side).
+/// - kSsprk2 and kSsprk3 require imex == false (rejected otherwise by the engine).
 
 namespace pops {
 
@@ -52,8 +52,9 @@ struct LevelHierarchy {
   // NEWTON OPTIONS of the IMEX step (default {} = historical constants 2 iters / 1e-7 -> bit-identical).
   // Honored only when imex==true; forwarded to backward_euler_source by mf_apply_source_treatment.
   NewtonOptions newton_options{};
-  // TIME METHOD: kEuler (default, forward Euler per substep, bit-identical to the historical) or
-  // kSsprk3 (SSPRK3 order 3 + per-stage reflux). kSsprk3 requires imex == false (rejected otherwise, cf. engine).
+  // TIME METHOD: kEuler (forward Euler), kSsprk2 (SSPRK2/Heun, order 2), or kSsprk3 (order 3).
+  // Both SSP methods expose their effective stage-weighted flux to reflux and require imex == false
+  // (rejected by the engine).
   AmrTimeMethod time_method = AmrTimeMethod::kEuler;
   // Zhang-Shu positivity floor (ADC-259): Density-role face-state + C/F-ghost-mean floor on the AMR
   // transport. <= 0 (default) -> inactive, bit-identical to the historical path.
@@ -77,11 +78,51 @@ void advance_amr(const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& b
                                                                  imex, nopts, tmethod, pos_floor);
 }
 
+/// Production entry for an explicitly authored AMR clock chain.  Unlike the compatibility overload
+/// above, this route never derives a temporal cadence from kAmrRefRatio: every coarse/fine transition
+/// is partitioned by its ParentChildClockRelation, including a declared rational final substep.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void advance_amr_with_temporal_relations(
+    const Model& m, std::vector<AmrLevelMP>& levels, const Box2D& base_dom, Real dt,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations,
+    Periodicity base_per = Periodicity{true, true}, bool coarse_replicated = true,
+    bool recon_prim = false, bool imex = false, const NewtonOptions& nopts = {},
+    AmrTimeMethod tmethod = AmrTimeMethod::kEuler, Real pos_floor = Real(0)) {
+  detail::amr_step_multilevel_multipatch_with_temporal_relations<Limiter, NumericalFlux>(
+      m, levels, base_dom, dt, temporal_relations, base_per, coarse_replicated, recon_prim, imex,
+      nopts, tmethod, pos_floor);
+}
+
+/// Allocation-free counterpart used by AmrRuntime after relation installation prepared the clock
+/// partitions once.  The immutable plan is safe to share across blocks and their explicit substeps.
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void advance_amr_with_temporal_plan(const Model& m, std::vector<AmrLevelMP>& levels,
+                                    const Box2D& base_dom, Real dt,
+                                    const detail::PreparedAmrTemporalPlan& temporal_plan,
+                                    Periodicity base_per = Periodicity{true, true},
+                                    bool coarse_replicated = true, bool recon_prim = false,
+                                    bool imex = false, const NewtonOptions& nopts = {},
+                                    AmrTimeMethod tmethod = AmrTimeMethod::kEuler,
+                                    Real pos_floor = Real(0)) {
+  detail::amr_step_multilevel_multipatch_with_temporal_plan<Limiter, NumericalFlux>(
+      m, levels, base_dom, dt, temporal_plan, base_per, coarse_replicated, recon_prim, imex, nopts,
+      tmethod, pos_floor);
+}
+
 template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
 void advance_amr(const Model& m, LevelHierarchy& h, Real dt) {
   advance_amr<Limiter, NumericalFlux>(m, h.levels, h.base_dom, dt, h.base_per, h.coarse_replicated,
                                       h.recon_prim, h.imex, h.newton_options, h.time_method,
                                       h.pos_floor);
+}
+
+template <class Limiter = NoSlope, class NumericalFlux = RusanovFlux, class Model>
+void advance_amr_with_temporal_relations(
+    const Model& m, LevelHierarchy& h, Real dt,
+    const std::vector<amr::ParentChildClockRelation>& temporal_relations) {
+  advance_amr_with_temporal_relations<Limiter, NumericalFlux>(
+      m, h.levels, h.base_dom, dt, temporal_relations, h.base_per, h.coarse_replicated,
+      h.recon_prim, h.imex, h.newton_options, h.time_method, h.pos_floor);
 }
 
 }  // namespace pops

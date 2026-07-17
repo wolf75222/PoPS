@@ -6,11 +6,19 @@ radial, direction 1 = azimuthal (cf. PolarGeometry / assemble_rhs_polar on the C
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ._descriptor import MeshDescriptor
 from ..descriptors_report import CapabilitySet
+from pops.params.use_sites import ParamUse, resolve_param_use
 from pops.runtime_environment import NATIVE_DIMENSION, validate_dimension
+
+from ._layout_plan_contracts import (
+    NormalizedGeometry,
+    POLAR_ANNULUS_2D_COORDINATES,
+    POLAR_ANNULUS_CELL_AREA,
+)
 
 
 class PolarMesh(MeshDescriptor):
@@ -24,7 +32,7 @@ class PolarMesh(MeshDescriptor):
       transport) AND 'hll' (isothermal fluid only); 'hllc'/'roe' rejected (no polar Euler
       brick);
     - DIRECT polar Poisson (PolarPoissonSolver): single-rank, single-box only;
-    - tensorial polar Schur stage (via pops.Split/CondensedSchur): multi-rank/multi-box.
+    - tensorial polar hierarchy-scoped ``Program.solve``: multi-rank/multi-box.
 
     No AMR, no Cartesian<->polar coupling. ``theta_boxes`` splits the transport into
     azimuthal bands (1 = single-box, bit-identical to history; must divide ntheta).
@@ -35,6 +43,15 @@ class PolarMesh(MeshDescriptor):
     def __init__(self, r_min: Any, r_max: Any, nr: Any, ntheta: Any, theta_boxes: Any = 1,
                  *, dim: Any = NATIVE_DIMENSION) -> None:
         self.dim = validate_dimension(dim, where="PolarMesh")
+        r_min = resolve_param_use(
+            r_min, ParamUse.MESH_EXTENT, where="PolarMesh(r_min=)")
+        r_max = resolve_param_use(
+            r_max, ParamUse.MESH_EXTENT, where="PolarMesh(r_max=)")
+        nr = resolve_param_use(nr, ParamUse.SHAPE, where="PolarMesh(nr=)")
+        ntheta = resolve_param_use(
+            ntheta, ParamUse.SHAPE, where="PolarMesh(ntheta=)")
+        theta_boxes = resolve_param_use(
+            theta_boxes, ParamUse.MESH_TOPOLOGY, where="PolarMesh(theta_boxes=)")
         if not (r_max > r_min >= 0.0):
             raise ValueError("PolarMesh: requires r_max > r_min >= 0 (ring)")
         # nr >= 3: the radial drift uses a 2nd-order ONE-SIDED stencil at both walls.
@@ -71,7 +88,19 @@ class PolarMesh(MeshDescriptor):
             "multibox_transport": self.theta_boxes > 1,
         })
 
-    def _apply(self, config: Any) -> None:
+    def normalized_geometry(self) -> NormalizedGeometry:
+        """Project exact annular coordinates and the physical polar cell-area measure."""
+        return NormalizedGeometry(
+            coordinate_system=POLAR_ANNULUS_2D_COORDINATES,
+            cell_measure=POLAR_ANNULUS_CELL_AREA,
+            axis_names=("r", "theta"),
+            lower=(self.r_min, 0.0),
+            upper=(self.r_max, math.tau),
+            cells=(self.nr, self.ntheta),
+        )
+
+    def _apply_system_config(self, config: Any) -> None:
+        """Lower this advanced descriptor through the private native-config protocol."""
         config.geometry = "polar"
         config.nr = self.nr
         config.ntheta = self.ntheta

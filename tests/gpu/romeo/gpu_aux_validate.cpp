@@ -24,9 +24,9 @@
 #include <pops/mesh/execution/for_each.hpp>  // device_fence
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/fv/numerical_flux.hpp>    // RusanovFlux
-#include <pops/numerics/fv/reconstruction.hpp>    // NoSlope
-#include <pops/numerics/spatial_operator.hpp>  // assemble_rhs, load_aux, aux_comps
+#include <pops/numerics/fv/numerical_flux.hpp>  // RusanovFlux
+#include <pops/numerics/fv/reconstruction.hpp>  // NoSlope
+#include <pops/numerics/spatial_operator.hpp>   // assemble_rhs, load_aux, aux_comps
 #include <pops/parallel/comm.hpp>
 
 #include <cmath>

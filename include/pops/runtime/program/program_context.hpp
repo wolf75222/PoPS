@@ -1,14 +1,21 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <pops/core/foundation/types.hpp>      // Real, POPS_HD
 #include <pops/runtime/program/profiler.hpp>   // Profiler / ProfileScope (per-node timing, ADC-459)
+#include <pops/runtime/program/wire_ids.hpp>   // stable compiled-Program numeric protocol
 #include <pops/mesh/boundary/physical_bc.hpp>  // fill_ghosts (periodic / physical halo exchange)
 #include <pops/mesh/execution/for_each.hpp>  // for_each_cell (per-cell coeff / reconstruct kernels + negated divergence copy)
 #include <pops/mesh/geometry/geometry.hpp>  // Geometry (mesh metric of the Laplacian / gradient)
@@ -18,10 +25,12 @@
 #include <pops/numerics/elliptic/interface/elliptic_problem.hpp>  // field_postprocess (centered gradient)
 #include <pops/numerics/elliptic/linear/generic_krylov.hpp>  // ApplyFn / cg / bicgstab / gmres / richardson (solve_linear_matfree seam)
 #include <pops/numerics/elliptic/poisson/poisson_operator.hpp>  // apply_laplacian (shared 5-point matvec)
+#include <pops/numerics/elliptic/polar/polar_tensor_operator.hpp>  // metric-aware generated tensor solve
 #include <pops/runtime/config/runtime_params.hpp>  // RuntimeParams (compiled-Program runtime params, ADC-510)
-#include <pops/runtime/context/grid_context.hpp>   // GridContext (System aux seam)
-#include <pops/runtime/program/cache_manager.hpp>  // CacheManager (held-node value cache, ADC-458)
-#include <pops/runtime/system.hpp>                 // System (the runtime this facade forwards to)
+#include <pops/runtime/context/grid_context.hpp>    // GridContext (System aux seam)
+#include <pops/runtime/program/cache_manager.hpp>   // CacheManager (held-node value cache, ADC-458)
+#include <pops/runtime/program/clock_schedule.hpp>  // nested logical-clock cursor validation
+#include <pops/runtime/system.hpp>                  // System (the runtime this facade forwards to)
 
 /// @file
 /// @brief ProgramContext -- the C++-side facade a generated problem.so calls to run a compiled time
@@ -33,12 +42,12 @@
 ///   solve_fields_from_state(b, U) -> System::solve_fields_from_state(b, U) (aux at a stage state)
 ///   n_blocks()           -> System::n_blocks()
 ///   state(b)             -> System::block_state(b)             (the block's live MultiFab, zero-copy)
-///   rhs_into(b, U, R)    -> System::block_rhs_into(b, U, R)    (R <- -div F + S, Poisson frozen)
-///   neg_div_flux_default_into(b, U, R) -> System::block_neg_div_flux_into (R <- -div F, NO source)
+///   rhs_into(b, U, R, rate_id) -> System::block_rhs_into_at(...) (point-qualified -div F + S)
+///   neg_div_flux_default_into(b, U, R, rate_id) -> point-qualified -div F with no source
 ///   axpy(U, a, R)        -> pops::saxpy(U, a, R)                (U <- U + a R, device-dispatched)
 ///
 /// The Program composes the chain (e.g. Forward Euler = solve_fields(); for each block:
-/// rhs_into(b, U, R); axpy(U, dt, R)) and installs it via install(...). The .so NEVER touches
+/// rhs_into(b, U, R, rate_id); axpy(U, dt, R)) and installs it via install(...). The .so NEVER touches
 /// System::Impl / Array4 / fill_boundary / the elliptic solver / Kokkos / MPI / CFL / substeps.
 ///
 /// IDIOM: ProgramContext is a plain (non-template) class holding a System*. A generated .so receives
@@ -48,30 +57,6 @@
 namespace pops {
 namespace runtime {
 namespace program {
-
-/// Krylov method id for the ``ctx.solve_linear_matfree(...)`` seam (ADC-633). The codegen emits the id
-/// as a plain int; both ProgramContext (uniform) and AmrProgramContext (hierarchy) dispatch on it.
-enum LinearSolveMethod {
-  kLinearSolveCg = 0,          ///< pops::cg_solve (SPD, no preconditioner parameter)
-  kLinearSolveBicgstab = 1,    ///< pops::bicgstab_solve (the matrix-free default)
-  kLinearSolveGmres = 2,       ///< pops::gmres_solve (restarted; @p restart = basis size)
-  kLinearSolveRichardson = 3,  ///< pops::richardson_solve (omega = 1)
-};
-
-/// Assembly field-role id for the ``ctx.assembly_target(field, role)`` / ``assembly_source(field, role)``
-/// write/read-redirection seam (ADC-633 / ADC-637). The codegen emits the id by NAME; the uniform
-/// ProgramContext ignores it (identity, byte-preserving), the AMR ProgramContext routes the field to the
-/// matching per-level composite buffer of AmrCondensedElliptic on a refined hierarchy. Declared on the
-/// always-included facade so every generated .so sees it (the emitted condensed redirect names kEpsX..kPhi).
-enum AssemblyFieldRole {
-  kEpsX = 0,  ///< diagonal coefficient eps_x (A_op(0,0))
-  kEpsY = 1,  ///< diagonal coefficient eps_y (A_op(1,1))
-  kAxy = 2,   ///< cross coefficient a_xy (A_op(0,1))
-  kAyx = 3,   ///< cross coefficient a_yx (A_op(1,0))
-  kRhs = 4,   ///< condensed right-hand side
-  kFlux = 5,  ///< explicit flux F
-  kPhi = 6,   ///< solved potential phi^{n+theta} (READ role for the reconstruction)
-};
 
 class ProgramContext {
  public:
@@ -85,31 +70,116 @@ class ProgramContext {
     sys_->install_program_step(std::move(step));
   }
 
-  /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
-  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stored the map after
-  /// matching the .so's block names to the instantiated System blocks; an EMPTY map is the identity
-  /// (single-block / order-matching Program, or a ProgramContext built directly in a C++ test), so the
-  /// historical positional convention is byte-identical. Every seam method taking a block index routes
-  /// through here, so the System blocks may be added in ANY order vs the Program's P.state declarations.
-  int sys_block(int b) const {
-    const std::vector<int>& m = sys_->program_block_map();
-    return (b >= 0 && b < static_cast<int>(m.size())) ? m[static_cast<std::size_t>(b)] : b;
+  /// Start one generated Program body.  The native stepper supplies the accepted local dt; every
+  /// boundary evaluation in the body derives its physical time from this exact value and the
+  /// authored rational stage fraction.
+  void begin_step(double dt) const {
+    if (!std::isfinite(dt) || dt <= 0.0)
+      throw std::invalid_argument("Program boundary clock requires a finite positive dt");
+    current_dt_ = dt;
+    stage_time_ = amr::Rational(0, 1);
   }
 
-  void solve_fields() const {
+  /// Exact stage abscissa emitted for a rate evaluation. A flat hierarchy has no parent/child time
+  /// interpolation to update, but the shared generated body must retain and validate the same temporal
+  /// contract as its AMR entry point. This is therefore a validated semantic no-op, not a fallback.
+  void set_stage_time(std::int64_t numerator, std::int64_t denominator) const {
+    if (denominator <= 0 || numerator < 0 || numerator > denominator)
+      throw std::runtime_error("Program stage time is outside [0,1]");
+    stage_time_ = amr::Rational(numerator, denominator);
+  }
+
+  void configure_primary_clock(const std::string& clock) const {
+    clock_schedule_.configure_primary_clock(clock);
+    primary_clock_ = clock;
+  }
+  void declare_clock_relation(const std::string& parent, const std::string& child,
+                              int count) const {
+    clock_schedule_.declare_relation(parent, child, count);
+  }
+  bool schedule_domain_occurs(ScheduleDomainKind kind, const std::string& clock,
+                              const std::string& stage_identity, int level) const {
+    return clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step())
+        .has_value();
+  }
+  bool schedule_is_due(int node_id, int every_n, ScheduleDomainKind kind, const std::string& clock,
+                       const std::string& stage_identity, int level) const {
+    if (node_id < 0 || every_n <= 0)
+      throw std::runtime_error("Program schedule requires a valid node and positive period");
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
+    return coordinate && coordinate->value % every_n == 0;
+  }
+  bool schedule_at_start(ScheduleDomainKind kind, const std::string& clock,
+                         const std::string& stage_identity, int level) const {
+    const auto coordinate =
+        clock_schedule_.coordinate(kind, clock, stage_identity, level, -1, macro_step());
+    return coordinate && coordinate->value == 0;
+  }
+
+  /// Record exactly one decision for a scheduled Program node. The due expression is evaluated by
+  /// the typed domain seam above; this wrapper authenticates the node id and forwards the result to
+  /// the shared Profiler, which distinguishes real cache-backed policies from skip/zero/error.
+  bool schedule_decision(int node_id, bool due, bool cache_backed) const {
+    if (node_id < 0)
+      throw std::runtime_error("Program schedule decision requires a valid node");
+    return sys_->profiler().schedule_decision(due, cache_backed);
+  }
+
+  ClockScheduleState::SubcycleScope subcycle_scope(const std::string& parent,
+                                                   const std::string& child, int count) const {
+    return clock_schedule_.subcycle(parent, child, count);
+  }
+  void synchronize_sample_and_hold(const std::string& source, const std::string& target, int step,
+                                   Real offset) const {
+    clock_schedule_.synchronize_sample_and_hold(source, target, step, static_cast<double>(offset));
+  }
+
+  /// Translate a PROGRAM block index @p b (P.state declaration order, what the codegen emits) to the
+  /// SYSTEM block index it names (Spec 3 criterion 23, ADC-457). install_program stores the explicit
+  /// name-matched map before the generated entry point constructs this context. Direct C++ users must
+  /// install the same explicit map themselves: an empty, incomplete or invalid map is never interpreted
+  /// positionally. Every seam method taking a block index routes through here, so the System blocks may
+  /// be added in ANY order vs the Program's P.state declarations.
+  int sys_block(int b) const {
+    const std::vector<int>& m = sys_->program_block_map();
+    if (m.empty())
+      throw block_map_error_(
+          "ProgramContext::sys_block: no explicit program-to-system block map is installed; "
+          "positional block identity is not supported");
+    if (b < 0 || b >= static_cast<int>(m.size()))
+      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
+                             " is outside the explicit block map [0, " + std::to_string(m.size()) +
+                             ")");
+    const int mapped = m[static_cast<std::size_t>(b)];
+    const int count = sys_->n_blocks();
+    if (mapped < 0 || mapped >= count)
+      throw block_map_error_("ProgramContext::sys_block: program block index " + std::to_string(b) +
+                             " maps to invalid system block index " + std::to_string(mapped) +
+                             " for a System with " + std::to_string(count) + " blocks");
+    return mapped;
+  }
+
+  SolveReport solve_fields() const {
     // No count_kernel() here: this forwards to the PUBLIC System::solve_fields() -> Impl::solve_fields(),
     // which already counts the kernel. (The from_state/from_blocks/named seams below DO count, because
     // their Impl paths do not.) Counting here too would double-count this one op.
-    sys_->solve_fields();
+    return sys_->solve_fields();
   }
   /// Per-stage field solve (ADC-409): re-solve the elliptic fields and re-fill the shared aux from
   /// block @p b's STAGE state @p u_stage (not its live state), so a field-coupled multi-stage
   /// Program's stage k reads phi solved from stage k's own state. Forwards to
   /// System::solve_fields_from_state. With b = 0 and u_stage = U^n (the first stage) it matches
   /// solve_fields(); the codegen lowers every solve_fields op to this, passing the stage's state var.
-  void solve_fields_from_state(int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(int b, MultiFab& u_stage) const {
     count_kernel();
-    sys_->solve_fields_from_state(sys_block(b), u_stage);
+    return sys_->solve_fields_from_state(sys_block(b), u_stage);
+  }
+  SolveReport solve_fields_from_state_at(const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                         const std::string& provider_slot, int b,
+                                         MultiFab& u_stage) const {
+    count_kernel();
+    return sys_->solve_fields_from_state_at(point, provider_slot, sys_block(b), u_stage);
   }
   /// Named multi-elliptic field solve (ADC-428): re-solve the SECOND elliptic field @p field from block
   /// @p b's stage state @p u_stage and write its phi (+ centered grad) into the field's OWN aux
@@ -117,9 +187,9 @@ class ProgramContext {
   /// System::solve_fields_from_state(field, b, u_stage). The codegen lowers
   /// P.solve_fields(field=name, state=U) to this; a default (unnamed) solve_fields keeps the overload
   /// above, byte-identical.
-  void solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
+  SolveReport solve_fields_from_state(const std::string& field, int b, MultiFab& u_stage) const {
     count_kernel();
-    sys_->solve_fields_from_state(field, sys_block(b), u_stage);
+    return sys_->solve_fields_from_state(field, sys_block(b), u_stage);
   }
   /// Coupled multi-block field solve (Spec 3 criterion 24, ADC-457): re-solve the elliptic fields and
   /// re-fill the shared aux from the SIMULTANEOUS stage states of MULTIPLE blocks at once -- the system
@@ -129,33 +199,175 @@ class ProgramContext {
   /// lowers P.solve_fields_from_blocks([U0, U1, ...]) to this, building the per-block pointer vector
   /// from the listed stage-state vars (their declaration order == the block index order, asserted at
   /// emit time). This is the multi-target counterpart of solve_fields_from_state.
-  void solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
+  SolveReport solve_fields_from_blocks(const std::vector<const MultiFab*>& u_stages) const {
     count_kernel();
     // The codegen builds @p u_stages indexed BY PROGRAM block index (a stage state slotted at its own
     // Program index, the rest nullptr). The System solver expects it indexed by SYSTEM block index, so
     // re-slot each Program entry p at its name-matched System index sys_block(p) (Spec 3 criterion 23,
-    // ADC-457). Identity map -> the vector is copied unchanged (order-matching Program, byte-identical).
+    // ADC-457). Even an order-matching Program carries an explicit identity map.
     const std::vector<int>& m = sys_->program_block_map();
-    if (m.empty()) {
-      sys_->solve_fields_from_blocks(u_stages);
-      return;
-    }
+    if (m.empty())
+      throw block_map_error_(
+          "ProgramContext::solve_fields_from_blocks: no explicit program-to-system block map is "
+          "installed; positional block identity is not supported");
+    if (u_stages.size() < m.size())
+      throw block_map_error_("ProgramContext::solve_fields_from_blocks: received " +
+                             std::to_string(u_stages.size()) +
+                             " Program stage slots for an explicit block map with " +
+                             std::to_string(m.size()) + " entries");
     std::vector<const MultiFab*> remapped(static_cast<std::size_t>(sys_->n_blocks()), nullptr);
     // Iterate the PROGRAM block indices [0, m.size()) -- NOT u_stages.size(), which is the larger
     // SYSTEM block count. The codegen sizes u_stages to ctx.n_blocks() but only fills Program slots
     // [0, n_program_blocks); when the System has MORE blocks than the Program declares (a subset
     // install), walking the System-sized range would re-map the nullptr padding through the identity
     // fallthrough and clobber real entries. m[p] is Program block p's System index (install-validated
-    // in range); the unlisted System slots stay nullptr = their live state.
-    for (std::size_t p = 0; p < m.size(); ++p)
-      remapped[static_cast<std::size_t>(m[p])] = u_stages[p];
-    sys_->solve_fields_from_blocks(remapped);
+    // in range); the unlisted System slots stay nullptr = their live state. sys_block validates every
+    // mapped value before it is used as a vector index.
+    for (std::size_t p = 0; p < m.size(); ++p) {
+      const int mapped = sys_block(static_cast<int>(p));
+      remapped[static_cast<std::size_t>(mapped)] = u_stages[p];
+    }
+    return sys_->solve_fields_from_blocks(remapped);
+  }
+
+  SolveReport solve_fields_from_blocks(const std::string& field,
+                                       const std::vector<const MultiFab*>& u_stages) const {
+    count_kernel();
+    const std::vector<int>& map = sys_->program_block_map();
+    if (u_stages.size() != map.size())
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): stage vector size mismatch");
+    std::vector<MultiFab*> live;
+    std::vector<MultiFab> published;
+    live.reserve(u_stages.size());
+    published.reserve(u_stages.size());
+    int representative = -1;
+    for (std::size_t p = 0; p < u_stages.size(); ++p) {
+      if (u_stages[p] == nullptr)
+        continue;
+      const int system_block = sys_block(static_cast<int>(p));
+      MultiFab& state_value = sys_->block_state(system_block);
+      if (representative < 0)
+        representative = system_block;
+      live.push_back(&state_value);
+      published.push_back(state_value);
+      state_value = *u_stages[p];
+    }
+    if (representative < 0)
+      throw std::runtime_error(
+          "ProgramContext::solve_fields_from_blocks(field): no stage override was supplied");
+    auto restore = [&]() {
+      for (std::size_t i = 0; i < live.size(); ++i)
+        *live[i] = std::move(published[i]);
+    };
+    try {
+      const SolveReport report =
+          sys_->solve_fields_from_state(field, representative, sys_->block_state(representative));
+      restore();
+      return report;
+    } catch (...) {
+      restore();
+      throw;
+    }
   }
   int n_blocks() const { return sys_->n_blocks(); }
+  Real physical_time() const { return static_cast<Real>(sys_->time()); }
+  void set_field_logical_timepoint(const std::string& field,
+                                   const FieldLogicalTimePoint& point) const {
+    sys_->set_field_logical_timepoint(field, point);
+  }
+  void set_field_boundary_parameters(const std::string& field,
+                                     const std::vector<double>& parameters) const {
+    sys_->set_field_boundary_parameters(field, parameters);
+  }
+  void set_field_boundary_kernel(const std::string& field,
+                                 const CompiledFieldBoundaryKernel& kernel) const {
+    sys_->set_field_boundary_kernel(field, kernel);
+  }
   MultiFab& state(int b) const { return sys_->block_state(sys_block(b)); }
-  void rhs_into(int b, MultiFab& u, MultiFab& r) const {
+  /// Evaluate one authored rate at its exact, stable node identity.  There is deliberately no
+  /// sentinel/default identity: shared-interface assembly and boundary callbacks authenticate this
+  /// value as part of BoundaryEvaluationPoint, so an anonymous rate would be temporally ambiguous.
+  void rhs_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
-    sys_->block_rhs_into(sys_block(b), u, r);
+    sys_->block_rhs_into_at(boundary_point_(rate_id), sys_block(b), u, r);
+  }
+  runtime::multiblock::BoundaryEvaluationPoint boundary_evaluation_point(int stage_id) const {
+    return boundary_point_(stage_id);
+  }
+  bool has_boundary_linearization(int b) const {
+    return sys_->block_has_boundary_linearization(sys_block(b));
+  }
+  void rhs_core_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                        MultiFab& u, MultiFab& r, bool flux_only) const {
+    count_kernel();
+    sys_->block_rhs_core_into_at(point, sys_block(b), u, r, flux_only);
+  }
+  void boundary_residual_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                                 MultiFab& u, MultiFab& c) const {
+    count_kernel();
+    sys_->block_boundary_residual_into_at(point, sys_block(b), u, c);
+  }
+  void boundary_jvp_into_at(const runtime::multiblock::BoundaryEvaluationPoint& point, int b,
+                            MultiFab& u, const MultiFab& v, MultiFab& j) const {
+    count_kernel();
+    sys_->block_boundary_jvp_into_at(point, sys_block(b), u, v, j);
+  }
+
+  struct RhsGroupRequest {
+    RhsGroupRequest(int block_value, MultiFab* state_value, MultiFab* rhs_value, int rate_id_value,
+                    int flux_only_value)
+        : block(block_value),
+          state(state_value),
+          rhs(rhs_value),
+          rate_id(rate_id_value),
+          flux_only(flux_only_value) {}
+
+    int block;
+    MultiFab* state;
+    MultiFab* rhs;
+    int rate_id;
+    int flux_only;
+  };
+
+  /// Simultaneous multi-block rate evaluation.  @p group_id is the exact authored identity of this
+  /// atomic evaluation and is deliberately distinct from every request's rate-node identity.  The
+  /// generated Program emits one group only for RHS nodes authenticated at the same exact StagePoint;
+  /// System then executes each installed interface once before any group result can be consumed.
+  void rhs_group(int group_id, std::initializer_list<RhsGroupRequest> requests) const {
+    require_group_identity_(group_id);
+    if (requests.size() == 0)
+      throw std::invalid_argument("Program RHS group cannot be empty");
+    std::vector<int> rate_ids;
+    rate_ids.reserve(requests.size());
+    for (const auto& request : requests) {
+      require_rate_identity_(request.rate_id);
+      if (request.rate_id == group_id ||
+          std::find(rate_ids.begin(), rate_ids.end(), request.rate_id) != rate_ids.end())
+        throw std::invalid_argument(
+            "Program RHS group and member rate identities must be distinct");
+      if (request.state == nullptr || request.rhs == nullptr ||
+          (request.flux_only != 0 && request.flux_only != 1))
+        throw std::invalid_argument("Program RHS group contains an invalid request");
+      rate_ids.push_back(request.rate_id);
+    }
+    std::vector<int> blocks;
+    std::vector<MultiFab*> states;
+    std::vector<MultiFab*> rhs;
+    std::vector<int> flux_only;
+    blocks.reserve(requests.size());
+    states.reserve(requests.size());
+    rhs.reserve(requests.size());
+    flux_only.reserve(requests.size());
+    for (const auto& request : requests) {
+      count_kernel();
+      blocks.push_back(sys_block(request.block));
+      states.push_back(request.state);
+      rhs.push_back(request.rhs);
+      flux_only.push_back(request.flux_only);
+    }
+    sys_->block_rhs_group(boundary_point_(group_id), blocks, states, rhs, flux_only);
   }
 
   /// r <- -div F(u) for block @p b -- the SAME flux divergence as @ref rhs_into but WITHOUT the model's
@@ -165,9 +377,10 @@ class ProgramContext {
   /// incl. the empty list) to this, so a Lie/Strang split assembles "flux but no source" without the
   /// default source leaking in (epic ADC-399 / ADC-425, spec criterion 17). Header-inline forwarder,
   /// like @ref rhs_into.
-  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r) const {
+  void neg_div_flux_default_into(int b, MultiFab& u, MultiFab& r, int rate_id) const {
+    require_rate_identity_(rate_id);
     count_kernel();
-    sys_->block_neg_div_flux_into(sys_block(b), u, r);
+    sys_->block_neg_div_flux_into_at(boundary_point_(rate_id), sys_block(b), u, r);
   }
 
   /// r <- S(u, aux) for block @p b -- the model's default/composite SOURCE only, WITHOUT the flux
@@ -215,13 +428,23 @@ class ProgramContext {
   /// allocated, byte-for-byte as before. The @p role tag (a field id defined by the assembly module) is
   /// ignored here; it exists so the AMR ProgramContext can, on a refined hierarchy, redirect the write
   /// to a per-level composite buffer instead. Kept trivial + inline so the uniform .so is unchanged.
-  MultiFab& assembly_target(MultiFab& field, int /*role*/) const { return field; }
+  MultiFab& assembly_target(MultiFab& field, int role) const {
+    validate_assembly_write_role(role, "ProgramContext::assembly_target");
+    if (sys_->program_is_polar() && role >= 0 && role < 4)
+      polar_coeffs_[static_cast<std::size_t>(role)] = &field;
+    return field;
+  }
 
   /// The MultiFab a per-level reconstruction should READ its solved field from (ADC-633). Identity on
   /// the uniform System (the field passed is the level-0 solution the emitted solve wrote); the AMR
   /// ProgramContext redirects the READ to the current level's published composite field on a refined
   /// hierarchy. Trivial + inline so the uniform .so is byte-for-byte unchanged.
-  MultiFab& assembly_source(MultiFab& field, int /*role*/) const { return field; }
+  MultiFab& assembly_source(MultiFab& field, int role) const {
+    validate_assembly_read_role(role, "ProgramContext::assembly_source");
+    return field;
+  }
+  /// Uniform counterpart of AmrProgramContext::linear_solution: one grid has one solve field.
+  MultiFab& linear_solution(MultiFab& field) const { return field; }
 
   /// Solve the matrix-free linear system A(phi) = rhs of a compiled Program (ADC-633). On the uniform
   /// System this dispatches by @p method to the SAME matrix-free Krylov call the codegen used to emit
@@ -230,25 +453,57 @@ class ProgramContext {
   /// OVERRIDES this method to route a refined hierarchy through its composite elliptic. @p method:
   /// 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson (LinearSolveMethod). @p precond is the
   /// preconditioner ApplyFn (empty = unpreconditioned); @p restart is the GMRES basis size (ignored by
-  /// the others). The KrylovResult is discarded (the trip count is a C++-side detail, invisible to the
-  /// IR), matching the old inline emission.
-  void solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
-                            const ApplyFn& precond, int method, Real tol, int max_iter,
-                            int restart) const {
-    (void)restart;
+  /// the others). The SolveReport is returned to generated code, which must consume it before
+  /// publishing @p sol as a solved value.
+  SolveReport solve_linear_matfree(MultiFab& sol, const MultiFab& rhs, const ApplyFn& apply,
+                                   const ApplyFn& precond, int method, Real tol, int max_iter,
+                                   int restart, Real omega) const {
+    validate_linear_solve_method(method, "ProgramContext::solve_linear_matfree");
+    if (sys_->program_is_polar()) {
+      // The generated coefficient assembly registered the four tensor fields through
+      // assembly_target.  Solve the same authored mathematical operator with the generic polar metric
+      // backend; no source-stage/physics vocabulary enters this dispatch.
+      for (std::size_t c = 0; c < polar_coeffs_.size(); ++c)
+        if (!polar_coeffs_[c]) {
+          SolveReport report;
+          report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+          return report;
+        }
+      if (method != kLinearSolveBicgstab) {
+        SolveReport report;
+        report.mark_failed(SolveStatus::kCapabilityFailure);
+        return report;
+      }
+      if (!polar_tensor_)
+        polar_tensor_ = std::make_shared<PolarTensorKrylovSolver>(
+            sys_->program_polar_geometry(), sol.box_array(), sys_->grid_context().bc,
+            PolarPrecond::RadialLine);
+      polar_tensor_->set_coefficients(polar_coeffs_[0], polar_coeffs_[1], polar_coeffs_[2],
+                                      polar_coeffs_[3]);
+      // The Program authors -div(A grad phi)=rhs. PolarTensorKrylovSolver owns the equivalent
+      // +div(A grad phi) operator, hence its RHS is the exact negation.  Keep the authored initial
+      // guess and do not publish a failed partial iterate.
+      pops::lincomb(polar_tensor_->phi(), Real(1), sol, Real(0), sol);
+      pops::lincomb(polar_tensor_->rhs(), Real(-1), rhs, Real(0), rhs);
+      const SolveReport report = polar_tensor_->solve(tol, max_iter);
+      if (report.solved()) {
+        pops::lincomb(sol, Real(1), polar_tensor_->phi(), Real(0), polar_tensor_->phi());
+      }
+      return report;
+    }
     switch (method) {
       case kLinearSolveCg:
-        (void)pops::cg_solve(apply, sol, rhs, tol, max_iter);
-        break;
+        return pops::cg_solve(apply, sol, rhs, tol, max_iter);
       case kLinearSolveGmres:
-        (void)pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
-        break;
+        return pops::gmres_solve(apply, precond, sol, rhs, tol, max_iter, restart);
       case kLinearSolveRichardson:
-        (void)pops::richardson_solve(apply, sol, rhs, static_cast<Real>(1), tol, max_iter);
-        break;
-      default:  // kLinearSolveBicgstab
-        (void)pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
-        break;
+        return pops::richardson_solve(apply, sol, rhs, omega, tol, max_iter);
+      case kLinearSolveBicgstab:
+        return pops::bicgstab_solve(apply, precond, sol, rhs, tol, max_iter);
+      default:
+        SolveReport report;
+        report.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+        return report;  // validated above; keeps exhaustive behavior explicit for defensive builds
     }
   }
 
@@ -265,6 +520,15 @@ class ProgramContext {
   /// returns a temporary, so a reference to its @c geom member would dangle. The metric the matrix-free
   /// Laplacian / gradient read.
   Geometry geom() const { return sys_->grid_context().geom; }
+  /// Metric facts captured by generated kernels before entering device lambdas.  Cartesian and polar
+  /// Programs share one emitted body; only these geometry-level values select the coordinate metric.
+  bool is_polar_geometry() const { return sys_->program_is_polar(); }
+  Real radial_origin() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().r_min : Real(0);
+  }
+  Real radial_spacing() const {
+    return sys_->program_is_polar() ? sys_->program_polar_geometry().dr() : geom().dx();
+  }
 
   /// out = Lap(in): fill @p in's ghosts (transport BC, periodic by default) then apply the SHARED
   /// discrete 5-point Laplacian (pops::apply_laplacian, all optional coefficients null -> the bare
@@ -276,7 +540,18 @@ class ProgramContext {
     count_kernel();
     const GridContext gc = sys_->grid_context();
     fill_ghosts(in, gc.geom.domain, gc.bc);
-    apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
+    if (sys_->program_is_polar()) {
+      if (!polar_unit_rr_) {
+        polar_unit_rr_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_tt_ = std::make_shared<MultiFab>(in.box_array(), in.dmap(), 1, 1);
+        polar_unit_rr_->set_val(Real(1));
+        polar_unit_tt_->set_val(Real(1));
+      }
+      apply_polar_tensor(in, sys_->program_polar_geometry(), out, polar_unit_rr_.get(),
+                         polar_unit_tt_.get(), nullptr, nullptr);
+    } else {
+      apply_laplacian(in, gc.geom, out);  // all optional pointers null -> bare 5-point Laplacian
+    }
   }
 
   /// out = grad(@p phi) by centered differences: out(.,0) = d phi/dx, out(.,1) = d phi/dy (@p out
@@ -358,6 +633,10 @@ class ProgramContext {
     count_kernel();
     pops::saxpy(u, a, r);
   }
+  void axpy(MultiFab& u, Real a, const MultiFab& r, Real /*dt*/,
+            std::initializer_list<ExactCoefficientTerm> /*exact*/) const {
+    axpy(u, a, r);
+  }
 
   /// z <- a x + b y over the valid cells (assignment, not accumulation; z may alias x or y).
   /// Forwards to pops::lincomb. The codegen uses it for the committed stage: the block state becomes
@@ -365,6 +644,32 @@ class ProgramContext {
   void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y) const {
     count_kernel();
     pops::lincomb(z, a, x, b, y);
+  }
+  void lincomb(MultiFab& z, Real a, const MultiFab& x, Real b, const MultiFab& y, Real /*dt*/,
+               std::initializer_list<ExactCoefficientTerm> /*exact_a*/,
+               std::initializer_list<ExactCoefficientTerm> /*exact_b*/) const {
+    lincomb(z, a, x, b, y);
+  }
+
+  /// Publish a complete multi-state commit group only after every target/source pair validates.
+  /// The enclosing System step snapshot is the exception-safety boundary: an allocation/copy failure
+  /// in this final phase restores the entire accepted group before the exception escapes.
+  void commit_many(std::initializer_list<std::pair<MultiFab*, const MultiFab*>> commits) const {
+    std::vector<MultiFab*> targets;
+    targets.reserve(commits.size());
+    for (const auto& [target, source] : commits) {
+      if (target == nullptr || source == nullptr)
+        throw std::invalid_argument("ProgramContext::commit_many received a null state");
+      if (std::find(targets.begin(), targets.end(), target) != targets.end())
+        throw std::invalid_argument("ProgramContext::commit_many received a duplicate target");
+      if (target->ncomp() != source->ncomp() ||
+          target->box_array().boxes() != source->box_array().boxes())
+        throw std::invalid_argument("ProgramContext::commit_many state layout mismatch");
+      targets.push_back(target);
+    }
+    for (const auto& [target, source] : commits)
+      if (target != source)
+        lincomb(*target, Real(0), *target, Real(1), *source);
   }
 
   /// Register (idempotent) the history @p name with maximum lag @p lag, allocating the ring buffer
@@ -376,6 +681,13 @@ class ProgramContext {
   /// Forwards to System::register_history. A read-only counterpart of @ref history.
   void register_history(const std::string& name, int lag, int ncomp = -1) const {
     sys_->register_history(name, lag, ncomp);
+  }
+  void register_history(const std::string& name, int lag, int ncomp, int owner,
+                        const std::string& state_identity, const std::string& space_identity,
+                        const std::string& clock_identity,
+                        const std::string& interpolation_identity) const {
+    sys_->register_history(name, lag, ncomp, owner < 0 ? -1 : sys_block(owner), state_identity,
+                           space_identity, clock_identity, interpolation_identity);
   }
 
   /// The history slot @p lag macro-steps back (the SYSTEM-OWNED ring buffer, ADC-406a): lag 1 = the
@@ -389,6 +701,13 @@ class ProgramContext {
     sys_->register_history(name, lag);  // idempotent: allocate the ring on first use
     return sys_->read_history(name, lag);
   }
+  /// Owner-qualified mirror used by sources that also contain an AMR entry point.  @p owner is a
+  /// Program block index (never a component index); resolving it here preserves the same topology
+  /// guard as the AMR context before delegating to the System-owned whole-field ring.
+  MultiFab& history(const std::string& name, int lag, int owner) const {
+    (void)sys_block(owner);
+    return history(name, lag);
+  }
 
   /// ZERO COLD-START history read (ADC-427): like @ref history, but a read BEFORE the first store
   /// returns the zero-filled slot instead of failing loud. A read-first carry (the cross-step
@@ -400,8 +719,13 @@ class ProgramContext {
   MultiFab& history_zero_start(const std::string& name, int lag, int ncomp = -1) const {
     sys_->register_history(name, lag, ncomp);  // idempotent; ncomp binds at the first register
     if (!sys_->history_initialized(name))
-      sys_->set_history_initialized(name, true);  // the zero-filled slots ARE the declared cold start
+      sys_->set_history_initialized(name,
+                                    true);  // the zero-filled slots ARE the declared cold start
     return sys_->read_history(name, lag);
+  }
+  MultiFab& history_zero_start(const std::string& name, int lag, int ncomp, int owner) const {
+    (void)sys_block(owner);
+    return history_zero_start(name, lag, ncomp);
   }
 
   /// Store @p value into the CURRENT slot of history @p name (ADC-406a). Registers the ring on first
@@ -413,11 +737,18 @@ class ProgramContext {
     sys_->register_history(name, 1);  // idempotent: at least a current slot exists before the store
     sys_->store_history(name, value);
   }
+  void store_history(const std::string& name, const MultiFab& value, int owner) const {
+    (void)sys_block(owner);
+    store_history(name, value);
+  }
 
   /// Shift every history ring one macro-step (slot k <- slot k-1). Forwards to
   /// System::rotate_histories. The codegen emits ``ctx.rotate_histories()`` as the LAST statement of
   /// the step body (after the commit), so the next step reads lag k as the value k stores ago.
   void rotate_histories() const { sys_->rotate_histories(); }
+  void rotate_histories(const std::string& clock_identity) const {
+    sys_->rotate_histories(clock_identity);
+  }
 
   /// @name Reductions (spec op 16)
   /// COLLECTIVE all_reduce over one component of a field (sum / signed max / signed min). The codegen
@@ -429,7 +760,9 @@ class ProgramContext {
   Real max_component(const MultiFab& u, int comp) const { return pops::reduce_max(u, comp); }
   Real min_component(const MultiFab& u, int comp) const { return pops::reduce_min(u, comp); }
   /// L1 (absolute-sum) reduction Sum_cells |u(.,.,comp)| over one component -- P.norm1 / Norm(L1).
-  Real abs_sum_component(const MultiFab& u, int comp) const { return pops::reduce_abs_sum(u, comp); }
+  Real abs_sum_component(const MultiFab& u, int comp) const {
+    return pops::reduce_abs_sum(u, comp);
+  }
   Real sum(const MultiFab& u) const { return pops::reduce_sum(u, 0); }
   Real max(const MultiFab& u) const { return pops::reduce_max(u, 0); }
   Real min(const MultiFab& u) const { return pops::reduce_min(u, 0); }
@@ -447,7 +780,7 @@ class ProgramContext {
   /// Apply block @p b's post-step positivity projection to @p u in place: U <- project(U, aux) over the
   /// valid cells, the SAME Zhang-Shu / floor projection the native per-step path runs (ADC-177, spec
   /// op 21). REUSES the block's own projection closure (set at add_block time); a block WITHOUT a
-  /// projection is a no-op. Forwards to System::block_project -- it reimplements no positivity.
+  /// projection is rejected. Forwards to System::block_project -- it reimplements no positivity.
   void apply_projection(int b, MultiFab& u) const { sys_->block_project(sys_block(b), u); }
 
   /// Store a runtime Scalar @p value into the System diagnostics map under @p name (spec op 23),
@@ -537,8 +870,9 @@ class ProgramContext {
   /// installed Program, keyed by the Program node id) so the checkpoint can reach it (Spec 3 section
   /// 30); every ProgramContext copy forwards to that single manager via sys_->program_cache(). The
   /// codegen wraps a held solve_fields in
-  /// ``if (cache_should_update(id, N)) { solve_fields_from_state(...); cache_store_aux(id); }
-  ///  else { cache_restore_aux(id); }``. The runtime cadence/checkpoint is exercised in a compiled
+  /// ``if (schedule_decision(id, schedule_is_due(...), true)) {
+  ///  solve_fields_from_state(...); cache_store_aux(id); } else { cache_restore_aux(id); }``.
+  /// The runtime cadence/checkpoint is exercised in a compiled
   /// .so step loop (validated on ROMEO; not buildable on a host-only Mac).
   /// @{
   /// True if node @p node_id is due to recompute at the current macro step: cold start (never stored),
@@ -604,6 +938,44 @@ class ProgramContext {
   /// @}
 
  private:
+  static void require_rate_identity_(int rate_id) {
+    if (rate_id < 0)
+      throw std::invalid_argument(
+          "Program rate evaluation requires a non-negative authored node identity");
+  }
+
+  static void require_group_identity_(int group_id) {
+    if (group_id < 0)
+      throw std::invalid_argument(
+          "Program RHS group requires a non-negative authored group identity");
+  }
+
+  runtime::multiblock::BoundaryEvaluationPoint boundary_point_(int stage) const {
+    require_rate_identity_(stage);
+    if (primary_clock_.empty() || !std::isfinite(current_dt_) || current_dt_ <= 0.0)
+      throw std::runtime_error("Program boundary evaluation has no prepared clock/dt");
+    return {primary_clock_,
+            static_cast<std::int64_t>(macro_step()),
+            0,
+            0,
+            stage,
+            stage_time_,
+            current_dt_,
+            static_cast<double>(physical_time()) + stage_time_.value() * current_dt_};
+  }
+
+  static std::runtime_error block_map_error_(std::string message) {
+    return std::runtime_error(std::move(message));
+  }
+
+  mutable ClockScheduleState clock_schedule_;
+  mutable std::string primary_clock_;
+  mutable amr::Rational stage_time_{0, 1};
+  mutable double current_dt_ = 0.0;
+  mutable std::array<MultiFab*, 4> polar_coeffs_{{nullptr, nullptr, nullptr, nullptr}};
+  mutable std::shared_ptr<PolarTensorKrylovSolver> polar_tensor_;
+  mutable std::shared_ptr<MultiFab> polar_unit_rr_;
+  mutable std::shared_ptr<MultiFab> polar_unit_tt_;
   System* sys_;
 };
 

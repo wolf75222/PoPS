@@ -14,9 +14,8 @@
 // it. The two runtimes use DIFFERENT SUBSETS of the fields, documented per member below:
 //   - step_ / substeps_ / stride_ / installed_hash_ / block_map_ / block_params_ / diagnostics_ /
 //     profiler_ : used by BOTH runtimes (identical semantics).
-//   - dt_bound_ : UNIFORM ONLY. The uniform SystemStepper tightens the CFL dt with the Program's
-//     exported dt bound; the AMR runtime has no dt-bound seam, so this closure stays EMPTY on AMR
-//     (documented divergence, not a second subsystem).
+//   - dt_bound_ : used by BOTH runtimes. Each target loader wraps the generated scalar IR in its
+//     concrete context; both CFL routes tighten the native bound before running the Program.
 //   - hist_ / cache_ : UNIFORM ONLY today. The uniform System serializes the multistep history rings
 //     and the held-node scheduler cache through the checkpoint; the AMR runtime defers both (its
 //     history / cache seams are not wired), so these stay EMPTY on AMR. Keeping the storage here (one
@@ -59,6 +58,11 @@ struct HistoryManager {
   std::map<std::string, std::vector<MultiFab>> histories;  // name -> ring (newest at [0])
   std::map<std::string, int> depth;                        // name -> ring length (max lag + 1)
   std::map<std::string, bool> initialized;                 // name -> stored at least once
+  std::map<std::string, int> owner;                        // runtime block index (-1 legacy)
+  std::map<std::string, std::string> state_identity;
+  std::map<std::string, std::string> space_identity;
+  std::map<std::string, std::string> clock_identity;
+  std::map<std::string, std::string> interpolation_identity;
   /// PER-SLOT dt (ADC-626). slot_dt[name][s] = the macro-step dt whose commit produced the value now
   /// in slot s (slot 0 = newest). Filled by the runtime's store_history (which knows the current dt via
   /// ProgramRuntimeState::last_dt_) and rotated ALONGSIDE the ring, so a selective-persistence restart
@@ -75,6 +79,24 @@ struct HistoryManager {
   /// the ring it annotates.
   void rotate() {
     for (auto& [name, ring] : histories) {
+      for (std::size_t k = ring.size(); k-- > 1;)
+        std::swap(ring[k], ring[k - 1]);
+      auto dt_it = slot_dt.find(name);
+      if (dt_it != slot_dt.end()) {
+        std::vector<Real>& dts = dt_it->second;
+        for (std::size_t k = dts.size(); k-- > 1;)
+          std::swap(dts[k], dts[k - 1]);
+      }
+    }
+  }
+
+  /// Rotate only rings owned by one qualified logical clock. Generated multirate Programs use this
+  /// overload; the unqualified rotate above remains the internal legacy seam.
+  void rotate(const std::string& clock) {
+    for (auto& [name, ring] : histories) {
+      const auto qualified = clock_identity.find(name);
+      if (qualified == clock_identity.end() || qualified->second != clock)
+        continue;
       for (std::size_t k = ring.size(); k-- > 1;)
         std::swap(ring[k], ring[k - 1]);
       auto dt_it = slot_dt.find(name);
@@ -108,10 +130,10 @@ struct ProgramRuntimeState {
   // --- fields read by the stepper (the ONLY Program state the stepper sees) -------------------------
   /// Installed macro-step body (ADC-399); empty -> the historical / native step path.
   std::function<void(double)> step_;
-  /// OPTIONAL compiled-Program dt bound (ADC-417), UNIFORM ONLY. When a generated .so exports one, the
-  /// uniform install stores a closure here and SystemStepper::step_cfl tightens dt to
-  /// min(native CFL, program bound). EMPTY on the AMR runtime (no dt-bound seam) and when no Program
-  /// exports a bound -> the native CFL is used UNCHANGED (documented Uniform/AMR divergence).
+  /// OPTIONAL compiled-Program dt bound (ADC-417). The target-specific loader stores a closure here
+  /// over ProgramContext (uniform) or AmrProgramContext (AMR); step_cfl tightens dt to
+  /// min(native CFL, program bound). EMPTY when no Program exports a bound, so the native CFL is used
+  /// unchanged. The closure owns no Python callback and executes entirely in the compiled module.
   std::function<Real(Real)> dt_bound_;
   /// GLOBAL macro-step cadence (ADC-411): substeps n runs step_ n times over eff_dt/n; stride M runs
   /// the program once per M macro-steps with eff_dt = M*dt (hold-then-catch-up). Default 1/1 ->
@@ -122,7 +144,7 @@ struct ProgramRuntimeState {
   /// program_.step_(h) call (run_program_cadence, shared by step() and step_cfl()), so the runtime's
   /// store_history can tag the slot it produces with the dt that produced it (HistoryManager::slot_dt).
   /// A plain data field only assigned by the template (never a new method it instantiates) -> the mock
-  /// System (test_strang_splitting) compiles unchanged. Default 0 -> no program stepped yet.
+  /// System. Default 0 -> no program stepped yet.
   Real last_dt_ = Real(0);
 
   // --- checkpoint / binding identity ---------------------------------------------------------------
@@ -202,8 +224,8 @@ struct ProgramRuntimeState {
     if (count > kMaxRuntimeParams)
       throw std::runtime_error(
           "install_program: program block " + std::to_string(prog_block) + " declares " +
-          std::to_string(count) + " runtime parameters > kMaxRuntimeParams=" +
-          std::to_string(kMaxRuntimeParams) +
+          std::to_string(count) +
+          " runtime parameters > kMaxRuntimeParams=" + std::to_string(kMaxRuntimeParams) +
           " (include/pops/runtime/config/runtime_params.hpp); the fixed-size device carrier "
           "RuntimeParams cannot hold them. Regenerate the problem.so with the current headers.");
     RuntimeParams rp;

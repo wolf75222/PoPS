@@ -1,31 +1,49 @@
-"""pops.mesh -- typed mesh / geometry / layout / AMR descriptors (Spec 5 sec.5.9-5.11).
+"""Typed mesh descriptors and mesh-local implementation contracts.
 
 ``pops.mesh`` describes the discrete domain and the objects the runtime materialises. It
-contains no physics and no solver. Spec 5 lifts the mesh objects out of
-``pops.runtime.mesh`` into this package and adds the typed layout / AMR / geometry surface:
+contains no physics and no solver. Layout descriptors live in :mod:`pops.layouts`.
 
-* meshes: :class:`CartesianMesh`, :class:`PolarMesh`; aux halo :class:`AuxHalo`;
+The ordinary public Cartesian path has one spelling: a :class:`CartesianGrid` over a framed
+:class:`pops.domain.Rectangle`, with periodic topology expressed by :class:`PeriodicAxes`.
+:class:`PolarMesh` remains an advanced, currently supported native annulus descriptor; it is not a
+second Cartesian authoring path. Adaptive authoring lives at :mod:`pops.amr`; ``pops.mesh._amr`` is
+an implementation package and is deliberately not re-exported here.
+
+Other descriptors:
+
+* mesh: :class:`CartesianGrid`; advanced polar mesh: :class:`PolarMesh`;
+  aux halo :class:`AuxHalo`;
   boxes :class:`PatchBox` / :class:`BoxLayout`;
-* :mod:`pops.mesh.layouts` -- ``Uniform`` / ``AMR``;
-* :mod:`pops.mesh.amr` -- ``PatchLayout`` / ``RegridEvery`` / ``Refine`` / ``TagUnion`` / ...;
 * :mod:`pops.mesh.geometry` -- ``Disc`` / ``HalfPlane`` / ``LevelSet`` / ``EmbeddedBoundary``;
 * :mod:`pops.mesh.masks` -- ``NoMask`` / ``Staircase`` / ``CutCell``;
 * :mod:`pops.mesh.boundaries` -- ``Periodic`` / ``Physical`` / ``FaceBC`` / face selectors.
 
-Every object is an inert :class:`pops.mesh._descriptor.MeshDescriptor`; the C++ runtime
-materialises the actual grids, patches and halos after validation.
+Objects are inert authoring values; the runtime materialises grids, patches and halos only after
+validation and lowering.
 """
 from __future__ import annotations
 
-from ._descriptor import Availability, MeshDescriptor
-from .cartesian import CartesianMesh
+from ._descriptor import MeshDescriptor
+from .grid import CartesianGrid, PeriodicAxes
 from .polar import PolarMesh
 from .aux import AuxHalo
 from .boxes import PatchBox, BoxLayout
-from . import layouts, amr, geometry, masks, boundaries
+from .layout_plan import (
+    LayoutHandle, LayoutMappingOperation, LayoutMappingPort, LayoutMappingProvider,
+    LayoutMappingRequirement, LayoutRepresentation, LayoutSynchronization,
+    LayoutPlan, LayoutPlanBuilder, NormalizedGeometry, NormalizedGeometryProvider,
+    normalize_layout_plan)
+from .layout_mapping import NativeLayoutMapping
+from . import geometry, masks, boundaries
 
 __all__ = [
-    "CartesianMesh", "PolarMesh", "AuxHalo", "PatchBox", "BoxLayout",
-    "Availability", "MeshDescriptor",
-    "layouts", "amr", "geometry", "masks", "boundaries",
+    "CartesianGrid", "PeriodicAxes", "PolarMesh", "AuxHalo", "PatchBox",
+    "BoxLayout",
+    "MeshDescriptor",
+    "LayoutHandle", "LayoutMappingOperation", "LayoutMappingPort", "LayoutMappingProvider",
+    "LayoutMappingRequirement", "LayoutRepresentation", "LayoutSynchronization",
+    "LayoutPlan", "LayoutPlanBuilder", "NativeLayoutMapping",
+    "NormalizedGeometry", "NormalizedGeometryProvider",
+    "normalize_layout_plan",
+    "geometry", "masks", "boundaries",
 ]

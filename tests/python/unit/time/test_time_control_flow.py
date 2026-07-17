@@ -18,18 +18,21 @@ SEPARATE sub-block (a recording scope), not the flat SSA list, so the body re-ru
     reference x_k = target + (1-omega)^k (x0 - target). Self-skips without numpy / _pops / a compiler /
     Kokkos / install_program (never faking the engine).
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen import _compile_drivers as compile_drivers
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
     try:
         import pops.time as t
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_control_flow (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_control_flow (pops.time unavailable: %s)' % exc)
     return t
 
 
@@ -39,71 +42,75 @@ def _convergence_program(t, *, name="fixed_point", omega=0.5, tol=1e-10):
     The body and condition use only linear_combine + norm2, so the Program lowers with NO model
     (solve_fields is inert / absent); the loop drives the fixed point entirely in C++."""
     P = t.Program(name)
-    U0 = P.state("blk")
-    target = P.linear_combine("target", 2.0 * U0)  # a fixed target state == 2*U0
+    U0 = typed_state(P, "blk")
+    target = P.value("target", 2.0 * U0)  # a fixed target state == 2*U0
 
     def cond(P, x):
-        diff = P.linear_combine("diff", target - x)
+        diff = P.value("diff", target - x)
         return P.norm2(diff) > tol
 
     def body(P, x):
         # x_next = x + omega*(target - x) = (1-omega)*x + omega*target
-        return P.linear_combine("x_next", (1.0 - omega) * x + omega * target)
+        return P.value("x_next", (1.0 - omega) * x + omega * target)
 
     x_final = P.while_(U0, cond, body)
-    P.commit("blk", x_final)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    final = P.value("fixed_point_next", x_final, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
 # ---- (A) codegen: pure Python, always runs ----
 def test_norm2_is_scalar(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     assert s.vtype == "scalar", "P.norm2 returns a Scalar value (got %r)" % s.vtype
 
 
 def test_dot_is_scalar(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.dot(U, U)
     assert s.vtype == "scalar", "P.dot returns a Scalar value (got %r)" % s.vtype
 
 
 def test_compare_is_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     b = P.norm2(U) > 1e-8
     assert b.vtype == "bool", "a scalar comparison returns a Bool value (got %r)" % b.vtype
 
 
 def test_scalar_not_python_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     try:
         bool(s)
     except TypeError as exc:
-        assert "cannot be used as a Python bool" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
+        assert "has no Python truth value" in str(exc), str(exc)
     else:
         raise AssertionError("a Scalar must not silently collapse to a Python bool")
 
 
 def test_bool_not_python_bool(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     b = P.norm2(U) > 1e-8
     try:
         bool(b)
     except TypeError as exc:
-        assert "cannot be used as a Python bool" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
+        assert "has no Python truth value" in str(exc), str(exc)
     else:
         raise AssertionError("a Bool must not silently collapse to a Python bool")
 
 
 def test_scalar_not_python_index(t):
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     s = P.norm2(U)
     try:
         range(s)  # __index__ must fire, never a silent integer
@@ -116,7 +123,7 @@ def test_scalar_not_python_index(t):
 def test_state_bool_still_loud(t):
     # The existing field-value guard must stay intact (only the scalar/bool branch is ADDED).
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     try:
         bool(U)
     except TypeError:
@@ -127,7 +134,7 @@ def test_state_bool_still_loud(t):
 
 def test_while_codegen(t):
     P = _convergence_program(t)
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
     for frag in ("pops::dot", "std::sqrt", "for (;;)", "if (!(", "break;"):
         assert frag in src, "the generated while loop must contain %r\n%s" % (frag, src)
 
@@ -143,18 +150,18 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable in this interpreter
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 8
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     # A minimal 1-variable model with NO Poisson coupling: solve_fields is inert and the while body
     # needs no fields. A complete compilable block (flux + primitive + eigenvalue).
@@ -170,11 +177,11 @@ def _run_section_b(t):
 
     omega, tol = 0.5, 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("cflow_prog"),
             time=_convergence_program(t, name="cflow_step", omega=omega, tol=tol))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
+        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:160])
         return None
 
     assert compiled.program_name == "cflow_step", "handle carries the program name"
@@ -182,11 +189,11 @@ def _run_section_b(t):
     try:
         compiled_model = passive_model("cflow_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:160])
+        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:160])
         return None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho0 = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)

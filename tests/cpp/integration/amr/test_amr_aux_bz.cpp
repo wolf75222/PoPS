@@ -27,7 +27,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
-#include <pops/mesh/layout/refinement.hpp>              // coarsen_index
+#include <pops/mesh/layout/refinement.hpp>                  // coarsen_index
 #include <pops/numerics/time/amr/reflux/amr_reflux_mf.hpp>  // AmrLevelMP, advance_amr
 #include <pops/parallel/comm.hpp>
 

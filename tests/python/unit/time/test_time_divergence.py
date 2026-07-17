@@ -4,7 +4,8 @@
 ADC-412 adds the ``ctx.divergence`` primitive (the centered finite-volume divergence factored as
 ``pops::apply_divergence``) and the ``P.divergence(out, fx, fy)`` IR op. A matrix-free Schur-like operator
 ``A(phi) = phi - alpha*div(grad phi)`` (the div(flux) structure of the condensed-Schur operator) is
-built from ``P.gradient`` chained into ``P.divergence`` and solved with ``P.solve_linear`` -- exactly
+built from ``P.gradient`` chained into ``P.divergence`` and solved with a typed ``LinearProblem`` --
+exactly
 the matrix-free Krylov path acceptance 32 needs in place. The centered ``div(grad)`` is the WIDE-stencil
 Laplacian ``(x(i+2) - 2 x(i) + x(i-2))/(4 h^2)`` (not the compact 5-point ``apply_laplacian``), so the
 compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil discrete operator.
@@ -12,47 +13,49 @@ compiled solve is verified against an OFFLINE numpy CG on that SAME wide-stencil
 (A) Pure Python, always runs:
     - ``P.divergence`` records a 3-input scalar_field op, validates its operands, and serializes;
     - the div(grad) Helmholtz apply (gradient -> divergence) lowers to ``ctx.gradient`` + a
-      ``ctx.divergence`` + ``pops::bicgstab_solve``, with the gradient buffer allocated 2-component
+      ``ctx.divergence`` + ``ctx.solve_linear_matfree``, with the gradient buffer allocated 2-component
       (``ctx.alloc_scalar_field(2, 1)``);
     - a standalone divergence-of-a-known-field check: the offline centered FV divergence of
       f = (cos 2pi x, sin 2pi y) matches the analytic div f = -2pi sin 2pi x + 2pi cos 2pi y to the
       discretization error -- the reference the compiled ctx.divergence reproduces;
-    - ``pops.lib.time.condensed_schur`` (now implemented, ADC-421) lowers at theta == 1 and raises for
-      the deferred theta != 1 extrapolation (the full end-to-end parity is test_time_condensed_schur.py).
+    - the generic matrix-free ``Program.solve`` path retains the complete div(grad) operator.
 
 (B) End-to-end parity (skips unless the full toolchain is present): the div(grad) Helmholtz Program is
     compiled + installed + stepped, then compared to an OFFLINE numpy CG on the identical discrete
     periodic 5-point system. Asserts max|compiled - offline| <= 1e-6. Self-skips (exit 0) without numpy
     / _pops / install_program / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+from pops.codegen import _compile_drivers as compile_drivers
+from typed_program_support import typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.linalg import LinearProblem
 from pops.solvers import krylov
-import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.time import FailRun
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _pops_time():
-    global lt  # ready schemes live in pops.lib.time (Spec 4)
     try:
         import pops.time as t
-        import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_divergence (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip('test_time_divergence (pops.time unavailable: %s)' % exc)
     return t
 
 
 _ALPHA = 0.1  # Helmholtz coefficient: A = I - alpha*div(grad) = I - alpha*Lap (SPD, well-conditioned)
 
 
-def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200, alpha=_ALPHA):
+def _divgrad_program(t, *, name="divgrad", solver=None, tol=1e-10, max_iter=200, alpha=_ALPHA):
     """Solve (I - alpha*div(grad)) phi = U, committed back into the 1-component block.
 
     The apply ``out = in - alpha*div(grad(in))`` chains P.gradient (into a 2-component buffer) then
     P.divergence (recovering Lap), so it exercises ctx.divergence inside the matrix-free Krylov loop."""
     P = t.Program(name)
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -62,12 +65,16 @@ def _divgrad_program(t, *, name="divgrad", method=None, tol=1e-10, max_iter=200,
         P.divergence(d, g, g)  # div(grad x) == Lap x; fy reads component 1 of the same buffer
         return x - alpha * d  # out = in - alpha*div(grad(in)) = in - alpha*Lap(in)
 
-    if method is None:
+    if solver is None:
         from pops.solvers.krylov import BiCGStab  # typed default (Spec 5 sec.7); lowers to "bicgstab"
-        method = BiCGStab(max_iter=max_iter)  # ADC-535: max_iter is mandatory on the descriptor
+        solver = BiCGStab(max_iter=max_iter, rel_tol=tol)
     P.set_apply(A, apply)
-    phi = P.solve_linear(operator=A, rhs=U, method=method, tol=tol, max_iter=max_iter)
-    P.commit("blk", phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    phi = P.solve(
+        LinearProblem(A, U, at=endpoint.point), solver=solver,
+    ).consume(action=FailRun())
+    final = P.value("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     return P
 
 
@@ -86,9 +93,14 @@ def test_divergence_records_and_validates(t):
 
     from pops.solvers.krylov import BiCGStab
     P.set_apply(A, apply)
-    U = P.state("blk")
-    phi = P.solve_linear(operator=A, rhs=U, method=BiCGStab(max_iter=50), tol=1e-8, max_iter=50)
-    P.commit("blk", phi)
+    U = typed_state(P, "blk")
+    endpoint = typed_state(P, "blk", state_name="U").next
+    phi = P.solve(
+        LinearProblem(A, U, at=endpoint.point),
+        solver=BiCGStab(max_iter=50, rel_tol=1e-8),
+    ).consume(action=FailRun())
+    final = P.value("phi_next", phi, at=endpoint.point)
+    P.commit(endpoint, final)
     assert P.validate() is True, "the div(grad) Program must validate"
     assert P._ir_hash(), "the IR must serialize to a stable hash"
 
@@ -113,14 +125,14 @@ def test_divergence_operand_types(t):
         P.divergence(dd, g, g)
         return x - dd
 
-    U_state = P.state("blk")  # a State is not a scalar_field -> each divergence operand must reject it
+    U_state = typed_state(P, "blk")  # a State is not a scalar_field -> each divergence operand must reject it
     P.set_apply(A, apply)
     assert all(bad), "divergence must reject a non-scalar_field operand (out / fx / fy)"
 
 
 def test_scalar_field_ncomp_validates(t):
     P = t.Program("p")
-    for bad in (0, -1, 1.5):
+    for bad in (0, -1, 1.5, True):
         try:
             P.scalar_field("g", ncomp=bad)
         except ValueError as exc:
@@ -132,63 +144,11 @@ def test_scalar_field_ncomp_validates(t):
 
 
 def test_divgrad_codegen(t):
-    src = _divgrad_program(t, method=krylov.BiCGStab(max_iter=200)).emit_cpp_program()
-    for frag in ("ctx.gradient", "ctx.divergence", "pops::bicgstab_solve",
+    src = emit_cpp_program(_divgrad_program(
+        t, solver=krylov.BiCGStab(max_iter=200, rel_tol=1e-10)))
+    for frag in ("ctx.gradient", "ctx.divergence", "ctx.solve_linear_matfree",
                  "ctx.alloc_scalar_field(2, 1)"):  # the 2-component gradient buffer
         assert frag in src, "the div(grad) solve must contain %r\n%s" % (frag, src)
-
-
-def _lorentz_model(name):
-    """A rho/mx/my block carrying the electrostatic-Lorentz linearization J the generic condensed
-    route (ADC-637) resolves at emit time."""
-    from pops.ir.ops import sqrt
-    from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    m.elliptic_rhs(rho)
-    m.aux("grad_x")
-    m.aux("grad_y")
-    m.aux("B_z")
-    author_electrostatic_lorentz(m)
-    return m
-
-
-def test_condensed_schur_macro_lowers(t):
-    # ADC-421 + ADC-427 + ADC-637: the condensed-implicit macro (generic-only route) lowers for any theta
-    # in (0, 1]. theta == 1 lowers the full anisotropic assemble / solve / reconstruct chain; theta != 1
-    # adds the n+1 momentum extrapolation by factor 1/theta on top. theta out of (0, 1] raises ValueError.
-    # The end-to-end parity lives in test_time_condensed_schur.py.
-    P = t.Program("p")
-    lt.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    assert P.validate() is True, "the condensed macro must validate"
-    src = P.emit_cpp_program(model=_lorentz_model("div_m1"))
-    # ADC-637: the condensed ops lower INLINE via the block_inverse intrinsic; NO coupling/schur.
-    assert "pops::detail::block_inverse<2>(M_, Mi_);" in src, src
-    assert "pops::detail::block_apply_inverse<2>(M_, cond_v_, cond_mv_);" in src, src
-    assert "coupling/schur" not in src and "coupling::schur" not in src, src
-    # ADC-427: theta != 1 now lowers (the extrapolation is plain affine algebra), no longer raises.
-    P2 = t.Program("p2")
-    lt.condensed_schur(P2, "blk", alpha=1.0, theta=0.5)
-    assert P2.validate() is True, "condensed_schur(theta != 1) must validate (ADC-427)"
-    assert "pops::detail::block_apply_inverse<2>" in P2.emit_cpp_program(model=_lorentz_model("div_m2")), (
-        "theta=0.5 must lower the reconstruct chain (inline block_apply_inverse)")
-    # theta out of (0, 1] is still rejected (loud).
-    try:
-        lt.condensed_schur(t.Program("p3"), "blk", alpha=1.0, theta=1.5)
-    except ValueError as exc:
-        assert "theta must be in (0, 1]" in str(exc), str(exc)
-    else:
-        raise AssertionError("condensed_schur(theta out of (0, 1]) must raise ValueError")
 
 
 def _analytic_divergence_check():
@@ -265,18 +225,18 @@ def _run_section_b(t):
     try:
         import numpy as np
 
-        import pops
+        import pops.runtime._engine_descriptors as engine
     except Exception as exc:  # noqa: BLE001  -- numpy / _pops unavailable here
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (B) skipped: pops/numpy unavailable: %s --' % exc)
         return None
 
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program"):
-        print("-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --")
+        require_native_or_skip('-- (B) skipped: _pops lacks the install_program binding (rebuild _pops) --')
         return None
 
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
 
     def passive_model(name):  # 1-variable block, no flux, no Poisson coupling
         m = Model(name)
@@ -290,12 +250,14 @@ def _run_section_b(t):
 
     tol = 1e-10
     try:
-        compiled = pops.codegen.compile_problem(
+        compiled = compile_drivers.compile_problem(
             model=passive_model("divgrad_prog"),
-            time=_divgrad_program(t, name="divgrad_step", method=krylov.BiCGStab(max_iter=200),
-                                  tol=tol, max_iter=200))
+            time=_divgrad_program(
+                t, name="divgrad_step",
+                solver=krylov.BiCGStab(max_iter=200, rel_tol=tol),
+                tol=tol, max_iter=200))
     except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- (B) skipped: compile_problem could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: compile_problem could not build the .so: %s --' % str(exc)[:200])
         return None
 
     assert compiled.program_name == "divgrad_step", "handle carries the program name"
@@ -303,11 +265,11 @@ def _run_section_b(t):
     try:
         compiled_model = passive_model("divgrad_block").compile(backend="production")
     except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- (B) skipped: model compile could not build the .so: %s --" % str(exc)[:200])
+        require_native_or_skip('-- (B) skipped: model compile could not build the .so: %s --' % str(exc)[:200])
         return None
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
 
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")

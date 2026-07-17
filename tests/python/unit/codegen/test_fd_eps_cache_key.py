@@ -2,7 +2,7 @@
 
 Two families:
   * wave_speeds_from_jacobian(eig='fd', fd_eps=...): the emitted C++ literal changes AND model_hash
-    changes; the default (fd_eps=None) is byte-identical + hash-stable vs the pre-617 emission.
+    changes; every Jacobian column uses a central difference scaled from its own state component.
   * solve_local_nonlinear(fd_eps=...): the emitted Newton kernel literal changes AND the program IR
     hash changes; the default is byte-identical.
 
@@ -11,8 +11,9 @@ Emit-level + hash-level only (no _pops runtime needed); self-skips without the D
 import pytest
 
 pops = pytest.importorskip("pops")
-Model = pytest.importorskip("pops.physics.facade").Model
-from pops.codegen.compile_emit import model_hash  # noqa: E402
+Model = pytest.importorskip("pops.physics._facade").Model
+from pops.codegen._compile_emit import model_hash  # noqa: E402
+from typed_program_support import typed_state  # noqa: E402
 
 
 def _fd_model(fd_eps=None):
@@ -25,10 +26,16 @@ def _fd_model(fd_eps=None):
     return m
 
 
-def test_wave_speeds_default_fd_eps_emits_historical_literal():
+def test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step():
     src = _fd_model()._m.emit_cpp_brick()
-    # The default keeps the exact historical literal (1e-6 relative + 1e-30 floor), byte-identical.
-    assert "pops::Real(1e-6) * (U[0] < 0 ? -U[0] : U[0]) + pops::Real(1e-30)" in src
+    # The default keeps the public relative factor, scales every column independently and preserves
+    # a meaningful perturbation when a conservative component is exactly zero.
+    assert ("pops::Real(1e-6) * std::fmax(std::fabs(U[k_]), pops::Real(1))"
+            in src)
+    assert "(U[0] < 0 ? -U[0] : U[0])" not in src
+    assert "Up_[k_] += eps_;" in src
+    assert "Um_[k_] -= eps_;" in src
+    assert "(Fp_[i_] - Fm_[i_]) / (pops::Real(2) * eps_)" in src
 
 
 def test_wave_speeds_fd_eps_override_changes_literal_and_hash():
@@ -44,8 +51,8 @@ def test_wave_speeds_fd_eps_override_changes_literal_and_hash():
 
 
 def test_wave_speeds_default_fd_eps_hash_is_stable():
-    # None -> the ws_jac hash part is byte-identical to a model with no fd_eps segment (no spurious
-    # cache miss for existing models). Two default models hash identically and deterministically.
+    # The central per-column algorithm version is deterministic. It invalidates artifacts from the
+    # former U[0]-scaled forward-difference implementation; corrected models still share a cache key.
     assert model_hash(_fd_model()._m) == model_hash(_fd_model()._m)
 
 
@@ -60,17 +67,23 @@ def test_wave_speeds_fd_eps_rejected_on_numeric_path():
 # --- solve_local_nonlinear (program IR) --------------------------------------
 
 def _solve_program(adctime, fd_eps=None):
+    from pops.solvers.nonlinear import LocalNewton
+    from pops.time import FailRun, LocalResidual
     """A minimal Program with a solve_local_nonlinear node carrying fd_eps (trivial residual so no
     compiled model is needed): r(U) = U - U0. The node stores tol / max_iter / fd_eps."""
     P = adctime.Program("p_default" if fd_eps is None else "p_eps")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
 
     def residual(P, Uit, U0):
-        return P.linear_combine("r", Uit - U0)
+        return P.value("r", Uit - U0)
 
-    W = P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, tol=1e-12,
-                                max_iter=20, fd_eps=fd_eps)
-    P.commit("blk", W)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    guess = P.value("guess", U, at=endpoint.point)
+    step = 1e-7 if fd_eps is None else fd_eps
+    W = P.solve(LocalResidual(residual, guess), name="W", solver=LocalNewton(
+        tolerance=1e-12, max_iterations=20,
+        finite_difference_step=step)).consume(action=FailRun())
+    P.commit(endpoint, W)
     return P
 
 
@@ -85,15 +98,10 @@ def test_solve_local_nonlinear_fd_eps_changes_program_ir_hash():
 
 
 def test_solve_local_nonlinear_fd_eps_rejected_out_of_domain():
-    adctime = pytest.importorskip("pops.time")
-    P = adctime.Program("bad")
-    U = P.state("blk")
+    from pops.solvers.nonlinear import LocalNewton
 
-    def residual(P, Uit, U0):
-        return P.linear_combine("r", Uit - U0)
-
-    with pytest.raises(ValueError, match="fd_eps"):
-        P.solve_local_nonlinear(name="W", residual=residual, initial_guess=U, fd_eps=0.0)
+    with pytest.raises(ValueError, match="finite_difference_step"):
+        LocalNewton(finite_difference_step=0.0)
 
 
 # --- ADC-645: eig_max_iter / im_tol cache-key parity (the fd_eps rule) ------------------------
@@ -128,7 +136,7 @@ def test_eig_knobs_validated_and_carried():
 
 
 def main():
-    test_wave_speeds_default_fd_eps_emits_historical_literal()
+    test_wave_speeds_default_fd_eps_emits_unit_scaled_column_step()
     test_wave_speeds_fd_eps_override_changes_literal_and_hash()
     test_wave_speeds_default_fd_eps_hash_is_stable()
     test_wave_speeds_fd_eps_rejected_on_numeric_path()

@@ -118,6 +118,7 @@ std::string loader_source() {
   // clang-format off
   return R"CPP(
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
+#include <pops/runtime/config/route_ids.hpp>
 #include <pops/runtime/dynamic/abi_key.hpp>
 #include <pops/physics/bricks/bricks.hpp>
 #include <string>
@@ -127,15 +128,19 @@ using ProdModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::Backgr
 // LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
 // vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
 extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
+extern "C" const char* pops_compiled_route_manifest() { return pops::kRouteRegistrySignature; }
+extern "C" int pops_compiled_nparams() { return 0; }
+extern "C" const char* pops_compiled_param_names() { return ""; }
 extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
                                        const char* riemann, const char* recon, const char* time,
-                                       double gamma, int substeps) {
+                                       double gamma, int substeps, const double*, int,
+                                       double pos_floor) {
   pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
   pops::add_compiled_model<pops_generated::ProdModel>(
       *s, name,
       pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
                                pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps);
+      limiter, riemann, recon, time, gamma, substeps, 1, {}, {}, pos_floor);
 }
 )CPP";
   // clang-format on
@@ -147,8 +152,8 @@ bool compile_loader(const std::string& src_path, const std::string& so_path) {
 #else
   const std::string cc = POPS_TEST_CXX;
 #endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src_path + " -o " + so_path;
+  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " +
+                    POPS_TEST_INCLUDE + " " + src_path + " -o " + so_path;
 #if defined(__APPLE__)
   cmd += " -undefined dynamic_lookup";
 #endif
@@ -295,5 +300,6 @@ static int pops_run_test_amr_riemann_native(int argc, char** argv) {
 }
 
 TEST(test_amr_riemann_native, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_riemann_native, "test_amr_riemann_native"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_riemann_native, "test_amr_riemann_native"),
+            0);
 }

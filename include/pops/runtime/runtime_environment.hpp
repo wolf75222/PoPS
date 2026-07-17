@@ -47,6 +47,10 @@ struct RuntimeEnvironmentReport {
   int mpi_ranks = 1;
   std::string communicator = "serial";
   bool supports_custom_communicator = false;
+  bool mpi_initialized_by_pops = false;
+  bool mpi_atexit_finalize_registered = false;
+  int mpi_thread_level = 0;
+  std::string mpi_ownership = "not-built";
 
   std::string allocator_mode = "std_allocator";
   std::string comm_allocator_mode = "std_allocator";
@@ -91,6 +95,11 @@ inline RuntimeEnvironmentReport runtime_environment_report() {
   report.mpi_ranks = n_ranks();
   report.communicator = "MPI_COMM_WORLD";
   report.supports_custom_communicator = false;
+  report.mpi_initialized_by_pops = pops::mpi_initialized_by_pops();
+  report.mpi_atexit_finalize_registered = pops::mpi_atexit_finalize_registered();
+  report.mpi_thread_level = pops::mpi_thread_level();
+  report.mpi_ownership =
+      report.mpi_initialized_by_pops ? "pops-owned" : (report.mpi_active ? "external" : "inactive");
 #endif
   return report;
 }

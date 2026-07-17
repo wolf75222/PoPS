@@ -13,13 +13,15 @@ covered there:
 
 Pure Python IR construction (no numerics / no _pops); collected as pytest functions.
 """
+from typed_program_support import commits_by_block, typed_state
+
 import sys
 
 import pytest
 
 from pops import time as adctime
-from pops.time.history import CopyCurrent
-from pops.time.history_persistence import Dense, Interval
+from pops.time._history.policy import CopyCurrent
+from pops.time._history.persistence import Dense, Interval
 
 
 def _expect(exc_type, fn, needle):
@@ -34,50 +36,52 @@ def _expect(exc_type, fn, needle):
 # --- keep_history checkpoint policy (ADC-626) ---------------------------------------------------
 def test_keep_history_default_resolves_to_dense():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     node = P.keep_history(U, depth=2)
     assert node.op == "store_history"
     # The historical whole-ring behaviour: cold start defaults to CopyCurrent, persistence to Dense.
-    assert isinstance(U._cold_start, CopyCurrent)
-    assert isinstance(U._checkpoint_policy, Dense)
-    # The resolved policy is recorded on the Program keyed by the ring name (depth, policy).
-    depth, policy = P._history_persistence["plasma.U"]
-    assert depth == 2 and isinstance(policy, Dense)
+    _, cold_start, configured_policy = P._time_history_configs[U]
+    assert isinstance(cold_start, CopyCurrent)
+    assert isinstance(configured_policy, Dense)
+    # The resolved policy is recorded against the physical slot count (max lag + current slot).
+    ring_slots, policy = P._history_persistence["plasma.U"]
+    assert ring_slots == 3 and isinstance(policy, Dense)
 
 
 def test_keep_history_accepts_typed_policy():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
-    # depth 4 with Interval(3): (depth-1)=3 divisible by 3 -> stores {0, 3}, coherent.
-    node = P.keep_history(U, depth=4, checkpoint_policy=Interval(3))
+    U = typed_state(P, "plasma", state_name="U")
+    # max lag 3 creates four slots; Interval(3) stores both anchors {0, 3}.
+    node = P.keep_history(U, depth=3, checkpoint_policy=Interval(3))
     assert node.op == "store_history"
-    assert isinstance(U._checkpoint_policy, Interval) and U._checkpoint_policy.k == 3
-    depth, policy = P._history_persistence["plasma.U"]
-    assert depth == 4 and policy.stored_slots(4) == (0, 3)
+    _, _, configured_policy = P._time_history_configs[U]
+    assert isinstance(configured_policy, Interval) and configured_policy.k == 3
+    ring_slots, policy = P._history_persistence["plasma.U"]
+    assert ring_slots == 4 and policy.stored_slots(ring_slots) == (0, 3)
 
 
 def test_keep_history_bad_string_policy_refused():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
+    U = typed_state(P, "plasma", state_name="U")
     # A bare string is NOT a typed policy: refused with a TypeError (only the descriptors are accepted).
     _expect(TypeError, lambda: P.keep_history(U, depth=2, checkpoint_policy="disk"), "typed policy")
 
 
 def test_keep_history_incoherent_policy_refused_at_author_time():
     P = adctime.Program("h")
-    U = P.state("U", block="plasma")
-    # Interval(2) on depth 4: (depth-1)=3 not divisible by 2 -> the oldest lag is unreconstructable.
-    _expect(ValueError, lambda: P.keep_history(U, depth=4, checkpoint_policy=Interval(2)),
+    U = typed_state(P, "plasma", state_name="U")
+    # Max lag 3 creates four slots; Interval(2) misses oldest slot 3.
+    _expect(ValueError, lambda: P.keep_history(U, depth=3, checkpoint_policy=Interval(2)),
             "oldest slot")
 
 
 # --- bounded loops: the count is a MANDATORY bound ----------------------------------------------
 def test_static_range_requires_int_bound():
     P = adctime.Program("sr")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def body(prog, x):
-        return prog.linear_combine("x1", 1.0 * x)
+        return prog.value("x1", 1.0 * x)
 
     # a valid bound unrolls the body 'count' times
     out = P.static_range(U, 3, body)
@@ -90,10 +94,10 @@ def test_static_range_requires_int_bound():
 
 def test_range_requires_int_bound_and_refuses_runtime_scalar():
     P = adctime.Program("rg")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def body(prog, x):
-        return prog.linear_combine("x1", 1.0 * x)
+        return prog.value("x1", 1.0 * x)
 
     out = P.range(U, 4, body)
     assert out.op == "range" and out.attrs["count"] == 4
@@ -106,41 +110,55 @@ def test_range_requires_int_bound_and_refuses_runtime_scalar():
 
 def test_range_negative_bound_rejected():
     P = adctime.Program("neg")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     _expect(ValueError, lambda: P.range(U, -1, lambda prog, x: x), "non-negative")
 
 
 # --- commit_many atomicity ----------------------------------------------------------------------
 def test_commit_many_atomic_double_commit_rejected():
     P = adctime.Program("cm")
-    Ua = P.state("a")
-    Ub = P.state("b")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit("a", a1)  # 'a' already committed
+    Ua = typed_state(P, "a")
+    Ub = typed_state(P, "b")
+    a_next = typed_state(P, "a", state_name="U").next
+    b_next = typed_state(P, "b", state_name="U").next
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.value("b1", 1.0 * Ub, at=b_next.point)
+    P.commit(a_next, a1)  # 'a' already committed
     # commit_many of {a, b} must be rejected as a UNIT (a is double), and b must NOT be committed.
-    _expect(ValueError, lambda: P.commit_many({"a": a1, "b": b1}), "committed more than once")
+    _expect(
+        ValueError,
+        lambda: P.commit_many({a_next: a1, b_next: b1}),
+        "committed more than once",
+    )
     assert "b" not in P.commits(), "commit_many must be atomic: no partial commit of the group"
 
 
 def test_commit_many_foreign_value_rejected_atomically():
     P = adctime.Program("cm2")
     other = adctime.Program("other")
-    Ua = P.state("a")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    foreign = other.linear_combine("z", 1.0 * other.state("a"))
-    _expect(ValueError, lambda: P.commit_many({"a": a1, "z": foreign}), "different Program")
+    Ua = typed_state(P, "a")
+    a_next = typed_state(P, "a", state_name="U").next
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    foreign = other.value("z", 1.0 * typed_state(other, "a"))
+    z_next = typed_state(P, "z", state_name="U").next
+    _expect(
+        ValueError,
+        lambda: P.commit_many({a_next: a1, z_next: foreign}),
+        "different Program",
+    )
     assert P.commits() == {}, "no block committed when the group is rejected"
 
 
 def test_commit_many_success_commits_all():
     P = adctime.Program("cm3")
-    Ua = P.state("a")
-    Ub = P.state("b")
-    a1 = P.linear_combine("a1", 1.0 * Ua)
-    b1 = P.linear_combine("b1", 1.0 * Ub)
-    P.commit_many({"a": a1, "b": b1})
-    assert P.commits() == {"a": a1, "b": b1}
+    Ua = typed_state(P, "a")
+    Ub = typed_state(P, "b")
+    a_next = typed_state(P, "a", state_name="U").next
+    b_next = typed_state(P, "b", state_name="U").next
+    a1 = P.value("a1", 1.0 * Ua, at=a_next.point)
+    b1 = P.value("b1", 1.0 * Ub, at=b_next.point)
+    P.commit_many({a_next: a1, b_next: b1})
+    assert commits_by_block(P) == {"a": a1, "b": b1}
 
 
 if __name__ == "__main__":

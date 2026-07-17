@@ -1,8 +1,8 @@
 """Spec 4 (36.1 / 38 / 7): forbidden paths must never exist in the pops/ tree.
 
 The clean-break restructure bans the ``std`` and ``custom`` escape hatches and the
-flat ``models`` package: a time scheme is a library macro called by its explicit name
-(``pops.lib.time.ssprk3``), never a ``std`` bundle; a closure is a decorated callable, not a
+flat ``models`` package: a time scheme is a library factory called by its explicit name
+(``pops.lib.time.SSPRK3``), never a ``std`` bundle; a closure is a decorated callable, not a
 ``pops.lib.models.moments.custom`` module; and concrete models live under
 ``pops.lib.models.*``, never a top-level ``pops.models``.
 
@@ -40,10 +40,10 @@ def test_forbidden_path_absent(rel):
 def test_no_std_name_anywhere():
     """Spec 4 s7: the name ``std`` is banned in the architecture, not just the ``std/`` directory
     (s38). No ``std.py`` module may exist anywhere under python/pops -- schemes are exposed by
-    their explicit names (``pops.lib.time.ssprk3``), never via a ``std`` bundle.
+    their explicit names (``pops.lib.time.SSPRK3``), never via a ``std`` bundle.
     """
     offenders = sorted(str(p.relative_to(REPO_ROOT)) for p in POPS.rglob("std.py"))
     assert not offenders, (
         "Spec 4 s7 forbids the `std` name; remove: %s "
-        "(call schemes by explicit name, e.g. pops.lib.time.ssprk3)" % offenders
+        "(call schemes by explicit name, e.g. pops.lib.time.SSPRK3)" % offenders
     )

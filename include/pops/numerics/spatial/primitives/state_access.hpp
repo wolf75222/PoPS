@@ -18,7 +18,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableSet: SourceFreeModel::conservative_vars forwarding
-#include <pops/mesh/storage/fab2d.hpp>      // ConstArray4: load_state / load_aux read path
+#include <pops/mesh/storage/fab2d.hpp>  // ConstArray4: load_state / load_aux read path
 
 #include <concepts>
 
@@ -83,7 +83,7 @@ struct SourceFreeModel {
   // to even COMPILE for a non-Euler model (e.g. a moment hierarchy: n_vars != 4, no pressure). The
   // 4-var Euler models compiled before only because that fallback happens to fit them.
   POPS_HD Real contact_speed(const State& ul, const State& ur, Real pl, Real pr, Real sl, Real sr,
-                            int dir) const
+                             int dir) const
     requires requires(const M& mm, const State a_, const State b_, Real p, Real q, Real x, Real y,
                       int d) { mm.contact_speed(a_, b_, p, q, x, y, d); }
   {
@@ -97,7 +97,7 @@ struct SourceFreeModel {
     return m.hllc_star_state(u, p, s, sStar, dir);
   }
   POPS_HD State roe_dissipation(const State& ul, const Aux& al, const State& ur, const Aux& ar,
-                               int dir) const
+                                int dir) const
     requires requires(const M& mm, const State a_, const Aux x_, const State b_, const Aux y_,
                       int d) { mm.roe_dissipation(a_, x_, b_, y_, d); }
   {
@@ -139,20 +139,21 @@ POPS_HD inline typename Model::State load_state(const ConstArray4& a, int i, int
 // same table). NComp = kAuxBaseComps: all guards are false -> bit-identical.
 template <int NComp = kAuxBaseComps>
 POPS_HD inline Aux load_aux(const ConstArray4& a, int i, int j) {
+  static_assert(NComp >= kAuxBaseComps, "provider pack is missing required base aux fields");
+  static_assert(NComp <= kAuxMaxComps, "provider pack exceeds capacity; never clamp it");
   Aux x{a(i, j, 0), a(i, j, 1), a(i, j, 2)};
 #define POPS_AUX_LOAD(name, idx) \
-  if constexpr (NComp > (idx))  \
+  if constexpr (NComp > (idx))   \
     x.name = a(i, j, idx);
   POPS_AUX_FIELDS(POPS_AUX_LOAD)
 #undef POPS_AUX_LOAD
   // NAMED aux fields (ADC-70 phase 1): components from kAuxNamedBase (= 5). Loaded
   // ONLY if the model declares n_aux > kAuxNamedBase (otherwise if constexpr false -> no codegen,
   // NComp = kAuxBaseComps stays strictly bit-identical). The bound n_extra is known at
-  // compile time (NComp template): the loop is unrolled and clamped to kAuxMaxExtra (size of
-  // x.extra) -- never an out-of-bounds access on the C array, device-clean.
+  // compile time (NComp template): the loop is unrolled after the capacity assertion above --
+  // never clamped and never an out-of-bounds access on the C array, device-clean.
   if constexpr (NComp > kAuxNamedBase) {
-    constexpr int n_extra =
-        (NComp - kAuxNamedBase) < kAuxMaxExtra ? (NComp - kAuxNamedBase) : kAuxMaxExtra;
+    constexpr int n_extra = NComp - kAuxNamedBase;
     for (int k = 0; k < n_extra; ++k)
       x.extra[k] = a(i, j, kAuxNamedBase + k);
   }

@@ -1,113 +1,71 @@
-"""pops.fields.poisson -- Poisson-family field-problem shortcuts (Spec 5 sec.5.5).
+"""Physics-only Poisson-family FieldOperator presets."""
 
-Thin subclasses of :class:`pops.fields.problem.FieldProblem` that name the common elliptic
-shapes:
-
-* :class:`PoissonProblem` -- ``-laplacian(phi) == rhs`` (the standard self-consistent field);
-* :class:`ScreenedPoissonProblem` -- adds a zeroth-order reaction term (Debye screening);
-* :class:`AnisotropicPoissonProblem` -- a tensor / anisotropic principal coefficient.
-
-They only refine the declared capabilities and the validation; the runtime / codegen treat
-them as a :class:`FieldProblem`.
-"""
 from __future__ import annotations
 
 from typing import Any
 
 from pops.descriptors_report import CapabilitySet
 from pops.math import Equation, principal_kinds
-from .problem import FieldProblem
 
-# An elliptic LHS must carry a principal operator: a Laplacian or a div(coeff*grad).
+from .operator import FieldOperator
+
+
 _PRINCIPAL_OPERATORS = {"laplacian", "div_coeff_grad"}
 
 
-class PoissonProblem(FieldProblem):
-    """A standard Poisson problem ``-laplacian(phi) == rhs``.
+class PoissonOperator(FieldOperator):
+    """FieldOperator constrained to a Poisson principal operator."""
 
-    Refines :class:`FieldProblem` by requiring the equation's principal operator to be an
-    elliptic Laplacian / div(coeff*grad) (so a non-elliptic equation is rejected up front).
-    """
+    category = "poisson_operator"
 
-    category = "poisson_problem"
-
-    def capabilities(self) -> Any:
-        """The FieldProblem capabilities plus the ``poisson`` family tag."""
-        caps = super().capabilities().to_dict()
-        caps["poisson"] = True
-        return CapabilitySet(caps)
+    def capabilities(self) -> CapabilitySet:
+        result = super().capabilities().to_dict()
+        result["poisson"] = True
+        return CapabilitySet(result)
 
     def validate(self, context: Any = None) -> bool:
-        """Additionally refuse an equation whose principal operator is not elliptic."""
         super().validate(context)
-        if isinstance(self.equation, Equation):
-            if not (principal_kinds(self.equation.lhs) & _PRINCIPAL_OPERATORS):
-                raise ValueError(
-                    "%s: a Poisson problem expects an elliptic principal operator on the "
-                    "left-hand side (e.g. -laplacian(phi) == rhs or "
-                    "-div(eps*grad(phi)) == rhs); got %r" % (self.name, self.equation.lhs))
+        if isinstance(self.equation, Equation) and not (
+            principal_kinds(self.equation.lhs) & _PRINCIPAL_OPERATORS
+        ):
+            raise ValueError(
+                "%s expects a Laplacian or div(coeff*grad) principal operator" % self.name
+            )
         return True
 
 
-class ScreenedPoissonProblem(PoissonProblem):
-    """A screened Poisson problem ``-laplacian(phi) + k*phi == rhs`` (Debye screening).
+class ScreenedPoissonOperator(PoissonOperator):
+    category = "screened_poisson_operator"
 
-    Requires a zeroth-order reaction term (``k*phi``) on top of the principal operator.
-    """
-
-    category = "screened_poisson_problem"
-
-    def capabilities(self) -> Any:
-        """The Poisson capabilities plus the ``screened`` family tag."""
-        caps = super().capabilities().to_dict()
-        caps["screened"] = True
-        return CapabilitySet(caps)
+    def capabilities(self) -> CapabilitySet:
+        result = super().capabilities().to_dict()
+        result["screened"] = True
+        return CapabilitySet(result)
 
     def validate(self, context: Any = None) -> bool:
-        """Additionally require the reaction term and a screened-capable solver."""
         super().validate(context)
-        if isinstance(self.equation, Equation):
-            if "reaction" not in principal_kinds(self.equation.lhs):
-                raise ValueError(
-                    "%s: a screened Poisson expects a zeroth-order reaction term "
-                    "(e.g. -laplacian(phi) + k*phi == rhs); got %r"
-                    % (self.name, self.equation.lhs))
-        # Reject only a solver that declares it cannot serve a screened operator (criterion 11).
-        self._require_solver_capability("screened", "a screened operator", "GeometricMG()")
+        if "reaction" not in principal_kinds(self.equation.lhs):
+            raise ValueError("%s expects an explicit reaction term" % self.name)
         return True
 
 
-class AnisotropicPoissonProblem(PoissonProblem):
-    """An anisotropic Poisson problem ``-div(A grad phi) == rhs`` (variable / tensor coefficient).
+class AnisotropicPoissonOperator(PoissonOperator):
+    category = "anisotropic_poisson_operator"
 
-    Requires a ``div(coeff*grad(phi))`` principal operator (the variable-coefficient form).
-
-    NOTE: the form is authorable + validated here, but lowering a variable / tensor
-    coefficient in the elliptic codegen is the coordinated follow-up (ADC-491); today the
-    native elliptic operator solves a constant-coefficient ``div(eps grad)``.
-    """
-
-    category = "anisotropic_poisson_problem"
-
-    def capabilities(self) -> Any:
-        """The Poisson capabilities plus the ``anisotropic`` family tag."""
-        caps = super().capabilities().to_dict()
-        caps["anisotropic"] = True
-        return CapabilitySet(caps)
+    def capabilities(self) -> CapabilitySet:
+        result = super().capabilities().to_dict()
+        result["anisotropic"] = True
+        return CapabilitySet(result)
 
     def validate(self, context: Any = None) -> bool:
-        """Additionally require div(coeff*grad) and an anisotropic-capable solver."""
         super().validate(context)
-        if isinstance(self.equation, Equation):
-            if "div_coeff_grad" not in principal_kinds(self.equation.lhs):
-                raise ValueError(
-                    "%s: an anisotropic Poisson expects a div(coeff*grad(phi)) principal "
-                    "operator (e.g. -div(eps*grad(phi)) == rhs); got %r"
-                    % (self.name, self.equation.lhs))
-        # Reject only a solver that declares it cannot serve an anisotropic operator (criterion 11).
-        self._require_solver_capability(
-            "anisotropic", "an anisotropic operator", "GeometricMG()")
+        if "div_coeff_grad" not in principal_kinds(self.equation.lhs):
+            raise ValueError("%s expects an explicit div(coeff*grad) operator" % self.name)
         return True
 
 
-__all__ = ["PoissonProblem", "ScreenedPoissonProblem", "AnisotropicPoissonProblem"]
+__all__ = [
+    "AnisotropicPoissonOperator",
+    "PoissonOperator",
+    "ScreenedPoissonOperator",
+]

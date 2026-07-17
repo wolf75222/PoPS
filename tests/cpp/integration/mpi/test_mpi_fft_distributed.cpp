@@ -54,5 +54,6 @@ static int pops_run_test_mpi_fft_distributed(int argc, char** argv) {
 }
 
 TEST(test_mpi_fft_distributed, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_fft_distributed, "test_mpi_fft_distributed"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_fft_distributed, "test_mpi_fft_distributed"),
+            0);
 }

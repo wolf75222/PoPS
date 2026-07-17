@@ -35,7 +35,9 @@ from typing import Any
 # vtype of the buffer it stages so a caller sees the state / rhs / scalar-field split the spec asks
 # for. These mirror Program._SCRATCH_OPS; the bucketing is by the produced vtype, not the op name.
 _RHS_OPS = ("rhs", "source", "apply", "coupled_rate")
-_STATE_SCRATCH_OPS = ("linear_combine", "solve_local_linear", "solve_local_nonlinear", "where")
+_STATE_SCRATCH_OPS = (
+    "linear_combine", "solve_local_linear", "solve_local_nonlinear",
+    "solve_coupled_implicit", "where")
 _SCALAR_FIELD_OPS = ("solve_linear", "scalar_field", "cell_compare")
 # A linear_source is a pure operator DECLARATION node (vtype 'operator', no allocated buffer): it
 # appears in the Program's _SCRATCH_OPS for the liveness walk but stages no MultiFab, so it is its

@@ -3,20 +3,23 @@
 
 ``compile_problem(debug=True)`` persists the generated ``.cpp`` with a leading provenance banner
 (serialized IR, hashes, flags, toolchain, redacted command), and every fresh compile writes a
-``<so>.cachekey`` sidecar the cache-HIT guard re-verifies. This module pins the PURE-PYTHON parts of
+final artifact sidecar the cache-HIT guard re-verifies. This module pins the PURE-PYTHON parts of
 that machinery -- the banner string composition and the sidecar read / write / verify logic -- with
 no compiler and no ``.so`` (the real-compiler integration lives in the gated integration tests).
 
 Guarded with ``pytest.importorskip("pops")``; the ``__main__`` block runs pytest.
 """
+import os
 import sys
 
 import pytest
 
 pytest.importorskip("pops")
 from pops.codegen.compile_provenance import (  # noqa: E402
-    build_debug_banner, cachekey_path, read_cachekey_sidecar, verify_cached_program_so,
-    write_cachekey_sidecar, StaleArtifactError)
+    artifact_sidecar_path, build_debug_banner, read_artifact_sidecar,
+    publish_staged_artifact, verify_cached_artifact, write_artifact_sidecar,
+    StaleArtifactError)
+from pops.identity import make_identity  # noqa: E402
 
 
 class _FakeProgram:
@@ -76,48 +79,106 @@ def test_banner_handles_a_handle_without_a_program():
 
 def test_sidecar_round_trip(tmp_path):
     so_path = str(tmp_path / "problem-abc.so")
-    write_cachekey_sidecar(so_path, cache_key="CK", abi_key="ABI", toolchain="clang++|c++23")
-    assert cachekey_path(so_path).endswith(".cachekey")
-    found = read_cachekey_sidecar(so_path)
-    assert found == {"cache_key": "CK", "abi_key": "ABI", "toolchain": "clang++|c++23"}
+    (tmp_path / "problem-abc.so").write_bytes(b"binary")
+    semantic = make_identity("semantic", {"program": "p"})
+    spec = make_identity("artifact-spec", {"target": "system"})
+    binary, artifact = write_artifact_sidecar(
+        so_path, semantic_identity=semantic, spec_identity=spec)
+    assert artifact_sidecar_path(so_path).endswith(".pops-artifact.json")
+    found = read_artifact_sidecar(so_path)
+    assert found == {
+        "protocol": "pops.artifact-sidecar.v1",
+        "semantic_identity": semantic.token,
+        "artifact_spec_identity": spec.token,
+        "binary_identity": binary.token,
+        "artifact_identity": artifact.token,
+    }
+
+
+def test_staged_publication_commits_the_identity_sidecar_last(tmp_path, monkeypatch):
+    staging = str(tmp_path / ".problem.stage.so")
+    destination = str(tmp_path / "problem.so")
+    (tmp_path / ".problem.stage.so").write_bytes(b"complete-binary")
+    semantic = make_identity("semantic", {"program": "p"})
+    spec = make_identity("artifact-spec", {"target": "system"})
+    replacements = []
+    real_replace = os.replace
+
+    def recorded_replace(source, target):
+        replacements.append((source, target))
+        real_replace(source, target)
+
+    monkeypatch.setattr("pops.codegen.compile_provenance.os.replace", recorded_replace)
+    expected = publish_staged_artifact(
+        staging,
+        destination,
+        semantic_identity=semantic,
+        spec_identity=spec,
+    )
+
+    assert replacements[-2:] == [
+        (staging, destination),
+        (artifact_sidecar_path(staging), artifact_sidecar_path(destination)),
+    ]
+    assert not (tmp_path / ".problem.stage.so").exists()
+    assert verify_cached_artifact(
+        destination, semantic_identity=semantic, spec_identity=spec
+    ) == expected
 
 
 def test_read_sidecar_absent_is_none(tmp_path):
-    assert read_cachekey_sidecar(str(tmp_path / "nope.so")) is None
+    assert read_artifact_sidecar(str(tmp_path / "nope.so")) is None
 
 
 # --- the cache-HIT stale/ABI guard -------------------------------------------------------------
 
 def test_verify_accepts_a_matching_sidecar(tmp_path):
     so_path = str(tmp_path / "problem-abc.so")
-    write_cachekey_sidecar(so_path, cache_key="CK", abi_key="ABI", toolchain="clang++|c++23")
-    # A matching sidecar returns None (accept, no raise).
-    assert verify_cached_program_so(so_path, cache_key="CK", abi_key="ABI") is None
+    (tmp_path / "problem-abc.so").write_bytes(b"binary")
+    semantic = make_identity("semantic", {"program": "p"})
+    spec = make_identity("artifact-spec", {"target": "system"})
+    expected = write_artifact_sidecar(so_path, semantic_identity=semantic, spec_identity=spec)
+    assert verify_cached_artifact(
+        so_path, semantic_identity=semantic, spec_identity=spec) == expected
 
 
 def test_verify_refuses_a_missing_sidecar(tmp_path):
     so_path = str(tmp_path / "legacy.so")
     open(so_path, "w").close()  # a .so with NO sidecar (a legacy artifact)
     with pytest.raises(StaleArtifactError) as exc:
-        verify_cached_program_so(so_path, cache_key="CK", abi_key="ABI")
-    assert "no" in str(exc.value) and "sidecar" in str(exc.value), "names the missing sidecar"
-    assert "rm " in str(exc.value), "tells the user how to clear the cache"
+        verify_cached_artifact(
+            so_path,
+            semantic_identity=make_identity("semantic", {}),
+            spec_identity=make_identity("artifact-spec", {}),
+        )
+    assert "no" in str(exc.value) and "sidecar" in str(exc.value)
 
 
-def test_verify_refuses_a_mismatched_cache_key(tmp_path):
+def test_verify_refuses_a_mismatched_spec_identity(tmp_path):
     so_path = str(tmp_path / "problem-abc.so")
-    write_cachekey_sidecar(so_path, cache_key="OLD", abi_key="ABI", toolchain="clang++|c++23")
+    (tmp_path / "problem-abc.so").write_bytes(b"binary")
+    semantic = make_identity("semantic", {})
+    old_spec = make_identity("artifact-spec", {"version": "old"})
+    new_spec = make_identity("artifact-spec", {"version": "new"})
+    write_artifact_sidecar(so_path, semantic_identity=semantic, spec_identity=old_spec)
     with pytest.raises(StaleArtifactError) as exc:
-        verify_cached_program_so(so_path, cache_key="NEW", abi_key="ABI")
+        verify_cached_artifact(
+            so_path, semantic_identity=semantic, spec_identity=new_spec)
     msg = str(exc.value)
-    assert "expected=NEW" in msg and "found=OLD" in msg, "names expected vs found"
+    assert new_spec.token in msg and old_spec.token in msg
 
 
-def test_verify_refuses_a_mismatched_abi_key(tmp_path):
+def test_verify_refuses_a_mismatched_semantic_identity(tmp_path):
     so_path = str(tmp_path / "problem-abc.so")
-    write_cachekey_sidecar(so_path, cache_key="CK", abi_key="OLDABI", toolchain="clang++|c++23")
+    (tmp_path / "problem-abc.so").write_bytes(b"binary")
+    old_semantic = make_identity("semantic", {"program": "old"})
+    new_semantic = make_identity("semantic", {"program": "new"})
+    spec = make_identity("artifact-spec", {})
+    write_artifact_sidecar(
+        so_path, semantic_identity=old_semantic, spec_identity=spec)
     with pytest.raises(StaleArtifactError):
-        verify_cached_program_so(so_path, cache_key="CK", abi_key="NEWABI")
+        verify_cached_artifact(
+            so_path, semantic_identity=new_semantic, spec_identity=spec)
 
 
 if __name__ == "__main__":

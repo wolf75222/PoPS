@@ -14,7 +14,7 @@
 #include <pops/core/state/state.hpp>
 #include <pops/core/foundation/types.hpp>
 #include <pops/core/state/variables.hpp>  // VariableRole, VariableSet: Density-role resolution
-#include <pops/mesh/storage/fab2d.hpp>      // ConstArray4: face-state source cell read
+#include <pops/mesh/storage/fab2d.hpp>    // ConstArray4: face-state source cell read
 
 #include <stdexcept>  // positivity_comp: model without Density role -> clear error
 
@@ -40,7 +40,7 @@ namespace pops {
 /// POINTWISE device-clean function. POPS_HD.
 template <class Model>
 POPS_HD inline void zhang_shu_scale(typename Model::State& s, const ConstArray4& u, int i, int j,
-                                   Real floor, int pos_comp) {
+                                    Real floor, int pos_comp) {
   if (!(floor > Real(0)))
     return;  // strict opt-in: floor <= 0 -> no effect
   if (!(s[pos_comp] < floor))

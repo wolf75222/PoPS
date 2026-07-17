@@ -19,7 +19,7 @@ class _SystemDiagnostics(_System):
     def check_model(self, block: Any, raise_on_error: bool = True, rtol: float = 1e-8,
                     atol: float = 1e-10) -> Any:
         """Generic RUNTIME verification of an installed block (audit 2026-06, work item 6): check
-        on the CURRENT STATE of the block (whatever the backend: native composed, .so JIT/AOT/production):
+        on the CURRENT STATE of the block (direct native or compiled production package):
 
         - finite state U;
         - finite residual -div F + S (exercises flux + source + reconstruction end to end);
@@ -54,7 +54,7 @@ class _SystemDiagnostics(_System):
             if not np.all(np.isfinite(P)):
                 failures.append("primitive state not finite (to_primitive)")
             else:
-                for i, (r, nm) in enumerate(zip(prim_roles, prim_names)):
+                for i, (r, nm) in enumerate(zip(prim_roles, prim_names, strict=True)):
                     if (r == "pressure" or nm == "p") and not bool(np.all(P[i] > 0)):
                         failures.append("primitive '%s' (pressure) not strictly positive" % nm)
                 # round-trip cons -> prim -> cons: state saved then restored (no net mutation).

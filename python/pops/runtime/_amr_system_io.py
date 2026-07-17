@@ -1,16 +1,8 @@
-"""AmrSystem IO mixin (Spec-4 PR-F): AMR outputs, checkpoint, restart.
-
-Visualization output (coarse fields + patch footprints) and the bit-identical single-block
-single-rank v1 checkpoint/restart of :class:`pops.runtime.amr_system.AmrSystem`. Mixed in via
-inheritance; operates on ``self._s``, ``self._L`` and ``self._regrid_every``. ``abi_key`` is the
-module ABI key re-exported through ``pops.runtime.bricks``.
-"""
-
+"""Strict accepted-state checkpoint/restart mixin for the AMR engine."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-
-from pops.runtime.bricks import abi_key
 
 if TYPE_CHECKING:
     from pops.runtime._amr_system_contract import _AmrSystem
@@ -18,250 +10,100 @@ else:
     _AmrSystem = object
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedAMRSystemRestart:
+    restart_identity: Any
+    codec: Any
+
+
 class _AmrSystemIO(_AmrSystem):
-    """Output / checkpoint / restart methods of AmrSystem."""
+    """Private accepted-state codec and transactional restore adapter for ``AmrSystem``."""
 
     def set_history_persistence(self, mapping: Any) -> Any:
-        """Attach the per-history persistence policies (ADC-631, parity with System): @p mapping is
-        ``name -> policy`` (a :class:`pops.time.history_persistence.HistoryPersistence`). The v3
-        checkpoint reads it to store only the policy-selected ring slots; a ring absent from the map
-        persists Dense (the whole ring). Idempotent; ``None`` clears it. Forwarded at install."""
         self._history_persistence = dict(mapping or {})
         return self
 
     def last_restart_report(self) -> Any:
-        """The typed :class:`~pops.time.history_persistence_report.HistoryReplayReport` of the last
-        restart (stored-vs-recomputed ring slots + replay steps), or ``None`` if no restart with rings
-        has run. Metadata-only (parity System.last_restart_report); populated by :meth:`restart`."""
         return getattr(self, "_last_restart_report", None)
 
-    def write(self, path: Any, format: str = "npz", step: Any = None) -> Any:
-        """AMR VISUALIZATION OUTPUT (wave 3) : COARSE fields per block + phi + footprints of the
-        fine patches. format='npz' (per-block densities, phi, patch_rectangles, t) or 'vtk' (.vti of
-        the COARSE : per-block density + phi -- the fine patches are provided in npz via their
-        rectangles, the multi-resolution VTK = PR-IO-3). @p step : numbered suffix. @return path."""
-        import os
-        import numpy as np
-        n = self._s.nx()
-        suffix = ("_%06d" % int(step)) if step is not None else ""
-        # EACH block, by its name (binding AmrSystem::block_names, parity with System) : in multi-block,
-        # density() without a name would read ONLY block 0 and would lose the others SILENTLY.
-        names = list(self._s.block_names())
-        if not names:
-            names = [""]
-        if format == "npz":
-            out = {"t": self._s.time(), "n": n,
-                   "patch_rectangles": np.array(self.patch_rectangles(), dtype=np.float64)
-                   if self.patch_rectangles() else np.zeros((0, 4))}
-            for b in names:
-                key = b if b else "block"
-                out["density_" + key] = np.asarray(self.density(b) if b else self.density(),
-                                                   dtype=np.float64)
-            out["phi"] = np.asarray(self.potential(), dtype=np.float64)
-            target = path + suffix + ".npz"
-            tmp = target + ".tmp"
-            with open(tmp, "wb") as f:
-                np.savez_compressed(f, **out)
-            os.replace(tmp, target)
-            return target
-        if format == "vtk":
-            target = path + suffix + ".vti"
-            arrays, labels = [], []
-            for b in names:
-                key = b if b else "block"
-                arrays.append(np.asarray(self.density(b) if b else self.density(),
-                                         dtype=np.float64).reshape(n, n))
-                labels.append("%s_density" % key)
-            arrays.append(np.asarray(self.potential(), dtype=np.float64).reshape(n, n))
-            labels.append("phi")
-            lines = ['<?xml version="1.0"?>',
-                     '<VTKFile type="ImageData" version="0.1" byte_order="LittleEndian">',
-                     '  <ImageData WholeExtent="0 %d 0 %d 0 0" Origin="0 0 0" '
-                     'Spacing="%.17g %.17g 1">' % (n, n, self._L / n, self._L / n),
-                     '    <Piece Extent="0 %d 0 %d 0 0">' % (n, n),
-                     '      <CellData>']
-            for nm, arr in zip(labels, arrays):
-                lines.append('        <DataArray type="Float64" Name="%s" format="ascii">' % nm)
-                lines.append("          " + " ".join("%.17g" % v for v in arr.ravel()))
-                lines.append('        </DataArray>')
-            lines += ['      </CellData>', '    </Piece>', '  </ImageData>', '</VTKFile>', '']
-            tmp = target + ".tmp"
-            with open(tmp, "w") as f:
-                f.write("\n".join(lines))
-            os.replace(tmp, target)
-            return target
-        raise ValueError("AmrSystem.write : format 'npz' | 'vtk' (received %r)" % (format,))
-
     def checkpoint(self, path: Any) -> Any:
-        """RESTARTABLE BIT-IDENTICAL AMR CHECKPOINT (npz). v1 = SINGLE-BLOCK SINGLE-RANK (ADC-65) ;
-        v2 (ADC-509) = MULTI-BLOCK and/or MPI np>1. Writes the FULL CONSERVATIVE STATE of EACH level
-        (all components ; the coarse AND the fine patches, valid cells -- PER BLOCK in multi-block),
-        the phi of each level (level 0 = WARM-START of the multigrid, load-bearing for the bit-identical
-        resume ; SHARED across blocks), the HIERARCHY (patch_boxes), the clock (t, macro_step) and the
-        regrid cadence. CONTRACT (parity with System.checkpoint) : restart does NOT rebuild the
-        composition -- the script replays its add_block/set_poisson/set_refinement/set_density then calls
-        sim.restart(path), which CHECKS consistency and raises otherwise. @return the path.
+        """Encode the complete accepted AMR state for the RuntimeInstance checkpoint provider.
 
-        MPI np>1 : the per-level/per-block states are gathered by the GLOBAL collective accessors
-        (level_state_global / block_level_state_global / level_potential_global -- every rank MUST call
-        checkpoint), then ONLY rank 0 writes the SINGLE file (identical to mono-rank). The base coarse
-        (replicated or distributed) and the round-robin fine patches are disjoint, so the gather is exact.
+        The provider owns collective publication; this adapter serializes the installed hierarchy,
+        temporal state, histories, and regrid state for frozen or active regridding.
+        """
+        from pops.runtime._amr_checkpoint_v3 import write_v3
 
-        MULTI-BLOCK : the AmrRuntime engine SHARES the layout AND the aux across blocks. The per-level
-        STATE is serialized PER BLOCK (state_<block>_<k>) while phi stays SHARED (phi_<k>). The fine
-        hierarchy is the deterministic frozen central patch (regrid_every == 0), reproduced at restart
-        by replaying the same composition -- so no set_hierarchy on the shared grid.
+        return write_v3(
+            self, self._s, path, self._L, self._regrid_every,
+            getattr(self, "_history_persistence", None) or {})
 
-        SCOPE (EXPLICIT rejection) : regrid_every == 0 only. A bit-identical resume requires a FROZEN
-        hierarchy (otherwise the regrid would re-diverge after the restart) ; we reject at the
-        checkpoint (early failure, clear message). Out-of-scope fallback : AmrSystem.write
-        (visualization) or a single-level System."""
-        import os
-        import numpy as np
-        from pops import _pops
-        # ADC-542: regrid-active checkpoints are RESTARTABLE now (format v3 rebuilds the hierarchy from
-        # the manifest at restart). A regridding system writes v3; a frozen hierarchy keeps the v2 path
-        # (back-compat, zero behaviour change) so existing v2 readers still work.
-        if self._regrid_every != 0:
-            from pops.runtime._amr_checkpoint_v3 import write_v3
-            return write_v3(self._s, path, self._L, self._regrid_every,
-                            getattr(self, "_history_persistence", None) or {})
-        gather = _pops.n_ranks() != 1  # np>1 : COLLECTIVE _global accessors (every rank gathers)
-        multi = self._s.n_blocks() != 1
-        nlev = int(self._s.n_levels())
-        names = list(self._s.block_names())
-        pb = self._s.patch_boxes()  # (level, ilo, jlo, ihi, jhi) inclusive, index space of the level
-        out = {"pops_amr_checkpoint_version": 2,
-               "t": self._s.time(), "macro_step": self._s.macro_step(),
-               "n": self._s.nx(), "L": self._L, "regrid_every": self._regrid_every,
-               "abi_key": abi_key(), "blocks": np.array(names),
-               "n_levels": nlev,
-               "patch_boxes": (np.asarray(pb, dtype=np.int64) if pb
-                               else np.zeros((0, 5), dtype=np.int64))}
-        # FULL conservative state of each level (c*nf*nf + j*nf + i) + SHARED phi (nf*nf). Fine level :
-        # only the patch cells are defined (0 elsewhere) ; the restart only rewrites those cells.
-        # MULTI-BLOCK : per-BLOCK state (the engine carries one level stack per block). MONO-BLOCK :
-        # state_<""> keyed by the (single) block name (an empty name -> the historical "" key).
-        # COLLECTIVE gather (all ranks) BEFORE the rank-0 guard when np>1.
-        if multi:
-            for b in names:
-                out["n_vars_%s" % b] = int(self._s.block_n_vars(b))
-                for k in range(nlev):
-                    out["state_%s_%d" % (b, k)] = np.asarray(
-                        self._s.block_level_state_global(b, k) if gather
-                        else self._s.block_level_state(b, k), dtype=np.float64)
-        else:
-            b = names[0] if names else ""
-            out["n_vars_%s" % b] = int(self._s.n_vars())
-            for k in range(nlev):
-                out["state_%s_%d" % (b, k)] = np.asarray(
-                    self._s.level_state_global(k) if gather else self._s.level_state(k),
-                    dtype=np.float64)
-        for k in range(nlev):
-            out["phi_%d" % k] = np.asarray(
-                self._s.level_potential_global(k) if gather else self._s.level_potential(k),
-                dtype=np.float64)
-        target = path if path.endswith(".npz") else path + ".npz"
-        if _pops.my_rank() != 0:
-            return target  # only rank 0 writes the checkpoint (the gather is already done)
-        tmp = target + ".tmp"  # ATOMIC write (.tmp + os.replace : a crash corrupts nothing)
-        with open(tmp, "wb") as f:
-            np.savez_compressed(f, **out)
-        os.replace(tmp, target)
-        return target
+    def _prepare_checkpoint_restart(self, payload: bytes) -> _PreparedAMRSystemRestart:
+        """Authenticate and preflight the complete AMR payload without native mutation."""
+        from pops.output._checkpoint_collective import decode_checkpoint_bytes
+        from pops.runtime._checkpoint_manifest import authenticate_checkpoint_payload
+        from pops.runtime._amr_checkpoint_v3 import prepare_v3
+
+        data = decode_checkpoint_bytes(payload)
+        identity = authenticate_checkpoint_payload(self, data, runtime_kind="amr")
+        version = int(data["pops_amr_checkpoint_version"])
+        if version != 3:
+            raise ValueError(
+                "restart: AMR checkpoint version %r unsupported; expected exactly 3" % version)
+        return _PreparedAMRSystemRestart(
+            identity, prepare_v3(self, self._s, data, self._L))
+
+    def _begin_checkpoint_restart(self) -> None:
+        if "_checkpoint_restart_python_snapshot" in self.__dict__:
+            raise RuntimeError("AMR checkpoint restart transaction is already active")
+        self._checkpoint_restart_python_snapshot = (
+            getattr(self, "_last_restart_identity", None),
+            getattr(self, "_last_restart_report", None),
+            getattr(self, "_temporal_restart_state", None),
+            getattr(self, "_step_controller", None),
+        )
+        try:
+            self._s.begin_restart_transaction()
+        except BaseException:
+            del self._checkpoint_restart_python_snapshot
+            raise
+
+    def _apply_checkpoint_restart(self, prepared: _PreparedAMRSystemRestart) -> Any:
+        if type(prepared) is not _PreparedAMRSystemRestart:
+            raise TypeError("AMR restart requires its exact prepared payload")
+        from pops.runtime._amr_checkpoint_v3 import apply_v3
+
+        self._last_restart_report = apply_v3(self, self._s, prepared.codec)
+        self._last_restart_identity = prepared.restart_identity
+        return prepared.restart_identity
+
+    def _commit_checkpoint_restart(self) -> None:
+        # Keep the native AcceptedSnapshot live through the all-rank commit consensus.
+        self._checkpoint_restart_committed = True
+
+    def _finalize_checkpoint_restart(self) -> None:
+        if not self.__dict__.get("_checkpoint_restart_committed", False):
+            raise RuntimeError("AMR checkpoint restart transaction was not committed")
+        self._s.commit_restart_transaction()
+        del self._checkpoint_restart_committed
+        del self._checkpoint_restart_python_snapshot
+
+    def _rollback_checkpoint_restart(self) -> None:
+        snapshot = self._checkpoint_restart_python_snapshot
+        try:
+            self._s.rollback_restart_transaction()
+        finally:
+            (self._last_restart_identity, self._last_restart_report,
+             self._temporal_restart_state, self._step_controller) = snapshot
+            self.__dict__.pop("_checkpoint_restart_committed", None)
+            del self._checkpoint_restart_python_snapshot
 
     def restart(self, path: Any) -> Any:
-        """RESUMES an AMR checkpoint (BIT-IDENTICAL). v1 = SINGLE-BLOCK SINGLE-RANK (ADC-65) ;
-        v2 (ADC-509) = MULTI-BLOCK and/or MPI np>1. CHECKS consistency (version, grid, blocks,
-        components, regrid_every == 0) then : (1) MONO-BLOCK only, IMPOSES the saved fine hierarchy
-        (set_hierarchy ; multi-block reproduces the deterministic frozen hierarchy at composition
-        replay) ; (2) restores the FULL conservative state of each level AS-IS, PER BLOCK (no
-        re-prolongation) ; (3) restores the SHARED phi of each level (level 0 = warm-start of the
-        multigrid -> the 1st solve post-restart starts from the same guess) ; (4) restores the clock
-        (t, macro_step). The COMPOSITION (add_block / set_poisson / set_refinement / set_density) must
-        have been REPLAYED by the script BEFORE the call.
+        """Restore the direct AMR engine through the native collective transaction protocol."""
+        from pops.output._checkpoint_collective import restore_checkpoint_path
 
-        ORDER : set_hierarchy BEFORE set_level_state (imposing the layout precedes restoring the valid
-        cells) ; phi and clock after. The 1st step replays update() (sync_down + warm-start solve)
-        then advance -- the ghosts (coarse AND fine) are remade by the step, exactly like after a
-        regrid, hence the bit-identical resume without restoring any ghosts.
+        return restore_checkpoint_path(
+            self, self, path, phase_prefix="AMR direct-engine restart")
 
-        MPI np>1 : every rank reads the file (shared FS) ; set_block_level_state / set_level_potential
-        are owner-rank writes (a rank without a box is a no-op), set_clock sets the clock on each rank
-        -> bit-identical resume under np>1 (parity with System.restart)."""
-        import numpy as np
-        from pops import _pops
-        target = path if path.endswith(".npz") else path + ".npz"
-        d = np.load(target, allow_pickle=False)
-        version = int(d["pops_amr_checkpoint_version"])
-        if version not in (1, 2, 3):
-            raise ValueError("restart : AMR checkpoint version %r not supported (expected 1, 2 or 3)"
-                             % (d["pops_amr_checkpoint_version"],))
-        if version == 3:
-            # ADC-542: v3 rebuilds the mid-run hierarchy from the manifest (restartable under active
-            # regridding). The frozen-hierarchy requirement does NOT apply to v3. ADC-631: restart_v3
-            # also restores + replays the multistep history rings and returns the HistoryReplayReport.
-            from pops.runtime._amr_checkpoint_v3 import restart_v3
-            self._last_restart_report = restart_v3(self._s, d, self._L)
-            return
-        if self._regrid_every != 0:
-            raise ValueError(
-                "AmrSystem.restart : a v1/v2 checkpoint requires regrid_every == 0 (frozen hierarchy). "
-                "This system has regrid_every=%d; write a v3 checkpoint (it restarts under active "
-                "regridding) or rebuild the system with regrid_every=0." % self._regrid_every)
-        if int(d["n"]) != self._s.nx():
-            raise ValueError("restart : checkpoint grid (n=%d) != system (n=%d)"
-                             % (int(d["n"]), self._s.nx()))
-        if float(d["L"]) != self._L:
-            raise ValueError("restart : checkpoint domain (L=%r) != system (L=%r) -- different dx"
-                             % (float(d["L"]), self._L))
-        if int(d["regrid_every"]) != 0:
-            raise ValueError("restart : checkpoint taken with regrid_every=%d != 0 (bit-identical "
-                             "resume impossible)" % int(d["regrid_every"]))
-        chk_blocks = [str(b) for b in d["blocks"]]
-        cur_blocks = list(self._s.block_names())
-        if chk_blocks != cur_blocks:
-            raise ValueError("restart : checkpoint blocks %r != current composition %r "
-                             "(replay the SAME composition before restart)" % (chk_blocks, cur_blocks))
-        nlev = int(d["n_levels"])
-        if nlev != int(self._s.n_levels()):
-            raise ValueError("restart : %d levels in the checkpoint, %d here (does the composition / the "
-                             "refinement differ ?)" % (nlev, int(self._s.n_levels())))
-        multi = self._s.n_blocks() != 1
-        # (1) IMPOSE the saved fine hierarchy (MONO-BLOCK : the coupler filters level 1), except a
-        # SINGLE-LEVEL hierarchy (n_levels == 1, e.g. amr-schur path with no fine patch). MULTI-BLOCK :
-        # the shared hierarchy is the deterministic frozen central patch, already reproduced by the
-        # composition replay -> nothing to impose (the AmrRuntime engine has no set_hierarchy).
-        boxes = [tuple(int(x) for x in row) for row in np.asarray(d["patch_boxes"], dtype=np.int64)]
-        if nlev >= 2 and not any(b[0] == 1 for b in boxes):
-            raise ValueError("restart : %d-level hierarchy but no fine patch (level 1) "
-                             "in the checkpoint (inconsistent)." % nlev)
-        if nlev >= 2 and not multi:
-            self._s.set_hierarchy(boxes)
-        # (2) restore the FULL conservative state of each level AS-IS (no re-prolongation). v2 keys the
-        # state PER BLOCK (state_<block>_<k> + n_vars_<block>) ; v1 (legacy mono-block single-rank) keys
-        # it by level (state_<k> + n_vars). MULTI-BLOCK routes to set_block_level_state(name, k, .),
-        # MONO-BLOCK to set_level_state(k, .) ; both flatten the array and write only the valid cells.
-        for b in cur_blocks:
-            cur_nv = int(self._s.block_n_vars(b)) if multi else int(self._s.n_vars())
-            if version == 2:
-                chk_nv = int(d["n_vars_%s" % b])
-                if chk_nv != cur_nv:
-                    raise ValueError("restart : block '%s' has %d components in the checkpoint, %d here"
-                                     % (b, chk_nv, cur_nv))
-            else:  # v1 : single mono-block, components under the flat "n_vars" key
-                if int(d["n_vars"]) != cur_nv:
-                    raise ValueError("restart : %d components in the checkpoint, %d here"
-                                     % (int(d["n_vars"]), cur_nv))
-            for k in range(nlev):
-                key = ("state_%s_%d" % (b, k)) if version == 2 else ("state_%d" % k)
-                st = np.asarray(d[key], dtype=np.float64)
-                if multi:
-                    self._s.set_block_level_state(b, k, st)
-                else:
-                    self._s.set_level_state(k, st)
-        # (3) restore the SHARED phi (level 0 = warm-start of the multigrid : bit-identical resume).
-        for k in range(nlev):
-            self._s.set_level_potential(k, np.asarray(d["phi_%d" % k], dtype=np.float64).ravel())
-        # (4) restore the clock AFTER the state (parity with System ; macro_step advances the cadence phase).
-        self._s.set_clock(float(d["t"]), int(d["macro_step"]))
+
+__all__ = ["_AmrSystemIO"]

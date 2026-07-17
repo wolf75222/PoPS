@@ -17,7 +17,7 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/numerics/fv/numerical_flux.hpp>
-#include <pops/numerics/spatial/primitives/face_flux.hpp>     // reconstruct_pp, require_reconstruction_ghosts
+#include <pops/numerics/spatial/primitives/face_flux.hpp>  // reconstruct_pp, require_reconstruction_ghosts
 #include <pops/numerics/spatial/primitives/positivity.hpp>    // detail::positivity_comp
 #include <pops/numerics/spatial/primitives/state_access.hpp>  // load_state, load_aux, DiffusiveModel
 #include <pops/numerics/spatial/primitives/wave_speed.hpp>    // fill_wave_speed_cache
@@ -50,10 +50,6 @@ struct AssembleRhsKernel {
   int pos_comp = 0;          ///< component of the Density role (resolved by the host caller)
   POPS_HD void operator()(int i, int j) const {
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
-    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
-    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
-    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // x faces: reconstruction of the states on either side of each face
     const auto Lxm =
@@ -64,8 +60,17 @@ struct AssembleRhsKernel {
         reconstruct_pp<Model>(model, u, i, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rxp =
         reconstruct_pp<Model>(model, u, i + 1, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Fxm = nflux(model, Lxm, Axm, Rxm, Ac, 0);
-    const auto Fxp = nflux(model, Lxp, Ac, Rxp, Axp, 0);
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    const auto Fxm = apply_face_measure(evaluate_numerical_flux_at(nflux, model, Lxm, ax, i - 1, j,
+                                                                   Rxm, ax, i, j, xface)
+                                            .checked_density(),
+                                        xface)
+                         .value;
+    const auto Fxp = apply_face_measure(evaluate_numerical_flux_at(nflux, model, Lxp, ax, i, j, Rxp,
+                                                                   ax, i + 1, j, xface)
+                                            .checked_density(),
+                                        xface)
+                         .value;
 
     // y faces
     const auto Lym =
@@ -76,8 +81,17 @@ struct AssembleRhsKernel {
         reconstruct_pp<Model>(model, u, i, j, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Ryp =
         reconstruct_pp<Model>(model, u, i, j + 1, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto Fym = nflux(model, Lym, Aym, Rym, Ac, 1);
-    const auto Fyp = nflux(model, Lyp, Ac, Ryp, Ayp, 1);
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    const auto Fym = apply_face_measure(evaluate_numerical_flux_at(nflux, model, Lym, ax, i, j - 1,
+                                                                   Rym, ax, i, j, yface)
+                                            .checked_density(),
+                                        yface)
+                         .value;
+    const auto Fyp = apply_face_measure(evaluate_numerical_flux_at(nflux, model, Lyp, ax, i, j, Ryp,
+                                                                   ax, i, j + 1, yface)
+                                            .checked_density(),
+                                        yface)
+                         .value;
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)
@@ -145,10 +159,6 @@ struct AssembleRhsHllCachedKernel {
   int pos_comp = 0;          ///< Density role component (resolved by the host caller)
   POPS_HD void operator()(int i, int j) const {
     const Aux Ac = load_aux<aux_comps<Model>()>(ax, i, j);
-    const Aux Axm = load_aux<aux_comps<Model>()>(ax, i - 1, j);
-    const Aux Axp = load_aux<aux_comps<Model>()>(ax, i + 1, j);
-    const Aux Aym = load_aux<aux_comps<Model>()>(ax, i, j - 1);
-    const Aux Ayp = load_aux<aux_comps<Model>()>(ax, i, j + 1);
 
     // x faces: reconstruction of the states on both sides of each face
     const auto Lxm =
@@ -165,8 +175,22 @@ struct AssembleRhsHllCachedKernel {
     const Real sRxm = ws(i - 1, j, 1) > ws(i, j, 1) ? ws(i - 1, j, 1) : ws(i, j, 1);
     const Real sLxp = ws(i, j, 0) < ws(i + 1, j, 0) ? ws(i, j, 0) : ws(i + 1, j, 0);
     const Real sRxp = ws(i, j, 1) > ws(i + 1, j, 1) ? ws(i, j, 1) : ws(i + 1, j, 1);
-    const auto Fxm = hll_flux_with_speeds(model, Lxm, Axm, Rxm, Ac, 0, sLxm, sRxm);
-    const auto Fxp = hll_flux_with_speeds(model, Lxp, Ac, Rxp, Axp, 0, sLxp, sRxp);
+    const FaceContext xface = FaceContext::axis_aligned(0);
+    const PhysicalFluxView<Model> physical{model};
+    const auto Fxm =
+        apply_face_measure(
+            hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lxm, ax, i - 1, j),
+                                 make_face_trace_at<Model>(Rxm, ax, i, j), xface, sLxm, sRxm)
+                .checked_density(),
+            xface)
+            .value;
+    const auto Fxp =
+        apply_face_measure(
+            hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lxp, ax, i, j),
+                                 make_face_trace_at<Model>(Rxp, ax, i + 1, j), xface, sLxp, sRxp)
+                .checked_density(),
+            xface)
+            .value;
 
     // y faces (components 2 = lo_y, 3 = hi_y of the scratch)
     const auto Lym =
@@ -181,8 +205,21 @@ struct AssembleRhsHllCachedKernel {
     const Real sRym = ws(i, j - 1, 3) > ws(i, j, 3) ? ws(i, j - 1, 3) : ws(i, j, 3);
     const Real sLyp = ws(i, j, 2) < ws(i, j + 1, 2) ? ws(i, j, 2) : ws(i, j + 1, 2);
     const Real sRyp = ws(i, j, 3) > ws(i, j + 1, 3) ? ws(i, j, 3) : ws(i, j + 1, 3);
-    const auto Fym = hll_flux_with_speeds(model, Lym, Aym, Rym, Ac, 1, sLym, sRym);
-    const auto Fyp = hll_flux_with_speeds(model, Lyp, Ac, Ryp, Ayp, 1, sLyp, sRyp);
+    const FaceContext yface = FaceContext::axis_aligned(1);
+    const auto Fym =
+        apply_face_measure(
+            hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lym, ax, i, j - 1),
+                                 make_face_trace_at<Model>(Rym, ax, i, j), yface, sLym, sRym)
+                .checked_density(),
+            yface)
+            .value;
+    const auto Fyp =
+        apply_face_measure(
+            hll_flux_with_speeds(physical, make_face_trace_at<Model>(Lyp, ax, i, j),
+                                 make_face_trace_at<Model>(Ryp, ax, i, j + 1), yface, sLyp, sRyp)
+                .checked_density(),
+            yface)
+            .value;
 
     const auto S = model.source(load_state<Model>(u, i, j), Ac);
     for (int c = 0; c < Model::n_vars; ++c)

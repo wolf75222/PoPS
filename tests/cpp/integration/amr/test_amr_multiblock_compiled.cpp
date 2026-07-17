@@ -31,13 +31,13 @@
 
 #include <gtest/gtest.h>
 
-#include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
-#include <pops/physics/bricks/bricks.hpp>                   // CompositeModel
-#include <pops/physics/bricks/elliptic.hpp>                 // ChargeDensity
-#include <pops/physics/bricks/hyperbolic.hpp>               // ExBVelocity
-#include <pops/physics/bricks/source.hpp>                   // NoSource
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>            // add_compiled_model(AmrSystem&, ...)
-#include <pops/runtime/amr_system.hpp>               // facade AmrSystem
+#include <pops/coupling/source/coupled_source_program.hpp>   // CsOp (opcodes du bytecode P5)
+#include <pops/physics/bricks/bricks.hpp>                    // CompositeModel
+#include <pops/physics/bricks/elliptic.hpp>                  // ChargeDensity
+#include <pops/physics/bricks/hyperbolic.hpp>                // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                    // NoSource
+#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem&, ...)
+#include <pops/runtime/amr_system.hpp>                       // facade AmrSystem
 #include <pops/runtime/config/model_spec.hpp>  // ModelSpec (bloc natif, melange compile + natif)
 
 #include <cmath>
@@ -90,22 +90,28 @@ struct StiffMomentumRelax {
   }
 };
 
-// Modele COMPILE 4 variables a SOURCE RAIDE LOCALE (pour exercer le chemin IMEX du bloc compile multi-
-// bloc en DIRECT, add_compiled_model). elliptic "background" alpha=0 : rhs nul (raideur PUREMENT locale,
-// aucun couplage Poisson) -> on separe la stabilite de la source de tout couplage. TYPE CONCRET (pas de
-// dispatch generique) : reste compilable sous nvcc, comme le reste du fichier.
-using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, BackgroundDensity>;
+// A genuinely state-independent zero elliptic brick. This keeps the stiff-source oracle independent
+// of Poisson even after the deliberately unstable explicit trajectory becomes non-finite: unlike
+// `0 * state`, it cannot manufacture NaNs in an otherwise exact-zero periodic RHS.
+struct ZeroElliptic {
+  template <class State>
+  POPS_HD Real rhs(const State&) const {
+    return Real(0);
+  }
+};
+
+using StiffCModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
 static StiffCModel stiff_cmodel(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffCModel{Euler{Real(1.4)}, r, BackgroundDensity{Real(0), Real(0)}};
+  return StiffCModel{Euler{Real(1.4)}, r, ZeroElliptic{}};
 }
 
 // Modele COMPILE 4 variables NEUTRE (Euler sans source) : un bloc voisin explicite, MEME nombre de
 // variables que le bloc raide (layout coherent sur la hierarchie partagee).
-using NeutralCModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+using NeutralCModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
 static NeutralCModel neutral_cmodel() {
-  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, BackgroundDensity{Real(0), Real(0)}};
+  return NeutralCModel{Euler{Real(1.4)}, NoSource{}, ZeroElliptic{}};
 }
 
 // densite "bulle" gaussienne (gradients non triviaux -> le transport engendre de l'impulsion que la
@@ -120,6 +126,23 @@ static std::vector<double> bubble(int n) {
   return rho;
 }
 
+// Etat Euler complet, component-major, dont les QUATRE composantes sont partout non nulles. Le
+// test (G) l'utilise comme oracle exact du transport set_conservative_state -> builder compile.
+static std::vector<double> full_euler_state(int n, double scale) {
+  const std::size_t nn = static_cast<std::size_t>(n) * n;
+  std::vector<double> state(4 * nn);
+  for (int j = 0; j < n; ++j)
+    for (int i = 0; i < n; ++i) {
+      const std::size_t k = static_cast<std::size_t>(j) * n + i;
+      const double rho = scale * (1.0 + 0.01 * static_cast<double>(1 + i + n * j));
+      state[0 * nn + k] = rho;
+      state[1 * nn + k] = 0.25 * rho;
+      state[2 * nn + k] = -0.125 * rho;
+      state[3 * nn + k] = 2.5 * rho;
+    }
+  return state;
+}
+
 // densite de charge a moyenne nulle (solvable en periodique) : un creneau centre +/- amplitude, n*n.
 static std::vector<double> bump(int n, double base, double amp) {
   std::vector<double> r(static_cast<std::size_t>(n) * n, base);
@@ -129,6 +152,18 @@ static std::vector<double> bump(int n, double base, double amp) {
       r[static_cast<std::size_t>(j) * n + i] = base + (in ? amp : -amp / 3.0);
     }
   return r;
+}
+
+static double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+static double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                                const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
 }
 
 template <class F>
@@ -211,6 +246,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
   const double q0 = +1.0, q1 = -1.0;  // ions (block 0), electrons (block 1)
   const std::vector<double> rho0 = bump(N, 1.0, 0.40);
   const std::vector<double> rho1 = bump(N, 1.0, 0.20);
+  ASSERT_NEAR(periodic_rhs_mean(q0, rho0, q1, rho1), 0.0, 1e-13)
+      << "charged two-block fixtures must satisfy the periodic Poisson nullspace before solve";
 
   // ============================================================================================
   // (A) DEUX BLOCS COMPILES a schemas DIFFERENTS, sans couplage. Le 2e add_compiled_model ne leve
@@ -224,6 +261,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     // bloc 0 : ions q=+1, schema none/rusanov.
     add_compiled_model(sim, "ions", exb_model(q0, B0), "none", "rusanov", "conservative",
                        "explicit",
@@ -251,8 +289,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     EXPECT_TRUE(dmax_field(d1_after, d1_before) > 1e-6) << "A_block1_evolved";
 
     EXPECT_TRUE(std::fabs(sim.mass("ions") - m0_before) < 1e-10) << "A_block0_mass_conserved";
-    EXPECT_TRUE(std::fabs(sim.mass("electrons") - m1_before) < 1e-10)
-        << "A_block1_mass_conserved";
+    EXPECT_TRUE(std::fabs(sim.mass("electrons") - m1_before) < 1e-10) << "A_block1_mass_conserved";
 
     const std::vector<double> phi = sim.potential();
     double pmax = 0;
@@ -265,9 +302,12 @@ TEST(test_amr_multiblock_compiled, Runs) {
   // ============================================================================================
   // (B) COUPLAGE entre deux blocs compiles : ionisation-like +S/-S (ions gagnent, neutrals perdent).
   //     La masse COMPOSITE n_ions + n_neutrals est conservee globalement ; la masse ions AUGMENTE.
-  //     neutrals q=0 (pas de contribution Poisson) -> couplage pur entre deux blocs compiles.
+  //     Both blocks are field-neutral here: this section isolates the coupled source and keeps the
+  //     fully periodic elliptic RHS exactly compatible with its constant nullspace.
   // ============================================================================================
   {
+    ASSERT_EQ(periodic_rhs_mean(0.0, rho0, 0.0, rho1), 0.0)
+        << "field-neutral source fixture must have an exactly zero periodic RHS mean before solve";
     AmrSystemConfig cfg;
     cfg.n = N;
     cfg.L = L;
@@ -275,7 +315,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
-    add_compiled_model(sim, "ions", exb_model(q0, B0), "minmod", "rusanov", "conservative",
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
+    add_compiled_model(sim, "ions", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);
     add_compiled_model(sim, "neutrals", exb_model(0.0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);
@@ -309,6 +350,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     cfg.regrid_every = 0;
 
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     add_compiled_model(sim, "ions", exb_model(q0, B0), "minmod", "rusanov", "conservative",
                        "explicit", /*gamma=*/1.4);                                   // bloc COMPILE
     sim.add_block("electrons", exb_spec(q1, B0), "none", "rusanov", "conservative",  // bloc NATIF
@@ -322,8 +364,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
     const std::vector<double> d1_before = sim.density("electrons");
     sim.advance(0.01, 5);
     EXPECT_TRUE(dmax_field(sim.density("ions"), d0_before) > 1e-6) << "C_compiled_block_evolved";
-    EXPECT_TRUE(dmax_field(sim.density("electrons"), d1_before) > 1e-6)
-        << "C_native_block_evolved";
+    EXPECT_TRUE(dmax_field(sim.density("electrons"), d1_before) > 1e-6) << "C_native_block_evolved";
     EXPECT_TRUE(std::fabs(sim.mass("ions") - 0.0) >= 0.0) << "C_mass_queryable";  // n'a pas crash
   }
 
@@ -333,6 +374,9 @@ TEST(test_amr_multiblock_compiled, Runs) {
   //     mono-bloc compile vers le nouveau moteur, qui differe sur l'ordre des operations flottantes).
   // ============================================================================================
   {
+    const std::vector<double> periodic_state = bump(N, 0.0, 0.40);
+    ASSERT_NEAR(periodic_rhs_mean(q0, periodic_state, 0.0, periodic_state), 0.0, 1e-13)
+        << "single charged periodic fixture must have zero RHS mean before solve";
     auto run_mono = [&]() {
       AmrSystemConfig cfg;
       cfg.n = N;
@@ -344,7 +388,8 @@ TEST(test_amr_multiblock_compiled, Runs) {
                          "explicit",
                          /*gamma=*/1.4);
       sim.set_poisson("charge_density", "geometric_mg", "periodic");
-      sim.set_density("ne", rho0);
+      // A single periodic charged block must itself have zero mean; no projection is allowed.
+      sim.set_density("ne", periodic_state);
       sim.advance(0.01, 5);
       return sim.density("ne");
     };
@@ -405,6 +450,7 @@ TEST(test_amr_multiblock_compiled, Runs) {
       cfg.periodic = true;
       cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
       AmrSystem sim(cfg);
+      sim.set_temporal_relations({2}, {1}, {"integral_only"});
       add_compiled_model(sim, "stiff", stiff_cmodel(eps), "minmod", "rusanov", "conservative",
                          imex ? "imex" : "explicit", /*gamma=*/1.4, /*substeps=*/1, stride,
                          /*implicit_vars=*/{}, impl_roles);
@@ -467,5 +513,38 @@ TEST(test_amr_multiblock_compiled, Runs) {
     const bool mask_in_explicit_threw =
         raises([&] { (void)run_stiff_compiled(/*imex=*/false, /*stride=*/1, {"momentum_x"}); });
     EXPECT_TRUE(mask_in_explicit_threw) << "F3_compiled_partial_mask_rejected_in_explicit";
+  }
+
+  // ============================================================================================
+  // (G) ETAT CONSERVATIF COMPLET sur DEUX blocs compiles : le builder differe recoit le vecteur
+  //     runtime lie APRES l'enregistrement du modele concret. Les 4 composantes non nulles doivent
+  //     etre reproduites BIT POUR BIT au niveau grossier ; aucun repli implicite vers set_density.
+  // ============================================================================================
+  {
+    const int Ns = 8;
+    AmrSystemConfig cfg;
+    cfg.n = Ns;
+    cfg.L = L;
+    cfg.periodic = true;
+    cfg.regrid_every = 0;
+    AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
+    add_compiled_model(sim, "gas", neutral_cmodel(), "minmod", "rusanov", "conservative",
+                       "explicit", /*gamma=*/1.4);
+    add_compiled_model(sim, "marker", neutral_cmodel(), "minmod", "rusanov", "conservative",
+                       "explicit", /*gamma=*/1.4);
+    const std::vector<double> gas_state = full_euler_state(Ns, 1.0);
+    const std::vector<double> marker_state = full_euler_state(Ns, 0.75);
+    for (double value : gas_state)
+      ASSERT_NE(value, 0.0);
+    for (double value : marker_state)
+      ASSERT_NE(value, 0.0);
+    sim.set_conservative_state("gas", gas_state);
+    sim.set_conservative_state("marker", marker_state);
+
+    EXPECT_EQ(sim.block_level_state_global("gas", 0), gas_state)
+        << "G_compiled_full_state_gas_exact";
+    EXPECT_EQ(sim.block_level_state_global("marker", 0), marker_state)
+        << "G_compiled_full_state_marker_exact";
   }
 }

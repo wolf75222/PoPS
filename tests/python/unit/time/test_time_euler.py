@@ -3,8 +3,8 @@
 
 Motivation : fidelite aux references au premier ordre (RIEMOM2D : split dimensionnel
 additif + Euler == Euler non-splitte, algebriquement Mx+My-M = M+dt(Lx+Ly)) ; le seul
-ecart de schema d'un replay vs ces references est l'etage 2 de ssprk2. "euler" est un
-mode VALIDATION : ssprk2 reste le defaut (no-default-change verifie ici).
+ecart de schema d'un replay vs ces references est l'etage 2 de ssprk2. ``euler`` reste un
+schema public explicite ; ssprk2 reste le defaut (no-default-change verifie ici).
 
 On verifie :
  (1) facade : Explicit() -> kind 'explicit' (defaut intact) ; Explicit(method='euler') ->
@@ -15,28 +15,37 @@ On verifie :
  (3) no-default-change : un pas Explicit() == un pas Explicit(method='ssprk2') bit-exact ;
  (4) garde de discrimination : euler != ssprk2 sur le meme pas (le test (2) ne compare pas
      deux choses egales par accident) ;
- (5) AmrSystem : time='euler' rejete par le perimetre AMR existant (explicit|ssprk3|imex),
-     message explicite -- pas d'ignore silencieux ;
- (6) [compilateur] chemins .so : backend='production' (add_native_block, gabarit
-     add_compiled_model -> make_block) porte euler -- meme identite de Shu-Osher ; le chemin
-     AOT (add_compiled_block, ABI extern C figee sur SSPRK2) le REJETTE explicitement en
-     pointant production/natif (pas d'ignore silencieux).
+ (5) AmrSystem : time='euler' porte par le chemin Forward-Euler AMR existant, avec sa relation
+     temporelle explicite -- pas de rabattement silencieux vers SSPRK2 ;
+ (6) [compilateur] le package natif backend='production' (add_native_block, gabarit
+     add_compiled_model -> make_block) porte euler avec la meme identite de Shu-Osher.
 
 Modele natif pur transport (isotherme sans source ni Poisson) pour (1)-(5) : aucun
 compilateur requis ; (6) s'auto-saute sans compilateur ou sans Kokkos.
 """
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import os
 import sys
 import tempfile
 
 import numpy as np
-
 import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model as BoardModel
+from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefaultSource
+
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.toolchain import _default_cxx
-from pops.physics.facade import Model
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.physics._facade import Model
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
+from tests.python.support.requirements import repo_include
 
 fails = 0
 
@@ -50,7 +59,8 @@ def chk(cond, label):
 
 def err_msg(fn):
     try:
-        fn(); return ""
+        fn()
+        return ""
     except Exception as ex:  # noqa: BLE001
         return str(ex)
 
@@ -58,18 +68,18 @@ def err_msg(fn):
 def transport_model():
     # NoSource + brique elliptique inerte (jamais resolue : pas de set_poisson) : l'avance
     # est un PUR transport, condition de l'identite de Shu-Osher du test (2).
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def make_sim(method):
     n = 24
     sim = System(n=n, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method=method))
+    sim.add_equation("ions", transport_model(),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(method=method))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
@@ -78,9 +88,9 @@ def make_sim(method):
 
 
 print("== (1) facade ==")
-chk(pops.Explicit().kind == "explicit", "Explicit() -> kind 'explicit' (defaut intact)")
-chk(pops.Explicit(method="euler").kind == "euler", "Explicit(method='euler') -> kind 'euler'")
-msg = err_msg(lambda: pops.Explicit(method="rk4"))
+chk(engine.Explicit().kind == "explicit", "Explicit() -> kind 'explicit' (defaut intact)")
+chk(engine.Explicit(method="euler").kind == "euler", "Explicit(method='euler') -> kind 'euler'")
+msg = err_msg(lambda: engine.Explicit(method="rk4"))
 chk("'euler'" in msg, f"methode inconnue rejetee, liste a jour ({msg[:48]}...)")
 
 print("== (2) identite de Shu-Osher : ssprk2 == 0.5 U0 + 0.5 euler(euler(.)) ==")
@@ -102,9 +112,9 @@ if not bit:
 print("== (3) no-default-change : defaut == ssprk2 ==")
 sd = make_sim("ssprk2")
 s_def = System(n=24, L=1.0, periodic=True)
-s_def.add_block("ions", transport_model(),
-                spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                time=pops.Explicit())
+s_def.add_equation("ions", transport_model(),
+                   spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                   time=engine.Explicit())
 s_def.set_state("ions", np.array(sd.get_state("ions")))
 sd.step(dt)
 s_def.step(dt)
@@ -119,12 +129,57 @@ seb.step(dt)
 d = np.abs(np.array(s2b.get_state("ions")) - np.array(seb.get_state("ions"))).max()
 chk(d > 1e-8, f"euler != ssprk2 sur un pas (ecart max {d:.2e})")
 
-print("== (5) AMR : rejet explicite ==")
-amr = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=0)
-msg = err_msg(lambda: amr.add_block("ions", transport_model(),
-                                    spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                                    time=pops.Explicit(method="euler")))
-chk("euler" in msg or "explicit" in msg, f"AmrSystem rejette time='euler' ({msg[:60]}...)")
+def make_amr_sim(method):
+    n = 24
+    sim = AmrSystem(n=n, L=1.0, periodic=True, regrid_every=0)
+    sim.set_temporal_relations([2], [1], ["integral_only"])
+    sim.add_equation(
+        "ions",
+        transport_model(),
+        spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+        time=engine.Explicit(method=method),
+    )
+    x = (np.arange(n) + 0.5) / n
+    X, Y = np.meshgrid(x, x, indexing="ij")
+    rho = 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
+    sim.set_density("ions", rho.ravel())
+    return sim, rho
+
+
+print("== (5) AMR : Euler explicite execute avec relation temporelle ==")
+amr_euler, amr_rho0 = make_amr_sim("euler")
+amr_ssprk2, _ = make_amr_sim("ssprk2")
+amr_euler.step(dt)
+amr_euler_once = np.asarray(amr_euler.density("ions")).reshape(amr_rho0.shape)
+amr_ssprk2.step(dt)
+amr_ssprk2_once = np.asarray(amr_ssprk2.density("ions")).reshape(amr_rho0.shape)
+chk(
+    amr_euler.macro_step() == 1 and abs(amr_euler.time() - dt) < 1e-15,
+    "AmrSystem Euler avance exactement un macro-pas",
+)
+chk(
+    np.all(np.isfinite(amr_euler_once)),
+    "AmrSystem Euler publie un etat fini apres son premier pas",
+)
+chk(
+    float(np.max(np.abs(amr_euler_once - amr_ssprk2_once))) > 1e-8,
+    "AmrSystem Euler ne se rabat pas silencieusement sur SSPRK2",
+)
+amr_euler.step(dt)
+amr_euler_twice = np.asarray(amr_euler.density("ions")).reshape(amr_rho0.shape)
+chk(
+    np.all(np.isfinite(amr_euler_twice))
+    and float(np.max(np.abs(amr_euler_twice - amr_rho0))) > 1e-8,
+    "deux pas Euler AMR produisent un transport non trivial et fini",
+)
+amr_ssprk2_reference = 0.5 * amr_rho0 + 0.5 * amr_euler_twice
+amr_relation_error = float(np.max(np.abs(amr_ssprk2_once - amr_ssprk2_reference)))
+chk(
+    np.array_equal(amr_ssprk2_once, amr_ssprk2_reference)
+    or amr_relation_error < 1e-15,
+    "identite de Shu-Osher AMR : SSPRK2 == 0.5 U0 + 0.5 Euler(Euler(U0)) "
+    f"(err max {amr_relation_error:.1e})",
+)
 
 cxx = _default_cxx(None)
 if not cxx:
@@ -132,8 +187,7 @@ if not cxx:
     print("FAILS =", fails)
     sys.exit(1 if fails else 0)
 
-print("== (6) chemins .so : production porte euler, AOT rejette ==")
-from tests.python.support.requirements import repo_include
+print("== (6) package natif production : Euler explicite porte ==")
 INCLUDE = repo_include()
 
 
@@ -148,9 +202,44 @@ def adv_model():
     return m
 
 
+def _public_adv_artifact(name="eulprod"):
+    """Compile the production component through the final typed Case lifecycle."""
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
+    state = model.state("U", components=("q1", "q2"))
+    q1, q2 = state
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (1.5 * q1, -0.7 * q2),
+                     y_axis: (-0.7 * q1, 1.5 * q2)},
+        waves={x_axis: (1.5 + 0.0 * q1,) * 2,
+               y_axis: (1.5 + 0.0 * q1,) * 2},
+    )
+    source = model.source("zero", on=state, value=(0.0 * q1, 0.0 * q2))
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+    case = pops.Case("%s-case" % name)
+    block = case.block("q", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, FiniteVolume(
+        flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    case.numerics(numerics, block=block)
+    program = __import__("pops").time.Program("%s-program" % name)
+    temporal = program.state(block[state])
+    rhs = program.rhs(state=temporal.n, terms=[FinalFlux(), FinalDefaultSource()])
+    program.commit(temporal.next, program.value(
+        "U1", temporal.n + program.dt * rhs, at=temporal.next.point))
+    case.program(program)
+    layout = Uniform(CartesianGrid(frame=frame, cells=(16, 16), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production(),
+                            compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")})
+    return pops.compile(resolved).blocks[0].model
+
+
 tmp = tempfile.mkdtemp(prefix="pops_euler_")
 try:
-    prod = adv_model().compile(os.path.join(tmp, "eulprod.so"), INCLUDE, backend="production")
+    prod = _public_adv_artifact()
 except RuntimeError as ex:
     if "Kokkos" in str(ex):
         print("Kokkos introuvable : test (6) saute --", str(ex)[:60])
@@ -163,8 +252,8 @@ def make_prod_sim(method):
     n = 16
     sim = System(n=n, L=1.0, periodic=True)
     sim.add_equation("q", model=prod,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method=method))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method=method))
     x = (np.arange(n) + 0.5) / n
     X, Y = np.meshgrid(x, x, indexing="ij")
     sim.set_state("q", np.stack([1.0 + 0.3 * np.sin(2 * np.pi * X),
@@ -183,15 +272,6 @@ gotp = np.array(p2.get_state("q"))
 ep = np.abs(gotp - refp).max()
 chk(np.array_equal(gotp, refp) or ep < 1e-15,
     f"production : identite de Shu-Osher (err max {ep:.1e})")
-
-aot = adv_model().compile(os.path.join(tmp, "eulaot.so"), INCLUDE, backend="aot")
-sim_a = System(n=16, L=1.0, periodic=True)
-msg = err_msg(lambda: sim_a.add_equation("q", model=aot,
-                                         spatial=pops.FiniteVolume(limiter=FirstOrder(),
-                                                                  riemann=Rusanov()),
-                                         time=pops.Explicit(method="euler")))
-chk("production" in msg and "SSPRK2" in msg,
-    f"AOT : euler rejete en pointant production/natif ({msg[:60]}...)")
 
 print("FAILS =", fails)
 sys.exit(1 if fails else 0)

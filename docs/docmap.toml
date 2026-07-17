@@ -1,8 +1,5 @@
-# Minimal documentation map for the documentation reset.
-#
-# The former Sphinx site and historical root docs were removed. Entries below
-# intentionally have no freshness dependencies until the new documentation
-# structure is rebuilt.
+# Maintained documentation map. Dependencies are executable/source authorities,
+# not roadmap references; freshness warnings identify a contract that needs review.
 
 [exclude]
 patterns = []
@@ -76,3 +73,24 @@ mode = "warning"
 depends_on = []
 tested_by = []
 testable = false
+
+[docs."docs/design/SPECIFICATION_TECHNIQUE_FINALE_POPS_ARCHITECTURE.md"]
+owner = "Romain"
+mode = "warning"
+reviewed = "45e71434fead6b25e3e14cb56f344031f12565d2"
+depends_on = [
+  "python/pops/__init__.py",
+  "python/pops/_api.py",
+  "python/pops/physics/board.py",
+  "python/pops/problem/problem.py",
+  "python/pops/time/_program/api.py",
+  "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py",
+  "examples/final/EXEMPLE_SPEC_FINALE_MULTIPHYSIQUE_CORE.py",
+  "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_IMEX_AMR.py",
+  "examples/final/EXEMPLE_SPEC_FINALE_15_MOMENTS_HYQMOM.py",
+]
+tested_by = [
+  "tests/python/architecture/test_final_public_api.py",
+  "tests/python/architecture/test_release_contract.py",
+]
+testable = true

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -52,6 +53,57 @@ def skip_process_test(reason: str, *, code: int = 0) -> None:
     sys.exit(code)
 
 
+def native_tests_required() -> bool:
+    """Return whether missing native prerequisites are release-gate failures."""
+    return os.environ.get("POPS_REQUIRE_NATIVE_TESTS") == "1"
+
+
+def mpi_tests_required() -> bool:
+    """Return whether missing MPI prerequisites are release-gate failures."""
+    return os.environ.get("POPS_REQUIRE_MPI_TESTS") == "1"
+
+
+def require_native_or_skip(
+    reason: str,
+    *,
+    optional_skip: Callable[[str], object] | None = None,
+) -> None:
+    """Fail a required native CI acceptance, otherwise report an explicit optional skip.
+
+    Local source-only runs may legitimately lack a compiler, Kokkos, or an installed extension.
+    The Serial native CI lane sets ``POPS_REQUIRE_NATIVE_TESTS=1`` because those prerequisites are
+    part of that lane's contract; treating their disappearance (or an import/API regression) as a
+    skip would silently remove release coverage. ``optional_skip`` lets pytest-native fixtures and
+    tests use this same policy without relying on the process-test ``POPS_SKIP`` protocol.
+    """
+    if native_tests_required():
+        raise RuntimeError(f"required native test unavailable: {reason}")
+    if optional_skip is not None:
+        optional_skip(reason)
+        return
+    skip_process_test(reason)
+
+
+def require_mpi_or_skip(
+    reason: str,
+    *,
+    optional_skip: Callable[[str], object] | None = None,
+) -> None:
+    """Fail a required MPI acceptance, otherwise report one canonical optional skip.
+
+    The dedicated MPI lane sets ``POPS_REQUIRE_MPI_TESTS=1``.  Its manifest-owned entrypoints must
+    therefore never turn a missing native MPI build, launcher, rank count, or parallel-HDF5
+    capability into a successful process exit.  Developer runs retain an explicit ``POPS_SKIP:``
+    result through the same process protocol as native-only tests.
+    """
+    if mpi_tests_required():
+        raise RuntimeError(f"required MPI test unavailable: {reason}")
+    if optional_skip is not None:
+        optional_skip(reason)
+        return
+    skip_process_test(reason)
+
+
 def kokkos_root() -> Path | None:
     for name in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
         value = os.environ.get(name)
@@ -62,7 +114,9 @@ def kokkos_root() -> Path | None:
     return None
 
 
-def missing_aot_requirement(include: str | os.PathLike[str], cxx: str | None) -> str | None:
+def missing_native_compile_requirement(
+    include: str | os.PathLike[str], cxx: str | None,
+) -> str | None:
     if not cxx:
         return "compilateur C++ absent"
     if not Path(include).is_dir():

@@ -24,7 +24,7 @@
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes du bytecode P5)
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr/amr_runtime.hpp>                  // AmrRuntime, AmrRuntimeBlock
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -70,8 +70,8 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   detail::dispatch_model(exb_charge(+1.0, B0), [&](auto m) {
@@ -88,8 +88,11 @@ static AmrRuntime make_two_block(int N, double L, double B0, const std::vector<d
   // Pure host METADATA: the numerics still act on component 0, only (block, role) resolution changes.
   if (ions_user_role != nullptr)
     blocks[0].cons_vars.user_roles = {ions_user_role};
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 // Source minimale a UN terme : out_role recu sur le bloc "ions", lisant density des deux blocs.

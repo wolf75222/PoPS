@@ -5,60 +5,92 @@ descriptor). System.install_program reads that descriptor and rejects, BEFORE in
 a simulation that did not provide a required field -- here B_z, normally supplied by
 set_magnetic_field -- with a spec-style message ("operator 'lorentz' requires aux field 'B_z', but
 simulation did not provide it") instead of a cryptic failure mid-step. The negative and positive
-cases both need a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) to build the .so; the test prints a
-skip notice and exits 0 otherwise (run it on ROMEO). cf. docs/sphinx/reference/operator-modules.md.
+cases both need a compiler + a visible Kokkos (POPS_KOKKOS_ROOT) to build the .so. The exact native
+preflight is an explicit optional local skip and a fail-closed requirement in native CI. Any later
+compile failure propagates as a real regression. cf. docs/sphinx/reference/operator-modules.md.
 """
+import sys
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
-import sys
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
 
 try:
     import numpy as np
 
-    import pops
-    from pops.ir.ops import sqrt
-    from pops.physics.facade import Model
-    from pops import time as adctime
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    import pops.runtime._engine_descriptors as engine
+    import pops.lib.time as libtime
+    from pops.codegen._compile_drivers import compile_problem
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.math import ddt, div, sqrt
+    from pops.physics import Model
+    from pops.problem import Case
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
+    from tests.python.integration._final_field_program import compile_block_model
 except Exception as exc:  # noqa: BLE001
-    print("skip test_install_requirement_validation (pops/numpy unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip(
+        "test_install_requirement_validation imports unavailable: %s" % exc
+    )
 
 N = 16
 
 
 def lorentz_model(name="adc446_model"):
     """An isothermal fluid whose Lorentz linear source reads the aux field B_z (a hard requirement)."""
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    frame = Rectangle(
+        "%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    m = Model(name, frame=frame)
+    state = m.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
     cs = sqrt(0.5)
-    m.flux(x=[mx, mx * mx / rho + 0.5 * rho, mx * my / rho],
-           y=[my, mx * my / rho, my * my / rho + 0.5 * rho])
-    m.eigenvalues(x=[mx / rho - cs, mx / rho, mx / rho + cs],
-                  y=[my / rho - cs, my / rho, my / rho + cs])
-    m.primitive_vars(rho, mx, my)
-    m.conservative_from([rho, mx, my])
+    flux = m.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={
+            x_axis: (mx, mx * mx / rho + 0.5 * rho, mx * my / rho),
+            y_axis: (my, mx * my / rho, my * my / rho + 0.5 * rho),
+        },
+        waves={
+            x_axis: (mx / rho - cs, mx / rho, mx / rho + cs),
+            y_axis: (my / rho - cs, my / rho, my / rho + cs),
+        },
+    )
     bz = m.aux("B_z")
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho)
-    m.rate_operator("explicit_rhs", flux=True)
+    m.operator(
+        "lorentz",
+        returns=m.local_linear_operator(
+            "lorentz",
+            on=state,
+            matrix=((0.0, 0.0, 0.0), (0.0, 0.0, bz), (0.0, -bz, 0.0)),
+        ),
+    )
+    m.rate("explicit_rhs", equation=ddt(state) == -div(flux))
     return m
 
 
-def lie_program(name="adc446_prog"):
-    P = adctime.Program(name)
-    u = P.state("plasma")
-    fields = P.solve_fields(u)
-    r = P._rhs_legacy(state=u, fields=fields)
-    P.commit("plasma", P.linear_combine("u1", u + P.dt * r))
-    return P
+def lie_program(model, name="adc446_prog"):
+    case = Case("%s-case" % name)
+    state = case.block("plasma", model)[model.states["U"]]
+    return libtime.ForwardEuler(
+        state,
+        rate=model.operators["explicit_rhs"],
+    )
 
 
 def make_sim(block_model, with_bz):
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_equation("plasma", block_model.compile(backend="production"),
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+    sim.add_equation("plasma", compile_block_model(block_model, target="system"),
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     if with_bz:
         sim.set_magnetic_field(3.0 * np.ones(N * N))
@@ -70,16 +102,15 @@ def make_sim(block_model, with_bz):
 
 
 def main():
+    missing = missing_native_compile_requirement(repo_include(), default_cxx())
+    if missing:
+        require_native_or_skip("test_install_requirement_validation: %s" % missing)
     if not hasattr(System(n=8, L=1.0, periodic=True), "install_program"):
-        print("skip test_install_requirement_validation (_pops lacks install_program; rebuild _pops)")
-        return 0
+        require_native_or_skip(
+            "test_install_requirement_validation requires System.install_program"
+        )
     m = lorentz_model()
-    try:
-        compiled = pops.codegen.compile_problem(model=m, time=lie_program())
-    except RuntimeError as exc:
-        print("skip test_install_requirement_validation (no Kokkos to build the .so: %s)"
-              % str(exc)[:120])
-        return 0
+    compiled = compile_problem(model=m, time=lie_program(m))
 
     # (1) Negative: a simulation WITHOUT set_magnetic_field must be rejected at install with the
     # spec-style message naming the operator and the missing aux field.

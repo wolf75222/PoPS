@@ -1,22 +1,30 @@
-"""pops.lib.time.euler -- Forward Euler time-stepping scheme.
-
-Builds a pops.time.Program step for the classic first-order explicit method.
-The backward_euler name is not defined here (the implicit BDF1 path is accessed
-via bdf(..., order=1, linear_source=...)); only forward_euler lives here.
-"""
+"""Canonical forward-Euler Program factory."""
 from __future__ import annotations
 
 from typing import Any
 
-from ._helpers import _stage_rhs, program_macro
+from pops.time._methods.tableau import RungeKuttaTableau
+
+from ._factory import program_factory, resolve_solve_action
+from .rk import _build_explicit_runge_kutta
 
 
-@program_macro
-def forward_euler(P: Any, block: Any, *, sources: Any = ("default",), flux: Any = True) -> Any:
-    """Forward Euler: U^{n+1} = U + dt * R(U).
+FORWARD_EULER_TABLEAU = RungeKuttaTableau(
+    A=[[]], b=[1], c=[0], name="forward_euler")
 
-    Called with a live ``Program`` first (``forward_euler(P, block)``) it mutates ``P`` in place; called
-    with the block name (``forward_euler(block)``) it returns a fresh, inspectable Program (ADC-554)."""
-    U = P.state(block)
-    R = _stage_rhs(P, U, sources, flux)
-    P.commit(block, P.linear_combine("fe_step", U + P.dt * R))
+
+def ForwardEuler(state: Any, *, rate: Any, fields: Any = None, solve_action: Any = None) -> Any:
+    """Return an ordinary first-order explicit Program."""
+    action = resolve_solve_action(solve_action, "ForwardEuler")
+    return program_factory(
+        "ForwardEuler",
+        _build_explicit_runge_kutta,
+        state,
+        rate,
+        fields,
+        FORWARD_EULER_TABLEAU,
+        action,
+    )
+
+
+__all__ = ["FORWARD_EULER_TABLEAU", "ForwardEuler"]

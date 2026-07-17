@@ -7,19 +7,15 @@ These checks pin the Spec 5 sec.6 / sec.7 descriptor contract:
   - available() on the Descriptor family returns an explainable Availability, never a bare bool;
   - lower() returns an INERT metadata dict and never raises for a valid descriptor (it must not
     run a numeric loop or touch the runtime);
-  - inspect_capabilities() returns a descriptor-sourced matrix whose rows carry the required keys;
+  - pops.inspect(descriptor) returns the descriptor-owned structured record;
   - reject_string_selector() raises a clear TypeError with the spec message;
-  - read_manifest() reads a brick manifest's metadata WITHOUT registering it;
-  - Availability is now the SAME class in pops.descriptors and pops.mesh._descriptor (the
-    duplicate the reviewers flagged is gone).
+  - Availability has one public owner in pops.descriptors; private mesh implementation modules do
+    not re-export it.
 
 Pure Python: it only imports the inert authoring packages (the compiled _pops loads as a side
 effect of ``import pops`` but no model is built or run).
 """
-import json
-import os
 import sys
-import tempfile
 
 import pytest
 
@@ -28,7 +24,7 @@ pops = pytest.importorskip("pops")
 from pops.descriptors import (  # noqa: E402
     Availability, BrickDescriptor, Descriptor, DescriptorProtocol, reject_string_selector)
 from pops.numerics.riemann import HLL  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
+from pops.mesh import PolarMesh  # noqa: E402
 import pops.mesh._descriptor as mesh_descriptor  # noqa: E402
 from pops import moments  # noqa: E402
 
@@ -47,7 +43,7 @@ MOMENTS_ROUTE_CHOOSERS = (
     (moments.ExactSpeeds(moments.ExactSpeeds.ROE_DISSIPATION), "wave_speed"),
     (moments.RealizabilityProjection(eps_m00=1e-10, robust=False), "realizability"),
     (moments.MagneticMomentSource(q_over_m="my_q", b_field="my_b"), "moment_source"),
-    (moments.HyQMOM15Closure(variant="levermore"), "closure"),
+    (moments.HyQMOM15Closure(), "closure"),
 )
 
 # The builders / handles of pops.moments do NOT choose a route, so they stay lightweight and
@@ -66,7 +62,7 @@ MOMENTS_HANDLES = (
 
 def test_descriptor_family_satisfies_protocol():
     # The Descriptor base (via a concrete mesh subclass) honours the full protocol surface.
-    mesh = CartesianMesh(n=8)
+    mesh = PolarMesh(0.1, 1.0, 8, 16)
     for member in PROTOCOL_MEMBERS:
         assert hasattr(mesh, member), "Descriptor family missing protocol member %r" % member
     assert isinstance(mesh, DescriptorProtocol)
@@ -128,7 +124,7 @@ def test_hyqmom15_closure_is_still_a_callable_closure():
 
 def test_available_returns_availability_not_bool():
     # On the Descriptor family, available() is an explainable Availability, never a bare bool.
-    status = CartesianMesh(n=8).available()
+    status = PolarMesh(0.1, 1.0, 8, 16).available()
     assert isinstance(status, Availability)
     assert not isinstance(status, bool)
     assert status.status in ("yes", "no", "partial")
@@ -137,7 +133,7 @@ def test_available_returns_availability_not_bool():
 
 def test_lower_is_inert_record_and_never_raises():
     # lower() returns a typed LoweredDescriptor for a valid descriptor and never raises (ADC-625).
-    for descriptor in (CartesianMesh(n=8), HLL()):
+    for descriptor in (PolarMesh(0.1, 1.0, 8, 16), HLL()):
         record = descriptor.lower().to_dict()
         assert isinstance(record, dict)
         assert record["name"] == descriptor.name
@@ -147,17 +143,18 @@ def test_lower_is_inert_record_and_never_raises():
 
 
 def test_brick_descriptor_native_id_carried_in_lowering():
-    # A native brick lowers with its real C++ symbol; a planned brick lowers with no symbol.
+    # A native brick lowers with its real C++ symbol; a test-only unavailable route carries none.
     assert HLL().lower().to_dict()["native_id"] == "pops::HLLFlux"
-    from pops.numerics.reconstruction.limiters import MC  # planned, no native type yet.
-    assert MC().lower().to_dict()["native_id"] in (None, "")
-    matrix = MC().capability_matrix()
+    planned = BrickDescriptor(
+        "mc", "native", category="limiter", native_id="", scheme="mc", available=False)
+    assert planned.lower().to_dict()["native_id"] in (None, "")
+    matrix = planned.capability_matrix()
     row = matrix.rows[0]
     assert row.status == "unavailable"
     assert "requested limiter:mc" in row.error_message
     try:
-        MC().validate()
-        raise AssertionError("MC() must reject before bind/compile")
+        planned.validate()
+        raise AssertionError("an unavailable descriptor must reject before bind/compile")
     except ValueError as exc:
         msg = str(exc)
         assert "unsupported route" in msg
@@ -166,8 +163,9 @@ def test_brick_descriptor_native_id_carried_in_lowering():
         assert "alternative" in msg
 
 
-def test_inspect_capabilities_rows_have_required_keys():
-    matrix = pops.inspect_capabilities()
+def test_internal_descriptor_catalog_rows_have_required_keys():
+    from pops._capabilities_inspect import _descriptor_catalog_report
+    matrix = _descriptor_catalog_report()
     assert len(matrix) > 0
     seen_categories = set()
     for entry in matrix:
@@ -184,9 +182,10 @@ def test_inspect_capabilities_rows_have_required_keys():
     assert isinstance(matrix.to_dict(), dict)
 
 
-def test_inspect_capabilities_is_descriptor_sourced():
+def test_internal_descriptor_catalog_is_descriptor_sourced():
     # The matrix reports the native bricks as available with their real symbols.
-    matrix = pops.inspect_capabilities()
+    from pops._capabilities_inspect import _descriptor_catalog_report
+    matrix = _descriptor_catalog_report()
     riemann = {e.name: e for e in matrix.by_category("riemann")}
     assert riemann["hll"].native_id == "pops::HLLFlux"
     assert riemann["hll"].available == "yes"
@@ -202,45 +201,11 @@ def test_reject_string_selector_raises():
 
 
 def test_availability_is_unified_single_class():
-    # Spec 5 Phase D: the parallel mesh Availability duplicate is gone; it is now re-exported.
-    assert mesh_descriptor.Availability is Availability
-    # MeshDescriptor is a subclass of the shared Descriptor base.
+    # The shared type has one public owner. Private implementation modules use it internally but do
+    # not create a second import route that users could depend upon.
+    assert not hasattr(mesh_descriptor, "Availability")
     assert issubclass(mesh_descriptor.MeshDescriptor, Descriptor)
-    assert isinstance(CartesianMesh(n=8), Descriptor)
-
-
-def test_read_manifest_reads_without_registering():
-    from pops.external import read_manifest, CompiledManifest
-    from pops import descriptors as desc
-    # ADC-611 : le schema strict versionne exige schema_version (et chaque champ d'entree).
-    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
-    manifest = {
-        "schema_version": 2,
-        "abi_key": "pops-test-abi",
-        "bricks": [
-            {"id": "my_flux", "category": "riemann",
-             "requirements": "physical_flux,wave_speeds", "capabilities": "provides_x"},
-        ],
-    }
-    desc._clear_external_catalog()
-    fd, path = tempfile.mkstemp(suffix=".json")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(manifest, handle)
-        result = read_manifest(path)
-        assert isinstance(result, CompiledManifest)
-        assert result.ids == ["my_flux"]
-        assert result.abi_key == "pops-test-abi"
-        assert result.categories == ["riemann"]
-        assert result.bricks[0]["requirements"] == ["physical_flux", "wave_speeds"]
-        assert result.bricks[0]["capabilities"] == ["provides_x"]
-        # read_manifest is INSPECTION ONLY: it did NOT register the brick in the catalog.
-        with pytest.raises(LookupError):
-            desc.external("my_flux")
-        assert isinstance(result.to_dict(), dict)
-    finally:
-        os.remove(path)
-        desc._clear_external_catalog()
+    assert isinstance(PolarMesh(0.1, 1.0, 8, 16), Descriptor)
 
 
 if __name__ == "__main__":

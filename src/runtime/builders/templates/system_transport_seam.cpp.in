@@ -1,0 +1,14 @@
+// GENERATED from src/runtime/builders/seam_combinations.cmake (do not edit here; edit the manifest row).
+// ADC-593 seam generation, ADC-335 (P0-B) provenance: per-transport System block-build seam for the
+// @SEAM_TRANSPORT@ transport. Instantiates ONLY the @SEAM_TRANSPORT@ leaves of the System dispatch
+// product (see block_seam.hpp); compiled in parallel with the other transports' translation units. The
+// TR construction matches dispatch_transport VERBATIM.
+#include <pops/runtime/builders/block/block_seam.hpp>
+
+namespace pops::detail {
+
+BuiltBlock @SEAM_SYMBOL@(const ModelSpec& model, const BlockBuildArgs& a) {
+  return build_block_for(@SEAM_TR_CTOR@, model, a);
+}
+
+}  // namespace pops::detail

@@ -4,8 +4,7 @@
 //   (1) parse/token round-trip over EVERY row of EVERY k*Routes table (iterate by index) ;
 //   (2) an unknown token is REFUSED with a message naming the family, the requested token, the valid
 //       token set AND the phrase "never fall back to a default" (never a silent default) ;
-//   (3) the historical alias spellings resolve to the canonical route while route_token emits the
-//       canonical spelling ;
+//   (3) historical alias spellings are refused while route_token emits the one canonical spelling ;
 //   (4) route_info carries the native entry point / requirements / limitations columns ;
 //   (5) the route tables MIRROR the historical registries (dispatch_tags / model_registry) row for
 //       row ; the header static_asserts this too -- we assert it dynamically so the test documents
@@ -69,48 +68,42 @@ static bool tokens_mirror(const RouteInfo (&routes)[NR], const Tag (&tags)[NT]) 
 }  // namespace
 
 TEST(RouteIds, RoundTripEveryRowOfEveryTable) {
-  EXPECT_TRUE(table_round_trip<RiemannRouteId>(
-      kRiemannRoutes, [](const std::string& t) { return parse_riemann_route(t); }))
-      << "riemann round-trip";
-  EXPECT_TRUE(table_round_trip<LimiterRouteId>(
-      kLimiterRoutes, [](const std::string& t) { return parse_limiter_route(t); }))
-      << "limiter round-trip";
-  EXPECT_TRUE(table_round_trip<ReconRouteId>(
-      kReconRoutes, [](const std::string& t) { return parse_recon_route(t); }))
-      << "recon round-trip";
-  EXPECT_TRUE(table_round_trip<TimeRouteId>(
-      kTimeRoutes, [](const std::string& t) { return parse_time_route(t); }))
-      << "time round-trip";
-  EXPECT_TRUE(table_round_trip<SplittingRouteId>(
-      kSplittingRoutes, [](const std::string& t) { return parse_splitting_route(t); }))
-      << "splitting round-trip";
-  EXPECT_TRUE(table_round_trip<FieldSolverRouteId>(
-      kFieldSolverRoutes, [](const std::string& t) { return parse_field_solver_route(t); }))
-      << "field_solver round-trip";
-  EXPECT_TRUE(table_round_trip<PoissonBcRouteId>(
-      kPoissonBcRoutes, [](const std::string& t) { return parse_poisson_bc_route(t); }))
-      << "poisson_bc round-trip";
-  EXPECT_TRUE(table_round_trip<LayoutRouteId>(
-      kLayoutRoutes, [](const std::string& t) { return parse_layout_route(t); }))
-      << "layout round-trip";
-  EXPECT_TRUE(table_round_trip<TransportRouteId>(
-      kTransportRoutes, [](const std::string& t) { return parse_transport_route(t); }))
-      << "transport round-trip";
-  EXPECT_TRUE(table_round_trip<SourceRouteId>(
-      kSourceRoutes, [](const std::string& t) { return parse_source_route(t); }))
-      << "source round-trip";
-  EXPECT_TRUE(table_round_trip<EllipticRouteId>(
-      kEllipticRoutes, [](const std::string& t) { return parse_elliptic_route(t); }))
-      << "elliptic round-trip";
-  EXPECT_TRUE(table_round_trip<SourceStageRouteId>(
-      kSourceStageRoutes, [](const std::string& t) { return parse_source_stage_route(t); }))
-      << "source_stage round-trip";
-  EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(
-      kPoissonRhsRoutes, [](const std::string& t) { return parse_poisson_rhs_route(t); }))
-      << "poisson_rhs round-trip";
-  EXPECT_TRUE(table_round_trip<WallRouteId>(
-      kWallRoutes, [](const std::string& t) { return parse_wall_route(t); }))
-      << "wall round-trip";
+  EXPECT_TRUE(table_round_trip<RiemannRouteId>(kRiemannRoutes, [](const std::string& t) {
+    return parse_riemann_route(t);
+  })) << "riemann round-trip";
+  EXPECT_TRUE(table_round_trip<LimiterRouteId>(kLimiterRoutes, [](const std::string& t) {
+    return parse_limiter_route(t);
+  })) << "limiter round-trip";
+  EXPECT_TRUE(table_round_trip<ReconRouteId>(kReconRoutes, [](const std::string& t) {
+    return parse_recon_route(t);
+  })) << "recon round-trip";
+  EXPECT_TRUE(table_round_trip<TimeRouteId>(kTimeRoutes, [](const std::string& t) {
+    return parse_time_route(t);
+  })) << "time round-trip";
+  EXPECT_TRUE(table_round_trip<FieldSolverRouteId>(kFieldSolverRoutes, [](const std::string& t) {
+    return parse_field_solver_route(t);
+  })) << "field_solver round-trip";
+  EXPECT_TRUE(table_round_trip<PoissonBcRouteId>(kPoissonBcRoutes, [](const std::string& t) {
+    return parse_poisson_bc_route(t);
+  })) << "poisson_bc round-trip";
+  EXPECT_TRUE(table_round_trip<LayoutRouteId>(kLayoutRoutes, [](const std::string& t) {
+    return parse_layout_route(t);
+  })) << "layout round-trip";
+  EXPECT_TRUE(table_round_trip<TransportRouteId>(kTransportRoutes, [](const std::string& t) {
+    return parse_transport_route(t);
+  })) << "transport round-trip";
+  EXPECT_TRUE(table_round_trip<SourceRouteId>(kSourceRoutes, [](const std::string& t) {
+    return parse_source_route(t);
+  })) << "source round-trip";
+  EXPECT_TRUE(table_round_trip<EllipticRouteId>(kEllipticRoutes, [](const std::string& t) {
+    return parse_elliptic_route(t);
+  })) << "elliptic round-trip";
+  EXPECT_TRUE(table_round_trip<PoissonRhsRouteId>(kPoissonRhsRoutes, [](const std::string& t) {
+    return parse_poisson_rhs_route(t);
+  })) << "poisson_rhs round-trip";
+  EXPECT_TRUE(table_round_trip<WallRouteId>(kWallRoutes, [](const std::string& t) {
+    return parse_wall_route(t);
+  })) << "wall round-trip";
 }
 
 TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
@@ -151,13 +144,17 @@ TEST(RouteIds, UnknownTokenRefusedWithFamilyTokenValidSetAndNoDefaultPhrase) {
   }
 }
 
-TEST(RouteIds, HistoricalAliasesResolveToCanonicalRoute) {
-  EXPECT_TRUE(parse_source_route("lorentz") == SourceRouteId::kMagneticLorentz)
-      << "alias 'lorentz' -> kMagneticLorentz";
-  EXPECT_TRUE(parse_source_route("potential_lorentz") == SourceRouteId::kPotentialMagneticLorentz)
-      << "alias 'potential_lorentz' -> kPotentialMagneticLorentz";
-  EXPECT_TRUE(parse_time_route("ssprk2") == TimeRouteId::kExplicitSsprk2)
-      << "alias 'ssprk2' -> kExplicitSsprk2";
+TEST(RouteIds, HistoricalAliasesAreRefusedAndCanonicalTokensRemainStable) {
+  const std::string lorentz = throw_message([] { (void)parse_source_route("lorentz"); });
+  EXPECT_TRUE(contains(lorentz, "source") && contains(lorentz, "lorentz") &&
+              contains(lorentz, "never fall back to a default"));
+  const std::string potential =
+      throw_message([] { (void)parse_source_route("potential_lorentz"); });
+  EXPECT_TRUE(contains(potential, "source") && contains(potential, "potential_lorentz") &&
+              contains(potential, "never fall back to a default"));
+  const std::string ssprk2 = throw_message([] { (void)parse_time_route("ssprk2"); });
+  EXPECT_TRUE(contains(ssprk2, "time") && contains(ssprk2, "ssprk2") &&
+              contains(ssprk2, "never fall back to a default"));
   EXPECT_TRUE(std::string(route_token(SourceRouteId::kMagneticLorentz)) == "magnetic")
       << "route_token(kMagneticLorentz) == 'magnetic' (canonique)";
   EXPECT_TRUE(std::string(route_token(SourceRouteId::kPotentialMagneticLorentz)) ==
@@ -165,6 +162,27 @@ TEST(RouteIds, HistoricalAliasesResolveToCanonicalRoute) {
       << "route_token(kPotentialMagneticLorentz) == 'potential_magnetic' (canonique)";
   EXPECT_TRUE(std::string(route_token(TimeRouteId::kExplicitSsprk2)) == "explicit")
       << "route_token(kExplicitSsprk2) == 'explicit' (canonique)";
+}
+
+TEST(RouteIds, UnknownAndReservedNumericIdsAreRefused) {
+  const std::string unknown = throw_message([] { (void)route_info(static_cast<TimeRouteId>(99)); });
+  EXPECT_TRUE(contains(unknown, "time") && contains(unknown, "99"));
+  const std::string reserved =
+      throw_message([] { (void)route_info(static_cast<TimeRouteId>(kReservedRouteWireId255)); });
+  EXPECT_TRUE(contains(reserved, "time") && contains(reserved, "255"));
+}
+
+TEST(RouteIds, RegistrySignatureAuthenticatesFullContent) {
+  const std::string signature = route_registry_signature();
+  EXPECT_TRUE(signature.rfind("v2:", 0) == 0) << signature;
+  EXPECT_TRUE(signature.size() == 67) << "v2: plus complete sha256 catalog digest";
+  EXPECT_TRUE(throw_message([&] { verify_route_manifest("", "test"); }).find("missing") !=
+              std::string::npos);
+  EXPECT_TRUE(throw_message([&] {
+                verify_route_manifest(
+                    "v2:0000000000000000000000000000000000000000000000000000000000000000", "test");
+              }).find("mismatch") != std::string::npos);
+  EXPECT_NO_THROW(verify_route_manifest(signature, "test"));
 }
 
 TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
@@ -182,9 +200,14 @@ TEST(RouteIds, RouteInfoCarriesNativeEntryRequirementsAndLimitations) {
               std::string(route_info(RiemannRouteId::kEulerRoe).native_entry) ==
                   "pops::EulerRoeFlux2D")
       << "route euler_roe : round-trip + native 'pops::EulerRoeFlux2D'";
-  EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).limitations).size() > 0 &&
-              contains(route_info(TimeRouteId::kSsprk3).limitations, "aot"))
-      << "route_info(kSsprk3) : limitations non vide (mentionne 'aot')";
+  EXPECT_TRUE(std::string(route_info(TimeRouteId::kSsprk3).native_entry) == "pops::SSPRK3" &&
+              std::string(route_info(TimeRouteId::kSsprk3).limitations).empty())
+      << "route_info(kSsprk3) : native production sans limitation obsolete";
+  EXPECT_TRUE(std::string(route_info(TimeRouteId::kForwardEuler).native_entry) ==
+                  "pops::ForwardEuler" &&
+              std::string(route_info(TimeRouteId::kForwardEuler).limitations) ==
+                  "validation use, never default")
+      << "route_info(kForwardEuler) : route native reservee a la validation";
 }
 
 TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {
@@ -200,11 +223,10 @@ TEST(RouteIds, RouteTokensMirrorRegistryTagNamesInOrder) {
 
 TEST(RouteIds, EveryRouteFamilyEnumeratorNamesItself) {
   const RouteFamily fams[] = {
-      RouteFamily::kLimiter,    RouteFamily::kRiemann,   RouteFamily::kRecon,
-      RouteFamily::kTime,       RouteFamily::kSplitting, RouteFamily::kFieldSolver,
-      RouteFamily::kPoissonBc,  RouteFamily::kLayout,    RouteFamily::kTransport,
-      RouteFamily::kSource,     RouteFamily::kElliptic,  RouteFamily::kSourceStage,
-      RouteFamily::kPoissonRhs, RouteFamily::kWall,
+      RouteFamily::kLimiter,  RouteFamily::kRiemann,     RouteFamily::kRecon,
+      RouteFamily::kTime,     RouteFamily::kFieldSolver, RouteFamily::kPoissonBc,
+      RouteFamily::kLayout,   RouteFamily::kTransport,   RouteFamily::kSource,
+      RouteFamily::kElliptic, RouteFamily::kPoissonRhs,  RouteFamily::kWall,
   };
   bool ok = true;
   for (RouteFamily f : fams)

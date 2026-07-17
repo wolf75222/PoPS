@@ -1,11 +1,21 @@
-"""Package version (Spec-4 PR-F).
+"""Package version from the generated release contract.
 
-Single source of the version number: the value baked into the extension by ``project(VERSION)``
-in CMake. An old module without the attribute degrades to "unknown" rather than breaking the
-import. ``pops.__version__`` re-exports this.
+The generated value derives from ``project(VERSION)`` and is available without importing native
+code. A built extension is authenticated against it when native execution is requested; pure
+authoring never degrades to an ambiguous ``"unknown"`` version.
 """
+from __future__ import annotations
 
-try:
-    from ._pops import __version__
-except ImportError:
-    __version__ = "unknown"
+from ._generated_release_contract import PACKAGE_VERSION
+
+
+__version__ = PACKAGE_VERSION
+
+
+def authenticate_native_version(native: object) -> None:
+    actual = getattr(native, "__version__", None)
+    if actual != PACKAGE_VERSION:
+        raise ImportError(
+            "pops native/package version mismatch: native=%r, package=%r"
+            % (actual, PACKAGE_VERSION)
+        )

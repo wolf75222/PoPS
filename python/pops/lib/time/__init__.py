@@ -1,68 +1,42 @@
-"""pops.lib.time -- ready-made time-stepping scheme macros (Spec 4 adc.lib.time).
+"""Canonical pre-implemented time Programs.
 
-These functions build a pops.time.Program step.  They are extracted from
-pops.time and placed here per Spec 4: scheme macros belong in adc.lib.time,
-not in the time-language module (adc.time).
-
-Public API
-----------
-Euler:
-    forward_euler
-
-SSPRK:
-    ssprk2, ssprk3
-
-Classic Runge-Kutta:
-    rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
-
-Splitting:
-    strang, lie, condensed_schur
-
-IMEX:
-    imex_local, imex_local_linear
-
-Multi-step:
-    adams_bashforth, adams_bashforth2, bdf
-
-Predictor-corrector:
-    predictor_corrector_local_linear
-
-The schemes are exposed by their explicit names (Spec 4 s7: the name ``std`` is banned -- no
-catch-all bundle). Call e.g. ``pops.lib.time.ssprk3`` / ``pops.lib.time.strang`` directly.
+Every factory returns an ordinary :class:`pops.Program` built from the same
+public operations available to user code.  Factories take exact block-owned
+state handles and exact model operator handles; they do not select physics by
+name, boolean flags, hidden defaults, or a preset-specific runtime route.
 """
 
-from .euler import forward_euler
-from .ssprk import ssprk2, ssprk3
-from .rk import rk4, rk, explicit_rk, ButcherTableau, RK4_TABLEAU, SSPRK2_TABLEAU
-from .strang import strang, lie, condensed_schur
-from .imex import imex_local, imex_local_linear
-from .multistep import adams_bashforth, adams_bashforth2, bdf
-from .predictor_corrector import predictor_corrector_local_linear
+from .euler import FORWARD_EULER_TABLEAU, ForwardEuler
+from .imex import IMEX, IMEX_EULER_TABLEAU
+from .multistep import AdamsBashforth, BDF
+from .predictor_corrector import PredictorCorrector
+from .rk import ButcherTableau, RK4, RK4_TABLEAU, RungeKutta, SSPRK2_TABLEAU
+from .ssprk import SSPRK2, SSPRK3, SSPRK3_TABLEAU
+from .strang import Lie, Strang
+
+# Importing submodules installs them as package attributes.  Two historical
+# lowercase callables had those exact names; remove the ambiguous package
+# attributes so only the final factories form the public surface.  Explicit
+# ``import pops.lib.time.rk`` remains normal Python module access.
+globals().pop("rk", None)
+globals().pop("strang", None)
 
 __all__ = [
-    # Euler
-    "forward_euler",
-    # SSPRK
-    "ssprk2",
-    "ssprk3",
-    # Classic RK
-    "rk4",
-    "rk",
-    "explicit_rk",
+    "AdamsBashforth",
+    "BDF",
     "ButcherTableau",
+    "FORWARD_EULER_TABLEAU",
+    "ForwardEuler",
+    "IMEX",
+    "IMEX_EULER_TABLEAU",
+    "Lie",
+    "PredictorCorrector",
+    "RK4",
     "RK4_TABLEAU",
+    "RungeKutta",
+    "SSPRK2",
     "SSPRK2_TABLEAU",
-    # Splitting
-    "strang",
-    "lie",
-    "condensed_schur",
-    # IMEX
-    "imex_local",
-    "imex_local_linear",
-    # Multi-step
-    "adams_bashforth",
-    "adams_bashforth2",
-    "bdf",
-    # Predictor-corrector
-    "predictor_corrector_local_linear",
+    "SSPRK3",
+    "SSPRK3_TABLEAU",
+    "Strang",
 ]

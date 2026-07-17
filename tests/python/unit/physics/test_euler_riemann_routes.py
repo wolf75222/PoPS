@@ -12,9 +12,10 @@ test_no_fallback_compliance_matrix.py) enforces the ADC-590 acceptance matrix on
 CompiledModel objects.
 """
 import pytest
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
 from pops.numerics.riemann import EulerHLLC2D, EulerRoe2D, HLLC, Roe, riemann  # noqa: E402
 
@@ -24,17 +25,18 @@ def _compiled(*, n_vars, prim_names, hllc=False, roe=False):
     cons = ["rho", "rho_u", "rho_v", "E"][:n_vars] or ["q0", "q1", "q2"]
     roles = ["density", "momentum_x", "momentum_y", "energy"][:n_vars]
     return CompiledModel(
-        so_path="/no/such/pops-euler-route.so", backend="production", adder="add_native_block",
+        so_path="/no/such/pops-euler-route.so", backend="production",
         cons_names=cons, cons_roles=roles, prim_names=list(prim_names), n_vars=n_vars,
         gamma=1.4, n_aux=3, params={}, caps={"cpu": True}, abi_key="SIG|c++|c++23",
         model_hash="mh", cxx="c++", std="c++23", hllc=hllc, roe=roe, wave_speeds=True,
+        wave_speed_provider="explicit_pair",
         target="system")
 
 
 def _validate(model, flux_desc):
     """Run the unified-install riemann capability gate on a fake compiled model."""
     System(n=8, L=1.0, periodic=True)._validate_riemann_capability(
-        model, pops.FiniteVolume(riemann=flux_desc))
+        model, engine.Spatial(flux=flux_desc))
 
 
 # --- 1. descriptor lowering ---------------------------------------------------------------------
@@ -48,11 +50,11 @@ def test_euler_descriptors_lower_to_explicit_routes():
 
 
 def test_euler_descriptors_lower_to_native_flux_entries():
-    hs = pops.Spatial(flux=EulerHLLC2D())
+    hs = engine.Spatial(flux=EulerHLLC2D())
     assert hs.flux.id == "riemann.euler_hllc"
     assert hs.flux.native_entry == "pops::EulerHLLCFlux2D"
     assert hs.flux == "euler_hllc"
-    rs = pops.Spatial(flux=EulerRoe2D())
+    rs = engine.Spatial(flux=EulerRoe2D())
     assert rs.flux.id == "riemann.euler_roe"
     assert rs.flux.native_entry == "pops::EulerRoeFlux2D"
 

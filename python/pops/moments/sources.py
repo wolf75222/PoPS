@@ -115,7 +115,7 @@ def bgk_source(M: Any, nu: Any) -> list:
     return out
 
 
-# --- thin facades over the free functions (Spec 4 moments NEW API) ---------
+# --- thin facades over the free functions ----------------------------------
 # These carry no math: they forward to the closure-free free functions above so the
 # arithmetic stays in one place and lowers to the same generated flux.
 class VlasovSources:
@@ -172,7 +172,10 @@ class MagneticMomentSource(Descriptor):
         qom_name, b_name = self.q_over_m, self.b_field
 
         def sources(m: Any, M: Any) -> Any:
-            qom = m.param(qom_name, q_over_m_value)
+            from pops.params import ConstParam
+
+            qom_handle = m.param(ConstParam(qom_name, value=q_over_m_value))
+            qom = m.value(qom_handle)
             b_z = m.aux(b_name)
             omega_c = qom * b_z
             return lorentz_sources(M, 0.0, 0.0, qom, omega_c)

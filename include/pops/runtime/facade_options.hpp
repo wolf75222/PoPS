@@ -8,65 +8,24 @@
 ///        HOMOGENEOUS parameters that posed an ordering footgun (C++ Core Guidelines I.23).
 ///
 /// Layer: `include/pops/runtime`.
-/// Role: carry, in a single named aggregate, the settings of a Schur-condensed source stage and the
-///   bytecode description of an inter-species coupled source. These families were previously flat
-///   lists of parameters of the SAME type (several adjacent `std::string`, several parallel
+/// Role: carry the bytecode description of an inter-species coupled source. This family was previously
+///   a flat list of parameters of the SAME type (several parallel
 ///   `std::vector<int>`) -- silently swappable at the call site. Grouping them into a named POD makes
 ///   the call self-documenting (designated initializers) and removes the swap risk.
 /// Contract: flat POD crossing the bindings without friction. The in-class DEFAULTS reproduce EXACTLY
 ///   the old defaults of the flat parameters -> no behavior change.
 ///
 /// Invariants:
-/// - each field keeps the name, type and default of the old flat parameter of the same name;
-/// - these PODs live ABOVE the ABI layer (compiled_block_abi.hpp / native_loader.hpp): they never
-///   cross the extern "C" boundary of a .so loader. The SEMANTIC extern "C" ABI (residual / advance,
+/// - these PODs live ABOVE the authenticated component ABI (`native_loader.hpp`): they never
+///   cross the extern "C" boundary of a component loader. The SEMANTIC extern "C" ABI (residual / advance,
 ///   structs crossing the loader) therefore stays UNCHANGED. On the other hand the abi_key() LITERAL
 ///   CHANGES: it embeds the token headers=POPS_HEADER_SIG (conservative sha256 of the path and content
 ///   of EVERY header under include/, cf. abi_key.hpp and python/CMakeLists.txt); merely ADDING this
 ///   header and EDITING system.hpp / amr_system.hpp shifts POPS_HEADER_SIG. This is EXPECTED and
-///   harmless: no semantic ABI changes, but add_native_block will reject the AOT .so generated before
+///   harmless: no semantic ABI changes, but add_native_block will reject the native component generated before
 ///   this change (divergent signature) -> a one-time regeneration of the stale .so.
 
 namespace pops {
-
-/// @brief Settings of the Schur-condensed SOURCE STAGE (cf. System::set_source_stage /
-///        AmrSystem::set_source_stage). Groups the Krylov solve and the field DESCRIPTORS --
-///        a family of four adjacent `std::string` that were swappable at the call site.
-///
-/// Usage: built by the facade (or by the bindings, from the flat Python kwargs) then passed to
-///   set_source_stage. All defaults (empty POD) = bit-identical historical behavior.
-/// Contract: the DEFAULTS reproduce the old defaults of the flat parameters.
-///  - krylov_tol / krylov_max_iters: tolerance and budget of the stage Krylov solve (BiCGStab).
-///    <= 0 (default) = historical stepper constants (1e-10; 400 cartesian, 600 polar).
-///  - density / momentum_x / momentum_y / energy: DESCRIPTORS of the stage fields. EMPTY string
-///    (default) = canonical role (Density / MomentumX / MomentumY / optional Energy), bit-identical.
-///    Otherwise: a stable ROLE NAME ("density", "momentum_x", ...) or a VARIABLE NAME of the block.
-///    energy == "none" disables the energy update.
-///  - bz_aux_component: aux-channel component read as the magnetic field Omega. < 0 (default) =
-///    canonical B_z channel (kAuxBaseComps), bit-identical. (Ignored by AmrSystem: mono-block stage
-///    on the canonical channel.)
-struct SourceStageOptions {
-  double krylov_tol = 0.0;
-  int krylov_max_iters = 0;
-  std::string density = "";
-  std::string momentum_x = "";
-  std::string momentum_y = "";
-  std::string energy = "";
-  int bz_aux_component = -1;
-  // ADC-614: composite-FAC knobs of the MULTI-LEVEL AMR condensed Schur solve. <= 0 (default) = the
-  // kFAC* stepper constants, bit-identical. Ignored on the uniform System stage (no composite solve).
-  int fac_max_iters = 0;
-  int fac_fine_sweeps = 0;
-  double fac_tol = 0.0;
-  double fac_coarse_rel_tol = 0.0;
-  int fac_coarse_cycles = 0;
-  bool fac_verbose = false;
-  // ADC-645: preconditioner knobs of the stage's Krylov solve. n_precond_vcycles = MG V-cycles per
-  // BiCGStab-preconditioner application (0 = the historical ctor default 1; the steppers accept 1 or
-  // 2). polar_precond = "radial_line" | "jacobi" (POLAR stage only; "" = the historical RadialLine).
-  int n_precond_vcycles = 0;
-  std::string polar_precond = "";
-};
 
 /// @brief BYTECODE description of a generic inter-species COUPLED SOURCE (cf.
 ///        System::add_coupled_source / AmrSystem::add_coupled_source). Groups the FLAT arrays

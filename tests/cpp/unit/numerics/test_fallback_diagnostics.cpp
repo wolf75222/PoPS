@@ -16,10 +16,9 @@
 namespace {
 const pops::FallbackDiagnosticEntry* find_entry(const pops::FallbackDiagnosticsReport& report,
                                                 const std::string& key) {
-  const auto it = std::find_if(report.entries.begin(), report.entries.end(),
-                               [&](const pops::FallbackDiagnosticEntry& row) {
-                                 return row.key == key;
-                               });
+  const auto it =
+      std::find_if(report.entries.begin(), report.entries.end(),
+                   [&](const pops::FallbackDiagnosticEntry& row) { return row.key == key; });
   return it == report.entries.end() ? nullptr : &*it;
 }
 }  // namespace
@@ -49,9 +48,8 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
   }
 
   {
-    Real A[3][3] = {{Real(0), Real(0), Real(6)},
-                    {Real(1), Real(0), Real(-11)},
-                    {Real(0), Real(1), Real(6)}};
+    Real A[3][3] = {
+        {Real(0), Real(0), Real(6)}, {Real(1), Real(0), Real(-11)}, {Real(0), Real(1), Real(6)}};
     bool fallback = false;
     const EigBounds bounds = real_eig_minmax(A, /*max_iter_per_eig=*/0, &fallback);
     EXPECT_TRUE(!bounds.converged && fallback) << "dense eig reports forced Gershgorin fallback";
@@ -59,8 +57,7 @@ TEST(test_fallback_diagnostics, counters_and_report_track_triggered_fallbacks) {
         << "Gershgorin fallback increments counter";
   }
 
-  if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace,
-                               Kokkos::DefaultHostExecutionSpace>) {
+  if constexpr (std::is_same_v<Kokkos::DefaultExecutionSpace, Kokkos::DefaultHostExecutionSpace>) {
     const std::size_t before = fallback_count(FallbackCounter::kForeachSerialSmallBox);
     if (detail::foreach_serial_threshold() > 1) {
       for_each_cell(Box2D::from_extents(1, 1), [] POPS_HD(int, int) {});

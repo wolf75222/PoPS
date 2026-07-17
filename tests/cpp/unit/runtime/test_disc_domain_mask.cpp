@@ -180,8 +180,7 @@ TEST_F(DiscDomainMask, DiscMaskConservesActiveMassAndZeroesInactiveResidual) {
       for (int j = dom.lo[1]; j <= dom.hi[1]; ++j)
         for (int i = dom.lo[0]; i <= dom.hi[0]; ++i)
           if (m(i, j, 0) < Real(0.5))
-            max_inactive_residual =
-                std::max(max_inactive_residual, std::fabs(double(r(i, j, 0))));
+            max_inactive_residual = std::max(max_inactive_residual, std::fabs(double(r(i, j, 0))));
     }
     saxpy(U, Real(dt), R);  // U += dt R (cellules valides)
   }
@@ -198,7 +197,8 @@ TEST_F(DiscDomainMask, DiscMaskConservesActiveMassAndZeroesInactiveResidual) {
   // flux internes telescopiques) : borne JUSTE au-dessus du bruit machine (~1e-15 attendu).
   EXPECT_TRUE(rel_drift < 1e-12)
       << "masse sur les cellules actives conservee a la machine (flux normal nul a la frontiere "
-         "du disque ; drift < 1e-12), got drift=" << rel_drift;
+         "du disque ; drift < 1e-12), got drift="
+      << rel_drift;
   // Temoin que la dynamique a bien TOURNE (sinon la conservation serait triviale) : l'etat a bouge.
   {
     device_fence();

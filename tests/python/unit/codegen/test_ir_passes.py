@@ -4,8 +4,8 @@
 dead nodes removed. It is SAFE-BY-DEFAULT: a node is removable ONLY if its op is on an explicit
 allow-list of ops proven to allocate a FRESH result scratch and have no other side effect (rhs,
 source, apply, linear_combine, linear_source, solve_local_linear, cell_compare, where, reduce,
-scalar_op, compare) AND no live op consumes its result. EVERY other op -- the buffer-writers that
-alias a caller-allocated input buffer (schur_rhs, laplacian, ...), the side-effecting ops, solve_linear
+scalar_op, compare) AND no live op consumes its result. EVERY other op -- generic buffer-writers that
+alias a caller-allocated input buffer (laplacian, gradient, ...), the side-effecting ops, solve_linear
 and the sub-block ops -- is kept even with an unconsumed result, so an unknown/new op is never wrongly
 dropped. It NEVER runs on the default ``emit_cpp_program`` path, so it cannot change an existing
 compiled program.
@@ -18,17 +18,20 @@ The contract this test pins:
     that node;
   - side-effecting nodes (fill_boundary / record_scalar / solve_fields) are NEVER removed even with an
     unused result;
-  - BUFFER-WRITERS (schur_rhs and the generic laplacian/gradient/divergence) whose result is discarded
+  - BUFFER-WRITERS (the generic laplacian/gradient/divergence ops) whose result is discarded
     but whose buffer a later op reads by identity are NEVER removed (the safe-by-default whitelist);
   - the ``_ir_hash`` genuinely changes (the IR changed) yet the committed outputs are unchanged.
 
 Pure Python: no compilation, no .so. ``model=None`` still lowers FE / SSPRK, so the parity checks run
 on real emitted C++ without a model. Run with python3 (PYTHONPATH = built pops package).
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import pytest
+from pops.numerics.terms import DefaultSource, Flux
+
+from typed_program_support import commits_by_block, solve_field, typed_state
 
 adctime = pytest.importorskip("pops.time")
-libtime = pytest.importorskip("pops.lib.time")  # ready schemes (Spec 4)
 
 
 def _commit_signature(prog):
@@ -36,7 +39,7 @@ def _commit_signature(prog):
     State's op + name + the affine coefficient polynomials it combines (the actual numerics), so two
     programs that commit the same scheme match even if their node ids differ."""
     out = {}
-    for block, state in prog.commits().items():
+    for block, state in commits_by_block(prog).items():
         coeffs = state.attrs.get("coeffs")
         out[block] = (state.op, state.name, repr(coeffs))
     return out
@@ -46,11 +49,12 @@ def _euler_with_dead_rhs():
     """Forward Euler whose committed combine never reads ``dead`` (a genuinely unused rhs)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P._rhs_legacy("dead", state=U, fields=fields, flux=True, sources=["default"])  # never consumed
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    R = P.rhs("R", state=U, terms=[Flux(), DefaultSource()])
+    P.rhs("dead", state=U, terms=[Flux(), DefaultSource()])  # never consumed
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
@@ -58,10 +62,11 @@ def _euler_no_dead():
     """The SAME forward Euler, written without the dead rhs (the byte-identity reference)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    R = P.rhs("R", state=U, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
@@ -81,7 +86,7 @@ def test_removes_exactly_the_dead_node():
     # Exactly one node removed; every other (op, name) kept, in order.
     assert after_ops == [op for op in before_ops if op != ("rhs", "dead")]
     # The commit target and its inputs survive unchanged.
-    assert set(Q.commits()) == {"plasma"}
+    assert set(commits_by_block(Q)) == {"plasma"}
     assert _commit_signature(Q) == _commit_signature(P)
 
 
@@ -90,7 +95,7 @@ def test_parity_noop_when_nothing_dead():
     P = _euler_no_dead()
     Q = adctime.eliminate_dead_nodes(P)
     assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash"
-    assert Q.emit_cpp_program() == P.emit_cpp_program(), "no-op pass changed the emitted C++"
+    assert emit_cpp_program(Q) == emit_cpp_program(P), "no-op pass changed the emitted C++"
 
 
 def test_parity_dead_node_matches_handwritten():
@@ -100,7 +105,7 @@ def test_parity_dead_node_matches_handwritten():
     P_clean = _euler_no_dead()
     Q = adctime.eliminate_dead_nodes(P_dead)
     assert Q._ir_hash() == P_clean._ir_hash(), "optimized hash != hand-written-clean hash"
-    assert Q.emit_cpp_program() == P_clean.emit_cpp_program(), "optimized C++ != hand-written-clean"
+    assert emit_cpp_program(Q) == emit_cpp_program(P_clean), "optimized C++ != hand-written-clean"
     # And the dead program differed BEFORE the pass (otherwise the test proves nothing).
     assert P_dead._ir_hash() != P_clean._ir_hash()
 
@@ -110,7 +115,7 @@ def test_method_form_matches_free_function():
     Q_fn = adctime.eliminate_dead_nodes(P)
     Q_method = P.eliminate_dead_nodes()
     assert Q_method._ir_hash() == Q_fn._ir_hash()
-    assert Q_method.emit_cpp_program() == Q_fn.emit_cpp_program()
+    assert emit_cpp_program(Q_method) == emit_cpp_program(Q_fn)
 
 
 def test_side_effecting_nodes_never_removed():
@@ -118,12 +123,14 @@ def test_side_effecting_nodes_never_removed():
     result. Here the committed combine reads only U + dt*R, so none of the three feeds the commit."""
     P = adctime.Program("side_effects")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)            # side-effecting (fills ghosts/aux), result unused downstream
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
+    U = typed_state(P, "plasma")
+    fields = solve_field(P, U)            # side-effecting (fills ghosts/aux), result unused downstream
+    R = P.rhs("R", state=U, fields=fields, terms=[Flux(), DefaultSource()])
     P.fill_boundary(U)                    # side-effecting, result unused
     P.record_scalar("mass", P.norm2(R))  # side-effecting diagnostic, result unused
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
 
     Q = adctime.eliminate_dead_nodes(P)
     kept = {v.op for v in Q._values}
@@ -147,74 +154,22 @@ def test_chained_dead_nodes_removed():
     """A dead node feeding only another dead node: BOTH go (reverse-reachability, not one level)."""
     P = adctime.Program("chain")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    dead0 = P._rhs_legacy("dead0", state=U, fields=fields, flux=True, sources=["default"])
-    P.linear_combine("dead1", U + dt * dead0)  # consumes dead0 but is itself unused
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    fields = solve_field(P, U)
+    R = P.rhs("R", state=U, fields=fields, terms=[Flux(), DefaultSource()])
+    dead0 = P.rhs("dead0", state=U, fields=fields, terms=[Flux(), DefaultSource()])
+    P.value(
+        "dead1", U + dt * dead0,
+        at=typed_state(P, "plasma", state_name="U").next.point,
+    )  # consumes dead0 but is itself unused
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
 
     Q = adctime.eliminate_dead_nodes(P)
     names = {v.name for v in Q._values}
     assert "dead0" not in names and "dead1" not in names
     assert {"R", "U1"} <= names
-
-
-_ALPHA = 1.0
-
-
-def _lorentz_energy_model(name):
-    """A rho/mx/my/E block (energy at component 3) with the electrostatic-Lorentz linearization J the
-    generic condensed route (ADC-637) resolves. The energy component lets the c_E=3 variant emit the
-    condensed_energy kernel; the c_E=None variant simply omits it."""
-    from pops.ir.ops import sqrt
-    from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
-    m = Model(name)
-    rho, mx, my, E = m.conservative_vars("rho", "mx", "my", "E")
-    cs2 = m.param("cs2", 0.5)
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v, E])
-    m.flux(x=[mx, mx * u + p, my * u, (E + p) * u], y=[my, mx * v, my * v + p, (E + p) * v])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs, u], y=[v - cs, v, v + cs, v])
-    m.elliptic_rhs(rho)
-    m.aux("grad_x")
-    m.aux("grad_y")
-    m.aux("B_z")
-    author_electrostatic_lorentz(m)
-    return m
-
-
-def test_condensed_buffer_writers_never_removed():
-    """REGRESSION (the safe-by-default whitelist). ``pops.lib.time.condensed_schur`` assembles its RHS
-    with ``P.condensed_rhs(rhs, phi_n, U, ...)`` (ADC-637) -- a top-level op whose RESULT is DISCARDED.
-    Its real effect is filling the caller-allocated ``rhs`` scalar_field buffer, which
-    ``P.solve_linear(rhs=rhs)`` then reads BY BUFFER IDENTITY, not via a dataflow input edge. A blacklist
-    marks ``condensed_rhs`` dead and drops it -> the emitted C++ loses the fused RHS write and the solve
-    runs on a zero RHS (silent corruption, ``validate()`` stays True). Under the allow-list every
-    buffer-writer is NOT removable, so the pass is a no-op: the emitted C++ is byte-identical and still
-    contains the fused RHS write. Covers theta == 1 (historical IR) and theta < 1 + energy (the extra
-    linear_combine copy / extrapolation / condensed_energy buffer-writers)."""
-    RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
-    for theta, c_E in ((1.0, None), (0.5, None), (0.5, 3), (1.0, 3)):
-        P = adctime.Program("cs")
-        libtime.condensed_schur(P, "blk", alpha=_ALPHA, theta=theta, c_E=c_E)
-        model = _lorentz_energy_model("cs_ir_%d_%s" % (int(round(theta * 100)), c_E))
-        before = P.emit_cpp_program(model=model)
-        assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
-
-        Q = adctime.eliminate_dead_nodes(P)
-
-        after = Q.emit_cpp_program(model=model)
-        msg = "theta=%r c_E=%r" % (theta, c_E)
-        assert RHS_MARKER in after, "condensed_rhs wrongly dropped (%s)" % msg
-        # Nothing is dead: a pure no-op, byte-for-byte (the buffer-writers + solve are all live).
-        assert after == before, "pass corrupted the condensed_schur C++ (%s)" % msg
-        assert Q._ir_hash() == P._ir_hash(), "no-op pass changed the IR hash (%s)" % msg
 
 
 def test_buffer_writing_op_with_discarded_result_kept():
@@ -223,7 +178,7 @@ def test_buffer_writing_op_with_discarded_result_kept():
     from the allow-list, so the safe-by-default pass keeps it -- a buffer-writer that aliases an input
     is never wrongly dropped, even with an unconsumed result."""
     P = adctime.Program("buf_writer")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
     buf = P.scalar_field("buf")
     P.laplacian(buf, buf)  # buffer-writer: writes buf in place, RESULT DISCARDED
     A = P.matrix_free_operator("op")
@@ -233,17 +188,23 @@ def test_buffer_writing_op_with_discarded_result_kept():
         p.laplacian(lap, x)
         return -1.0 * lap
 
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import CG
+    from pops.time import FailRun
     P.set_apply(A, apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)  # reads buf by BUFFER IDENTITY
-    P.commit("plasma", P.linear_combine("U1", 1.0 * U))
+    P.solve(
+        LinearProblem(A, buf), solver=CG(max_iter=10),
+    ).consume(action=FailRun())  # reads buf by BUFFER IDENTITY
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", 1.0 * U,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
 
-    before = P.emit_cpp_program()
+    before = emit_cpp_program(P)
     Q = adctime.eliminate_dead_nodes(P)
     after_ops = [(v.op, v.name) for v in Q._values]
     assert ("laplacian", "buf") in after_ops, "top-level buffer-writing laplacian wrongly removed"
     # No node is dead here -> exact no-op.
-    assert Q.emit_cpp_program() == before
+    assert emit_cpp_program(Q) == before
     assert Q._ir_hash() == P._ir_hash()
 
 
@@ -251,20 +212,59 @@ def test_control_flow_input_kept():
     """A value consumed only inside a while sub-block is LIVE (the while op lists it as an input);
     v1 never descends into sub-blocks, so anything feeding one is conservatively kept."""
     P = adctime.Program("cf")
-    U = P.state("plasma")
+    U = typed_state(P, "plasma")
 
     def cond(p, x):
         return p.norm2(x) > 1e-10
 
     def body(p, x):
-        return p.linear_combine("it", 0.5 * x)
+        return p.value("it", 0.5 * x)
 
     Ufinal = P.while_(U, cond, body)
-    P.commit("plasma", Ufinal)
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.value("Ufinal", Ufinal, at=endpoint.point))
 
     Q = adctime.eliminate_dead_nodes(P)
     ops = [v.op for v in Q._values]
     assert "while" in ops and "state" in ops
     # No node was dead (state feeds the while, while is committed) -> exact no-op.
     assert Q._ir_hash() == P._ir_hash()
-    assert Q.emit_cpp_program() == P.emit_cpp_program()
+    assert emit_cpp_program(Q) == emit_cpp_program(P)
+
+
+def test_rebuild_preserves_history_policy_and_remaps_field_context_stage_source():
+    from pops.time import Interval
+
+    program = adctime.Program("metadata_rebuild")
+    tracked = typed_state(program, "tracked", state_name="U")
+    program.keep_history(tracked, depth=3, checkpoint_policy=Interval(3))
+    program.value("dead", 2 * tracked.n)
+    advanced = typed_state(program, "advanced", state_name="U")
+    solve_field(program, advanced.n)
+    final = program.value(
+        "advanced_next", advanced.n, at=advanced.next.point)
+    program.commit(advanced.next, final)
+
+    rebuilt = program.eliminate_dead_nodes()
+    rebuilt_state = next(
+        v for v in rebuilt._values
+        if v.op == "state" and v.block.local_id == "advanced")
+    rebuilt_fields = next(v for v in rebuilt._values if v.op == "solve_fields")
+    ring_slots, policy = rebuilt._history_persistence["tracked.U"]
+
+    assert ring_slots == 4
+    assert policy.to_manifest() == {
+        "protocol": "pops.manifest", "kind": "history-persistence", "schema_version": 1,
+        "payload": {"policy": "interval", "k": 3},
+    }
+    assert rebuilt_fields.field_context.stage_sources == ((rebuilt_state.block, rebuilt_state.id),)
+    rebuilt_fields.field_context.require_read(
+        rebuilt_fields.field_context.field, rebuilt_state.block, rebuilt_state.id)
+    assert rebuilt._serialize()["history_persistence"] == [{
+        "name": "tracked.U",
+        "depth": 4,
+        "policy": {
+            "protocol": "pops.manifest", "kind": "history-persistence", "schema_version": 1,
+            "payload": {"policy": "interval", "k": 3},
+        },
+    }]

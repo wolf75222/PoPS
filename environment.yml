@@ -79,10 +79,10 @@ dependencies:
                          # downgrade working envs. Pin here (e.g. `kokkos=4.4.*`) only if you deliberately
                          # want local==CI Kokkos and have confirmed conda-forge still ships that build.
   - openmpi              # MPI backend (distributed comm seam); provides mpicxx/mpicc
+  - "hdf5=*=mpi_openmpi_*"  # native parallel HDF5 writer; ABI-aligned with the OpenMPI package
   - llvm-openmp          # libomp + headers: standalone OpenMP (deprecated) + -fopenmp runtime
 
   # --- Optional: uncomment as needed ---
-  # - "hdf5=*=mpi_openmpi_*"  # POPS_USE_HDF5=ON, parallel DataWriter (MPI variant, consistent with openmpi)
   # - cxx-compiler            # conda C++ toolchain: clang (osx-arm64) / gcc 14.2 (linux), both
   #                           # C++23-capable. Recommended on Linux/cluster without a recent gcc. On macOS,
   #                           # possible but ALL-CONDA then: build _pops with it AND export

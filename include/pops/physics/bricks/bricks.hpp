@@ -15,8 +15,7 @@
 /// PRODUCTION vs VALIDATION: this umbrella re-exports ONLY production/generic bricks. The
 /// validation/reference bricks (AdvectionDiffusion, LangmuirMode, TwoFluidLinear) are NOT part of
 /// this surface; they live under pops/validation/physics/ in namespace pops::validation (ADC-329).
-/// The old pops/physics/{advection_diffusion,langmuir,two_fluid_isothermal}.hpp paths remain as
-/// deprecated compat forwarders and are intentionally not aggregated here.
+/// Removed legacy include paths are not re-exported or aliased from this umbrella.
 
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/elliptic.hpp>

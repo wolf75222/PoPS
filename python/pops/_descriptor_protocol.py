@@ -11,11 +11,35 @@ A descriptor is INERT: it declares metadata and computes nothing.
 from __future__ import annotations
 
 import typing
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
+
+from pops._report import ReportTree
 
 if TYPE_CHECKING:
     from pops.descriptors_report import (
-        CapabilitySet, LoweredDescriptor, RequirementSet, ValidationReport)
+        CapabilitySet, LoweredDescriptor, RequirementSet)
+
+
+def _freeze_descriptor_value(value: Any) -> Any:
+    """Recursively freeze storage reachable from a descriptor attribute."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({
+            _freeze_descriptor_value(key): _freeze_descriptor_value(item)
+            for key, item in value.items()
+        })
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_descriptor_value(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_descriptor_value(item) for item in value)
+    freeze = getattr(value, "freeze", None)
+    if callable(freeze):
+        result = freeze()
+        if result is not None and result is not value:
+            raise TypeError(
+                "%s.freeze() must seal and return self" % type(value).__name__)
+    return value
 
 
 class Availability:
@@ -91,6 +115,31 @@ class Descriptor:
     #: native brick set this (as a class or instance attribute).
     native_id = None
 
+    def __copy__(self) -> Descriptor:
+        """Return a detached, mutable authoring copy even when ``self`` is frozen.
+
+        Reference-resolution protocols intentionally copy descriptors before replacing Handle
+        leaves.  Python's default shallow-copy implementation also copied ``_frozen=True`` and
+        therefore made the first replacement fail.  A copy is a new authoring transaction: retain
+        the already-immutable member values, but never inherit the source object's lifecycle flag.
+        """
+        clone = type(self).__new__(type(self))
+        names = list(getattr(self, "__dict__", {}))
+        for owner in type(self).__mro__:
+            slots = owner.__dict__.get("__slots__", ())
+            if isinstance(slots, str):
+                slots = (slots,)
+            for name in slots:
+                if name.startswith("__") and not name.endswith("__"):
+                    name = "_%s%s" % (owner.__name__.lstrip("_"), name)
+                if name not in names:
+                    names.append(name)
+        for name in names:
+            if name != "_frozen":
+                if name not in ("__dict__", "__weakref__") and hasattr(self, name):
+                    object.__setattr__(clone, name, getattr(self, name))
+        return clone
+
     def freeze(self) -> Descriptor:
         """Freeze this descriptor: a later attribute mutation RAISES (ADC-563). Returns ``self``.
 
@@ -98,6 +147,11 @@ class Descriptor:
         frozen (``pops.compile`` freezes the ``Problem``, which cascades ``freeze`` to its member
         descriptors), the descriptor is sealed so a post-freeze edit to a route the artifact already
         committed cannot silently diverge from what was compiled. Idempotent."""
+        # A guard on attribute assignment is not enough: stale references to a list/dict stored in
+        # the descriptor would bypass __setattr__. Replace every container recursively first.
+        for name, value in tuple(getattr(self, "__dict__", {}).items()):
+            if name != "_frozen":
+                object.__setattr__(self, name, _freeze_descriptor_value(value))
         object.__setattr__(self, "_frozen", True)
         return self
 
@@ -146,26 +200,25 @@ class Descriptor:
         return Availability.yes()
 
     def validate(self, context: Any = None) -> bool:
-        """Return a :class:`~pops.descriptors_report.ValidationReport`, raising loud on error.
+        """Validate strictly, raising a structured diagnostic on error.
 
-        ADC-527: ``validate`` accumulates structured issues into a report; for the strict callers
-        that expect an exception, it also raises via ``report.raise_if_error()`` at the end, so both
-        "accumulate" and "fail loud" are honoured. The historical ``True`` return is preserved for
-        the callers that only check the boolean.
+        The historical ``True`` return remains for boolean-only callers.  The inspectable form is
+        :meth:`validate_report`; both paths share the same immutable :class:`ReportTree`.
         """
-        status = self.available(context)
-        if not status.ok:
-            raise ValueError("%s is not available for this route:\n%s" % (self.name, status))
+        self.validate_report(context).raise_if_error()
         return True
 
-    def validate_report(self, context: Any = None) -> ValidationReport:
-        """Return the accumulated :class:`~pops.descriptors_report.ValidationReport` (no raise)."""
-        from pops.descriptors_report import ValidationReport
-        report = ValidationReport(subject=self)
+    def validate_report(self, context: Any = None) -> ReportTree:
+        """Return the immutable descriptor validation tree without raising."""
+        report = ReportTree(
+            phase="validation", severity="info", code="validation.descriptor.report",
+            source=self.category, owner=self,
+            evidence={"descriptor": self.name, "category": self.category},
+        )
         status = self.available(context)
         if not status.ok:
-            report.error(self.category, "unavailable", str(status),
-                         alternatives=status.alternatives)
+            report = report.error(self.category, "unavailable", str(status),
+                                  alternatives=status.alternatives)
         return report
 
     def lower(self, context: Any = None) -> LoweredDescriptor:
@@ -240,13 +293,12 @@ class DescriptorProtocol(typing.Protocol):
         capabilities(): What the route PROVIDES / supports (a ``CapabilitySet``).
         options(): The configured knobs and their chosen values (a plain dict).
         available(context): An :class:`Availability` (yes / no / partial), never a bare bool.
-        validate(context): A ``ValidationReport`` of accumulated errors (also raises for strict
-            callers via ``raise_if_error``).
+        validate(context): Strict validation (raises a structured ``DiagnosticError`` on failure).
         lower(context): The inert ``LoweredDescriptor`` record (metadata only, no computation).
         inspect(): A plain-dict view of the descriptor for tooling and printing.
 
     ADC-527 / ADC-625: the result objects (``RequirementSet`` / ``CapabilitySet`` /
-    ``LoweredDescriptor`` / ``ValidationReport``) are TYPED, not ``dict`` subclasses. Each family
+    ``LoweredDescriptor`` / ``ReportTree``) are TYPED, not ``dict`` subclasses. Each family
     returns the typed object directly; a consumer reads it through the typed accessors
     (``supports`` / ``check`` / the ``LoweredDescriptor`` attributes) or ``to_dict``.
     """
@@ -263,7 +315,7 @@ class DescriptorProtocol(typing.Protocol):
 
     def available(self, context: Any = None) -> Availability: ...
 
-    def validate(self, context: Any = None) -> ValidationReport: ...
+    def validate(self, context: Any = None) -> bool: ...
 
     def lower(self, context: Any = None) -> LoweredDescriptor: ...
 

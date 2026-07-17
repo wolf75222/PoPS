@@ -89,11 +89,73 @@ static void fill_mms_rhs(GeometricMG& mg, const Geometry& geom, const Box2D& dom
   }
 }
 
+// Materialize c_bc = L_int(0) independently of TensorKrylovSolver. This lets the regression build a
+// deliberately cancelling stored RHS, rhs = c_bc + b_eff, and verify that the solve is normalized by
+// the small effective forcing b_eff rather than by the large affine boundary offset.
+static void fill_affine_operator_offset(GeometricMG& op, MultiFab& offset) {
+  MultiFab zero(op.box_array(), op.dmap(), 1, 1);
+  zero.set_val(Real(0));
+  device_fence();
+  fill_ghosts(zero, op.geom().domain, op.bc());
+  apply_laplacian(zero, op.geom(), offset, op.op_coef(), op.op_eps(), op.op_kappa(), op.op_eps_y(),
+                  op.op_a_xy(), op.op_a_yx());
+}
+
+struct AffineForcingReport {
+  SolveReport probe;
+  SolveReport converged;
+  SolveReport warm;
+  double true_relative_residual;
+};
+
+static AffineForcingReport affine_forcing_case(BCType type) {
+  constexpr int n = 24;
+  constexpr Real boundary_value = Real(1e3);
+  constexpr Real tight_tol = Real(1e-9);
+  const Box2D dom = Box2D::from_extents(n, n);
+  const Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray ba = BoxArray::from_domain(dom, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = type;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = boundary_value;
+  bc.dx = geom.dx();
+  bc.dy = geom.dy();
+  if (type == BCType::Robin) {
+    bc.xlo_alpha = bc.xhi_alpha = bc.ylo_alpha = bc.yhi_alpha = Real(1);
+    bc.xlo_beta = bc.xhi_beta = bc.ylo_beta = bc.yhi_beta = Real(0.25);
+  }
+
+  GeometricMG op(geom, ba, bc);
+  op.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  GeometricMG precond(geom, ba, bc);
+  MultiFab offset(ba, op.dmap(), 1, 0);
+  MultiFab effective(ba, op.dmap(), 1, 0);
+  fill_affine_operator_offset(op, offset);
+  for (int li = 0; li < effective.local_size(); ++li) {
+    Array4 forcing = effective.fab(li).array();
+    for_each_cell(effective.box(li), PoissonRhsKernel{forcing, geom});
+  }
+  lincomb(op.rhs(), Real(1), offset, Real(1), effective);
+
+  TensorKrylovSolver kry(op, precond, 1);
+  op.phi().set_val(Real(0));
+  // With the correct scale, the initial relative residual is one and cannot pass a 0.5 tolerance.
+  // Normalizing by the huge stored rhs instead would incorrectly publish a zero-iteration solve.
+  const SolveReport probe = kry.solve(Real(0.5), 1);
+
+  op.phi().set_val(Real(0));
+  const SolveReport converged = kry.solve(tight_tol, 300);
+  const double effective_norm = std::sqrt(static_cast<double>(dot(effective, effective)));
+  const double true_relative_residual = static_cast<double>(kry.residual()) / effective_norm;
+  const SolveReport warm = kry.solve(tight_tol, 300);
+  return AffineForcingReport{probe, converged, warm, true_relative_residual};
+}
+
 // (B) un cas MMS : construit l'operateur PLEIN (op) + le preconditionneur SYMETRIQUE (precond, sans
 // termes croises), resout par BiCGStab, renvoie iterations + convergence ; rapporte le V-cycle MG
 // SEUL en contraste (meme operateur op, vcycle direct). n = resolution, c = amplitude croisee,
 // non_sym = true -> Ayx = -c (A non symetrique), sinon Ayx = c (A symetrique).
-struct SolveReport {
+struct TensorSolveCaseReport {
   int kry_iters;
   bool kry_conv;
   double kry_rel;
@@ -102,7 +164,7 @@ struct SolveReport {
   const char* mg_state;
 };
 
-static SolveReport solve_case(int n, double c, bool non_sym) {
+static TensorSolveCaseReport solve_case(int n, double c, bool non_sym) {
   Box2D dom = Box2D::from_extents(n, n);
   Geometry geom{dom, 0.0, 1.0, 0.0, 1.0};
   BoxArray ba = BoxArray::from_domain(dom, n);
@@ -124,7 +186,7 @@ static SolveReport solve_case(int n, double c, bool non_sym) {
                                   [](Real, Real) { return Real(1); });
 
   TensorKrylovSolver kry(op, precond, /*n_precond_vcycles=*/1);
-  const KrylovResult kr = kry.solve(Real(1e-10), 300);
+  const SolveReport kr = kry.solve(Real(1e-10), 300);
 
   // CONTRASTE : V-cycle MG SEUL sur le MEME operateur plein (lisseur 5 points, croises explicites).
   GeometricMG mg(geom, ba, bc);
@@ -144,7 +206,8 @@ static SolveReport solve_case(int n, double c, bool non_sym) {
   const char* st =
       (rn < 1e-6 * r0) ? "CONVERGE" : (rn < r0 ? "stagne (incomplet)" : "DIVERGE/STAGNE");
 
-  return SolveReport{kr.iters, kr.converged, static_cast<double>(kr.rel_residual), r0, rn, cyc, st};
+  return TensorSolveCaseReport{kr.iters, kr.solved(), static_cast<double>(kr.rel_residual), r0, rn,
+                               cyc,      st};
 }
 
 // (A) A = I : ecart MAX phi_krylov vs phi_mg (Poisson canonique), reduit sur tous les rangs.
@@ -207,7 +270,7 @@ static double consistency_identity(int n) {
 //
 // On rapporte : convergence + residu relatif Krylov, et l'ecart MAX a phi_exact (cellules valides) compare
 // a une reference GeometricMG du MEME probleme Dirichlet (consistance, comme (A)) ET a l'analytique
-// (avec la tolerance O(h^2) du schema 2 points). Renvoie le tout par SolveReport-like via parametres.
+// (avec la tolerance O(h^2) du schema 2 points). Renvoie le tout par TensorSolveCaseReport-like via parametres.
 struct DirichletReport {
   bool kry_conv;
   double kry_rel;
@@ -245,7 +308,7 @@ static DirichletReport dirichlet_mms(int n, double V) {
   fill(op);
   GeometricMG precond(geom, ba, bc);
   TensorKrylovSolver kry(op, precond, 1);
-  const KrylovResult kr = kry.solve(Real(1e-10), 300);
+  const SolveReport kr = kry.solve(Real(1e-10), 300);
 
   // ecart MAX a la reference MG (consistance) et a l'analytique phi_exact = V + sin sin (cellules valides).
   double dmg = 0, dex = 0;
@@ -260,8 +323,72 @@ static DirichletReport dirichlet_mms(int n, double V) {
         dex = std::fmax(dex, std::fabs(a(i, j) - ex));
       }
   }
-  return DirichletReport{kr.converged, static_cast<double>(kr.rel_residual), all_reduce_max(dmg),
+  return DirichletReport{kr.solved(), static_cast<double>(kr.rel_residual), all_reduce_max(dmg),
                          all_reduce_max(dex), std::fabs(V) + 1.0};
+}
+
+TEST(test_krylov_solver, affine_boundary_detection_is_typed_per_face) {
+  BCRec bc;
+  bc.xlo_val = bc.xhi_val = bc.ylo_val = bc.yhi_val = Real(7);
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Foextrap;
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+
+  bc.xlo = BCType::Dirichlet;
+  EXPECT_TRUE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+  bc.xlo = BCType::Foextrap;
+  bc.yhi = BCType::Robin;
+  EXPECT_TRUE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+  bc.yhi_val = Real(0);
+  EXPECT_FALSE(detail::tensor_krylov_has_affine_boundary_offset(bc));
+}
+
+TEST(test_krylov_solver, affine_boundary_forcing_uses_effective_rhs_scale) {
+  comm_init();
+  for (const BCType type : {BCType::Dirichlet, BCType::Robin}) {
+    SCOPED_TRACE(type == BCType::Dirichlet ? "Dirichlet" : "Robin");
+    const AffineForcingReport report = affine_forcing_case(type);
+    EXPECT_EQ(report.probe.iters, 1);
+    EXPECT_TRUE(report.converged.solved());
+    EXPECT_LT(report.converged.rel_residual, Real(1e-9));
+    EXPECT_LT(report.true_relative_residual, 1e-9);
+    EXPECT_TRUE(report.warm.solved());
+    EXPECT_EQ(report.warm.iters, 0);
+    EXPECT_LT(report.warm.rel_residual, Real(1e-9));
+  }
+}
+
+TEST(test_krylov_solver, zero_forcing_requires_exact_zero_without_absolute_tolerance) {
+  comm_init();
+  constexpr int n = 8;
+  const Box2D domain = Box2D::from_extents(n, n);
+  const Geometry geometry{domain, 0.0, 1.0, 0.0, 1.0};
+  const BoxArray boxes = BoxArray::from_domain(domain, n);
+  BCRec bc;
+  bc.xlo = bc.xhi = bc.ylo = bc.yhi = BCType::Dirichlet;
+
+  GeometricMG op(geometry, boxes, bc);
+  op.set_cross_terms([](Real, Real) { return Real(0); }, [](Real, Real) { return Real(0); });
+  GeometricMG precond(geometry, boxes, bc);
+  TensorKrylovSolver solver(op, precond);
+  solver.rhs().set_val(Real(0));  // exact affine forcing R(0) = 0
+  solver.phi().set_val(Real(1e-6));
+  const Real initial_residual = solver.residual();
+  ASSERT_GT(initial_residual, Real(0));
+  ASSERT_LT(initial_residual, Real(1));
+
+  // The report denominator is one, but the stop remains max(rel_tol * 0, 0) = 0.
+  const SolveReport exact_only = solver.solve(Real(1), /*max_iters=*/1, /*abs_tol=*/Real(0));
+  EXPECT_FALSE(exact_only.solved() && exact_only.iters == 0);
+
+  solver.phi().set_val(Real(1e-6));
+  const Real reset_residual = solver.residual();
+  const SolveReport absolute =
+      solver.solve(Real(1e-8), /*max_iters=*/1, /*abs_tol=*/Real(2) * reset_residual);
+  EXPECT_TRUE(absolute.solved());
+  EXPECT_EQ(absolute.iters, 0);
+  EXPECT_NEAR(absolute.rel_residual, reset_residual, Real(1e-14));
 }
 
 TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
@@ -289,7 +416,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
   for (int t = 0; t < 3; ++t) {
     const double c = cs[t];
     // A SYMETRIQUE (Axy = Ayx = c).
-    const SolveReport rs = solve_case(n, c, /*non_sym=*/false);
+    const TensorSolveCaseReport rs = solve_case(n, c, /*non_sym=*/false);
     if (me == 0)
       std::printf(
           "(B) SYM c=%.1f : BiCGStab %s en %d iters (rel=%.2e) | MG seul: r0=%.2e rN=%.2e (%d cyc) "
@@ -300,7 +427,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
     chk(rs.kry_rel < 1e-10, "B_sym_residu_sous_1e-10");
 
     // A NON SYMETRIQUE (Axy = c, Ayx = -c) : le cas verrou de #120.
-    const SolveReport ru = solve_case(n, c, /*non_sym=*/true);
+    const TensorSolveCaseReport ru = solve_case(n, c, /*non_sym=*/true);
     if (me == 0)
       std::printf(
           "(B) NONSYM c=%.1f : BiCGStab %s en %d iters (rel=%.2e) | MG seul: r0=%.2e rN=%.2e (%d "
@@ -344,7 +471,7 @@ TEST(test_krylov_solver, tensor_krylov_solver_converges_where_mg_alone_stalls) {
   // MPI : convergence et iterations invariantes au nombre de rangs (dot collectif). On reverifie le
   // cas verrou non symetrique fort et on all_reduce le nombre d'iterations : spread nul attendu.
   {
-    const SolveReport r = solve_case(n, 0.7, /*non_sym=*/true);
+    const TensorSolveCaseReport r = solve_case(n, 0.7, /*non_sym=*/true);
     const long it = r.kry_iters;
     const long it_min = -static_cast<long>(all_reduce_max(static_cast<double>(-it)));
     const long it_max = static_cast<long>(all_reduce_max(static_cast<double>(it)));

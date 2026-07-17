@@ -19,7 +19,8 @@
 /// the incoming value is the initial guess (warm start), the outgoing value is the solution. @p rhs
 /// is the right-hand side, never modified. Convergence is the RELATIVE L2 residual
 /// `||r|| <= rel_tol * ||b||` (||.|| = sqrt of the Krylov inner product, a GLOBAL L2 norm), or
-/// @p max_iters reached (returns converged=false, best effort). When ||b|| == 0 the base is taken as 1.
+/// @p max_iters reached (returns status=iteration_limit; no solved value is available). When ||b|| ==
+/// 0 the base is taken as 1.
 ///
 /// MULTI-COMPONENT (vector / state) FIELDS: every inner product goes through detail::krylov_dot, which
 /// reduces over ALL components (pops::dot_all) when the field has ncomp>1 and over component 0 only
@@ -49,7 +50,7 @@
 #include <pops/core/foundation/types.hpp>
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/numerics/elliptic/linear/krylov_result.hpp>  // pops::KrylovResult (shared)
+#include <pops/numerics/elliptic/linear/solve_report.hpp>  // pops::SolveReport (shared)
 #include <pops/runtime/numerical_defaults.hpp>
 
 #include <cmath>
@@ -59,7 +60,7 @@
 
 namespace pops {
 
-// KrylovResult is shared via krylov_result.hpp (included above), so this header and the
+// SolveReport is shared via solve_report.hpp (included above), so this header and the
 // GeometricMG-coupled krylov_solver.hpp never carry hand-synchronised copies of the struct.
 
 /// Matrix-free operator callback: `out <- A(in)`. The caller supplies any apply (e.g. fill ghosts +
@@ -90,8 +91,24 @@ inline void require_max_iter(int max_iters) {
     throw std::invalid_argument("dynamic solver loops require max_iter");
 }
 
+/// Guards the relative residual tolerance. Invalid caller inputs are rejected before mutating the
+/// iterate; invalid arithmetic produced during a solve is reported as invalid_evaluation instead.
+inline void require_rel_tol(Real rel_tol) {
+  if (!(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)))
+    throw std::invalid_argument("dynamic solver loops require positive finite rel_tol");
+}
+
 /// Tiny breakdown guard for the BiCGStab scalar recurrences (division by ~0).
 inline constexpr Real kKrylovTiny = kKrylovBreakdownTiny;
+
+/// GMRES restart is a contract, not a tuning hint: out-of-range requests are rejected instead of
+/// silently clamped so the generated run honors the exact user descriptor.
+inline constexpr int kGmresRestartMax = 50;
+
+inline void require_gmres_restart(int restart) {
+  if (restart < 1 || restart > kGmresRestartMax)
+    throw std::invalid_argument("gmres_solve requires 1 <= restart <= 50");
+}
 
 }  // namespace detail
 
@@ -106,9 +123,10 @@ inline constexpr Real kKrylovTiny = kKrylovBreakdownTiny;
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs,
-                                     Real omega, Real rel_tol, int max_iters) {
+inline SolveReport richardson_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs,
+                                    Real omega, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
+  detail::require_rel_tol(rel_tol);
   // Scratch allocated ONCE, co-distributed with phi; reused every iteration (no in-loop alloc).
   MultiFab r(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
 
@@ -118,10 +136,14 @@ inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const Mult
   A(r, phi);                               // r = A(phi)
   lincomb(r, Real(1), rhs, Real(-1), r);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
+  if (!std::isfinite(static_cast<double>(rnorm))) {
+    res.mark_failed(SolveStatus::kInvalidEvaluation);
+    return res;
+  }
   if (rnorm <= rel_tol * norm0) {  // already converged (warm start)
-    res.converged = true;
+    res.mark_solved();
     return res;
   }
 
@@ -132,12 +154,17 @@ inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const Mult
     rnorm = detail::krylov_l2_norm(r);      // COLLECTIVE (all ranks, same value)
     res.iters = k;
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
   }
-  return res;  // max_iters reached: best effort (converged=false)
+  res.mark_failed(SolveStatus::kIterationLimit);
+  return res;  // max_iters reached: no solved value published
 }
 
 /// Conjugate Gradient, solving A x = b for an SPD operator A. Standard preconditioner-free CG.
@@ -153,9 +180,10 @@ inline KrylovResult richardson_solve(const ApplyFn& A, MultiFab& phi, const Mult
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs, Real rel_tol,
-                             int max_iters) {
+inline SolveReport cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rhs, Real rel_tol,
+                            int max_iters) {
   detail::require_max_iter(max_iters);
+  detail::require_rel_tol(rel_tol);
   // Scratch allocated ONCE, co-distributed with phi; reused every iteration. p carries phi's ghost
   // width because A(Ap, p) may read p's ghosts; r and Ap need none but share the layout for clarity.
   MultiFab r(phi.box_array(), phi.dmap(), phi.ncomp(), phi.n_grow());
@@ -168,10 +196,14 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
   A(r, phi);                               // r = A(phi)
   lincomb(r, Real(1), rhs, Real(-1), r);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
+  if (!std::isfinite(static_cast<double>(rnorm))) {
+    res.mark_failed(SolveStatus::kInvalidEvaluation);
+    return res;
+  }
   if (rnorm <= rel_tol * norm0) {  // already converged (warm start)
-    res.converged = true;
+    res.mark_solved();
     return res;
   }
 
@@ -181,9 +213,16 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
   for (int k = 1; k <= max_iters; ++k) {
     A(Ap, p);                                    // Ap = A(p)
     const Real pAp = detail::krylov_dot(p, Ap);  // COLLECTIVE (all components if ncomp>1)
+    if (!std::isfinite(static_cast<double>(pAp))) {
+      res.iters = k - 1;
+      res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (std::fabs(pAp) < detail::kKrylovTiny) {  // breakdown (A not SPD / null direction)
       res.iters = k - 1;
       res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kBreakdown);
       return res;
     }
     const Real alpha = rs_old / pAp;
@@ -193,15 +232,20 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
     rnorm = std::sqrt(rs_new);
     res.iters = k;
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(rs_new)) || !std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
     const Real beta = rs_new / rs_old;
     lincomb(p, Real(1), r, beta, p);  // p <- r + beta p
     rs_old = rs_new;
   }
-  return res;  // max_iters reached: best effort (converged=false)
+  res.mark_failed(SolveStatus::kIterationLimit);
+  return res;  // max_iters reached: no solved value published
 }
 
 /// Preconditioned BiCGStab, solving A x = b for a general (possibly non-symmetric) operator A. The
@@ -221,9 +265,10 @@ inline KrylovResult cg_solve(const ApplyFn& A, MultiFab& phi, const MultiFab& rh
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters iteration budget; <= 0 throws std::invalid_argument.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
-                                   const MultiFab& rhs, Real rel_tol, int max_iters) {
+inline SolveReport bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
+                                  const MultiFab& rhs, Real rel_tol, int max_iters) {
   detail::require_max_iter(max_iters);
+  detail::require_rel_tol(rel_tol);
   const bool has_precond = static_cast<bool>(precond);
 
   // Scratch allocated ONCE, co-distributed with phi; reused every iteration (mirror of
@@ -248,10 +293,14 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
   A(v, phi);                               // v = A(phi) (scratch reuse for r0)
   lincomb(r, Real(1), rhs, Real(-1), v);   // r = b - A(phi)
   Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
-  KrylovResult res;
+  SolveReport res;
   res.rel_residual = rnorm / norm0;
+  if (!std::isfinite(static_cast<double>(rnorm))) {
+    res.mark_failed(SolveStatus::kInvalidEvaluation);
+    return res;
+  }
   if (rnorm <= rel_tol * norm0) {  // already converged (warm start)
-    res.converged = true;
+    res.mark_solved();
     return res;
   }
 
@@ -262,9 +311,16 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
 
   for (int k = 1; k <= max_iters; ++k) {
     const Real rho = detail::krylov_dot(rhat, r);  // COLLECTIVE (all components if ncomp>1)
-    if (std::fabs(rho) < detail::kKrylovTiny || std::fabs(omega) < detail::kKrylovTiny) {
-      res.iters = k - 1;  // breakdown: best effort
+    if (!std::isfinite(static_cast<double>(rho)) || !std::isfinite(static_cast<double>(omega))) {
+      res.iters = k - 1;
       res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
+    if (std::fabs(rho) < detail::kKrylovTiny || std::fabs(omega) < detail::kKrylovTiny) {
+      res.iters = k - 1;  // breakdown: no solved value is available
+      res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kBreakdown);
       return res;
     }
     const Real beta = (rho / rho_prev) * (alpha / omega);
@@ -275,20 +331,33 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
       precond(phat, p);                                   // phat = M^{-1} p
     A(v, phat_ref);                                       // v = A(phat)
     const Real rhat_dot_v = detail::krylov_dot(rhat, v);  // COLLECTIVE (all components if ncomp>1)
+    if (!std::isfinite(static_cast<double>(rhat_dot_v))) {
+      res.iters = k - 1;
+      res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (std::fabs(rhat_dot_v) < detail::kKrylovTiny) {
       res.iters = k - 1;
       res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kBreakdown);
       return res;
     }
     alpha = rho / rhat_dot_v;
     lincomb(s, Real(1), r, -alpha, v);             // s <- r - alpha v
     saxpy(phi, alpha, phat_ref);                   // phi <- phi + alpha phat (partial)
     const Real snorm = detail::krylov_l2_norm(s);  // COLLECTIVE
-    if (snorm <= rel_tol * norm0) {                // mid-iteration convergence
+    if (!std::isfinite(static_cast<double>(snorm))) {
+      res.iters = k;
+      res.rel_residual = snorm / norm0;
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
+    if (snorm <= rel_tol * norm0) {  // mid-iteration convergence
       rnorm = snorm;
       res.iters = k;
       res.rel_residual = rnorm / norm0;
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
     MultiFab& shat_ref = has_precond ? shat : s;  // identity precond: shat = s
@@ -296,19 +365,30 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
       precond(shat, s);                        // shat = M^{-1} s
     A(t, shat_ref);                            // t = A(shat)
     const Real tt = detail::krylov_dot(t, t);  // COLLECTIVE (all components if ncomp>1)
+    if (!std::isfinite(static_cast<double>(tt))) {
+      res.iters = k - 1;
+      res.rel_residual = rnorm / norm0;
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     omega = tt > detail::kKrylovTiny ? detail::krylov_dot(t, s) / tt : Real(0);  // COLLECTIVE
     saxpy(phi, omega, shat_ref);        // phi <- phi + omega shat
     lincomb(r, Real(1), s, -omega, t);  // r <- s - omega t
     rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
     res.iters = k;
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(omega)) || !std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
     rho_prev = rho;
   }
-  return res;  // max_iters reached: best effort (converged=false)
+  res.mark_failed(SolveStatus::kIterationLimit);
+  return res;  // max_iters reached: no solved value published
 }
 
 /// Left-preconditioned restarted GMRES(m), solving A x = b for a GENERAL (possibly NON-symmetric)
@@ -329,10 +409,10 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
 /// (co-distributed with @p phi) before the restart loop and reused across every cycle -- no MultiFab
 /// allocation inside the loop. The small (restart+1) x restart Hessenberg least-squares lives on
 /// fixed-size stack arrays (H, the Givens cs/sn, the rotated rhs g, the solution y): no Eigen / LAPACK
-/// and no device-side dynamic allocation; @p restart is capped at kGmresRestartMax (50) so the stack
-/// footprint stays bounded. All inner products go through detail::krylov_dot (COLLECTIVE all_reduce,
-/// multi-component aware), so the loop is rank-divergence free and solves EVERY component of a vector /
-/// state field.
+/// and no device-side dynamic allocation; @p restart must be <= kGmresRestartMax (50) so the stack
+/// footprint stays bounded, and larger requests are rejected rather than clamped. All inner products
+/// go through detail::krylov_dot (COLLECTIVE all_reduce, multi-component aware), so the loop is
+/// rank-divergence free and solves EVERY component of a vector / state field.
 ///
 /// @param A         matrix-free operator `out <- A(in)`.
 /// @param precond   matrix-free preconditioner `out <- M^{-1}(in)`; EMPTY -> identity.
@@ -340,14 +420,15 @@ inline KrylovResult bicgstab_solve(const ApplyFn& A, const ApplyFn& precond, Mul
 /// @param rhs       right-hand side b (unchanged).
 /// @param rel_tol   stop when ||r|| <= rel_tol * ||b||.
 /// @param max_iters total matvec budget across restarts; <= 0 throws std::invalid_argument.
-/// @param restart   GMRES restart length m (basis size); clamped to [1, kGmresRestartMax]. Default 30.
+/// @param restart   GMRES restart length m (basis size); must be in [1, kGmresRestartMax]. Default 30.
 /// @return iterations, relative residual, convergence flag.
-inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
-                                const MultiFab& rhs, Real rel_tol, int max_iters,
-                                int restart = 30) {
+inline SolveReport gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiFab& phi,
+                               const MultiFab& rhs, Real rel_tol, int max_iters, int restart = 30) {
   detail::require_max_iter(max_iters);
-  constexpr int kGmresRestartMax = 50;  // caps the stack Hessenberg system (restart+1 entries)
-  const int m = restart < 1 ? 1 : (restart > kGmresRestartMax ? kGmresRestartMax : restart);
+  detail::require_rel_tol(rel_tol);
+  detail::require_gmres_restart(restart);
+  constexpr int kGmresRestartMax = detail::kGmresRestartMax;  // stack cap (restart+1 entries)
+  const int m = restart;
   const bool has_precond = static_cast<bool>(precond);
 
   const BoxArray& ba = phi.box_array();
@@ -385,7 +466,7 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
   Real g[kGmresRestartMax + 1];
   Real y[kGmresRestartMax];
 
-  KrylovResult res;
+  SolveReport res;
   int total_iters = 0;
 
   while (total_iters < max_iters) {
@@ -398,8 +479,12 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
       lincomb(r, Real(1), w, Real(0), w);   // r = b - A phi (copy via lincomb)
     Real beta = detail::krylov_l2_norm(r);  // COLLECTIVE
     res.rel_residual = beta / norm0;
+    if (!std::isfinite(static_cast<double>(beta))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (beta <= rel_tol * norm0) {  // converged (also the warm-start early-out)
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
 
@@ -423,6 +508,11 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
         saxpy(w, -H[i][k], V[i]);               // w <- w - H[i][k] v_i
       }
       H[k + 1][k] = detail::krylov_l2_norm(w);  // COLLECTIVE
+      if (!std::isfinite(static_cast<double>(H[k + 1][k]))) {
+        res.iters = total_iters;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (H[k + 1][k] > detail::kKrylovTiny)
         lincomb(V[k + 1], Real(1) / H[k + 1][k], w, Real(0), w);  // v_{k+1} = w / h
       // else: lucky breakdown (the exact solution lies in the current subspace); v_{k+1} stays unused.
@@ -435,6 +525,11 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
         H[i][k] = t;
       }
       const Real denom = std::sqrt(H[k][k] * H[k][k] + H[k + 1][k] * H[k + 1][k]);
+      if (!std::isfinite(static_cast<double>(denom))) {
+        res.iters = total_iters;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (denom > detail::kKrylovTiny) {
         cs[k] = H[k][k] / denom;
         sn[k] = H[k + 1][k] / denom;
@@ -451,6 +546,10 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
       const Real resid = std::fabs(g[k + 1]);  // ||M^{-1}(b - A x)|| WITHOUT a matvec
       res.iters = total_iters;
       res.rel_residual = resid / norm0;
+      if (!std::isfinite(static_cast<double>(resid))) {
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (resid <= rel_tol * norm0) {
         ++k;  // include this step in the back-substitution
         break;
@@ -462,6 +561,11 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
       Real sum = g[i];
       for (int j = i + 1; j < k; ++j)
         sum -= H[i][j] * y[j];
+      if (std::fabs(H[i][i]) <= detail::kKrylovTiny) {
+        res.iters = total_iters;
+        res.mark_failed(SolveStatus::kSingular);
+        return res;
+      }
       y[i] = std::fabs(H[i][i]) > detail::kKrylovTiny ? sum / H[i][i] : Real(0);
     }
     for (int i = 0; i < k; ++i)
@@ -477,12 +581,17 @@ inline KrylovResult gmres_solve(const ApplyFn& A, const ApplyFn& precond, MultiF
       lincomb(r, Real(1), w, Real(0), w);
     const Real rnorm = detail::krylov_l2_norm(r);  // COLLECTIVE
     res.rel_residual = rnorm / norm0;
+    if (!std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
     if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+      res.mark_solved();
       return res;
     }
   }
-  return res;  // max_iters reached: best effort (converged=false)
+  res.mark_failed(SolveStatus::kIterationLimit);
+  return res;  // max_iters reached: no solved value published
 }
 
 }  // namespace pops

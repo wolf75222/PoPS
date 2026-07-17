@@ -11,7 +11,7 @@ re-introduce a bespoke C++ method:
   - ``include/pops/runtime/system.hpp`` declares none of the three named coupling methods;
   - ``python/bindings/core/init/init_system.cpp`` binds none of them, and the raw bytecode ABI is bound
     only as the INTERNAL ``_add_coupled_source`` (no public ``add_coupled_source`` def);
-  - ``pops.Ionization`` / ``Collision`` / ``ThermalExchange`` survive only as preset descriptors that
+  - ``engine.Ionization`` / ``Collision`` / ``ThermalExchange`` survive only as preset descriptors that
     carry data (no ``add_*`` C++ dispatch method);
   - the typed ``add_coupling_operator`` entry IS present (the one generic registration path).
 

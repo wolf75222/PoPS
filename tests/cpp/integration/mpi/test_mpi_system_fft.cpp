@@ -25,11 +25,11 @@
 
 #include "gtest_compat.hpp"
 #include <pops/numerics/elliptic/poisson/poisson_fft_solver.hpp>  // RemappedFFTSolver, BoxArray (direct residual check)
-#include <pops/mesh/geometry/geometry.hpp>                         // Geometry, Box2D
+#include <pops/mesh/geometry/geometry.hpp>                        // Geometry, Box2D
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity
-#include <pops/physics/bricks/source.hpp>      // NoSource
-#include <pops/runtime/builders/compiled/dsl_block.hpp>   // add_compiled_model
+#include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                // NoSource
+#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <pops/parallel/comm.hpp>

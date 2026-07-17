@@ -6,6 +6,7 @@ Pure-Python: validation + role canonicalization + descriptors. The hook C++ itse
 emitted by the dsl backend (enable_hllc/enable_roe/roe_dissipation); generating hooks from
 ARBITRARY board formulas and the end-to-end compile remain ADC-456 follow-ups.
 """
+from pops.params import ConstParam
 import pytest
 
 physics = pytest.importorskip("pops.physics")
@@ -33,18 +34,24 @@ lib = _t.SimpleNamespace(
     SolverContext=_cs.SolverContext, SolverIR=_cs.SolverIR,
     spatial=_num.spatial, fields=_flds.catalog,
 )
+from tests.python.support.physics_roles import (  # noqa: E402
+    FRAME,
+    X_AXIS,
+    Y_AXIS,
+    planar_fluid_roles,
+)
 
 
 def _euler(with_pressure=True, with_roles=True):
     from pops.math import sqrt
-    m = physics.Model("euler")
-    roles = ({"rho": "density", "mx": "momentum_x", "my": "momentum_y", "E": "energy"}
+    m = physics.Model("euler", frame=FRAME)
+    roles = (planar_fluid_roles("rho", "mx", "my", energy="E")
              if with_roles else None)
     U = m.state("U", components=["rho", "mx", "my", "E"], roles=roles)
     rho, mx, my, E = U
     m.primitive("u", mx / rho)
     m.primitive("v", my / rho)
-    g = m.param("gamma", 1.4)
+    g = m.value(m.param(ConstParam("gamma", 1.4)))
     if with_pressure:
         m.primitive("p", (g - 1.0) * (E - 0.5 * (mx * mx + my * my) / rho))
     m.scalar("c", sqrt(g * (g - 1.0)))  # a sound-speed-ish scalar (value irrelevant here)
@@ -53,7 +60,8 @@ def _euler(with_pressure=True, with_roles=True):
 
 def test_board_roles_canonicalize_to_dsl_roles():
     m, _ = _euler()
-    roles = physics._roles_for(m._dsl._m)
+    space = m.module.state_spaces()["U"]
+    roles = [space.roles.get(component, "Custom") for component in space.components]
     assert roles == ["Density", "MomentumX", "MomentumY", "Energy"]
 
 
@@ -74,7 +82,12 @@ def test_hllc_rejects_model_without_fluid_roles():
     m = physics.Model("moments")
     U = m.state("U", components=["q0", "q1", "q2"])
     m.primitive("p", U[0])
-    assert physics._roles_for(m._dsl._m) == ["Custom", "Custom", "Custom"]
+    space = m.module.state_spaces()["U"]
+    assert [space.roles.get(component, "Custom") for component in space.components] == [
+        "Custom",
+        "Custom",
+        "Custom",
+    ]
     with pytest.raises(ValueError, match="requires model capability 'hllc_star_state'"):
         m.riemann("hllc")
 
@@ -101,8 +114,13 @@ def test_hll_requires_wave_speeds():
     rho, mx, my, E = U
     u, v = mx / rho, my / rho
     c = sqrt(1.4)
-    m2.flux("F", on=U, x=[mx, mx * u, mx * v, E], y=[my, my * u, my * v, E],
-            waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
+    m2.flux(
+        "F",
+        frame=FRAME,
+        state=U,
+        components={X_AXIS: [mx, mx * u, mx * v, E], Y_AXIS: [my, my * u, my * v, E]},
+        waves={X_AXIS: [u - c, u, u, u + c], Y_AXIS: [v - c, v, v, v + c]},
+    )
     m2.riemann("hll")                      # waves declared -> OK
 
 
@@ -121,9 +139,14 @@ def test_finite_volume_rate_validates_riemann():
     rho, mx, my, E = U
     u, v = mx / rho, my / rho
     c = sqrt(1.4)
-    m.flux("F", on=U, x=[mx, mx * u, mx * v, E], y=[my, my * u, my * v, E],
-           waves={"x": [u - c, u, u, u + c], "y": [v - c, v, v, v + c]})
-    m.finite_volume_rate("explicit_rate", flux="F",
+    flux = m.flux(
+        "F",
+        frame=FRAME,
+        state=U,
+        components={X_AXIS: [mx, mx * u, mx * v, E], Y_AXIS: [my, my * u, my * v, E]},
+        waves={X_AXIS: [u - c, u, u, u + c], Y_AXIS: [v - c, v, v, v + c]},
+    )
+    m.finite_volume_rate("explicit_rate", flux=flux,
                          riemann=lib.riemann.HLLC(),
                          reconstruction=lib.reconstruction.WENO5Z())
     assert "explicit_rate" in m.list_operators()

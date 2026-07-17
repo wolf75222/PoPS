@@ -1,20 +1,19 @@
-// pops brick_catalog.hpp : the BUILTIN native brick catalog (ADC-586). ONE declarative row per
-// canonical model brick (3 transports + 5 canonical sources + 3 elliptics), the inspectable
-// counterpart of the external-brick catalog. This test locks the PUBLIC contract of the light header
-// WITHOUT Kokkos or MPI (strings + enums only, like test_route_ids):
+// pops brick_catalog.hpp: the generated builtin component catalog (ADC-679). The schema catalog is
+// the only declaration; this test locks the light C++ inspection behavior without Kokkos or MPI.
 //   (1) catalog_entry lookup roundtrip for ALL 11 rows (found, category + id + route_index match) ;
 //   (2) a spot native_entry ("pops::ExBVelocity") and an unknown id -> nullptr ;
 //   (3) catalog_csv(category) matches the registry csv helpers over the CANONICAL set ;
 //   (4) brick_catalog_json() lists every id and parses as the same minimal grammar external_brick
 //       uses (string checks: "{\"bricks\":[", each "\"id\":\"<id>\"", the extra columns present) ;
-//   (5) the registry / catalog / route mirrors agree row for row (a DYNAMIC re-assert of the header's
-//       compile-time transports_mirror / sources_mirror / elliptics_mirror static_asserts).
+//   (5) generated descriptor views agree row for row.
 
 #include <gtest/gtest.h>
 
 #include <pops/runtime/builders/factory/brick_catalog.hpp>
+#include <pops/runtime/dynamic/model_registry.hpp>
 
 #include <cstddef>
+#include <iterator>
 #include <string>
 
 using namespace pops;
@@ -46,10 +45,10 @@ TEST(BrickCatalog, NativeEntryKnownAndUnknownIdReturnsNullptr) {
       << "catalog_entry('transport','exb')->native_entry == 'pops::ExBVelocity'";
   EXPECT_TRUE(std::string(catalog_entry("source", "potential")->native_entry) ==
                   "pops::PotentialForce" &&
-              std::string(catalog_entry("source", "potential")->params) == "qom")
-      << "catalog_entry('source','potential') : native 'pops::PotentialForce', params 'qom'";
-  EXPECT_TRUE(std::string(catalog_entry("elliptic", "background")->params) == "alpha,n0")
-      << "catalog_entry('elliptic','background')->params == 'alpha,n0'";
+              std::string(catalog_entry("source", "potential")->parameters) == "qom")
+      << "catalog_entry('source','potential') exposes generated parameter qom";
+  EXPECT_TRUE(std::string(catalog_entry("elliptic", "background")->parameters) == "alpha,n0")
+      << "catalog_entry('elliptic','background') exposes generated parameters";
   EXPECT_TRUE(catalog_entry("transport", "bogus") == nullptr) << "id inconnu -> nullptr";
   EXPECT_TRUE(catalog_entry("source", "lorentz") == nullptr)
       << "alias source 'lorentz' n'est PAS une ligne de catalog (parse-only) -> nullptr";
@@ -72,20 +71,20 @@ TEST(BrickCatalog, CatalogCsvMatchesCanonicalIdListPerCategory) {
 
 TEST(BrickCatalog, JsonListsEveryIdWithExternalBrickGrammar) {
   const std::string j = brick_catalog_json();
-  bool ok = contains(j, "{\"bricks\":[");
+  bool ok = contains(j, "{\"catalog_digest\":\"") &&
+            contains(j, "\"catalog_semantic_digest\":\"") && contains(j, "\"bricks\":[");
   for (const BrickCatalogEntry& e : kBrickCatalog) {
     const std::string id_field = std::string("\"id\":\"") + e.id + "\"";
     ok = ok && contains(j, id_field.c_str());
   }
-  EXPECT_TRUE(ok) << "brick_catalog_json() commence par {\"bricks\":[ et liste chaque \"id\":\"<id>\"";
-  // Les colonnes de la forme minimale d'external_brick (id/category/requirements/capabilities) +
-  // les colonnes supplementaires du catalog (route_index/native_entry/params/n_vars/polar_ok/summary).
-  EXPECT_TRUE(contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":\"") &&
-              contains(j, "\"capabilities\":\"") &&
-              contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
-              contains(j, "\"params\":\"cs2,vacuum_floor\"") && contains(j, "\"route_index\":") &&
-              contains(j, "\"n_vars\":") && contains(j, "\"polar_ok\":true"))
-      << "brick_catalog_json() porte les champs external_brick + les colonnes catalog";
+  EXPECT_TRUE(ok) << "brick_catalog_json() exposes both digests and every catalog id";
+  EXPECT_TRUE(
+      contains(j, "\"catalog_digest\":\"") && contains(j, "\"catalog_semantic_digest\":\"") &&
+      contains(j, "\"category\":\"transport\"") && contains(j, "\"requirements\":[]") &&
+      contains(j, "\"limitations\":[") && contains(j, "\"native_entry\":\"pops::ExBVelocity\"") &&
+      contains(j, "\"parameters\":[\"cs2\",\"vacuum_floor\"]") && contains(j, "\"route_index\":") &&
+      contains(j, "\"n_vars\":") && contains(j, "\"polar_ok\":true"))
+      << "brick_catalog_json() exposes structured generated component facts";
 }
 
 TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
@@ -103,30 +102,32 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
            std::string(e.summary) == t.summary && e.route_index == r.index &&
            std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
-           std::string(e.capabilities) == r.limitations;
+           std::string(e.limitations) == r.limitations;
       ++i;
     }
-    EXPECT_TRUE(i == 3 && ok) << "transport : catalog == kTransports == kTransportRoutes (3 lignes)";
+    EXPECT_TRUE(i == 3 && ok)
+        << "transport : catalog == kTransports == kTransportRoutes (3 lignes)";
   }
-  // Sources : catalog == kSources aux positions CANONIQUES (les 2 alias 4 et 6 sont sautes) ==
-  // kSourceRoutes. Re-assert dynamique de sources_mirror().
+  // Sources : the generated registry contains canonical rows only, in route order.
   {
-    const std::size_t canonical_pos[] = {0, 1, 2, 3, 5};
     bool ok = true;
     std::size_t i = 0;
     for (const BrickCatalogEntry& e : kBrickCatalog) {
       if (std::string(e.category) != "source")
         continue;
-      const SourceTag& s = kSources[canonical_pos[i]];
+      ASSERT_LT(i, std::size(kSources));
+      ASSERT_LT(i, std::size(kSourceRoutes));
+      const SourceTag& s = kSources[i];
       const RouteInfo& r = kSourceRoutes[i];
       ok = ok && std::string(e.id) == s.name && e.n_vars == s.min_vars &&
            std::string(e.summary) == s.summary && e.route_index == r.index &&
            std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
-           std::string(e.capabilities) == r.limitations;
+           std::string(e.limitations) == r.limitations;
       ++i;
     }
-    EXPECT_TRUE(i == 5 && ok) << "source : catalog == kSources canoniques == kSourceRoutes (5 lignes)";
+    EXPECT_TRUE(i == std::size(kSources) && ok)
+        << "source : catalog == canonical kSources == kSourceRoutes";
   }
   // Elliptics : catalog == kElliptics (name/summary, n_vars == -1) == kEllipticRoutes.
   {
@@ -141,7 +142,7 @@ TEST(BrickCatalog, MirrorsRegistryAndRouteTablesRowForRow) {
            std::string(e.summary) == el.summary && e.route_index == r.index &&
            std::string(e.id) == r.token && std::string(e.native_entry) == r.native_entry &&
            std::string(e.requirements) == r.requirements &&
-           std::string(e.capabilities) == r.limitations;
+           std::string(e.limitations) == r.limitations;
       ++i;
     }
     EXPECT_TRUE(i == 3 && ok) << "elliptic : catalog == kElliptics == kEllipticRoutes (3 lignes)";

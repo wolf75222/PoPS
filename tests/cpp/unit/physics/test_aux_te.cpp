@@ -7,10 +7,10 @@
 #include <gtest/gtest.h>
 
 #include <pops/physics/composition/composite.hpp>
-#include <pops/physics/fluids/euler.hpp>       // Euler (bloc fluide source de T_e)
-#include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity
-#include <pops/physics/bricks/source.hpp>      // NoSource
-#include <pops/runtime/builders/compiled/dsl_block.hpp>   // add_compiled_model
+#include <pops/physics/fluids/euler.hpp>                 // Euler (bloc fluide source de T_e)
+#include <pops/physics/bricks/hyperbolic.hpp>            // ExBVelocity
+#include <pops/physics/bricks/source.hpp>                // NoSource
+#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <cmath>

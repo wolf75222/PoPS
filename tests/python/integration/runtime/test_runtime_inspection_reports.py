@@ -3,11 +3,11 @@
 import json
 
 import pytest
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
 pops = pytest.importorskip("pops")
-from pops.mesh import CartesianMesh  # noqa: E402
-from pops.mesh.layouts import AMR, Uniform  # noqa: E402
+from pops.layouts import Uniform  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
 
 
 def test_system_inspect_is_structured_and_array_free():
@@ -40,7 +40,9 @@ def test_amr_system_inspect_composes_amr_snapshot():
     d = rep.to_dict()
     assert d["runtime"] == "amr_system"
     assert d["amr"] is not None
-    assert d["amr"]["max_levels"] == 2
+    # The native runtime does not own the bind-time resource ceiling.  Reporting the
+    # policy authority is exact; manufacturing the common two-level default is not.
+    assert d["amr"]["max_levels"] == "resource_policy"
     assert d["amr"]["ratio"] == 2
     assert d["runtime_environment"]["amr_refinement_ratio"] == 2
     assert d["options"]["defaults"]["amr"]["refinement_ratio"] == 2
@@ -57,7 +59,7 @@ def test_amr_system_inspect_composes_amr_snapshot():
 
 
 def test_layout_inspect_reports_native_routes_and_limitations():
-    uniform = Uniform(CartesianMesh(n=8))
+    uniform = Uniform(cartesian_grid(n=8))
     uniform_info = uniform.inspect()
     assert uniform_info["schema_version"] == 1
     assert uniform_info["report_type"] == "layout_inspection"
@@ -69,7 +71,8 @@ def test_layout_inspect_reports_native_routes_and_limitations():
     assert any(row["route_id"] == "mesh:2d_storage_arithmetic" and row["status"] == "partial"
                for row in uniform_info["native_capabilities"]["routes"])
 
-    amr = AMR(CartesianMesh(n=8), max_levels=2, ratio=2)
+    from tests.python.support.layout_plan import final_amr_layout
+    amr = final_amr_layout(cartesian_grid(n=8), max_levels=2, ratio=2)
     amr_info = amr.inspect()
     assert amr_info["capabilities"]["layout"] == "amr"
     routes = {row["route_id"]: row for row in amr_info["native_capabilities"]["routes"]}

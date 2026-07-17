@@ -1,6 +1,6 @@
-"""Coherence contract for pops.capabilities() (ADC-297).
+"""Coherence contract for ``pops.runtime.doctor.capabilities()`` (ADC-297).
 
-pops.capabilities() is the published source of truth for what the runtime can dispatch
+The runtime doctor capability report is the source of truth for what the runtime can dispatch
 (Riemann fluxes, time methods, stability bounds, Poisson, geometry, Schur, DSL backends,
 IO, AMR layout, aux). It is a hand-written dict, so it can silently drift from the gates it
 claims to mirror. These checks pin the capability surface to facts that are verified
@@ -27,12 +27,12 @@ documentation update:
        Decision 5), with the mono-block / compiled .so paths declared component-0 only; guards
        the "regrid is component-0 only" doc regression now that a selector exists.
 
-The test is pure Python: it only reads pops.capabilities() and pops.dsl._BACKEND_CAPS, so it
+The test is pure Python: it only reads ``capabilities()`` and the backend table, so it
 needs the _pops extension to import but does not build or run any model.
 """
-import pops
-from pops.codegen.compile import _BACKEND_CAPS
+from pops.codegen._compile import _BACKEND_CAPS
 from pops.physics.aux import AUX_BASE_COMPS, AUX_CANONICAL, AUX_NAMED_BASE, AUX_NAMED_MAX
+from pops.runtime.doctor import capabilities
 
 EXPECTED_TOP_KEYS = {
     "dimension", "riemann", "time", "stability_policy", "poisson", "geometry", "schur",
@@ -42,7 +42,7 @@ EXPECTED_TOP_KEYS = {
 
 
 def test_top_level_keys_present():
-    caps = pops.capabilities()
+    caps = capabilities()
     missing = EXPECTED_TOP_KEYS - set(caps)
     assert not missing, "capabilities() lost published top-level key(s): %s" % sorted(missing)
 
@@ -50,7 +50,7 @@ def test_top_level_keys_present():
 def test_riemann_surface_matches_dispatch():
     # ADC-590: the explicit canonical Euler routes euler_hllc/euler_roe join the cartesian and AMR
     # surfaces (generic hllc/roe stay, now capability-gated); polar stays rusanov + hll.
-    riemann = pops.capabilities()["riemann"]
+    riemann = capabilities()["riemann"]
     expected = ["rusanov", "hll", "hllc", "roe", "euler_hllc", "euler_roe"]
     assert riemann["system_cartesian"] == expected, riemann["system_cartesian"]
     assert riemann["amr"] == expected, riemann["amr"]
@@ -62,27 +62,28 @@ def test_riemann_surface_matches_dispatch():
 
 
 def test_backends_dsl_flags_match_backend_caps():
-    caps_b = pops.capabilities()["backends_dsl"]
-    for backend in ("prototype", "aot", "production"):
-        ref = _BACKEND_CAPS[backend]
-        got = caps_b[backend]
-        assert bool(got["mpi"]) == bool(ref["mpi"]), \
-            "%s: capabilities() mpi=%r disagrees with _BACKEND_CAPS mpi=%r" % (backend, got["mpi"], ref["mpi"])
-        assert bool(got["amr"]) == bool(ref["amr"]), \
-            "%s: capabilities() amr=%r disagrees with _BACKEND_CAPS amr=%r" % (backend, got["amr"], ref["amr"])
+    caps_b = capabilities()["backends_dsl"]
+    assert set(_BACKEND_CAPS) == {"production"}
+    assert set(caps_b) == {"default", "production"}
+    ref = _BACKEND_CAPS["production"]
+    got = caps_b["production"]
+    assert bool(got["mpi"]) == bool(ref["mpi"])
+    assert bool(got["amr"]) == bool(ref["amr"])
 
 
 def test_polar_stability_bounds_advertised_wired():
-    polar = " ".join(pops.capabilities()["stability_policy"]["system_polar"])
+    polar = " ".join(capabilities()["stability_policy"]["system_polar"])
     for bound in ("stability_speed", "stability_dt", "source_frequency"):
         assert bound in polar, "polar stability bound %r missing from capabilities()" % bound
 
 
-def test_amr_schur_advertised_implemented():
-    amr_schur = pops.capabilities()["schur"]["amr"]
-    assert amr_schur and "Phase 4a" in amr_schur, \
-        "schur.amr should advertise the implemented Phase 4a composite stage, got: %r" % amr_schur
-    assert "the implementation does not" not in amr_schur
+def test_amr_condensed_program_advertised_implemented():
+    amr_schur = capabilities()["schur"]["amr"]
+    for fragment in ("CompositeTensorFAC", "gather-all-levels", "reconstruct-all-levels"):
+        assert fragment in amr_schur, \
+            "schur.amr must advertise the implemented hierarchy route, got: %r" % amr_schur
+    for stale_limit in ("no native", "not implemented", "the implementation does not"):
+        assert stale_limit not in amr_schur
 
 
 def test_dimension_invariant_2d():
@@ -90,7 +91,7 @@ def test_dimension_invariant_2d():
     # structured scalar (not prose) so scripts and the limitations doc can introspect it, and it is
     # a SEPARATE top-level key, NOT nested under "geometry" (polar is a second geometry at the SAME
     # dimension, not a third axis).
-    caps = pops.capabilities()
+    caps = capabilities()
     dim = caps["dimension"]
     assert dim == 2, "capabilities()['dimension'] should declare the 2D-core invariant, got %r" % (dim,)
     # bool is a subclass of int in Python; pin to a plain int so True / 2.0 / "2" cannot pass.
@@ -101,7 +102,7 @@ def test_dimension_invariant_2d():
 
 
 def test_runtime_environment_and_precision_facts():
-    caps = pops.capabilities()
+    caps = capabilities()
     precision = caps["precision"]
     assert precision["real"] == "double"
     assert precision["real_bytes"] == 8
@@ -119,7 +120,7 @@ def test_regrid_variable_selector_advertised():
     # ADC-296 / ADR-0001 Decision 5: the multi-block regrid variable is selectable by name/role
     # (default = component 0). The mono-block and compiled .so paths stay component-0 only. The
     # surface mirrors AmrSystem.set_refinement(threshold, variable=, role=).
-    regrid = pops.capabilities()["regrid"]
+    regrid = capabilities()["regrid"]
     assert set(regrid["variable_selector"]) == {"component_0", "by_name", "by_role"}, \
         regrid["variable_selector"]
     assert "by_name" in regrid["multi_block"] and "by_role" in regrid["multi_block"], regrid["multi_block"]
@@ -134,7 +135,7 @@ def test_aux_named_surface_and_limit_parity():
     # DSL mirror (AUX_NAMED_MAX) -- this pins the hand-maintained Python<->C++ mirror so it cannot
     # silently drift (the historical #51-class risk the issue calls out).
     from pops import _pops
-    named = pops.capabilities()["aux"]["named"]
+    named = capabilities()["aux"]["named"]
     assert set(named["backends"]) >= {"system_cartesian", "system_polar", "amr_single_block",
                                       "amr_multi_block"}, named["backends"]
     # the limit is the SINGLE C++ source, mirrored by the DSL constant.
@@ -152,7 +153,7 @@ def test_aux_named_surface_and_limit_parity():
         "C++ aux_names table != Python AUX_CANONICAL: %r vs %r" % (
             dict(_pops.__aux_canonical__), dict(AUX_CANONICAL))
     # no stale "cartesian System only" claim survives in the aux surface.
-    blob = repr(pops.capabilities()["aux"]).lower()
+    blob = repr(capabilities()["aux"]).lower()
     assert "cartesian system only" not in blob, "stale 'cartesian System only' aux claim"
 
 
@@ -161,10 +162,9 @@ if __name__ == "__main__":
     test_riemann_surface_matches_dispatch()
     test_backends_dsl_flags_match_backend_caps()
     test_polar_stability_bounds_advertised_wired()
-    test_amr_schur_advertised_implemented()
     test_dimension_invariant_2d()
     test_runtime_environment_and_precision_facts()
     test_regrid_variable_selector_advertised()
     test_aux_named_surface_and_limit_parity()
     print("test_capabilities : OK (top keys, riemann surface, backends_dsl, polar stability, "
-          "AMR Schur, 2D dimension, regrid selector, aux named surface + limit parity)")
+          "2D dimension, regrid selector, aux named surface + limit parity)")

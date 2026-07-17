@@ -34,7 +34,7 @@ namespace {
 // ---------------------------------------------------------------------------------------------
 struct HookedEuler : pops::Euler {
   POPS_HD Real contact_speed(const State& UL, const State& UR, Real pL, Real pR, Real sL, Real sR,
-                            int dir) const {
+                             int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real rL = UL[0], rR = UR[0];
     const Real unL = UL[in] / rL, unR = UR[in] / rR;
@@ -55,7 +55,7 @@ struct HookedEuler : pops::Euler {
     return Us;
   }
   POPS_HD State roe_dissipation(const State& UL, const Aux&, const State& UR, const Aux&,
-                               int dir) const {
+                                int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const int it = (dir == 0) ? 2 : 1;
     const Real rL = UL[0], rR = UR[0];
@@ -130,7 +130,7 @@ struct IsoHLLC {
   }
   POPS_HD Real pressure(const State& u) const { return cs2 * u[0]; }
   POPS_HD Real contact_speed(const State& UL, const State& UR, Real pL, Real pR, Real sL, Real sR,
-                            int dir) const {
+                             int dir) const {
     const int in = (dir == 0) ? 1 : 2;
     const Real rL = UL[0], rR = UR[0];
     const Real unL = UL[in] / rL, unR = UR[in] / rR;
@@ -171,6 +171,25 @@ double maxdiff(const pops::StateVec<N>& a, const pops::StateVec<N>& b) {
   return m;
 }
 
+template <class Policy, class Model>
+typename Model::State face_density(const Policy& policy, const Model& model,
+                                   const typename Model::State& left, const Aux& left_providers,
+                                   const typename Model::State& right, const Aux& right_providers,
+                                   int axis) {
+  pops::FluxProviderValues<Model> left_values{}, right_values{};
+  left_values[0] = left_providers.phi;
+  left_values[1] = left_providers.grad_x;
+  left_values[2] = left_providers.grad_y;
+  right_values[0] = right_providers.phi;
+  right_values[1] = right_providers.grad_x;
+  right_values[2] = right_providers.grad_y;
+  return pops::evaluate_numerical_flux(
+             policy, model, left, pops::bind_flux_providers<Model>(left_values), right,
+             pops::bind_flux_providers<Model>(right_values), pops::FaceContext::axis_aligned(axis))
+      .checked_density()
+      .value;
+}
+
 }  // namespace
 
 TEST(test_riemann_capabilities, compile_time_detection) {
@@ -179,7 +198,8 @@ TEST(test_riemann_capabilities, compile_time_detection) {
                 "Euler doit satisfaire HasHLLCStructure (ADC-590 : brique a-capabilites)");
   static_assert(pops::HasRoeDissipation<pops::Euler>,
                 "Euler doit satisfaire HasRoeDissipation (ADC-590 : brique a-capabilites)");
-  static_assert(pops::HasHLLCStructure<HookedEuler>, "HookedEuler doit satisfaire HasHLLCStructure");
+  static_assert(pops::HasHLLCStructure<HookedEuler>,
+                "HookedEuler doit satisfaire HasHLLCStructure");
   static_assert(pops::HasRoeDissipation<HookedEuler>,
                 "HookedEuler doit satisfaire HasRoeDissipation");
   static_assert(pops::HasHLLCStructure<IsoHLLC>, "IsoHLLC doit satisfaire HasHLLCStructure");
@@ -204,10 +224,11 @@ TEST(test_riemann_capabilities, generic_path_bit_identical_to_explicit_euler_pat
   };
   for (const auto& pr : pairs)
     for (int dir = 0; dir < 2; ++dir) {
-      const double dh =
-          maxdiff(hllc(e, pr[0], a, pr[1], a, dir), ehllc(e, pr[0], a, pr[1], a, dir));
+      const double dh = maxdiff(face_density(hllc, e, pr[0], a, pr[1], a, dir),
+                                face_density(ehllc, e, pr[0], a, pr[1], a, dir));
       EXPECT_EQ(dh, 0.0) << "HLLC generique != EulerHLLCFlux2D explicite (dir " << dir << ")";
-      const double dr = maxdiff(roe(e, pr[0], a, pr[1], a, dir), eroe(e, pr[0], a, pr[1], a, dir));
+      const double dr = maxdiff(face_density(roe, e, pr[0], a, pr[1], a, dir),
+                                face_density(eroe, e, pr[0], a, pr[1], a, dir));
       EXPECT_EQ(dr, 0.0) << "Roe generique != EulerRoeFlux2D explicite (dir " << dir << ")";
     }
 }
@@ -222,7 +243,7 @@ TEST(test_riemann_capabilities, non_euler_isothermal_hllc_consistency) {
   U[1] = 0.4;
   U[2] = -0.7;
   for (int dir = 0; dir < 2; ++dir) {
-    const double d = maxdiff(hllc(iso, U, a, U, a, dir), iso.flux(U, a, dir));
+    const double d = maxdiff(face_density(hllc, iso, U, a, U, a, dir), iso.flux(U, a, dir));
     EXPECT_LE(d, 1e-13) << "consistance HLLC isotherme (dir " << dir << ")";
   }
 }
@@ -241,8 +262,8 @@ TEST(test_riemann_capabilities, non_euler_isothermal_preserves_stationary_shear)
   UR[0] = 1.0;
   UR[1] = 0.0;
   UR[2] = -3.0;  // u_t = -3
-  const State3 Fc = hllc(iso, UL, a, UR, a, 0);
-  const State3 Fh = hll(iso, UL, a, UR, a, 0);
+  const State3 Fc = face_density(hllc, iso, UL, a, UR, a, 0);
+  const State3 Fh = face_density(hll, iso, UL, a, UR, a, 0);
   EXPECT_LE(std::fabs(Fc[2]), 1e-14) << "HLLC isotherme : cisaillement stationnaire diffuse";
   EXPECT_GE(std::fabs(Fh[2]), 1e-2) << "temoin HLL : le cisaillement devrait etre diffuse";
 }

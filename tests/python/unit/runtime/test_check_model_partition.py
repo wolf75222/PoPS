@@ -20,7 +20,7 @@ import sys
 
 import numpy as np
 
-from pops.physics.facade import Model
+from pops.physics._facade import Model
 
 fails = 0
 

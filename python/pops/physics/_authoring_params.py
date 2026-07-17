@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pops.ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
-from pops.ir.values import RuntimeParamRef  # noqa: F401
-from pops.ir.visitors import _children  # noqa: F401
+from pops._ir import Expr, _wrap  # noqa: F401  -- _validate_hook_form isinstance checks
+from pops._ir.values import RuntimeParamRef, set_runtime_param_indices  # noqa: F401
+from pops._ir.visitors import _children  # noqa: F401
 
 from .aux import _K_MAX_RUNTIME_PARAMS, max_runtime_params  # noqa: F401 -- literal + _pops-preferring
 
@@ -54,6 +54,12 @@ class _RuntimeParamsMixin(_HyperbolicModel):
             out += list(self.cons_from)
         if self._elliptic is not None:
             out.append(self._elliptic)
+        # Named elliptic fields are emitted as standalone RHS bricks, but they consume the same
+        # block-qualified RuntimeParams carrier as the composite model.  A parameter referenced only
+        # by one of these providers must therefore participate in the shared index/layout authority;
+        # otherwise its generated ``params.get(index)`` has no BindSchema slot to populate.
+        for info in (getattr(self, "_elliptic_fields", {}) or {}).values():
+            out.append(_wrap(info["rhs"]))
         if self._roe_rows is not None:  # Roe rows provided: discover their runtime params (via StateRef)
             out += self._roe_rows["x"] + self._roe_rows["y"]
         return out
@@ -92,20 +98,20 @@ class _RuntimeParamsMixin(_HyperbolicModel):
                 "overflow. Reduce the number of runtime params or promote some to kind='const'. "
                 "Declared runtime params: %s"
                 % (self.name, len(nodes), limit, names))
-        for k, node in enumerate(nodes):
-            node.index = k
+        set_runtime_param_indices({node.name: k for k, node in enumerate(nodes)})
         return nodes
 
     def _runtime_params_member(self) -> str:
         """C++ line declaring the RuntimeParams member of a generated brick, initialized to the
-        DECLARATION values (default without a runtime set call). Empty string if the model has no runtime
-        param (brick strictly identical to history -> bit-identity of const params preserved)."""
+        neutral carrier values.  Runtime defaults belong to the resolved BindSchema and are installed
+        before execution; baking them into generated C++ would make a bind-time value change alter the
+        artifact identity. Empty string if the model has no runtime param."""
         nodes = self.assign_runtime_indices()
         if not nodes:
             return ""
-        vals = ", ".join(repr(node.value) for node in nodes)
-        return ("  pops::RuntimeParams params{%d, {%s}};  // params RUNTIME (P7-b) : ecrasables a "
-                "l'execution\n" % (len(nodes), vals))
+        vals = ", ".join("pops::Real(0)" for _ in nodes)
+        return ("  pops::RuntimeParams params{%d, {%s}};  // defaults installed from BindSchema\n"
+                % (len(nodes), vals))
 
     def has_runtime_params(self) -> bool:
         """True if at least one formula reads a runtime parameter (kind='runtime')."""
@@ -125,4 +131,3 @@ class _RuntimeParamsMixin(_HyperbolicModel):
                 "riemann hook %r references undeclared quantity %s: the formula needs model "
                 "capabilities %s that are not provided (declare them, or use the role-derived "
                 "default)" % (hook, missing, missing))
-

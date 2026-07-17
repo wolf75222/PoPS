@@ -12,12 +12,12 @@ from pops._report import Report
 from pops._capabilities import native_capability_report
 from pops.runtime.defaults import numerical_defaults_report
 from pops.runtime.fallbacks import fallback_diagnostics_report
-from pops.runtime.profile import PerformanceSummary
+from pops.runtime._profile import PerformanceSummary
 from pops.runtime_environment import runtime_environment_report
 
 
 class RuntimeInspectionReport(Report):
-    """Structured, printable snapshot of a live runtime facade (adopts the pops.Report base, ADC-564)."""
+    """Structured, printable snapshot of a live runtime facade using the internal report base."""
 
     schema_version = 1
     report_type = "runtime_inspection"
@@ -25,7 +25,8 @@ class RuntimeInspectionReport(Report):
     def __init__(self, *, runtime: Any, blocks: Any, clock: Any, runtime_environment: Any,
                  capabilities: Any, program: Any, profile: Any, history: Any, cache: Any,
                  diagnostics: Any, options: Any = None, amr: Any = None, limitations: Any = None,
-                 routes: Any = None, lifecycle: Any = None, bound_snapshot: Any = None) -> None:
+                 routes: Any = None, lifecycle: Any = None, bound_snapshot: Any = None,
+                 instance: Any = None) -> None:
         self.runtime = runtime
         self.blocks = list(blocks)
         self.clock = dict(clock)
@@ -45,9 +46,10 @@ class RuntimeInspectionReport(Report):
         # An engine never bound reports "assembling" and no snapshot (bound_snapshot is None).
         self.lifecycle = lifecycle if lifecycle is not None else "assembling"
         self.bound_snapshot = dict(bound_snapshot) if bound_snapshot is not None else None
+        self.instance = dict(instance) if instance is not None else None
 
     def to_dict(self) -> Any:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "report_type": self.report_type,
             "runtime": self.runtime,
@@ -67,6 +69,9 @@ class RuntimeInspectionReport(Report):
             "lifecycle": self.lifecycle,
             "bound_snapshot": dict(self.bound_snapshot) if self.bound_snapshot is not None else None,
         }
+        if self.instance is not None:
+            payload["instance"] = dict(self.instance)
+        return payload
 
     def __repr__(self) -> Any:
         return ("RuntimeInspectionReport(runtime=%r, blocks=%d, history=%d, cache=%d)"
@@ -84,15 +89,17 @@ class RuntimeInspectionReport(Report):
                         rt.get("precision"), rt.get("communicator")))
         lines.append("  program     : installed=%s hash=%s"
                      % (self.program.get("installed"), self.program.get("hash") or "(none)"))
-        # RUNTIME FREEZE LIFECYCLE (ADC-592): the state, and once bound the snapshot hash + a one-line
-        # block / solver summary of what was frozen.
+        # RUNTIME FREEZE LIFECYCLE: the state, canonical bind identity and frozen composition.
+        # block / resolved-field-plan summary of what was frozen.
         lines.append("  lifecycle   : %s" % self.lifecycle)
         snap = self.bound_snapshot
         if snap is not None:
             snap_blocks = ", ".join(str(b.get("name")) for b in snap.get("blocks", [])) or "(none)"
-            snap_solvers = ", ".join(sorted(snap.get("solvers", {}))) or "(none)"
-            lines.append("  bound       : snapshot=%s blocks=[%s] solvers=[%s]"
-                         % (snap.get("snapshot_hash", "(none)"), snap_blocks, snap_solvers))
+            snap_field_plans = ", ".join(sorted(snap.get("field_plans", {}))) or "(none)"
+            identity = snap.get("bind_identity", {})
+            lines.append("  bound       : identity=%s blocks=[%s] field_plans=[%s]"
+                         % (identity.get("hexdigest", "(none)"), snap_blocks,
+                            snap_field_plans))
         lines.append("  profile     : source=%s scopes=%d counters=%d"
                      % (prof.get("source"), len(prof.get("scopes", {})),
                         len(prof.get("counters", {}))))
@@ -102,8 +109,7 @@ class RuntimeInspectionReport(Report):
         lines.append("  diagnostics : %d scalar(s), fallbacks=%s"
                      % (len(self.diagnostics), fallbacks.get("total_count", 0)))
         opts = self.options
-        lines.append("  options     : blocks=%d source_stages=%d"
-                     % (len(opts.get("blocks", [])), len(opts.get("source_stages", []))))
+        lines.append("  options     : blocks=%d" % len(opts.get("blocks", [])))
         if self.routes:
             lines.append("  routes      : %d block(s), poisson=%s"
                          % (len(self.routes.get("blocks", [])),
@@ -117,10 +123,21 @@ class RuntimeInspectionReport(Report):
             unavailable = sum(1 for row in self.limitations if row.get("status") == "unavailable")
             lines.append("  limitations : %d partial, %d unavailable route(s)"
                          % (partial, unavailable))
+        if self.instance is not None:
+            lines.append("  instance    : bind=%s consumers=%d attempts=%s"
+                         % (self.instance.get("bind_identity", {}).get("digest", "(none)"),
+                            len(self.instance.get("consumer_graph", {}).get("nodes", [])),
+                            self.instance.get("attempt")))
         return "\n".join(lines)
 
 
-def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
+def build_runtime_inspection(
+    sim: Any,
+    *,
+    runtime: Any,
+    adaptive: bool | None = None,
+    instance: Any = None,
+) -> Any:
     """Build the :class:`RuntimeInspectionReport` of a bound simulation (inert, no numerics).
 
     Reads the carried metadata of @p sim (blocks, clock, capabilities, program, profile,
@@ -146,11 +163,11 @@ def build_runtime_inspection(sim: Any, *, runtime: Any) -> Any:
         cache=_cache(sim),
         diagnostics=_diagnostics(sim, options),
         options=options,
-        amr=_amr(sim) if runtime == "amr_system" else None,
+        amr=_amr(sim) if (runtime == "amr_system" if adaptive is None else adaptive) else None,
         limitations=limitations,
         routes=_routes(options),
         lifecycle=_lifecycle(sim),
-        bound_snapshot=_bound_snapshot(sim))
+        bound_snapshot=_bound_snapshot(sim), instance=instance)
 
 
 def _call(obj: Any, name: Any, default: Any = None, *args: Any) -> Any:
@@ -184,14 +201,15 @@ def _profile_payload(sim: Any) -> Any:
 def _program(sim: Any) -> Any:
     """The compiled-Program section, built FROM the structured ProgramRuntimeReport (ADC-594) so the
     two reports share a SINGLE source. Kept back-compatible: the historical inspection keys
-    ("installed"/"hash") are preserved, with the richer cadence/block_map/param/history/cache summary
+    ("installed"/"hash") are preserved, with the richer transaction/block-map/parameter/history/cache
+    summary
     folded in from the same report."""
     from pops.runtime.program_report import build_program_report
     report = build_program_report(sim)
     return {
         "installed": report.installed,
         "hash": report.program_hash,
-        "cadence": dict(report.cadence),
+        "step_transaction": dict(report.step_transaction),
         "block_map": list(report.block_map),
         "params": [dict(row) for row in report.params],
         "histories": [dict(row) for row in report.histories],
@@ -209,21 +227,13 @@ def _lifecycle(sim: Any) -> Any:
 
 
 def _bound_snapshot(sim: Any) -> Any:
-    """The BoundSnapshot manifest of what pops.bind froze, as a plain dict + its hash (ADC-592).
-
-    Reads the engine's ``bound_snapshot`` (None before bind); serialises it via ``to_dict()`` and
-    folds in the stable ``snapshot_hash`` so inspection carries the frozen identity. Returns None when
-    the engine was never bound (an engine driven by the low-level seam without pops.bind)."""
+    """Canonical BindManifest of what ``pops.bind`` froze, as a detached plain dict."""
     snap = getattr(sim, "bound_snapshot", None)
     if snap is None:
         return None
     to_dict: Any = getattr(snap, "to_dict", None)
     raw: Any = to_dict() if callable(to_dict) else {}
-    payload: Any = dict(raw)
-    snapshot_hash = getattr(snap, "snapshot_hash", None)
-    if snapshot_hash is not None:
-        payload["snapshot_hash"] = snapshot_hash
-    return payload
+    return dict(raw)
 
 
 def _history(sim: Any) -> Any:
@@ -272,8 +282,6 @@ def _options(sim: Any, runtime: Any) -> Any:
         "defaults": numerical_defaults_report(),
         "blocks": [],
         "poisson": {},
-        "source_stages": [],
-        "time": {"scheme": None, "gauss_policy": None},
         "amr": None,
     }
 

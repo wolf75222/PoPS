@@ -67,7 +67,7 @@ concept PolarHasSource = requires(const M m, const typename M::State u, const Au
 /// if constexpr guard: zero extra codegen for bricks without a source. POPS_HD.
 template <class Model>
 POPS_HD inline typename Model::State polar_source(const Model& m, const typename Model::State& u,
-                                                 const Aux& a) {
+                                                  const Aux& a) {
   if constexpr (PolarHasSource<Model>)
     return m.source(u, a);
   else
@@ -91,7 +91,7 @@ concept PolarHasGeomSource = requires(const M m, const typename M::State u, Real
 /// ExB path stays strictly bit-identical). POPS_HD. r > 0 (annulus) enforced upstream.
 template <class Model>
 POPS_HD inline typename Model::State polar_geom_source(const Model& m,
-                                                      const typename Model::State& u, Real r) {
+                                                       const typename Model::State& u, Real r) {
   if constexpr (PolarHasGeomSource<Model>)
     return m.polar_geom_source(u, r);
   else
@@ -141,10 +141,12 @@ struct PolarFaceFluxRKernel {
         reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 0);
+    const FaceContext face = FaceContext::axis_aligned(0, rf);
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
-      fr(i, j, c) = rf * F[c];
+      fr(i, j, c) = F[c];
   }
 };
 
@@ -169,8 +171,10 @@ struct PolarFaceFluxThetaKernel {
         reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 1);
+    const FaceContext face = FaceContext::axis_aligned(1);
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
       ft(i, j, c) = F[c];
   }

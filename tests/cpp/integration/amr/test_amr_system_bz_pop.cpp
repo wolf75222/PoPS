@@ -244,9 +244,9 @@ TEST_F(AmrSystemBzPopTest, SetterMatchesConstructor) {
   const Geometry gf = geom.refine(2);
   EXPECT_LT(std::fabs(read_bz(sim->aux(0), 3, 3) - bz_field(geom.x_cell(3), 0)), Real(1e-12))
       << "set_bz_populates_coarse";
-  EXPECT_LT(std::fabs(read_bz(sim->aux(1), fbox.lo[0], fbox.lo[1]) -
-                      bz_field(gf.x_cell(fbox.lo[0]), 0)),
-            Real(1e-12))
+  EXPECT_LT(
+      std::fabs(read_bz(sim->aux(1), fbox.lo[0], fbox.lo[1]) - bz_field(gf.x_cell(fbox.lo[0]), 0)),
+      Real(1e-12))
       << "set_bz_populates_fine";
 }
 

@@ -1,7 +1,7 @@
 """pops.numerics.riemann.waves -- the typed wave-speed provider layer (ADC-552).
 
 A model can obtain its SIGNED wave speeds (the interface bound HLL needs) from several
-sources: an explicit signed pair (``m.wave_speeds(x=, y=)``), the eigenvalues of the flux
+sources: an explicit signed pair (``Model.wave_speeds(...)``), the eigenvalues of the flux
 jacobian (``m.wave_speeds_from_jacobian(...)``), the historical primitive-'p' path, or one of
 the hook-selector estimates (Einfeldt / Davis). Each source is now a TYPED
 :class:`WaveSpeedProvider` (Spec 5 sec.6: a route-choosing object that declares its
@@ -53,7 +53,7 @@ class WaveSpeedProvider(Descriptor):
     def requirements(self) -> Any:
         """What the source NEEDS from the model (documentary; the hard gate stays at install)."""
         needs = {
-            "explicit_pair": "m.wave_speeds(x=(smin, smax), y=(smin, smax))",
+            "explicit_pair": "Model.wave_speeds(...) with one signed pair per typed axis",
             "jacobian": "m.wave_speeds_from_jacobian(...) (flux jacobian eigenvalues)",
             "pressure_derived": "a primitive 'p' + declared eigenvalues (historical path)",
             "einfeldt": "the Einfeldt wave-speed estimate hook",
@@ -82,7 +82,7 @@ class WaveSpeedProvider(Descriptor):
 
 # --- factories (typed handles for each source; the public authoring surface) ------------------
 def ExplicitPair() -> WaveSpeedProvider:
-    """The signed pair declared with ``m.wave_speeds(x=(smin, smax), y=(...))``."""
+    """The signed pair declared with the typed public ``Model.wave_speeds(...)`` route."""
     return WaveSpeedProvider("explicit_pair")
 
 
@@ -143,16 +143,20 @@ def provider_of(model_or_compiled: Any) -> Any:
     ``set_wave_speeds_from_jacobian`` raise on the second); we assert it and raise a clear error
     naming both if a foreign object ever set both.
 
-    On a bare :class:`pops.codegen.loader.CompiledModel` the SOURCE kind is not recorded (the ``.so``
-    metadata carries only ``has_wave_speeds``): when the handle also exposes ``model`` (the carried
-    authoring model) that model is consulted; otherwise a generic signed-pair provider is returned
-    when ``has_wave_speeds`` is True, else ``None`` (an honest, documented limitation)."""
+    On a :class:`pops.codegen.loader.CompiledModel`, the exact detached SOURCE kind carried by the
+    artifact is used. Compiled artifacts never retain the authoring model and never guess that an
+    unknown signed source was an explicit pair."""
     from pops.codegen.loader import CompiledModel  # lazy: codegen <-> numerics edge
     if isinstance(model_or_compiled, CompiledModel):
-        carried = getattr(model_or_compiled, "model", None)
-        if carried is not None:
-            return provider_of(carried)
-        return ExplicitPair() if getattr(model_or_compiled, "has_wave_speeds", False) else None
+        kind = getattr(model_or_compiled, "wave_speed_provider", None)
+        if kind is None:
+            if getattr(model_or_compiled, "has_wave_speeds", False):
+                raise ValueError(
+                    "provider_of: compiled model advertises wave speeds without an authenticated "
+                    "wave_speed_provider source"
+                )
+            return None
+        return WaveSpeedProvider(kind)
 
     inner = _authoring_model(model_or_compiled)
     if inner is None:
@@ -202,8 +206,8 @@ class _CapabilityHandles:
         provider = provider_of(self._model)
         if provider is None:
             raise ValueError(
-                "this model declares no wave speeds; declare m.wave_speeds(x=(smin, smax), "
-                "y=(smin, smax)), or m.wave_speeds_from_jacobian(...), or a primitive 'p' "
+                "this model declares no wave speeds; declare Model.wave_speeds(...) with one "
+                "signed pair per typed axis, or m.wave_speeds_from_jacobian(...), or a primitive 'p' "
                 "(m.primitive('p', ...)) before reading .capabilities.wave_speeds.")
         return provider
 

@@ -71,7 +71,7 @@ def test_chebyshev_smoother_refuses_structurally():
     report = GeometricMG(smoother=Chebyshev()).validate()
     assert not report.ok
     codes = {i.code for i in report.issues}
-    assert "smoother_not_wired" in codes
+    assert "elliptic_solver.smoother_not_wired" in codes
     # lower() must also refuse (never a silent drop of the un-wired smoother).
     with pytest.raises(ValueError, match="Gauss-Seidel"):
         GeometricMG(smoother=Chebyshev()).lower()
@@ -82,24 +82,24 @@ def test_out_of_domain_cycles_and_tolerance_refuse():
         GeometricMG(max_cycles=0)
     with pytest.raises(ValueError):
         GeometricMG(min_coarse=0)
-    report = GeometricMG(tolerance=Relative(0.0)).validate()
-    assert not report.ok
-    assert "rel_tol_out_of_domain" in {i.code for i in report.issues}
+    with pytest.raises(ValueError, match="Relative"):
+        Relative(0.0)
 
 
 # --- runtime tier (needs _pops) ----------------------------------------------
 
 pops = pytest.importorskip("pops")
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+import pops.runtime._engine_descriptors as engine  # noqa: E402
+from pops.runtime._system import System  # noqa: E402  (ADC-545 advanced runtime seam)
 
 
 def _sim(**poisson):
     sim = System(n=16, L=1.0, periodic=True)
-    sim.add_block(
+    sim.add_equation(
         "ion",
-        pops.Model(pops.FluidState.isothermal(cs2=0.7), pops.IsothermalFlux(), pops.NoSource(),
-                   pops.ChargeDensity(charge=-1.0)),
-        spatial=pops.Spatial(),
+        engine.Model(engine.FluidState.isothermal(cs2=0.7), engine.IsothermalFlux(), engine.NoSource(),
+                   engine.ChargeDensity(charge=-1.0)),
+        spatial=engine.Spatial(),
     )
     if poisson:
         sim.set_poisson(**poisson)
@@ -160,23 +160,25 @@ def test_override_changes_the_v_cycle_count():
 def test_coarse_threshold_changes_the_hierarchy():
     """ADC-644 live behavior: a positive coarse_threshold actually stops coarsening.
 
-    With ONE V-cycle (max_cycles=1) the result depends on the hierarchy depth; a ceiling of n*n
-    (coarsening fully disabled) must produce a different phi than the default deep hierarchy. The
-    default (0 = disabled ceiling) is the byte-identity baseline of the goldens."""
+    The native profiler reports the actual MG level count.  A ceiling of n*n disables coarsening at
+    the root and must therefore report fewer levels than the default deep hierarchy.  This is a
+    structural witness; unlike comparing one converged potential, it remains valid when the root
+    bottom solve happens to make both numerical answers identical."""
     import numpy as np
 
-    def _phi(**poisson):
+    def _levels(**poisson):
         sim = _sim(max_cycles=1, **poisson)
         rho = np.zeros((16, 16))
         rho[8, 8] = 1.0
         rho[4, 4] = -1.0
         sim.set_density("ion", rho)
-        sim.solve_fields()
-        return np.array(sim.potential(), copy=True)
+        with sim.profile() as profile:
+            sim.solve_fields()
+        return profile.summary().by_elliptic()["mg_levels"]
 
-    deep = _phi()  # default: coarsen down to min_coarse
-    shallow = _phi(coarse_threshold=16 * 16)  # ceiling at the root level: no coarsening at all
-    assert np.max(np.abs(deep - shallow)) > 0.0, "coarse_threshold must reach the native hierarchy"
+    deep = _levels()  # default: coarsen down to min_coarse
+    shallow = _levels(coarse_threshold=16 * 16)  # ceiling at root: no coarsening
+    assert deep > shallow == 1, "coarse_threshold must reach the native hierarchy"
 
 
 def test_native_set_poisson_refuses_out_of_domain():

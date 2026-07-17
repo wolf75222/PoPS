@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from pops.ir import _wrap
-from pops.ir.visitors import _expr_uses_cons_or_prim
+from pops._ir import _wrap
+from pops._ir.visitors import _expr_uses_cons_or_prim
 from pops.model import OperatorHandle
 
 from .aux import AUX_CANONICAL
@@ -29,7 +29,15 @@ class _SourceMixin(_HyperbolicModel):
     def set_source(self, s: Any) -> None: self._source = [_wrap(e) for e in s]
     def set_elliptic_rhs(self, e: Any) -> None: self._elliptic = _wrap(e)
 
-    def elliptic_field(self, name: Any, rhs: Any, operator: str = "poisson", aux: Any = None) -> None:
+    def elliptic_field(
+        self,
+        name: Any,
+        rhs: Any,
+        operator: str = "poisson",
+        aux: Any = None,
+        *,
+        gradient_sign: int = 1,
+    ) -> None:
         """Declare a NAMED elliptic field (ADC-419): an elliptic solve ``operator(field) = rhs(U)``
         whose solution + derived quantities populate the NAMED aux fields @p aux (default
         ``["phi", "grad_x", "grad_y"]``, the canonical electrostatic triple). @p rhs is an Expr of
@@ -39,10 +47,9 @@ class _SourceMixin(_HyperbolicModel):
         self._elliptic (m.elliptic_rhs). name must be a valid identifier, unique, and not collide with
         the default.
 
-        SCOPE: the IR + validation + hash + codegen-IR for the named field land here, but the RUNTIME
-        (a SECOND elliptic operator with its own aux-channel allocation) is DEFERRED -- the System hosts
-        a single elliptic solve + the shared aux channel, so ctx.solve_fields(field=name) raises a clear
-        NotImplementedError on lowering rather than mis-solving (cf. time.py / report)."""
+        The declaration carries physics only. A case-owned callable field operator and its
+        ``FieldDiscretization`` select the executable solver, boundaries and output route; none of
+        those numerical choices are inferred here."""
         n = self.n_vars
         if n == 0:
             raise ValueError("elliptic_field(%r): declare conservative_vars(...) first" % (name,))
@@ -62,6 +69,16 @@ class _SourceMixin(_HyperbolicModel):
         aux = list(aux) if aux is not None else ["phi", "grad_x", "grad_y"]
         if not aux:
             raise ValueError("elliptic_field('%s'): aux must list at least one field" % name)
+        if len(aux) == 2 or len(aux) > 3:
+            raise ValueError(
+                "elliptic_field('%s'): aux outputs must have length 1 or 3; the runtime "
+                "cannot register %d outputs yet" % (name, len(aux)))
+        if type(gradient_sign) is not int or gradient_sign not in (-1, 1):
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign must be exactly -1 or 1" % name)
+        if len(aux) == 1 and gradient_sign != 1:
+            raise ValueError(
+                "elliptic_field('%s'): gradient_sign=-1 requires two gradient outputs" % name)
         for a in aux:
             if not (isinstance(a, str) and a.isidentifier()):
                 raise ValueError("elliptic_field('%s'): aux field %r is not a valid identifier"
@@ -81,7 +98,12 @@ class _SourceMixin(_HyperbolicModel):
                              "right-hand side is a function of the conservative state only (the same "
                              "surface as m.elliptic_rhs). Read the SOLVED field's aux in a source/flux."
                              % (name, sorted(rhs_aux)))
-        self._elliptic_fields[name] = {"rhs": rhs, "operator": operator, "aux": aux}
+        self._elliptic_fields[name] = {
+            "rhs": rhs,
+            "operator": operator,
+            "aux": aux,
+            "gradient_sign": gradient_sign,
+        }
 
     def source_term(self, name: Any, exprs: Any) -> Any:
         """Declare a NAMED local source S_name(U, primitives, aux, params): exactly n_cons
@@ -106,7 +128,9 @@ class _SourceMixin(_HyperbolicModel):
                              % (name, len(exprs), n))
         if name == "default":
             self._source = exprs   # equivalent to m.source([...]) -- the legacy default source
-            return OperatorHandle("default", kind="local_source")
+            return OperatorHandle(
+                "default", kind="local_source", owner=self.owner_path,
+                registered_operator_name="source_default")
         if not name.isidentifier():
             raise ValueError("source_term('%s'): name must be a valid identifier "
                              "(letters/digits/_, no leading digit)" % name)
@@ -115,7 +139,7 @@ class _SourceMixin(_HyperbolicModel):
         if name in self._linear_sources:
             raise ValueError("source_term('%s'): name collides with a linear_source" % name)
         self._source_terms[name] = exprs
-        return OperatorHandle(name, kind="local_source")
+        return OperatorHandle(name, kind="local_source", owner=self.owner_path)
 
     def linear_source(self, name: Any, matrix: Any) -> Any:
         """Declare a NAMED local linear operator L_name(aux, params): an n_cons x n_cons matrix whose
@@ -152,13 +176,13 @@ class _SourceMixin(_HyperbolicModel):
         if name in self._source_terms:
             raise ValueError("linear_source('%s'): name collides with a source_term" % name)
         self._linear_sources[name] = wrapped
-        return OperatorHandle(name, kind="local_linear_operator")
+        return OperatorHandle(name, kind="local_linear_operator", owner=self.owner_path)
 
     def rate_operator(self, name: Any, *, flux: bool = True, sources: Any = ("default",),
                       fluxes: Any = None) -> Any:
         """Declare a NAMED composite rate operator ``R_name = -div F + sum(sources)`` (Spec 2,
         operator-first). It is a Program-side ALIAS for ``ctx.rhs(flux=, sources=, fluxes=)``: a typed
-        ``P.call(name, U[, fields])`` lowers to the SAME rhs IR as the explicit ``P.rhs(...)`` shortcut,
+        calling the returned handle lowers to the same internal rhs IR,
         so a model-free Program can address the RHS by one operator name instead of spelling out
         flux/sources. The alias carries no new numerics (its flux/sources are already in the model and
         the hash) -- it never enters the model hash nor the codegen. ``flux`` / ``sources`` / ``fluxes``
@@ -166,8 +190,8 @@ class _SourceMixin(_HyperbolicModel):
         rate operators, and must not collide with a source_term / linear_source.
 
         Returns the declared operator's :class:`pops.model.OperatorHandle` (Spec 5 sec.14.2.3): an
-        inert typed reference (``.name`` / ``.kind == "local_rate"``) a Program can pass to ``P.call``
-        in place of the string name, lowering to the byte-identical IR."""
+        inert typed reference (``.name`` / ``.kind == "local_rate"``) callable with Program values;
+        string operator selection is absent."""
         if self.n_vars == 0:
             raise ValueError("rate_operator(%r): declare conservative_vars(...) first" % (name,))
         if not (isinstance(name, str) and name.isidentifier()):
@@ -184,7 +208,7 @@ class _SourceMixin(_HyperbolicModel):
                              "(a source-only rate has no flux to divide)" % name)
         srcs = list(sources) if sources is not None else None
         self._rate_operators[name] = {"flux": bool(flux), "sources": srcs, "fluxes": flx}
-        return OperatorHandle(name, kind="local_rate")
+        return OperatorHandle(name, kind="local_rate", owner=self.owner_path)
 
     def stability_speed(self, expr: Any) -> None:
         """STABILITY speed lambda* (expression of cons / prims / aux): drives the block CFL
@@ -226,10 +250,9 @@ class _SourceMixin(_HyperbolicModel):
         une PROJECTION (idempotente : P(P(U)) == P(U)) et PONCTUELLE (aucune lecture de voisin). Les
         formules de realisabilite restent cote cas ; les clamps s'ecrivent SANS branche, en max/min
         via abs_ / sign : p.ex. positivite q >= 0 : (q + abs_(q)) / 2. Compilee comme flux/source
-        (CSE comprise, production GPU/MPI -- remplace le callback Python par cellule). Backends
-        'aot' (add_compiled_block) et 'production' System (add_native_block) ; le backend 'prototype'
-        et target='amr_system' la REJETTENT explicitement (jamais d'ignore silencieux). SANS appel :
-        aucun hook emis, chemin bit-identique."""
+        (CSE comprise, production GPU/MPI -- remplace le callback Python par cellule). Le package
+        natif transporte ce hook sur System et l'applique par niveau apres reflux sur AMR. SANS
+        appel : aucun hook emis."""
         exprs = [_wrap(e) for e in exprs]
         if len(exprs) != self.n_vars:
             raise ValueError("projection : %d expressions attendues (une par composante "

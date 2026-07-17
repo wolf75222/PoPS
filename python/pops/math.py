@@ -1,26 +1,32 @@
-"""Blackboard math operators for the Spec 3 physics DSL.
+"""Public symbolic algebra for PoPS scientific authoring.
 
-Thin facade: all node classes and constructors now live in :mod:`pops.ir`
-(single source of truth). This module re-exports them so every existing
-``from pops.math import ...`` or ``pops.math.X`` call keeps working unchanged.
+Users build immutable expressions here; the concrete intermediate-representation modules remain an
+internal compiler detail.  Handles are imported from their owning scientific objects and wrapped
+explicitly with :class:`ValueExpr` when an expression is required.
 """
 from __future__ import annotations
 
 __all__ = [
-    "sqrt", "grad", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
+    "sqrt", "grad", "norm", "div", "laplacian", "dx", "dy", "ddt", "rate", "unknown",
     "integral",
-    # IR node types (advanced / introspection)
-    "Equation", "Gradient", "Partial", "Laplacian", "Divergence",
+    # Public symbolic values and node types.
+    "Expr", "Const", "Var", "ValueExpr", "SymbolicTruthValueError",
+    "Equation", "Gradient", "GradientMagnitude", "Partial", "Laplacian", "Divergence",
     "TimeDerivative", "Unknown", "OpApply", "Integral", "RateTerm", "RateExpr",
     # elliptic field-operator algebra (Spec 5 sec.9.2)
-    "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "principal_kinds",
+    "Reaction", "CoeffGradient", "DivCoeffGrad", "EllipticSum", "elliptic_terms",
+    "principal_kinds",
 ]
 
-from pops.ir.expr import (  # noqa: F401
+from pops._ir.expr import (  # noqa: F401
+    Expr,
+    Const,
+    Var,
     Equation,
     _BoardNode,
     Partial,
     Gradient,
+    GradientMagnitude,
     Laplacian,
     RateTerm,
     RateExpr,
@@ -30,16 +36,20 @@ from pops.ir.expr import (  # noqa: F401
     OpApply,
     Integral,
 )
-from pops.ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-operator algebra)
+from pops._ir.handle_expr import ValueExpr  # noqa: F401
+from pops._ir.symbolic import SymbolicTruthValueError  # noqa: F401
+from pops._ir.elliptic import (  # noqa: F401  (Spec 5 sec.9.2 elliptic field-operator algebra)
     Reaction,
     CoeffGradient,
     DivCoeffGrad,
     EllipticSum,
+    elliptic_terms,
     principal_kinds,
 )
-from pops.ir.expr import _as_rate  # noqa: F401  (used internally by RateTerm)
-from pops.ir.ops import (  # noqa: F401
+from pops._ir.expr import _as_rate  # noqa: F401  (used internally by RateTerm)
+from pops._ir.ops import (  # noqa: F401
     grad,
+    norm,
     dx,
     dy,
     laplacian,
@@ -49,7 +59,7 @@ from pops.ir.ops import (  # noqa: F401
     unknown,
     integral,
 )
-from pops.ir.ops import board_sqrt as sqrt  # noqa: F401
+from pops._ir.ops import board_sqrt as sqrt  # noqa: F401
 
 
 # --- scalar dtypes (Spec 5 sec.5.12: a typed param declares its dtype) -------------------

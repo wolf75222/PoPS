@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """ADC-529: a board Equation refuses bool() / if equation:.
 
-``lhs == rhs`` on a board node builds an inspectable :class:`pops.ir.expr.Equation`, NOT a truth
+``lhs == rhs`` on a board node builds an inspectable :class:`pops._ir.expr.Equation`, NOT a truth
 value. Using it as a Python condition (``if ddt(U) == R:`` / ``bool(ddt(U) == R)``) is almost always
-a mistaken comparison, so both the Equation and the bare board node refuse ``__bool__`` with a clear
-error naming the lowering APIs (m.rate / m.solve_field / T.define / T.solve). ``==`` itself still
-builds an Equation (the authoring surface is unchanged).
+a mistaken comparison, so both the Equation and the bare board node refuse ``__bool__`` with a
+sourced symbolic-truth diagnostic. ``==`` itself still builds an Equation.
 
-Pure Python (pops.ir only, no numerics / no _pops); skips if pops is not importable.
+Pure Python (pops._ir only, no numerics / no _pops); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import math as bm
-    from pops.ir.expr import Equation
+    from pops.math import Equation
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_equation_not_bool (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_equation_not_bool (pops unavailable: %s)' % exc)
 
 
 def test_equal_on_board_node_builds_an_equation():
@@ -33,8 +31,9 @@ def test_bool_of_equation_raises():
         raise AssertionError("bool(Equation) must raise")
     except TypeError as exc:
         msg = str(exc)
-        assert "not a boolean" in msg and "m.rate" in msg, msg
-    print("OK  bool(Equation) raises pointing at the lowering APIs")
+        assert "[symbolic_truth_value]" in msg, msg
+        assert "Equation has no Python truth value" in msg, msg
+    print("OK  bool(Equation) raises a sourced symbolic-truth diagnostic")
 
 
 def test_if_equation_raises():
@@ -44,7 +43,7 @@ def test_if_equation_raises():
             pass
         raise AssertionError("if equation: must raise")
     except TypeError as exc:
-        assert "not a boolean" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
     print("OK  'if equation:' raises")
 
 
@@ -55,7 +54,7 @@ def test_bare_board_node_bool_raises():
         bool(node)
         raise AssertionError("bool(board node) must raise")
     except TypeError as exc:
-        assert "not a boolean" in str(exc), str(exc)
+        assert "[symbolic_truth_value]" in str(exc), str(exc)
     print("OK  a bare board node refuses bool()")
 
 

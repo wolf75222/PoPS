@@ -1,154 +1,163 @@
 #!/usr/bin/env python3
-"""ADC-515: ``CompiledModel.arguments()`` / ``estimate_memory()`` -- the AMR-route seam.
+"""AMR-route introspection through the exact compile/bind phase records.
 
-``pops.compile(problem, layout=AMR(...))`` returns the first block's :class:`CompiledModel` (the AMR
-route lowers per-block native ``add_native_block`` loaders; there is no whole-system
-``CompiledProblem`` on AMR). Before ADC-515 that handle exposed ``inspect_amr()`` /
-``capability_matrix()`` but NOT ``arguments()`` / ``estimate_memory()`` (those lived only on
-``CompiledProblem``), so introspecting the AMR-route artifact raised ``AttributeError``. This suite
-pins the two new seams, built by the SHARED ``inspect_compiled`` builders via the model-as-handle
-path (the ``CompiledModel`` IS its own physical model):
-
-  * ``arguments()`` reports the block instance / params / named aux and the runtime layout, with
-    ``layout == "amr"`` driven by the handle's ``target='amr_system'``;
-  * ``estimate_memory(mesh)`` is a pure FORMULA (state / aux / halo + AMR patch budget) that defaults
-    the AMR layout from the handle's carried ``_layout`` and NEVER touches Program-only scratch (the
-    no-Program branch is guarded), so the seam matches the ``CompiledProblem`` counterpart on the
-    Uniform route.
-
-Pure metadata + formula: no compile, bind, dlopen or allocation, so it runs on a bare box (the
-stub ``CompiledModel`` needs no ``.so``). ``importorskip("pops")`` guards the imports; ``__main__``
-runs pytest.
+The public compile result is always ``CompiledSimulationArtifact``.  AMR still carries one native
+``CompiledModel`` per block, but tests must not recreate the retired convention where a model was
+mutated with compile- or bind-phase metadata.
 """
 import sys
 
+import numpy as np
 import pytest
 
 pops = pytest.importorskip("pops", exc_type=ImportError)
 
+from pops.codegen._plans import (  # noqa: E402
+    BindInputs,
+    InstallPlan,
+    ResolvedBlock,
+    ResolvedSimulationPlan,
+)
+from pops.codegen._compiled_artifact import (  # noqa: E402
+    CompiledBlockArtifact,
+    CompiledSimulationArtifact,
+)
+from pops.codegen._compiled_model_identity import model_compile_identity  # noqa: E402
+from pops.codegen._phases import bind as bind_phase  # noqa: E402
 from pops.codegen.loader import CompiledModel  # noqa: E402
-from pops.mesh import CartesianMesh  # noqa: E402
-from pops.mesh.layouts import AMR, Uniform  # noqa: E402
-from pops.physics.model import Param  # noqa: E402
+from tests.python.support.layout_plan import cartesian_grid, final_amr_layout  # noqa: E402
+from pops.model import Module  # noqa: E402
+from pops.model.bind_schema import BindSchema  # noqa: E402
+from pops.model.resolved_bindings import ResolvedBindings  # noqa: E402
+from pops.params import ConstParam, RuntimeParam  # noqa: E402
+from pops.problem import Case  # noqa: E402
+from pops.problem._snapshot import AuthoringSnapshot  # noqa: E402
+from tests.python.support.layout_plan import resolved_layout_contract  # noqa: E402
 
 
-def _amr_handle(*, n_aux=2, mpi=True, runtime_param=True):
-    """A stub AMR-route ``CompiledModel`` (target='amr_system', no ``.so``): the handle the AMR route
-    returns. Carries three conservative components, named aux, a runtime + a const param, and the
-    ``caps`` the ``pops.compile`` AMR route produces. ``_layout`` is attached exactly as
-    ``_orchestration_amr._compile_amr`` attaches it."""
+def _amr_artifact(*, n_aux=2, mpi=True, runtime_param=True):
+    """Return an exact AMR compiled artifact without compiling or loading a shared library."""
+    source = Module("amr-introspection-source")
+    source.state_space("U", ("rho", "mx", "my"))
     params = {}
     if runtime_param:
-        params["alpha"] = Param("alpha", 1.0, kind="runtime")
-    params["gamma"] = Param("gamma", 1.4, kind="const")
+        params["alpha"] = RuntimeParam("alpha", default=1.0)
+    params["gamma"] = ConstParam("gamma", 1.4)
+    for declaration in params.values():
+        source.param(declaration)
     aux = ["B_z", "phi_bg"][:n_aux]
-    handle = CompiledModel(
-        so_path="<stub-amr>", backend="production", adder="add_native_block",
-        cons_names=["rho", "mx", "my"], cons_roles=["Density", "MomentumX", "MomentumY"],
-        prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux, params=params,
-        caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k", model_hash="h", cxx="c++",
-        std="c++23", target="amr_system", aux_extra_names=aux)
-    handle._layout = AMR(base=CartesianMesh(n=64, periodic=True), max_levels=2, ratio=2)
-    return handle
+    component = CompiledModel(
+        so_path="<stub-amr>", backend="production",
+        cons_names=["rho", "mx", "my"],
+        cons_roles=["Density", "MomentumX", "MomentumY"],
+        prim_names=["rho", "mx", "my"], n_vars=3, gamma=1.4, n_aux=n_aux,
+        params=params, caps={"cpu": True, "amr": True, "mpi": mpi}, abi_key="k",
+        model_hash="h", cxx="c++", std="c++23", target="amr_system",
+        aux_extra_names=aux, definition_identity=model_compile_identity(source),
+    )
+    layout = final_amr_layout(cartesian_grid(n=64, periodic=True), max_levels=2, ratio=2)
+    schema_problem = Case(name="amr-introspection-case")
+    schema_problem.block("block", source)
+    schema = BindSchema.from_problem(schema_problem)
+    layout_plan, layout_coverage = resolved_layout_contract(
+        layout, target="amr_system", block_names=("block",))
+    plan = ResolvedSimulationPlan(
+        snapshot=AuthoringSnapshot({"kind": "amr-route-introspection-stub"}),
+        target="amr_system",
+        backend="production",
+        layout=layout,
+        layout_plan=layout_plan,
+        layout_targets={
+            row.handle.qualified_id: "amr_system" for row in layout_plan.layouts
+        },
+        time=None,
+        blocks=(ResolvedBlock(
+            "block", source, {"ghost_depth": 1}, "production", ("U",),
+            ("test::block::state::U",)),),
+        bind_schema=schema,
+        compile_values=schema.resolve_compile(),
+        field_plans={},
+        libraries=(),
+        requirements={"amr": True},
+        capabilities={"cpu": True, "amr": True, "mpi": mpi},
+        lowering_coverage=layout_coverage,
+    )
+    artifact = CompiledSimulationArtifact(
+        plan=plan,
+        program=None,
+        blocks=(
+            CompiledBlockArtifact(
+                "block", component, {"ghost_depth": 1}, ("U",)
+            ),
+        ),
+    )
+    return artifact
 
 
-# --- arguments() on the AMR route ------------------------------------------------
-def test_amr_handle_exposes_arguments_and_estimate_memory():
-    handle = _amr_handle()
-    # The two seams the AMR route was missing before ADC-515.
-    assert callable(getattr(handle, "arguments", None))
-    assert callable(getattr(handle, "estimate_memory", None))
+def test_amr_compile_result_is_the_exact_artifact():
+    artifact = _amr_artifact()
+    assert type(artifact) is CompiledSimulationArtifact
+    assert artifact.target == "amr_system"
+    assert artifact.blocks[0].model.target == "amr_system"
+    artifact.verify()
 
 
-def test_arguments_reports_the_amr_layout_and_the_block_instance():
-    args = _amr_handle().arguments()
-    lr = args.layout_runtime
-    # The runtime layout is AMR (driven by target='amr_system'), MPI advertised from the caps.
-    assert lr["layout"] == "amr"
-    assert lr["supports_mpi"] is True
-    # The block instance carries the model's conservative components (not a degenerate 1).
+def test_arguments_report_amr_layout_block_aux_and_typed_params():
+    args = _amr_artifact().arguments()
+    assert args.layout_runtime["layout"] == "amr"
+    assert args.layout_runtime["supports_mpi"] is True
     assert len(args.instances) == 1
-    inst = next(iter(args.instances.values()))
-    assert inst["components"] == 3
-    assert inst["conservative"] == ["rho", "mx", "my"]
-    assert inst["required"] is True
-
-
-def test_arguments_lists_the_named_aux_and_typed_params():
-    args = _amr_handle().arguments()
-    # Named aux from aux_extra_names (each a required cell input).
+    instance = next(iter(args.instances.values()))
+    assert instance["components"] == 3
+    assert instance["conservative"] == ["rho", "mx", "my"]
     assert set(args.aux) == {"B_z", "phi_bg"}
-    assert all(spec["required"] is True and spec["layout"] == "cell"
-               for spec in args.aux.values())
-    # The runtime param is required at bind; the const param is frozen (not required).
-    assert set(args.params) == {"alpha", "gamma"}
-    assert args.params["alpha"]["kind"] == "runtime" and args.params["alpha"]["required"] is True
-    assert args.params["gamma"]["kind"] == "const" and args.params["gamma"]["required"] is False
+    params = {row["name"]: row for row in args.params.values()}
+    assert set(params) == {"alpha", "gamma"}
+    assert params["alpha"]["kind"] == "runtime"
+    assert params["alpha"]["required"] is False
+    assert params["gamma"]["kind"] == "const"
+    assert params["gamma"]["required"] is False
 
 
-def test_arguments_supports_mpi_reflects_the_caps():
-    # A handle whose model has no MPI cap reports supports_mpi False (no fabricated capability).
-    args = _amr_handle(mpi=False).arguments()
+def test_arguments_do_not_fabricate_mpi_capability():
+    args = _amr_artifact(mpi=False).arguments()
     assert args.layout_runtime["supports_mpi"] is False
 
 
-# --- estimate_memory() on the AMR route ------------------------------------------
-def test_estimate_memory_defaults_the_amr_layout_from_the_carried_layout():
-    handle = _amr_handle()
-    mesh = CartesianMesh(n=64, L=1.0, periodic=True)
-    # A BARE estimate_memory(mesh) auto-reports the AMR hierarchy (the handle carries the AMR
-    # _layout); the caller need not re-pass layout=AMR(...).
-    est = handle.estimate_memory(mesh)
-    assert est.layout == "amr"
-    cats = est.categories
-    # The no-Program branch returns POSITIVE state / aux / halo / amr_patch categories.
-    assert cats["state"] > 0 and cats["aux"] > 0 and cats["halo"] > 0
-    assert cats.get("amr_patch", 0) > 0
-    # state = n_cons(3) x cells(64*64) x 8 bytes; aux = n_aux(2) x cells x 8 bytes.
-    assert cats["state"] == 3 * 64 * 64 * 8
-    assert cats["aux"] == 2 * 64 * 64 * 8
-    assert est.total_bytes > 0
+def test_bind_creates_exact_install_plan_without_mutating_compiled_components():
+    artifact = _amr_artifact(runtime_param=False)
+    initial = np.array([1.0, 0.0, 0.0])
+    inputs = BindInputs(initial_state={"block": initial})
+    params = artifact.bind_schema.resolve_bind(
+        {}, compile_values=artifact.plan.compile_values)
+    install = InstallPlan(
+        artifact=artifact,
+        bind_inputs=inputs,
+        instances={
+            "block": {
+                "model": artifact.blocks[0].model,
+                "spatial": artifact.blocks[0].spatial,
+                "initial": inputs.initial_state["block"],
+            }
+        },
+        params=params,
+        aux={},
+    )
+    assert type(install.bind_inputs) is BindInputs
+    assert type(install.params) is ResolvedBindings
+    assert install.params is params
+    assert install.target == "amr_system"
+    assert install.block_models["block"] is artifact.blocks[0].model
+    install.verify()
 
 
-def test_estimate_memory_no_program_branch_skips_program_only_scratch():
-    # A bare CompiledModel carries no time Program, so the Program-only solver categories are ZERO
-    # (never a reference to Program scratch on a handle that has none).
-    est = _amr_handle().estimate_memory(CartesianMesh(n=32, L=1.0, periodic=True))
-    for program_only in ("scalar_field", "krylov", "multigrid", "field_output"):
-        assert est.categories.get(program_only, 0) == 0, (
-            "no-Program branch must not populate %r" % program_only)
-
-
-def test_estimate_memory_amr_budget_dominates_the_uniform_budget():
-    handle = _amr_handle()
-    mesh = CartesianMesh(n=64, L=1.0, periodic=True)
-    amr_est = handle.estimate_memory(mesh)                       # auto AMR (from _layout)
-    uni_est = handle.estimate_memory(mesh, layout=Uniform(mesh))  # explicit Uniform wins
-    assert uni_est.layout == "uniform"
-    # The AMR hierarchy estimate adds the refined-patch budget on top of the Uniform state budget.
-    assert amr_est.total_bytes >= uni_est.total_bytes
-    assert "amr_patch" not in uni_est.by_scratch() or uni_est.by_scratch().get("amr_patch", 0) == 0
-
-
-def test_estimate_memory_explicit_platform_adds_the_mpi_buffer():
-    handle = _amr_handle()
-    mesh = CartesianMesh(n=32, L=1.0, periodic=True)
-    plain = handle.estimate_memory(mesh)
-    with_mpi = handle.estimate_memory(mesh, platform="mpi")
-    assert plain.categories.get("mpi_buffer", 0) == 0
-    assert with_mpi.categories.get("mpi_buffer", 0) > 0
-
-
-# --- a system-target handle is unchanged (no AMR leakage) ------------------------
-def test_system_target_handle_still_reports_system_layout():
-    # A target='system' bare model (no _layout) reports the Uniform layout: the AMR path is opt-in
-    # via target='amr_system', never a default.
-    handle = CompiledModel(
-        so_path="<stub-sys>", backend="aot", adder="add_native_block", cons_names=["rho"],
-        cons_roles=["Density"], prim_names=["rho"], n_vars=1, gamma=None, n_aux=0, params={},
-        caps={"cpu": True}, abi_key="k", model_hash="h", cxx="c++", std="23")  # target='system'
-    assert handle.arguments().layout_runtime["layout"] == "system"
-    assert handle.estimate_memory(16).layout == "system"
+def test_public_amr_bind_refuses_the_retired_initial_state_compatibility_route():
+    artifact = _amr_artifact(runtime_param=False)
+    with pytest.raises(ValueError, match="requires a resolved InitialConditionPlan"):
+        bind_phase(
+            artifact,
+            BindInputs(initial_state={"block": np.ones((3, 8, 8), dtype=np.float64)}),
+        )
 
 
 if __name__ == "__main__":

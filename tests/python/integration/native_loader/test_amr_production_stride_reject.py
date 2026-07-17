@@ -7,26 +7,28 @@ POURQUOI un rejet et pas un fix : l'ABI PLATE du loader .so (symbole pops_instal
 add_native_block) ne transporte NI stride NI le masque IMEX. Passes par ce chemin, ils prendraient
 leurs defauts EN SILENCE (stride=1, masque vide = backward-Euler plein) -> demi-fix silencieux interdit.
 La facade les rejette donc clairement (meme esprit que System.add_equation, qui rejette stride>1 et le
-masque sur les backends compiles .so : cf. tests/python/unit/time/test_stride.py section 8).
+masque sur les backends compiles .so ; les cadences supportees sont prouvees nativement par
+tests/cpp/unit/physics/test_multirate_stride.cpp et
+tests/cpp/integration/amr/test_amr_stride_cadence.cpp).
 
 Route explicite vers les chemins qui SUPPORTENT ces parametres :
-  - AmrSystem.add_block (modele natif pops.Model(...)) : stride + masque cables (et FORWARDES par
+  - AmrSystem.add_block (modele natif engine.Model(...)) : stride + masque cables (et FORWARDES par
     add_equation sur la branche ModelSpec) ;
   - add_compiled_model(AmrSystem&) en DIRECT (C++) : stride + masque exposes (exerce par le test C++
     tests/cpp/integration/amr/test_amr_multiblock_compiled.cpp, cas (F)).
 
 Ce test est PUR PYTHON et NE DEPEND PAS d'un compilateur : la garde est purement Python et leve AVANT
 tout dlopen du .so, donc un CompiledModel FACTICE (backend='production', target='amr_system', .so
-inexistant) suffit (deterministe en CI minimale ; meme recette que test_stride.py).
+inexistant) suffit de maniere deterministe en CI minimale.
 """
 
 import sys
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 
 fails = 0
@@ -41,34 +43,34 @@ def chk(cond, label):
 
 
 def fake_production_amr():
-    """CompiledModel FACTICE du chemin production AMR : backend='production', target='amr_system',
-    adder='add_native_block', .so inexistant. La garde stride/masque de add_equation leve AVANT le
+    """CompiledModel FACTICE du chemin production AMR : target='amr_system', .so inexistant.
+    La garde stride/masque de add_equation leve AVANT le
     dlopen du .so, donc le chemin n'est jamais reellement charge."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production", adder="add_native_block",
+        so_path="/inexistant_amr.so", backend="production",
         cons_names=["rho", "rho_u", "rho_v", "E"],
         cons_roles=["Density", "MomentumX", "MomentumY", "Energy"],
         prim_names=["rho", "u", "v", "p"], n_vars=4, gamma=1.4, n_aux=3, params={}, caps={},
         abi_key="k", model_hash="h", cxx="c++", std="c++20", target="amr_system")
 
 
-# ---- 1. stride > 1 via pops.IMEX(stride=...) -> ValueError claire -------------------------------
+# ---- 1. stride > 1 via engine.IMEX(stride=...) -> ValueError claire -------------------------------
 print("== production AMR : stride>1 (IMEX) rejete explicitement ==")
 sim = AmrSystem(n=16, periodic=True)
 try:
-    sim.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                     time=pops.IMEX(stride=5))
+    sim.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                     time=engine.IMEX(stride=5))
     chk(False, "add_equation(time=IMEX(stride=5), production AMR) doit lever ValueError")
 except ValueError as ex:
     chk("stride" in str(ex) and "production" in str(ex),
         "add_equation(stride=5, production AMR) leve une ValueError claire (stride/production)")
 
-# stride > 1 aussi via pops.Explicit(stride=...) (la cadence n'est pas specifique a l'IMEX).
+# stride > 1 aussi via engine.Explicit(stride=...) (la cadence n'est pas specifique a l'IMEX).
 print("== production AMR : stride>1 (Explicit) rejete explicitement ==")
 sim_e = AmrSystem(n=16, periodic=True)
 try:
-    sim_e.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                       time=pops.Explicit(stride=5))
+    sim_e.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                       time=engine.Explicit(stride=5))
     chk(False, "add_equation(time=Explicit(stride=5), production AMR) doit lever ValueError")
 except ValueError as ex:
     chk("stride" in str(ex) and "production" in str(ex),
@@ -78,8 +80,8 @@ except ValueError as ex:
 print("== production AMR : implicit_vars (masque IMEX partiel) rejete explicitement ==")
 sim2 = AmrSystem(n=16, periodic=True)
 try:
-    sim2.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                      time=pops.IMEX(implicit_vars=["rho_u"]))
+    sim2.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                      time=engine.IMEX(implicit_vars=["rho_u"]))
     chk(False, "add_equation(IMEX(implicit_vars=['rho_u']), production AMR) doit lever ValueError")
 except ValueError as ex:
     chk("implicit" in str(ex) and "production" in str(ex),
@@ -88,8 +90,8 @@ except ValueError as ex:
 print("== production AMR : implicit_roles (masque IMEX partiel) rejete explicitement ==")
 sim3 = AmrSystem(n=16, periodic=True)
 try:
-    sim3.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                      time=pops.IMEX(implicit_roles=["momentum_x"]))
+    sim3.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                      time=engine.IMEX(implicit_roles=["momentum_x"]))
     chk(False, "add_equation(IMEX(implicit_roles=['momentum_x']), production AMR) doit lever ValueError")
 except ValueError as ex:
     chk("implicit" in str(ex) and "production" in str(ex),
@@ -101,8 +103,8 @@ except ValueError as ex:
 print("== production AMR : stride=1 / masque vide NE levent PAS (pas de faux positif) ==")
 sim_ok = AmrSystem(n=16, periodic=True)
 try:
-    sim_ok.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                        time=pops.Explicit())  # stride=1, masque vide : DEFAUT
+    sim_ok.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                        time=engine.Explicit())  # stride=1, masque vide : DEFAUT
     chk(False, "add_equation(Explicit(), production AMR) : attendu un echec au dlopen (.so inexistant)")
 except ValueError as ex:
     chk(False, "add_equation(Explicit(), production AMR) ne doit PAS lever de ValueError (%s)" % ex)
@@ -111,8 +113,8 @@ except Exception:  # noqa: BLE001  RuntimeError du dlopen attendu : la garde a l
 
 sim_ok_imex = AmrSystem(n=16, periodic=True)
 try:
-    sim_ok_imex.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                             time=pops.IMEX())  # stride=1, masque vide : IMEX plein backward-Euler
+    sim_ok_imex.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                             time=engine.IMEX())  # stride=1, masque vide : IMEX plein backward-Euler
     chk(False, "add_equation(IMEX(), production AMR) : attendu un echec au dlopen (.so inexistant)")
 except ValueError as ex:
     chk(False, "add_equation(IMEX(), production AMR) ne doit PAS lever de ValueError (%s)" % ex)

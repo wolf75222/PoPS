@@ -5,7 +5,7 @@ INERT inspection (acceptance criterion #38, epic ADC-479): build a REAL ``pops.t
 SSPRK3-style multi-stage step with field solves + a Krylov solve) lowered in memory -- NO Kokkos
 compile, NO .so on disk -- and assert that
 
-  - ``program.scratch_plan()`` / ``compiled.scratch_plan()`` return a ``ScratchPlan`` listing the
+  - ``build_scratch_plan(program)`` / ``compiled.scratch_plan()`` return a ``ScratchPlan`` listing the
     per-category scratch counts (state / rhs / scalar-field), inspectable BEFORE any bind / run;
   - the REUSED buffers are SOUND: a scratch is only marked reusable when its SSA live range is
     PROVABLY disjoint from the buffer's earlier occupant (the earlier last-use precedes its def);
@@ -16,6 +16,7 @@ compile, NO .so on disk -- and assert that
 Pure-Python: the Program lowers without _pops; the plan reuses ``Program.scratch_liveness`` /
 ``buffer_reuse_report`` (the same liveness ADC-465 ships). Pytest + __main__ guard (CI runs
 ``python3 <file>``)."""
+from tests.python.support.requirements import require_native_or_skip
 import json
 import os
 import sys
@@ -23,12 +24,17 @@ import tempfile
 
 try:
     import pops  # noqa: F401
-    from pops.codegen import ScratchPlan, build_scratch_plan
+    from pops.numerics.terms import DefaultSource, Flux
+    from pops.codegen.scratch_plan import ScratchPlan, build_scratch_plan
     from pops.codegen.loader import CompiledModel, CompiledProblem
-    from pops import time as adctime
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
-    print("skip test_scratch_plan (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_scratch_plan (pops unavailable: %s)' % exc)
+
+from tests.python.unit.runtime._typed_program import (
+    solve_field,
+    typed_compiled_artifact,
+    typed_program_state,
+)
 
 
 def _ssprk3(name="ssprk3"):
@@ -36,30 +42,37 @@ def _ssprk3(name="ssprk3"):
 
     Each stage solves the elliptic field from its own stage state, builds the rate, and combines into
     the next stage; the final stage commits. This is the canonical multi-stage step the plan
-    analyzes: the per-stage rate scratch (rhs2 / rhs5 / rhs8) lifetimes do NOT overlap (each is
-    consumed by the very next combine), so they collapse to ONE reused buffer -- a provable reuse."""
-    P = adctime.Program(name)
+    analyzes: the per-stage rate scratch lifetimes do NOT overlap (each is consumed by the very
+    next combine), so they collapse to ONE reused buffer -- a provable reuse."""
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
     dt = P.dt
-    U = P.state("plasma")
-    f0 = P.solve_fields(U)
-    r0 = P._rhs_legacy(state=U, fields=f0, flux=True, sources=["default"])
-    u1 = P.linear_combine("U1", U + dt * r0)
-    f1 = P.solve_fields(u1)
-    r1 = P._rhs_legacy(state=u1, fields=f1, flux=True, sources=["default"])
-    u2 = P.linear_combine("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1)
-    f2 = P.solve_fields(u2)
-    r2 = P._rhs_legacy(state=u2, fields=f2, flux=True, sources=["default"])
-    un = P.linear_combine("Un", (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2)
-    P.commit("plasma", un)
+    U = temporal.n
+    from pops.time import StagePoint, TimePoint
+    stage1 = StagePoint("ssprk3_stage_1", {"main": TimePoint(P.clock, 1)})
+    stage2 = StagePoint("ssprk3_stage_2", {"main": TimePoint(P.clock, 1)})
+    f0 = solve_field(P, U)
+    r0 = P.rhs(state=U, fields=f0, terms=[Flux(), DefaultSource()])
+    u1 = P.value("U1", U + dt * r0, at=stage1)
+    f1 = solve_field(P, u1)
+    r1 = P.rhs(state=u1, fields=f1, terms=[Flux(), DefaultSource()])
+    u2 = P.value("U2", 0.75 * U + 0.25 * u1 + 0.25 * dt * r1, at=stage2)
+    f2 = solve_field(P, u2)
+    r2 = P.rhs(state=u2, fields=f2, terms=[Flux(), DefaultSource()])
+    un = P.value(
+        "Un",
+        (1.0 / 3.0) * U + (2.0 / 3.0) * u2 + (2.0 / 3.0) * dt * r2,
+        at=temporal.next.point,
+    )
+    P.commit(temporal.next, un)
     return P
 
 
 def _krylov(name="krylov_demo"):
-    """A Program with a matrix-free ``solve_linear`` (Krylov) node -- exercises the persistent path."""
-    P = adctime.Program(name)
-    U = P.state("plasma")
-    f = P.solve_fields("phi", U)
-    r = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
+    """A Program with a typed matrix-free linear solve -- exercises the persistent path."""
+    P, _, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    U = temporal.n
+    f = solve_field(P, U, name="phi")
+    r = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
     buf = P.scalar_field("buf")
     A = P.matrix_free_operator("op")
 
@@ -68,10 +81,17 @@ def _krylov(name="krylov_demo"):
         p.laplacian(lap, x)
         return -1.0 * lap
 
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import CG
+    from pops.time import FailRun
     P.set_apply(A, _apply)
-    P.solve_linear(operator=A, rhs=buf, method=CG(max_iter=10), max_iter=10)
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
+    P.solve(
+        LinearProblem(A, buf), solver=CG(max_iter=10),
+    ).consume(action=FailRun())
+    P.commit(
+        temporal.next,
+        P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
     return P
 
 
@@ -80,7 +100,7 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
     cons = ["rho", "mx", "my", "E"][:n_vars]
     roles = ["Density", "MomentumX", "MomentumY", "Energy"][:n_vars]
     return CompiledModel(
-        so_path="/nonexistent/problem.so", backend="production", adder="add_native_block",
+        so_path="/nonexistent/problem.so", backend="production",
         cons_names=cons, cons_roles=roles, prim_names=cons, n_vars=n_vars, gamma=1.4,
         n_aux=n_aux, params={}, caps={"cpu": True, "mpi": True},
         abi_key="SIG|c++|c++23", model_hash="modelhash", cxx="c++", std="c++23",
@@ -89,8 +109,11 @@ def _model(*, n_vars=3, n_aux=1, aux_names=("B_z",)):
 
 def _compiled(program):
     """A SYNTHETIC CompiledProblem: a real lowered Program + a real CompiledModel, no compile."""
-    return CompiledProblem("/tmp/pops-cache/problem.so", program, _model(), "SIG|c++|c++23",
-                           "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    model = _model()
+    compiled = CompiledProblem(
+        "/tmp/pops-cache/problem.so", program, model, "SIG|c++|c++23",
+        "c++", "c++23", problem_hash="deadbeefcafe", cache_key="0badc0de")
+    return typed_compiled_artifact(compiled, model)
 
 
 def chk(cond, label):
@@ -106,9 +129,9 @@ def test_scratch_plan_categories():
     """scratch_plan() lists the state / rhs / scalar-field scratch counts of the IR."""
     print("== scratch_plan() lists the scratch categories ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     chk(isinstance(plan, ScratchPlan), "scratch_plan() returns a ScratchPlan")
-    # SSPRK3: 3 linear_combine states (U1/U2/Un) + 3 rhs rates (rhs2/rhs5/rhs8), no scalar field.
+    # SSPRK3: 3 linear_combine states (U1/U2/Un) + 3 rhs rates, no scalar field.
     chk(plan.categories["state"] == 3, "3 state scratches (U1/U2/Un linear_combine)")
     chk(plan.categories["rhs"] == 3, "3 rhs scratches (the per-stage rates)")
     chk(plan.categories.get("scalar_field", 0) == 0, "no scalar-field scratch in a plain SSPRK3")
@@ -127,8 +150,8 @@ def test_scratch_plan_available_before_run():
     # The free builder and both delegators agree (same IR -> same plan).
     chk(build_scratch_plan(cp.program).to_dict() == cp.scratch_plan().to_dict(),
         "build_scratch_plan and compiled.scratch_plan() agree")
-    chk(cp.program.scratch_plan().to_dict() == cp.scratch_plan().to_dict(),
-        "Program.scratch_plan() and compiled.scratch_plan() agree")
+    chk(build_scratch_plan(cp.program).to_dict() == cp.scratch_plan().to_dict(),
+        "build_scratch_plan(program) and compiled.scratch_plan() agree")
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +163,15 @@ def test_reuse_is_sound():
     earlier occupant -- verified directly against the liveness ranges."""
     print("== reused buffers have provably-disjoint live ranges ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     chk(plan.buffers_saved > 0, "SSPRK3 reuses at least one buffer")
     chk(plan.buffer_count < plan.scratch_count, "buffer_count < scratch_count (reuse happened)")
-    # The 3 per-stage rates (rhs2/rhs5/rhs8) are each consumed by the next combine -> disjoint -> one
-    # buffer. Assert that rhs5 / rhs8 are reported as reusing rhs2's buffer.
-    reused_names = {r["scratch"] for r in plan.reused}
-    chk("rhs5" in reused_names and "rhs8" in reused_names,
-        "the later per-stage rates reuse an earlier rate's buffer")
+    # The 3 per-stage rates are each consumed by the next combine -> disjoint -> one buffer. Node
+    # ids also count the intervening field calls, so assert this from their typed ``rhs`` operation
+    # rather than freezing incidental generated names.
+    rhs_reuse = [r for r in plan.reused if r["op"] == "rhs"]
+    chk(len(rhs_reuse) == 2 and len({r["buffer"] for r in rhs_reuse}) == 1,
+        "the later per-stage rates reuse the first rate's buffer")
     # SOUNDNESS: for every reused entry, the sharer's live range must NOT overlap the predecessor's.
     live = {r["name"]: r for r in P.scratch_liveness()}
     for entry in plan.reused:
@@ -164,7 +188,7 @@ def test_rejected_reuse_has_reason():
     """A scratch that could NOT reuse a buffer is listed with an inspectable reason (overlap)."""
     print("== rejected reuse carries an inspectable reason ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     # U1 / U2 are still live when the next stages' states are defined (a later combine reads them), so
     # they cannot share a buffer with the still-live earlier states -> rejected.
     rejected_names = {r["scratch"] for r in plan.rejected}
@@ -185,7 +209,7 @@ def test_no_fabricated_reuse():
     """No scratch is BOTH reused and rejected; reuse never claims a still-live buffer."""
     print("== reuse / rejected are consistent (no fabricated reuse) ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     reused = {r["scratch"] for r in plan.reused}
     rejected = {r["scratch"] for r in plan.rejected}
     chk(not (reused & rejected), "a scratch is never both reused and rejected")
@@ -205,7 +229,7 @@ def test_persistent_multigrid_buffers():
     """An elliptic solve_fields contributes a persistent multigrid buffer (whole-solve)."""
     print("== persistent multigrid buffers for field solves ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     mg = [p for p in plan.persistent if p["kind"] == "multigrid"]
     chk(len(mg) == 3, "3 field solves -> 3 multigrid persistent buffers")
     chk(plan.conservative is True, "the plan declares itself conservative (persistent buffers)")
@@ -217,7 +241,7 @@ def test_persistent_krylov_buffers():
     """A solve_linear (Krylov) node contributes persistent Krylov work vectors."""
     print("== persistent Krylov work vectors for a solve_linear ==")
     P = _krylov()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     krylov = [p for p in plan.persistent if p["kind"] == "krylov"]
     chk(len(krylov) == 1, "one solve_linear -> one Krylov persistent entry")
     chk(krylov[0]["buffers"] >= 1, "the Krylov entry reports >= 1 work vector")
@@ -227,11 +251,14 @@ def test_persistent_krylov_buffers():
 def test_no_persistent_without_solve():
     """A pure transport step (no field / Krylov solve) has no persistent buffers and is EXACT."""
     print("== a solve-free step has no persistent buffers (exact plan) ==")
-    P = adctime.Program("transport_only")
-    U = P.state("plasma")
-    r = P._rhs_legacy(state=U, flux=True, sources=[])
-    P.commit("plasma", P.linear_combine("U1", U + P.dt * r))
-    plan = P.scratch_plan()
+    P, _, _, _, _, temporal = typed_program_state("transport_only", block_name="plasma")
+    U = temporal.n
+    r = P.rhs(state=U, terms=[Flux()])
+    P.commit(
+        temporal.next,
+        P.value("U1", U + P.dt * r, at=temporal.next.point),
+    )
+    plan = build_scratch_plan(P)
     chk(plan.persistent == [], "no solve -> no persistent solver buffers")
     chk(plan.conservative is False, "a solve-free plan is EXACT, not conservative")
 
@@ -244,7 +271,7 @@ def test_to_dict_and_json_roundtrip():
     """to_dict round-trips through JSON; to_json writes a valid file and returns the string."""
     print("== scratch_plan() serialisation (to_dict / to_json) ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     d = plan.to_dict()
     chk(set(d) >= {"categories", "scratch_count", "buffer_count", "reused", "rejected",
                    "persistent", "conservative", "notes"}, "to_dict carries every field")
@@ -263,7 +290,7 @@ def test_str_and_repr():
     """str(plan) is a readable report; repr is a short summary."""
     print("== scratch_plan() str / repr ==")
     P = _ssprk3()
-    plan = P.scratch_plan()
+    plan = build_scratch_plan(P)
     text = str(plan)
     chk("scratch plan for Program 'ssprk3'" in text, "str() names the program")
     chk("scratch categories" in text and "reused buffers" in text, "str() shows categories + reuse")

@@ -13,13 +13,11 @@ import shutil
 import subprocess
 import tempfile
 
-GAMMA = 1.4
-from tests.python.support.requirements import repo_include
-INCLUDE = repo_include()
-
-
 from tests.python.support.models import build_euler_brick
+from tests.python.support.requirements import repo_include, require_native_or_skip
 
+GAMMA = 1.4
+INCLUDE = repo_include()
 
 HARNESS = r"""
 #include <pops/physics/fluids/euler.hpp>
@@ -74,7 +72,7 @@ def main():
 
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents -> verification sautee (%s)" % INCLUDE)
+        require_native_or_skip('skip  compilateur ou en-tetes pops absents -> verification sautee (%s)' % INCLUDE)
         print("test_dsl_compose : OK (forme du struct seulement)")
         return
 

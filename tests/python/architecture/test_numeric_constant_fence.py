@@ -110,7 +110,7 @@ def _load_static_report() -> dict:
     ret = next((n for n in ast.walk(fn) if isinstance(n, ast.Return)), None)
     assert ret is not None and isinstance(ret.value, ast.Dict), "_static_report return dict not found"
     report = {}
-    for k_node, v_node in zip(ret.value.keys, ret.value.values):
+    for k_node, v_node in zip(ret.value.keys, ret.value.values, strict=True):
         key = ast.literal_eval(k_node)
         if key == "classification":
             continue
@@ -177,9 +177,11 @@ _REPORT_VALUE_TO_CONSTANT = {
     ("mg", "bottom_sweeps"): "kMGDefaultBottomSweeps",
     ("fac", "max_iters"): "kFACDefaultMaxIters",
     ("fac", "fine_sweeps"): "kFACDefaultFineSweeps",
-    ("fac", "tol"): "kFACDefaultTol",
-    ("fac", "initial_coarse_rel_tol"): "kFACInitialCoarseRelTol",
-    ("fac", "initial_coarse_max_cycles"): "kFACInitialCoarseMaxCycles",
+    ("fac", "rel_tol"): "kFACDefaultRelTol",
+    ("fac", "abs_tol"): "kFACDefaultAbsTol",
+    ("fac", "coarse_rel_tol"): "kFACInitialCoarseRelTol",
+    ("fac", "coarse_abs_tol"): "kFACInitialCoarseAbsTol",
+    ("fac", "coarse_cycles"): "kFACInitialCoarseMaxCycles",
     ("fft", "spectral_default"): "kFFTDefaultSpectral",
     ("fft", "zero_mean_gauge"): "kFFTZeroMeanGauge",
     ("fft", "direct_dft_fallback"): "kFFTDirectDftFallback",

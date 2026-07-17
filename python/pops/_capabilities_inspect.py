@@ -4,8 +4,8 @@ The introspection side of the capability layer: the descriptor-catalog walk
 (``_walk_brick_catalog`` / ``_walk_class_catalog`` / ``_entry_from_brick``), the
 native cross-check (``_cross_check`` / :class:`CapabilityMismatchError` /
 ``_native_rows``) that adjudicates descriptor availability against the C++ facts,
-the public :func:`inspect_capabilities`, and the AMR hierarchy report
-(:class:`AmrReport` / :func:`inspect_amr` / ``_amr_policy_rows``). Split out of
+the internal descriptor-catalog report, and the AMR hierarchy report
+(:class:`AmrReport` / the private layout-adaptivity protocol / ``_amr_policy_rows``). Split out of
 ``_capabilities`` for the 500-line cap; ``pops._capabilities`` re-exports every
 public name. The descriptor walk is PURE; ``_pops`` is only reached lazily through
 ``_module_capabilities`` for the optional cross-check.
@@ -36,7 +36,7 @@ def _entry_from_brick(descriptor):
     error = "" if ok else _unsupported_error(
         requested=feature,
         available="native %s descriptors with a non-empty native_id" % descriptor.category,
-        alternative="choose an available descriptor from pops.inspect_capabilities()")
+        alternative="choose a typed descriptor from its pops.lib catalog and inspect it with pops.inspect()")
     return CapabilityEntry(descriptor.name, descriptor.category,
                            descriptor.native_id or None, status, descriptor.requirements,
                            feature=feature, backend="native" if descriptor.native_id else "none",
@@ -76,7 +76,7 @@ def _external_brick_rows():
     """CapabilityEntry rows for the registered EXTERNAL C++ bricks (ADC-611 / ADC-544): one
     ``source="external"`` row per brick registered via ``pops.load_cpp_library`` /
     ``pops.external.register`` (the in-process catalog ``pops.descriptors._EXTERNAL_BRICKS``). Empty
-    when none are registered. This surfaces the external bricks in ``inspect_capabilities()`` so a
+    when none are registered. This surfaces external bricks in the internal catalog report so a
     third-party brick loaded at runtime appears in the capability report instead of being invisible.
 
     ADC-544 enriches the row with the brick's declared route surface: ``supported_layouts`` becomes the
@@ -136,7 +136,7 @@ _LAYOUT_NATIVE_FLAG = {"Uniform": "supports_uniform", "AMR": "supports_amr"}
 class CapabilityMismatchError(RuntimeError):
     """A descriptor's declared availability disagrees with the C++ authoritative source (#36/#37).
 
-    Raised by :func:`inspect_capabilities` when the native ``_pops.module_capabilities()`` reports a
+    Raised by :func:`_descriptor_catalog_report` when native ``_pops.module_capabilities()`` reports a
     transport as UNAVAILABLE while the Python descriptor catalog still advertises it available. It
     closes the Spec 5 sec.13.12 "Python-derived, not authoritative" gap: a descriptor can no longer
     silently claim a capability the built module does not provide.
@@ -186,8 +186,8 @@ def _cross_check(entries, native_caps):
                 % (entry.name, entry.category, entry.available, flag))
 
 
-def inspect_capabilities():
-    """Return the capability :class:`CapabilityMatrix`, cross-checked against the C++ source (sec.6).
+def _descriptor_catalog_report():
+    """Build the internal descriptor catalog, cross-checked against native facts.
 
     Walks the available descriptor catalogs and reports one row per catalogued entry (``source =
     "descriptor"``), THEN cross-checks the route-deciding entries against the authoritative C++
@@ -197,7 +197,7 @@ def inspect_capabilities():
     :class:`CapabilityMismatchError` (closing the silent-default-fallback gap).
 
     The descriptor walk is PURE (only the inert authoring packages, no numeric loop). ``_pops`` is
-    imported LAZILY (inside the function) and ONLY for the cross-check, so the module import graph
+    imported LAZILY (inside this function) and ONLY for the cross-check, so the module import graph
     stays acyclic; when ``_pops`` is absent or predates ``module_capabilities`` the walk proceeds
     WITHOUT the native rows / cross-check rather than failing (graceful degradation).
     """
@@ -205,7 +205,7 @@ def inspect_capabilities():
     from pops.numerics.reconstruction import reconstruction
     from pops.numerics.reconstruction.limiters import limiters
     from pops.numerics.projections import projections
-    from pops.mesh.layouts import Uniform, AMR
+    from pops.layouts import Uniform, AMR
 
     entries = []
     for namespace in (riemann, reconstruction, limiters, projections):
@@ -237,13 +237,14 @@ def inspect_capabilities():
 
 
 class AmrReport:
-    """The structured, printable result of :func:`inspect_amr` (Spec 5 sec.5.11 / sec.8).
+    """The structured AMR section embedded by ``pops.inspect(layout)``.
 
     A plain record of an AMR hierarchy's declared metadata -- the level / ratio envelope, the
-    regrid / patch / nesting / refinement / checkpoint / output policies, the runtime
-    requirements (reflux, tag reduction), and the explainable route limitations. :meth:`to_dict`
-    returns a plain nested dict and :meth:`__str__` a short, deterministic report. It is inert:
-    it holds metadata read from the descriptors, it computes nothing.
+    regrid / patch / nesting / refinement policies, the runtime requirements (reflux, tag
+    reduction), and the explainable route limitations. Checkpoint and output declarations live in
+    the Case's ConsumerGraph and are deliberately absent. :meth:`to_dict` returns a plain nested
+    dict and :meth:`__str__` a short, deterministic report. It is inert: it holds metadata read from
+    the descriptors, it computes nothing.
     """
 
     def __init__(self, *, layout, max_levels, ratio, native_max_levels, native_ratios,
@@ -279,9 +280,9 @@ class AmrReport:
 
     def __str__(self):
         lines = ["AMR hierarchy report (%s):" % self.layout]
-        lines.append("  levels: max_levels=%s ratio=%s (native envelope: max_levels<=%s, "
-                     "ratios=%s)" % (self.max_levels, self.ratio, self.native_max_levels,
-                                     ", ".join(map(str, self.native_ratios))))
+        lines.append("  levels: max_levels=%s ratio=%s (native depth: %s; ratios=%s)" % (
+            self.max_levels, self.ratio, self.native_max_levels,
+            ", ".join(map(str, self.native_ratios))))
         lines.append("  available: %s" % self.available)
         if self.requirements:
             req = ", ".join("%s=%s" % (k, v) for k, v in sorted(self.requirements.items()))
@@ -301,13 +302,13 @@ class AmrReport:
 def _amr_policy_rows(layout):
     """Ordered (slot, name, options) rows for the policies attached to an AMR layout.
 
-    A deterministic, stable walk of the descriptor chain (refine / regrid / patches / nesting /
-    checkpoint / output); a slot left as ``None`` on the layout is skipped. The refinement
-    criterion is expanded into its sub-criteria when it is a ``TagUnion`` so the report names
-    each tagged subject / predicate / threshold, not just the union count.
+    A deterministic, stable walk of the descriptor chain (refine / regrid / patches / nesting); a
+    slot left as ``None`` on the layout is skipped. The refinement criterion is expanded into its
+    sub-criteria when it is a ``TagUnion`` so the report names each tagged subject / predicate /
+    threshold, not just the union count.
     """
     rows = []
-    for slot in ("refine", "regrid", "patches", "nesting", "checkpoint", "output"):
+    for slot in ("refine", "regrid", "patches", "nesting"):
         policy = getattr(layout, slot, None)
         if policy is None:
             continue
@@ -319,55 +320,43 @@ def _amr_policy_rows(layout):
     return rows
 
 
-def inspect_amr(layout_or_context=None):
-    """Return a printable :class:`AmrReport` of an AMR hierarchy (Spec 5 sec.5.11 / sec.8).
+def _native_amr_context():
+    """Return the immutable native facts shared by layout-owned AMR reports."""
+    from pops.mesh._amr import NATIVE_RATIOS
 
-    The introspectable counterpart of :func:`inspect_capabilities` for the adaptive-mesh
-    route. PURE: it imports only the inert :mod:`pops.mesh` authoring descriptors and reads
-    their declared metadata (levels / ratio, the regrid / patch / nesting / refine / checkpoint
-    / output policies, the runtime requirements such as reflux / tag reduction, and the
-    explainable route limitations); it NEVER imports ``_pops`` / the runtime / codegen and runs
-    no numeric loop.
+    native_depth = "resource_policy"
+    native_note = (
+        "resolved hierarchy depth is resource-policy controlled; native transfer ratios: %s; "
+        "transitions are 2D isotropic and share one isotropic buffer/lookahead; policy routes are "
+        "shared_n_level / berger_rigoutsos / box_array / round_robin"
+        % ", ".join(map(str, NATIVE_RATIOS))
+    )
+    return native_depth, tuple(NATIVE_RATIOS), native_note
 
-    Args:
-        layout_or_context: an :class:`pops.mesh.layouts.AMR` (or :class:`Uniform`) descriptor to
-            report on, or ``None`` to report the current native AMR envelope (the
-            :data:`pops.mesh.amr.NATIVE_MAX_LEVELS` / ``NATIVE_RATIOS`` capability limits).
-    """
-    from pops.mesh.amr import NATIVE_MAX_LEVELS, NATIVE_RATIOS
-    from pops.mesh.layouts import AMR, Uniform
 
-    native_note = ("the current native AMR route supports max_levels<=%d at ratio %s; a request "
-                   "beyond that is refused before the runtime, not silently clamped"
-                   % (NATIVE_MAX_LEVELS, ", ".join(map(str, NATIVE_RATIOS))))
-
-    if layout_or_context is None:
-        return AmrReport(
-            layout="native-envelope", max_levels=NATIVE_MAX_LEVELS, ratio=NATIVE_RATIOS[0],
-            native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
-            available="yes", limitations=[native_note], requirements={}, policies=[])
-
-    if isinstance(layout_or_context, Uniform):
-        caps = layout_or_context.capabilities()
-        return AmrReport(
-            layout="uniform", max_levels=caps.get("levels", 1), ratio=1,
-            native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
-            available="yes",
-            limitations=["a Uniform layout is single-level: no refinement, regrid or reflux"],
-            requirements={}, policies=[])
-
-    if not isinstance(layout_or_context, AMR):
-        raise TypeError(
-            "inspect_amr expects a pops.mesh.layouts.AMR / Uniform descriptor (or None for the "
-            "native envelope); got %r" % (type(layout_or_context).__name__,))
-
-    layout = layout_or_context
-    status = layout.available()
-    limitations = [native_note]
-    if not status.ok and status.reason:
-        limitations.append(status.reason)
+def _native_amr_envelope():
+    """Build the runtime's descriptor-free native AMR capability envelope."""
+    native_depth, native_ratios, native_note = _native_amr_context()
     return AmrReport(
-        layout="amr", max_levels=layout.max_levels, ratio=layout.ratio,
-        native_max_levels=NATIVE_MAX_LEVELS, native_ratios=NATIVE_RATIOS,
-        available=status.status, limitations=limitations,
-        requirements=layout.requirements().to_dict(), policies=_amr_policy_rows(layout))
+        layout="native-envelope", max_levels=native_depth, ratio=native_ratios[0],
+        native_max_levels=native_depth, native_ratios=native_ratios,
+        available="yes", limitations=[native_note], requirements={}, policies=[])
+
+
+def _layout_amr_report(layout):
+    """Ask a layout for its AMR report through the open, branch-free layout protocol.
+
+    This helper deliberately knows no concrete layout class. New layout kinds participate by
+    implementing ``_amr_report()``; the public inspection path remains ``pops.inspect(layout)``.
+    """
+    provider = getattr(layout, "_amr_report", None)
+    if not callable(provider):
+        raise TypeError(
+            "%s must implement the layout adaptivity protocol _amr_report()"
+            % type(layout).__qualname__)
+    report = provider()
+    if not isinstance(report, AmrReport):
+        raise TypeError(
+            "%s._amr_report() must return AmrReport, got %s"
+            % (type(layout).__qualname__, type(report).__qualname__))
+    return report

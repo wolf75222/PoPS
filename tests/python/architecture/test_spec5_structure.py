@@ -55,18 +55,17 @@ def test_moved_catalogs_are_gone_from_lib():
         + "\n  ".join(offenders))
 
 
-def test_lib_keeps_only_presets():
-    # Criterion 7: pops.lib holds ONLY presets -- time schemes / models / ready-to-run bundles
-    # (ADC-524 lib.presets). The solver descriptors are NOT a preset: they live in the ONE public home
-    # pops.solvers (the pops.lib.solvers shim was removed, no back-compat path). The spatial / fields
-    # catalogs and the solver-gen DSL are not presets either and must not live under lib.
-    allowed = {"time", "models", "presets", "__init__.py", "__pycache__"}
+def test_lib_keeps_only_preimplemented_public_contracts():
+    # Implementations are grouped by public contract family; there is no second bundle DSL.
+    allowed = {"amr", "initial", "models", "time", "__init__.py", "__pycache__"}
     unexpected = []
     for child in (POPS / "lib").iterdir():
+        if child.is_dir() and not (child / "__init__.py").exists():
+            continue
         if child.name not in allowed and not child.name.endswith(".pyc"):
             unexpected.append(child.name)
     assert not unexpected, (
-        "Spec 5 criterion 7: pops.lib should hold only presets (time / models / presets); "
+        "pops.lib should hold only ordinary model/time/initial/AMR implementations; "
         "unexpected: %s" % unexpected)
 
 

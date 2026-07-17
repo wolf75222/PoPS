@@ -19,17 +19,13 @@ from pops.descriptors import Descriptor  # noqa: E402
 from pops.diagnostics import (ConservationCheck, Integral, MinMax,  # noqa: E402
                              Norm)
 from pops.linalg.norms import L1, L2, LInf  # noqa: E402
+from pops.model import Module  # noqa: E402
+from pops.physics.roles import Density  # noqa: E402
+from pops.problem import Case  # noqa: E402
 
 
-class _Role:
-    """A minimal named role handle (a model role reference) for the tests.
-
-    A real role is a typed role object carrying a ``name``; the measures surface it by that
-    name without interpreting it. This stub models the intended (named) usage.
-    """
-
-    def __init__(self, name):
-        self.name = name
+_DIAGNOSTIC_PROBLEM = Case(name="diagnostic-measures")
+_NE_BLOCK = _DIAGNOSTIC_PROBLEM.block("ne", Module("diagnostic-model"))
 
 
 # --- package surface --------------------------------------------------------------------
@@ -43,7 +39,7 @@ def test_typed_measures_exported():
 # --- Norm: typed norm kind, string rejected ---------------------------------------------
 @pytest.mark.parametrize("cls,kind", [(L1, "l1"), (L2, "l2"), (LInf, "linf")])
 def test_norm_accepts_typed_norm_kind(cls, kind):
-    n = Norm(cls(), block="ne", role=_Role("Density"))
+    n = Norm(cls(), block=_NE_BLOCK, role=Density())
     assert isinstance(n, Descriptor)
     assert n.category == "diagnostic_norm"
     assert n.options()["norm"] == kind
@@ -57,7 +53,21 @@ def test_norm_rejects_string_kind():
     with pytest.raises(TypeError):
         Norm("l2")
     with pytest.raises(TypeError):
-        Norm("l2", block="ne")
+        Norm("l2", block=_NE_BLOCK)
+
+
+def test_measures_reject_string_block_references():
+    with pytest.raises(TypeError, match="BlockHandle"):
+        Integral(block="ne")
+    with pytest.raises(TypeError, match="BlockHandle"):
+        MinMax(block="ne")
+
+
+def test_measures_require_real_typed_component_roles():
+    with pytest.raises(TypeError, match="ComponentRole"):
+        Integral(role="Density")
+    with pytest.raises(TypeError, match="ComponentRole"):
+        Norm(L2(), role=object())
 
 
 def test_norm_rejects_non_norm_object():
@@ -69,7 +79,7 @@ def test_norm_rejects_non_norm_object():
 
 # --- Integral / MinMax ------------------------------------------------------------------
 def test_integral_is_a_sum_reduction():
-    mass = Integral(role=_Role("Density"))
+    mass = Integral(role=Density())
     assert isinstance(mass, Descriptor)
     assert mass.category == "diagnostic_integral"
     assert mass.options()["scheme"] == "integral"
@@ -79,7 +89,7 @@ def test_integral_is_a_sum_reduction():
 
 
 def test_minmax_is_a_minmax_reduction():
-    mm = MinMax(block="ne")
+    mm = MinMax(block=_NE_BLOCK)
     assert mm.category == "diagnostic_minmax"
     assert mm.options()["scheme"] == "min_max"
     assert mm.options()["block"] == "ne"
@@ -88,7 +98,7 @@ def test_minmax_is_a_minmax_reduction():
 
 # --- ConservationCheck: takes a diagnostic descriptor, rejects a string -----------------
 def test_conservation_check_accepts_a_diagnostic():
-    chk = ConservationCheck(Integral(role=_Role("Density")), tolerance=1e-12)
+    chk = ConservationCheck(Integral(role=Density()), tolerance=1e-12)
     assert isinstance(chk, Descriptor)
     assert chk.category == "conservation_check"
     assert chk.options()["tolerance"] == 1e-12
@@ -103,7 +113,7 @@ def test_conservation_check_default_tolerance():
 
 
 def test_conservation_check_accepts_a_norm():
-    chk = ConservationCheck(Norm(L2(), block="ne"))
+    chk = ConservationCheck(Norm(L2(), block=_NE_BLOCK))
     assert chk.validate() is True
     assert chk.options()["quantity"] == "Norm"
 
@@ -125,7 +135,7 @@ def test_conservation_check_rejects_non_descriptor():
 
 # --- metadata: reduction kind, MPI reduction, cadence, AMR/multi-level ------------------
 @pytest.mark.parametrize("measure", [
-    Norm(L2(), block="ne"), Integral(role="Density"), MinMax(block="ne"),
+    Norm(L2(), block=_NE_BLOCK), Integral(role=Density()), MinMax(block=_NE_BLOCK),
 ])
 def test_measures_declare_reduction_metadata(measure):
     caps = measure.capabilities().to_dict()
@@ -146,11 +156,44 @@ def test_conservation_check_declares_metadata():
     assert chk.requirements().to_dict()["quantity"] is True
 
 
+def test_measures_expose_closed_native_execution_plans():
+    from pops.output._consumer_contracts import diagnostic_collective_operations
+
+    plans = {
+        "l1": Norm(L1()).diagnostic_execution(),
+        "l2": Norm(L2()).diagnostic_execution(),
+        "linf": Norm(LInf()).diagnostic_execution(),
+        "integral": Integral().diagnostic_execution(),
+        "minmax": MinMax().diagnostic_execution(),
+    }
+    assert plans["l1"]["operations"] == [{
+        "name": "l1", "reduction": "abs_sum", "transform": "identity",
+        "metric_weighted": True,
+    }]
+    assert plans["l2"]["operations"][0]["transform"] == "sqrt"
+    assert plans["linf"]["operations"][0]["reduction"] == "abs_max"
+    assert plans["integral"]["operations"][0]["reduction"] == "sum"
+    assert [row["reduction"] for row in plans["minmax"]["operations"]] == ["min", "max"]
+    assert diagnostic_collective_operations(plans["l2"]) == ("global_sum",)
+    assert diagnostic_collective_operations(plans["minmax"]) == (
+        "global_max", "global_min")
+    conservation = ConservationCheck(Integral(), tolerance=1e-9).diagnostic_execution()
+    assert conservation["operations"] == plans["integral"]["operations"]
+    assert conservation["conservation"] == {"tolerance": (1e-9).hex()}
+
+
+def test_conservation_check_rejects_invalid_tolerance_and_multivalued_quantity():
+    with pytest.raises(ValueError, match="finite"):
+        ConservationCheck(Integral(), tolerance=float("inf"))
+    with pytest.raises(ValueError, match="one scalar"):
+        ConservationCheck(MinMax()).diagnostic_execution()
+
+
 # --- inspect() / options() / __repr__ (Spec 5 sec.12.1 printable rule) ------------------
 @pytest.mark.parametrize("measure,cls_name,category", [
-    (Norm(L2(), block="ne"), "Norm", "diagnostic_norm"),
-    (Integral(role="Density"), "Integral", "diagnostic_integral"),
-    (MinMax(block="ne"), "MinMax", "diagnostic_minmax"),
+    (Norm(L2(), block=_NE_BLOCK), "Norm", "diagnostic_norm"),
+    (Integral(role=Density()), "Integral", "diagnostic_integral"),
+    (MinMax(block=_NE_BLOCK), "MinMax", "diagnostic_minmax"),
     (ConservationCheck(Integral()), "ConservationCheck", "conservation_check"),
 ])
 def test_inspect_options_and_repr(measure, cls_name, category):
@@ -182,58 +225,12 @@ def test_importing_measures_alone_does_not_pull_pops_runtime():
     assert out.stdout.strip() == "False", out.stdout + out.stderr
 
 
-# --- factory / typed-class scheme dedup (ADC-506) ---------------------------------------
-# The legacy diagnostics factories and the typed measure classes are NOT the same descriptor
-# family (the factory is a BrickDescriptor with category "diagnostic" that the architecture
-# consumers depend on; the typed class is a Descriptor with a finer category). What they MUST
-# share -- and what ADC-506 dedups -- is the native reduction SCHEME label, now sourced ONCE
-# from the typed class. These tests pin that the two paths lower to the same inert scheme and
-# that neither computes.
-def test_norm_factory_and_typed_norm_share_one_scheme():
+def test_typed_measures_replace_retired_factory_entry_points():
+    """The final typed descriptors retain reduction schemes without legacy factories."""
     import pops.diagnostics as diag
 
-    factory = diag.norm()
-    typed = Norm(L2())
-    # The scheme label is sourced from the typed class -- the factory reads Norm.scheme, so the
-    # two agree by construction (no second literal to drift).
-    assert typed.scheme == Norm.scheme
-    assert factory.scheme == Norm.scheme
-    assert factory.scheme == typed.options()["scheme"]
-    # The historical factory return shape consumers depend on is untouched.
-    assert factory.category == "diagnostic"
-    assert factory.brick_type == "macro"
-
-
-def test_integral_factory_and_typed_integral_share_one_scheme():
-    import pops.diagnostics as diag
-
-    factory = diag.integral()
-    typed = Integral()
-    assert typed.scheme == Integral.scheme
-    assert factory.scheme == Integral.scheme
-    assert factory.scheme == typed.options()["scheme"]
-    assert factory.category == "diagnostic"
-
-
-def test_conservation_check_factory_and_typed_class_share_one_scheme():
-    import pops.diagnostics as diag
-
-    factory = diag.invariants.conservation_check("charge")
-    typed = ConservationCheck(Integral())
-    assert typed.scheme == ConservationCheck.scheme
-    assert factory.scheme == ConservationCheck.scheme
-    # The invariant factory keeps its own (historical) category; only the scheme is unified.
-    assert factory.category == "invariant"
-
-
-def test_dedup_does_not_fabricate_a_runtime_path():
-    # Both the factory descriptor and the typed measure stay inert: lower() returns a plain
-    # metadata dict carrying the shared scheme, and neither exposes a compute/eval/call.
-    import pops.diagnostics as diag
-
-    factory = diag.norm()
-    typed = Norm(L2())
-    assert factory.lower().to_dict()["scheme"] == typed.lower().to_dict()["scheme"] == Norm.scheme
-    for obj in (factory, typed):
-        for attr in ("eval", "compile", "__call__", "run"):
-            assert not hasattr(obj, attr), "%r must stay inert (has %s)" % (obj, attr)
+    assert not hasattr(diag, "norm")
+    assert not hasattr(diag, "integral")
+    assert Norm(L2()).scheme == "norm"
+    assert Integral().scheme == "integral"
+    assert ConservationCheck(Integral()).scheme == "conservation_check"

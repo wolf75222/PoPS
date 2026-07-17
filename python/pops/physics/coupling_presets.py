@@ -20,13 +20,20 @@ evaluating ``S`` (frozen-register additive split), whereas the helper folded ``d
 ``(dt * k) * ...`` by at most one ULP per step. The presets are therefore NEAR-EXACT to the old helpers
 (~1e-16 per step), not bit-exact -- documented in the CHANGELOG, same precedent as ``strang.py``.
 
-Import-graph rule (Spec 4): pure ``pops.ir`` / ``pops.physics.multispecies`` + stdlib. No codegen /
+Import-graph rule (Spec 4): pure ``pops._ir`` / ``pops.physics.multispecies`` + stdlib. No codegen /
 ``_pops`` import; the preset only BUILDS a CoupledSource, the install layer compiles and registers it.
 """
 from __future__ import annotations
 
+from fractions import Fraction
 from typing import Any
 
+from pops.physics._scalars import (
+    exact_physics_scalar,
+    native_real,
+    scalar_data_view,
+    subtract_exact_integer,
+)
 from pops.physics.multispecies import CoupledSource
 
 
@@ -43,11 +50,19 @@ class ContractedCoupling:
     __slots__ = ("source", "conserved", "created", "frequency")
 
     def __init__(self, source: Any, conserved: Any = (), created: Any = (),
-                 frequency: float = 0.0) -> None:
+                 frequency: Any = 0) -> None:
         self.source = source
         self.conserved = list(conserved)
         self.created = list(created)
-        self.frequency = float(frequency)
+        self.frequency = exact_physics_scalar(
+            frequency, where="ContractedCoupling.frequency")
+
+    def __repr__(self) -> str:
+        return (
+            "ContractedCoupling(source=%r, conserved=%r, created=%r, frequency=%r)"
+            % (self.source.name, self.conserved, self.created,
+               scalar_data_view(self.frequency, where="ContractedCoupling.frequency"))
+        )
 
 
 def ionization_preset(electron: Any, ion: Any, neutral: Any, rate: Any,
@@ -131,9 +146,13 @@ def thermal_exchange_preset(a: Any, b: Any, rate: Any, gamma_a: Any, gamma_b: An
     myb = src.block(b).role("MomentumY")
     db = src.block(b).role("Density")
     k = src.param("k_thermal", rate)
-    gam_a = src.param("gamma_a", gamma_a - 1.0)  # (gamma_a - 1), the pre-subtracted factor
-    gam_b = src.param("gamma_b", gamma_b - 1.0)
-    half = src.param("half", 0.5)
+    ga = exact_physics_scalar(gamma_a, where="thermal_exchange_preset.gamma_a")
+    gb = exact_physics_scalar(gamma_b, where="thermal_exchange_preset.gamma_b")
+    gam_a = src.param(
+        "gamma_a", subtract_exact_integer(ga, 1, where="thermal_exchange_preset.gamma_a"))
+    gam_b = src.param(
+        "gamma_b", subtract_exact_integer(gb, 1, where="thermal_exchange_preset.gamma_b"))
+    half = src.param("half", Fraction(1, 2))
     # p = (gamma-1) * (E - 0.5 * (mx*mx + my*my) / rho), grouped exactly as the C++ helper.
     pa = gam_a * (ea - half * (((mxa * mxa) + (mya * mya)) / da))
     pb = gam_b * (eb - half * (((mxb * mxb) + (myb * myb)) / db))
@@ -154,18 +173,25 @@ def coupling_operator_args(compiled: Any, conserved: Any = (), created: Any = ()
     compiled value). Kept here (not in the install mixin) to hold the install module under its size cap.
     """
     freq = compiled.frequency if frequency is None else frequency
-    return (compiled.in_blocks, compiled.in_roles, compiled.consts, compiled.out_blocks,
+    # This helper is the explicit Python -> pybind/native ABI boundary.  The compiled descriptor
+    # itself remains lossless; only the vectors handed to pops::Real are rounded to binary64 here.
+    native_consts = [
+        native_real(value, where="coupling_operator_args.constants[%d]" % index)
+        for index, value in enumerate(compiled.consts)
+    ]
+    native_frequency = native_real(freq, where="coupling_operator_args.frequency")
+    return (compiled.in_blocks, compiled.in_roles, native_consts, compiled.out_blocks,
             compiled.out_roles, compiled.prog_ops, compiled.prog_args, compiled.prog_lens,
-            freq, compiled.name, getattr(compiled, "freq_prog_ops", []),
+            native_frequency, compiled.name, getattr(compiled, "freq_prog_ops", []),
             getattr(compiled, "freq_prog_args", []), list(conserved), list(created))
 
 
 def lower_named_coupling(coupling: Any, gamma_of: Any) -> Any:
     """Lower a named coupling object to its :class:`ContractedCoupling` preset, or ``None`` (ADC-595).
 
-    Dispatches ``pops.Ionization`` / ``Collision`` / ``ThermalExchange`` (duck-typed by their fields, to
-    avoid importing the ``pops.runtime.bricks`` scheme classes here and creating a cycle) to the matching
-    preset builder. ``ThermalExchange`` reads each block's adiabatic index via the @p gamma_of callback
+    Dispatches the private native-engine ``Ionization`` / ``Collision`` / ``ThermalExchange``
+    values (duck-typed by their fields to avoid a runtime import cycle) to the matching preset
+    builder. ``ThermalExchange`` reads each block's adiabatic index via the @p gamma_of callback
     (``lambda name: sim.block_gamma(name)``), inlined as a per-block ``.param()``, exactly like the
     deleted ``System::add_thermal_exchange`` read ``P->sp[ia].gamma``. Returns ``None`` for any object
     that is not a named coupling (the caller then handles the generic CompiledCoupledSource path)."""

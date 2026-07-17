@@ -32,6 +32,10 @@
 ///                     previously ACCEPTED by the key -> mute serial fallback in one direction, UB
 ///                     in the other. The divergence is now rejected explicitly; parity is restored
 ///                     via POPS_KOKKOS_ROOT (cf. dsl._native_kokkos_flags) or a serial module.
+///   - mpi=0|1 + mpi_abi=<sha256|off>: MPI changes the inline communication seam in comm.hpp.  The
+///                     ABI digest is computed by CMake from the exact MPI compile/link contract and
+///                     the bytes of mpi.h plus every linked MPI library.  Generated loaders receive
+///                     the same literal; an Open MPI/MPICH mismatch is rejected before installation.
 ///   - stdlib=...: C++ standard library linked (libc++ _LIBCPP_VERSION / libstdc++ __GLIBCXX__).
 ///                     Two toolchains may share __VERSION__ AND __cplusplus but link stdlibs with
 ///                     INCOMPATIBLE ABIs (std::string/std::function cross the loader boundary).
@@ -52,6 +56,20 @@
 #define POPS_ABI_KOKKOS "1"
 #else
 #define POPS_ABI_KOKKOS "0"
+#endif
+
+// MPI token: unlike a cache-only feature key, this lives in the native guard compared across the
+// dlopen boundary.  Manual MPI builds which omit POPS_MPI_ABI remain explicitly "unknown" and can
+// never compare equal to an authenticated CMake build carrying a concrete SHA-256.
+#ifdef POPS_HAS_MPI
+#define POPS_ABI_MPI "1"
+#ifndef POPS_MPI_ABI
+#define POPS_MPI_ABI "unknown"
+#endif
+#define POPS_ABI_MPI_ID POPS_MPI_ABI
+#else
+#define POPS_ABI_MPI "0"
+#define POPS_ABI_MPI_ID "off"
 #endif
 
 // stdlib token: identity + version of the linked standard library. _LIBCPP_VERSION /
@@ -76,24 +94,25 @@
 #endif
 
 // ABI key of the current TRANSLATION UNIT, as a pure literal concatenated by the preprocessor:
-// "compiler=<__VERSION__>;std=<__cplusplus>;headers=<POPS_HEADER_SIG>;kokkos=<0|1>;stdlib=<...>".
+// "compiler=<__VERSION__>;std=<__cplusplus>;headers=<POPS_HEADER_SIG>;kokkos=<0|1>;stdlib=<...>;
+// mpi=<0|1>;mpi_abi=<sha256|off>".
 // All tokens are string literals (__VERSION__ and POPS_HEADER_SIG already are), so the key is frozen
 // in the .rodata of EACH TU at preprocessing -- NO function call.
 //
-// WHY a literal and not an inline function (real CI bug, ELF/Linux): a .so loader is loaded
-// RTLD_GLOBAL and an `inline` function (weak linkage, default visibility) that would build the key
-// would be INTERPOSED by the dynamic linker onto the copy in the already-loaded module -- the
-// loader would then return the key OF THE MODULE and the guard would compare the module key against
-// itself (tautology: ABI never rejected). Whether interposition happened depended on the compiler's
-// inlining threshold (the short function was inlined -> correct local key; lengthened by
-// kokkos=/stdlib=, gcc -O2 stopped inlining it -> interposition -> guard neutralized, caught by
-// test_amr_native_loader). A literal crosses no symbol: no interposition.
+// WHY a literal and not an inline function (real CI bug, ELF/Linux): the historical production path
+// loaded generated packages RTLD_GLOBAL. An `inline` function (weak linkage, default visibility)
+// that built the key could then be INTERPOSED onto the copy in the already-loaded module, making the
+// guard compare the module key against itself (tautology: ABI never rejected). Whether that happened
+// depended on the compiler's inlining threshold, and test_amr_native_loader caught the regression.
+// Packages are now RTLD_LOCAL, but the ABI value remains a TU-local literal so the guard cannot be
+// weakened by a future visibility change or a non-PoPS caller with different loading policy.
 // NB: the parsers (dsl._pops_cxx_std_from_module / module_header_signature) scan by token prefix
 // ("std=", "headers=") -> insensitive to ADDING tokens at the tail.
-#define POPS_ABI_KEY_LITERAL                                                                \
-  "compiler=" POPS_ABI_COMPILER ";std=" POPS_ABI_STR(__cplusplus) ";headers=" POPS_HEADER_SIG \
-                                                                ";kokkos=" POPS_ABI_KOKKOS  \
-                                                                ";stdlib=" POPS_ABI_STDLIB
+#define POPS_ABI_KEY_LITERAL                                                               \
+  "compiler=" POPS_ABI_COMPILER                                                            \
+  ";std=" POPS_ABI_STR(__cplusplus) ";headers=" POPS_HEADER_SIG ";kokkos=" POPS_ABI_KOKKOS \
+                                    ";stdlib=" POPS_ABI_STDLIB ";mpi=" POPS_ABI_MPI        \
+                                    ";mpi_abi=" POPS_ABI_MPI_ID
 
 namespace pops {
 namespace detail {

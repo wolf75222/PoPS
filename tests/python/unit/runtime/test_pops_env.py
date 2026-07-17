@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
-"""Spec 5 sec.12.4: the codegen ``POPS_*`` environment completeness + the JIT-backdoor guard.
-
-Criteria #47 (the active env state is inspectable) and #48 (the JIT backdoor is a disabled-by-default,
-loud, never-implicit, surfaced gate), epic ADC-479.
+"""Spec 5 sec.12.4: codegen ``POPS_*`` environment completeness and inspectability.
 
 The contract is additive and honest:
 
-  * each variable supplies a DEFAULT -- an explicit Python argument to ``compile_problem`` always
-    wins (asserted below by passing the explicit value against a conflicting env);
-  * coercion is lenient (an unrecognised value falls back to the safe default, never raises);
-  * ``POPS_AUTOTUNE`` is an HONEST no-op stub (no autotune engine today): it is recorded + surfaced
-    but changes no codegen and does not enter the cache key;
-  * ``POPS_JIT_BACKDOOR`` is OFF by default, warns LOUDLY when set, is never enabled implicitly, and
-    is surfaced in ``compiled.inspect()`` (and ``pops.doctor``).
+  * each implemented variable supplies a DEFAULT -- an explicit Python argument to
+    ``compile_problem`` always wins (asserted below against a conflicting env);
+  * coercion of implemented controls is lenient (an unrecognised value falls back to the safe
+    default, never raises);
+  * ``POPS_AUTOTUNE`` is rejected because no autotuning engine exists; no inert control is accepted.
 
 These checks are PURE: they exercise the resolver, the recording on the handle and the inspect
 surface WITHOUT a real Kokkos compile. The one end-to-end ``compile_problem`` check MOCKS the
@@ -24,37 +19,65 @@ Pytest + __main__ guard (CI runs ``python3 <file>``).
 import os
 import sys
 import tempfile
-import warnings
+from pathlib import Path
 
 import pytest
 
 try:
-    import pops  # noqa: F401
-    from pops.codegen.env import (
-        CodegenEnv, resolve_log_level, resolve_autotune, jit_backdoor_enabled)
-    from pops.codegen.loader import CompiledProblem
-    from pops.codegen.inspect_report import CompiledReport
-    from pops import time as adctime
+    from pops.codegen.env import CodegenEnv, resolve_log_level
+    from pops.codegen.loader import CompiledModel, CompiledProblem
+    from pops.numerics.terms import DefaultSource, Flux
 except Exception as exc:  # noqa: BLE001 -- pops unavailable in this interpreter
     print("skip test_pops_env (pops unavailable: %s)" % exc)
     sys.exit(0)
 
+from tests.python.unit.runtime._typed_program import (
+    typed_compiled_artifact,
+    typed_program_state,
+)
+
+
+INCLUDE = str(Path(__file__).resolve().parents[4] / "include")
+
+
+def _program_fixture(name="env_demo"):
+    """A real in-memory Program (a state, a Forward-Euler commit) -- no compile."""
+    P, module, _, _, _, temporal = typed_program_state(name, block_name="plasma")
+    dt = P.dt
+    U = temporal.n
+    R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+    P.commit(temporal.next, P.value("U1", U + dt * R, at=temporal.next.point))
+    return P, module
+
 
 def _program(name="env_demo"):
-    """A real in-memory Program (a state, a Forward-Euler commit) -- no compile."""
-    P = adctime.Program(name)
-    dt = P.dt
-    U = P.state("plasma")
-    R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
-    return P
+    return _program_fixture(name)[0]
+
+
+def _compiled_model(*, abi_key="SIG|c++|c++23", cxx="c++", std="c++23"):
+    """Exact metadata carrier for synthetic handles; no compiler is involved."""
+    return CompiledModel(
+        so_path="<synthetic>", backend="production", cons_names=["u"],
+        cons_roles=["Scalar"], prim_names=["u"], n_vars=1, gamma=None, n_aux=0,
+        params={}, caps={"cpu": True}, abi_key=abi_key, model_hash="env-model",
+        cxx=cxx, std=std,
+    )
 
 
 def _handle(env, program=None):
-    """A synthetic CompiledProblem carrying a resolved CodegenEnv (no .so on disk)."""
+    """A final artifact carrying a synthetic executable and resolved CodegenEnv."""
     P = program if program is not None else _program()
-    return CompiledProblem("/tmp/pops-cache/problem.so", P, None, "SIG|c++|c++23", "c++", "c++23",
-                           codegen_env=env)
+    model = _compiled_model()
+    component = CompiledProblem(
+        "/tmp/pops-cache/problem.so",
+        P,
+        model,
+        "SIG|c++|c++23",
+        "c++",
+        "c++23",
+        codegen_env=env,
+    )
+    return typed_compiled_artifact(component, model)
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +93,14 @@ def test_log_level_codegen_specific_wins_and_is_lenient():
     assert resolve_log_level({"POPS_CODEGEN_LOG": "garbage"}) == "quiet"  # lenient, not raised
 
 
-def test_autotune_levels_and_honest_stub():
-    assert resolve_autotune({}) == "off"
-    assert resolve_autotune({"POPS_AUTOTUNE": "basic"}) == "basic"
-    assert resolve_autotune({"POPS_AUTOTUNE": "aggressive"}) == "aggressive"
-    assert resolve_autotune({"POPS_AUTOTUNE": "nonsense"}) == "off"  # lenient fallback
+@pytest.mark.parametrize("value", ["", "off", "basic", "aggressive", "nonsense"])
+def test_autotune_is_rejected_until_an_engine_exists(value):
+    with pytest.raises(NotImplementedError, match="no autotuning engine"):
+        CodegenEnv.from_env(env={"POPS_AUTOTUNE": value})
+
+    clean = CodegenEnv.from_env(env={})
+    assert "autotune" not in clean.to_dict()
+    assert not hasattr(clean, "autotune")
 
 
 def test_codegen_dir_keep_dump_read_from_env():
@@ -108,75 +134,26 @@ def test_explicit_keep_generated_overrides_env():
 
 
 # ---------------------------------------------------------------------------
-# POPS_JIT_BACKDOOR (criterion #48): off by default, warns when set, never implicit, surfaced.
-# ---------------------------------------------------------------------------
-
-def test_jit_backdoor_off_by_default():
-    assert jit_backdoor_enabled({}) is False
-    assert CodegenEnv.from_env(env={}).jit_backdoor is False
-    # No OTHER option implicitly enables it (autotune / dump / keep set, backdoor still off).
-    e = CodegenEnv.from_env(env={"POPS_AUTOTUNE": "aggressive", "POPS_DUMP_IR": "1",
-                                 "POPS_KEEP_GENERATED": "1"})
-    assert e.jit_backdoor is False
-
-
-def test_jit_backdoor_warns_loudly_when_set():
-    assert jit_backdoor_enabled({"POPS_JIT_BACKDOOR": "1"}) is True
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        e = CodegenEnv.from_env(env={"POPS_JIT_BACKDOOR": "true"})
-    assert e.jit_backdoor is True
-    assert any("POPS_JIT_BACKDOOR" in str(w.message) and "UNSAFE" in str(w.message).upper()
-               for w in caught), [str(w.message) for w in caught]
-
-
-def test_jit_backdoor_surfaced_in_inspect():
-    e = CodegenEnv.from_env(env={"POPS_JIT_BACKDOOR": "1"}, warn=False)
-    rep = _handle(e).inspect()
-    assert isinstance(rep, CompiledReport)
-    assert rep.env["jit_backdoor"] is True
-    text = str(rep)
-    assert "jit_backdoor" in text and "UNSAFE" in text.upper(), text
-
-
-def test_jit_backdoor_visible_in_doctor():
-    # doctor reads the env directly (lightweight): FAIL row when set, OK row when unset.
-    monkey = os.environ.get("POPS_JIT_BACKDOOR")
-    try:
-        os.environ["POPS_JIT_BACKDOOR"] = "1"
-        checks = pops.doctor(verbose=False)
-        ok, detail = checks["jit_backdoor"]
-        assert ok is False and "ENABLED" in detail, detail
-        os.environ.pop("POPS_JIT_BACKDOOR", None)
-        ok, detail = pops.doctor(verbose=False)["jit_backdoor"]
-        assert ok is True and "disabled" in detail, detail
-    finally:
-        if monkey is None:
-            os.environ.pop("POPS_JIT_BACKDOOR", None)
-        else:
-            os.environ["POPS_JIT_BACKDOOR"] = monkey
-
-
-# ---------------------------------------------------------------------------
 # Inspectability (criterion #47): the active env state is surfaced in inspect().
 # ---------------------------------------------------------------------------
 
 def test_env_state_surfaced_in_inspect():
-    e = CodegenEnv.from_env(env={"POPS_CODEGEN_LOG": "info", "POPS_AUTOTUNE": "aggressive",
-                                 "POPS_CODEGEN_DIR": "/cg"}, warn=False)
+    e = CodegenEnv.from_env(env={"POPS_CODEGEN_LOG": "info", "POPS_CODEGEN_DIR": "/cg"})
     rep = _handle(e).inspect()
     d = rep.to_dict()
     assert d["env"]["log_level"] == "info"
-    assert d["env"]["autotune"] == "aggressive"
     assert d["env"]["codegen_dir"] == "/cg"
-    assert d["env"]["jit_backdoor"] is False
-    # The autotune no-op stub is labelled honestly in the printable report.
-    assert "no-op stub" in str(rep)
+    assert "autotune" not in d["env"]
+    assert "autotune" not in str(rep)
 
 
 def test_inspect_without_env_is_empty_not_faked():
     # A handle built outside compile_problem carries no env -> {} (documented absence, not a default).
-    bare = CompiledProblem("/tmp/x/problem.so", _program(), None, "SIG", "c++", "c++23")
+    model = _compiled_model()
+    component = CompiledProblem(
+        "/tmp/x/problem.so", _program(), model, model.abi_key, "c++", "c++23"
+    )
+    bare = typed_compiled_artifact(component, model)
     assert bare.codegen_env is None
     assert bare.inspect().env == {}
 
@@ -193,7 +170,7 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
     POINT is the env wiring (record on the handle, codegen-dir redirect, keep-generated, dump-on-
     compile), not the compile itself.
     """
-    from pops.codegen import compile_drivers as cd
+    from pops.codegen import _compile_drivers as cd
 
     def _fake_build_flags(cxx=None):
         return ("c++", [], [])
@@ -215,15 +192,17 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         monkeypatch.setenv("POPS_KEEP_GENERATED", "1")
         monkeypatch.setenv("POPS_DUMP_IR", "1")
         monkeypatch.setenv("POPS_DUMP_CPP", "1")
-        monkeypatch.setenv("POPS_AUTOTUNE", "basic")
-        monkeypatch.delenv("POPS_JIT_BACKDOOR", raising=False)
-
-        compiled = cd.compile_problem(time=_program("wired"), force=True)
+        program, module = _program_fixture("wired")
+        compiled = cd.compile_problem(
+            model=module, time=program, force=True, include=INCLUDE)
 
         # The env snapshot is recorded on the handle and surfaced in inspect().
         assert compiled.codegen_env is not None
-        assert compiled.codegen_env.autotune == "basic"
-        assert compiled.inspect().env["autotune"] == "basic"
+        artifact = typed_compiled_artifact(
+            compiled,
+            _compiled_model(abi_key=compiled.abi_key, cxx=compiled.cxx, std=compiled.std),
+        )
+        assert "autotune" not in artifact.inspect().env
         # The .so landed in POPS_CODEGEN_DIR.
         assert os.path.dirname(compiled.so_path) == tmp
         # POPS_KEEP_GENERATED kept the source next to the .so.
@@ -234,14 +213,15 @@ def test_compile_problem_records_env_and_honors_dirs(monkeypatch):
         assert "wired.cpp" in produced, produced
 
         # A second call hits the cache (the placeholder .so exists) and STILL records the env.
-        again = cd.compile_problem(time=_program("wired"), force=False)
+        again = cd.compile_problem(
+            model=module, time=program, force=False, include=INCLUDE)
         assert again.codegen_env is not None
         assert again.so_path == compiled.so_path
 
 
 def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     """compile_problem(debug=True) forces keep-generated even with POPS_KEEP_GENERATED unset."""
-    from pops.codegen import compile_drivers as cd
+    from pops.codegen import _compile_drivers as cd
 
     monkeypatch.setattr(cd, "pops_loader_build_flags", lambda cxx=None: ("c++", [], []))
     monkeypatch.setattr(cd, "pops_header_signature", lambda include: "MOCKSIG")
@@ -252,9 +232,26 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         monkeypatch.setenv("POPS_CODEGEN_DIR", tmp)
         monkeypatch.delenv("POPS_KEEP_GENERATED", raising=False)
-        compiled = cd.compile_problem(time=_program("dbg"), force=True, debug=True)
+        program, module = _program_fixture("dbg")
+        compiled = cd.compile_problem(
+            model=module, time=program, force=True, debug=True, include=INCLUDE)
         assert compiled.codegen_env.keep_generated is True
         assert compiled.generated_sources and os.path.exists(compiled.generated_sources[0])
+
+
+def test_compile_problem_rejects_autotune_before_compiler_discovery(monkeypatch):
+    """The public compile path fails closed before it can invoke any compiler/toolchain probe."""
+    from pops.codegen import _compile_drivers as cd
+
+    monkeypatch.setenv("POPS_AUTOTUNE", "off")
+    monkeypatch.setattr(
+        cd,
+        "pops_loader_build_flags",
+        lambda cxx=None: pytest.fail("compiler discovery must not run for POPS_AUTOTUNE"),
+    )
+    program, module = _program_fixture("unsupported_autotune")
+    with pytest.raises(NotImplementedError, match="remove POPS_AUTOTUNE"):
+        cd.compile_problem(model=module, time=program, force=True, include=INCLUDE)
 
 
 # ---------------------------------------------------------------------------
@@ -263,14 +260,12 @@ def test_explicit_debug_keeps_generated_over_env(monkeypatch):
 
 def test_every_documented_var_is_read():
     names = ["POPS_LOG", "POPS_CODEGEN_LOG", "POPS_CODEGEN_DIR", "POPS_KEEP_GENERATED",
-             "POPS_DUMP_IR", "POPS_DUMP_CPP", "POPS_CACHE_DIR", "POPS_PROFILE", "POPS_AUTOTUNE",
-             "POPS_JIT_BACKDOOR"]
+             "POPS_DUMP_IR", "POPS_DUMP_CPP", "POPS_CACHE_DIR", "POPS_PROFILE"]
     # Set every var to a non-default and assert the resolved snapshot reflects each one.
     env = {"POPS_LOG": "debug", "POPS_CODEGEN_LOG": "info", "POPS_CODEGEN_DIR": "/cg",
            "POPS_KEEP_GENERATED": "1", "POPS_DUMP_IR": "1", "POPS_DUMP_CPP": "1",
-           "POPS_CACHE_DIR": "/cache", "POPS_PROFILE": "advanced", "POPS_AUTOTUNE": "basic",
-           "POPS_JIT_BACKDOOR": "1"}
-    e = CodegenEnv.from_env(env=env, warn=False)
+           "POPS_CACHE_DIR": "/cache", "POPS_PROFILE": "advanced"}
+    e = CodegenEnv.from_env(env=env)
     d = e.to_dict()
     # Each documented name has a corresponding resolved, non-default field.
     assert d["log_level"] == "info"            # codegen-specific wins over POPS_LOG=debug
@@ -279,8 +274,6 @@ def test_every_documented_var_is_read():
     assert d["dump_ir"] is True and d["dump_cpp"] is True
     assert d["cache_dir"] == "/cache"
     assert d["profile"] == "advanced"
-    assert d["autotune"] == "basic"
-    assert d["jit_backdoor"] is True
     # POPS_LOG is read (it is the fallback when POPS_CODEGEN_LOG is absent).
     assert resolve_log_level({"POPS_LOG": "debug"}) == "debug"
     assert set(names)  # the list above is the sec.12.4 surface this test pins

@@ -8,7 +8,13 @@ dispatcher.  They reuse the shared primitives in ``program_emit_kernels``.
 """
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
+from fractions import Fraction
 from typing import Any
+
+from pops._ir.literals import scalar_cpp
+from pops.time.points import StagePoint, TimePoint
 
 from pops.codegen.program_emit_kernels import (
     _apply_in_arg,
@@ -17,8 +23,155 @@ from pops.codegen.program_emit_kernels import (
 )
 
 
+def _program_nodes(program: Any) -> Any:
+    """Iterate top-level and nested ProgramValue nodes without importing lowerability helpers."""
+    def walk(value: Any) -> Any:
+        yield value
+        for key in ("cond_block", "body_block", "apply_block", "residual_block",
+                    "true_block", "false_block"):
+            block = value.attrs.get(key)
+            if isinstance(block, (list, tuple)):
+                for nested in block:
+                    yield from walk(nested)
+
+    for value in program._values:
+        yield from walk(value)
+
+
+def _consumed_solve_action(program: Any, solve: Any) -> str:
+    """Return the explicit action kind attached to the unique solve_outcome consumer."""
+    matches = []
+    for node in _program_nodes(program):
+        if node.op != "solve_outcome" or len(node.inputs) != 1 or node.inputs[0] is not solve:
+            continue
+        action = node.attrs.get("action")
+        matches.append(str(getattr(action, "kind", "")))
+    if len(matches) != 1 or matches[0] not in ("fail_run", "reject_attempt"):
+        raise ValueError(
+            "solve %r must have exactly one explicit outcome.consume(action=FailRun(...) or "
+            "RejectAttempt(...)); found %d" % (solve.name, len(matches)))
+    return matches[0]
+
+
+def _validate_matrix_free_contract(v: Any, model: Any) -> None:
+    """Validate matrix-free facts that need either the final node or physical model metadata."""
+    if v.op == "rhs_jacvec":
+        if len(v.inputs) != 4:
+            raise ValueError("rhs_jacvec IR requires out, direction, iterate, and r0 inputs")
+        iterate, r0 = v.inputs[2], v.inputs[3]
+        named = [source for source in (v.attrs.get("sources") or ()) if source != "default"]
+        if not isinstance(v.attrs.get("field_coupled"), bool):
+            raise ValueError("rhs_jacvec IR requires an explicit boolean field_coupled attribute")
+        if v.attrs.get("flux") is not True or named:
+            raise NotImplementedError(
+                "rhs_jacvec lowers only the default flux with sources=[] or ['default']; "
+                "got flux=%r, named_sources=%r" % (v.attrs.get("flux"), named))
+        if getattr(r0, "op", None) != "rhs" or len(getattr(r0, "inputs", ())) < 1:
+            raise ValueError("rhs_jacvec r0 must be an exact precomputed rhs(iterate) IR node")
+        if r0.inputs[0] is not iterate:
+            raise ValueError("rhs_jacvec r0 must be computed from the exact frozen iterate")
+        if r0.block != iterate.block or r0.point != iterate.point:
+            raise ValueError(
+                "rhs_jacvec r0 and iterate must share one exact block and temporal point")
+        expected_sources = v.attrs.get("sources")
+        actual_sources = r0.attrs.get("sources")
+        if actual_sources is not None:
+            actual_sources = list(actual_sources)
+        if expected_sources is not None:
+            expected_sources = list(expected_sources)
+        if (r0.attrs.get("flux") is not True or actual_sources != expected_sources
+                or r0.attrs.get("fluxes") not in (None, (), [])):
+            raise ValueError(
+                "rhs_jacvec r0 must use the exact same default-flux/default-source selection "
+                "as the Jacobian-vector product and no named flux")
+        context = getattr(r0, "field_context", None)
+        if v.attrs["field_coupled"]:
+            field = getattr(context, "field", None)
+            stage_sources = tuple(getattr(context, "stage_sources", ()))
+            if field is None or stage_sources != ((iterate.block, iterate.id),):
+                raise ValueError(
+                    "rhs_jacvec field coupling requires one unambiguous field context solved "
+                    "only from the frozen iterate")
+        elif context is not None:
+            raise ValueError(
+                "rhs_jacvec field_coupled=False requires an r0 with no field-solve provenance")
+        return
+    if v.op != "solve_linear":
+        return
+    rhs = v.inputs[1]
+    if rhs.vtype != "state" or rhs.space is not None or model is None:
+        return
+    impl = getattr(model, "_m", model)
+    model_ncomp = getattr(impl, "n_cons", None)
+    if model_ncomp is None:
+        model_ncomp = getattr(impl, "n_vars", None)
+    if model_ncomp is None:
+        names = getattr(impl, "cons_names", None)
+        if names is None:  # opaque native ModelSpec: no truthful Python-side component metadata
+            return
+        model_ncomp = len(names)
+    declared = int(v.attrs["ncomp"])
+    if declared != int(model_ncomp):
+        raise ValueError(
+            "solve_linear: untyped State rhs uses operator ncomp=%d but the physical model "
+            "declares n_cons=%d" % (declared, int(model_ncomp)))
+
+
+def _rhs_stage_fraction(value: Any) -> Fraction:
+    """Return the exact explicit residual coordinate carried by one RHS-like IR value.
+
+    A partitioned stage may expose distinct explicit and implicit coordinates.  Conservative RHS
+    evaluation belongs to the explicit partition, exactly as in the top-level RHS emitter.  This
+    helper deliberately accepts only the typed temporal IR: a missing/opaque point is a codegen
+    error, never a reason to invent stage zero for a matrix-free callback that will outlive the
+    authoring scope.
+    """
+    point = getattr(value, "point", None)
+    if type(point) is TimePoint:
+        stage_point = point
+    elif type(point) is StagePoint:
+        try:
+            stage_point = point.time
+        except ValueError:
+            try:
+                stage_point = point.time_for("explicit")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(
+                    "rhs_jacvec r0 requires an exact explicit StagePoint coordinate"
+                ) from exc
+    else:
+        raise ValueError(
+            "rhs_jacvec r0 requires an exact TimePoint or StagePoint in the Program IR")
+    try:
+        return Fraction(stage_point.step) + Fraction(stage_point.offset.to_python())
+    except (AttributeError, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise ValueError(
+            "rhs_jacvec r0 carries no exact stage fraction") from exc
+
+
+def _rhs_jacvec_field_slot(r0: Any, field_plans: Any) -> str:
+    """Resolve the exact FieldContext captured by r0 to its installed native provider slot."""
+    context = getattr(r0, "field_context", None)
+    field = getattr(context, "field", None)
+    if field is None:
+        raise ValueError("field-coupled rhs_jacvec r0 has no exact FieldContext identity")
+    if len(getattr(r0, "inputs", ())) != 2:
+        raise ValueError(
+            "field-coupled rhs_jacvec r0 must consume exactly its iterate and field solve")
+    fields = r0.inputs[1]
+    if (getattr(fields, "vtype", None) != "fields"
+            or getattr(fields, "field_context", None) != context):
+        raise ValueError(
+            "field-coupled rhs_jacvec r0 field input disagrees with its FieldContext")
+    from pops.codegen.program_emit_field_routes import resolved_field_route
+    slot, _ = resolved_field_route(field, field_plans)
+    if not isinstance(slot, str) or not slot:
+        raise ValueError("field-coupled rhs_jacvec resolved an invalid native provider slot")
+    return slot
+
+
 def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
-                               lines: Any = None) -> None:
+                               lines: Any = None, *, field_plans: Any = None) -> None:
     """Lower a matrix_free_operator to an INSTALL-TIME C++ apply lambda ``apply_A{id}`` (appended to
     @p prelude). The lambda has the pops::ApplyFn signature ``(pops::MultiFab& out, const pops::MultiFab&
     in)``; its body re-emits the apply sub-block:
@@ -28,15 +181,21 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
       - ``laplacian(o, i)`` -> ``ctx.laplacian(*o, i)`` (i const_cast when it is the lambda's ``in``,
         which is logically read-only -- the fill only writes ghosts, as in test_generic_krylov);
       - ``rhs_jacvec(out, in, iterate, r0, ...)`` (ADC-431) -> a finite-difference Jacobian-vector
-        product ``out = in - (c*dt/eps)(rhs(U^k + eps*in) - rhs(U^k))`` calling ``ctx.rhs_into`` (or
-        ``neg_div_flux_default_into``) on PERSISTENT jac_uk / jac_r0 scratch the lambda captures; the
-        step body refreshes that scratch from the live iterate / rhs(U^k) (@p lines, see below);
+        product over the core residual plus the exact prepared-boundary JVP.  The lambda captures one
+        shared ``BoundaryEvaluationPoint`` refreshed from r0's exact stage in the step body, so its
+        install-time ProgramContext copy can never reconstruct stale time.  Boundary-only scratch is
+        allocated once and only when that block has an installed boundary linearization;
       - the apply RESULT (the affine the body returned, e.g. ``in - alpha*Lap(in)``) is written into
         ``out`` via the same accumulate-then-lincomb idiom as a linear_combine commit.
 
     The lambda captures ``[ctx, <scratch shared_ptrs>]``; the step closure captures it by value. @p
-    lines is the step-body line list (for the rhs_jacvec scratch refresh); None when the operator has
-    no jacvec op (the historical matrix-free path, prelude only)."""
+    lines is the mandatory step-body line list: it refreshes the current ``dt`` before every solve,
+    and also carries the rhs_jacvec scratch refresh when that optional operation is present.  A
+    matrix-free operator cannot be lowered in a control-flow-local scope because its install-time
+    ApplyFn would otherwise have no authenticated step-lifetime source for those values."""
+    if lines is None:
+        raise NotImplementedError(
+            "matrix_free_operator is only lowerable at the top level / step body")
     apply_id = v.id
     lam = "apply_A%d" % apply_id
     var[apply_id] = lam
@@ -70,6 +229,16 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (acc_sp, op_ncomp))
     captures.append(acc_sp)
+    # The ApplyFn is constructed at install time, outside ``ctx.install([=](double dt) {...})``,
+    # while affine apply bodies evaluate exact dt-polynomial coefficients and pass the current dt
+    # to the conservative axpy/lincomb ledger.  Carry the live step value through one persistent
+    # scalar, exactly like the rhs_jacvec coefficient capture below.  Reusing a single value is safe:
+    # a ProgramContext invokes one matrix-free ApplyFn synchronously within its owning step.
+    apply_dt = "apply_dt%d" % apply_id
+    prelude.append(
+        "auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % apply_dt)
+    captures.append(apply_dt)
+    lines.append("*%s = static_cast<pops::Real>(dt);" % apply_dt)
     # A coefficiented apply (apply_laplacian_coeff) reads an OUTER condensed_coeffs bundle (assembled in
     # the step body, before the operator): capture its four coefficient shared_ptrs (already
     # allocated in the prelude by emit_condensed_op) so the lambda can dereference them.
@@ -84,15 +253,22 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
     # iteration, so -- like schur_coeffs -- they become PERSISTENT shared_ptr scratch (jac_uk / jac_r0)
     # captured by value (shared pointee), refreshed from the live iterate / r0 in the step body BEFORE
     # the solve. Plus a perturbed-state scratch (jac_up) and a perturbed-rhs scratch (jac_rp) the
-    # lambda fills per matvec. All carry the operator's component count (= the block n_cons).
+    # lambda fills per matvec. All carry the operator's component count (= the block n_cons).  The
+    # exact BoundaryEvaluationPoint is a shared pointee because the ApplyFn itself is constructed
+    # before begin_step; rebuilding it from the lambda's captured ctx would observe stale time.
     jac_ops = [w for w in block if w.op == "rhs_jacvec"]
-    if jac_ops and lines is None:
-        raise NotImplementedError(
-            "rhs_jacvec is only lowerable in a top-level / step-body matrix-free solve, not inside a "
-            "control-flow (if/while/range) body (the Newton outer loop must be a static_range unroll)")
-    jac_scratch = {}  # jacvec op id -> (uk, r0, up, rp, cdt) names
-    ng_state = "ctx.state(0).n_grow()"  # the jacvec scratch needs the state's ghost count for rhs_into
+    jac_scratch = {}
+    # jacvec op id -> (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
+    #                  field_slot, cdt, block_idx) names/provenance
     for w in jac_ops:
+        _validate_matrix_free_contract(w, None)
+        iterate_in, r0_in = w.inputs[2], w.inputs[3]
+        indices = program._block_indices()
+        if iterate_in.block not in indices:
+            raise ValueError(
+                "rhs_jacvec iterate block %r has no declared Program state" % iterate_in.block)
+        block_idx = indices[iterate_in.block]
+        ng_state = "ctx.state(%d).n_grow()" % block_idx
         uk = "jac_uk%d_%d" % (apply_id, w.id)
         r0 = "jac_r0%d_%d" % (apply_id, w.id)
         up = "jac_up%d_%d" % (apply_id, w.id)
@@ -102,22 +278,66 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
                 "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, %s));"
                 % (sp, op_ncomp, ng_state))
             captures.append(sp)
+        point = "jac_point%d_%d" % (apply_id, w.id)
+        prelude.append(
+            "auto %s = std::make_shared<"
+            "pops::runtime::multiblock::BoundaryEvaluationPoint>();" % point)
+        captures.append(point)
+        has_boundary = "jac_has_boundary%d_%d" % (apply_id, w.id)
+        prelude.append(
+            "const bool %s = ctx.has_boundary_linearization(%d);"
+            % (has_boundary, block_idx))
+        captures.append(has_boundary)
+        # Krylov invokes this ApplyFn sequentially.  Reuse one boundary buffer first for C(U^k) in
+        # the step-body refresh, then for C'(U^k)v in each matvec.  Both conditional allocations are
+        # skipped entirely for the ordinary no-boundary-linearization path.
+        r0_core = "jac_r0_core%d_%d" % (apply_id, w.id)
+        boundary_work = "jac_boundary_work%d_%d" % (apply_id, w.id)
+        for sp in (r0_core, boundary_work):
+            prelude.append(
+                "auto %s = %s ? std::make_shared<pops::MultiFab>("
+                "ctx.alloc_scalar_field(%d, %s)) : std::shared_ptr<pops::MultiFab>{};"
+                % (sp, has_boundary, op_ncomp, ng_state))
+            captures.append(sp)
+        field_slot = None
+        if w.attrs["field_coupled"]:
+            field_slot = "jac_field_slot%d_%d" % (apply_id, w.id)
+            resolved_slot = _rhs_jacvec_field_slot(r0_in, field_plans)
+            prelude.append(
+                "const std::string %s = %s;" % (field_slot, json.dumps(resolved_slot)))
+            captures.append(field_slot)
         # The BDF coefficient c*dt depends on the step's dt (the step-closure parameter), which the
         # install-time lambda cannot see; carry it through a captured shared_ptr<Real> the step body
         # sets to its dt value before the solve (the same persistent-scratch idiom as jac_uk).
         cdt = "jac_cdt%d_%d" % (apply_id, w.id)
         prelude.append("auto %s = std::make_shared<pops::Real>(static_cast<pops::Real>(0));" % cdt)
         captures.append(cdt)
-        jac_scratch[w.id] = (uk, r0, up, rp, cdt)
-        # Step body: refresh the FROZEN captures from this iteration's live iterate / rhs(U^k) / dt.
-        iterate_in, r0_in = w.inputs[2], w.inputs[3]
+        jac_scratch[w.id] = (
+            uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
+            field_slot, cdt, block_idx)
+        # Step body: first restore the exact StagePoint of r0 and snapshot it into the shared point;
+        # then refresh the frozen U^k / rhs(U^k) / dt captures.  Prepared boundary residuals are
+        # removed from the frozen base so the finite difference covers only the core residual; their
+        # derivative is supplied separately by boundary_jvp_into_at in the ApplyFn.
+        stage = _rhs_stage_fraction(r0_in)
+        lines.append("ctx.set_stage_time(%d, %d);" % (stage.numerator, stage.denominator))
+        lines.append("*%s = ctx.boundary_evaluation_point(%d);" % (point, int(r0_in.id)))
         lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
                      % (uk, uk, var[iterate_in.id]))
         lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), %s);"
                      % (r0, r0, var[r0_in.id]))
+        lines.append("if (%s) {" % has_boundary)
+        lines.append("  ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, "
+                     "static_cast<pops::Real>(1), *%s);" % (r0_core, r0_core, r0))
+        lines.append("  %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
+        lines.append("  ctx.boundary_residual_into_at(*%s, %d, *%s, *%s);"
+                     % (point, block_idx, uk, boundary_work))
+        lines.append("  ctx.axpy(*%s, static_cast<pops::Real>(-1), *%s);"
+                     % (r0_core, boundary_work))
+        lines.append("}")
         lines.append("*%s = %s;" % (cdt, _coeff_cpp(w.attrs["c_dt"])))
     # 2) The lambda body: the laplacian / gradient ops + the result write into `out`.
-    body = []
+    body = ["const pops::Real dt = *%s;" % apply_dt]
     for w in block:
         if w.op in ("scalar_field", "apply_in", "apply_out"):
             continue  # scratch shared_ptr / lambda params: already bound in `sub`, nothing to emit
@@ -154,15 +374,15 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             # captured jac_uk / jac_r0 hold U^k and rhs(U^k) (refreshed in the step body); jac_up /
             # jac_rp are per-matvec scratch; jac_cdt holds c*dt. The op writes directly into `out`.
             o, i = w.inputs[0], w.inputs[1]
-            uk, r0, up, rp, cdt = jac_scratch[w.id]
+            (uk, r0, up, rp, r0_core, boundary_work, point, has_boundary,
+             field_slot, cdt, block_idx) = jac_scratch[w.id]
             in_arg = _apply_in_arg(sub, i)        # the Krylov vector v (the lambda's const `in`)
             out_tok = sub[o.id]                   # the apply out buffer (== "out")
-            eps = repr(float(w.attrs["eps"]))
+            eps = scalar_cpp(w.attrs["eps"])
             sub[w.id] = out_tok
             want_default = w.attrs.get("sources")
             want_default = want_default is None or "default" in want_default
-            rhs_call = ("ctx.rhs_into(0, *%s, *%s);" if (w.attrs["flux"] and want_default)
-                        else "ctx.neg_div_flux_default_into(0, *%s, *%s);") % (up, rp)
+            flux_only = "false" if want_default else "true"
             body.append("{")
             # FD step norms via krylov_dot (all components when ncomp>1, component 0 otherwise --
             # the SAME reduction the Krylov loop uses for its residual norm).
@@ -173,13 +393,33 @@ def _emit_matrix_free_operator(program: Any, v: Any, var: Any, prelude: Any,
             body.append("  const pops::Real jh = jvn > pops::Real(0) ? "
                         "static_cast<pops::Real>(%s) * (pops::Real(1) + jukn) / jvn "
                         ": static_cast<pops::Real>(%s);" % (eps, eps))
-            # U^k + h*v -> jac_up; rhs(U^k + h*v) -> jac_rp (one rhs per matvec, U^k / rhs(U^k) frozen).
+            # U^k + h*v -> jac_up; solve fields from that SAME perturbed state before evaluating rhs.
+            # This includes elliptic dependence in Jv instead of reusing stale U^n/U^k fields.
             body.append("  ctx.lincomb(*%s, pops::Real(1), *%s, jh, %s);" % (up, uk, in_arg))
-            body.append("  %s" % rhs_call)
-            # out = v - (c*dt/h)(rhs(U^k + h*v) - rhs(U^k)): lincomb then axpy back the frozen rhs(U^k).
+            if w.attrs["field_coupled"]:
+                body.append("  ctx.solve_fields_from_state_at(*%s, %s, %d, *%s);"
+                            % (point, field_slot, block_idx, up))
+            body.append("  ctx.rhs_core_into_at(*%s, %d, *%s, *%s, %s);"
+                        % (point, block_idx, up, rp, flux_only))
+            if w.attrs["field_coupled"]:
+                # The perturbed RHS solve mutates the installed provider.  Restore the exact frozen
+                # iterate before any boundary JVP (and before returning from ApplyFn), so a Krylov
+                # matvec cannot leak U^k+h*v field state into the next callback or outer solve.
+                body.append("  ctx.solve_fields_from_state_at(*%s, %s, %d, *%s);"
+                            % (point, field_slot, block_idx, uk))
+            # out = v - (c*dt/h)(Rcore(U^k + h*v) - Rcore(U^k)).  The boundary contribution uses its
+            # exact JVP contract below, avoiding an invalid finite difference of ghost/action effects.
             body.append("  const pops::Real jc = *%s / jh;" % cdt)
             body.append("  ctx.lincomb(%s, pops::Real(1), %s, -jc, *%s);" % (out_tok, in_arg, rp))
-            body.append("  ctx.axpy(%s, jc, *%s);" % (out_tok, r0))
+            body.append("  if (%s) {" % has_boundary)
+            body.append("    ctx.axpy(%s, jc, *%s);" % (out_tok, r0_core))
+            body.append("    %s->set_val(static_cast<pops::Real>(0));" % boundary_work)
+            body.append("    ctx.boundary_jvp_into_at(*%s, %d, *%s, %s, *%s);"
+                        % (point, block_idx, uk, in_arg, boundary_work))
+            body.append("    ctx.axpy(%s, -*%s, *%s);" % (out_tok, cdt, boundary_work))
+            body.append("  } else {")
+            body.append("    ctx.axpy(%s, jc, *%s);" % (out_tok, r0))
+            body.append("  }")
             body.append("}")
         else:
             raise NotImplementedError(
@@ -206,7 +446,7 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         field-solve multigrid), no new numerical kernel (ADC-516).
 
     A scheme other than these two never reaches here: the Python layer
-    (pops.time.program_solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
+    (pops.time._program.solve.solve_linear) lowers only identity / geometric_mg for gmres / bicgstab and
     rejects every other preconditioner upstream."""
     scheme = v.attrs.get("preconditioner", "identity")
     if scheme == "identity":
@@ -248,27 +488,115 @@ def _precond_applyfn(v: Any, prelude: Any) -> str:
         "geometric_mg)" % scheme)
 
 
+def _composite_tensor_fac_options(
+        v: Any) -> tuple[int, Any, Any, int | None, Any, Any, int | None, bool | None]:
+    """Authenticate the complete direct-solver identity carried by a hierarchy solve node."""
+    identity = v.attrs.get("hierarchy_solver_identity")
+    expected_identity = {"schema_version", "solver_id", "capabilities", "options"}
+    if not isinstance(identity, Mapping) or set(identity) != expected_identity:
+        raise TypeError(
+            "CompositeTensorFAC hierarchy solve requires an exact canonical solver identity")
+    if identity["schema_version"] != 1:
+        raise ValueError("CompositeTensorFAC hierarchy solve uses an unsupported identity schema")
+    if identity["solver_id"] != "composite_tensor_fac" \
+            or v.attrs.get("hierarchy_solver") != identity["solver_id"]:
+        raise ValueError("CompositeTensorFAC hierarchy solve solver identity is unauthenticated")
+    capabilities = identity["capabilities"]
+    if (not isinstance(capabilities, (list, tuple))
+            or tuple(capabilities) != (
+                "amr_hierarchy", "flat_bicgstab", "scalar", "tensor_elliptic")):
+        raise ValueError("CompositeTensorFAC hierarchy solve capabilities are unauthenticated")
+    options = identity["options"]
+    expected_options = {
+        "max_iter", "rel_tol", "abs_tol", "fine_sweeps", "coarse_rel_tol", "coarse_abs_tol",
+        "coarse_cycles", "verbose"}
+    if not isinstance(options, Mapping) or set(options) != expected_options:
+        raise TypeError(
+            "CompositeTensorFAC options must contain exactly max_iter, rel_tol, abs_tol, fine_sweeps, "
+            "coarse_rel_tol, coarse_abs_tol, coarse_cycles and verbose")
+    max_iter = options["max_iter"]
+    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or max_iter < 1:
+        raise ValueError("CompositeTensorFAC max_iter must be a positive int")
+    fine_sweeps, coarse_cycles, verbose = (
+        options["fine_sweeps"], options["coarse_cycles"], options["verbose"])
+    if fine_sweeps is not None and (
+            isinstance(fine_sweeps, bool) or not isinstance(fine_sweeps, int)
+            or fine_sweeps < 1):
+        raise ValueError("CompositeTensorFAC fine_sweeps must be a positive int or None")
+    if coarse_cycles is not None and (
+            isinstance(coarse_cycles, bool) or not isinstance(coarse_cycles, int)
+            or coarse_cycles < 1):
+        raise ValueError("CompositeTensorFAC coarse_cycles must be a positive int or None")
+    if verbose is not None and type(verbose) is not bool:
+        raise TypeError("CompositeTensorFAC verbose must be a Python bool or None")
+    from pops.model._bind_schema_data import literal_value
+    rel_tol = literal_value(options["rel_tol"], where="CompositeTensorFAC rel_tol")
+    if isinstance(rel_tol, bool) or not 0 < rel_tol < 1:
+        raise ValueError("CompositeTensorFAC rel_tol must be in (0, 1)")
+    abs_tol = literal_value(options["abs_tol"], where="CompositeTensorFAC abs_tol")
+    if isinstance(abs_tol, bool) or abs_tol < 0:
+        raise ValueError("CompositeTensorFAC abs_tol must be >= 0")
+    coarse_rel_tol = options["coarse_rel_tol"]
+    if coarse_rel_tol is not None:
+        coarse_rel_tol = literal_value(
+            coarse_rel_tol, where="CompositeTensorFAC coarse_rel_tol")
+        if isinstance(coarse_rel_tol, bool) or not 0 < coarse_rel_tol < 1:
+            raise ValueError("CompositeTensorFAC coarse_rel_tol must be in (0, 1) or None")
+    coarse_abs_tol = options["coarse_abs_tol"]
+    if coarse_abs_tol is not None:
+        coarse_abs_tol = literal_value(
+            coarse_abs_tol, where="CompositeTensorFAC coarse_abs_tol")
+        if isinstance(coarse_abs_tol, bool) or coarse_abs_tol < 0:
+            raise ValueError("CompositeTensorFAC coarse_abs_tol must be >= 0 or None")
+    from pops._ir.literals import scalar_data
+    emitted_tol_data = scalar_data(v.attrs["tol"])
+    emitted_max_iter = v.attrs.get("max_iter")
+    if (emitted_tol_data != options["rel_tol"] or isinstance(emitted_max_iter, bool)
+            or not isinstance(emitted_max_iter, int) or emitted_max_iter != max_iter):
+        raise ValueError(
+            "CompositeTensorFAC emitted convergence controls disagree with solver identity")
+    if v.attrs.get("method") != "bicgstab" or v.attrs.get("preconditioner") != "identity" \
+            or v.attrs.get("restart") is not None:
+        raise ValueError("CompositeTensorFAC flat branch must be exact unpreconditioned BiCGStab")
+    emitted_ncomp = v.attrs.get("ncomp")
+    if isinstance(emitted_ncomp, bool) or not isinstance(emitted_ncomp, int) \
+            or emitted_ncomp != 1:
+        raise ValueError("CompositeTensorFAC supports exactly ncomp=1")
+    block_index = v.attrs.get("hierarchy_block_index")
+    if isinstance(block_index, bool) or not isinstance(block_index, int) or block_index < 0:
+        raise ValueError("CompositeTensorFAC requires an authenticated hierarchy block index")
+    return (max_iter, rel_tol, abs_tol, fine_sweeps, coarse_rel_tol, coarse_abs_tol,
+            coarse_cycles, verbose)
+
+
 def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
                        lines: Any, target: Any = "system") -> None:
     """Lower solve_linear to a call into the runtime's matrix-free Krylov loop. The solution field
     ``sf_sol{id}`` is a PERSISTENT shared_ptr (prelude, captured by the step closure); the step body
-    seeds the initial guess (zero, or a copy of the supplied guess), then calls
-    ``pops::cg_solve`` / ``bicgstab_solve`` / ``richardson_solve`` with the operator's apply lambda.
-    The KrylovResult is kept (diagnostics) but the trip count is decided C++-side, inside the loop --
-    invisible to the IR. The result token is the solution field, dereferenced for the final copy back
-    into the block state at commit.
+    seeds the initial guess (zero, or a copy of the supplied guess), then calls the runtime context's
+    generic ``solve_linear_matfree`` seam with the operator's apply lambda.
+    The SolveReport is checked before the token is published: solved writes may continue,
+    while non-converged / singular / breakdown / invalid-evaluation reports fail the run instead of
+    letting a partial iterate masquerade as a solved value. The trip count is still decided C++-side,
+    inside the loop -- invisible to the IR. The result token is the solution field, dereferenced for the
+    final copy back into the block state at commit.
 
-    TARGET SEAM (ADC-633). ``target='system'`` emits the verbatim ``pops::<method>_solve(...)`` call
-    (the uniform trajectory + the golden emitted-C++ text are byte-untouched). ``target='amr_system'``
-    routes it through ``ctx.solve_linear_matfree(sol, rhs, apply, precond, method_id, tol, max_iter,
-    restart)``: a FLAT hierarchy dispatches to the SAME Krylov call (identical numerics), a REFINED
-    hierarchy to the composite FAC. The seam exists on BOTH ProgramContext (uniform) and
-    AmrProgramContext (hierarchy) with byte-identical uniform numerics, so the AMR .so's shared body
-    compiles against both install entries."""
+    Uniform and level-scoped AMR solves use the generic context seam. A direct hierarchy solve emits
+    the flat Krylov call in the flat topology body and the authenticated composite-FAC call in the
+    refined solve-once phase."""
     op_value = v.inputs[0]
     rhs_in = v.inputs[1]
     guess_in = v.inputs[2] if v.attrs["has_guess"] else None
     lam = var[op_value.id]  # the apply lambda (already emitted into the prelude)
+    hierarchy_solver = v.attrs.get("hierarchy_solver")
+    direct_refined = bool(var.get(("direct_hierarchy_solve", v.id), False))
+    fac_options = None
+    if hierarchy_solver is not None:
+        if target != "amr_system" or v.attrs.get("scope") != "hierarchy" \
+                or hierarchy_solver != "composite_tensor_fac":
+            raise ValueError(
+                "CompositeTensorFAC lowers only as a direct hierarchy solver for target='amr_system'")
+        fac_options = _composite_tensor_fac_options(v)
     sol_sp = "sf_sol%d" % v.id
     # The solution carries the operator's component count: a vector / state solve writes an ncomp
     # iterate (the Krylov scratch r/p/Ap is co-allocated from it, so the whole loop is ncomp-wide).
@@ -276,18 +604,50 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     prelude.append(
         "auto %s = std::make_shared<pops::MultiFab>(ctx.alloc_scalar_field(%d, 1));"
         % (sol_sp, op_ncomp))
-    var[v.id] = "(*%s)" % sol_sp  # token: the dereferenced solution MultiFab
+    if fac_options is not None:
+        _, _, _, fine_sweeps, coarse_rel_tol, coarse_abs_tol, coarse_cycles, verbose = fac_options
+        prelude.append(
+            "ctx.configure_composite_tensor_fac(%d, %d, %d, static_cast<pops::Real>(%s), "
+            "static_cast<pops::Real>(%s), %d, %s);"
+            % (int(v.attrs["hierarchy_block_index"]), op_ncomp,
+               0 if fine_sweeps is None else fine_sweeps,
+               scalar_cpp(0 if coarse_rel_tol is None else coarse_rel_tol),
+               scalar_cpp(0 if coarse_abs_tol is None else coarse_abs_tol),
+               0 if coarse_cycles is None else coarse_cycles,
+               -1 if verbose is None else int(verbose)))
+    # On a refined AMR hierarchy the mathematical solution is one field per level.  The persistent
+    # level-0 scratch remains the actual solve argument, while every downstream consumer resolves the
+    # published field through the context's current-level seam.  Flat AMR returns the scratch itself.
+    var[v.id] = ("ctx.linear_solution(*%s)" % sol_sp
+                 if target == "amr_system" and v.attrs.get("scope") == "hierarchy"
+                 else "(*%s)" % sol_sp)
     # Initial guess: zero (default) or a copy of the guess field.
-    if guess_in is None:
-        lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
-    else:
-        lines.append("ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, static_cast<pops::Real>(1), "
-                     "%s);" % (sol_sp, sol_sp, var[guess_in.id]))
-    tol = "static_cast<pops::Real>(%s)" % repr(float(v.attrs["tol"]))
+    if not direct_refined:
+        if guess_in is None:
+            lines.append("%s->set_val(static_cast<pops::Real>(0));" % sol_sp)
+        else:
+            lines.append(
+                "ctx.lincomb(*%s, static_cast<pops::Real>(0), *%s, "
+                "static_cast<pops::Real>(1), %s);"
+                % (sol_sp, sol_sp, var[guess_in.id]))
+    tol = "static_cast<pops::Real>(%s)" % scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     rhs_tok = var[rhs_in.id]
     method = v.attrs["method"]
     kr = "kr%d" % v.id
+    action_kind = _consumed_solve_action(program, v)
+
+    def _append_report_guard() -> None:
+        lines.append("if (!%s.solved_value_available()) {" % kr)
+        if action_kind == "reject_attempt":
+            lines.append("  throw pops::runtime::program::StepAttemptRejected("
+                         "%s.status, \"solve\", std::string(\"solve_linear failed: \") + "
+                         "%s.status_name());" % (kr, kr))
+        else:
+            lines.append("  throw std::runtime_error(std::string(\"solve_linear failed: \") + "
+                         "%s.status_name() + \" action=fail_run\");" % kr)
+        lines.append("}")
+
     # The preconditioner ApplyFn passed to bicgstab / gmres: an EMPTY pops::ApplyFn{} for the identity
     # (unpreconditioned), or a real M^{-1} callback for a non-identity scheme. _precond_applyfn emits the
     # real callback into the prelude (alloc-once, like the operator apply) and returns the C++ expression
@@ -295,35 +655,24 @@ def _emit_solve_linear(program: Any, v: Any, base: Any, var: Any, prelude: Any,
     # the Python layer rejects a non-identity precond for them, so they never reach this branch.)
     precond_arg = _precond_applyfn(v, prelude)
     restart = int(v.attrs["restart"]) if method == "gmres" else 0
-    if target == "amr_system":
-        # AMR target: route through the ctx seam so a refined hierarchy solves compositely (a flat
-        # hierarchy dispatches to the SAME Krylov call, identical numerics). CG / Richardson carry no
-        # preconditioner parameter, so pass the empty ApplyFn{} for them (the seam ignores it). The
-        # method id (SchurSolveMethod) is 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
-        method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
-        precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
-        lines.append("ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, %d, %d);"
-                     % (sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart))
-    elif method == "cg":
-        lines.append("pops::KrylovResult %s = pops::cg_solve(%s, *%s, %s, %s, %d);"
-                     % (kr, lam, sol_sp, rhs_tok, tol, max_iter))
-        lines.append("(void)%s;" % kr)
-    elif method == "bicgstab":
-        lines.append("pops::KrylovResult %s = pops::bicgstab_solve(%s, %s, *%s, %s, %s, "
-                     "%d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter))
-        lines.append("(void)%s;" % kr)
-    elif method == "gmres":
-        # Restarted GMRES(m): restart = the basis size; precond_arg = identity (empty) or the real M^{-1}.
-        lines.append("pops::KrylovResult %s = pops::gmres_solve(%s, %s, *%s, %s, %s, "
-                     "%d, %d);" % (kr, lam, precond_arg, sol_sp, rhs_tok, tol, max_iter, restart))
-        lines.append("(void)%s;" % kr)
-    else:  # richardson: omega defaults to 1 (pre-scaled / well-conditioned operator)
-        # ADC-645: an omega set on the Richardson() descriptor is baked as the literal; absent
-        # (the default) emits the EXACT historical "static_cast<pops::Real>(1)" text, byte-identical.
-        omega = v.attrs.get("omega")
-        omega_tok = ("static_cast<pops::Real>(1)" if omega is None
-                     else "static_cast<pops::Real>(%s)" % repr(float(omega)))
-        lines.append("pops::KrylovResult %s = pops::richardson_solve(%s, *%s, %s, "
-                     "%s, %s, %d);"
-                     % (kr, lam, sol_sp, rhs_tok, omega_tok, tol, max_iter))
-        lines.append("(void)%s;" % kr)
+    # CG / Richardson carry no preconditioner parameter, so pass the empty ApplyFn{}; the context
+    # ignores it. Method id: 0 = cg, 1 = bicgstab, 2 = gmres, 3 = richardson.
+    method_id = {"cg": 0, "bicgstab": 1, "gmres": 2, "richardson": 3}[method]
+    precond_expr = precond_arg if method in ("bicgstab", "gmres") else "pops::ApplyFn{}"
+    omega = v.attrs.get("omega")
+    omega_tok = ("static_cast<pops::Real>(1)" if omega is None
+                 else "static_cast<pops::Real>(%s)" % scalar_cpp(omega))
+    if direct_refined:
+        if fac_options is None:
+            raise ValueError("a direct hierarchy phase requires CompositeTensorFAC")
+        fac_abs_tol = "static_cast<pops::Real>(%s)" % scalar_cpp(fac_options[2])
+        lines.append(
+            "pops::SolveReport %s = ctx.solve_composite_tensor_fac(%d, %d, %s, %s, %d);"
+            % (kr, int(v.attrs["hierarchy_block_index"]), op_ncomp, tol, fac_abs_tol, max_iter))
+    else:
+        lines.append(
+            "pops::SolveReport %s = ctx.solve_linear_matfree(*%s, %s, %s, %s, %d, %s, "
+            "%d, %d, %s);"
+            % (kr, sol_sp, rhs_tok, lam, precond_expr, method_id, tol, max_iter, restart,
+               omega_tok))
+    _append_report_guard()

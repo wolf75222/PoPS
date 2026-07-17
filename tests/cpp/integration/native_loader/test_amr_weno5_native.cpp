@@ -1,281 +1,139 @@
-// WENO5 sur le chemin "production" NATIF cote AMR (Plan Ideal etape 5 / DSL Phase D). Pendant raffine
-// de tests/cpp/integration/native_loader/test_weno5_compiled_model.cpp (System) : on prouve que le limiteur WENO5-Z (stencil 5
-// points, 3 ghosts) tourne EXACTEMENT la meme hierarchie AMR (AmrCouplerMP<Model> + reflux conservatif
-// + regrid) sur les trois chemins, BIT-IDENTIQUE :
-//
-//   (A) add_compiled_model(AmrSystem&) == add_block(ModelSpec)   -- direct, sans .so : tourne sous TOUS
-//       les backends (hote, Kokkos Serial), c'est la parite decisive qui ne casse pas nvcc.
-//   (B) add_native_block(loader.so) == add_compiled_model(AmrSystem&) -- chemin .so (la source qu'emet
-//       dsl.emit_cpp_native_loader(target="amr_system"), ecrite ici pour un test C++ autonome). Le
-//       loader est recompile a l'execution par un g++ nu, donc cette partie SE SAUTE sous backend
-//       Kokkos (ABI incompatible avec ce module) ; la parite CPU complete reste couverte par (A).
-//
-// Le verrou : les niveaux du coupleur sont alloues a Limiter::n_ghost (= Weno5::n_ghost = 3, cf.
-// build_amr_compiled) et le regrid HERITE n_grow() (amr_regrid_finest : ngf = L[fk].U.n_grow()), donc
-// le stencil 5 points de WENO5 ne lit pas hors bornes -- MEME mecanisme ghost que System (PR #22/#88),
-// pas de logique dupliquee. On exige aussi le NO-DEFAULT-CHANGE : none/minmod (<= 2 ghosts) restent
-// BIT-IDENTIQUES (le branchement weno5 n'a change ni l'allocation ni le resultat des autres limiteurs).
-//
-// Le modele est un transport pur (CompositeModel<Euler, NoSource, BackgroundDensity{alpha=0}>) : la
-// brique elliptique vaut 0, donc le solve MG donne phi=0 partout (zero bruit FP), parite STRICTE.
-//
-// CMake injecte POPS_TEST_CXX (compilateur), POPS_TEST_INCLUDE (en-tetes pops), POPS_TEST_CXX_STD (norme
-// C++ du build : la cle d'ABI du loader concorde avec celle du test) et POPS_TEST_TMPDIR.
 #include <gtest/gtest.h>
 
-#include "gtest_compat.hpp"
-#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, NoSource, BackgroundDensity
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/amr_system.hpp>
-#include <pops/runtime/config/model_spec.hpp>
+#include <pops/numerics/fv/reconstruction.hpp>
+#include <pops/runtime/dynamic/component_consumers.hpp>
 
+#include "component_abi_test_helpers.hpp"
+
+#include <algorithm>
+#include <array>
 #include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <ctime>
-#include <fstream>
-#include <string>
+#include <cstddef>
+#include <cstdint>
 #include <vector>
-
-#if defined(POPS_HAS_KOKKOS)
-#include <Kokkos_Core.hpp>  // ScopeGuard : la partie (A) tourne le coupleur AMR (for_each/kokkos_malloc)
-#endif
-
-using namespace pops;
 
 namespace {
 
-using ProdModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
-constexpr double kGamma = 1.4;
+namespace abi = pops::component::test_support;
 
-ProdModel make_model() {
-  // alpha=0 : elliptic_rhs nul -> phi=0, parite stricte. n0 sans effet (alpha=0).
-  return ProdModel{Euler{static_cast<Real>(kGamma)}, NoSource{},
-                   BackgroundDensity{Real(0), Real(0)}};
-}
+constexpr double kVelocity = 0.75;
 
-// ModelSpec equivalente (dispatch_model -> CompositeModel<CompressibleFlux=Euler, NoSource,
-// BackgroundDensity{alpha=0}>) pour le chemin natif add_block : MEME type concret -> parite exacte.
-ModelSpec make_spec() {
-  ModelSpec spec;
-  spec.transport = "compressible";
-  spec.source = "none";
-  spec.elliptic = "background";
-  spec.gamma = kGamma;
-  spec.alpha = 0.0;
-  spec.n0 = 0.0;
-  return spec;
+std::size_t periodic(std::ptrdiff_t index, std::size_t size) {
+  const auto extent = static_cast<std::ptrdiff_t>(size);
+  const auto wrapped = (index % extent + extent) % extent;
+  return static_cast<std::size_t>(wrapped);
 }
 
-std::vector<double> bubble(int n) {  // bulle de densite lisse, periodique (WENO5 pleinement actif)
-  std::vector<double> rho(static_cast<std::size_t>(n) * n);
-  for (int j = 0; j < n; ++j)
-    for (int i = 0; i < n; ++i) {
-      const double x = (i + 0.5) / n - 0.5, y = (j + 0.5) / n - 0.5;
-      rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
-    }
-  return rho;
+double minmod(double left, double right) {
+  if (left * right <= 0.0)
+    return 0.0;
+  return std::copysign(std::min(std::abs(left), std::abs(right)), left);
 }
 
-AmrSystemConfig make_cfg(int n) {
-  AmrSystemConfig cfg;
-  cfg.n = n;
-  cfg.L = 1.0;
-  cfg.periodic = true;
-  cfg.regrid_every = 4;
-  return cfg;
+PopsComponentTableHeaderV1 flux_header() {
+  return {sizeof(PopsNumericalFluxApiV1),
+          POPS_COMPONENT_PROTOCOL_ABI_V1,
+          POPS_NATIVE_INTERFACE_NUMERICAL_FLUX_V1,
+          1,
+          nullptr,
+          nullptr};
 }
 
-// Avance @p s de N pas et renvoie (densite grossiere, masse, n_patches). dt petit : reste stable WENO5.
-struct Snap {
-  std::vector<double> density;
-  double mass = 0;
-  int n_patches = 0;
-};
-Snap run(AmrSystem& s, int nsteps) {
-  s.set_poisson("charge_density", "geometric_mg");
-  s.set_refinement(1.2);  // raffine la bulle
-  const double dt = 2e-4;
-  for (int k = 0; k < nsteps; ++k)
-    s.step(dt);
-  return Snap{s.density(), s.mass(), s.n_patches()};
+PopsNumericalFluxApiV1 flux_api() {
+  return {flux_header(),
+          +[](void*, const PopsNumericalFluxRequestV1* request, PopsNumericalFluxResultV1* result) {
+            const auto* left_values = static_cast<const double*>(request->left.data);
+            const auto* right_values = static_cast<const double*>(request->right.data);
+            auto* output_values = static_cast<double*>(result->normal_flux.data);
+            for (std::size_t point = 0; point < pops::component::field_point_count(request->left);
+                 ++point) {
+              const double left = left_values[point];
+              const double right = right_values[point];
+              output_values[point] =
+                  0.5 * kVelocity * (left + right) - 0.5 * std::abs(kVelocity) * (right - left);
+              result->stability_bounds[point] = std::abs(kVelocity);
+              result->actions[point] = POPS_COMPONENT_CONTINUE_V1;
+            }
+            result->status = {sizeof(PopsComponentStatusV1), 0, POPS_COMPONENT_CONTINUE_V1,
+                              nullptr};
+            return 0;
+          }};
 }
 
-double maxdiff(const std::vector<double>& a, const std::vector<double>& b) {
-  double d = 0;
-  for (std::size_t k = 0; k < a.size() && k < b.size(); ++k)
-    d = std::fmax(d, std::fabs(a[k] - b[k]));
-  return d;
-}
-double maxabs(const std::vector<double>& a) {
-  double m = 0;
-  for (double v : a)
-    m = std::fmax(m, std::fabs(v));
-  return m;
-}
-
-// Source du loader AMR : MEME forme que dsl.emit_cpp_native_loader(target="amr_system"), modele en dur.
-std::string loader_source() {
-  // Generated C++ source raw string: clang-format would reindent (or, with the
-  // interleaved R"CPP( delimiters, runaway-indent) the inner content. Fence it to keep the
-  // emitted source verbatim.
-  // clang-format off
-  return R"CPP(
-#include <pops/runtime/builders/compiled/amr_dsl_block.hpp>
-#include <pops/runtime/dynamic/abi_key.hpp>
-#include <pops/physics/bricks/bricks.hpp>
-#include <string>
-namespace pops_generated {
-using ProdModel = pops::CompositeModel<pops::Euler, pops::NoSource, pops::BackgroundDensity>;
-}
-// LITTERAL preprocesseur (PAS abi_key_string() : une inline serait interposee, ELF/RTLD_GLOBAL,
-// vers la copie du module deja charge -> cle du module renvoyee -> garde d'ABI tautologique).
-extern "C" const char* pops_native_abi_key() { return POPS_ABI_KEY_LITERAL; }
-extern "C" void pops_install_native_amr(void* sys, const char* name, const char* limiter,
-                                       const char* riemann, const char* recon, const char* time,
-                                       double gamma, int substeps) {
-  pops::AmrSystem* s = reinterpret_cast<pops::AmrSystem*>(sys);
-  pops::add_compiled_model<pops_generated::ProdModel>(
-      *s, name,
-      pops_generated::ProdModel{pops::Euler{static_cast<pops::Real>(gamma)}, pops::NoSource{},
-                               pops::BackgroundDensity{pops::Real(0), pops::Real(0)}},
-      limiter, riemann, recon, time, gamma, substeps);
-}
-)CPP";
-  // clang-format on
+std::vector<double> evaluate_flux(const std::vector<double>& left,
+                                  const std::vector<double>& right) {
+  const std::size_t faces = left.size();
+  std::vector<double> output(faces);
+  std::vector<double> stability(faces);
+  std::vector<PopsComponentActionV1> actions(faces);
+  std::vector<double> normals(faces * 2, 0.0);
+  for (std::size_t point = 0; point < faces; ++point)
+    normals[2 * point] = 1.0;
+  const PopsNumericalFluxRequestV1 request{sizeof(PopsNumericalFluxRequestV1),
+                                           abi::const_field_view(left.data(), 1, faces),
+                                           abi::const_field_view(right.data(), 1, faces),
+                                           abi::const_field_view(normals.data(), 1, faces, 2),
+                                           nullptr,
+                                           abi::logical_time(),
+                                           abi::host_execution_context()};
+  PopsNumericalFluxResultV1 result{sizeof(PopsNumericalFluxResultV1),
+                                   abi::field_view(output.data(), 1, faces),
+                                   stability.data(),
+                                   actions.data(),
+                                   {}};
+  const auto api = flux_api();
+  EXPECT_EQ(pops::component::evaluate_faces(api, nullptr, request, result), 0);
+  return output;
 }
 
-bool compile_loader(const std::string& src_path, const std::string& so_path) {
-#if defined(__APPLE__)
-  const std::string cc = "/usr/bin/c++";  // resout l'SDK (cf. test_amr_native_loader)
-#else
-  const std::string cc = POPS_TEST_CXX;
-#endif
-  std::string cmd = cc + " -shared -fPIC -std=" + POPS_TEST_CXX_STD + " -O2 -I " + POPS_TEST_INCLUDE +
-                    " " + src_path + " -o " + so_path;
-#if defined(__APPLE__)
-  cmd += " -undefined dynamic_lookup";
-#endif
-  cmd += " 2> /dev/null";
-  return std::system(cmd.c_str()) == 0;
+TEST(test_amr_weno5_native, CoreWenoStatesFeedExactExternalFluxTableWithoutMarshallingFallback) {
+  constexpr std::size_t cells = 64;
+  std::vector<double> state(cells);
+  for (std::size_t cell = 0; cell < cells; ++cell) {
+    const double x = (static_cast<double>(cell) + 0.5) / cells;
+    state[cell] = 1.0 + 0.2 * std::sin(2.0 * std::acos(-1.0) * x) +
+                  0.05 * std::sin(6.0 * std::acos(-1.0) * x);
+  }
+
+  std::vector<double> weno_left(cells), weno_right(cells);
+  std::vector<double> minmod_left(cells), minmod_right(cells);
+  const auto value = [&](std::ptrdiff_t cell) { return state[periodic(cell, cells)]; };
+  for (std::ptrdiff_t cell = 0; cell < static_cast<std::ptrdiff_t>(cells); ++cell) {
+    weno_left[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell - 2), value(cell - 1), value(cell), value(cell + 1), value(cell + 2));
+    weno_right[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell + 3), value(cell + 2), value(cell + 1), value(cell), value(cell - 1));
+    minmod_left[static_cast<std::size_t>(cell)] =
+        value(cell) + 0.5 * minmod(value(cell) - value(cell - 1), value(cell + 1) - value(cell));
+    minmod_right[static_cast<std::size_t>(cell)] =
+        value(cell + 1) -
+        0.5 * minmod(value(cell + 1) - value(cell), value(cell + 2) - value(cell + 1));
+  }
+
+  const auto weno_flux = evaluate_flux(weno_left, weno_right);
+  const auto minmod_flux = evaluate_flux(minmod_left, minmod_right);
+  double difference = 0.0;
+  for (std::size_t face = 0; face < cells; ++face) {
+    EXPECT_DOUBLE_EQ(weno_flux[face], kVelocity * weno_left[face]);
+    difference = std::max(difference, std::abs(weno_flux[face] - minmod_flux[face]));
+  }
+  EXPECT_GT(difference, 1e-8);
+  EXPECT_EQ(pops::Weno5::n_ghost, 3);
+}
+
+TEST(test_amr_weno5_native, ConstantStateRemainsExactlyConstantAcrossWenoAndFinalFluxAbi) {
+  constexpr std::size_t cells = 16;
+  const std::vector<double> state(cells, 2.5);
+  std::vector<double> left(cells), right(cells);
+  const auto value = [&](std::ptrdiff_t cell) { return state[periodic(cell, cells)]; };
+  for (std::ptrdiff_t cell = 0; cell < static_cast<std::ptrdiff_t>(cells); ++cell) {
+    left[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell - 2), value(cell - 1), value(cell), value(cell + 1), value(cell + 2));
+    right[static_cast<std::size_t>(cell)] = pops::weno5z(
+        value(cell + 3), value(cell + 2), value(cell + 1), value(cell), value(cell - 1));
+  }
+  for (const double value_at_face : evaluate_flux(left, right))
+    EXPECT_DOUBLE_EQ(value_at_face, kVelocity * 2.5);
 }
 
 }  // namespace
-
-static int pops_run_test_amr_weno5_native(int argc, char** argv) {
-#if defined(POPS_HAS_KOKKOS)
-  Kokkos::ScopeGuard guard(argc, argv);  // initialise/finalise le backend (partie A : coupleur AMR)
-#else
-  (void)argc;
-  (void)argv;
-#endif
-  const int n = 64;
-  const int nsteps = 12;
-  const std::vector<double> rho = bubble(n);
-
-  int fails = 0;
-  auto chk = [&](bool c, const char* w) {
-    if (!c) {
-      std::printf("FAIL %s\n", w);
-      ++fails;
-    }
-  };
-
-  // ============================================================================================
-  // (A) PARITE DECISIVE (sans .so) : add_compiled_model(AmrSystem&) == add_block(ModelSpec), pour
-  //     weno5 ET minmod. Tourne sous TOUS les backends (hote, Kokkos Serial) -> ne casse pas nvcc.
-  // ============================================================================================
-  auto parity_direct = [&](const char* lim) {
-    AmrSystem A(make_cfg(n));  // bloc COMPILE : modele connu a la compilation
-    add_compiled_model(A, "gas", make_model(), lim, "rusanov", "conservative", "explicit", kGamma);
-    A.set_density("gas", rho);
-    const Snap sa = run(A, nsteps);
-
-    AmrSystem B(make_cfg(n));  // bloc NATIF : meme modele via dispatch d'une ModelSpec
-    B.add_block("gas", make_spec(), lim, "rusanov", "conservative", "explicit", 1);
-    B.set_density("gas", rho);
-    const Snap sb = run(B, nsteps);
-
-    const double nrm = maxabs(sb.density), dmax = maxdiff(sa.density, sb.density);
-    char w[160];
-    std::snprintf(w, sizeof w, "[%s] densite directe non triviale", lim);
-    chk(nrm > 1e-6, w);
-    std::snprintf(w, sizeof w, "[%s] add_compiled_model == add_block sur AMR (dmax==0)", lim);
-    chk(dmax == 0.0, w);
-    std::snprintf(w, sizeof w, "[%s] masse add_compiled_model == add_block", lim);
-    chk(std::fabs(sa.mass - sb.mass) < 1e-12 * (std::fabs(sb.mass) + 1.0), w);
-    std::snprintf(w, sizeof w, "[%s] n_patches add_compiled_model == add_block (regrid identique)",
-                  lim);
-    chk(sa.n_patches == sb.n_patches, w);
-    return sa.density;  // pour le test no-default-change (weno5 != minmod)
-  };
-
-  const std::vector<double> dw = parity_direct("weno5");
-  const std::vector<double> dm = parity_direct("minmod");
-  parity_direct("none");
-
-  // NO-DEFAULT-CHANGE croise : WENO5 (ordre 5) DOIT differer de minmod (ordre 2) sur un meme etat
-  // lisse evolue (sinon le branchement weno5 retomberait sur minmod -> dispatch inerte). Le residu
-  // n'est pas trivial, donc une difference > 0 prouve que Weno5 est bien instancie et actif.
-  chk(maxdiff(dw, dm) > 1e-9, "weno5 != minmod (la reconstruction WENO5 est bien active sur AMR)");
-
-  // ============================================================================================
-  // (B) CHEMIN .so : add_native_block(loader) == add_compiled_model(AmrSystem&), weno5 ET minmod.
-  //     Le loader est recompile par un g++ nu -> incompatible avec un module Kokkos : on SAUTE (A
-  //     a deja couvert la parite CPU). exit 0.
-  // ============================================================================================
-#if defined(POPS_HAS_KOKKOS)
-  std::printf("skip (B) loader .so (backend Kokkos : loader CPU nu incompatible)\n");
-#else
-  const char* cxx = POPS_TEST_CXX;
-  if (!cxx || cxx[0] == '\0') {
-    std::printf("skip (B) loader .so (aucun compilateur C++ connu du build)\n");
-  } else {
-    const std::string tmp = std::string(POPS_TEST_TMPDIR) + "/amr_weno5_native_" +
-                            std::to_string(static_cast<long>(std::clock()));
-    const std::string src = tmp + ".cpp";
-    const std::string so = tmp + ".so";
-    {
-      std::ofstream f(src);
-      f << loader_source();
-    }
-    if (!compile_loader(src, so)) {
-      std::printf("skip (B) loader .so (echec de compilation du loader -- en-tetes/std ?)\n");
-    } else {
-      auto parity_loader = [&](const char* lim) {
-        AmrSystem A(make_cfg(n));  // chemin "production" : loader .so -> add_native_block
-        A.add_native_block("gas", so, lim, "rusanov", "conservative", "explicit", kGamma, 1);
-        A.set_density("gas", rho);
-        const Snap sa = run(A, nsteps);
-
-        AmrSystem B(
-            make_cfg(n));  // MEME modele installe EN DIRECT (le chemin que le loader inline)
-        add_compiled_model(B, "gas", make_model(), lim, "rusanov", "conservative", "explicit",
-                           kGamma);
-        B.set_density("gas", rho);
-        const Snap sb = run(B, nsteps);
-
-        const double dmax = maxdiff(sa.density, sb.density);
-        char w[160];
-        std::snprintf(w, sizeof w, "[%s] add_native_block == add_compiled_model (dmax==0)", lim);
-        chk(dmax == 0.0, w);
-        std::snprintf(w, sizeof w, "[%s] n_patches loader == direct", lim);
-        chk(sa.n_patches == sb.n_patches, w);
-      };
-      parity_loader("weno5");
-      parity_loader("minmod");
-      std::printf("OK (B) add_native_block(weno5/minmod) == add_compiled_model(AmrSystem&)\n");
-    }
-  }
-#endif  // POPS_HAS_KOKKOS
-
-  if (fails == 0)
-    std::printf(
-        "OK test_amr_weno5_native (weno5 AMR : add_native_block == add_compiled_model == "
-        "add_block, bit-identique ; no-default-change none/minmod)\n");
-  return fails ? 1 : 0;
-}
-
-TEST(test_amr_weno5_native, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_amr_weno5_native, "test_amr_weno5_native"), 0);
-}

@@ -9,7 +9,7 @@ preserve the emitted numerics, so the headline guard is byte-identity:
   - CSE collapses a duplicated PURE sub-IR to a single computation and emits C++ byte-identical to the
     same program written with that value computed once (the producer runs once; the consumer's axpy
     structure -- hence the floating-point operation sequence -- is preserved exactly);
-  - CSE NEVER collapses a side-effecting / buffer-writing op (a solve_fields, a schur_rhs, a reduce);
+  - CSE NEVER collapses a side-effecting / buffer-writing op (a field solve, a laplacian, a reduce);
   - redundant-solve elim removes a provably-redundant second solve_fields over the same state and KEEPS
     it when a state/aux mutation (project / fill_boundary / a commit) intervenes;
   - the liveness / buffer-reuse / cost-estimate reports return sane, internally-consistent numbers;
@@ -23,9 +23,18 @@ checks run on real emitted C++ without a model. Runs as a script (``python3 test
 the CI invocation) AND under pytest; the script form drives the same checks and exits non-zero on the
 first failure.
 """
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
 import pytest
+from pops.numerics.terms import DefaultSource, Flux
+
+from typed_program_support import (
+    commits_by_block,
+    solve_field,
+    state_refs,
+    typed_state,
+)
 
 adctime = pytest.importorskip("pops.time")
 libtime = pytest.importorskip("pops.lib.time")  # ready schemes (Spec 4)
@@ -37,10 +46,11 @@ def _euler_clean():
     """Forward Euler, no optimizable structure (the byte-identity reference)."""
     P = adctime.Program("forward_euler")
     dt = P.dt
-    U = P.state("plasma")
-    fields = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=fields, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    R = P.rhs("R", state=U, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
@@ -50,27 +60,31 @@ def _cse_dup_program():
     distinct values (no further collapse, no affine-term merge). Explicit names so the CSE survivor's
     name matches the hand-deduped reference exactly (CSE keeps the FIRST node's name)."""
     P = adctime.Program("cse")
-    U = P.state("plasma")
-    a = P.linear_combine("a", 1.0 * U)
-    b = P.linear_combine("b", 2.0 * U)
+    U = typed_state(P, "plasma")
+    a = P.value("a", 1.0 * U)
+    b = P.value("b", 2.0 * U)
     m1 = P.cell_compare(U, 0.0, ">", name="mask")     # representative
     m2 = P.cell_compare(U, 0.0, ">", name="mask_dup")  # exact pure duplicate of m1
     w1 = P.where(m1, a, b, name="w1")
     w2 = P.where(m2, b, a, name="w2")                  # distinct consumer (a/b swapped)
-    P.commit("plasma", P.linear_combine("U1", 0.5 * w1 + 0.5 * w2))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", 0.5 * w1 + 0.5 * w2,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
 def _cse_handwritten():
     """The SAME program with the mask computed ONCE -- the CSE byte-identity reference."""
     P = adctime.Program("cse")
-    U = P.state("plasma")
-    a = P.linear_combine("a", 1.0 * U)
-    b = P.linear_combine("b", 2.0 * U)
+    U = typed_state(P, "plasma")
+    a = P.value("a", 1.0 * U)
+    b = P.value("b", 2.0 * U)
     m = P.cell_compare(U, 0.0, ">", name="mask")
     w1 = P.where(m, a, b, name="w1")
     w2 = P.where(m, b, a, name="w2")
-    P.commit("plasma", P.linear_combine("U1", 0.5 * w1 + 0.5 * w2))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", 0.5 * w1 + 0.5 * w2,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
@@ -95,7 +109,7 @@ def test_cse_byte_identical_to_handwritten():
     Q = adctime.eliminate_common_subexpressions(_cse_dup_program())
     H = _cse_handwritten()
     assert Q._ir_hash() == H._ir_hash(), "CSE IR hash != hand-deduped"
-    assert Q.emit_cpp_program() == H.emit_cpp_program(), "CSE C++ != hand-deduped"
+    assert emit_cpp_program(Q) == emit_cpp_program(H), "CSE C++ != hand-deduped"
     # And the duplicated program DIFFERED before the pass (otherwise the test proves nothing).
     assert _cse_dup_program()._ir_hash() != H._ir_hash()
 
@@ -105,7 +119,7 @@ def test_cse_noop_byte_identical_when_nothing_duplicated():
     P = _euler_clean()
     Q = adctime.eliminate_common_subexpressions(P)
     assert Q._ir_hash() == P._ir_hash(), "no-op CSE changed the IR hash"
-    assert Q.emit_cpp_program() == P.emit_cpp_program(), "no-op CSE changed the emitted C++"
+    assert emit_cpp_program(Q) == emit_cpp_program(P), "no-op CSE changed the emitted C++"
 
 
 def test_cse_never_collapses_side_effecting_solve_fields():
@@ -113,73 +127,36 @@ def test_cse_never_collapses_side_effecting_solve_fields():
     CSE must NEVER collapse them -- only the explicit redundant-solve pass may, and only when sound."""
     P = adctime.Program("two_solves")
     dt = P.dt
-    U = P.state("plasma")
-    f1 = P.solve_fields(U)
-    f2 = P.solve_fields(U)
+    U = typed_state(P, "plasma")
+    f1 = solve_field(P, U)
+    f2 = solve_field(P, U)
     # Use both field contexts so neither is dead (keeps the test about CSE, not dead-node elim).
-    R1 = P._rhs_legacy("R1", state=U, fields=f1, flux=True, sources=["default"])
-    R2 = P._rhs_legacy("R2", state=U, fields=f2, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + 0.5 * dt * R1 + 0.5 * dt * R2))
+    R1 = P.rhs("R1", state=U, fields=f1, terms=[Flux(), DefaultSource()])
+    R2 = P.rhs("R2", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + 0.5 * dt * R1 + 0.5 * dt * R2,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = adctime.eliminate_common_subexpressions(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "CSE collapsed a solve_fields"
     assert Q._ir_hash() == P._ir_hash(), "CSE touched the side-effecting program"
 
 
 def test_cse_never_collapses_reduce_or_buffer_writer():
-    """A reduce (collective communication) and a buffer-writer (schur_rhs / laplacian) are NOT on the
+    """A reduce (collective communication) and a generic laplacian buffer-writer are NOT on the
     pure allow-list, so CSE never deduplicates them even if two are textually identical."""
     # Two identical reductions: NOT collapsed (a reduce is a global communication, off the allow-list).
     P = adctime.Program("dup_reduce")
     dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=f, flux=True, sources=["default"])
+    U = typed_state(P, "plasma")
+    f = solve_field(P, U)
+    R = P.rhs("R", state=U, fields=f, terms=[Flux(), DefaultSource()])
     P.record_scalar("n1", P.norm2(R))
     P.record_scalar("n2", P.norm2(R))   # identical reduce, but a reduce is never CSE'd
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = adctime.eliminate_common_subexpressions(P)
     assert sum(1 for v in Q._values if v.op == "reduce") == 2, "CSE collapsed a reduce (unsound)"
-    assert Q._ir_hash() == P._ir_hash()
-
-
-def _lorentz_model(name):
-    """A rho/mx/my block with the electrostatic-Lorentz linearization J the generic condensed route
-    (ADC-637) resolves at emit time."""
-    from pops.ir.ops import sqrt
-    from pops.lib.models import author_electrostatic_lorentz
-    from pops.physics.facade import Model
-    m = Model(name)
-    rho, mx, my = m.conservative_vars("rho", "mx", "my")
-    cs2 = m.param("cs2", 0.5)
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    m.elliptic_rhs(rho)
-    m.aux("grad_x")
-    m.aux("grad_y")
-    m.aux("B_z")
-    author_electrostatic_lorentz(m)
-    return m
-
-
-def test_cse_condensed_buffer_writers_untouched():
-    """REGRESSION: condensed_schur assembles its RHS with a buffer-writer op (condensed_rhs, ADC-637)
-    whose result is discarded but whose buffer a later solve reads by identity. CSE must be a no-op
-    here -- the op is not pure -- so the emitted C++ is byte-identical (still has the fused RHS write)."""
-    RHS_MARKER = "rhsA(i, j, 0) = nlA(i, j, 0)"  # the generic fused -Lap - g*div(F) write
-    P = adctime.Program("cs")
-    libtime.condensed_schur(P, "blk", alpha=1.0, theta=1.0)
-    model = _lorentz_model("cs_opt")
-    before = P.emit_cpp_program(model=model)
-    assert RHS_MARKER in before, "fixture lost its condensed RHS assembly"
-    Q = adctime.eliminate_common_subexpressions(P)
-    assert RHS_MARKER in Q.emit_cpp_program(model=model), "CSE dropped a buffer-writer (unsound)"
-    assert Q.emit_cpp_program(model=model) == before, "CSE corrupted the condensed_schur C++"
     assert Q._ir_hash() == P._ir_hash()
 
 
@@ -191,12 +168,14 @@ def test_cse_does_not_collapse_aux_reading_rhs_across_a_solve():
     only on dataflow inputs -- must KEEP both, never collapse the second onto the stale-aux first."""
     P = adctime.Program("aux_rhs_cse")
     dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    R1 = P._rhs_legacy("R1", state=U, fields=f, flux=True, sources=["default"])
-    P.solve_fields(U)  # re-fills the shared aux IN PLACE between the two rhs reads
-    R2 = P._rhs_legacy("R2", state=U, fields=f, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R1 + dt * R2))
+    U = typed_state(P, "plasma")
+    f = solve_field(P, U)
+    R1 = P.rhs("R1", state=U, fields=f, terms=[Flux(), DefaultSource()])
+    solve_field(P, U)  # re-fills the shared aux IN PLACE between the two rhs reads
+    R2 = P.rhs("R2", state=U, fields=f, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R1 + dt * R2,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     n_before = sum(1 for v in P._values if v.op == "rhs")
     assert n_before == 2, "fixture lost an rhs"
     Q = P.optimize()
@@ -211,14 +190,16 @@ def test_redundant_solve_removed_when_no_mutation():
     and is removed; its consumer is rewired onto the first solve. The committed outputs are unchanged."""
     P = adctime.Program("rs")
     dt = P.dt
-    U = P.state("plasma")
-    P.solve_fields(U)          # first solve (kept)
-    f2 = P.solve_fields(U)     # redundant (no mutation since the first)
-    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    solve_field(P, U)          # first solve (kept)
+    f2 = solve_field(P, U)     # redundant (no mutation since the first)
+    R = P.rhs("R", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 1, "redundant solve not removed"
-    assert set(Q.commits()) == {"plasma"}
+    assert set(commits_by_block(Q)) == {"plasma"}
     assert Q._ir_hash() != P._ir_hash(), "redundant-solve removal left the hash unchanged"
 
 
@@ -227,12 +208,14 @@ def test_redundant_solve_kept_when_state_mutated():
     re-solves from a changed state. The pass must keep both."""
     P = adctime.Program("rs_project")
     dt = P.dt
-    U = P.state("plasma")
-    P.solve_fields(U)
+    U = typed_state(P, "plasma")
+    solve_field(P, U)
     P.project(U)               # in-place state mutation: a state/aux barrier
-    f2 = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    f2 = solve_field(P, U)
+    R = P.rhs("R", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "solve wrongly removed past a project"
     assert Q._ir_hash() == P._ir_hash(), "pass touched a program with no removable solve"
@@ -243,30 +226,100 @@ def test_redundant_solve_kept_when_fill_boundary_intervenes():
     provably redundant. Both kept."""
     P = adctime.Program("rs_fb")
     dt = P.dt
-    U = P.state("plasma")
-    P.solve_fields(U)
+    U = typed_state(P, "plasma")
+    solve_field(P, U)
     P.fill_boundary(U)
-    f2 = P.solve_fields(U)
-    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    f2 = solve_field(P, U)
+    R = P.rhs("R", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 2, "solve removed past a fill_boundary"
 
 
-def test_redundant_solve_noop_byte_identical():
-    """A program with a single solve_fields: the pass is a byte-for-byte no-op."""
-    P = _euler_clean()
+def test_redundant_solve_noop_is_canonically_identical():
+    """A Program with one consumed field solve is a canonical no-op for the dedicated pass.
+
+    Standalone C++ emission cannot resolve a Case field's install plan; the generic byte-identity
+    contract is covered by ``test_optimize_byte_identical_when_nothing_optimizable``.
+    """
+    P = adctime.Program("one_solve")
+    U = typed_state(P, "plasma")
+    solve_field(P, U)
+    endpoint = typed_state(P, "plasma", state_name="U").next
+    P.commit(endpoint, P.value("U1", 1 * U, at=endpoint.point))
     Q = adctime.eliminate_redundant_field_solves(P)
     assert Q._ir_hash() == P._ir_hash()
-    assert Q.emit_cpp_program() == P.emit_cpp_program()
+    assert [
+        (value.op, value.name, tuple(item.id for item in value.inputs))
+        for value in Q._values
+    ] == [
+        (value.op, value.name, tuple(item.id for item in value.inputs))
+        for value in P._values
+    ]
+    assert commits_by_block(Q).keys() == commits_by_block(P).keys()
 
 
 # --------------------------------------------------------------------------- liveness / reuse / estimate
 
-def _rk4():
-    P = adctime.Program("rk4")
-    libtime.rk4(P, "plasma")
-    return P
+def _rk4(*, with_fields=True):
+    from pops.descriptors import Descriptor
+    from pops.fields import FieldDiscretization, FieldOperator
+    from pops.math import ValueExpr
+    from pops.math import laplacian
+    from pops.model import Module, RateSpace, Signature
+    from pops.problem import Case
+
+    module = Module("rk4")
+    state_space = module.state_space("U", ("u",))
+    state = module.state_handle(state_space)
+    fields = None
+    if with_fields:
+        field_space = module.field_space("potential", ("potential",))
+        provider = module.operator(
+            name="potential_provider",
+            signature=Signature((state_space,), field_space),
+            kind="field_operator",
+            expr="potential_provider",
+        )
+        rate_signature = Signature((state_space, field_space), RateSpace(state_space))
+    else:
+        rate_signature = Signature((state_space,), RateSpace(state_space))
+    rate = module.operator(
+        name="explicit",
+        signature=rate_signature,
+        kind="local_rate",
+        expr="explicit",
+    )
+    case = Case("rk4-case")
+    block = case.block("plasma", module, states=(state,))
+    state_ref = block[state]
+    if with_fields:
+        unknown = block[module.field_handle(field_space)]
+
+        class _Method(Descriptor):
+            category = "field_method"
+
+            def to_data(self):
+                return {"type": "unit-second-order"}
+
+        class _Solver(Descriptor):
+            category = "elliptic_solver"
+
+            def to_data(self):
+                return {"type": "unit-krylov"}
+
+        fields = case.field(
+            FieldOperator(
+                "potential",
+                unknown=unknown,
+                equation=-laplacian(ValueExpr(unknown)) == ValueExpr(state_ref),
+                providers=provider,
+            ),
+            FieldDiscretization(method=_Method(), boundaries=(), solver=_Solver()),
+        )
+    return libtime.RK4(state_ref, rate=rate, fields=fields)
 
 
 def test_scratch_liveness_sane():
@@ -326,15 +379,17 @@ def test_estimate_internally_consistent():
 def _pathological():
     """A long chain of tiny per-cell kernels + a buffer explosion (trips every GPU detector)."""
     P = adctime.Program("patho")
-    U = P.state("plasma")
-    a = P.linear_combine("a", 1.0 * U)
-    b = P.linear_combine("b", 2.0 * U)
+    U = typed_state(P, "plasma")
+    a = P.value("a", 1.0 * U)
+    b = P.value("b", 2.0 * U)
     acc = 1.0 * U
     for i in range(20):
         m = P.cell_compare(U, float(i), ">", name="m%d" % i)
         w = P.where(m, a, b, name="w%d" % i)
         acc = acc + 0.01 * w
-    P.commit("plasma", P.linear_combine("U1", acc))
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", acc,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     return P
 
 
@@ -354,7 +409,7 @@ def test_gpu_detectors_flag_pathological_ir():
 
 def test_gpu_detectors_quiet_on_well_behaved_ir():
     """A small Forward Euler trips no host-side GPU heuristic."""
-    assert libtime.forward_euler and _euler_clean().gpu_detectors() == []
+    assert callable(libtime.ForwardEuler) and _euler_clean().gpu_detectors() == []
 
 
 # --------------------------------------------------------------------------- pipeline / byte-identity
@@ -362,11 +417,11 @@ def test_gpu_detectors_quiet_on_well_behaved_ir():
 def test_optimize_byte_identical_when_nothing_optimizable():
     """CRITICAL (the spec's hard requirement): a Program with NO optimizable structure emits IDENTICAL
     C++ with the whole pipeline on (``P.optimize()``) vs off -- optimization must not change results."""
-    for build in (_euler_clean, _rk4):
+    for build in (_euler_clean, lambda: _rk4(with_fields=False)):
         P = build()
         Q = P.optimize()
         assert Q._ir_hash() == P._ir_hash(), "optimize changed the hash of an optimal Program (%s)" % P.name
-        assert Q.emit_cpp_program() == P.emit_cpp_program(), "optimize changed the C++ (%s)" % P.name
+        assert emit_cpp_program(Q) == emit_cpp_program(P), "optimize changed the C++ (%s)" % P.name
 
 
 def test_optimize_runs_all_proven_safe_passes():
@@ -374,16 +429,18 @@ def test_optimize_runs_all_proven_safe_passes():
     to a smaller, still-valid IR whose commit outputs are unchanged."""
     P = adctime.Program("all")
     dt = P.dt
-    U = P.state("plasma")
-    P.solve_fields(U)                 # first solve
-    f2 = P.solve_fields(U)            # redundant solve (no mutation) -> removed
-    R = P._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
-    P._rhs_legacy("dead", state=U, fields=f2, flux=True, sources=["default"])  # dead -> removed
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
+    U = typed_state(P, "plasma")
+    solve_field(P, U)                 # first solve
+    f2 = solve_field(P, U)            # redundant solve (no mutation) -> removed
+    R = P.rhs("R", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    P.rhs("dead", state=U, fields=f2, terms=[Flux(), DefaultSource()])  # dead -> removed
+    P.commit(typed_state(P, "plasma", state_name="U").next,
+             P.value("U1", U + dt * R,
+                              at=typed_state(P, "plasma", state_name="U").next.point))
     Q = P.optimize()
     assert sum(1 for v in Q._values if v.op == "solve_fields") == 1
     assert "dead" not in {v.name for v in Q._values}
-    assert set(Q.commits()) == {"plasma"}
+    assert set(commits_by_block(Q)) == {"plasma"}
     assert Q.validate()
 
 
@@ -407,11 +464,13 @@ def test_method_and_free_function_forms_agree():
     assert adctime.optimize(R)._ir_hash() == R.optimize()._ir_hash()
     S = adctime.Program("rs")
     dt = S.dt
-    U = S.state("plasma")
-    S.solve_fields(U)
-    f2 = S.solve_fields(U)
-    Rr = S._rhs_legacy("R", state=U, fields=f2, flux=True, sources=["default"])
-    S.commit("plasma", S.linear_combine("U1", U + dt * Rr))
+    U = typed_state(S, "plasma")
+    solve_field(S, U)
+    f2 = solve_field(S, U)
+    Rr = S.rhs("R", state=U, fields=f2, terms=[Flux(), DefaultSource()])
+    S.commit(typed_state(S, "plasma", state_name="U").next,
+             S.value("U1", U + dt * Rr,
+                              at=typed_state(S, "plasma", state_name="U").next.point))
     assert (adctime.eliminate_redundant_field_solves(S)._ir_hash()
             == S.eliminate_redundant_field_solves()._ir_hash())
 

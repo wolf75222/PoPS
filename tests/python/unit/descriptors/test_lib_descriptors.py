@@ -55,18 +55,23 @@ def test_reconstruction_weno5z_is_native():
     assert d.scheme == "weno5"
 
 
-def test_catalogued_but_unwired_bricks_are_marked_unavailable():
-    # No native symbol is fabricated: planned bricks refuse via availability(), empty id.
-    for d in (lib.fields.Poisson(), lib.solvers.Newton(),
-              lib.preconditioners.Jacobi(), lib.limiters.MC()):
-        assert d.available().ok is False
-        assert d.native_id == ""
+def test_unwired_placeholder_bricks_are_absent_from_final_catalogs():
+    for catalog, name in (
+        (lib.fields, "Poisson"),
+        (lib.preconditioners, "Jacobi"),
+        (lib.limiters, "MC"),
+    ):
+        assert not hasattr(catalog, name)
+
+    newton = lib.solvers.Newton()
+    assert newton.available().ok is True
+    assert newton.native_id == "pops::FieldNewtonSolver"
 
 
 def test_available_native_ids_exist_and_are_namespaced():
     for d in (lib.fields.GeometricMG(), lib.solvers.CG(max_iter=200),
               lib.solvers.GMRES(max_iter=200),
-              lib.solvers.Schur(), lib.projections.positivity()):
+              lib.projections.positivity()):
         assert d.available().ok
         assert d.native_id.startswith("pops::")
 
@@ -99,11 +104,15 @@ def test_user_riemann_is_external():
     # riemann.User(id) surface an external_cpp descriptor.
     import json
     # ADC-611 : le schema strict versionne exige schema_version + chaque champ d'entree.
-    # ADC-544 : le schema passe a la v2 (les champs v2 sont optionnels; native_id defaut = id).
+    from pops.runtime._engine_descriptors import abi_key
     lib._register_manifest(json.dumps(
-        {"schema_version": 2,
+        {"schema_version": _desc.BRICK_MANIFEST_SCHEMA_VERSION, "abi_key": abi_key(),
+         "annotations": {},
          "bricks": [{"id": "my_hllc_variant", "category": "riemann",
-                     "requirements": "", "capabilities": ""}]}))
+                     "requirements": "", "capabilities": "",
+                     "native_id": "my_hllc_variant", "supported_layouts": "",
+                     "supported_platforms": "", "params": "", "options": "",
+                     "exported_symbols": ""}]}))
     try:
         d = lib.riemann.User("my_hllc_variant")
         assert d.brick_type == "external_cpp"
@@ -115,4 +124,5 @@ def test_user_riemann_is_external():
 def test_descriptor_requirements_present():
     # HLLC requires the model HLLC capabilities; Rusanov only needs a max wave speed.
     assert "hllc_star_state" in lib.riemann.HLLC().requirements.get("capabilities", [])
-    assert lib.riemann.Rusanov().requirements.get("capabilities") == ["max_wave_speed"]
+    assert lib.riemann.Rusanov().requirements.get("capabilities") == [
+        "physical_flux", "provider_pack", "stability_bound"]

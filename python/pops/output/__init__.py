@@ -1,19 +1,33 @@
-"""pops.output -- output / checkpoint policy descriptors (Spec 5 sec.5.14).
+"""Exact accepted-side-effect authoring and scientific-output data protocols."""
 
-Typed replacements for ``output(format="hdf5", every=20)`` / ``checkpoint(mode=...)``:
-:class:`OutputPolicy` / :class:`CheckpointPolicy` declare a typed format
-(:mod:`pops.output.formats`), a cadence, the fields / diagnostics, and the level selection
-(``AllLevels`` / ``CoarseOnly`` / ``SelectedLevels``). Inert descriptors; the runtime does
-the I/O. The level policies are the canonical home shared with :mod:`pops.mesh.amr`.
-"""
-from .policies import (OutputPolicy, CheckpointPolicy,
-                       AllLevels, CoarseOnly, SelectedLevels)
-from .formats import HDF5, Plotfile
-from .runtime_policies import RuntimePolicies, RuntimePoliciesReport
-from . import policies, formats, runtime_policies
+from ._consumer_contracts import ConsumerGraph, ParallelMode
+from .consumers import Checkpoint, ScientificOutput
+from .levels import AllLevels, CoarseOnly, LevelSelection, SelectedLevels
+from .formats import ExternalWriter, FormatInterface, HDF5, NPZ, ParaView
+from .data import (
+    ArrayPiece, DiagnosticKey, DiagnosticPayload, FieldKey, FieldPayload, LevelGeometry, OutputClock,
+    OutputProvenance, OutputRequest, OutputSnapshot,
+)
+from .diagnostics import BalanceTerms, composite_integrals
+from ._writers.common import (
+    OutputPublicationReceipt, ScientificWriter, WriterSession,
+    deterministic_target, writer_session_authority,
+)
+from ._writers.hdf5 import HDF5Writer, read_hdf5
+from ._writers.npz import NPZWriter, read_npz
+from ._writers.paraview import ParaViewWriter, read_paraview
+from . import formats
 
 __all__ = [
-    "OutputPolicy", "CheckpointPolicy", "AllLevels", "CoarseOnly", "SelectedLevels",
-    "HDF5", "Plotfile", "RuntimePolicies", "RuntimePoliciesReport",
-    "policies", "formats", "runtime_policies",
+    "Checkpoint", "ConsumerGraph", "ParallelMode", "ScientificOutput",
+    "AllLevels", "CoarseOnly", "SelectedLevels",
+    "LevelSelection",
+    "FormatInterface", "ExternalWriter", "HDF5", "NPZ", "ParaView",
+    "ArrayPiece", "DiagnosticKey", "DiagnosticPayload", "FieldKey", "FieldPayload",
+    "LevelGeometry", "OutputClock",
+    "OutputProvenance", "OutputRequest", "OutputSnapshot", "BalanceTerms",
+    "composite_integrals", "HDF5Writer", "NPZWriter", "ParaViewWriter",
+    "ScientificWriter", "WriterSession", "OutputPublicationReceipt",
+    "deterministic_target", "writer_session_authority",
+    "read_hdf5", "read_npz", "read_paraview", "formats",
 ]

@@ -280,14 +280,22 @@ def _emit_condensed_rhs_kernel(uid: Any, model: Any, jblock_op: Any, subset: Any
         % uid,
         "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
         % uid,
+        "const bool cond%s_polar = ctx.is_polar_geometry();" % uid,
+        "const pops::Real cond%s_r0 = ctx.radial_origin();" % uid,
+        "const pops::Real cond%s_dr = ctx.radial_spacing();" % uid,
         "const pops::Real cond%s_g = %s;" % (uid, g_cpp),
         "for (int li = 0; li < %s.local_size(); ++li) {" % rhsW,
         "  const pops::Array4 rhsA = %s.fab(li).array();" % rhsW,
         "  const pops::ConstArray4 nlA = %s.fab(li).const_array();" % negl,
         "  const pops::ConstArray4 fA = %s.fab(li).const_array();" % fxW,
         "  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % rhsW,
-        "    const pops::Real divF = (fA(i + 1, j, 0) - fA(i - 1, j, 0)) * cond%s_hx + "
-        "(fA(i, j + 1, 1) - fA(i, j - 1, 1)) * cond%s_hy;" % (uid, uid),
+        "    const pops::Real ri = cond%s_r0 + (i + pops::Real(0.5)) * cond%s_dr;" % (uid, uid),
+        "    const pops::Real divF = cond%s_polar ? "
+        "(((ri + cond%s_dr) * fA(i + 1, j, 0) - (ri - cond%s_dr) * fA(i - 1, j, 0)) "
+        "* cond%s_hx + (fA(i, j + 1, 1) - fA(i, j - 1, 1)) * cond%s_hy) / ri : "
+        "((fA(i + 1, j, 0) - fA(i - 1, j, 0)) * cond%s_hx + "
+        "(fA(i, j + 1, 1) - fA(i, j - 1, 1)) * cond%s_hy);"
+        % (uid, uid, uid, uid, uid, uid, uid),
         "    rhsA(i, j, 0) = nlA(i, j, 0) - cond%s_g * divF;" % uid,
         "  });",
         "}",
@@ -322,6 +330,9 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
         % uid,
         "const pops::Real cond%s_hy = pops::Real(1) / (pops::Real(2) * ctx.geom().dy());"
         % uid,
+        "const bool cond%s_polar = ctx.is_polar_geometry();" % uid,
+        "const pops::Real cond%s_r0 = ctx.radial_origin();" % uid,
+        "const pops::Real cond%s_dr = ctx.radial_spacing();" % uid,
         "for (int li = 0; li < %s.local_size(); ++li) {" % state,
         "  const pops::Array4 stateA = %s.fab(li).array();" % state,
         "  const pops::ConstArray4 phiA = %s.fab(li).const_array();" % phiR,
@@ -336,8 +347,10 @@ def _emit_condensed_reconstruct_kernel(uid: Any, model: Any, jblock_op: Any, sub
     # M = I - th_dt*J FIRST: _emit_block_M binds th_dt_ and the aux J locals the residual reads below.
     n = _emit_block_M(body, impl, jblock, th_dt_cpp, "    ")
     body += [
+        "    const pops::Real ri = cond%s_r0 + (i + pops::Real(0.5)) * cond%s_dr;" % (uid, uid),
         "    const pops::Real gx_ = (phiA(i + 1, j, 0) - phiA(i - 1, j, 0)) * cond%s_hx;" % uid,
-        "    const pops::Real gy_ = (phiA(i, j + 1, 0) - phiA(i, j - 1, 0)) * cond%s_hy;" % uid,
+        "    const pops::Real gy_ = (phiA(i, j + 1, 0) - phiA(i, j - 1, 0)) * cond%s_hy "
+        "/ (cond%s_polar ? ri : pops::Real(1));" % (uid, uid),
         "    const pops::Real rx_ = vx_ - th_dt_ * gx_;  // (v^n - theta dt grad phi)_x",
         "    const pops::Real ry_ = vy_ - th_dt_ * gy_;",
     ]

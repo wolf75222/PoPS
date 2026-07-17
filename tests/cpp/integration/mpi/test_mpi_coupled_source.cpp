@@ -20,7 +20,7 @@
 #include <pops/physics/composition/composite.hpp>
 #include <pops/physics/bricks/hyperbolic.hpp>  // ExBVelocity (scalaire 1 var, role Density)
 #include <pops/physics/bricks/source.hpp>      // NoSource
-#include <pops/runtime/builders/compiled/dsl_block.hpp>   // add_compiled_model
+#include <pops/runtime/builders/compiled/dsl_block.hpp>  // add_compiled_model
 #include <pops/runtime/system.hpp>
 
 #include <pops/coupling/source/coupled_source_program.hpp>  // CsOp (opcodes, miroir Python)
@@ -179,5 +179,6 @@ static int pops_run_test_mpi_coupled_source(int argc, char** argv) {
 }
 
 TEST(test_mpi_coupled_source, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_coupled_source, "test_mpi_coupled_source"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_mpi_coupled_source, "test_mpi_coupled_source"),
+            0);
 }

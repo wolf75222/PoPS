@@ -3,22 +3,24 @@
 import math
 
 import pytest
-from pops.runtime.system import AmrSystem, System  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem, System  # ADC-545 advanced runtime seam
 
-pops = pytest.importorskip("pops")
+pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine
+from pops.runtime.defaults import numerical_defaults_report
 
 
 def _isothermal_model(cs2=0.7, charge=-2.0):
-    return pops.Model(
-        pops.FluidState.isothermal(cs2=cs2),
-        pops.IsothermalFlux(),
-        pops.NoSource(),
-        pops.ChargeDensity(charge=charge),
+    return engine.Model(
+        engine.FluidState.isothermal(cs2=cs2),
+        engine.IsothermalFlux(),
+        engine.NoSource(),
+        engine.ChargeDensity(charge=charge),
     )
 
 
 def test_numerical_defaults_report_is_structured():
-    d = pops.numerical_defaults_report()
+    d = numerical_defaults_report()
     assert d["schema_version"] == 1
     assert d["newton"]["max_iters"] == 2
     assert d["newton"]["fd_eps"] == pytest.approx(1e-7)
@@ -26,8 +28,11 @@ def test_numerical_defaults_report_is_structured():
     assert d["krylov"]["schur_polar_max_iters"] == 600
     assert d["mg"]["rel_tol"] == pytest.approx(1e-8)
     assert d["mg"]["max_cycles"] == 50
-    assert d["fac"]["initial_coarse_rel_tol"] == pytest.approx(1e-12)
-    assert d["fac"]["initial_coarse_max_cycles"] == 100
+    assert d["fac"]["rel_tol"] == pytest.approx(1e-9)
+    assert d["fac"]["abs_tol"] == pytest.approx(0.0)
+    assert d["fac"]["coarse_rel_tol"] == pytest.approx(1e-12)
+    assert d["fac"]["coarse_abs_tol"] == pytest.approx(0.0)
+    assert d["fac"]["coarse_cycles"] == 100
     assert d["fft"]["zero_mean_gauge"] is True
     assert d["eb"]["cut_fraction_floor"] == pytest.approx(1e-3)
     assert d["eb"]["face_open_eps"] == pytest.approx(1e-6)  # ADC-615
@@ -44,7 +49,7 @@ def test_numerical_defaults_report_classifies_every_constant():
     """ADC-618: the C++ report agrees with the Python-side classification single source of truth."""
     from pops.runtime.defaults import _CONSTANT_CLASSIFICATION
 
-    d = pops.numerical_defaults_report()
+    d = numerical_defaults_report()
     classification = d["classification"]
     allowed = {"public_knob", "internal_default", "diagnostic_only", "hard_limit"}
     assert all(v in allowed for v in classification.values())
@@ -62,10 +67,10 @@ def test_numerical_defaults_report_classifies_every_constant():
 
 def test_system_inspect_reports_effective_block_and_solver_options():
     sim = System(n=8, L=1.0, periodic=True)
-    sim.add_block(
+    sim.add_equation(
         "ion",
         _isothermal_model(),
-        time=pops.IMEX(
+        time=engine.IMEX(
             newton_max_iters=4,
             newton_rel_tol=1e-6,
             newton_fd_eps=2e-7,
@@ -73,7 +78,7 @@ def test_system_inspect_reports_effective_block_and_solver_options():
             newton_fail_policy="throw",
             newton_diagnostics=True,
         ),
-        spatial=pops.Spatial(positivity_floor=1e-12),
+        spatial=engine.Spatial(positivity_floor=1e-12),
     )
     sim.set_poisson(abs_tol=1e-11)
 
@@ -99,20 +104,10 @@ def test_system_inspect_reports_effective_block_and_solver_options():
 
 def test_invalid_newton_and_refinement_values_are_rejected():
     with pytest.raises(ValueError, match="newton_max_iters"):
-        pops.IMEX(newton_max_iters=0)
+        engine.IMEX(newton_max_iters=0)
 
     amr = AmrSystem(n=8, L=1.0, periodic=True)
     with pytest.raises(RuntimeError, match="threshold must be finite"):
         amr.set_refinement(math.inf)
     with pytest.raises(RuntimeError, match="grad_threshold must be finite"):
         amr.set_phi_refinement(math.nan)
-
-
-def test_amr_inspect_reports_refinement_sentinel_as_policy():
-    amr = AmrSystem(n=8, L=1.0, periodic=True)
-    amr.set_refinement(1e30)
-    options = amr.inspect().to_dict()["options"]
-    assert options["runtime"] == "amr_system"
-    assert options["amr"]["disabled"] is True
-    assert options["amr"]["disabled_policy"] == "legacy_abi_sentinel_threshold"
-    assert options["defaults"]["amr"]["refinement_disabled_threshold"] == pytest.approx(1e30)

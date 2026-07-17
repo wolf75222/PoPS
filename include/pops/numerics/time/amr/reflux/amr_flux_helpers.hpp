@@ -6,10 +6,12 @@
 #include <pops/mesh/boundary/fill_boundary.hpp>
 #include <pops/mesh/execution/for_each.hpp>
 #include <pops/mesh/storage/multifab.hpp>
-#include <pops/mesh/layout/refinement.hpp>                 // coarsen_index
-#include <pops/numerics/spatial_operator.hpp>       // compute_face_fluxes, xface_box, yface_box
+#include <pops/mesh/layout/refinement.hpp>     // coarsen_index
+#include <pops/numerics/spatial_operator.hpp>  // compute_face_fluxes, xface_box, yface_box
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>  // backward_euler_source (IMEX implicit step)
 
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 /// @file
@@ -21,7 +23,7 @@
 /// Role: provide the kernels reused by amr_level / amr_patch_range / amr_subcycling.
 ///        mf_advance_faces (U -= dt div F), mf_apply_source (U += dt S, forward Euler),
 ///        mf_apply_source_treatment (explicit OR IMEX backward-Euler per runtime flag),
-///        mf_eval_rhs (R = -div F + S at the same state, for SSPRK3 stages), mf_average_down,
+///        mf_eval_rhs (R = -div F + S at the same state, for SSPRK stages), mf_average_down,
 ///        fill_cf_ghost_cell / mf_fill_fine_ghosts_t.
 ///
 /// Invariants:
@@ -38,18 +40,37 @@ namespace pops {
 
 static_assert(kAmrRefRatio == 2, "ratio-2-structural kernels below assume kAmrRefRatio == 2");
 
-// Time method of an AMR step (Berger-Oliger subcycling). kEuler (DEFAULT) = forward Euler
-// advance at each substep (legacy path, strictly bit-identical); kSsprk3 = SSPRK3
-// (Shu-Osher, 3 stages, order 3) with per-stage reflux (convex effective flux). The enum is passed
-// BY VALUE (POD) along the advance_amr -> subcycle_level_mp path; the flat ABI of the .so loader
-// carries it as an integer (AmrBuildParams::time_method), 0 == kEuler.
-enum class AmrTimeMethod : int { kEuler = 0, kSsprk3 = 1 };
+// Time method of an AMR step (Berger-Oliger subcycling):
+//   kEuler  = forward Euler (the historical low-level route);
+//   kSsprk2 = SSPRK2 / Heun (Shu-Osher, 2 stages, order 2);
+//   kSsprk3 = SSPRK3 (Shu-Osher, 3 stages, order 3).
+// Both SSP routes record the convex effective face flux used by their final update so reflux sees
+// the same time discretization as the state.  The enum is passed BY VALUE (POD) along the
+// advance_amr -> subcycle_level_mp path and is carried as an integer by AmrBuildParams.  Preserve
+// the historical wire values kEuler=0 and kSsprk3=1; kSsprk2 is the additive wire value 2.
+enum class AmrTimeMethod : int { kEuler = 0, kSsprk3 = 1, kSsprk2 = 2 };
+
+/// Strict lowering of the stable integer wire carried by AmrBuildParams and block seams.  Never
+/// coerce an unknown value to Euler: a stale or corrupt generated artifact must fail before launch.
+inline AmrTimeMethod amr_time_method_from_wire(int wire) {
+  switch (wire) {
+    case static_cast<int>(AmrTimeMethod::kEuler):
+      return AmrTimeMethod::kEuler;
+    case static_cast<int>(AmrTimeMethod::kSsprk3):
+      return AmrTimeMethod::kSsprk3;
+    case static_cast<int>(AmrTimeMethod::kSsprk2):
+      return AmrTimeMethod::kSsprk2;
+    default:
+      throw std::runtime_error("unknown AMR time-method wire value " + std::to_string(wire) +
+                               " (expected 0=euler, 1=ssprk3, or 2=ssprk2)");
+  }
+}
 
 // Device-clean NAMED functor (same recipe as mf_arith.hpp: a first instantiation possible
 // from an external loader TU, or an extended lambda makes nvcc choke) of the method-of-lines RHS
 // at ONE AMR level: R = -div(Fx,Fy) + S(U, aux), evaluated at ONE SAME state. It is the divergence of
 // mf_advance_faces (opposite sign, without dt) FUSED with the source of mf_apply_source. Used
-// ONLY by the SSPRK3 stages (mf_eval_rhs), where L(U) = -div F + S must be taken at the same
+// ONLY by the SSPRK stages (mf_eval_rhs), where L(U) = -div F + S must be taken at the same
 // stage state (true method-of-lines SSPRK), unlike the transport-then-source splitting of the
 // Euler path. Without a source (model with S == 0) R reduces to -div F.
 template <class Model>
@@ -67,7 +88,7 @@ struct AmrSspRhsKernel {
 };
 
 // R <- -div(Fx,Fy) + S(U, aux) on the valid cells (method-of-lines RHS at ONE level, evaluated
-// at the state U). Fused "combine" of mf_advance_faces + mf_apply_source for the SSPRK3 stages (the
+// at the state U). Fused "combine" of mf_advance_faces + mf_apply_source for the SSPRK stages (the
 // stage flux Fx/Fy is assumed already computed by compute_face_fluxes at the state U).
 template <class Model>
 inline void mf_eval_rhs(const Model& m, const MultiFab& U, const MultiFab& aux, const MultiFab& Fx,

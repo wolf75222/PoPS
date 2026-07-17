@@ -1,7 +1,7 @@
 """Type-only contracts for the authoring mixins (ADC-628, static analysis only).
 
-The concrete authoring classes (:class:`pops.physics.model.HyperbolicModel`,
-:class:`pops.physics.board.Model`, :class:`pops.physics.facade.Model`) assemble their
+The concrete authoring classes (:class:`pops.physics._model.HyperbolicModel`,
+:class:`pops.physics.board.Model`, :class:`pops.physics._facade.Model`) assemble their
 behaviour from topical mixins (``_authoring_*`` / ``_board_*`` / ``_facade_*``). Each mixin
 reads instance attributes and sibling methods that live on the composed class, not on the
 mixin itself, so a static checker cannot resolve them from the mixin in isolation.
@@ -60,11 +60,16 @@ class _HyperbolicModel:
     _invariants: Any
     _aliases: Any
     _to_expr: Any
+    _state_space_metadata: Any
+    _operator_registry_cache: Any
     params: Any
     module: Any
 
     @property
+    def owner_path(self) -> Any: ...
+    @property
     def n_vars(self) -> int: ...
+    def _invalidate_authoring_views(self) -> None: ...
     def _env(self, U: Any, aux: Any) -> Any: ...
     def flux_jacobian(self, dir: Any) -> Any: ...
 
@@ -76,9 +81,10 @@ class _BoardModel:
     _species: Any
     _states: Any
     _fields: Any
+    _field_operators: Any
     _fluxes: Any
     _sources: Any
-    _field_solvers: Any
+    _rate_contracts: Any
     _multi_module: Any
     _aliases: Any
     _invariants: Any
@@ -86,12 +92,23 @@ class _BoardModel:
     _dsl: Any
 
     @property
+    def owner_path(self) -> Any: ...
+    @property
     def module(self) -> Any: ...
+    def _invalidate_authoring_views(self) -> None: ...
+    def _operator_binding_authority(self, module: Any) -> Any: ...
+    def _registered_operator_handle(self, name: Any) -> Any: ...
+    def _species_handle(self, op: Any, name: Any, sp: Any) -> Any: ...
+    def _validate_riemann_capabilities(
+        self, kind: Any, pressure: Any = None, wave_speeds: Any = None,
+        roe_average: Any = None,
+    ) -> None: ...
+    def riemann(self, *args: Any, **kwargs: Any) -> Any: ...
     def _to_expr(self, node: Any) -> Any: ...
 
 
 class _FacadeModel:
-    """The :class:`pops.physics.facade.Model` instance surface the ``_facade_*`` mixins share."""
+    """The :class:`pops.physics._facade.Model` instance surface the ``_facade_*`` mixins share."""
 
     name: str
     module: Any
@@ -99,3 +116,5 @@ class _FacadeModel:
     params: Any
     _m: Any
     _dsl: Any
+
+    def check(self) -> Any: ...

@@ -4,33 +4,27 @@
 # + PIC and linked into `_pops.*.so`, and cibuildwheel runs delocate-wheel to bundle any remaining
 # dynamic dependency. Kokkos stays ON and mandatory (adc_cpp is Kokkos-only).
 #
-# Triggers: on a vX.Y.Z tag (attach the wheel to the GitHub Release made by release.yml) and on
-# demand (workflow_dispatch). It is SEPARATE from ci.yml's required `gate` (an artifact build, not a
-# correctness gate), and deliberately does NOT run on PRs: ci.yml's required gate-python already
-# builds `_pops` WITH Kokkos and runs the python suite on every PR, so the only signal unique to this
-# job is the packaging path (cibuildwheel + delocate + static-Kokkos link + pyproject). To validate
-# that before cutting a release, run this workflow manually (workflow_dispatch) on the candidate.
+# Release tags invoke this as a reusable workflow from release.yml.  That caller then installs this
+# exact artifact for the complete release gate before it is allowed to create a GitHub Release.  A
+# manual dispatch remains available for packaging-only rehearsal; there is no independent tag race.
 name: Wheels
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
-  contents: write  # attach the wheel to the Release on a tag (gh release upload); read otherwise
+  contents: read
 
 concurrency:
   group: wheels-${{ github.ref }}
-  # A tag build ships a release artifact and must not be cancelled; only redundant manual re-runs on
-  # the same ref supersede each other (a fresh dispatch cancels a stale one on that ref).
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
 
 jobs:
   macos-arm64:
     name: wheel (macOS arm64, cp312)
     runs-on: macos-14  # Apple Silicon (arm64) runner
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v7
@@ -49,19 +43,31 @@ jobs:
       - name: Install ccache
         run: brew list ccache >/dev/null 2>&1 || brew install ccache
 
+      - name: Resolve Apple toolchain cache identity
+        id: apple-platform
+        shell: bash
+        run: |
+          xcode="$(xcodebuild -version | tr '\n' '-')"
+          clang="$(clang++ --version | head -n 1)"
+          sdk="$(xcrun --sdk macosx --show-sdk-version)"
+          image="$(sw_vers -productVersion)"
+          raw="macos-${image}-${RUNNER_ARCH}-${xcode}-appleclang-${clang}-sdk-${sdk}"
+          key="$(printf '%s' "$raw" | tr -c 'A-Za-z0-9._-' '-')"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
       # Cache the Kokkos install (deterministic for a fixed version + commit + flags), so warm runs SKIP
       # the Serial+static+PIC Kokkos build entirely -- CIBW_BEFORE_ALL no-ops on a cache hit. The key
       # carries the pinned commit (15dc143e = tag 4.4.01) and the build flags, AND hashFiles(this
       # workflow): any edit to a Kokkos flag here rolls the key (no stale-flag reuse) and editing the
-      # file is the escape hatch from a bad cache. macos-14 is pinned, and libc++ ABI is stable across
-      # its image updates, so the runner SDK is not in the key (an archive built on an older image links
-      # fine into a fresh _pops on a newer one).
+      # file is the escape hatch from a bad cache. The exact macOS image, architecture, Xcode,
+      # AppleClang and SDK identity also participate: a static archive is never reused across an
+      # unproven compiler/SDK boundary.
       - name: Cache Kokkos install (macOS arm64, Serial static PIC)
         id: kokkos-cache
         uses: actions/cache@v6
         with:
           path: /tmp/kokkos-install
-          key: kokkos-wheel-macos-arm64-4.4.01-15dc143e-serial-static-pic-cxx20-dt11-${{ hashFiles('.github/workflows/wheels.yml') }}
+          key: kokkos-wheel-${{ steps.apple-platform.outputs.key }}-4.4.01-15dc143e-serial-static-pic-cxx20-dt11-${{ hashFiles('.github/workflows/wheels.yml') }}
 
       # ccache for the heavy -O3 _pops TUs. Rolling key (sha) + restore-keys reuse the most recent cache.
       # cibuildwheel builds in a temp dir, so CCACHE_BASEDIR + CCACHE_NOHASHDIR (set in CIBW_ENVIRONMENT)
@@ -77,7 +83,7 @@ jobs:
       # cibuildwheel builds cp312-macosx_arm64 in an isolated env. CIBW_BEFORE_ALL runs ONCE on the
       # runner (macOS builds are native, not containerized), installing a Serial+static+PIC Kokkos that
       # find_package(Kokkos) then links INTO _pops -> the wheel carries no external Kokkos dylib.
-      # POPS_HEAVY_TU_POOL=2: post-split (ADC-335/342/359) the heavy module TUs are SMALL sub-TUs, so two
+      # POPS_HEAVY_MODULE_TU_POOL=2: post-split (ADC-335/342/359) the heavy module TUs are SMALL sub-TUs, so two
       # -O3 compiles fit the ~7 GB / 3-vCPU runner; the original pool=1 OOM guard (for the old monolithic
       # system.cpp / amr_system.cpp) made the serial build ~1 h here. MACOSX_DEPLOYMENT_TARGET=11.0 keeps
       # the wheel installable on older macOS than the runner SDK.
@@ -85,7 +91,7 @@ jobs:
         env:
           CIBW_BUILD: cp312-macosx_arm64
           CIBW_ARCHS_MACOS: arm64
-          CIBW_CONFIG_SETTINGS: cmake.define.POPS_HEAVY_TU_POOL=2
+          CIBW_CONFIG_SETTINGS: cmake.define.POPS_HEAVY_MODULE_TU_POOL=2
           MACOSX_DEPLOYMENT_TARGET: '11.0'
           # Builds Kokkos ONLY on a cache miss (the install dir is restored above otherwise). The clone
           # is retried (a transient network blip must not waste a multi-hour build) and its checkout is
@@ -148,25 +154,3 @@ jobs:
           name: pops-macos-arm64-cp312
           path: wheelhouse/*.whl
           if-no-files-found: error
-
-      # On a vX.Y.Z tag, attach the wheel to the Release. release.yml (a separate workflow on the same
-      # tag) is the sole creator of the Release from CHANGELOG.md; both start together, so wait for it
-      # to exist before uploading rather than racing it (the long wheel build makes this near-certain,
-      # the poll is insurance). We do NOT create the Release here, to keep release.yml's CHANGELOG notes.
-      - name: Attach wheel to the Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for i in $(seq 1 15); do
-            if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then break; fi
-            echo "waiting for release $GITHUB_REF_NAME (attempt $i/15)..."; sleep 20
-          done
-          # Best-effort: if release.yml has not created the Release (e.g. it errored), do NOT fail the
-          # job -- the wheel is already saved as a build artifact. A red wheels job here would falsely
-          # read as a wheel-build failure rather than a release-creation problem.
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" wheelhouse/*.whl --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            echo "::warning::Release $GITHUB_REF_NAME not found after wait; wheel retained as artifact, not attached."
-          fi

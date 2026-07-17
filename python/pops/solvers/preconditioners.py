@@ -1,9 +1,8 @@
 """pops.solvers.preconditioners -- the preconditioner brick catalog (Spec 5 sec.5.7).
 
-Only the geometric-multigrid preconditioner has a native type (``pops::GeometricMG``);
-identity / jacobi / block-jacobi have none yet (the polar solver has its own PolarPrecond
-enum), so they are catalogued as PLANNED descriptors. :func:`User` surfaces a loaded external
-preconditioner brick. This is the ONE public home of the catalog formerly parked under
+Identity lowers to the native empty ``pops::ApplyFn`` and geometric multigrid lowers to
+``pops::GeometricMG``. Unwired Jacobi placeholders are absent. :func:`User` surfaces a loaded
+external preconditioner brick. This is the ONE public home of the catalog formerly parked under
 ``pops.lib.solvers.preconditioners`` (that re-export shim is removed; no second public path).
 
 ADC-502 RATIFIES ``pops.solvers.preconditioners`` as that single home: a preconditioner configures
@@ -16,7 +15,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from pops.descriptors import _external_descriptor, _native, _planned
+from pops.descriptors import _external_descriptor, _native
 
 # ADC-644: the ONLY V-cycle-SHAPE knobs a geometric-multigrid PRECONDITIONER may carry. A Krylov
 # preconditioner must be a FIXED linear map M^{-1} (the same operator on every apply), so the meaningful
@@ -77,10 +76,8 @@ def _geometric_mg_precond(**o: Any) -> Any:
 
 
 preconditioners = SimpleNamespace(
-    Identity=lambda: _planned("identity", "identity", category="preconditioner"),
-    Jacobi=lambda: _planned("jacobi", "jacobi", category="preconditioner"),
-    BlockJacobi=lambda: _planned("block_jacobi", "block_jacobi",
-                                 category="preconditioner"),
+    Identity=lambda: _native(
+        "identity", "pops::ApplyFn", "identity", category="preconditioner"),
     GeometricMG=_geometric_mg_precond,
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="preconditioner"),
 )

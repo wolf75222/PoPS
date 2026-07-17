@@ -55,8 +55,8 @@ the compiler-gated files skip fast locally and MUST be seeded from CI instead.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
 DURATIONS_JSON = ROOT / "tests/python/test_durations.json"
@@ -65,7 +65,7 @@ DURATIONS_JSON = ROOT / "tests/python/test_durations.json"
 # Keep in sync with the "compile-cache" job in .github/workflows/ci.yml. These are the
 # multi-compile DSL tests (grep POPS_PROCESS_TIMEOUT): they dominate one shard on their own.
 EXCLUDED_FROM_SHARDS: tuple[str, ...] = (
-    "tests/python/integration/mpi/test_compile_cache_backend.py",
+    "tests/python/integration/mpi/test_dsl_compile_cache.py",
 )
 
 # Fallback when the timings JSON has no data at all (first run before any seed).

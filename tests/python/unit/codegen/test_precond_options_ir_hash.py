@@ -9,17 +9,21 @@ explicit ctor ``GeometricMgPreconditioner(nu1, nu2, nbottom, min_coarse, n_vcycl
 Source-only: the emit + IR hash are exercised at the authoring/lowering layer (no _pops runtime, no
 compile). Runs under pytest AND standalone. Skips (never fakes) if pops is not importable.
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
 
-import pytest
+
+from typed_program_support import typed_state
 
 
 def _solve_program(preconditioner=None):
-    """A minimal GMRES solve_linear program (GMRES takes the preconditioner ApplyFn slot)."""
+    """A minimal typed LinearProblem solved by GMRES with an optional preconditioner."""
     import pops.time as t
+    from pops.linalg import LinearProblem
     from pops.solvers.krylov import GMRES
     P = t.Program("p")
-    U = P.state("blk")
+    U = typed_state(P, "blk")
     A = P.matrix_free_operator("A")
 
     def apply(P, out, x):
@@ -28,11 +32,14 @@ def _solve_program(preconditioner=None):
         return x - 0.1 * lap
 
     P.set_apply(A, apply)
-    kw = dict(operator=A, rhs=U, method=GMRES(max_iter=200), tol=1e-10, max_iter=200, restart=8)
-    if preconditioner is not None:
-        kw["preconditioner"] = preconditioner
-    phi = P.solve_linear(**kw)
-    P.commit("blk", phi)
+    endpoint = typed_state(P, "blk", state_name="U").next
+    rhs = P.value("rhs", U, at=endpoint.point)
+    solver = GMRES(
+        max_iter=200, rel_tol=1e-10, restart=8, preconditioner=preconditioner)
+    phi = P.solve(
+        LinearProblem(A, rhs), solver=solver,
+    ).consume(action=t.FailRun())
+    P.commit(endpoint, phi)
     return P
 
 
@@ -43,7 +50,7 @@ def test_default_geometric_mg_precond_leaves_ir_hash_byte_identical():
     default_a = _solve_program(preconditioners.GeometricMG())
     default_b = _solve_program(preconditioners.GeometricMG())
     assert default_a._ir_hash() == default_b._ir_hash()
-    node = default_a._commits["blk"]
+    node = next(value for value in default_a._values if value.op == "solve_linear")
     # Omit-when-default: no precond_options attr on the node for a default GeometricMG().
     assert "precond_options" not in node.attrs
     assert node.attrs["preconditioner"] == "geometric_mg"
@@ -54,14 +61,13 @@ def test_configured_precond_busts_ir_hash_and_adds_attr():
     default = _solve_program(preconditioners.GeometricMG())
     override = _solve_program(preconditioners.GeometricMG(n_vcycles=3, pre_sweeps=1))
     assert default._ir_hash() != override._ir_hash()
-    node = override._commits["blk"]
+    node = next(value for value in override._values if value.op == "solve_linear")
     assert node.attrs["precond_options"] == {"n_vcycles": 3, "pre_sweeps": 1}
 
 
 def test_default_precond_emits_historical_ctor():
-    default = _solve_program()  # None -> Identity() (unpreconditioned)
     mg_default = _solve_program(_mg())
-    src_default = mg_default.emit_cpp_program()
+    src_default = emit_cpp_program(mg_default)
     # The default GeometricMG preconditioner emits the no-arg ctor, byte-identical to pre-644.
     assert "GeometricMgPreconditioner>();" in src_default
     assert "GeometricMgPreconditioner>(2, 2, 50" not in src_default
@@ -70,7 +76,7 @@ def test_default_precond_emits_historical_ctor():
 def test_configured_precond_emits_explicit_ctor():
     override = _solve_program(_mg(n_vcycles=3, pre_sweeps=1, post_sweeps=1, bottom_sweeps=80,
                                   min_coarse=4))
-    src = override.emit_cpp_program()
+    src = emit_cpp_program(override)
     # nu1, nu2, nbottom, min_coarse, n_vcycles in fixed positional order.
     assert "GeometricMgPreconditioner>(1, 1, 80, 4, 3)" in src
 
@@ -85,7 +91,7 @@ def main():
         import pops  # noqa: F401
         import pops.time  # noqa: F401
     except Exception as exc:  # pragma: no cover - no built extension here
-        print("SKIP  ADC-644 precond IR hash (pops not importable: %s)" % exc)
+        require_native_or_skip('SKIP  ADC-644 precond IR hash (pops not importable: %s)' % exc)
         return 0
     test_default_geometric_mg_precond_leaves_ir_hash_byte_identical()
     test_configured_precond_busts_ir_hash_and_adds_attr()

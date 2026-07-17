@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from pops.runtime import threading as _threading
-from pops.runtime.threading import has_kokkos
+from pops.runtime import _threading
+from pops.runtime._threading import has_kokkos
 
 # Canonical token orders for the matrix the doctor prints. The token SET is derived from the
 # descriptor catalogs (see _descriptor_tokens); this only pins the display order so the audit
@@ -36,7 +36,7 @@ def _descriptor_tokens() -> Any:
     """Available brick tokens per category, sourced from the descriptor catalogs (Spec 5 sec.12).
 
     Single source of truth: this reads the SAME inert catalogs that
-    :func:`pops._capabilities.inspect_capabilities` walks (riemann / limiter / reconstruction /
+    the internal descriptor catalog report walks (riemann / limiter / reconstruction /
     elliptic solvers), so adding or retiring a descriptor cannot silently desync the doctor matrix
     from the introspectable capability matrix. Only descriptors that declare themselves available
     are reported (a planned-but-not-native brick like ``mc`` / ``superbee`` is left out). Pure: no
@@ -70,7 +70,6 @@ def _descriptor_tokens() -> Any:
     # printed list stays the historical set while still being sourced from the catalog.
     high_order = ["weno5"] if "weno5" in recon_tokens else []
     dsl_limiters = _ordered(["none", *limiter_tokens, *high_order], _LIMITER_ORDER)
-    dsl_limiters_low = [t for t in dsl_limiters if t != "weno5"]
     # Elliptic field-solver tokens (the Poisson row), sourced from the elliptic descriptors:
     # GeometricMG plus the FFT discrete / spectral schemes.
     poisson = {
@@ -83,13 +82,12 @@ def _descriptor_tokens() -> Any:
         "riemann": riemann_tokens,
         "riemann_polar": [t for t in riemann_tokens if t in _POLAR_RIEMANN],
         "dsl_limiters": dsl_limiters,
-        "dsl_limiters_low": dsl_limiters_low,
         "poisson": poisson,
     }
 
 
 def doctor(verbose: bool = True) -> Any:
-    """Diagnose the pops environment in ONE command : python -c "import pops; pops.doctor()".
+    """Diagnose the installed runtime environment and native toolchain.
 
     Checks each link on which the module AND the runtime compilation of the DSL depend (the class of
     bugs "build environment != execution environment", e.g. the `which c++` of a conda env
@@ -115,8 +113,8 @@ def doctor(verbose: bool = True) -> Any:
     # 3. compiled compute backend
     hk = has_kokkos()
     checks["kokkos"] = (hk is not False,
-                        {True: "Kokkos module (multi-thread possible ; pops.set_threads active)",
-                         False: "SERIAL module (set_threads has no effect ; rebuild preset python-parallel)",
+                        {True: "Kokkos module (thread/device resources selected before initialization)",
+                         False: "SERIAL module (rebuild preset python-parallel for threaded execution)",
                          None: "undetermined (old module without __has_kokkos__)"}[hk])
 
     # 4. runtime DSL compiler (the link of the -std=c++23 bug)
@@ -167,13 +165,13 @@ def doctor(verbose: bool = True) -> Any:
         except RuntimeError as e:
             checks["include"] = (False, "pops headers not found (set POPS_INCLUDE) : %s" % e)
 
-        # 5c. Kokkos root for the DSL production/aot backend (the tutorial's "no DSL backend" blocker).
+        # 5c. Kokkos root for the production package compiler.
         # PoPS is Kokkos-only : every DSL .so that includes the pops headers MUST compile against an
         # installed Kokkos (Serial is enough on CPU), found via POPS_KOKKOS_ROOT / Kokkos_ROOT.
         kroot = _tc._native_kokkos_root()
         if kroot is None:
             checks["kokkos_root"] = (False,
-                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> DSL backend='production'/'aot' cannot compile "
+                "POPS_KOKKOS_ROOT / Kokkos_ROOT not set -> production package cannot compile "
                 "(the tutorial dead-ends on 'no DSL backend'). Fix (conda) :\n"
                 "      conda env config vars set POPS_KOKKOS_ROOT=\"$CONDA_PREFIX\"\n"
                 "      conda env config vars set Kokkos_ROOT=\"$CONDA_PREFIX\"\n"
@@ -200,20 +198,6 @@ def doctor(verbose: bool = True) -> Any:
                          % (os.environ.get("OMP_NUM_THREADS", "(default)"),
                             _threading._first_system_built))
 
-    # 7. POPS_JIT_BACKDOOR (Spec 5 sec.12.4, criterion #48): the UNSAFE debug gate must never be
-    # silently honored. Surface it loudly here (in addition to compiled.inspect()) so a stray export
-    # is visible at a glance. OK when unset / disabled; FAIL (loud) when enabled -- a debug-only
-    # escape hatch in a healthy environment. No backdoor behavior is wired; this is the guard only.
-    # Read the env directly (no codegen import, so doctor stays lightweight even without numpy); the
-    # truthy convention mirrors pops.codegen.env.jit_backdoor_enabled.
-    _backdoor = os.environ.get("POPS_JIT_BACKDOOR", "").strip().lower() in ("1", "on", "true",
-                                                                            "yes", "y")
-    if _backdoor:
-        checks["jit_backdoor"] = (False, "POPS_JIT_BACKDOOR is SET -> the UNSAFE debug JIT gate is "
-                                         "ENABLED. Never set this in production; unset it to disable.")
-    else:
-        checks["jit_backdoor"] = (True, "disabled (POPS_JIT_BACKDOOR unset -- the safe default)")
-
     if verbose:
         for cname, (ok, detail) in checks.items():
             print("[%s] %-16s %s" % ("OK " if ok else "FAIL", cname, detail))
@@ -234,14 +218,14 @@ def capabilities() -> Any:
 
     Sec 12: the riemann / limiter / reconstruction / Poisson token lists are DERIVED from the
     descriptor catalogs via :func:`_descriptor_tokens` (the same single source
-    :func:`pops._capabilities.inspect_capabilities` reads), not hardcoded, so adding or retiring a
+    the internal descriptor report reads), not hardcoded, so adding or retiring a
     brick cannot silently desync this matrix from the introspectable one.
     """
     from pops import _pops as _pops_mod  # ADC-291: read the aux limit from the SINGLE C++ source
     from pops.physics.aux import AUX_NAMED_MAX  # fallback mirror (no second hardcoded literal)
     aux_max_extra = int(getattr(_pops_mod, "__aux_max_extra__", AUX_NAMED_MAX))
     # Sec 12: derive the riemann / limiter / reconstruction / Poisson token lists from the descriptor
-    # catalogs (the SAME single source inspect_capabilities() reads) instead of hardcoding them, so a
+    # catalogs (the same source as the internal descriptor report) instead of hardcoding them, so a
     # new descriptor cannot silently desync the doctor matrix from the introspectable one.
     tok = _descriptor_tokens()
     riemann_all = list(tok["riemann"])
@@ -250,7 +234,6 @@ def capabilities() -> Any:
     poisson_fft = tok["poisson"]["fft"]
     poisson_fft_spectral = tok["poisson"]["fft_spectral"]
     dsl_limiters = list(tok["dsl_limiters"])
-    dsl_limiters_low = list(tok["dsl_limiters_low"])
     from pops.runtime_environment import runtime_environment_report
     runtime_env = runtime_environment_report()
     return {
@@ -276,8 +259,8 @@ def capabilities() -> Any:
             "system_polar": riemann_polar,
             "amr": list(riemann_all),
             "notes": {
-                "rusanov": "minimal generic (max_wave_speed only)",
-                "hll": "generic with signed waves (model.wave_speeds ; DSL : m.wave_speeds(x=, y=) "
+                "rusanov": "minimal generic (physical flux + exact provider pack + declared stability bound)",
+                "hll": "generic with signed waves (typed Model.wave_speeds(...) "
                        "explicit WITHOUT primitive 'p', or historical path eigenvalues + 'p') ; "
                        "polar : eligible for the isothermal fluid (IsothermalFluxPolar), not for "
                        "scalar ExB (no wave_speeds) -- same gate as the cartesian one",
@@ -305,11 +288,15 @@ def capabilities() -> Any:
             "system": ["explicit (ssprk2|ssprk3)", "imex (= SourceImplicitBE)",
                        "imexrk_ars222 (IMEX-RK family, ARS(2,2,2) scheme, order 2 ; cartesian only ; "
                        "fully implicit source)",
-                       "split lie|strang + CondensedSchur"],
-            "amr": ["explicit (forward Euler per substep)", "ssprk3 (order 3 + reflux per stage)",
-                    "imex (= SourceImplicitBE)",
-                    "split lie|strang + CondensedSchur (mono-block, coarse)"],
-            "system_polar": ["explicit (ssprk2|ssprk3)", "split + polar CondensedSchur"],
+                       "Program factories Lie|Strang + explicit Program.solve"],
+            "amr": ["explicit (SSPRK2/Heun, order 2 + effective reflux flux)",
+                    "euler (Forward Euler)",
+                    "ssprk3 (order 3 + effective reflux flux)",
+                    "coarse/fine SSP stages sample the parent window at RK abscissae",
+                    "imex (= Forward Euler transport + SourceImplicitBE)",
+                    "Program factories Lie|Strang + hierarchy-scoped Program.solve"],
+            "system_polar": ["explicit (ssprk2|ssprk3)",
+                             "metric-aware explicit Program.solve graph"],
             "newton_options": "options (max_iters/tol/fd_eps/damping/fail_policy) : System + AMR "
                               "mono-block AND native multi-block (.so loaders : explicit rejection) ; "
                               "analytic jacobian via m.source_jacobian ; newton_diagnostics/"
@@ -349,55 +336,35 @@ def capabilities() -> Any:
                    "hierarchy construction, not silently mis-coarsened)",
         },
         "schur": {
-            "system_cartesian": "complete ; configurable roles/fields (density=/momentum=/energy=/"
-                                "magnetic_field=), configurable krylov_tol/max_iters",
-            "system_polar": "configurable roles (density=/momentum=/energy=, wave 3) ; "
-                            "magnetic_field freezes B_z ; multi-box C++ solver, facade one global box",
-            "amr": "mono-block ; roles + configurable krylov_tol/max_iters (wave 3, "
-                   "magnetic_field freezes coarse B_z) ; complete mono-level + composite Phase 4a "
-                   "(2 levels, 1..N disjoint non-adjacent fine patches, mono-rank) ; Phase 4b "
-                   "(adjacent patches/>2 levels/MPI/multi-block) to be done",
+            "system_cartesian": "explicit Program.solve(LinearProblem(...), solver=GMRES/BiCGStab) ; "
+                                "authored roles/fields ; generic matrix-free operator",
+            "system_polar": "same explicit Program IR ; metric-aware divergence/gradient plus "
+                            "PolarTensorKrylovSolver provider",
+            "amr": "hierarchy-scoped Program.solve with CompositeTensorFAC ; gather-all-levels, "
+                   "one composite tensor solve, then reconstruct-all-levels through the Program",
         },
         "backends_dsl": {
-            "default": "auto (ADC-63) : production if toolchain parity established (module loaded + "
-                       "baked compiler + matching headers), aot otherwise ; reason set on "
-                       "CompiledModel.backend_auto_reason ; explicit backend = short-circuit",
-            # ADC-600: each backend row carries "tier" (production | prototype | internal) so the
-            # report names plainly whether a route is the target production route, a host prototype
-            # route, or an internal host-marshalled harness (never a fallback for the target surface).
-            "prototype": {"adder": "add_dynamic_block", "tier": "prototype",
-                          "riemann": [t for t in riemann_all if t == "rusanov"],
-                          "limiter": dsl_limiters_low, "stride": False,
-                          "evolve_false": False, "mpi": False, "amr": False},
-            "aot": {"adder": "add_compiled_block", "tier": "internal",
-                    "riemann": list(riemann_all),
-                    "limiter": dsl_limiters, "stride": False,
-                    "evolve_false": False, "mpi": False, "amr": False,
-                    "runtime_params": True},
-            "production": {"adder": "add_native_block", "tier": "production",
+            "default": "production package; compiler, headers and module ABI must match",
+            "production": {"tier": "production",
                            "riemann": list(riemann_all),
                            "limiter": dsl_limiters, "stride": True,
                            "evolve_false": True, "mpi": True, "amr": "target='amr_system'",
-                           "stability_hooks": True},
+                           "stability_hooks": True, "bind_params": "fixed at install"},
         },
         "io": {
-            "write": ["vtk (.vti cartesian)", "npz",
-                      "hdf5 (h5py optional, rank-0 gather aggregation by default)",
-                      "parallel hdf5 (write(parallel=True) : hyperslabs per rank via h5py mpio + "
-                      "mpi4py ; opt-in, clear error if h5py without MPI ; true parallelism in "
-                      "MULTI-BOX, mono-box cartesian System)",
-                      "AmrSystem.write npz/vtk (coarse + patch rectangles)"],
-            "checkpoint_restart": "v1 npz mono-rank/rank-0 gather (System ; states + phi + t/macro_step ; "
-                                  "composition replayed by the script ; bit-identical resume ; "
-                                  "checkpoint(parallel=True) raises, stays rank-0 gather npz) ; "
-                                  "AMR mono-block mono-rank regrid_every=0 (ADC-65 : complete "
-                                  "conservative state per level + phi warm-start + imposed hierarchy ; resume "
-                                  "bit-identical) ; AMR multi-block / np>1 and parallel HDF5 "
-                                  "CHECKPOINT = follow-up (docs/IO_CHECKPOINT_PLAN.md ; explicit rejections)",
+            "scientific_output": (
+                "typed NPZ/ParaView/HDF5 providers with explicit SERIAL, ROOT, COLLECTIVE or "
+                "PER_RANK topology; collective HDF5 requires the native C++ parallel-HDF5 route"
+            ),
+            "checkpoint_restart": (
+                "strict accepted-state v3 for Uniform and AMR, including multi-block, active "
+                "regridding, fields, histories, clocks and consumer cursors; exact MPI_COMM_WORLD "
+                "captures collectively and publishes one rank-0 NPZ artifact"
+            ),
         },
         "amr_layout": {
-            "set_conservative_state": "mono-block AND native multi-block (wave 3 ; .so loaders : "
-                                      "explicit rejection)",
+            "set_conservative_state": "mono-block, native multi-block, and compiled multi-block "
+                                      "(.so loaders ; complete block-qualified conservative state)",
         },
         "regrid": {
             # ADC-296 / ADR-0001 Decision 5. The MULTI-BLOCK AMR regrid variable is selectable PER BLOCK
@@ -429,7 +396,7 @@ def capabilities() -> Any:
                 "halo_radius": 1,
                 "persistent": True,
                 # Per-field aux HALO/BC policy (ADC-369): a named field can declare its own ghost BC via
-                # pops.AuxHalo(kind, value), applied to the NON-PERIODIC faces (periodic faces -- periodic
+                # pops.mesh.AuxHalo(kind, value), applied to NON-PERIODIC faces (periodic faces -- periodic
                 # domain, polar theta -- keep their wrap). Uniform over the 4 faces; per-face asymmetric
                 # BC is a follow-up. Default (no halo) inherits the shared aux BC, bit-identical.
                 "halo_policy": {
@@ -439,10 +406,6 @@ def capabilities() -> Any:
                 },
             },
             "followups": "per-field CONFIGURABLE aux halo radius (today fixed at 1) ; named aux on the "
-                         "AMR path needs backend='production' target='amr_system', on polar a "
-                         "System+AOT compiled block (the in-AMR compiled .so is mono-level) ; the "
-                         "opt-in single-block composite-FAC Poisson path (facade-reachable via "
-                         "GeometricMG(amr_composite=CompositeFAC(...)), ADC-645) does not yet carry "
-                         "named aux to the fine level",
+                         "AMR path needs target='amr_system'",
         },
     }

@@ -1,23 +1,24 @@
-"""ADC-614 (FAC Poisson AMR options) + ADC-616 (Berger-Rigoutsos clustering params) end to end.
+"""ADC-616 Berger-Rigoutsos clustering parameters end to end.
 
 Both surface in the AmrSystem effective-options report (sim.inspect()) and refuse out-of-domain
 values structurally. Kokkos-gated (self-skips without _pops); a small Serial AmrSystem is enough.
 """
 import numpy as np
 import pytest
-from pops.runtime.system import AmrSystem
+from pops.runtime._system import AmrSystem
 
 pops = pytest.importorskip("pops")
+import pops.runtime._engine_descriptors as engine  # noqa: E402
 
 
 def _model():
-    return pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                      source=pops.NoSource(), elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                      source=engine.NoSource(), elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 def _built(**cfg):
     sim = AmrSystem(n=32, L=1.0, periodic=True, regrid_every=2, coarse_max_grid=16, **cfg)
-    sim.add_block("ne", model=_model(), spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+    sim.block("ne", model=_model(), spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     sim.set_refinement(threshold=0.5)
     ne = np.ones((32, 32))
     ne[10:22, 10:22] = 5.0
@@ -47,7 +48,7 @@ def test_clustering_override_visible_in_report():
 
 
 def test_clustering_descriptor_refuses_out_of_domain():
-    from pops.mesh.amr import PatchClustering
+    from pops.mesh._amr import PatchClustering
     with pytest.raises(ValueError):
         PatchClustering(min_efficiency=0.0)
     with pytest.raises(ValueError):
@@ -60,112 +61,11 @@ def test_clustering_descriptor_refuses_out_of_domain():
 
 # --- ADC-614 FAC options -----------------------------------------------------
 
-def test_fac_options_default_reported_on_schur_stage():
-    """A default condensed Schur AMR stage reports the kFAC* defaults in its effective report."""
-    amr = AmrSystem(n=16, L=1.0, periodic=True)
-    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                          transport=pops.CompressibleFlux(),
-                                          source=pops.NoSource(),
-                                          elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(), time=pops.Explicit())
-    amr.set_magnetic_field(np.ones((16, 16)))
-    amr.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0)
-    stages = amr.inspect().to_dict()["options"]["source_stages"]
-    assert stages, "the condensed Schur stage must appear in the report"
-    st = stages[0]
-    assert st["effective_fac_max_iters"] == 30
-    assert st["effective_fac_fine_sweeps"] == 400
-    assert st["effective_fac_tol"] == pytest.approx(1e-9)
-    assert st["effective_fac_coarse_rel_tol"] == pytest.approx(1e-12)
-    assert st["effective_fac_coarse_cycles"] == 100
-
-
-def test_fac_options_override_visible_and_refused_out_of_domain():
-    amr = AmrSystem(n=16, L=1.0, periodic=True)
-    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                          transport=pops.CompressibleFlux(),
-                                          source=pops.NoSource(),
-                                          elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(), time=pops.Explicit())
-    amr.set_magnetic_field(np.ones((16, 16)))
-    amr.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0,
-                         fac_max_iters=12, fac_fine_sweeps=200, fac_tol=1e-7,
-                         fac_coarse_rel_tol=1e-10, fac_coarse_cycles=40, fac_verbose=True)
-    st = amr.inspect().to_dict()["options"]["source_stages"][0]
-    assert st["effective_fac_max_iters"] == 12
-    assert st["effective_fac_fine_sweeps"] == 200
-    assert st["effective_fac_tol"] == pytest.approx(1e-7)
-    assert st["effective_fac_coarse_rel_tol"] == pytest.approx(1e-10)
-    assert st["effective_fac_coarse_cycles"] == 40
-    assert st["fac_verbose"] is True
-
-    bad = AmrSystem(n=16, L=1.0, periodic=True)
-    bad.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                          transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                                          elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(), time=pops.Explicit())
-    bad.set_magnetic_field(np.ones((16, 16)))
-    with pytest.raises((RuntimeError, ValueError)):
-        bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, fac_tol=2.0)
-
-
-def test_n_precond_vcycles_on_the_amr_source_stage():
-    """ADC-645: n_precond_vcycles reaches the AMR stage report; polar_precond refuses (cartesian)."""
-    amr = AmrSystem(n=16, L=1.0, periodic=True)
-    amr.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                          transport=pops.CompressibleFlux(),
-                                          source=pops.NoSource(),
-                                          elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(), time=pops.Explicit())
-    amr.set_magnetic_field(np.ones((16, 16)))
-    amr.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, n_precond_vcycles=2)
-    st = amr.inspect().to_dict()["options"]["source_stages"][0]
-    assert st["requested_n_precond_vcycles"] == 2
-    assert st["effective_n_precond_vcycles"] == 2
-
-    dflt = AmrSystem(n=16, L=1.0, periodic=True)
-    dflt.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                           transport=pops.CompressibleFlux(),
-                                           source=pops.NoSource(),
-                                           elliptic=pops.ChargeDensity(charge=1.0)),
-                   spatial=pops.Spatial(), time=pops.Explicit())
-    dflt.set_magnetic_field(np.ones((16, 16)))
-    dflt.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0)
-    st0 = dflt.inspect().to_dict()["options"]["source_stages"][0]
-    assert st0["requested_n_precond_vcycles"] == 0  # left default
-    assert st0["effective_n_precond_vcycles"] == 1  # the historical ONE V-cycle
-
-    bad = AmrSystem(n=16, L=1.0, periodic=True)
-    bad.add_block("ion", model=pops.Model(state=pops.FluidState.compressible(gamma=1.4),
-                                          transport=pops.CompressibleFlux(), source=pops.NoSource(),
-                                          elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.Spatial(), time=pops.Explicit())
-    bad.set_magnetic_field(np.ones((16, 16)))
-    with pytest.raises((RuntimeError, ValueError)):
-        bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, n_precond_vcycles=3)
-    with pytest.raises((RuntimeError, ValueError), match="polar_precond"):
-        bad.set_source_stage("ion", "electrostatic_lorentz", 0.5, 1.0, polar_precond="jacobi")
-
-
-def test_condensed_schur_descriptor_refuses_out_of_domain_fac():
-    from pops.runtime._bricks_time import CondensedSchur
-    with pytest.raises(ValueError):
-        CondensedSchur(fac_tol=2.0)
-    with pytest.raises(ValueError):
-        CondensedSchur(fac_max_iters=0)
-    with pytest.raises(ValueError):
-        CondensedSchur(fac_coarse_rel_tol=1.5)
-
-
 def main():
     test_clustering_default_reported_bit_identically()
     test_clustering_override_visible_in_report()
     test_clustering_descriptor_refuses_out_of_domain()
-    test_fac_options_default_reported_on_schur_stage()
-    test_fac_options_override_visible_and_refused_out_of_domain()
-    test_n_precond_vcycles_on_the_amr_source_stage()
-    test_condensed_schur_descriptor_refuses_out_of_domain_fac()
-    print("OK  ADC-614 + ADC-616")
+    print("OK ADC-616")
 
 
 if __name__ == "__main__":

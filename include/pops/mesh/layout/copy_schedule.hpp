@@ -44,8 +44,8 @@ struct CopyJob {
 /// ABSENT: the region jobs are geometry-only and the component count is supplied at replay (via
 /// min(dst.ncomp, src.ncomp)), exactly like HaloSchedule.
 struct SrcLayoutKey {
-  std::vector<Box2D> boxes;   // src BoxArray boxes (order significant, = global index)
-  std::vector<int> ranks;     // src DistributionMapping owner-rank per box
+  std::vector<Box2D> boxes;  // src BoxArray boxes (order significant, = global index)
+  std::vector<int> ranks;    // src DistributionMapping owner-rank per box
 
   bool matches(const BoxArray& sba, const DistributionMapping& sdm) const {
     return boxes == sba.boxes() && ranks == sdm.ranks();

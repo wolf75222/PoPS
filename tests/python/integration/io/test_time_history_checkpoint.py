@@ -5,10 +5,8 @@ A compiled `Program` with multistep histories (e.g. Adams-Bashforth 2) carries S
 buffers across macro-steps (the previous RHS R_{n-1}, ...). For a checkpoint/restart to be correct the
 rings MUST survive the checkpoint, so a CONTINUOUS run is bit-for-bit identical to a (run, checkpoint,
 restart, continue) run -- without the rings the post-restart AB2 would cold-start again and diverge.
-The program HASH is recorded in the checkpoint too: restarting a DIFFERENT compiled Program is rejected
-fail-loud (the restored buffers / cadence would be meaningless). The existing v1 checkpoint format
-(state, t, macro_step, phi) stays back-compatible: a checkpoint with no program/history keys restarts
-as before.
+The typed semantic/artifact/bind/run identities and every payload digest are recorded too: restarting
+under a different composition is rejected before any state mutation.
 
 (A) NPZ facade keys (pure Python / numpy, always runs when numpy is present): the checkpoint key naming
     scheme (program_hash, history_names, history_depth_<n>, history_<n>_<k>, history_init_<n>) and the
@@ -24,15 +22,27 @@ as before.
     (Forward Euler, different IR hash) from that checkpoint -> RuntimeError containing
     "checkpoint was created with a different compiled Program hash".
 
-Sections (B)/(C) self-skip (never fake the engine) without numpy / _pops / install_program / a compiler /
-a visible Kokkos, exactly like test_time_history.py.
+Sections (B)/(C) explicitly skip only when numpy, the native extension, or the native toolchain is
+absent. Once those prerequisites are present, compile and install failures are test failures.
 """
-from pops.numerics.reconstruction import FirstOrder
-from pops.numerics.riemann import Rusanov
+import json
 import os
-import sys
 import tempfile
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+
+from tests.python.support.requirements import (
+    default_cxx,
+    missing_native_compile_requirement,
+    repo_include,
+    require_native_or_skip,
+)
+
+try:
+    from pops.numerics.reconstruction import FirstOrder
+    from pops.numerics.riemann import Rusanov
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
+except Exception as exc:  # noqa: BLE001 -- optional outside a native-capable checkout
+    require_native_or_skip(
+        "test_time_history_checkpoint cannot import its runtime: %s" % exc)
 
 
 def _pops_time():
@@ -41,9 +51,16 @@ def _pops_time():
         import pops.time as t
         import pops.lib.time as lt  # ready schemes live in pops.lib.time (Spec 4)
     except Exception as exc:  # pops not importable here -> skip, never fake
-        print("skip test_time_history_checkpoint (pops.time unavailable: %s)" % exc)
-        sys.exit(0)
+        require_native_or_skip(
+            "test_time_history_checkpoint pops.time unavailable: %s" % exc)
     return t
+
+
+def _require_native_toolchain(section):
+    missing = missing_native_compile_requirement(repo_include(), default_cxx())
+    if missing:
+        require_native_or_skip(
+            "test_time_history_checkpoint %s: %s" % (section, missing))
 
 
 _C = 0.75  # source coefficient: S(rho) = _C*rho (a linear ODE rho' = c rho; R changes every step)
@@ -51,72 +68,158 @@ _DT = 0.01
 _NSTEPS = 6  # even, so N/2 is a whole number of macro-steps
 
 
-# ---- (A) NPZ facade keys: pure numpy, always runs when numpy is present ----
-def test_npz_key_scheme_roundtrips(_t):
+def test_collective_failure_preserves_one_scientific_error_family():
+    """MPI transport retains typed causes instead of flattening them to RuntimeError."""
+    from pops.output._checkpoint_collective import (
+        _error_record,
+        _raise_collective_failure,
+    )
+
+    failures = (
+        (0, _error_record(ValueError("manifest digest mismatch"))),
+        (1, _error_record(ValueError("history depth is invalid"))),
+    )
+    try:
+        _raise_collective_failure("restart-validation", failures)
+    except ValueError as error:
+        message = str(error)
+        assert "rank 0: builtins.ValueError: manifest digest mismatch" in message
+        assert "rank 1: builtins.ValueError: history depth is invalid" in message
+    else:
+        raise AssertionError("homogeneous collective ValueError was not reconstructed")
+
+    mixed = (
+        (0, _error_record(ValueError("invalid manifest"))),
+        (1, _error_record(TypeError("invalid schema"))),
+    )
+    try:
+        _raise_collective_failure("restart-validation", mixed)
+    except RuntimeError as error:
+        message = str(error)
+        assert "rank 0: builtins.ValueError: invalid manifest" in message
+        assert "rank 1: builtins.TypeError: invalid schema" in message
+    else:
+        raise AssertionError("mixed collective error families did not fail closed")
+
+    class BrokenMessage(ValueError):
+        def __str__(self):
+            raise RuntimeError("formatting must not escape before the collective")
+
+    record = _error_record(BrokenMessage())
+    assert record["family"] == "ValueError"
+    assert record["message"] == "<exception message unavailable>"
+
+
+def _authorize_identity_runtime(sim, compiled):
+    """Attach the exact identity boundary to this deliberately low-level integration engine."""
+    from pops.identity import make_identity
+    from pops.model.bind_schema import BindSchema
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from tests.python.support.native_execution_context import (
+        compiled_problem_execution_context,
+    )
+
+    component = compiled.program
+    authored = getattr(component, "program", component)
+    context = compiled_problem_execution_context(compiled, target="system")
+    sim._execution_context = context
+    sim._step_strategy = authored._step_strategy
+    sim._step_transaction_plan = authored.transaction_plan()
+    snapshot = BoundSnapshot(
+        semantic_identity=compiled.semantic_identity,
+        artifact_identity=compiled.artifact_identity,
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], field_plans={},
+        step_transaction=sim._step_transaction_plan.to_data(),
+        params=[], aux_evidence={}, initial_evidence={},
+        bind_schema_identity=make_identity("bind-schema", BindSchema().to_dict()),
+        execution_context=context.to_data(),
+    )
+    sim._finalize_bind(snapshot)
+    return snapshot
+
+
+# ---- (A) Current strict NPZ envelope: pure numpy, always runs when numpy is present ----
+def test_current_checkpoint_envelope_roundtrips():
     try:
         import numpy as np
     except Exception as exc:  # noqa: BLE001 -- numpy unavailable in this interpreter
-        print("-- (A) skipped: numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (A) skipped: numpy unavailable: %s --' % exc)
         return
-    # Mirror EXACTLY the keys + dtypes System.checkpoint writes for a program with one AB2 history.
-    hname = "blk.R"
-    depth = 2
-    ncomp, ny, nx = 1, 4, 4
-    slots = [np.full((ncomp, ny, nx), float(k + 1)) for k in range(depth)]
+    from types import SimpleNamespace
+    from pops.identity import make_identity
+    from pops.runtime._bound_snapshot import BoundSnapshot
+    from pops.runtime._checkpoint_manifest import (
+        authenticate_checkpoint_payload, seal_checkpoint_payload)
+    from pops.runtime._run_manifest import RunManifest
+    from pops.runtime._step_strategy import run_control_payload
+    from pops.runtime._temporal_restart import TemporalRestartState
+    from pops.runtime._engine_descriptors import abi_key
+    from pops.time import FixedDt
+
+    snapshot = BoundSnapshot(
+        semantic_identity=make_identity("semantic", {"test": "npz-envelope"}),
+        artifact_identity=make_identity("artifact", {"binary": "npz-envelope"}),
+        layout={"kind": "uniform"}, blocks=[{"name": "blk"}], field_plans={},
+        step_transaction={},
+        params=[], aux_evidence={}, initial_evidence={},
+        bind_schema_identity=make_identity("bind-schema", {"slots": []}),
+    )
+    run = RunManifest(
+        bind_identity=snapshot.bind_identity, start_time=0.0, start_macro_step=0,
+        controls={"t_end": 0.1, "step_transaction": run_control_payload(FixedDt(0.05)),
+                  "max_steps": 10,
+                  "output_mode": "current-directory"})
+    owner = SimpleNamespace(
+        _checkpoint_identities=lambda: (
+            snapshot.semantic_identity, snapshot.artifact_identity, snapshot.bind_identity),
+        last_run_identity=run.run_identity)
+    temporal_state = TemporalRestartState()
+    temporal_state.begin_run(
+        run_control_payload(FixedDt(0.05)), time=0.0, macro_step=0)
+    temporal_state.accept(before_time=0.0, before_step=0, time=0.05, macro_step=1)
+    temporal_state.accept(before_time=0.05, before_step=1, time=0.1, macro_step=2)
+    temporal = temporal_state.to_data()
     out = {
-        "pops_checkpoint_version": 1,
-        "program_hash": "deadbeef" * 8,  # a 64-hex IR hash shape
-        "history_names": np.array([hname]),
-        "history_depth_" + hname: depth,
-        "history_ncomp_" + hname: ncomp,
-        "history_init_" + hname: True,
+        "pops_checkpoint_version": 3, "t": 0.1, "macro_step": 2,
+        "abi_key": abi_key(), "program_hash": "deadbeef" * 8,
+        "temporal_restart_state": np.array(json.dumps(temporal, sort_keys=True)),
+        "history_names": np.array([], dtype="U1"),
+        "cache_nodes": np.array([], dtype=np.int64),
+        "cache_names": np.array([], dtype="U1"),
+        "state_blk": np.arange(16, dtype=np.float64),
     }
-    for k in range(depth):
-        out["history_%s_%d" % (hname, k)] = slots[k]
+    expected = seal_checkpoint_payload(owner, out, runtime_kind="uniform")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "ckpt.npz")
         with open(path, "wb") as f:
             np.savez_compressed(f, **out)
         d = np.load(path, allow_pickle=False)
-        assert "program_hash" in d and str(d["program_hash"]) == out["program_hash"]
-        assert [str(h) for h in d["history_names"]] == [hname]
-        assert int(d["history_depth_" + hname]) == depth
-        assert int(d["history_ncomp_" + hname]) == ncomp
-        assert bool(d["history_init_" + hname]) is True
-        for k in range(depth):
-            np.testing.assert_array_equal(d["history_%s_%d" % (hname, k)], slots[k])
-
-    # The hash guard is a plain string compare: equal -> ok, different -> the spec-46 message.
-    assert out["program_hash"] == ("deadbeef" * 8), "same hash compares equal"
-    assert out["program_hash"] != ("cafe" * 16), "a different hash must compare unequal"
-
-    # Back-compat: a checkpoint WITHOUT the new keys carries neither program_hash nor history_names.
-    legacy = {"pops_checkpoint_version": 1, "t": 0.0, "macro_step": 0}
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "legacy.npz")
-        with open(path, "wb") as f:
-            np.savez_compressed(f, **legacy)
-        d = np.load(path, allow_pickle=False)
-        assert "program_hash" not in d and "history_names" not in d, \
-            "a legacy checkpoint must not carry the ADC-406b keys (back-compatible restart)"
+        assert authenticate_checkpoint_payload(
+            owner, d, runtime_kind="uniform") == expected
 
 
-# ---- (A2) ADC-626 v2 selective-persistence key scheme + reader dispatch (pure numpy) ----
-def test_v2_history_persistence_key_scheme(_t):
-    """The v2 checkpoint stores only the policy-selected slots + the policy manifest + the per-slot dt;
-    the restore_histories reader dispatches on the manifest, restores the stored slots, and the
-    policy-compat guard refuses a stored-slots / policy mismatch verbatim. Pure numpy (no engine): a
-    fake System captures restore_history / restore_history_slot_dt / rebuild_history_slots calls."""
+# ---- (A2) Selective-persistence key scheme + strict reader dispatch (pure numpy) ----
+def test_history_persistence_key_scheme():
+    """The checkpoint records requested and effective slots plus the resolved storage mode.
+
+    Without an in-window regrid they coincide with the policy selection.  The reader dispatches on
+    the manifest and refuses any resolved-plan mismatch. Pure numpy (no engine): a fake System
+    captures restore_history / restore_history_slot_dt / rebuild_history_slots calls.
+    """
     try:
         import json
 
         import numpy as np
     except Exception as exc:  # noqa: BLE001
-        print("-- (A2) skipped: numpy unavailable: %s --" % exc)
+        require_native_or_skip('-- (A2) skipped: numpy unavailable: %s --' % exc)
         return
-    from pops.runtime._system_io_history import restore_histories, serialize_histories
-    from pops.time.history_persistence import Interval, Revolve
+    from pops.runtime._system_io_history import (
+        prepare_history_capture,
+        restore_histories,
+        serialize_histories,
+    )
+    from pops.time._history.persistence import Revolve
 
     hname = "blk.state"
     depth = 5
@@ -171,12 +274,23 @@ def test_v2_history_persistence_key_scheme(_t):
     serialize_histories(writer, {hname: Revolve(3)}, out)
     stored = sorted(int(s) for s in out["history_stored_slots_" + hname])
     assert stored == [0, 2, 4], stored
+    assert list(out["history_requested_stored_slots_" + hname]) == stored
+    assert str(out["history_storage_mode_" + hname]) == "policy"
     for k in stored:
         assert ("history_%s_%d" % (hname, k)) in out
     for k in (1, 3):
         assert ("history_%s_%d" % (hname, k)) not in out, "a recomputed slot is not written"
-    assert json.loads(str(out["history_policy_" + hname]))["kind"] == "revolve"
+    policy_wire = json.loads(str(out["history_policy_" + hname]))
+    assert policy_wire["payload"]["policy"] == "revolve"
     assert len(out["history_slot_dt_" + hname]) == depth
+
+    promoted = prepare_history_capture(
+        writer, {hname: Revolve(3)}, macro_step=6, regrid_every=4)
+    promoted_ring = promoted.rings[0]
+    assert promoted_ring.requested_stored_slots == (0, 2, 4)
+    assert promoted_ring.stored_slots == tuple(range(depth))
+    assert promoted_ring.storage_mode == "dense_regrid_safety"
+    assert promoted_ring.regrid_steps == (4,)
 
     # READER: round-trip through numpy so the dtypes match, then restore + replay.
     with tempfile.TemporaryDirectory() as tmp:
@@ -189,7 +303,7 @@ def test_v2_history_persistence_key_scheme(_t):
             np.savez_compressed(f, **payload)
         d = np.load(path, allow_pickle=False)
         reader = FakeSystem(present_slots=stored)
-        report = restore_histories(reader, d, ckpt_version=2)
+        report = restore_histories(reader, d)
     assert sorted(reader.restored) == [0, 2, 4], "only the stored slots are restored"
     assert reader.rebuilt == [0, 2, 4], "replay is driven from the stored slots"
     assert len(reader.restored_dt) == depth, "every slot's dt is restored"
@@ -206,12 +320,13 @@ def test_v2_history_persistence_key_scheme(_t):
         d = np.load(path, allow_pickle=False)
         raised = False
         try:
-            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+            restore_histories(FakeSystem(stored), d)
         except RuntimeError as exc:
-            raised = "stored slots" in str(exc) and "policy" in str(exc)
-        assert raised, "a stored-slots / policy mismatch must be refused verbatim"
+            raised = "resolved storage plan" in str(exc)
+        assert raised, "an effective stored-slots / resolved-plan mismatch must be refused"
 
-    # BACK-COMPAT: a v1 checkpoint (no policy keys, every slot present) restores as Dense, no replay.
+    # STRICT FORMAT: a checkpoint without the persistence manifest is refused; conversion belongs
+    # outside the runtime core.
     v1 = {"history_names": np.array([hname]),
           "history_depth_" + hname: depth,
           "history_init_" + hname: True}
@@ -223,14 +338,18 @@ def test_v2_history_persistence_key_scheme(_t):
             np.savez_compressed(f, **v1)
         d = np.load(path, allow_pickle=False)
         reader = FakeSystem(present_slots=list(range(depth)))
-        report = restore_histories(reader, d, ckpt_version=1)
-    assert sorted(reader.restored) == list(range(depth)), "v1 restores every slot (Dense)"
-    assert reader.rebuilt is None, "v1 never replays (every slot is present)"
-    assert report.histories[0]["policy_kind"] == "dense" and report.histories[0]["recomputed_slots"] == 0
+        raised = False
+        try:
+            restore_histories(reader, d)
+        except RuntimeError as exc:
+            raised = "persistence manifest" in str(exc)
+    assert raised, "a checkpoint without the current persistence manifest must be refused"
 
     # UNKNOWN kind at restart fails loud (a checkpoint written by a newer pops).
     unknown = dict(payload)
-    unknown["history_policy_" + hname] = np.array(json.dumps({"kind": "brand_new"}))
+    unknown_policy = Revolve(3).to_manifest()
+    unknown_policy["payload"]["policy"] = "brand_new"
+    unknown["history_policy_" + hname] = np.array(json.dumps(unknown_policy))
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "unknown.npz")
         with open(path, "wb") as f:
@@ -238,7 +357,7 @@ def test_v2_history_persistence_key_scheme(_t):
         d = np.load(path, allow_pickle=False)
         raised = False
         try:
-            restore_histories(FakeSystem(stored), d, ckpt_version=2)
+            restore_histories(FakeSystem(stored), d)
         except ValueError as exc:
             raised = "unknown" in str(exc)
         assert raised, "an unknown policy kind must fail loud at restart"
@@ -248,7 +367,7 @@ def test_v2_history_persistence_key_scheme(_t):
 def _passive_source_model(name):
     """A 1-variable model (rho), ZERO flux, default LINEAR source S(rho) = _C*rho (R = c*rho changes
     every step). A complete compilable block (flux + primitive + eigenvalue + source)."""
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     m = Model(name)
     (rho,) = m.conservative_vars("rho")
     u = m.primitive("u", 0.0 * rho)
@@ -262,18 +381,16 @@ def _passive_source_model(name):
 
 def _build_system(pops, np, n):
     """A fresh n x n periodic System with the compiled passive-source block added; (sim, has_engine)."""
+    import pops.runtime._engine_descriptors as engine
+
     sim = System(n=n, L=1.0, periodic=True)
     if not hasattr(sim, "install_program") or not hasattr(sim, "history_names"):
-        return None, None
-    from pops.physics.facade import Model
-    try:
-        compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
-    except RuntimeError as exc:  # no compiler / no Kokkos visible
-        print("-- skipped: model compile could not build the .so: %s --" % str(exc)[:160])
-        return None, None
+        require_native_or_skip(
+            "test_time_history_checkpoint requires install_program/history_names bindings")
+    compiled_model = _passive_source_model("ckpt_block").compile(backend="production")
     sim.add_equation("blk", compiled_model,
-                     spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                     time=pops.Explicit(method="euler"))
+                     spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                     time=engine.Explicit(method="euler"))
     return sim, True
 
 
@@ -283,37 +400,39 @@ def _rho0(np, n):
     return 1.0 + 0.3 * np.sin(2 * np.pi * X) * np.cos(2 * np.pi * Y)
 
 
-def _compile_program(pops, t, builder, prog_name, model_name):
-    """compile_problem for the program built by @p builder (e.g. lt.adams_bashforth2). Returns the
-    handle or None if the toolchain is absent."""
-    P = t.Program(prog_name)
-    builder(P, "blk")
-    try:
-        return pops.codegen.compile_problem(model=_passive_source_model(model_name), time=P)
-    except RuntimeError as exc:  # no compiler / no Kokkos visible / .so compile failed
-        print("-- skipped: compile_problem could not build the .so: %s --" % str(exc)[:160])
-        return None
+def _compile_program(pops, t, builder, builder_options, prog_name, model_name):
+    """Compile a ready scheme built from exact final-API Case/Model handles."""
+    from pops.problem import Case
+
+    model = _passive_source_model(model_name)
+    rate = model.rate("%s_rate" % prog_name, flux=False, sources=("default",))
+    case = Case(name="%s-case" % prog_name)
+    block = case.block("blk", model.module)
+    spaces = tuple(model.module.state_spaces().values())
+    assert len(spaces) == 1, "the passive checkpoint model has exactly one state"
+    declaration = model.module.state_handle(spaces[0])
+    P = builder(block[declaration], rate=rate, **builder_options)
+    P.step_strategy(t.FixedDt(_DT))
+    from pops.codegen._compile_drivers import compile_problem
+    return compile_problem(model=model, time=P)
 
 
 # ---- (B) spec 45 + 39: continuous == (run, checkpoint, restart, continue), bit-for-bit ----
 def _run_section_b(t):
+    _require_native_toolchain("section B")
     try:
         import numpy as np
 
         import pops
     except Exception as exc:  # noqa: BLE001 -- numpy / _pops unavailable
-        print("-- (B) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip(
+            "test_time_history_checkpoint section B imports unavailable: %s" % exc)
 
     n = 16
     sim_cont, has_engine = _build_system(pops, np, n)
-    if sim_cont is None:
-        print("-- (B) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
-        return None
 
-    compiled = _compile_program(pops, t, lt.adams_bashforth2, "ab2_ckpt", "ab2_prog_b")
-    if compiled is None:
-        return None
+    compiled = _compile_program(
+        pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_ckpt", "ab2_prog_b")
 
     rho0 = _rho0(np, n)
     half = _NSTEPS // 2
@@ -329,19 +448,21 @@ def _run_section_b(t):
     sim1, _ = _build_system(pops, np, n)
     sim1.set_state("blk", np.stack([rho0]))
     sim1.install_program(compiled.so_path)
-    for _ in range(half):
-        sim1.step(_DT)
+    _authorize_identity_runtime(sim1, compiled)
+    sim1.run(t_end=half * _DT, max_steps=half)
+    from pops.time._history.persistence import Dense
+    sim1.set_history_persistence({name: Dense() for name in sim1._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim1.checkpoint(os.path.join(tmp, "ab2"))
 
         # (3) FRESH system, re-add block, re-install the SAME program, RESTART, run N/2 more -> B.
         sim2, _ = _build_system(pops, np, n)
         sim2.install_program(compiled.so_path)  # the hash guard needs the program installed first
+        _authorize_identity_runtime(sim2, compiled)
         sim2.restart(ckpt)
         assert sim2.macro_step() == half, \
             "restart restores macro_step (%d != %d)" % (sim2.macro_step(), half)
-        for _ in range(_NSTEPS - half):
-            sim2.step(_DT)
+        sim2.run(t_end=_NSTEPS * _DT, max_steps=_NSTEPS - half)
     state_b = np.array(sim2.get_state("blk"))[0]
 
     err = float(np.abs(state_a - state_b).max())
@@ -383,57 +504,64 @@ def _offline_ab2_cold_restart(rho0, dt, nsteps, resume):
 
 # ---- (C) spec 46: restart a DIFFERENT compiled Program -> hash-mismatch RuntimeError ----
 def _run_section_c(t):
+    _require_native_toolchain("section C")
     try:
         import numpy as np
 
         import pops
     except Exception as exc:  # noqa: BLE001
-        print("-- (C) skipped: pops/numpy unavailable: %s --" % exc)
-        return None
+        require_native_or_skip(
+            "test_time_history_checkpoint section C imports unavailable: %s" % exc)
 
     n = 8
     sim, has_engine = _build_system(pops, np, n)
-    if sim is None:
-        print("-- (C) skipped: _pops lacks the install_program/history bindings (rebuild _pops) --")
-        return None
 
-    ab2 = _compile_program(pops, t, lt.adams_bashforth2, "ab2_c", "ab2_prog_c")
-    fe = _compile_program(pops, t, lt.forward_euler, "fe_c", "fe_prog_c")
-    if ab2 is None or fe is None:
-        return None
+    ab2 = _compile_program(
+        pops, t, lt.AdamsBashforth, {"order": 2}, "ab2_c", "ab2_prog_c")
+    fe = _compile_program(pops, t, lt.ForwardEuler, {}, "fe_c", "fe_prog_c")
     assert ab2.program_hash != fe.program_hash, \
         "AB2 and Forward Euler must have different IR hashes (else the test is vacuous)"
 
     sim.set_state("blk", np.stack([np.ones((n, n))]))
     sim.install_program(ab2.so_path)
-    sim.step(_DT)
-    sim.step(_DT)
+    _authorize_identity_runtime(sim, ab2)
+    sim.run(t_end=2 * _DT, max_steps=2)
+    from pops.time._history.persistence import Dense
+    sim.set_history_persistence({name: Dense() for name in sim._s.history_names()})
     with tempfile.TemporaryDirectory() as tmp:
         ckpt = sim.checkpoint(os.path.join(tmp, "ab2_for_mismatch"))
 
         # A fresh system that installs the WRONG (Forward Euler) program, then restarts the AB2 ckpt.
         sim2, _ = _build_system(pops, np, n)
         sim2.install_program(fe.so_path)
+        _authorize_identity_runtime(sim2, fe)
         try:
             sim2.restart(ckpt)
-        except RuntimeError as exc:
+        except ValueError as exc:
             msg = str(exc)
-            assert "checkpoint was created with a different compiled Program hash" in msg, \
-                "the hash mismatch must fail loud with the spec-46 message; got: %s" % msg
+            assert "identity" in msg and "bound runtime" in msg, \
+                "the canonical identity mismatch must fail before mutation; got: %s" % msg
             print("  hash mismatch raised as expected: %s" % msg.splitlines()[0][:120])
             return True
     raise AssertionError("restarting a different compiled Program must raise (spec test 46)")
 
 
+def test_uniform_ab2_history_checkpoint_restart_is_bit_identical():
+    """Collect the Uniform AB2 checkpoint/restart acceptance as an ordinary test."""
+    _run_section_b(_pops_time())
+
+
+def test_uniform_restart_refuses_a_different_compiled_program():
+    """Collect the authenticated Uniform Program-identity guard as an ordinary test."""
+    _run_section_c(_pops_time())
+
+
 def _run():
-    t = _pops_time()
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
-        fn(t)
+        fn()
         print("ok", fn.__name__)
-    print("PASS test_time_history_checkpoint (A: %d checks)" % len(fns))
-    _run_section_b(t)
-    _run_section_c(t)
+    print("PASS test_time_history_checkpoint (%d checks)" % len(fns))
 
 
 if __name__ == "__main__":

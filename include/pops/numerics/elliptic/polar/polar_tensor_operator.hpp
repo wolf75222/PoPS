@@ -9,6 +9,7 @@
 #include <pops/mesh/storage/mf_arith.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/numerics/elliptic/linear/solve_report.hpp>
 #include <pops/parallel/comm.hpp>
 #include <pops/runtime/numerical_defaults.hpp>
 
@@ -21,11 +22,10 @@
 
 /// @file
 /// @brief Iterative POLAR elliptic operator with anisotropic TENSOR coefficient (cross terms).
-///        Path A stage 2a (foundational brick toward the polar Schur).
+///        Generic polar matrix-free operator used by generated Programs.
 ///
 /// CONTEXT. To build the FULL STIFF Euler-Poisson system in POLAR geometry (a strongly magnetized
-/// regime, high omega_c), the condensed Schur stage (CondensedSchurSourceStepper, level 4 of
-/// docs/SCHUR_CONDENSATION_DESIGN.md) is needed on the polar side. The lock is the elliptic OPERATOR:
+/// regime, high omega_c), a condensed Program needs this elliptic OPERATOR:
 /// the Schur condenses a FULL TENSOR operator A = I + c rho B^{-1} where B^{-1} is the Lorentz
 /// rotation, which injects CROSS terms a_rt / a_tr (and a theta-dependent coefficient as soon as
 /// rho or B_z varies in theta). The existing DIRECT PolarPoissonSolver (FFT-in-theta + tridiag-in-r,
@@ -66,20 +66,19 @@
 /// case it gives back EXACTLY the scalar polar stencil.
 ///
 /// BOUNDARY CONDITIONS. theta PERIODIC (periodic ghosts, fill_ghosts with ylo/yhi=Periodic).
-/// r_min/r_max: PHYSICAL BC Dirichlet (value at the face, reflection ghost 2 v - interior) or
-/// homogeneous Neumann (Foextrap, ghost = interior). This is exactly the cartesian fill_ghosts applied
-/// in (r, theta) (index direction 0 = radial, 1 = azimuthal; cf. PolarGeometry convention). The
-/// Dirichlet data is folded into the residual (AFFINE operator) for the true residual r0, and
-/// LINEARIZED (offset c_bc subtracted) for the matvec in the loop (correction directions): same
-/// mechanics as the cartesian TensorKrylovSolver (krylov_solver.hpp).
+/// r_min/r_max: PHYSICAL BC Dirichlet, Robin, or homogeneous Neumann (Foextrap). This is exactly the
+/// cartesian fill_ghosts applied in (r, theta) (index direction 0 = radial, 1 = azimuthal; cf.
+/// PolarGeometry convention). Nonzero Dirichlet/Robin data is folded into the true residual through
+/// an AFFINE operator and LINEARIZED (offset c_bc subtracted) for the in-loop matvecs on correction
+/// directions: same mechanics as the cartesian TensorKrylovSolver (krylov_solver.hpp).
 ///
 /// SINGULAR OPERATOR (pure radial Neumann + periodic theta, no reaction): the CONSTANT is in the
 /// kernel of L_int; BiCGStab diverges without treatment. We FIX THE GAUGE by PROJECTION onto the
 /// subspace of ZERO FV MEAN (weighted mean r dr dtheta removed from the initial residual, the
 /// solution, and each preconditioned correction direction). This is the ITERATIVE counterpart of the
 /// mode-0 pinning of the direct PolarPoissonSolver, without perturbing the stencil. Detected
-/// automatically (both radial boundaries non-Dirichlet); at least ONE Dirichlet boundary => invertible
-/// operator, NO pinning, bit-identical Dirichlet path. The solution is then defined modulo a constant.
+/// automatically (neither radial boundary fixes the constant mode); at least one Dirichlet boundary or
+/// Robin boundary with nonzero alpha => no pinning. The solution is then defined modulo a constant.
 ///
 /// SOLVER: MATRIX-FREE BiCGStab Krylov (handles the NON symmetric cross term), PRECONDITIONED by a
 /// SIMPLE preconditioner (NO MG V-cycle: the scoping, polar_poisson_solver.hpp warning, reports that
@@ -134,8 +133,8 @@ namespace detail {
 /// Cross terms absent (hrt=false) -> only the diagonal radial term contributes, bit-identical to the
 /// scalar polar stencil with a_rr=1.
 POPS_HD inline Real polar_radial_div(const ConstArray4& p, const ConstArray4& arr, bool hrt,
-                                    const ConstArray4& art, int i, int j, Real ri, Real rfm,
-                                    Real rfp, Real idr, Real idth) {
+                                     const ConstArray4& art, int i, int j, Real ri, Real rfm,
+                                     Real rfp, Real idr, Real idth) {
   // Face a_rr coefficients (arithmetic mean of the adjacent centers).
   const Real arr_p = Real(0.5) * (arr(i, j) + arr(i + 1, j));
   const Real arr_m = Real(0.5) * (arr(i, j) + arr(i - 1, j));
@@ -161,8 +160,8 @@ POPS_HD inline Real polar_radial_div(const ConstArray4& p, const ConstArray4& ar
 /// the azimuthal term. Face a_tt coefficients (arithmetic); metric 1/(r_i^2); cross term a_tr d_r phi
 /// at face j+-1/2 (d_r averaged over 4 corners).
 POPS_HD inline Real polar_azimuthal_div(const ConstArray4& p, const ConstArray4& att, bool htr,
-                                       const ConstArray4& atr, int i, int j, Real ri, Real idr,
-                                       Real idth) {
+                                        const ConstArray4& atr, int i, int j, Real ri, Real idr,
+                                        Real idth) {
   const Real inv_r2 = Real(1) / (ri * ri);
   const Real att_p = Real(0.5) * (att(i, j) + att(i, j + 1));
   const Real att_m = Real(0.5) * (att(i, j) + att(i, j - 1));
@@ -186,8 +185,8 @@ POPS_HD inline Real polar_azimuthal_div(const ConstArray4& p, const ConstArray4&
 /// Jacobi preconditioner. Cross terms EXCLUDED from the diagonal (they do not touch phi_{i,j}: the
 /// corners i+-1, j+-1 are off-diagonal). Returns the (NEGATIVE) value of the diagonal coefficient of
 /// L_int (sum of -face weights), like the scalar stencil (diag < 0).
-POPS_HD inline Real polar_diag(const ConstArray4& arr, const ConstArray4& att, int i, int j, Real ri,
-                              Real rfm, Real rfp, Real idr, Real idth) {
+POPS_HD inline Real polar_diag(const ConstArray4& arr, const ConstArray4& att, int i, int j,
+                               Real ri, Real rfm, Real rfp, Real idr, Real idth) {
   const Real arr_p = Real(0.5) * (arr(i, j) + arr(i + 1, j));
   const Real arr_m = Real(0.5) * (arr(i, j) + arr(i - 1, j));
   const Real att_p = Real(0.5) * (att(i, j) + att(i, j + 1));
@@ -252,6 +251,17 @@ struct PolarInvDiagKernel {
   }
 };
 
+inline bool polar_tensor_has_affine_boundary_offset(const BCRec& bc) {
+  auto face = [](BCType type, Real value) {
+    return (type == BCType::Dirichlet || type == BCType::Robin) && value != Real(0);
+  };
+  return face(bc.xlo, bc.xlo_val) || face(bc.xhi, bc.xhi_val);
+}
+
+inline bool polar_tensor_boundary_fixes_gauge(BCType type, Real robin_alpha) {
+  return type == BCType::Dirichlet || (type == BCType::Robin && robin_alpha != Real(0));
+}
+
 }  // namespace detail
 
 /// Applies L_int(phi) = div(A grad phi) in polar over the whole MultiFab. Ghosts of @p phi assumed
@@ -285,9 +295,9 @@ inline void apply_polar_tensor(const MultiFab& phi, const PolarGeometry& geom, M
 }
 
 /// Contract of the iterative POLAR elliptic operators: same shape as PolarEllipticSolver (cf.
-/// polar_poisson_solver.hpp) + a tolerance variant solve(rel_tol, max_iters) (polar counterpart of the
-/// cartesian LinearSolver). We do NOT redefine PolarEllipticSolver (defined with PolarPoissonSolver):
-/// it is included indirectly via the same members. Return type of solve(tol,it) is NON void.
+/// polar_poisson_solver.hpp) + a tolerance variant solve(rel_tol, max_iters, abs_tol=0) (polar
+/// counterpart of the cartesian LinearSolver). We do NOT redefine PolarEllipticSolver (defined with
+/// PolarPoissonSolver): it is included indirectly via the same members. Return type is NON void.
 template <class S>
 concept PolarLinearSolver = requires(S s, Real tol, int it) {
   { s.rhs() } -> std::same_as<MultiFab&>;
@@ -297,15 +307,6 @@ concept PolarLinearSolver = requires(S s, Real tol, int it) {
   { s.geom() } -> std::convertible_to<const PolarGeometry&>;
   s.solve(tol, it);
   requires !std::same_as<decltype(s.solve(tol, it)), void>;
-};
-
-/// Result of a polar BiCGStab solve: iterations, relative residual, convergence. (Same shape as the
-/// cartesian KrylovResult -- we reuse the type if already included; otherwise we declare the local
-/// counterpart.)
-struct PolarKrylovResult {
-  int iters = 0;
-  Real rel_residual = 0;
-  bool converged = false;
 };
 
 /// Choice of the SIMPLE BiCGStab PRECONDITIONER (NO MG V-cycle -- stagnation on polar 1/r^2, cf.
@@ -372,9 +373,9 @@ class PolarTensorKrylovSolver {
 
   // RULE OF FIVE (C.21): the current pointers a_rr_/a_tt_ alias the internal stores
   // a_rr_store_/a_tt_store_ or external fields. A DEFAULT copy/move would leave these pointers aiming
-  // at the SOURCE object's stores (dangling/UB). The solver is ALWAYS used as a LOCAL scope variable
-  // (never copied, moved, stored in a container, nor returned by value): we DELETE the four
-  // operations rather than write a move re-pointing the stores (useless here).
+  // at the SOURCE object's stores (dangling/UB). The solver may be owned persistently through a
+  // unique/shared pointer, but the object itself is never copied or moved, so delete all four
+  // operations instead of implementing a fragile pointer-rebinding move.
   PolarTensorKrylovSolver(const PolarTensorKrylovSolver&) = delete;
   PolarTensorKrylovSolver& operator=(const PolarTensorKrylovSolver&) = delete;
   PolarTensorKrylovSolver(PolarTensorKrylovSolver&&) = delete;
@@ -407,15 +408,23 @@ class PolarTensorKrylovSolver {
     return l2_norm(r_);
   }
 
-  void solve() { solve(kKrylovDefaultRelTol, kSchurKrylovCartesianMaxIters); }
+  void solve() { solve(kKrylovDefaultRelTol, kSchurKrylovCartesianMaxIters, Real(0)); }
 
   /// MATRIX-FREE BiCGStab preconditioned by precond_ (RadialLine by default, Jacobi as fallback);
   /// fixes the gauge (project_mean) when pin_gauge_ (singular pure Neumann/periodic case). phi() =
-  /// unknown (warm start), rhs() = right-hand side. Returns iterations + relative residual + convergence.
-  PolarKrylovResult solve(Real rel_tol, int max_iters) {
+  /// unknown (warm start), rhs() = right-hand side. Stops at
+  ///   ||r||2 <= max(rel_tol * ||R(0)||2, abs_tol).
+  /// The report uses 1 only as the relative-residual denominator when ||R(0)||2 is exactly zero.
+  /// Returns the shared linear-solve report.
+  SolveReport solve(Real rel_tol, int max_iters, Real abs_tol = Real(0)) {
+    SolveReport res;
+    if (max_iters <= 0 || !(rel_tol > Real(0)) || !std::isfinite(static_cast<double>(rel_tol)) ||
+        abs_tol < Real(0) || !std::isfinite(static_cast<double>(abs_tol))) {
+      res.mark_failed(SolveStatus::kInvalidInput, SolveAction::kRejectAttempt);
+      return res;
+    }
     ensure_coeffs();
-    prepare_offset();  // c_bc = apply_operator(0) (inhomogeneous part of Dirichlet boundary) once
-    PolarKrylovResult res;
+    prepare_offset();  // c_bc = apply_operator(0) for nonzero Dirichlet/Robin boundary data
     // MULTI-RANK MPI: ALL ranks (including those without a box, local_size()==0) execute the SAME
     // BiCGStab body. The per-fab operations (lincomb/saxpy/copy/apply_precond/apply_polar_tensor) are
     // no-ops on an empty rank; the COLLECTIVES (dot/l2_norm/project_mean -> all_reduce_sum) are called
@@ -437,12 +446,36 @@ class PolarTensorKrylovSolver {
       project_mean(r_);
       project_mean(phi_);
     }
-    const Real bnorm = l2_norm(rhs_);
-    const Real norm0 = bnorm > Real(0) ? bnorm : Real(1);
+    // L_int(phi) = rhs is equivalent to L_lin(phi) = rhs - c_bc. Relative convergence must therefore
+    // use the exact effective forcing ||R(0)|| = ||rhs - L_int(0)||, independently of the warm start.
+    // For a gauge-pinned problem, R(0) includes the same zero-mean projection as the live residual.
+    // Reuse t_ (overwritten before its first BiCGStab use) and the persistent op_offset_, so the solve
+    // creates no temporary MultiFab. The homogeneous, invertible path keeps the historical rhs norm.
+    Real forcing_norm = Real(0);
+    if (has_op_offset_) {
+      lincomb(t_, Real(1), rhs_, Real(-1), op_offset_);  // t_ = R(0) = rhs - c_bc
+    } else if (pin_gauge_) {
+      copy_into(t_, rhs_);  // homogeneous operator: R(0) = rhs before gauge projection
+    }
+    if (pin_gauge_) {
+      project_mean(t_);
+      forcing_norm = l2_norm(t_);
+    } else if (has_op_offset_) {
+      forcing_norm = l2_norm(t_);
+    } else {
+      forcing_norm = l2_norm(rhs_);
+    }
+    const Real report_denom = forcing_norm > Real(0) ? forcing_norm : Real(1);
+    const Real stop = (rel_tol * forcing_norm > abs_tol) ? rel_tol * forcing_norm : abs_tol;
     Real rnorm = l2_norm(r_);
-    res.rel_residual = rnorm / norm0;
-    if (rnorm <= rel_tol * norm0) {
-      res.converged = true;
+    res.rel_residual = rnorm / report_denom;
+    if (!std::isfinite(static_cast<double>(forcing_norm)) ||
+        !std::isfinite(static_cast<double>(rnorm))) {
+      res.mark_failed(SolveStatus::kInvalidEvaluation);
+      return res;
+    }
+    if (rnorm <= stop) {
+      res.mark_solved();
       return res;
     }
 
@@ -453,9 +486,16 @@ class PolarTensorKrylovSolver {
 
     for (int k = 1; k <= max_iters; ++k) {
       const Real rho = dot(rhat_, r_);  // COLLECTIVE
+      if (!std::isfinite(static_cast<double>(rho)) || !std::isfinite(static_cast<double>(omega))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rho) < kTiny || std::fabs(omega) < kTiny) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       const Real beta = (rho / rho_prev) * (alpha / omega);
@@ -466,20 +506,33 @@ class PolarTensorKrylovSolver {
         project_mean(phat_);          // gauge: zero-mean correction direction
       apply_operator_lin(phat_, v_);  // v = L_lin(phat) (LINEAR matvec)
       const Real rhat_dot_v = dot(rhat_, v_);
+      if (!std::isfinite(static_cast<double>(rhat_dot_v))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       if (std::fabs(rhat_dot_v) < kTiny) {
         res.iters = k - 1;
-        res.rel_residual = rnorm / norm0;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_failed(SolveStatus::kBreakdown);
         return res;
       }
       alpha = rho / rhat_dot_v;
       lincomb(s_, Real(1), r_, -alpha, v_);  // s <- r - alpha v
       saxpy(phi_, alpha, phat_);             // phi <- phi + alpha phat
       const Real snorm = l2_norm(s_);
-      if (snorm <= rel_tol * norm0) {
+      if (!std::isfinite(static_cast<double>(snorm))) {
+        res.iters = k;
+        res.rel_residual = snorm / report_denom;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
+      if (snorm <= stop) {
         rnorm = snorm;
         res.iters = k;
-        res.rel_residual = rnorm / norm0;
-        res.converged = true;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_solved();
         return res;
       }
       apply_precond(s_, shat_);  // shat = M^{-1} s
@@ -487,19 +540,31 @@ class PolarTensorKrylovSolver {
         project_mean(shat_);          // gauge: zero-mean correction direction
       apply_operator_lin(shat_, t_);  // t = L_lin(shat)
       const Real tt = dot(t_, t_);
+      if (!std::isfinite(static_cast<double>(tt))) {
+        res.iters = k - 1;
+        res.rel_residual = rnorm / report_denom;
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
       omega = tt > kTiny ? dot(t_, s_) / tt : Real(0);
       saxpy(phi_, omega, shat_);             // phi <- phi + omega shat
       lincomb(r_, Real(1), s_, -omega, t_);  // r <- s - omega t
       rnorm = l2_norm(r_);
       res.iters = k;
-      res.rel_residual = rnorm / norm0;
-      if (rnorm <= rel_tol * norm0) {
-        res.converged = true;
+      res.rel_residual = rnorm / report_denom;
+      if (!std::isfinite(static_cast<double>(omega)) ||
+          !std::isfinite(static_cast<double>(rnorm))) {
+        res.mark_failed(SolveStatus::kInvalidEvaluation);
+        return res;
+      }
+      if (rnorm <= stop) {
+        res.mark_solved();
         return res;
       }
       rho_prev = rho;
     }
-    return res;  // max_iters reached: best effort (converged=false)
+    res.mark_failed(SolveStatus::kIterationLimit);
+    return res;  // max_iters reached without convergence: no solved value published
   }
 
  private:
@@ -723,15 +788,14 @@ class PolarTensorKrylovSolver {
     }
   }
 
-  /// Prepares the offset c_bc = apply_operator(0) once per solve. Zero Dirichlet BC -> zero offset
-  /// (has_op_offset_ = false), path unchanged. Also detects the SINGULAR operator (pure radial
-  /// Neumann: no Dirichlet boundary) -> pin_gauge_: the constant is in the kernel, we will fix the
-  /// gauge by zero-mean projection (cf. solve). At least one Dirichlet boundary => invertible =>
-  /// pin_gauge_=false.
+  /// Prepares the persistent offset buffer c_bc = apply_operator(0) once per solve. Homogeneous
+  /// Dirichlet/Robin data leaves has_op_offset_ false and the historical path unchanged. Also detects
+  /// whether the constant mode remains in the kernel: Dirichlet and Robin with nonzero alpha fix it;
+  /// Foextrap and pure-flux Robin (alpha=0) do not.
   void prepare_offset() {
-    has_op_offset_ = (bc_.xlo == BCType::Dirichlet && bc_.xlo_val != Real(0)) ||
-                     (bc_.xhi == BCType::Dirichlet && bc_.xhi_val != Real(0));
-    pin_gauge_ = (bc_.xlo != BCType::Dirichlet) && (bc_.xhi != BCType::Dirichlet);
+    has_op_offset_ = detail::polar_tensor_has_affine_boundary_offset(bc_);
+    pin_gauge_ = !detail::polar_tensor_boundary_fixes_gauge(bc_.xlo, bc_.xlo_alpha) &&
+                 !detail::polar_tensor_boundary_fixes_gauge(bc_.xhi, bc_.xhi_alpha);
     if (has_op_offset_) {
       // Called on ALL ranks (apply_operator is a no-op on an empty rank except for the pairwise
       // fill_ghosts): no local_size() branch that would unpair the cross-rank halo exchange.
@@ -794,14 +858,14 @@ class PolarTensorKrylovSolver {
   MultiFab r_, rhat_, p_, v_, s_, t_;
   MultiFab phat_, shat_;
   MultiFab idiag_;      ///< 1/diag (Jacobi), recomputed at each set_coefficients
-  MultiFab op_offset_;  ///< c_bc = apply_operator(0) (inhomogeneous part of Dirichlet boundary)
+  MultiFab op_offset_;  ///< persistent c_bc = apply_operator(0) for affine physical boundary data
   MultiFab a_rr_store_, a_tt_store_;  ///< default diagonal coefficients (= 1, isotropic)
   MultiFab* a_rr_ = nullptr;  ///< current coefficients (point to the store or the external one)
   MultiFab* a_tt_ = nullptr;
   MultiFab* a_rt_ = nullptr;  ///< cross terms (nullptr -> absent)
   MultiFab* a_tr_ = nullptr;
   bool coeffs_ready_ = false;
-  bool has_op_offset_ = false;
+  bool has_op_offset_ = false;  ///< nonzero Dirichlet/Robin affine boundary offset
   bool pin_gauge_ =
       false;  ///< singular operator (pure Neumann): fix the gauge (zero-mean projection)
   // RadialLine preconditioner: radial tridiagonal of the diagonal block per theta line. PER LOCAL BOX

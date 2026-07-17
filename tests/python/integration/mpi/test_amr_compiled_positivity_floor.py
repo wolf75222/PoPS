@@ -15,7 +15,7 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
       1e6-contrast oscillating top-hat advected at u=1 (where weno5 reconstructs a negative face density),
       the floored .so run stays FINITE. The load-bearing claim (an unfloored run diverging on the same
       spike) is covered on the System path by tests/cpp/unit/numerics/test_positivity_floor.cpp and on a refined AMR C/F
-      interface by tests/python/integration/amr/test_amr_positivity_floor.py section (3); it is not asserted here since it
+      interface by tests/cpp/integration/amr/test_amr_positivity_floor.cpp; it is not asserted here since it
       depended on the pre-ADC-324 never-tagged seed of set_refinement(1e30) (now a mono-level hierarchy),
       leaving a coarse-only grid on which the demo is not robust. The floor still rides the compiled
       loader -- exercised by (2)'s dmax==0 marshalling check and (3)'s multi-block routing.
@@ -25,12 +25,13 @@ facade AmrSystem.add_equation. It checks, on the compiled .so path:
   (3) MULTI-BLOCK: two compiled blocks with positivity_floor > 0 build and run finite -- the floor rides
       the OTHER compiled routing too (build_multi -> AmrCompiledBlockBuilder -> dispatch_amr_block).
 
-The guarantee is face / C/F-ghost-mean Density positivity only (order-1 fallback), parity with the
-native path (tests/cpp/integration/amr/test_amr_positivity_floor.cpp, tests/python/integration/amr/test_amr_positivity_floor.py).
+The guarantee is face / C/F-ghost-mean Density positivity only (order-1 fallback), with native
+uniform and refined-AMR coverage in the dedicated C++ positivity tests.
 
 Needs a C++ compiler + the pops headers + POPS_KOKKOS_ROOT (the production loader is Kokkos-only):
 auto-skips (exit 0) without a compiler, like test_dsl_production_amr. Validated under CI (ci-kokkos*).
 """
+from tests.python.support.requirements import require_native_or_skip
 from pops.numerics.riemann import Rusanov
 from pops.numerics.reconstruction import WENO5
 import os
@@ -40,18 +41,19 @@ import tempfile
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
 from pops.codegen.loader import CompiledModel
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.math import sqrt
+from pops.physics._facade import Model
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
+
+from tests.python.support.requirements import repo_include
 
 CS2 = 0.25       # isothermal sound speed^2 (p = cs2 rho): flooring rho floors the pressure
 N = 48
 DT = 0.0008
-from tests.python.support.requirements import repo_include
 # Multiple DSL native compiles by design: on a slow CI runner the file can exceed the
-# global 300 s process-isolation budget (ADC-627, same class as test_compile_cache_backend).
+# global 300 s process-isolation budget (ADC-627, same class as test_dsl_compile_cache).
 POPS_PROCESS_TIMEOUT = 900
 INCLUDE = repo_include()
 
@@ -110,10 +112,11 @@ def compiled_single(cm, pf, state):
     """Single compiled block (add_equation -> add_native_block) with positivity_floor=pf, seeded with
     the full conservative state, stepped 38 times. Returns the coarse density (flat array)."""
     s = AmrSystem(n=N, L=1.0, periodic=True)
+    s.set_temporal_relations([2], [1], ["integral_only"])
     s.set_refinement(1e30)
     s.add_equation("gas", cm,
-                   spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
-                   time=pops.Explicit())
+                   spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(), positivity_floor=pf),
+                   time=engine.Explicit())
     s.set_conservative_state("gas", state)
     for _ in range(38):
         s.step(DT)
@@ -123,7 +126,7 @@ def compiled_single(cm, pf, state):
 def main():
     cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  no C++ compiler or pops headers")
+        require_native_or_skip('skip  no C++ compiler or pops headers')
         print("test_amr_compiled_positivity_floor : OK (nothing to compile)")
         return
 
@@ -132,14 +135,14 @@ def main():
         cm = build_iso_model().compile(os.path.join(tmp, "iso_floor_amr.so"), INCLUDE,
                                        backend="production", target="amr_system")
         assert isinstance(cm, CompiledModel)
-        assert cm.adder == "add_native_block" and cm.target == "amr_system"
+        assert cm.backend == "production" and cm.target == "amr_system"
 
         # --- (1) no longer raises + the floor rides the .so; floored run finite on the 1e6 spike ------
         # ADC-341/ADC-324: set_refinement(1e30) is now a MONO-LEVEL hierarchy (no seed fine patch). The
         # historical "unfloored .so run blows up" assertion relied on the never-tagged 1e30 seed and is
         # not robust on the resulting coarse-only grid (neither floored nor unfloored diverges there); the
         # load-bearing property is covered on System by tests/cpp/unit/numerics/test_positivity_floor.cpp and on a refined
-        # AMR C/F interface by tests/python/integration/amr/test_amr_positivity_floor.py section (3). Here we keep the
+        # AMR C/F interface by tests/cpp/integration/amr/test_amr_positivity_floor.cpp. Here we keep the
         # compiled-facade contract: floor>0 is accepted (previously raised at add_equation) and the
         # floored .so run stays finite. That the floor actually rides the loader is proven by (2)'s
         # dmax==0 marshalling check and (3)'s multi-block routing.
@@ -165,10 +168,11 @@ def main():
         band = np.full((N, N), 1e-6)
         band[:, N // 3:2 * N // 3] = 1.0
         sm = AmrSystem(n=N, L=1.0, periodic=True)
+        sm.set_temporal_relations([2], [1], ["integral_only"])
         sm.set_refinement(1e30)
-        sm.add_equation("a", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm.add_equation("a", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
-        sm.add_equation("b", cm, spatial=pops.Spatial(limiter=WENO5(), flux=Rusanov(),
+        sm.add_equation("b", cm, spatial=engine.Spatial(limiter=WENO5(), flux=Rusanov(),
                                                      positivity_floor=1e-8))
         sm.set_density("a", band.ravel().copy())
         sm.set_density("b", band.ravel().copy())

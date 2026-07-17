@@ -39,8 +39,8 @@ enum class FieldChannelRole {
 /// state.hpp layout, never a new numbering. Trivially copyable apart from the handle string
 /// (host-only descriptor, not a device type).
 struct AuxChannel {
-  std::string handle;                            ///< stable name ("phi", "E_x", model field)
-  int component = -1;                            ///< real pops::Aux component (0..kAuxMaxComps-1)
+  std::string handle;  ///< stable name ("phi", "E_x", model field)
+  int component = -1;  ///< real pops::Aux component (0..kAuxMaxComps-1)
   FieldChannelRole role = FieldChannelRole::kCustom;
 };
 
@@ -64,8 +64,8 @@ class AuxLayout {
   void add_channel(std::string handle, int component, FieldChannelRole role) {
     if (component < 0 || component >= kAuxMaxComps) {
       throw std::out_of_range("AuxLayout: component " + std::to_string(component) +
-                              " for handle '" + handle + "' outside [0, kAuxMaxComps=" +
-                              std::to_string(kAuxMaxComps) + ")");
+                              " for handle '" + handle +
+                              "' outside [0, kAuxMaxComps=" + std::to_string(kAuxMaxComps) + ")");
     }
     if (find(handle) != nullptr) {
       throw std::invalid_argument("AuxLayout: duplicate output handle '" + handle + "'");
@@ -73,8 +73,8 @@ class AuxLayout {
     for (const auto& c : channels_) {
       if (c.component == component) {
         throw std::invalid_argument("AuxLayout: aux component " + std::to_string(component) +
-                                    " already bound to handle '" + c.handle + "', cannot also bind '" +
-                                    handle + "'");
+                                    " already bound to handle '" + c.handle +
+                                    "', cannot also bind '" + handle + "'");
       }
     }
     channels_.push_back({std::move(handle), component, role});
@@ -110,8 +110,9 @@ class AuxLayout {
         known += ", ";
       known += c.handle;
     }
-    std::string where = problem_id.empty() ? std::string{} : (" of field problem '" +
-                                                              std::string(problem_id) + "'");
+    std::string where = problem_id.empty()
+                            ? std::string{}
+                            : (" of field problem '" + std::string(problem_id) + "'");
     throw std::out_of_range("AuxLayout: unknown output handle '" + std::string(handle) + "'" +
                             where + "; known outputs: [" + known + "]");
   }

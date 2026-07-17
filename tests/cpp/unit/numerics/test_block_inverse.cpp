@@ -1,7 +1,7 @@
 // Tests of pops::detail::block_inverse<N> (ADC-637), the pinned-order closed-form block inverse.
 //
 // Properties verified:
-//   1. BIT-FOR-BIT parity with LorentzEliminator. For the rotation block M = [[1, -w], [w, 1]]
+//   1. BIT-FOR-BIT parity with RotationInverseOracle. For the rotation block M = [[1, -w], [w, 1]]
 //      (w = theta*dt*B_z) the four block_inverse<2> entries MUST equal binv_11/12/21/22 EXACTLY
 //      (operator==, not a tolerance). This is the load-bearing gate of the ADC-637 retirement plan:
 //      the condensed-implicit codegen assembles A = I + c*rho*M^{-1} and must reproduce the retiring
@@ -15,19 +15,38 @@
 #include <gtest/gtest.h>
 
 #include <pops/numerics/linalg/block_inverse.hpp>
-#include <pops/numerics/linalg/dense_eig.hpp>          // mat_inverse<N> (the 3x3 / >3 reference)
-#include <pops/numerics/linalg/lorentz_eliminator.hpp>  // the bit-parity reference
+#include <pops/numerics/linalg/dense_eig.hpp>  // mat_inverse<N> (the 3x3 / >3 reference)
 
 #include <cmath>
 
-using pops::LorentzEliminator;
 using pops::Real;
 using pops::detail::block_inverse;
 using pops::detail::mat_inverse;
 
-static inline double dabs(double x) { return x < 0.0 ? -x : x; }
+static inline double dabs(double x) {
+  return x < 0.0 ? -x : x;
+}
 
 static constexpr double EPS_MACHINE = 1e-14;
+
+// Independent analytic oracle retained by the test only.  The production source-stage helper was
+// retired; this pins the operation tree expected from the generic block inverse without preserving a
+// second runtime implementation.
+struct RotationInverseOracle {
+  Real w;
+  Real det;
+  RotationInverseOracle(Real theta, Real dt, Real bz)
+      : w(theta * dt * bz), det(Real(1) + (theta * dt * bz) * (theta * dt * bz)) {}
+  Real binv_11() const { return Real(1) / det; }
+  Real binv_12() const { return w / det; }
+  Real binv_21() const { return -w / det; }
+  Real binv_22() const { return Real(1) / det; }
+  void apply_Binv(Real x, Real y, Real& ox, Real& oy) const {
+    const Real inv = Real(1) / det;
+    ox = inv * (x + w * y);
+    oy = inv * (y - w * x);
+  }
+};
 
 // The (theta, dt, B_z) cases mirror test_lorentz_eliminator: the same w = theta*dt*B_z sweep, from a
 // weak field to a very large w, so the parity claim is exercised across the dynamic range.
@@ -36,15 +55,12 @@ struct BzCase {
   const char* name;
 };
 static const BzCase kBz[] = {
-    {1.0, 0.1, 1.0, "theta=1 dt=0.1 Bz=1"},
-    {0.5, 0.2, 2.5, "theta=0.5 dt=0.2 Bz=2.5"},
-    {1.0, 1.0, 10.0, "strong w=10"},
-    {0.75, 0.05, 0.01, "weak field small dt"},
-    {1.0, 0.01, 1e6, "very large w"},
-    {1.0, 0.1, 0.0, "degenerate Bz=0"},
+    {1.0, 0.1, 1.0, "theta=1 dt=0.1 Bz=1"}, {0.5, 0.2, 2.5, "theta=0.5 dt=0.2 Bz=2.5"},
+    {1.0, 1.0, 10.0, "strong w=10"},        {0.75, 0.05, 0.01, "weak field small dt"},
+    {1.0, 0.01, 1e6, "very large w"},       {1.0, 0.1, 0.0, "degenerate Bz=0"},
 };
 
-// Test 1 (THE GATE): block_inverse<2> of the Lorentz rotation block == LorentzEliminator, BIT-EXACT.
+// Test 1 (THE GATE): block_inverse<2> of the Lorentz rotation block == RotationInverseOracle, BIT-EXACT.
 //
 // M = [[1, -w], [w, 1]] with w = th_dt*B_z (th_dt = theta*dt, and the eliminator is built as
 // (theta=th_dt, dt=1, B_z) to obtain the same w, exactly as SchurOperatorCoeffKernel does). The
@@ -53,7 +69,7 @@ static const BzCase kBz[] = {
 TEST(test_block_inverse, RotationBlockMatchesLorentzBitForBit) {
   for (const auto& c : kBz) {
     const Real th_dt = c.theta * c.dt;
-    const LorentzEliminator le(th_dt, Real(1), c.Bz);
+    const RotationInverseOracle le(th_dt, Real(1), c.Bz);
     const Real w = th_dt * c.Bz;
     const Real M[2][2] = {{Real(1), -w}, {w, Real(1)}};
     Real Mi[2][2];
@@ -63,7 +79,7 @@ TEST(test_block_inverse, RotationBlockMatchesLorentzBitForBit) {
     EXPECT_EQ(Mi[0][1], le.binv_12()) << "binv_12 [" << c.name << "]";
     EXPECT_EQ(Mi[1][0], le.binv_21()) << "binv_21 [" << c.name << "]";
     EXPECT_EQ(Mi[1][1], le.binv_22()) << "binv_22 [" << c.name << "]";
-    // And the determinant reduces to LorentzEliminator's 1 + w*w bit-for-bit -- in the intrinsic's
+    // And the determinant reduces to RotationInverseOracle's 1 + w*w bit-for-bit -- in the intrinsic's
     // PINNED shape (hoist a*d, subtract b*c). Written as one `a*d - b*c` expression the frontend may
     // fma-contract the WRONG product (clang contracts at EVERY -O level) and drift a ULP.
     const Real t = M[0][0] * M[1][1];
@@ -87,7 +103,7 @@ TEST(test_block_inverse, RotationBlockMatchesLorentzOnRuntimeValues) {
   };
   for (int k = 0; k < 10000; ++k) {
     const Real w = next();
-    const LorentzEliminator le(w, Real(1), Real(1));
+    const RotationInverseOracle le(w, Real(1), Real(1));
     const Real M[2][2] = {{Real(1), -w}, {w, Real(1)}};
     Real Mi[2][2];
     ASSERT_TRUE(block_inverse<2>(M, Mi));
@@ -113,7 +129,8 @@ TEST(test_block_inverse, RoundTrip2x2) {
   for (int i = 0; i < 2; ++i)
     for (int j = 0; j < 2; ++j) {
       Real p = Real(0);
-      for (int k = 0; k < 2; ++k) p += M[i][k] * Mi[k][j];
+      for (int k = 0; k < 2; ++k)
+        p += M[i][k] * Mi[k][j];
       const Real want = (i == j) ? Real(1) : Real(0);
       EXPECT_TRUE(dabs(p - want) < EPS_MACHINE) << "M*Minv[" << i << "][" << j << "]";
     }
@@ -130,7 +147,8 @@ TEST(test_block_inverse, ClosedForm3x3MatchesMatInverse) {
   for (int i = 0; i < 3; ++i)
     for (int j = 0; j < 3; ++j) {
       Real p = Real(0);
-      for (int k = 0; k < 3; ++k) p += M[i][k] * Mi[k][j];
+      for (int k = 0; k < 3; ++k)
+        p += M[i][k] * Mi[k][j];
       const Real want = (i == j) ? Real(1) : Real(0);
       EXPECT_TRUE(dabs(p - want) < EPS_MACHINE) << "M*Minv[" << i << "][" << j << "]";
     }
@@ -152,7 +170,7 @@ TEST(test_block_inverse, BlockDiagonalRotation3x3) {
   const Real M[3][3] = {{Real(1), -w, Real(0)}, {w, Real(1), Real(0)}, {Real(0), Real(0), Real(1)}};
   Real Mi[3][3];
   ASSERT_TRUE(block_inverse<3>(M, Mi));
-  const LorentzEliminator le(w, Real(1), Real(1));  // w = th_dt*B_z with th_dt=w, B_z=1
+  const RotationInverseOracle le(w, Real(1), Real(1));  // w = th_dt*B_z with th_dt=w, B_z=1
   EXPECT_TRUE(dabs(Mi[0][0] - le.binv_11()) < EPS_MACHINE);
   EXPECT_TRUE(dabs(Mi[0][1] - le.binv_12()) < EPS_MACHINE);
   EXPECT_TRUE(dabs(Mi[1][0] - le.binv_21()) < EPS_MACHINE);
@@ -185,7 +203,7 @@ TEST(test_block_inverse, SingularReturnsFalse) {
 }
 
 // Test 6 (THE APPLY GATE): block_apply_inverse<2> of the Lorentz rotation block applied to an arbitrary
-// vector == LorentzEliminator::apply_Binv, BIT-EXACT. The condensed RHS-flux and reconstruct kernels
+// vector == RotationInverseOracle::apply_Binv, BIT-EXACT. The condensed RHS-flux and reconstruct kernels
 // apply M^{-1} to a VECTOR (F = M^{-1}(mx,my); v = M^{-1}(v^n - theta dt grad phi)); the retiring Schur
 // brick applied it with apply_Binv = inv*(vx + w*vy) -- ONE reciprocal factored out of the bracket.
 // block_apply_inverse reproduces that factored order; summing the pre-divided block_inverse<2> entries
@@ -194,11 +212,14 @@ TEST(test_block_inverse, SingularReturnsFalse) {
 TEST(test_block_inverse, ApplyInverseMatchesApplyBinvBitForBit) {
   using pops::detail::block_apply_inverse;
   // A spread of input vectors: axis-aligned, mixed sign, and large magnitude.
-  const Real vs[][2] = {{Real(1), Real(0)},       {Real(0), Real(1)},   {Real(0.4), Real(-0.2)},
-                        {Real(-3.7), Real(2.1)},  {Real(1e3), Real(-7)}};
+  const Real vs[][2] = {{Real(1), Real(0)},
+                        {Real(0), Real(1)},
+                        {Real(0.4), Real(-0.2)},
+                        {Real(-3.7), Real(2.1)},
+                        {Real(1e3), Real(-7)}};
   for (const auto& cc : kBz) {
     const Real th_dt = cc.theta * cc.dt;
-    const LorentzEliminator le(th_dt, Real(1), cc.Bz);
+    const RotationInverseOracle le(th_dt, Real(1), cc.Bz);
     const Real w = th_dt * cc.Bz;
     const Real M[2][2] = {{Real(1), -w}, {w, Real(1)}};
     for (const auto& v : vs) {
@@ -226,11 +247,13 @@ TEST(test_block_inverse, ApplyInverse3x3AndSingular) {
   ASSERT_TRUE(block_inverse<3>(M, Mi));
   for (int r = 0; r < 3; ++r) {
     Real ref = Real(0);
-    for (int c = 0; c < 3; ++c) ref += Mi[r][c] * v[c];
+    for (int c = 0; c < 3; ++c)
+      ref += Mi[r][c] * v[c];
     const Real scale = Real(1) + dabs(ref);
     EXPECT_TRUE(dabs(got[r] - ref) < EPS_MACHINE * scale) << "apply vs Minv.v [" << r << "]";
   }
-  const Real S[3][3] = {{Real(1), Real(2), Real(3)}, {Real(2), Real(4), Real(6)}, {Real(0), Real(1), Real(1)}};
+  const Real S[3][3] = {
+      {Real(1), Real(2), Real(3)}, {Real(2), Real(4), Real(6)}, {Real(0), Real(1), Real(1)}};
   Real out[3] = {Real(-9), Real(-9), Real(-9)};  // sentinel
   EXPECT_FALSE(block_apply_inverse<3>(S, v, out)) << "singular 3x3 -> false";
   EXPECT_EQ(out[0], Real(-9)) << "out untouched on singular";

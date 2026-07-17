@@ -108,7 +108,7 @@ class SolverIR:
 
     It is a thin view over the building :class:`pops.time.Program` -- it records the
     flat op list and the returned solution value. It holds NO numeric data: every
-    node is a typed SSA record (see :class:`pops.time.Value`). The C++ lowering of
+    node is a typed SSA record (see :class:`pops.time.ProgramValue`). The C++ lowering of
     this IR is deferred (ADC-462); :func:`pops.codegen.solvers.solver_cpp.generate_solver_cpp`
     raises rather than fake a Python solve.
     """
@@ -152,26 +152,42 @@ class SolverContext:
     the residual ``r`` and the operator apply ``A(x)`` are IR values, not arrays.
     """
 
-    def __init__(self, program: Any, block: Any = "solve") -> None:
+    def __init__(self, program: Any, temporal_state: Any = None) -> None:
         self._p = program
-        self._block = block
+        if temporal_state is not None:
+            from pops.time.handles import TimeState
+            if not isinstance(temporal_state, TimeState):
+                raise TypeError("SolverContext temporal_state must be a TimeState")
+            temporal_state = program._require_time_state(temporal_state, "SolverContext")
+        self._state = temporal_state
+        self._block = temporal_state.block if temporal_state is not None else None
 
     # --- operands -----------------------------------------------------------
     def unknown(self, name: Any = None) -> Any:
         """A fresh solver unknown (the iterate ``x`` / the rhs ``b``): a State IR value."""
-        return self._p.state(self._block)
+        if self._state is None:
+            raise ValueError(
+                "SolverContext.unknown requires a typed TimeState; construct the context from "
+                "Program.state(block_handle[state_handle])")
+        return self._state.n
 
     def zeros_like(self, value: Any) -> Any:
         """A zero-initialized iterate over the same block as @p value (the warm start)."""
         _require_field(value, "zeros_like")
-        return self._p.state(value.block or self._block)
+        if value.block is None or value.state_ref is None:
+            raise ValueError("zeros_like requires block-qualified State provenance")
+        return self._p._new(
+            "state", "state", (),
+            {"state": value.state_ref, "solver_role": "zero"},
+            "solver_zero", value.block, space=value.space,
+            state_ref=value.state_ref)
 
     def scalar_int(self, n: Any) -> Any:
         """A COMPILE-TIME integer literal as a Scalar IR value (a loop count / index). It
         is an IR node, never a live Python counter the loop mutates."""
         if isinstance(n, bool) or not isinstance(n, int):
             raise TypeError("scalar_int expects a Python int; got %r" % (n,))
-        return self._p._scalar_binop(float(n), 0.0, "add")
+        return self._p._scalar_binop(n, 0, "add")
 
     # --- reductions ---------------------------------------------------------
     def norm2(self, x: Any) -> Any:
@@ -192,7 +208,7 @@ class SolverContext:
     def residual(self, operator: Any, x: Any, b: Any) -> Any:
         """The residual ``r = b - A(x)`` as an affine IR combine (no Python math)."""
         ax = self.apply(operator, x)
-        return self._p.linear_combine(expr=b - ax)
+        return self._p._linear_combine(expr=b - ax)
 
     def combine(self, expr: Any) -> Any:
         """Materialize an affine IR expression (e.g. ``x + omega*r``) into a State IR node.
@@ -200,7 +216,7 @@ class SolverContext:
         The affine ``x + omega*r`` is a deferred IR expression; this records it as one
         ``linear_combine`` node (the next iterate). ``omega`` is an IR literal coefficient,
         never multiplied against data in Python."""
-        return self._p.linear_combine(expr=expr)
+        return self._p._linear_combine(expr=expr)
 
     # --- predicates ---------------------------------------------------------
     def logical_and(self, a: Any, b: Any) -> Any:
@@ -266,6 +282,8 @@ class _SolverWhile:
         # Its ops live in a separate cond_block (re-run each pass), not the body block.
         cond_block = []
         self._p._recording.append(cond_block)
+        self._p._allow_region_capture(
+            self._p._region_for_block(self._body), self._p._region_for_block(cond_block))
         try:
             cond = self._cond_fn()
         finally:
@@ -273,8 +291,15 @@ class _SolverWhile:
         if not (hasattr(cond, "vtype") and cond.vtype == "bool"):
             raise TypeError("while_: the condition builder must return a Bool IR value "
                             "(e.g. ctx.norm2(r) > tol); got %r" % (cond,))
+        from pops.time._program.value_validation import require_region
+        require_region(
+            self._p, cond, self._p._region_for_block(cond_block), "solver while condition",
+            vtype="bool")
         self._p._new("state", "while", (),
-                     {"cond_block": cond_block, "cond": cond, "body_block": self._body},
+                     {"cond_block": cond_block,
+                      "cond_region": self._p._region_for_block(cond_block), "cond": cond,
+                      "body_block": self._body,
+                      "body_region": self._p._region_for_block(self._body)},
                      None, self._block)
         return False
 
@@ -293,7 +318,15 @@ def build_solver_ir(solver_brick: Any) -> SolverIR:
     from pops import time as _time
     desc = _as_descriptor(solver_brick)
     program = _time.Program("solver_" + desc.name)
-    ctx = SolverContext(program)
+    from pops.model import Module
+    from pops.problem import Case
+
+    state_model = Module("solver_state:" + desc.name)
+    state_space = state_model.state_space("x", ("value",))
+    state = state_model.state_handle(state_space)
+    block = Case(name="solver_case:" + desc.name).block("solve", state_model)
+    temporal = program.state(block[state])
+    ctx = SolverContext(program, temporal)
     a_op = program._linear_source("A")   # the matrix-free operator A, an IR operator value
     b_rhs = ctx.unknown("b")             # the right-hand side b, an IR State value
     result = desc.builder(ctx, a_op, b_rhs)
@@ -332,7 +365,7 @@ def _walk_nodes(values: Any, out: Any) -> None:
         attrs = node.attrs if hasattr(node, "attrs") else {}
         for key in ("cond_block", "body_block"):
             block = attrs.get(key)
-            if isinstance(block, list):
+            if isinstance(block, (list, tuple)):
                 _walk_nodes(block, out)
 
 

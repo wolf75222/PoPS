@@ -35,8 +35,8 @@
 
 #include <pops/physics/bricks/bricks.hpp>  // CompositeModel, Euler, BackgroundDensity, ChargeDensity, PotentialForce
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // detail::make_shared_amr_layout / build_amr_block / dispatch_amr_block
-#include <pops/runtime/amr/amr_runtime.hpp>    // AmrRuntime, AmrRuntimeBlock
-#include <pops/runtime/amr_system.hpp>     // facade AmrSystem
+#include <pops/runtime/amr/amr_runtime.hpp>                 // AmrRuntime, AmrRuntimeBlock
+#include <pops/runtime/amr_system.hpp>                      // facade AmrSystem
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_model
 #include <pops/runtime/config/model_spec.hpp>
 
@@ -77,22 +77,28 @@ struct StiffMomentumRelax {
     return s;
   }
 };
-// elliptic "background" alpha=0 : rhs nul -> phi=0, aucun couplage au champ (raideur PUREMENT locale,
-// le cas propre pour separer la stabilite de la source de tout couplage Poisson).
-using StiffModel = CompositeModel<Euler, StiffMomentumRelax, BackgroundDensity>;
+// A genuinely state-independent zero elliptic brick. The deliberately unstable explicit oracle can
+// reach non-finite state without turning an authored zero RHS into `0 * NaN`.
+struct ZeroElliptic {
+  template <class State>
+  POPS_HD Real rhs(const State&) const {
+    return Real(0);
+  }
+};
+
+using StiffModel = CompositeModel<Euler, StiffMomentumRelax, ZeroElliptic>;
 StiffModel make_stiff(double eps) {
   StiffMomentumRelax r;
   r.inv_eps = static_cast<Real>(1.0 / eps);
-  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, BackgroundDensity{Real(0), Real(0)}};
+  return StiffModel{Euler{static_cast<Real>(kGamma)}, r, ZeroElliptic{}};
 }
 
 // Modele EXPLICITE neutre (Euler sans source, charge nulle) : un 2e bloc "voisin" pour exercer le
 // MULTI-BLOCS (hierarchie partagee, Poisson somme) sans raideur. ExB scalaire ne convient pas (1 var) ;
 // on prend un Euler 4 var a source nulle, MEME nombre de variables que le bloc raide (layout coherent).
-using NeutralModel = CompositeModel<Euler, NoSource, BackgroundDensity>;
+using NeutralModel = CompositeModel<Euler, NoSource, ZeroElliptic>;
 NeutralModel make_neutral() {
-  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{},
-                      BackgroundDensity{Real(0), Real(0)}};
+  return NeutralModel{Euler{static_cast<Real>(kGamma)}, NoSource{}, ZeroElliptic{}};
 }
 
 // densite + impulsion initiales : une bulle de densite avec une impulsion non nulle (pour que la source
@@ -107,6 +113,18 @@ std::vector<double> bubble(int n) {
       rho[static_cast<std::size_t>(j) * n + i] = 1.0 + 0.5 * std::exp(-(x * x + y * y) / 0.02);
     }
   return rho;
+}
+
+double mean_of(const std::vector<double>& values) {
+  double sum = 0.0;
+  for (double value : values)
+    sum += value;
+  return sum / static_cast<double>(values.size());
+}
+
+double periodic_rhs_mean(double q0, const std::vector<double>& rho0, double q1,
+                         const std::vector<double>& rho1) {
+  return q0 * mean_of(rho0) + q1 * mean_of(rho1);
 }
 
 bool all_finite(const std::vector<double>& v) {
@@ -140,8 +158,8 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
   AmrBuildParams bp;
   bp.mesh.n = N;
   bp.mesh.L = L;
-  bp.mesh.regrid_every = 0;      // hierarchie figee (multi-blocs)
-  bp.poisson.bc = BCRec{};  // periodique
+  bp.mesh.regrid_every = 0;  // hierarchie figee (multi-blocs)
+  bp.poisson.bc = BCRec{};   // periodique
   const detail::SharedAmrLayout S = detail::make_shared_amr_layout(bp);
   std::vector<AmrRuntimeBlock> blocks;
   // bloc A : raide, traitement imex_stiff (true = IMEX, false = explicite : disable-and-fail).
@@ -152,8 +170,11 @@ AmrRuntime make_stiff_pair(int N, double L, double eps, bool imex_stiff,
   blocks.push_back(detail::build_amr_block<NeutralModel, Minmod, RusanovFlux>(
       make_neutral(), S, "neutral", rho, /*has_density=*/true, kGamma, /*substeps=*/1,
       /*recon_prim=*/false, /*imex=*/false, /*stride=*/1));
-  return AmrRuntime(S.geom, S.ba_coarse, S.poisson_bc, std::move(blocks), S.base_per,
-                    S.replicated_coarse, S.wall);
+  AmrRuntime runtime(S.geom, S.runtime_hierarchy(), S.poisson_bc, std::move(blocks), S.base_per,
+                     S.replicated_coarse, S.wall);
+  runtime.set_parent_child_temporal_relations({::pops::amr::ParentChildClockRelation(
+      0, 1, ::pops::amr::Rational(2, 1), ::pops::amr::RemainderPolicy::IntegralOnly)});
+  return runtime;
 }
 
 // Lit DIRECTEMENT le grossier (niveau 0) du bloc @p b et renvoie le max |U(.,.,c)| sur les
@@ -225,6 +246,13 @@ TEST(test_amr_multiblock_imex, Runs) {
   const int N = 32;
   const double L = 1.0;
   const std::vector<double> rho = bubble(N);
+  ASSERT_EQ(periodic_rhs_mean(0.0, rho, 0.0, rho), 0.0)
+      << "exact-zero elliptic bricks must have zero periodic RHS mean before solve";
+
+  const std::vector<double> facade_rho_a = bump(N, 1.0, 0.40);
+  const std::vector<double> facade_rho_b = bump(N, 1.0, 0.20);
+  ASSERT_NEAR(periodic_rhs_mean(+1.0, facade_rho_a, -1.0, facade_rho_b), 0.0, 1e-13)
+      << "charged facade fixtures must satisfy the periodic Poisson nullspace before solve";
 
   // ============================================================================================
   // (1)+(2)+(3) STABILITE RAIDE + CONSERVATION + DISABLE-AND-FAIL, au niveau du moteur AmrRuntime.
@@ -237,7 +265,8 @@ TEST(test_amr_multiblock_imex, Runs) {
   {
     AmrRuntime rt = make_stiff_pair(N, L, eps, /*imex_stiff=*/true, rho);
     const Real m0 = rt.mass(0);  // masse du bloc raide AVANT (sur le grossier, cascade incluse)
-    EXPECT_EQ(rt.nlev(), 2) << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
+    EXPECT_EQ(rt.nlev(), 2)
+        << "imex_two_levels_present";  // un patch fin existe (couverture exercee)
     for (int s = 0; s < K; ++s)
       rt.step(static_cast<Real>(dt));
     const std::vector<double> dStiff = rt.density(0);
@@ -363,11 +392,12 @@ TEST(test_amr_multiblock_imex, Runs) {
     cfg.periodic = true;
     cfg.regrid_every = 0;  // multi-blocs : hierarchie figee
     AmrSystem sim(cfg);
+    sim.set_temporal_relations({2}, {1}, {"integral_only"});
     sim.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1);
     sim.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
     sim.set_poisson("charge_density", "geometric_mg", "periodic");
-    sim.set_density("A", bump(N, 1.0, 0.40));
-    sim.set_density("B", bump(N, 1.0, 0.20));
+    sim.set_density("A", facade_rho_a);
+    sim.set_density("B", facade_rho_b);
     for (int s = 0; s < 6; ++s)
       sim.step(5e-3);
     EXPECT_EQ(sim.n_blocks(), 2) << "facade_two_blocks";
@@ -377,10 +407,10 @@ TEST(test_amr_multiblock_imex, Runs) {
     // (5b) masque IMEX partiel REFUSE en explicite (pas d'ignore silencieux).
     {
       AmrSystem s2(cfg);
-      EXPECT_THROW(s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative",
-                                "explicit", 1, 1,
-                                /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"}),
-                  std::runtime_error)
+      EXPECT_THROW(
+          s2.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "explicit", 1, 1,
+                       /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"}),
+          std::runtime_error)
           << "facade_mask_rejected_in_explicit";
     }
 
@@ -389,12 +419,13 @@ TEST(test_amr_multiblock_imex, Runs) {
     //      inexistant pour le bloc ExB scalaire) leve une erreur claire au build.
     {
       AmrSystem s3(cfg);
+      s3.set_temporal_relations({2}, {1}, {"integral_only"});
       s3.add_block("A", pot_charge(50.0), "minmod", "rusanov", "conservative", "imex", 1, 1,
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x", "momentum_y"});
       s3.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
       s3.set_poisson("charge_density", "geometric_mg", "periodic");
-      s3.set_density("A", bump(N, 1.0, 0.40));
-      s3.set_density("B", bump(N, 1.0, 0.20));
+      s3.set_density("A", facade_rho_a);
+      s3.set_density("B", facade_rho_b);
       bool ok = false;
       try {
         for (int s = 0; s < 4; ++s)
@@ -409,15 +440,23 @@ TEST(test_amr_multiblock_imex, Runs) {
     // (5d) role ABSENT du bloc -> erreur claire au build (resolution du masque, build_multi).
     {
       AmrSystem s4(cfg);
+      s4.set_temporal_relations({2}, {1}, {"integral_only"});
       // ExB scalaire (1 var, role Scalar) : 'momentum_x' n'existe pas -> resolve_implicit_components leve.
       s4.add_block("A", exb_charge(1.0, 1.0), "none", "rusanov", "conservative", "imex", 1, 1,
                    /*implicit_vars=*/{}, /*implicit_roles=*/{"momentum_x"});
       s4.add_block("B", exb_charge(-1.0, 1.0), "none", "rusanov", "conservative", "explicit", 1, 1);
       s4.set_poisson("charge_density", "geometric_mg", "periodic");
-      s4.set_density("A", bump(N, 1.0, 0.40));
-      s4.set_density("B", bump(N, 1.0, 0.20));
-      EXPECT_THROW(s4.step(5e-3), std::runtime_error)  // build paresseux : role absent -> leve
-          << "facade_partial_mask_absent_role_throws";
+      s4.set_density("A", facade_rho_a);
+      s4.set_density("B", facade_rho_b);
+      std::string diagnostic;
+      try {
+        s4.step(5e-3);  // build paresseux : role absent -> leve
+        FAIL() << "facade_partial_mask_absent_role_throws";
+      } catch (const std::runtime_error& error) {
+        diagnostic = error.what();
+      }
+      EXPECT_NE(diagnostic.find("implicit_roles"), std::string::npos) << diagnostic;
+      EXPECT_NE(diagnostic.find("momentum_x"), std::string::npos) << diagnostic;
     }
   }
 }

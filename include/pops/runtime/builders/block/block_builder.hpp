@@ -13,6 +13,7 @@
 #include <pops/numerics/spatial/embedded_boundary/operator.hpp>  // assemble_rhs_eb (cut-cell EB) + detail::DiscLevelSet (T5-PR2)
 #include <pops/numerics/time/integrators/implicit_stepper.hpp>
 #include <pops/numerics/time/integrators/time_steppers.hpp>
+#include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann, limiter_n_ghost)
 #include <pops/runtime/context/grid_context.hpp>  // GridContext + BlockClosures (shared lightweight header)
@@ -47,6 +48,63 @@ namespace pops {
 // included by system.hpp to expose grid_context() / install_block() without pulling in the numerics).
 
 namespace detail {
+struct ZeroPreparedInterfaceFace {
+  Array4 flux;
+  int axis = 0;
+  int coordinate = 0;
+  int components = 0;
+  POPS_HD void operator()(int i, int j) const {
+    if ((axis == 0 ? i : j) != coordinate)
+      return;
+    for (int component = 0; component < components; ++component)
+      flux(i, j, component) = Real(0);
+  }
+};
+
+inline void zero_prepared_interface_fluxes(MultiFab& fx, MultiFab& fy, const GridContext& context) {
+  if (!context.boundary_plan || !context.boundary_plan->has_omitted_faces())
+    return;
+  for (int local = 0; local < fx.local_size(); ++local) {
+    const Box2D faces = fx.box(local);
+    if (context.boundary_plan->omits_face(0, -1))
+      for_each_cell(faces, ZeroPreparedInterfaceFace{fx.fab(local).array(), 0, context.dom.lo[0],
+                                                     fx.ncomp()});
+    if (context.boundary_plan->omits_face(0, 1))
+      for_each_cell(faces, ZeroPreparedInterfaceFace{fx.fab(local).array(), 0,
+                                                     context.dom.hi[0] + 1, fx.ncomp()});
+  }
+  for (int local = 0; local < fy.local_size(); ++local) {
+    const Box2D faces = fy.box(local);
+    if (context.boundary_plan->omits_face(1, -1))
+      for_each_cell(faces, ZeroPreparedInterfaceFace{fy.fab(local).array(), 1, context.dom.lo[1],
+                                                     fy.ncomp()});
+    if (context.boundary_plan->omits_face(1, 1))
+      for_each_cell(faces, ZeroPreparedInterfaceFace{fy.fab(local).array(), 1,
+                                                     context.dom.hi[1] + 1, fy.ncomp()});
+  }
+}
+
+template <class Limiter, class Flux, class Model>
+inline void assemble_rhs_without_prepared_interfaces(const Model& model, MultiFab& state,
+                                                     const GridContext& context, MultiFab& residual,
+                                                     bool reconstruct_primitive,
+                                                     Real positivity_floor) {
+  std::vector<Box2D> xboxes;
+  std::vector<Box2D> yboxes;
+  xboxes.reserve(static_cast<std::size_t>(state.box_array().size()));
+  yboxes.reserve(static_cast<std::size_t>(state.box_array().size()));
+  for (int box = 0; box < state.box_array().size(); ++box) {
+    xboxes.push_back(xface_box(state.box_array()[box]));
+    yboxes.push_back(yface_box(state.box_array()[box]));
+  }
+  MultiFab fx(BoxArray(std::move(xboxes)), state.dmap(), state.ncomp(), 0);
+  MultiFab fy(BoxArray(std::move(yboxes)), state.dmap(), state.ncomp(), 0);
+  compute_face_fluxes<Limiter, Flux>(model, state, *context.aux, fx, fy, context.geom.dx(),
+                                     context.geom.dy(), reconstruct_primitive, positivity_floor);
+  zero_prepared_interface_fluxes(fx, fy, context);
+  mf_eval_rhs(model, state, *context.aux, fx, fy, context.geom.dx(), context.geom.dy(), residual);
+}
+
 /// Residual functor -div F + S (fill_ghosts then assemble_rhs), passed TO THE TimeStepper as RhsEval.
 /// NAMED FUNCTOR (not a lambda): this is what take_step receives and what triggers the instantiation
 /// of assemble_rhs<Limiter, Flux> (and its device AssembleRhsKernel). First-instantiated from an
@@ -64,9 +122,10 @@ struct BlockRhsEval {
   /// unchanged. Non-null ONLY for the HLL flux (cf. build_block): the cached branch is instantiated
   /// only for Flux == HLLFlux, so model.wave_speeds is always present there.
   std::shared_ptr<MultiFab> ws_cache;
-  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
+  Real weno_eps =
+      kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_ghosts(U, ctx->dom, ctx->bc);
+    fill_grid_ghosts(U, *ctx);
     if constexpr (std::is_same_v<Flux, HLLFlux>) {
       if (ws_cache) {
         // Re-allocate the scratch at the current layout (4 components, 1 ghost): covers an AMR regrid
@@ -79,6 +138,66 @@ struct BlockRhsEval {
       }
     }
     assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor, weno_eps);
+  }
+
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    eval_core(point, U, R);
+    add_grid_boundary_residual(U, R, *ctx, point);
+  }
+
+  /// Point-qualified transport/source core.  It includes ghost producers and prepared shared-face
+  /// omission, but deliberately excludes additive FieldBoundary residuals so an implicit operator
+  /// can compose their exact JVP without finite-differencing them twice.
+  void eval_core(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                 MultiFab& R) const {
+    fill_grid_ghosts(U, *ctx, point);
+    if (ctx->boundary_plan && ctx->boundary_plan->has_omitted_faces()) {
+      assemble_rhs_without_prepared_interfaces<Limiter, Flux>(model, U, *ctx, R, recon_prim,
+                                                              pos_floor);
+      return;
+    }
+    if constexpr (std::is_same_v<Flux, HLLFlux>) {
+      if (ws_cache) {
+        if (ws_cache->local_size() != U.local_size() || ws_cache->ncomp() != 4)
+          *ws_cache = MultiFab(U.box_array(), U.dmap(), 4, 1);
+        assemble_rhs_hll_cached<Limiter>(model, U, *ctx->aux, ctx->geom, R, *ws_cache, recon_prim,
+                                         pos_floor, weno_eps);
+        return;
+      }
+    }
+    assemble_rhs<Limiter, Flux>(model, U, *ctx->aux, ctx->geom, R, recon_prim, pos_floor, weno_eps);
+  }
+};
+
+template <class Limiter, class Flux, class Model>
+struct RhsCoreInto {
+  Model model;
+  GridContext ctx;
+  bool recon_prim;
+  Real pos_floor = Real(0);
+  std::shared_ptr<MultiFab> ws_cache;
+  Real weno_eps = kWenoEpsilon;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    BlockRhsEval<Limiter, Flux, Model>{model, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}
+        .eval_core(point, U, R);
+  }
+};
+
+struct BoundaryResidualInto {
+  GridContext ctx;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    add_grid_boundary_residual(U, R, ctx, point);
+  }
+};
+
+struct BoundaryJvpInto {
+  GridContext ctx;
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  const MultiFab& V, MultiFab& J) const {
+    apply_grid_boundary_jvp(U, V, J, ctx, point);
   }
 };
 
@@ -93,11 +212,11 @@ struct AdvanceExplicit {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   std::shared_ptr<MultiFab> ws_cache;  ///< HLL wave speed cache (opt-in); nullptr -> per-face path
-  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
+  Real weno_eps = kWenoEpsilon;        ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, Real dt, int n) const {
     const Real h = dt / static_cast<Real>(n);
-    const BlockRhsEval<Limiter, Flux, Model> rhs{m, &ctx, recon_prim, pos_floor, ws_cache,
-                                                 weno_eps};
+    const BlockRhsEval<Limiter, Flux, Model> rhs{m,         &ctx,     recon_prim,
+                                                 pos_floor, ws_cache, weno_eps};
     run_explicit_substeps<Stepper>(rhs, U, h, n);
   }
 };
@@ -264,10 +383,15 @@ struct RhsInto {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   std::shared_ptr<MultiFab> ws_cache;  ///< HLL wave speed cache (opt-in); nullptr -> per-face path
-  Real weno_eps = kWenoEpsilon;  ///< ADC-645: WENO-Z regulariser (default = historical)
+  Real weno_eps = kWenoEpsilon;        ///< ADC-645: WENO-Z regulariser (default = historical)
   void operator()(MultiFab& U, MultiFab& R) const {
     // Delegates to BlockRhsEval (fill_ghosts + assemble_rhs OR cached path): single source of the residual.
     BlockRhsEval<Limiter, Flux, Model>{m, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}(U, R);
+  }
+  void operator()(const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U,
+                  MultiFab& R) const {
+    BlockRhsEval<Limiter, Flux, Model>{m, &ctx, recon_prim, pos_floor, ws_cache, weno_eps}(point, U,
+                                                                                           R);
   }
 };
 
@@ -330,7 +454,7 @@ struct BlockRhsEvalMasked {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_ghosts(U, ctx->dom, ctx->bc);
+    fill_grid_ghosts(U, *ctx);
     assemble_rhs_masked<Limiter, Flux>(model, U, *ctx->aux, *mask, ctx->geom, R, recon_prim,
                                        pos_floor);
   }
@@ -351,7 +475,7 @@ struct BlockRhsEvalEb {
   bool recon_prim;
   Real pos_floor = Real(0);  ///< Zhang-Shu positivity limiter (<= 0: inactive, bit-identical)
   void operator()(MultiFab& U, MultiFab& R) const {
-    fill_ghosts(U, ctx->dom, ctx->bc);
+    fill_grid_ghosts(U, *ctx);
     // ADC-615: the cut-cell thresholds flow from the GridContext (resolved by set_disc_domain);
     // defaults = kEb* so an unconfigured EB run is bit-identical, and cut_theta_min matches the wall.
     assemble_rhs_eb<Limiter, Flux>(model, U, *ctx->aux, disc_level_set(*eb_domain), ctx->geom, R,
@@ -468,7 +592,7 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// ForwardEuler + backward_euler_source in IMEX. The closures are NAMED FUNCTORS (cf. namespace detail)
 /// and not lambdas: the add_compiled_model path (first instantiation from an external TU) then emits
 /// cleanly under nvcc. @p method affects ONLY the explicit advance (IMEX keeps its ForwardEuler
-/// half-step + implicit source); "ssprk2" reproduces the historical advance (bit-identical). In IMEX
+/// half-step + implicit source); canonical route "explicit" selects SSPRK2. In IMEX
 /// (@p imex), @p method "imexrk_ars222" selects the IMEX-RK ARS(2,2,2) family (order 2, advance
 /// PARALLEL to AdvanceImex, full cartesian only); any other value keeps the historical backward-Euler
 /// IMEX (order 1, bit-identical).
@@ -483,12 +607,12 @@ POPS_COLD_FN ImplicitMask<N> make_implicit_mask(const std::vector<int>& implicit
 /// residual is dispatched (assemble_rhs_masked / _eb).
 template <class Limiter, class Flux, class Model>
 POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, bool imex,
-                                      bool recon_prim, const std::string& method = "ssprk2",
-                                      const std::vector<int>& implicit_components = {},
-                                      const NewtonOptions& newton_opts = {},
-                                      NewtonReport* newton_report = nullptr,
-                                      Real pos_floor = Real(0), bool wave_speed_cache = false,
-                                      Real weno_eps = kWenoEpsilon) {
+                                       bool recon_prim, const std::string& method = "explicit",
+                                       const std::vector<int>& implicit_components = {},
+                                       const NewtonOptions& newton_opts = {},
+                                       NewtonReport* newton_report = nullptr,
+                                       Real pos_floor = Real(0), bool wave_speed_cache = false,
+                                       Real weno_eps = kWenoEpsilon) {
   const MultiFab* domain_mask = ctx.domain_mask;
   const detail::DiscDomain* eb_domain = ctx.eb_domain;
   // ADC-645: the per-block WENO-Z regulariser (weno_eps) is threaded through the FULL-cartesian
@@ -506,8 +630,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
       wave_speed_cache ? std::make_shared<MultiFab>() : std::shared_ptr<MultiFab>{};
   // Decode @p method ONCE through the typed TimeRouteId (ADC-641): the imex branch keeps its
   // imexrk_ars222-vs-historical split and the explicit branch is a switch; both are bit-identical to the
-  // old method=="..." string ladder (parse_time_route("explicit")==parse_time_route("ssprk2")==
-  // kExplicitSsprk2, so a compiled Program crossing "explicit" decodes to the SSPRK2 advance).
+  // old method=="..." string ladder. The canonical "explicit" route decodes to SSPRK2; legacy
+  // scheme aliases are rejected by parse_time_route rather than silently normalized.
   const TimeRouteId time_route = parse_time_route(method, "System");
   if (imex) {
     if (time_route == TimeRouteId::kImexRkArs222) {
@@ -558,11 +682,13 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
           m, ctx, eb_domain, recon_prim, pos_floor};
   } else {
     // kImex reaches here only when imex==false (a compiled Program's hyperbolic stage never asks for the
-    // implicit source); every other explicit route was handled above. Message preserved verbatim.
+    // implicit source); every other explicit route was handled above.
     throw std::runtime_error("System: unknown explicit time method '" + method +
-                             "' (euler|ssprk2|ssprk3)");
+                             "' (explicit|euler|ssprk3)");
   }
   bc.rhs_into =
+      detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
+  bc.rhs_at_point =
       detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
   // FLUX-ONLY residual R <- -div F(U) (ADC-425): the SAME RhsInto path on SourceFreeModel<Model> (the
   // canonical zero-source adapter the IMEX explicit half-step already uses, state_access.hpp), so the
@@ -577,6 +703,21 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
   // not a numerics change.
   bc.rhs_flux_only = detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
       SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
+  bc.rhs_flux_only_at_point = detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
+  bc.rhs_core_at_point =
+      detail::RhsCoreInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
+  bc.rhs_flux_only_core_at_point = detail::RhsCoreInto<Limiter, Flux, SourceFreeModel<Model>>{
+      SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
+  bc.boundary_residual_at_point = detail::BoundaryResidualInto{ctx};
+  bc.boundary_jvp_at_point = detail::BoundaryJvpInto{ctx};
+  if (ctx.boundary_plan && ctx.boundary_plan->has_omitted_faces()) {
+    bc.rhs_without_prepared_interfaces =
+        detail::RhsInto<Limiter, Flux, Model>{m, ctx, recon_prim, pos_floor, ws_cache, weno_eps};
+    bc.rhs_flux_only_without_prepared_interfaces =
+        detail::RhsInto<Limiter, Flux, SourceFreeModel<Model>>{
+            SourceFreeModel<Model>{m}, ctx, recon_prim, pos_floor, nullptr, weno_eps};
+  }
   // SOURCE-ONLY residual R <- S(U, aux) (ADC-430): the exact MIRROR of rhs_flux_only. SourceInto
   // evaluates m.source per cell (the SAME source term assemble_rhs / rhs_into add) with no numerical-flux
   // dispatch, so it is bit-identical to the source half of rhs_into and flux-template agnostic (a
@@ -600,7 +741,8 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 /// by requires: they demand a 4-variable transport exposing pressure (otherwise an explicit error).
 /// "weno5" = WENO5-Z reconstruction (order 5, 5-point stencil, 3 ghosts); spatial_operator routes to
 /// weno5z when Limiter::n_ghost >= 3 (the caller must allocate 3 ghosts, cf. block_n_ghost).
-/// @p method chooses the EXPLICIT advance (ssprk2 by default, ssprk3 | euler optional); no effect in IMEX.
+/// @p method chooses the EXPLICIT advance (explicit/SSPRK2 by default, ssprk3 | euler optional);
+/// no effect in IMEX.
 /// @p implicit_components: IMEX implicit mask carried by the block (indices; empty = model default,
 /// bit-identical). cf. build_block.
 // Per-flux limiter ladders, split out of make_block (ADC-335) so each flux's build_block leaves can be
@@ -612,12 +754,12 @@ POPS_COLD_FN BlockClosures build_block(const Model& m, const GridContext& ctx, b
 // make_block dispatcher (kept) and, for the per-flux seam path, to the caller (System).
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string& lim,
-                                             const GridContext& ctx, bool imex, bool recon_prim,
-                                             const std::string& method,
-                                             const std::vector<int>& implicit_components,
-                                             const NewtonOptions& newton_opts,
-                                             NewtonReport* newton_report, Real pos_floor,
-                                             Real weno_eps = kWenoEpsilon) {
+                                              const GridContext& ctx, bool imex, bool recon_prim,
+                                              const std::string& method,
+                                              const std::vector<int>& implicit_components,
+                                              const NewtonOptions& newton_opts,
+                                              NewtonReport* newton_report, Real pos_floor,
+                                              Real weno_eps = kWenoEpsilon) {
   return dispatch_limiter(parse_limiter_route(lim, "System"), "System", [&](auto tag) {
     using L = typename decltype(tag)::type;
     return build_block<L, RusanovFlux>(m, ctx, imex, recon_prim, method, implicit_components,
@@ -628,12 +770,12 @@ POPS_COLD_FN BlockClosures make_block_rusanov(const Model& m, const std::string&
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim,
-                                         const GridContext& ctx, bool imex, bool recon_prim,
-                                         const std::string& method,
-                                         const std::vector<int>& implicit_components,
-                                         const NewtonOptions& newton_opts,
-                                         NewtonReport* newton_report, Real pos_floor,
-                                         bool wave_speed_cache, Real weno_eps = kWenoEpsilon) {
+                                          const GridContext& ctx, bool imex, bool recon_prim,
+                                          const std::string& method,
+                                          const std::vector<int>& implicit_components,
+                                          const NewtonOptions& newton_opts,
+                                          NewtonReport* newton_report, Real pos_floor,
+                                          bool wave_speed_cache, Real weno_eps = kWenoEpsilon) {
   // HLL (Harten-Lax-van Leer, 2 waves): less diffusive than Rusanov (dissipation ~ signed |sR-sL|
   // instead of symmetric 2*max|v|), but does NOT require pressure (unlike HLLC/Roe) -- only SIGNED
   // wave speeds model.wave_speeds. Available as soon as a model exposes its signed eigenvalues (the
@@ -664,12 +806,12 @@ POPS_COLD_FN BlockClosures make_block_hll(const Model& m, const std::string& lim
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_hllc(const Model& m, const std::string& lim,
-                                          const GridContext& ctx, bool imex, bool recon_prim,
-                                          const std::string& method,
-                                          const std::vector<int>& implicit_components,
-                                          const NewtonOptions& newton_opts,
-                                          NewtonReport* newton_report, Real pos_floor,
-                                             Real weno_eps = kWenoEpsilon) {
+                                           const GridContext& ctx, bool imex, bool recon_prim,
+                                           const std::string& method,
+                                           const std::vector<int>& implicit_components,
+                                           const NewtonOptions& newton_opts,
+                                           NewtonReport* newton_report, Real pos_floor,
+                                           Real weno_eps = kWenoEpsilon) {
   // HLLC (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasHLLCStructure (contact_speed +
   // hllc_star_state). The native Euler brick now provides the capability, so the canonical Euler 2D
   // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
@@ -698,7 +840,7 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
                                                  const std::vector<int>& implicit_components,
                                                  const NewtonOptions& newton_opts,
                                                  NewtonReport* newton_report, Real pos_floor,
-                                             Real weno_eps = kWenoEpsilon) {
+                                                 Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical Euler 2D HLLC (ADC-590): the euler_hllc route pins EulerHLLCFlux2D directly.
   // Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true Euler brick
   // this is the SAME arithmetic as the generic hllc path (HLLCFlux via HasHLLCStructure).
@@ -720,12 +862,12 @@ POPS_COLD_FN BlockClosures make_block_euler_hllc(const Model& m, const std::stri
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block_roe(const Model& m, const std::string& lim,
-                                         const GridContext& ctx, bool imex, bool recon_prim,
-                                         const std::string& method,
-                                         const std::vector<int>& implicit_components,
-                                         const NewtonOptions& newton_opts,
-                                         NewtonReport* newton_report, Real pos_floor,
-                                             Real weno_eps = kWenoEpsilon) {
+                                          const GridContext& ctx, bool imex, bool recon_prim,
+                                          const std::string& method,
+                                          const std::vector<int>& implicit_components,
+                                          const NewtonOptions& newton_opts,
+                                          NewtonReport* newton_report, Real pos_floor,
+                                          Real weno_eps = kWenoEpsilon) {
   // ROE (generic, ADC-590): GENERIC-ONLY -- the model MUST supply HasRoeDissipation (full
   // d = |A_roe| dU). The native Euler brick now provides the capability, so the canonical Euler 2D
   // transport still reaches this path (bit-identical). A 4-var-pressure model WITHOUT the capability
@@ -754,7 +896,7 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
                                                 const std::vector<int>& implicit_components,
                                                 const NewtonOptions& newton_opts,
                                                 NewtonReport* newton_report, Real pos_floor,
-                                             Real weno_eps = kWenoEpsilon) {
+                                                Real weno_eps = kWenoEpsilon) {
   // EXPLICIT canonical ideal-gas Euler 2D Roe (ADC-590): the euler_roe route pins EulerRoeFlux2D
   // directly. Gated on the canonical layout (n_vars == 4 + pressure); never a fallback. On the true
   // Euler brick this is the SAME arithmetic as the generic roe path (RoeFlux via HasRoeDissipation).
@@ -776,13 +918,13 @@ POPS_COLD_FN BlockClosures make_block_euler_roe(const Model& m, const std::strin
 
 template <class Model>
 POPS_COLD_FN BlockClosures make_block(const Model& m, const std::string& lim,
-                                     const std::string& riem, const GridContext& ctx, bool imex,
-                                     bool recon_prim, const std::string& method = "ssprk2",
-                                     const std::vector<int>& implicit_components = {},
-                                     const NewtonOptions& newton_opts = {},
-                                     NewtonReport* newton_report = nullptr,
-                                     Real pos_floor = Real(0), bool wave_speed_cache = false,
-                                     Real weno_eps = kWenoEpsilon) {
+                                      const std::string& riem, const GridContext& ctx, bool imex,
+                                      bool recon_prim, const std::string& method = "explicit",
+                                      const std::vector<int>& implicit_components = {},
+                                      const NewtonOptions& newton_opts = {},
+                                      NewtonReport* newton_report = nullptr,
+                                      Real pos_floor = Real(0), bool wave_speed_cache = false,
+                                      Real weno_eps = kWenoEpsilon) {
   // CENTRALIZED VALIDATION (registry dispatch_tags.hpp) BEFORE the dispatch: same tag acceptances /
   // rejections as before, identical messages (validate_* keeps the historical wording). The flux
   // dispatch now forwards to the per-flux helpers above (each holds the unchanged capability

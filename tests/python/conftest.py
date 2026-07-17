@@ -6,10 +6,21 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 import pytest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 test environments
+    import tomli as tomllib
+
+from tests.python.support.requirements import (
+    native_tests_required,
+    require_mpi_or_skip,
+    require_native_or_skip,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +43,7 @@ class PythonProcessFile(pytest.File):
 
 class PythonProcessItem(pytest.Item):
     def runtest(self) -> None:
+        path = Path(str(self.path))
         env = os.environ.copy()
         env["POPS_PYTEST_PROCESS"] = "1"
         env["PYTHONUNBUFFERED"] = "1"
@@ -45,26 +57,27 @@ class PythonProcessItem(pytest.Item):
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=_process_timeout(Path(str(self.path))),
+            timeout=_process_timeout(path),
         )
         skip_reason = _process_skip_reason(result.stdout)
         if skip_reason:
-            pytest.skip(skip_reason)
+            _require_process_or_skip(skip_reason, path)
+        if result.returncode == 0:
+            legacy_missing = _missing_process_requirement(result.stdout)
+            if legacy_missing:
+                _require_process_or_skip(legacy_missing, path)
         if result.returncode != 0:
-            missing = _missing_process_requirement(result.stdout)
+            missing = _missing_process_requirement_for_environment(result.stdout, env)
             if missing:
-                pytest.skip(missing)
-            raise PythonProcessFailure(Path(str(self.path)), result.returncode, result.stdout)
+                _require_process_or_skip(missing, path)
+            raise PythonProcessFailure(path, result.returncode, result.stdout)
 
     def repr_failure(self, excinfo: pytest.ExceptionInfo[BaseException]) -> str:
         if isinstance(excinfo.value, PythonProcessFailure):
             output = excinfo.value.output.rstrip()
             if len(output) > 16000:
                 output = output[-16000:]
-            return (
-                f"{excinfo.value.path} exited with status {excinfo.value.returncode}\n"
-                f"{output}"
-            )
+            return f"{excinfo.value.path} exited with status {excinfo.value.returncode}\n{output}"
         return super().repr_failure(excinfo)
 
     def reportinfo(self) -> tuple[Path, int, str]:
@@ -117,7 +130,11 @@ def kokkos_root() -> Path:
             root = Path(value)
             if root.exists():
                 return root
-    pytest.skip("Kokkos root is not configured")
+    require_native_or_skip(
+        "Kokkos root is not configured",
+        optional_skip=pytest.skip,
+    )
+    raise AssertionError("pytest.skip unexpectedly returned")
 
 
 @pytest.fixture(scope="session")
@@ -132,7 +149,11 @@ def native_cxx() -> str:
     for candidate in candidates:
         if candidate:
             return candidate
-    pytest.skip("no C++ compiler available")
+    require_native_or_skip(
+        "no C++ compiler available",
+        optional_skip=pytest.skip,
+    )
+    raise AssertionError("pytest.skip unexpectedly returned")
 
 
 @pytest.fixture(scope="session")
@@ -203,10 +224,61 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         # skip through the POPS_SKIP marker, so they are left alone here.
         if compiler_missing and not isinstance(item, PythonProcessItem):
             if any(m.name == "compiler" for m in item.iter_markers()):
-                item.add_marker(pytest.mark.skip(reason=compiler_missing))
+                require_native_or_skip(
+                    compiler_missing,
+                    optional_skip=lambda reason, target=item: target.add_marker(
+                        pytest.mark.skip(reason=reason)
+                    ),
+                )
 
 
-@lru_cache(maxsize=None)
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item,
+    call: pytest.CallInfo[None],
+) -> Iterator[None]:
+    """Make every native-gated skip fail closed in required CI lanes.
+
+    This is the final safety net for a legacy direct ``pytest.skip`` or a third-party fixture skip.
+    The canonical requirement helper remains the preferred call site, but release coverage cannot
+    become green merely because one native test missed that migration.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if report.skipped and native_tests_required() and _is_native_requirement_skip(report.longrepr):
+        report.outcome = "failed"
+        report.longrepr = (
+            "POPS_REQUIRE_NATIVE_TESTS=1 forbids skips for native-gated tests: "
+            f"{item.nodeid} ({report.longrepr})"
+        )
+
+
+def _is_native_requirement_skip(longrepr: object) -> bool:
+    """Recognize only compiler/Kokkos/native-build skip diagnostics.
+
+    Marker membership is deliberately insufficient: a test can combine a native leg with an
+    optional MPI/HDF5 leg. Conversely, legacy mixed tests may omit the compiler marker entirely.
+    The skip reason is the authority for whether ``POPS_REQUIRE_NATIVE_TESTS`` applies.
+    """
+    reason = str(longrepr).lower()
+    explicit = (
+        "c++ compiler",
+        "compiler available",
+        "compilateur c++",
+        "kokkos",
+        "pops headers",
+        "pops header",
+        "en-tetes pops",
+        "native extension",
+        "_pops module",
+        "stale build",
+    )
+    return any(token in reason for token in explicit) or (
+        ".so" in reason and ("build" in reason or "compile" in reason)
+    )
+
+
+@cache
 def _process_timeout(path: Path) -> int:
     """Timeout for one process-isolated test file, in seconds.
 
@@ -233,17 +305,33 @@ def _process_timeout(path: Path) -> int:
     return PROCESS_TEST_TIMEOUT
 
 
-@lru_cache(maxsize=None)
+@cache
 def _process_test_dirs() -> tuple[str, ...]:
     dirs = {str(path.parent) for path in (REPO_ROOT / "tests" / "python").rglob("test_*.py")}
     return tuple(sorted(dirs))
 
 
 def _process_pythonpath(existing: str | None) -> str:
+    """Build a subprocess path without masking an installed native package.
+
+    A source checkout contains ``pops/__init__.py`` but normally not ``pops._pops``. Putting that
+    directory ahead of site-packages makes process-isolated integration tests import a package that
+    can never load its native extension, even immediately after ``scripts/build_python.sh`` installed
+    a coherent wheel. Use the source package only when it carries a compatible extension itself;
+    otherwise exercise the freshly installed wheel while keeping the repository/test helpers visible.
+    """
+    source_usable = _source_python_has_native_extension()
     entries: list[str] = []
     if existing:
-        entries.extend(part for part in existing.split(os.pathsep) if part)
-    entries.extend([str(REPO_ROOT), str(SOURCE_PYTHON), *_process_test_dirs()])
+        entries.extend(
+            part
+            for part in existing.split(os.pathsep)
+            if part and (source_usable or Path(part).resolve() != SOURCE_PYTHON.resolve())
+        )
+    entries.append(str(REPO_ROOT))
+    if source_usable:
+        entries.append(str(SOURCE_PYTHON))
+    entries.extend(_process_test_dirs())
     deduped: list[str] = []
     seen: set[str] = set()
     for entry in entries:
@@ -253,7 +341,16 @@ def _process_pythonpath(existing: str | None) -> str:
     return os.pathsep.join(deduped)
 
 
-@lru_cache(maxsize=None)
+@cache
+def _source_python_has_native_extension() -> bool:
+    package = SOURCE_PYTHON / "pops"
+    suffixes = (".so", ".dylib", ".pyd")
+    return any(
+        path.name.startswith("_pops.") and path.suffix in suffixes for path in package.iterdir()
+    )
+
+
+@cache
 def _compiler_gate_reason() -> str | None:
     """Return why a compiler-gated test cannot run here, or None if it can.
 
@@ -290,25 +387,71 @@ def _process_skip_reason(output: str) -> str | None:
     for line in output.splitlines():
         stripped = line.strip()
         if stripped.startswith(PROCESS_SKIP_MARKER):
-            return stripped[len(PROCESS_SKIP_MARKER):].strip() or "requirement not met"
+            return stripped[len(PROCESS_SKIP_MARKER) :].strip() or "requirement not met"
     return None
 
 
+@cache
+def _manifest_mpi_entrypoints() -> frozenset[Path]:
+    """Return the exact Python MPI scripts owned by the test manifest."""
+    manifest = tomllib.loads((REPO_ROOT / "tests" / "test_manifest.toml").read_text())
+    return frozenset(
+        (REPO_ROOT / entry["path"]).resolve()
+        for suite in manifest.get("python", {}).get("suite", ())
+        for entry in suite.get("mpi_entrypoints", ())
+    )
+
+
+@cache
+def _guarded_process_test_paths() -> tuple[Path, ...]:
+    """Derive every script whose process exit is release-significant."""
+    discovered = {
+        path.resolve()
+        for path in (REPO_ROOT / "tests" / "python").rglob("test_*.py")
+        if _requires_process_collection(path)
+    }
+    return tuple(sorted(discovered | set(_manifest_mpi_entrypoints())))
+
+
+def _require_process_or_skip(
+    reason: str,
+    path: Path,
+) -> None:
+    """Apply the release policy matching the subprocess's manifest authority."""
+    if path.resolve() in _manifest_mpi_entrypoints():
+        require_mpi_or_skip(reason, optional_skip=pytest.skip)
+        return
+    require_native_or_skip(reason, optional_skip=pytest.skip)
+
+
 def _missing_process_requirement(output: str) -> str | None:
-    if "compile_aot: PoPS is Kokkos-only" in output:
-        return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "PoPS is Kokkos-only" in output and "POPS_KOKKOS_ROOT" in output:
         return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "PoPS is Kokkos-only" in output and "Kokkos_Core.hpp" in output:
         return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "Kokkos introuvable" in output:
-        return "AOT compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
+        return "native compile requires POPS_KOKKOS_ROOT/Kokkos_ROOT"
     if "DO NOT MATCH those with which the _pops module was built" in output:
         return "headers do not match the built _pops module (stale build/overlay)"
     return None
 
 
-@lru_cache(maxsize=None)
+def _missing_process_requirement_for_environment(
+    output: str,
+    environment: dict[str, str],
+) -> str | None:
+    """Keep legacy local skips out of a native-required release lane.
+
+    ``require_native_or_skip`` raises on missing prerequisites when
+    ``POPS_REQUIRE_NATIVE_TESTS=1``. The subprocess parent must preserve that failure instead of
+    reclassifying its diagnostic text through the older heuristic fallback above.
+    """
+    if environment.get("POPS_REQUIRE_NATIVE_TESTS") == "1":
+        return None
+    return _missing_process_requirement(output)
+
+
+@cache
 def _requires_process_collection(path: Path) -> bool:
     if "architecture" in path.parts:
         return False
@@ -317,22 +460,55 @@ def _requires_process_collection(path: Path) -> bool:
         tree = ast.parse(text, filename=str(path))
     except SyntaxError:
         return False
-    if _has_test_defs(tree) and _has_pytest_main_entrypoint(tree) and "pytest = _SkipModule()" not in text:
+    if (
+        _has_test_defs(tree)
+        and _has_pytest_main_entrypoint(tree)
+        and "pytest = _SkipModule()" not in text
+    ):
         return False
     return (
         "pytest = _SkipModule()" in text
         or _has_import_time_sys_exit(tree)
+        or _has_import_time_requirement_helper(tree)
         or _has_custom_main_entrypoint(tree)
     )
 
 
 def _has_import_time_sys_exit(tree: ast.Module) -> bool:
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)):
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)
+        ):
             continue
         if isinstance(node, ast.If) and _is_main_guard(node.test):
             continue
         if _contains_sys_exit(node):
+            return True
+    return False
+
+
+def _has_import_time_requirement_helper(tree: ast.Module) -> bool:
+    """Detect a canonical skip/fail policy executed while importing a script.
+
+    Replacing a legacy ``sys.exit(0)`` with ``require_*_or_skip`` must not silently move a file
+    back into ordinary in-process pytest collection.  Such a helper can still terminate an optional
+    developer run, so the subprocess boundary remains part of the test's execution contract.
+    """
+    helper_names = {"require_native_or_skip", "require_mpi_or_skip"}
+    for node in tree.body:
+        if isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom),
+        ):
+            continue
+        if isinstance(node, ast.If) and _is_main_guard(node.test):
+            continue
+        if any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id in helper_names
+            for child in ast.walk(node)
+        ):
             return True
     return False
 
@@ -367,7 +543,13 @@ def _has_test_defs(tree: ast.Module) -> bool:
 def _is_runner_call(call: ast.Call) -> bool:
     func = call.func
     if isinstance(func, ast.Name):
-        return func.id in {"main", "run", "run_all", "_run", "_run_all"}
+        return func.id.startswith("test_") or func.id in {
+            "main",
+            "run",
+            "run_all",
+            "_run",
+            "_run_all",
+        }
     if isinstance(func, ast.Attribute):
         return func.attr in {"main", "run", "run_all", "_run", "_run_all"}
     return False

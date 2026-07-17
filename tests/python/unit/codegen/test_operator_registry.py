@@ -7,16 +7,15 @@ hash, and that the pops.model type system (StateSpace, FieldSpace, Rate, LocalLi
 Operator, Signature, OperatorRegistry) behaves as specified. No compilation, no _pops
 numerics; skips cleanly if the pops package is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
-    from pops.ir.expr import Const
-    from pops.ir.ops import abs_
-    from pops.physics.facade import Model
+    from pops._ir.expr import Const
+    from pops._ir.ops import abs_
+    from pops.physics._facade import Model
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_registry (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_registry (pops unavailable: %s)' % exc)
 
 
 def build_model():
@@ -42,7 +41,7 @@ def build_model():
     # Default elliptic field U -> phi -> field_operator (fields_from_state).
     m.elliptic_rhs(rho - 1.0)
     # A second, NAMED elliptic field -> field_operator.
-    m.elliptic_field("psi", rhs=mx, aux=["psi_x", "psi_y"])
+    m.elliptic_field("psi", rhs=mx, aux=["psi", "psi_x", "psi_y"])
     # Pointwise positivity projection -> projection.
     m.projection([abs_(rho), mx, my])
     return m
@@ -59,12 +58,20 @@ def test_spaces():
     fields = m.field_space()
     assert isinstance(fields, model.FieldSpace)
     assert fields.components == ("phi", "grad_x", "grad_y", "B_z")
-    # Rate identity is by base name: Rate("U") == Rate(state space U).
-    assert model.Rate("U") == model.Rate(state)
-    assert model.Rate("V") != model.Rate("U")
-    # LocalLinearOperator identity is by (domain, range) name.
-    assert model.LocalLinearOperator("U", "U") == model.LocalLinearOperator(state, state)
-    assert model.LocalLinearOperator("U", "U") != model.LocalLinearOperator("U", "V")
+    # A Rate retains the complete immutable StateSpace structure (no name-only wildcard).
+    assert model.Rate(state) == model.Rate(state)
+    assert model.Rate(model.StateSpace("U", ("rho",))) != model.Rate(state)
+    # Operator-valued types retain the full StateSpace; a shared name is not compatibility proof.
+    assert model.LocalLinearOperator(state, state) == model.LocalLinearOperator(state, state)
+    same_name_other_shape = model.StateSpace("U", ("energy",))
+    assert model.LocalLinearOperator(state, state) != model.LocalLinearOperator(
+        same_name_other_shape, same_name_other_shape)
+    try:
+        model.LocalLinearOperator("U", "U")
+    except TypeError as exc:
+        assert "typed Space descriptors" in str(exc)
+    else:
+        raise AssertionError("a name-only local operator must not masquerade as a typed map")
     print("OK  spaces: StateSpace / FieldSpace / Rate / LocalLinearOperator")
 
 
@@ -77,7 +84,7 @@ def test_registry_signatures():
     flux = reg.get("flux_default")
     assert flux.kind == "grid_operator"
     assert flux.signature.inputs == (state,)
-    assert flux.signature.output == model.Rate("U")
+    assert flux.signature.output == model.Rate(state)
     assert flux.capabilities["requires_ghosts"] == 1
 
     electric = reg.get("electric")
@@ -96,7 +103,7 @@ def test_registry_signatures():
     lorentz = reg.get("lorentz")
     assert lorentz.kind == "local_linear_operator"
     assert lorentz.signature.inputs == (fields,)
-    assert lorentz.signature.output == model.LocalLinearOperator("U", "U")
+    assert lorentz.signature.output == model.LocalLinearOperator(state, state)
     assert lorentz.capabilities["linear"] is True
     assert lorentz.capabilities["solve_i_minus_a"] is True
     assert lorentz.requirements["aux"] == ["B_z"]
@@ -109,7 +116,7 @@ def test_registry_signatures():
 
     psi = reg.get("psi")
     assert psi.kind == "field_operator"
-    assert psi.signature.output.components == ("psi_x", "psi_y")
+    assert psi.signature.output.components == ("psi", "psi_x", "psi_y")
 
     projection = reg.get("projection")
     assert projection.kind == "projection"
@@ -136,7 +143,7 @@ def test_registry_ids_and_errors():
         assert "unknown operator" in str(exc)
 
     state = m.state_space()
-    reg2 = model.OperatorRegistry()
+    reg2 = model.OperatorRegistry(owner=m.owner_path)
     op = model.Operator("a", "local_source", model.Signature([state], model.Rate(state)))
     reg2.register(op)
     try:

@@ -23,9 +23,9 @@
 #include <gtest/gtest.h>
 
 #include "gtest_compat.hpp"
-#include "test_harness.hpp"  // pops::test::Checker, checksum
-#include <pops/physics/bricks/bricks.hpp>        // CompositeModel, GravityForce, GravityCoupling
-#include <pops/physics/fluids/euler.hpp>         // Euler
+#include "test_harness.hpp"                // pops::test::Checker, checksum
+#include <pops/physics/bricks/bricks.hpp>  // CompositeModel, GravityForce, GravityCoupling
+#include <pops/physics/fluids/euler.hpp>   // Euler
 #include <pops/runtime/builders/compiled/amr_dsl_block.hpp>  // add_compiled_model(AmrSystem, ...)
 #include <pops/runtime/amr_system.hpp>
 
@@ -75,7 +75,8 @@ Result run(int n, int nsteps, double dt, bool distribute) {
   cfg.L = 1.0;
   cfg.periodic = true;
   cfg.regrid_every = 4;
-  cfg.distribute_coarse = distribute;  // ADC-620: coarse split into tiles, fine seed needs its OWN dmap
+  cfg.distribute_coarse =
+      distribute;  // ADC-620: coarse split into tiles, fine seed needs its OWN dmap
 
   AmrSystem sys(cfg);
   add_compiled_model(sys, "gas", Model{Euler{1.4}, GravityForce{}, GravityCoupling{-1.0, 1.0, 1.0}},
@@ -118,9 +119,11 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
   // than reaching the assertions below -- the regression lock is the process surviving construction and
   // stepping at all, on top of the checks that follow.
   const Result dis = run(n, nsteps, dt, /*distribute=*/true);
-  const Result rep = run(n, nsteps, dt, /*distribute=*/false);  // oracle: replicated coarse (unaffected)
+  const Result rep =
+      run(n, nsteps, dt, /*distribute=*/false);  // oracle: replicated coarse (unaffected)
 
-  chk(dis.dens.size() == static_cast<std::size_t>(n) * n, "distributed coarse density has size n*n");
+  chk(dis.dens.size() == static_cast<std::size_t>(n) * n,
+      "distributed coarse density has size n*n");
   chk(rep.dens.size() == dis.dens.size(), "replicated coarse density same size as distributed");
 
   // (2) a CFL step advances by a finite, positive dt (no NaN/Inf from a corrupted layout).
@@ -171,7 +174,8 @@ static int pops_run_test_amr_distribute_coarse_serial(int argc, char** argv) {
 
   if (chk.fails() == 0)
     std::printf(
-        "OK test_amr_distribute_coarse_serial (ADC-620: distribute_coarse=true hierarchy builds and "
+        "OK test_amr_distribute_coarse_serial (ADC-620: distribute_coarse=true hierarchy builds "
+        "and "
         "steps on a single rank, bit-identical to replicated coarse)\n");
   return chk.failed();
 }

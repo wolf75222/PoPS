@@ -15,7 +15,7 @@ Couvre les deux chantiers du solde (docs/GENERICITY_2026-06.md, points NON gener
 
   (c) NO-DEFAULT-CHANGE (mono-bloc) : les options Newton par DEFAUT explicites (newton_max_iters=2,
       rel_tol=0, abs_tol=0, fd_eps=1e-7, damping=1.0) donnent une trajectoire BIT-IDENTIQUE a celle
-      sans options (pops.IMEX()). On compare deux runs de memes graines : dmax == 0 (vrai test de
+      sans options (engine.IMEX()). On compare deux runs de memes graines : dmax == 0 (vrai test de
       non-regression : le chemin a options par defaut == chemin historique a iters figes).
 
   (d) LOADER .so + OPTIONS/DIAGNOSTICS : le chemin production AMR (CompiledModel
@@ -31,9 +31,10 @@ import sys
 
 import numpy as np
 
-import pops
+import pops.runtime._engine_descriptors as engine
+from pops.runtime._engine_descriptors import Periodic
 from pops.codegen.loader import CompiledModel
-from pops.runtime.system import AmrSystem  # ADC-545 advanced runtime seam
+from pops.runtime._system import AmrSystem  # ADC-545 advanced runtime seam
 
 fails = 0
 
@@ -48,10 +49,10 @@ def chk(cond, label):
 def iso_model(charge=1.0):
     """Isotherme 3-var (rho, rho_u, rho_v) avec source electrostatique (PotentialForce) : la source
     raide non triviale qu'attaque le Newton de l'IMEX (le pas implicite a quelque chose a resoudre)."""
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.PotentialForce(charge=charge),
-                     elliptic=pops.ChargeDensity(charge=charge))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.PotentialForce(charge=charge),
+                     elliptic=engine.ChargeDensity(charge=charge))
 
 
 def gaussian(n):
@@ -64,9 +65,10 @@ def mono_imex(time):
     """Construit un AmrSystem MONO-BLOC IMEX (iso_model) avec le traitement temporel @p time, seede
     d'une gaussienne, et avance d'un pas. Renvoie la densite grossiere apres le pas."""
     s = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+    s.set_temporal_relations([2], [1], ["integral_only"])
+    s.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
     s.set_refinement(1e30)
-    s.add_block("e", iso_model(), spatial=pops.FiniteVolume(limiter=Minmod()), time=time)
+    s.add_equation("e", iso_model(), spatial=engine.Spatial(limiter=Minmod()), time=time)
     s.set_density("e", gaussian(16).ravel())
     s.step(2e-3)
     return np.asarray(s.density("e")).reshape(16, 16)
@@ -77,7 +79,7 @@ def fake_production_amr():
     leve AVANT le dlopen du .so, donc le .so inexistant n'est jamais charge (deterministe, no compiler).
     Meme recette que test_amr_production_stride_reject.py."""
     return CompiledModel(
-        so_path="/inexistant_amr.so", backend="production", adder="add_native_block",
+        so_path="/inexistant_amr.so", backend="production",
         cons_names=["rho", "rho_u", "rho_v"], cons_roles=["Density", "MomentumX", "MomentumY"],
         prim_names=["rho", "u", "v"], n_vars=3, gamma=1.4, n_aux=3, params={}, caps={},
         abi_key="k", model_hash="h", cxx="c++", std="c++20", target="amr_system")
@@ -85,19 +87,20 @@ def fake_production_amr():
 
 # ---- (a) OPTIONS NEWTON MONO-BLOC : tourne fini, ne leve plus -----------------------------------
 print("== (a) mono-bloc IMEX + options Newton non-defaut : tourne fini (plus de rejet) ==")
-d_a = mono_imex(pops.IMEX(newton_max_iters=5, newton_rel_tol=1e-12))
+d_a = mono_imex(engine.IMEX(newton_max_iters=5, newton_rel_tol=1e-12))
 chk(np.all(np.isfinite(d_a)),
     "mono-bloc IMEX(newton_max_iters=5, rel_tol=1e-12) avance fini (options threadees au coupleur)")
 
 # ---- (b) NEWTON_DIAGNOSTICS MULTI-BLOCS : newton_report dict coherent ---------------------------
 print("== (b) multi-blocs IMEX + newton_diagnostics : newton_report('e1') coherent ==")
 amr = AmrSystem(n=16, L=1.0, periodic=True, regrid_every=0)
-amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
+amr.set_temporal_relations([2], [1], ["integral_only"])
+amr.set_poisson(rhs="charge_density", solver="geometric_mg", bc=Periodic())
 amr.set_refinement(1e30)
-amr.add_block("e1", iso_model(+1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-              time=pops.IMEX(newton_max_iters=4, newton_diagnostics=True))
-amr.add_block("e2", iso_model(-1.0), spatial=pops.FiniteVolume(limiter=Minmod()),
-              time=pops.Explicit())
+amr.add_equation("e1", iso_model(+1.0), spatial=engine.Spatial(limiter=Minmod()),
+                 time=engine.IMEX(newton_max_iters=4, newton_diagnostics=True))
+amr.add_equation("e2", iso_model(-1.0), spatial=engine.Spatial(limiter=Minmod()),
+                 time=engine.Explicit())
 amr.set_density("e1", gaussian(16).ravel())
 amr.set_density("e2", gaussian(16).ravel())
 amr.advance(2e-3, 3)
@@ -127,8 +130,8 @@ except RuntimeError as e:
 
 # ---- (c) NO-DEFAULT-CHANGE (mono-bloc) : defauts explicites == chemin sans options --------------
 print("== (c) mono-bloc : options par defaut explicites == sans options (dmax == 0, bit-identique) ==")
-d_base = mono_imex(pops.IMEX())  # chemin historique (aucune option)
-d_def = mono_imex(pops.IMEX(newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
+d_base = mono_imex(engine.IMEX())  # chemin historique (aucune option)
+d_def = mono_imex(engine.IMEX(newton_max_iters=2, newton_rel_tol=0.0, newton_abs_tol=0.0,
                            newton_fd_eps=1e-7, newton_damping=1.0))  # defauts EXPLICITES
 dmax = float(np.max(np.abs(d_def - d_base)))
 chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identique ; recu {dmax:.3e})")
@@ -136,17 +139,19 @@ chk(dmax == 0.0, f"options Newton par defaut explicites : dmax == 0 (bit-identiq
 # ---- (d) LOADER .so + OPTIONS/DIAGNOSTICS : rejet explicite -------------------------------------
 print("== (d) production AMR (.so) : options/diagnostics Newton rejetes explicitement ==")
 sim_opt = AmrSystem(n=16, periodic=True)
+sim_opt.set_temporal_relations([2], [1], ["integral_only"])
 try:
-    sim_opt.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                         time=pops.IMEX(newton_max_iters=5))
+    sim_opt.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                         time=engine.IMEX(newton_max_iters=5))
     chk(False, "add_equation(.so, IMEX(newton_max_iters=5)) doit lever ValueError")
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),
         "options Newton sur .so production AMR : ValueError claire (Newton/production)")
 sim_diag = AmrSystem(n=16, periodic=True)
+sim_diag.set_temporal_relations([2], [1], ["integral_only"])
 try:
-    sim_diag.add_equation("gas", fake_production_amr(), spatial=pops.FiniteVolume(),
-                          time=pops.IMEX(newton_diagnostics=True))
+    sim_diag.add_equation("gas", fake_production_amr(), spatial=engine.Spatial(),
+                          time=engine.IMEX(newton_diagnostics=True))
     chk(False, "add_equation(.so, IMEX(newton_diagnostics=True)) doit lever ValueError")
 except ValueError as ex:
     chk("Newton" in str(ex) and "production" in str(ex),

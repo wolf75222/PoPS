@@ -16,12 +16,16 @@ This pure-Python test (no .so compile, no engine) checks the two halves the code
 Runs as a plain script (``python3 test_name_binding_codegen.py``, the CI invocation) and under pytest.
 Skips cleanly (never fakes the engine) if pops.time cannot import (it needs _pops for the typed registry).
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
 import sys
+
+from pops.numerics.terms import DefaultSource, Flux
+from tests.python.support.typed_program import program_states, synthetic_module
 
 
 def _skip(msg):
-    print("skip test_name_binding_codegen (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_name_binding_codegen (%s)' % msg)
 
 
 def _pops_time():
@@ -45,17 +49,21 @@ def chk(cond, label):
 def _flux_program(t, name, blocks):
     """A flux-only Forward-Euler Program over @p blocks (declared in the given order), no model needed."""
     P = t.Program(name)
+    module = synthetic_module("%s_state" % name, components=("rho",))
+    _case, states = program_states(P, module, blocks)
     for blk in blocks:
-        U = P.state(blk)
-        R = P._rhs_legacy(state=U, flux=True, sources=["default"])
-        P.commit(blk, P.linear_combine(blk + "_next", U + P.dt * R))
+        temporal = states[blk]
+        U = temporal.n
+        R = P.rhs(state=U, terms=[Flux(), DefaultSource()])
+        P.commit(temporal.next, P.value(
+            blk + "_next", U + P.dt * R, at=temporal.next.point))
     return P
 
 
 def section_a(t):
     print("== (A) the .so exports pops_program_block_name per block, declaration order ==")
     P = _flux_program(t, "plasma_electrons", ["plasma", "electrons", "dust"])
-    src = P.emit_cpp_program()
+    src = emit_cpp_program(P)
 
     chk("pops_program_block_count() { return 3; }" in src,
         "pops_program_block_count returns the block count (3)")
@@ -68,7 +76,7 @@ def section_a(t):
 
     # A single-block Program still carries the table (count 1), so the loader binds it by name too.
     P1 = _flux_program(t, "single", ["gas"])
-    src1 = P1.emit_cpp_program()
+    src1 = emit_cpp_program(P1)
     chk("pops_program_block_count() { return 1; }" in src1, "single-block count is 1")
     chk('case 0: return "gas";' in src1, "single block 0 -> \"gas\"")
 
@@ -79,10 +87,19 @@ def section_b(t):
     h_ba = _flux_program(t, "p", ["electrons", "plasma"])._ir_hash()
     chk(h_ab != h_ba, "reordering P.state declarations changes the IR hash (block names in identity)")
 
-    # The block_order serialization field carries the names in declaration order (the hash input).
+    # The block_order field carries qualified block-handle identities in declaration order. Runtime
+    # labels remain readable through local_id, while the owner paths prevent cross-Case aliasing.
     ser = _flux_program(t, "p", ["plasma", "electrons"])._serialize()
-    chk(ser.get("block_order") == ["plasma", "electrons"],
-        "_serialize records block_order in declaration order")
+    order = ser.get("block_order", [])
+    chk([item.get("local_id") for item in order] == ["plasma", "electrons"],
+        "_serialize records qualified block_order in declaration order")
+    chk(all(item.get("kind") == "block" and item.get("handle_type") == "block"
+            and item.get("qualified_id", "").startswith("pops.handle.v1::case:p-program-case::")
+            for item in order),
+        "each block_order entry is a qualified Case-owned BlockHandle")
+    chk(all(item.get("model_owner_path", {}).get("definition_fingerprint", "").startswith(
+        "pops.module:sha256:") for item in order),
+        "each block_order entry authenticates its model owner")
 
     # Same program written twice (same names, same order) is byte-identical -> identical hash.
     h_again = _flux_program(t, "p", ["plasma", "electrons"])._ir_hash()

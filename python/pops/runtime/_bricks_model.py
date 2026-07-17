@@ -1,9 +1,8 @@
 """Model bricks : state / transport / source / elliptic value objects (Spec-4 PR-F).
 
-The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec), the
-HYBRID composition path (``CompositeModel`` + ``_native_to_brick``) and the elliptic physical
-model (EPM) bricks/helpers. ``pops.runtime.bricks`` re-exports everything here together with the
-scheme/time policies in ``_bricks_scheme``. ``ModelSpec`` comes from the loaded extension via
+The composable bricks a MODEL is built from, plus the ``Model`` composer (ModelSpec) and the
+elliptic physical model (EPM) bricks/helpers. Private native-engine adapters import these values
+through ``pops.runtime._engine_descriptors``. ``ModelSpec`` comes from the loaded extension via
 ``pops._bootstrap``.
 """
 
@@ -12,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops._bootstrap import ModelSpec
+from pops.runtime._numeric import exact_real, native_real
 from pops.runtime.defaults import (
     PHYSICAL_DEFAULT_ALPHA,
     PHYSICAL_DEFAULT_B0,
@@ -41,9 +41,8 @@ class FluidState:
     the flow evacuates the background (rho -> ~0). It does NOT modify the conserved state (only the
     velocity estimate). 0 (default) = inactive (bit-identical). This is independent of the spatial
     positivity_floor (the Zhang-Shu reconstruction limiter): the two address different failure modes
-    and must be enabled separately. Honored on the native pops.Model(...) / System / AmrSystem path;
-    the compiled/DSL path (pops.CompositeModel / JIT / AOT) does not carry it yet, so set it on the
-    native path.
+    and must be enabled separately. It is carried by the native ``ModelSpec`` route; generated
+    production packages carry their own immutable transport parameters.
     """
 
     def __init__(self,
@@ -52,20 +51,19 @@ class FluidState:
                  cs2: Any = PHYSICAL_DEFAULT_FLUID_STATE_CS2,
                  vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
         self.kind = kind
-        self.gamma = float(gamma)
-        self.cs2 = float(cs2)
-        if not (float(vacuum_floor) >= 0.0):
-            raise ValueError("FluidState: vacuum_floor >= 0 (0 = inactive)")
-        self.vacuum_floor = float(vacuum_floor)
+        self.gamma = exact_real(gamma, where="FluidState.gamma")
+        self.cs2 = exact_real(cs2, where="FluidState.cs2")
+        self.vacuum_floor = exact_real(
+            vacuum_floor, where="FluidState.vacuum_floor", minimum=0)
 
     @classmethod
     def compressible(cls, gamma: Any = PHYSICAL_DEFAULT_GAMMA) -> Any:
         """Typed constructor for the COMPRESSIBLE fluid state (Spec 5 sec.14.2.5).
 
-        ``pops.FluidState.compressible(gamma=1.4)`` is the typed equivalent of
-        ``pops.FluidState(kind="compressible", gamma=1.4)``: it builds the SAME inert state object
-        (kind="compressible", carrying gamma -> spec.gamma via Model) instead of selecting the kind
-        with a magic string. Pairs with CompressibleFlux (4 variables [rho, rho_u, rho_v, E]).
+        This private constructor builds the same inert engine value as
+        ``FluidState(kind="compressible", gamma=1.4)`` without a magic kind string. Public models
+        declare typed state through ``pops.Model.state``. The engine value pairs with
+        ``CompressibleFlux`` (4 variables [rho, rho_u, rho_v, E]).
         """
         return cls(kind="compressible", gamma=gamma)
 
@@ -75,11 +73,10 @@ class FluidState:
                    vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> Any:
         """Typed constructor for the ISOTHERMAL fluid state (Spec 5 sec.14.2.5).
 
-        ``pops.FluidState.isothermal(cs2=0.5, vacuum_floor=0.0)`` is the typed equivalent of
-        ``pops.FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)``: it builds the SAME inert
-        state object (kind="isothermal", carrying cs2 -> spec.cs2 and vacuum_floor ->
-        spec.vacuum_floor via Model). Pairs with IsothermalFlux (3 variables [rho, rho_u, rho_v]).
-        See the class docstring for the vacuum_floor (ADC-77) semantics.
+        This private constructor builds the same inert engine value as
+        ``FluidState(kind="isothermal", cs2=0.5, vacuum_floor=0.0)``. Public models declare typed
+        state through ``pops.Model.state``. The engine value pairs with ``IsothermalFlux``
+        (3 variables [rho, rho_u, rho_v]). See the class docstring for vacuum-floor semantics.
         """
         return cls(kind="isothermal", cs2=cs2, vacuum_floor=vacuum_floor)
 
@@ -89,7 +86,7 @@ class ExB:
     """Scalar advection by the E x B drift (magnetic field B0)."""
 
     def __init__(self, B0: Any = PHYSICAL_DEFAULT_B0) -> None:
-        self.B0 = float(B0)
+        self.B0 = exact_real(B0, where="ExB.B0")
 
 
 class CompressibleFlux:
@@ -97,22 +94,17 @@ class CompressibleFlux:
 
 
 class IsothermalFlux:
-    """Isothermal Euler flux (compiled/DSL transport brick).
+    """Isothermal Euler flux for the native ``ModelSpec`` route.
 
-    On the native ``pops.Model(...)`` path ``cs2`` / ``vacuum_floor`` (ADC-77) come from the
-    :class:`FluidState` state. On the compiled/hybrid ``pops.CompositeModel(transport=...)`` path the
-    state is not threaded into the AOT struct, so this brick carries them itself:
-    ``pops.CompositeModel(transport=pops.IsothermalFlux(cs2=..., vacuum_floor=...), ...)``. Both default
-    to the native constants, so an unconfigured ``IsothermalFlux()`` bakes the historical isothermal
-    flux bit-for-bit (``vacuum_floor`` 0 = the quasi-vacuum velocity clamp inactive).
+    ``cs2`` and ``vacuum_floor`` are immutable descriptor values. Generated models use their
+    authenticated BindSchema vector instead of a second mutable parameter channel.
     """
 
     def __init__(self, cs2: Any = PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2,
                  vacuum_floor: Any = PHYSICAL_DEFAULT_VACUUM_FLOOR) -> None:
-        self.cs2 = float(cs2)
-        if not (float(vacuum_floor) >= 0.0):
-            raise ValueError("IsothermalFlux: vacuum_floor >= 0 (0 = inactive)")
-        self.vacuum_floor = float(vacuum_floor)
+        self.cs2 = exact_real(cs2, where="IsothermalFlux.cs2")
+        self.vacuum_floor = exact_real(
+            vacuum_floor, where="IsothermalFlux.vacuum_floor", minimum=0)
 
 
 # --- Source bricks ------------------------------------------------------
@@ -124,7 +116,7 @@ class PotentialForce:
     """Potential force (q/m) rho E on the momentum (+ work if 4 vars)."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="PotentialForce.charge")
 
 
 class GravityForce:
@@ -138,13 +130,13 @@ class MagneticLorentzForce:
     EXPLICIT regime (moderate omega_c): pointwise algebraic term, no work (F . v = 0, energy
     unchanged). Reads B_z from the aux channel (canonical component 3): call
     ``sim.set_magnetic_field(Bz)`` to populate it. Requires a fluid transport >= 3 variables (momentum
-    on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) goes through the condensed stage
-    pops.CondensedSchur (Schur), NOT through this explicit brick.
+    on 2 axes); rejected on a scalar. The STIFF regime (large omega_c) is authored as an explicit
+    condensed ``Program.solve`` graph, NOT through this pointwise brick.
 
     ``charge`` = q/m, sign included (same convention as PotentialForce)."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="MagneticLorentzForce.charge")
 
 
 class PotentialMagneticForce:
@@ -154,7 +146,7 @@ class PotentialMagneticForce:
     fluid transport >= 3 variables. ``charge`` = q/m, sign included."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_QOM) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="PotentialMagneticForce.charge")
 
 
 # --- Elliptic right-hand-side bricks ------------------------------------
@@ -162,7 +154,7 @@ class ChargeDensity:
     """Charge density f = q n."""
 
     def __init__(self, charge: Any = PHYSICAL_DEFAULT_CHARGE_Q) -> None:
-        self.charge = float(charge)
+        self.charge = exact_real(charge, where="ChargeDensity.charge")
 
 
 class BackgroundDensity:
@@ -171,8 +163,8 @@ class BackgroundDensity:
     def __init__(self,
                  alpha: Any = PHYSICAL_DEFAULT_ALPHA,
                  n0: Any = PHYSICAL_DEFAULT_BACKGROUND_N0) -> None:
-        self.alpha = float(alpha)
-        self.n0 = float(n0)
+        self.alpha = exact_real(alpha, where="BackgroundDensity.alpha")
+        self.n0 = exact_real(n0, where="BackgroundDensity.n0")
 
 
 class GravityCoupling:
@@ -182,9 +174,9 @@ class GravityCoupling:
                  sign: Any = PHYSICAL_DEFAULT_GRAVITY_SIGN,
                  four_pi_G: Any = PHYSICAL_DEFAULT_FOUR_PI_G,
                  rho0: Any = PHYSICAL_DEFAULT_GRAVITY_RHO0) -> None:
-        self.sign = float(sign)
-        self.four_pi_G = float(four_pi_G)
-        self.rho0 = float(rho0)
+        self.sign = exact_real(sign, where="GravityCoupling.sign")
+        self.four_pi_G = exact_real(four_pi_G, where="GravityCoupling.four_pi_G")
+        self.rho0 = exact_real(rho0, where="GravityCoupling.rho0")
 
 
 def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
@@ -196,8 +188,8 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     The returned ``ModelSpec`` is the BOUNDED LEGACY BRIDGE for the native ``add_block`` path (a
     flat C++ POD of brick tags + parameters); it is NOT the target representation. The target
     representation of a model is the operator-first ``pops.model.Module`` (compiled to a Problem)
-    and its self-describing ``ModuleManifest`` (ADC-585). ADC-585 also moved this POD off the pops
-    root: it lives at ``pops.runtime.ModelSpec``, not ``pops.ModelSpec``.
+    and its self-describing ``ModuleManifest`` (ADC-585). The POD remains an explicitly private
+    native-engine value reached through ``pops.runtime._bricks_model``, never a public descriptor.
     """
     spec: Any = ModelSpec()
 
@@ -206,21 +198,23 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
             raise ValueError("Scalar requires transport=ExB(...)")
     elif isinstance(state, FluidState):
         if state.kind == "compressible":
-            spec.gamma = state.gamma
+            spec.gamma = native_real(state.gamma, where="Model.gamma")
             if not isinstance(transport, CompressibleFlux):
                 raise ValueError("FluidState(compressible) requires transport=CompressibleFlux()")
         elif state.kind == "isothermal":
-            spec.cs2 = state.cs2
-            spec.vacuum_floor = getattr(state, "vacuum_floor", 0.0)  # ADC-77 quasi-vacuum velocity bound
+            spec.cs2 = native_real(state.cs2, where="Model.cs2")
+            spec.vacuum_floor = native_real(
+                getattr(state, "vacuum_floor", 0.0), where="Model.vacuum_floor")
             if not isinstance(transport, IsothermalFlux):
                 raise ValueError("FluidState(isothermal) requires transport=IsothermalFlux()")
         else:
             raise ValueError("FluidState.kind: 'compressible' | 'isothermal'")
     else:
-        raise ValueError("state: pops.Scalar() | pops.FluidState(...)")
+        raise ValueError("state must be a private Scalar or FluidState engine descriptor")
 
     if isinstance(transport, ExB):
-        spec.transport = "exb"; spec.B0 = transport.B0
+        spec.transport = "exb"
+        spec.B0 = native_real(transport.B0, where="Model.B0")
     elif isinstance(transport, CompressibleFlux):
         spec.transport = "compressible"
     elif isinstance(transport, IsothermalFlux):
@@ -231,134 +225,36 @@ def Model(state: Any, transport: Any, source: Any, elliptic: Any) -> Any:
     if isinstance(source, NoSource):
         spec.source = "none"
     elif isinstance(source, PotentialForce):
-        spec.source = "potential"; spec.qom = source.charge
+        spec.source = "potential"
+        spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, GravityForce):
         spec.source = "gravity"
     elif isinstance(source, MagneticLorentzForce):
-        spec.source = "magnetic"; spec.qom = source.charge
+        spec.source = "magnetic"
+        spec.qom = native_real(source.charge, where="Model.qom")
     elif isinstance(source, PotentialMagneticForce):
-        spec.source = "potential_magnetic"; spec.qom = source.charge
+        spec.source = "potential_magnetic"
+        spec.qom = native_real(source.charge, where="Model.qom")
     else:
         raise ValueError("source: NoSource | PotentialForce | GravityForce | MagneticLorentzForce "
                          "| PotentialMagneticForce")
 
     if isinstance(elliptic, ChargeDensity):
-        spec.elliptic = "charge"; spec.q = elliptic.charge
+        spec.elliptic = "charge"
+        spec.q = native_real(elliptic.charge, where="Model.q")
     elif isinstance(elliptic, BackgroundDensity):
-        spec.elliptic = "background"; spec.alpha = elliptic.alpha; spec.n0 = elliptic.n0
+        spec.elliptic = "background"
+        spec.alpha = native_real(elliptic.alpha, where="Model.alpha")
+        spec.n0 = native_real(elliptic.n0, where="Model.n0")
     elif isinstance(elliptic, GravityCoupling):
-        spec.elliptic = "gravity"; spec.sign = elliptic.sign
-        spec.four_pi_G = elliptic.four_pi_G; spec.rho0 = elliptic.rho0
+        spec.elliptic = "gravity"
+        spec.sign = native_real(elliptic.sign, where="Model.sign")
+        spec.four_pi_G = native_real(elliptic.four_pi_G, where="Model.four_pi_G")
+        spec.rho0 = native_real(elliptic.rho0, where="Model.rho0")
     else:
         raise ValueError("elliptic: ChargeDensity | BackgroundDensity | GravityCoupling")
 
     return spec
-
-
-# --- HYBRID composition: native brick + DSL brick IN A model --------
-# pops.Model(...) composes 100% native bricks into a ModelSpec (C++ tags); pops.dsl.Model(...)
-# generates a 100% DSL model. pops.CompositeModel(...) fills the in-between: MIX, in ONE SINGLE
-# model, NATIVE bricks (pops.ExB / PotentialForce / ChargeDensity ...) and PARTIAL compiled DSL
-# bricks (pops.dsl.HyperbolicBrick(...).compile() / SourceBrick / EllipticBrick). The
-# mix is compiled into ONE composite .so (prototype: backend 'aot'). cf. pops/dsl.py (Phase B).
-def _native_to_brick(obj: Any, role: Any) -> Any:
-    """Translate a NATIVE brick (pops.* object) into a NativeBrick descriptor for the @p role slot.
-    An already-compiled DSL brick (CompiledBrick) passes through unchanged (after slot check)."""
-    from pops.physics.bricks import CompiledBrick, NativeBrick
-    if isinstance(obj, CompiledBrick):
-        if obj.kind != role:
-            raise ValueError("pops.CompositeModel: DSL brick of type %r placed in the %r slot"
-                             % (obj.kind, role))
-        return obj
-    if role == "hyperbolic":
-        if isinstance(obj, ExB):
-            return NativeBrick("pops::ExBVelocity", "hyperbolic", fields={"B0": obj.B0},
-                                   var_names=["n"], n_vars=1, prim_names=["n"])
-        if isinstance(obj, CompressibleFlux):
-            g = float(getattr(obj, "gamma", PHYSICAL_DEFAULT_GAMMA))
-            return NativeBrick("pops::CompressibleFlux", "hyperbolic", fields={"gamma": g},
-                                   var_names=["rho", "rho_u", "rho_v", "E"], n_vars=4,
-                                   prim_names=["rho", "u", "v", "p"], gamma=g)
-        if isinstance(obj, IsothermalFlux):
-            cs2 = float(getattr(obj, "cs2", PHYSICAL_DEFAULT_NATIVE_ISOTHERMAL_CS2))
-            # ADC-644: carry vacuum_floor into the baked struct ONLY when active. The native
-            # pops::IsothermalFlux has both members (cs2, vacuum_floor); NativeBrick.emit writes the
-            # fields in insertion order, so omitting vacuum_floor when 0 keeps the generated struct
-            # (and module_hash) byte-identical to today's quasi-vacuum-inactive isothermal flux.
-            vf = float(getattr(obj, "vacuum_floor", PHYSICAL_DEFAULT_VACUUM_FLOOR))
-            fields = {"cs2": cs2}
-            if vf != 0.0:
-                fields["vacuum_floor"] = vf
-            return NativeBrick("pops::IsothermalFlux", "hyperbolic", fields=fields,
-                                   var_names=["rho", "rho_u", "rho_v"], n_vars=3,
-                                   prim_names=["rho", "u", "v"])
-        raise ValueError("pops.CompositeModel transport: ExB | CompressibleFlux | IsothermalFlux "
-                         "(native) or dsl.HyperbolicBrick(...).compile()")
-    if role == "source":
-        if isinstance(obj, NoSource):
-            return NativeBrick("pops::NoSource", "source", min_vars=1)
-        if isinstance(obj, PotentialForce):
-            return NativeBrick("pops::PotentialForce", "source", fields={"qom": obj.charge},
-                                   min_vars=3)
-        if isinstance(obj, GravityForce):
-            return NativeBrick("pops::GravityForce", "source", min_vars=3)
-        if isinstance(obj, MagneticLorentzForce):
-            # n_aux=4: the brick reads B_z (canonical aux channel 3) -> the composite sizes the aux.
-            return NativeBrick("pops::MagneticLorentzForce", "source",
-                                   fields={"qom": obj.charge}, min_vars=3, n_aux=4)
-        if isinstance(obj, PotentialMagneticForce):
-            # NESTED fields of CompositeSource (public members a / b): the NativeBrick emit
-            # writes `a.qom = ...; b.qom = ...;` in the constructor of the derived struct.
-            return NativeBrick(
-                "pops::CompositeSource<pops::PotentialForce, pops::MagneticLorentzForce>", "source",
-                fields={"a.qom": obj.charge, "b.qom": obj.charge}, min_vars=3, n_aux=4)
-        raise ValueError("pops.CompositeModel source: NoSource | PotentialForce | GravityForce | "
-                         "MagneticLorentzForce | PotentialMagneticForce (native) or "
-                         "dsl.SourceBrick(...).compile()")
-    if role == "elliptic":
-        if isinstance(obj, ChargeDensity):
-            return NativeBrick("pops::ChargeDensity", "elliptic", fields={"q": obj.charge},
-                                   min_vars=1)
-        if isinstance(obj, BackgroundDensity):
-            return NativeBrick("pops::BackgroundDensity", "elliptic",
-                                   fields={"alpha": obj.alpha, "n0": obj.n0}, min_vars=1)
-        if isinstance(obj, GravityCoupling):
-            return NativeBrick("pops::GravityCoupling", "elliptic",
-                                   fields={"sign": obj.sign, "four_pi_G": obj.four_pi_G,
-                                           "rho0": obj.rho0}, min_vars=1)
-        raise ValueError("pops.CompositeModel elliptic: ChargeDensity | BackgroundDensity | "
-                         "GravityCoupling (native) or dsl.EllipticBrick(...).compile()")
-    raise ValueError("pops.CompositeModel: unknown slot %r" % (role,))
-
-
-def CompositeModel(transport: Any, source: Any, elliptic: Any, name: str = "hybrid") -> Any:
-    """Compose a HYBRID model mixing NATIVE bricks and PARTIAL DSL bricks in ONE model.
-
-    Each slot (transport / source / elliptic) is EITHER a native brick (pops.ExB(...),
-    pops.PotentialForce(...), pops.ChargeDensity(...) ...), OR a compiled partial DSL brick
-    (pops.dsl.HyperbolicBrick(...).compile(), pops.dsl.SourceBrick(...).compile(),
-    pops.dsl.EllipticBrick(...).compile()). AT LEAST one slot must be a DSL brick: a
-    100% native composition is written with pops.Model(...) (ModelSpec).
-
-        tr = pops.dsl.HyperbolicBrick("iso") ...        # DSL transport
-        m  = pops.CompositeModel(transport=tr.compile(),
-                                source=pops.PotentialForce(charge=-1.0),   # native source
-                                elliptic=pops.ChargeDensity(charge=-1.0))  # native elliptic
-        co = m.compile(backend="aot")                  # -> CompiledModel
-        sim.add_equation("ions", co, spatial=pops.FiniteVolume(), names=[...])
-
-    Returns an pops.dsl.HybridModel; call .compile(backend="aot") for a CompiledModel pluggable
-    via System.add_equation. (Prototype: only the 'aot' backend is wired.)"""
-    from pops.physics.bricks import CompiledBrick
-    from pops.physics.hybrid import HybridModel
-    tr = _native_to_brick(transport, "hyperbolic")
-    sr = _native_to_brick(source, "source")
-    el = _native_to_brick(elliptic, "elliptic")
-    if not any(isinstance(b, CompiledBrick) for b in (tr, sr, el)):
-        raise ValueError(
-            "pops.CompositeModel: all-native composition; use pops.Model(...) (ModelSpec) for "
-            "a 100% native model. CompositeModel is for MIXING native + DSL in a single model.")
-    return HybridModel(tr, sr, el, name=name)
 
 
 # --- Elliptic model (EPM): Poisson = a composable instance ------------
@@ -369,7 +265,7 @@ class DivEpsGrad:
     other operators (diffusion, projection) are refinements (they would touch the solver)."""
 
     def __init__(self, epsilon: Any = 1.0) -> None:
-        self.epsilon = float(epsilon)
+        self.epsilon = exact_real(epsilon, where="DivEpsGrad.epsilon")
 
 
 class CompositeRhs:

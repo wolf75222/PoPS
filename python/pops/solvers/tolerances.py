@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from pops.descriptors import Descriptor
+from pops.solvers._numeric import exact_positive_real
 
 
 class AbsoluteFloor(Descriptor):
@@ -24,8 +25,9 @@ class AbsoluteFloor(Descriptor):
     category = "tolerance_floor"
     native_id = None
 
-    def __init__(self, abs_floor: float = 1e-12) -> None:
-        self.abs_floor = float(abs_floor)
+    def __init__(self, abs_floor: Any = 1e-12) -> None:
+        self.abs_floor = exact_positive_real(
+            abs_floor, where="AbsoluteFloor(abs_floor=)")
 
     @property
     def name(self) -> str:
@@ -49,8 +51,8 @@ class Relative(Descriptor):
     category = "tolerance"
     native_id = None
 
-    def __init__(self, rel: float = 1e-6, floor: AbsoluteFloor | None = None) -> None:
-        self.rel = float(rel)
+    def __init__(self, rel: Any = 1e-6, floor: AbsoluteFloor | None = None) -> None:
+        self.rel = exact_positive_real(rel, where="Relative(rel=)")
         if floor is not None and not isinstance(floor, AbsoluteFloor):
             raise TypeError(
                 "Relative(floor=) must be a pops.solvers.tolerances.AbsoluteFloor(...) "
@@ -80,8 +82,8 @@ class Absolute(Descriptor):
     category = "tolerance"
     native_id = None
 
-    def __init__(self, abs_tol: float = 1e-6) -> None:
-        self.abs_tol = float(abs_tol)
+    def __init__(self, abs_tol: Any = 1e-6) -> None:
+        self.abs_tol = exact_positive_real(abs_tol, where="Absolute(abs_tol=)")
 
     @property
     def name(self) -> str:

@@ -5,24 +5,52 @@ Public API re-exported from pops.codegen.__init__.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import shutil
 import sys
+from collections.abc import Mapping
 from typing import Any
 
 
 # --- _pops access (mirrors dsl.py: try top-level then relative) ---
 def _pops_module() -> Any:
-    """The _pops extension module if it is loadable, otherwise None (dsl.py stays usable alone)."""
+    """Return ``_pops`` only when it is absent, never when its load failed.
+
+    A binary-loader or dependency error from an installed extension must remain visible: treating it
+    as an unavailable optional module would select a different toolchain and hide the real cause.
+    """
     try:
-        import _pops
-        return _pops
-    except Exception:
-        try:
-            from pops import _pops  # noqa: PLC0415  # SPEC4-TODO: lazy import
-            return _pops
-        except Exception:
+        return importlib.import_module("_pops")
+    except ModuleNotFoundError as exc:
+        if exc.name != "_pops":
+            raise
+    try:
+        return importlib.import_module("pops._pops")
+    except ModuleNotFoundError as exc:
+        if exc.name == "pops._pops":
             return None
+        raise
+
+
+_NATIVE_LOADER_CONTRACT_FIELDS = frozenset({"schema_version", "compile_definitions"})
+_NATIVE_LOADER_SHARED_DEFINITIONS = ("POPS_RUNTIME_SHARED_EXCEPTION_ABI",)
+
+
+def _native_loader_manifest_compile_flags(module: Any) -> list[str]:
+    """Replay the closed host manifest shared by every generated native plugin route."""
+    raw = getattr(module, "__native_loader_contract__", None)
+    if not isinstance(raw, Mapping) or set(raw) != _NATIVE_LOADER_CONTRACT_FIELDS:
+        raise RuntimeError(
+            "loaded pops._pops exposes no exact __native_loader_contract__ schema")
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        raise RuntimeError("unsupported pops._pops.__native_loader_contract__ schema_version")
+    definitions = raw["compile_definitions"]
+    if type(definitions) is not tuple or definitions != _NATIVE_LOADER_SHARED_DEFINITIONS:
+        raise RuntimeError(
+            "pops._pops native-loader compile definitions differ from the supported shared "
+            "exception ABI contract")
+    return ["-D" + definition for definition in definitions]
 
 
 # --- Signature of the core header tree (ABI key of the "production" path) -------------
@@ -31,25 +59,59 @@ def _pops_module() -> Any:
 # module MUST share the same C++ ABI (same headers, compiler, standard). We materialize the
 # "header signature" in the ABI key (pops/runtime/abi_key.hpp, token POPS_HEADER_SIG) ; the
 # module build bakes it (CMake) and compile_native re-bakes it (-D flag) by computing it IDENTICALLY.
-# The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here : sha256 of the
-# sorted concatenation "<relpath>\n<sha256(content)>\n" of each .hpp/.h under include/. cf. abi_key.hpp.
+# The computation MUST be bit-for-bit identical on the CMake side (python/CMakeLists.txt) and here:
+# sha256 of the sorted concatenation
+# "<category> <relpath>\n<sha256(content)>\n" for every installed row in
+# include/pops_headers.manifest. api, abi, sdk-root and sdk-support all enter the published ABI;
+# test-only or untracked files never do.
 def pops_header_signature(include: Any) -> str:
-    """Stable signature of the pops header tree under @p include : sha256 of the sorted concatenation
-    "<relative path>\\n<sha256 of content>\\n" of each .hpp/.h. EXACT MIRROR of the CMake computation
-    (python/CMakeLists.txt) : if a header changes, the signature changes on both sides, so the ABI
-    key diverges and add_native_block raises an explicit error (never silent UB)."""
+    """Signature of the exact normalized installed-header contract under ``include``."""
     import hashlib
-    import os
+
+    manifest = os.path.join(include, "pops_headers.manifest")
+    try:
+        with open(manifest, encoding="utf-8") as source:
+            rows = source.read().splitlines()
+    except OSError as exc:
+        raise RuntimeError("PoPS installed-header manifest is missing from %s" % include) from exc
+
+    categories = ("api", "abi", "sdk-root", "sdk-support", "test-only")
+    installed_categories = categories[:-1]
+    installed = []
+    seen = set()
+    for line_number, raw in enumerate(rows, 1):
+        row = raw.strip()
+        if not row or row.startswith("#"):
+            continue
+        parts = row.split(maxsplit=1)
+        if len(parts) != 2 or parts[0] not in categories:
+            raise RuntimeError("invalid PoPS installed-header manifest row %d" % line_number)
+        category, rel = parts
+        if rel.startswith("/") or ".." in rel.split("/") or not rel.startswith("pops/") \
+                or not rel.endswith((".hpp", ".h", ".inc")):
+            raise RuntimeError("invalid header path in PoPS manifest: %s" % rel)
+        if rel in seen:
+            raise RuntimeError("duplicate header path in PoPS manifest: %s" % rel)
+        seen.add(rel)
+        if category != "test-only":
+            installed.append((category, rel))
+
+    present = {category for category, _ in installed}
+    missing = [category for category in installed_categories if category not in present]
+    if missing:
+        raise RuntimeError(
+            "PoPS installed-header manifest has empty categories: %s" % ", ".join(missing))
+
     entries = []
-    for root, _dirs, files in os.walk(include):
-        for fn in files:
-            if fn.endswith((".hpp", ".h")):
-                p = os.path.join(root, fn)
-                rel = os.path.relpath(p, include).replace(os.sep, "/")  # CMake writes paths with '/' (even on Windows)
-                with open(p, "rb") as f:
-                    digest = hashlib.sha256(f.read()).hexdigest()
-                entries.append("%s\n%s\n" % (rel, digest))
-    blob = "".join(sorted(entries)).encode()
+    for category, rel in sorted(installed):
+        path = os.path.join(include, *rel.split("/"))
+        try:
+            with open(path, "rb") as source:
+                digest = hashlib.sha256(source.read()).hexdigest()
+        except OSError as exc:
+            raise RuntimeError("PoPS installed header is missing: %s" % rel) from exc
+        entries.append("%s %s\n%s\n" % (category, rel, digest))
+    blob = "".join(entries).encode()
     return hashlib.sha256(blob).hexdigest()
 
 
@@ -76,6 +138,7 @@ def pops_include() -> str:
     try:
         import pops as _pops_pkg
         pkg = os.path.dirname(os.path.abspath(_pops_pkg.__file__))   # .../pops
+        candidates.append(os.path.join(pkg, "include"))  # wheel-owned, exact signed header tree
         candidates.append(os.path.normpath(os.path.join(pkg, "..", "..", "..", "include")))
     except Exception:
         pass
@@ -104,13 +167,7 @@ def loader_cxx_std() -> str:
     POPS_CXX_STD : 20 under Kokkos, 23 otherwise). Graceful fallbacks if the attribute is missing (old module) :
     we parse __cplusplus from _pops.abi_key() (>202002L -> c++23, otherwise c++20) ; failing all that,
     we fall back to the historical default c++23 (non-Kokkos host case, unchanged)."""
-    try:
-        import _pops
-    except Exception:
-        try:
-            from pops import _pops  # noqa: PLC0415  # SPEC4-TODO: lazy import
-        except Exception:
-            _pops = None
+    _pops = _pops_module()
     std = _pops_cxx_std_from_module(_pops) if _pops is not None else None
     return std or "c++23"
 
@@ -190,35 +247,6 @@ def _check_headers_match_module(include: Any) -> str:
             "or point POPS_INCLUDE at the headers of the build that produced this module."
             % (include, so, current[:16], baked[:16]))
     return current  # signature of the @p include tree, reusable (avoids a 2nd walk+sha256)
-
-
-def resolve_auto_backend(include: Any = None) -> tuple:
-    """DEFAULT backend policy (backend='auto', decision recorded -- ADC-63).
-
-    'production' (zero-copy native loader, strict add_block parity) AS SOON AS the
-    toolchain parity with the _pops module is established : module loadable + known baked compiler +
-    header signature of @p include == the one baked into the module. OTHERWISE 'aot' (historical
-    default : host-marshaled, works without module or parity). Never silent : returns
-    (backend, reason) and the facades set the reason on CompiledModel.backend_auto_reason.
-    An EXPLICIT backend passed by the caller short-circuits this policy (unchanged)."""
-    from .abi import module_header_signature  # intra-package; avoids circular at module level
-    mod = _pops_module()
-    if mod is None:
-        return "aot", "_pops module not loadable (the production path requires the module)"
-    if not loader_cxx_compiler():
-        return "aot", "module compiler unknown (old module or manual build)"
-    baked = module_header_signature()
-    if not baked:
-        return "aot", "header signature absent from the module (manual build)"
-    try:
-        inc = include if include is not None else pops_include()
-        sig = pops_header_signature(inc)
-    except Exception as e:  # headers not found / unreadable -> fall back on default
-        return "aot", "pops headers not found for parity (%s)" % e
-    if sig != baked:
-        return "aot", ("headers != module (rebuild the module or point at the build headers ; "
-                       "production would refuse, cf. _check_headers_match_module)")
-    return "production", "toolchain parity established (module + baked compiler + matching headers)"
 
 
 def _default_cxx(cxx: Any = None) -> Any:
@@ -315,7 +343,7 @@ def _probe_cxx_std(cc: Any, std: Any) -> str:
 def _native_kokkos_root() -> Any:
     """Kokkos root to compile the DSL loaders with the SAME backend as the _pops module.
 
-    PoPS is KOKKOS-ONLY: every DSL .so that includes the pops headers (aot, native) MUST be compiled
+    PoPS is KOKKOS-ONLY: every production DSL .so that includes the PoPS headers MUST be compiled
     with Kokkos (for_each.hpp #error otherwise). The root is read from POPS_KOKKOS_ROOT / Kokkos_ROOT /
     KOKKOS_ROOT; None if not found (the caller then raises an explicit error)."""
     for key in ("POPS_KOKKOS_ROOT", "Kokkos_ROOT", "KOKKOS_ROOT"):
@@ -361,13 +389,18 @@ def _native_feature_key() -> str:
         except OSError:
             tag = "unknown"
         kk = "kokkos=on;kcfg=%s" % tag
-    # ADC-319: the MPI seam of the loader (POPS_HAS_MPI on/off, cf. _native_mpi_flags) changes the
-    # compiled code (real comm vs serial stubs n_ranks()=1/my_rank()=0) -> it MUST enter the cache,
-    # else a SERIAL-stub .so would be reused on an MPI module and any distributed layout built inside
-    # the loader (e.g. AmrSystem(distribute_coarse=True)) would replicate on every rank (no scaling).
+    # The native-loader manifest changes cross-DSO declarations and must partition every cached
+    # plugin even in serial builds. Replaying it here also fails closed before a stale host contract
+    # can select an artifact built under the header-only exception mode.
     mod = _pops_module()
-    mpi = "mpi=on" if (mod is not None and getattr(mod, "__has_mpi__", False)) else "mpi=off"
-    return "%s;%s" % (kk, mpi)
+    loader = "loader_defs=" + ",".join(
+        flag.removeprefix("-D") for flag in _native_loader_manifest_compile_flags(mod))
+    # The MPI seam changes both inline code and ABI.  Partition by the concrete CMake-authenticated
+    # mpi.h/library fingerprint, not only an on/off bit: Open MPI and MPICH artifacts must never share
+    # one cache slot merely because both define POPS_HAS_MPI.
+    from pops.codegen._native_mpi import native_mpi_abi_key
+    mpi = native_mpi_abi_key(mod)
+    return "%s;%s;%s" % (kk, loader, mpi)
 
 
 def _warn_kokkos_parity() -> None:
@@ -481,13 +514,23 @@ def pops_loader_build_flags(cxx: Any = None) -> tuple:
     Kokkos (for_each.hpp #error otherwise). Returns (compiler, compile_flags, link_flags): Kokkos +
     (macOS) -undefined dynamic_lookup. The Kokkos symbols stay UNDEFINED, resolved at load time
     against the Kokkos runtime already loaded by _pops (no 2nd copy). Raises if no installed Kokkos is
-    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU)."""
+    visible via POPS_KOKKOS_ROOT / Kokkos_ROOT (Serial suffices on CPU). The host's central native
+    loader manifest is replayed for every route before the optional MPI manifest, so serial and MPI
+    plugins consume the same exported exception RTTI without acquiring the producer definition."""
     if _native_kokkos_root() is None:
         raise RuntimeError(
             "pops_loader_build_flags: PoPS is Kokkos-only -- point to an installed Kokkos via "
             "POPS_KOKKOS_ROOT (or Kokkos_ROOT), e.g. `export POPS_KOKKOS_ROOT=/path/to/kokkos`.")
     cc = _native_kokkos_compiler(cxx)
     cflags, lflags = _native_kokkos_flags()
+    module = _pops_module()
+    from pops.codegen._native_host import ensure_native_host_global
+    ensure_native_host_global(module)
+    loader_cflags = _native_loader_manifest_compile_flags(module)
+    from pops.codegen._native_mpi import native_mpi_build_flags
+    mpi_cflags, mpi_lflags = native_mpi_build_flags(module)
+    cflags = [*loader_cflags, *cflags, *mpi_cflags]
+    lflags = [*lflags, *mpi_lflags]
     if sys.platform == "darwin":
         cflags = list(cflags) + ["-undefined", "dynamic_lookup"]
     return cc, cflags, lflags

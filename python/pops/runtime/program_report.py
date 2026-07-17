@@ -3,7 +3,7 @@
 ``System.program_report()`` and ``AmrSystem.program_report()`` return a :class:`ProgramRuntimeReport`
 value object built from this module. It aggregates the ALREADY-bound C++ accessors of the extracted
 Program subsystem (``pops::runtime::program::ProgramRuntimeState``) into ONE inspectable, JSON-ready
-structure: the installed step / hash, the global cadence, the name-based block map, the per-block
+structure: the installed step / hash, typed step transaction, name-based block map, the per-block
 runtime-param counts, the recorded diagnostics, the multistep histories, the scheduler cache slots and
 the profiler state.
 
@@ -12,10 +12,8 @@ arrays, never recompiles, never installs a program. It is the SINGLE SOURCE the
 :class:`~pops.runtime.inspection.RuntimeInspectionReport` ``program`` section is now built from, so the
 two reports never drift.
 
-The builder is graceful against an older prebuilt ``.so`` (the ADC-592 hasattr-gating pattern): an
-engine that predates a given accessor -- notably the ADC-594 ``program_substeps`` / ``program_stride``
-getters -- yields ``None`` for that field rather than raising, so the report stays describable on a
-stale extension (CI proves the fresh accessors).
+The native report remains metadata-only; transaction identity is read from the authenticated Python
+Program contract installed alongside the native closure.
 """
 
 from __future__ import annotations
@@ -44,21 +42,27 @@ class ProgramRuntimeReport:
     sections); a bound program fills the sections from the C++ Program subsystem accessors.
     """
 
-    schema_version = 1
+    schema_version = 3
     report_type = "program_runtime"
 
-    def __init__(self, *, installed: Any, program_hash: Any, cadence: Any, block_map: Any,
+    def __init__(self, *, installed: Any, program_hash: Any, step_transaction: Any, block_map: Any,
                  params: Any, diagnostics: Any, histories: Any, cache: Any,
-                 profiler: Any) -> None:
+                 profiler: Any, clocks: Any, level_relations: Any,
+                 flux_ledger: Any, synchronization: Any, temporal: Any) -> None:
         self.installed = bool(installed)
         self.program_hash = program_hash or ""
-        self.cadence = dict(cadence)
+        self.step_transaction = dict(step_transaction)
         self.block_map = list(block_map)
         self.params = [dict(row) for row in params]
         self.diagnostics = dict(diagnostics)
         self.histories = [dict(row) for row in histories]
         self.cache = [dict(row) for row in cache]
         self.profiler = dict(profiler)
+        self.clocks = [dict(row) for row in clocks]
+        self.level_relations = [dict(row) for row in level_relations]
+        self.flux_ledger = [dict(row) for row in flux_ledger]
+        self.synchronization = [dict(row) for row in synchronization]
+        self.temporal = dict(temporal)
 
     def to_dict(self) -> Any:
         return {
@@ -66,13 +70,18 @@ class ProgramRuntimeReport:
             "report_type": self.report_type,
             "installed": self.installed,
             "program_hash": self.program_hash,
-            "cadence": dict(self.cadence),
+            "step_transaction": dict(self.step_transaction),
             "block_map": list(self.block_map),
             "params": [dict(row) for row in self.params],
             "diagnostics": dict(self.diagnostics),
             "histories": [dict(row) for row in self.histories],
             "cache": [dict(row) for row in self.cache],
             "profiler": dict(self.profiler),
+            "clocks": [dict(row) for row in self.clocks],
+            "level_relations": [dict(row) for row in self.level_relations],
+            "flux_ledger": [dict(row) for row in self.flux_ledger],
+            "synchronization": [dict(row) for row in self.synchronization],
+            "temporal": dict(self.temporal),
         }
 
     def to_json(self, path: Any = None, *, indent: int = 2) -> Any:
@@ -89,28 +98,21 @@ class ProgramRuntimeReport:
                    len(self.cache)))
 
     def __str__(self) -> Any:
-        cad = self.cadence
+        strategy = self.step_transaction.get("strategy", {})
         lines = ["program runtime report (schema=%d)" % self.schema_version]
         lines.append("  installed   : %s" % self.installed)
         lines.append("  hash        : %s" % (self.program_hash or "(none)"))
-        lines.append("  cadence     : substeps=%s stride=%s"
-                     % (cad.get("substeps"), cad.get("stride")))
+        lines.append("  strategy    : %s" % (strategy.get("kind") or "(none)"))
         lines.append("  block_map   : %s" % (self.block_map or "(identity)"))
         lines.append("  params      : %d block(s)" % len(self.params))
         lines.append("  diagnostics : %d scalar(s)" % len(self.diagnostics))
         lines.append("  histories   : %d ring(s)" % len(self.histories))
         lines.append("  cache       : %d slot(s)" % len(self.cache))
         lines.append("  profiler    : enabled=%s" % self.profiler.get("enabled"))
+        lines.append("  clocks      : %d cursor(s)" % len(self.clocks))
+        lines.append("  flux ledger : %d accepted contribution(s)" % len(self.flux_ledger))
+        lines.append("  sync        : %d phase event(s)" % len(self.synchronization))
         return "\n".join(lines)
-
-
-def _cadence(sim: Any) -> Any:
-    """The GLOBAL macro-step cadence (ADC-594). ``program_substeps`` / ``program_stride`` are the
-    ADC-594 getters; an older ``.so`` lacks them -> None (graceful, CI proves the fresh accessors)."""
-    return {
-        "substeps": _call(sim, "program_substeps", None),
-        "stride": _call(sim, "program_stride", None),
-    }
 
 
 def _params(sim: Any) -> Any:
@@ -154,6 +156,52 @@ def _cache(sim: Any) -> Any:
     return rows
 
 
+def _amr_temporal_report(sim: Any) -> tuple[Any, Any, Any, Any]:
+    clocks = []
+    for row in _call(sim, "program_clock_manifest", []) or []:
+        if row[0] == "level" and len(row) == 6:
+            clocks.append({
+                "kind": "level", "level": int(row[1]), "macro_step": int(row[2]),
+                "phase": {"numerator": int(row[3]), "denominator": int(row[4])},
+                "physical_time": float(row[5]),
+            })
+        elif row[0] == "logical" and len(row) == 3:
+            clocks.append({"kind": "logical", "clock": row[1], "tick": int(row[2])})
+        else:
+            raise ValueError("native AMR Program clock report has an invalid row")
+    relations = []
+    for row in _call(sim, "checkpoint_temporal_relations", []) or []:
+        if len(row) != 5:
+            raise ValueError("native AMR temporal relation report has an invalid row")
+        relations.append({
+            "parent_level": int(row[0]), "child_level": int(row[1]),
+            "temporal_ratio": {"numerator": int(row[2]), "denominator": int(row[3])},
+            "remainder_policy": row[4],
+        })
+    ledger = []
+    for row in _call(sim, "program_flux_ledger_manifest", []) or []:
+        if len(row) != 13:
+            raise ValueError("native AMR Program flux-ledger report has an invalid row")
+        ledger.append({
+            "owner": row[0], "state": row[1], "rate": row[2], "flux": row[3],
+            "level": int(row[4]), "macro_step": int(row[5]),
+            "phase": {"numerator": int(row[6]), "denominator": int(row[7])},
+            "stage_weight": {"numerator": int(row[8]), "denominator": int(row[9])},
+            "orientation": row[10], "face_measure": float(row[11]),
+            "substep_duration": float(row[12]),
+        })
+    synchronization = []
+    for row in _call(sim, "program_sync_manifest", []) or []:
+        if len(row) != 7:
+            raise ValueError("native AMR Program synchronization report has an invalid row")
+        synchronization.append({
+            "parent_level": int(row[0]), "child_level": int(row[1]),
+            "block": int(row[2]), "phase": row[3], "macro_step": int(row[4]),
+            "clock_phase": {"numerator": int(row[5]), "denominator": int(row[6])},
+        })
+    return clocks, relations, ledger, synchronization
+
+
 def build_program_report(sim: Any) -> Any:
     """Aggregate the bound Program-subsystem accessors of @p sim into a :class:`ProgramRuntimeReport`.
 
@@ -162,14 +210,25 @@ def build_program_report(sim: Any) -> Any:
     missing an accessor yields ``None`` for that field.
     """
     program_hash = _call(sim, "installed_program_hash", "") or ""
+    clocks, relations, ledger, synchronization = _amr_temporal_report(sim)
+    temporal_state = getattr(sim, "_temporal_restart_state", None)
+    temporal = temporal_state.to_data() if temporal_state is not None else {}
     return ProgramRuntimeReport(
         installed=bool(program_hash),
         program_hash=program_hash,
-        cadence=_cadence(sim),
+        step_transaction=(
+            sim._step_transaction_plan.to_data()
+            if getattr(sim, "_step_transaction_plan", None) is not None else {}
+        ),
         block_map=list(_call(sim, "program_block_map", []) or []),
         params=_params(sim),
         diagnostics=dict(_call(sim, "program_diagnostics", {}) or {}),
         histories=_histories(sim),
         cache=_cache(sim),
         profiler={"enabled": _call(sim, "is_profiling", None)},
+        clocks=clocks,
+        level_relations=relations,
+        flux_ledger=ledger,
+        synchronization=synchronization,
+        temporal=temporal,
     )

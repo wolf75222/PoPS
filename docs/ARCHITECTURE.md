@@ -4,7 +4,8 @@ PoPS is the header-only C++20 core for coupled hyperbolic-elliptic systems on
 adaptive mesh (AMR), written for MPI + Kokkos (Kokkos is the ONLY on-node backend: Serial /
 OpenMP / Cuda depending on the install; the standalone OpenMP backend was removed). The generic physics bricks
 ([`include/pops/physics/`](../include/pops/physics)) and the library's Python bindings (module
-`pops`, compiled extension `_pops`, composition facades `System` / `AmrSystem`) live here; the
+`pops` and compiled extension `_pops`) live here. `System` / `AmrSystem` are private native
+execution engines behind `RuntimeInstance`, never Python authoring facades; the
 neighboring repository `adc_cases` only contains Python use cases that import this module. The
 core is model-agnostic: it names no scenario, it provides bricks composed in
 `CompositeModel`. The layers are orthogonal (physics, numerics, data/mesh, execution,
@@ -15,6 +16,7 @@ time/coupling) and a high layer never depends on an execution detail.
 
 - [Overview](#overview)
 - [The layers](#the-layers)
+- [Component contracts and generated catalog](#component-contracts-and-generated-catalog)
 - [Grid conventions](#grid-conventions)
 - [AMR coarse-fine stencil (reflux)](#amr-coarse-fine-stencil-reflux)
 - [Pipeline of a time step](#pipeline-of-a-time-step)
@@ -133,8 +135,48 @@ PoPS is organized into five orthogonal layers. A high layer expresses the proble
 
 **Execution (seams).** The execution policy, reduced to seams that only see minimal views (Box2D, `Array4`, scalar, rank), never `BoxArray` nor `DistributionMapping`: `for_each_cell` ([`include/pops/mesh/execution/for_each.hpp`](../include/pops/mesh/execution/for_each.hpp), serial / OpenMP / Kokkos dispatch) takes a box and an `POPS_HD(i, j)` lambda; the POD view `Array4` ([`include/pops/mesh/storage/fab2d.hpp`](../include/pops/mesh/storage/fab2d.hpp)) is identical host/device; `comm` ([`include/pops/parallel/comm.hpp`](../include/pops/parallel/comm.hpp)) does rank/size, all-reduce, barrier (serial / MPI identity); the allocator ([`include/pops/core/foundation/allocator.hpp`](../include/pops/core/foundation/allocator.hpp)) manages the storage of the Fabs. The halo exchange (`fill_boundary`) and the reductions / `saxpy` (`mf_arith`) are not this layer: they are grid operators that orchestrate the seams.
 
-**Time / coupling.** The layer that composes the operators without knowing their internal implementation: SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)), splitting `lie_step` / `strang_step` ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names, per block, the temporal treatment and the number of substeps; the scheduler reads this policy and calls the adapted operator without knowing the flux formula. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/pops/coupling/base/coupling_policy.hpp`](../include/pops/coupling/base/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/pops/coupling/system/system_coupler.hpp`](../include/pops/coupling/system/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)). Inter-species couplings are TYPED operators: a `CouplingOperator` ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) wraps the flat coupled-source program with a DECLARED conservation contract (which roles it conserves versus creates) and a frequency bound, validated at registration and enumerable read-only via `System::coupled_operators()` (and the AMR mirror). The named couplings (ionization, collision, thermal exchange) are now Python presets that lower to this one representation; there is no named C++ coupling method per coupling.
+**Time / coupling.** The layer that composes operators without knowing their implementation contains SSPRK ([`include/pops/numerics/time/integrators/ssprk.hpp`](../include/pops/numerics/time/integrators/ssprk.hpp)), IMEX asymptotic-preserving ([`include/pops/numerics/time/schemes/imex.hpp`](../include/pops/numerics/time/schemes/imex.hpp)) and low-level generic `lie_step` / `strang_step` helpers ([`include/pops/numerics/time/schemes/splitting.hpp`](../include/pops/numerics/time/schemes/splitting.hpp)). A `TimePolicy` ([`include/pops/numerics/time/integrators/time_integrator.hpp`](../include/pops/numerics/time/integrators/time_integrator.hpp)) names simple per-block native treatments. Arbitrary production composition is authored through `pops.Program`; `pops.lib.time` presets are ordinary IR builders, and no native `SystemStepper` branch selects a named split or condensed source stage. The fluid <-> Poisson coupling is carried by a `CouplingPolicy` ([`include/pops/coupling/base/coupling_policy.hpp`](../include/pops/coupling/base/coupling_policy.hpp)) which decides the order of operations and the synchronizations, without owning the data nor knowing the backend: `Coupler` single-model ([`include/pops/coupling/single/coupler.hpp`](../include/pops/coupling/single/coupler.hpp)), `SystemCoupler` multi-species single-level ([`include/pops/coupling/system/system_coupler.hpp`](../include/pops/coupling/system/system_coupler.hpp)), `AmrCouplerMP` AMR multi-box ([`include/pops/coupling/amr/amr_coupler_mp.hpp`](../include/pops/coupling/amr/amr_coupler_mp.hpp)). On the public Python surface, inter-species terms are declared with `Model.coupled_rate(...)`, called at explicit stages in the whole-system `Program`, and advanced or solved by that Program. Source-timescale stability is likewise a Program authority, declared explicitly with `Program.set_dt_bound(...)`; it is not inferred by registering a separate public coupling object. At the lower native layer, the private `CouplingOperator` engine ([`include/pops/coupling/source/coupling_operator.hpp`](../include/pops/coupling/source/coupling_operator.hpp)) still wraps the flat coupled-source program with its declared conservation metadata and native frequency-bound field for engine validation and read-only introspection. This is an implementation representation consumed by installation/lowering, not a second authoring path. Named physical couplings may be Python presets that build `Model.coupled_rate` plus Program IR; there is no named C++ coupling method per coupling.
 
+
+## Component contracts and generated catalog
+
+Every source, native, or externally supplied component crosses composition and loading boundaries
+with a schema-v2 `ComponentManifest`. The manifest is an immutable contract, not a report assembled
+after lowering. Its stable component identifier is the namespaced `uri` plus semantic `version`; its
+semantic payload declares the component type and facets, call signature, reads and writes,
+parameters, provided interfaces, requirements and capabilities, effects, admissible layouts and
+clocks, correlated target variants (dimension/scalar/device/required features), determinism,
+restart schema, precision,
+conservation properties, and named entry points.
+
+Two domain-separated identities are deliberate:
+
+- `semantic_digest` covers every behavior-bearing field and every registered semantic extension;
+- `manifest_digest` additionally covers documentary extensions and is the identity of the complete
+  manifest.
+
+Changing a summary or provenance note therefore does not invalidate scientific semantics. A
+semantic extension must name an absolute schema URI and a positive schema version, and must be
+validated by a registered `ComponentExtensionSchema`; unversioned or unknown semantic extension
+data is refused. Unknown top-level fields are also refused. Values use the closed PoPS canonical
+CBOR vocabulary (no binary floats or opaque Python values), so Python and C++ produce identical
+bytes and SHA-256 identities.
+
+Builtin routes and model bricks have one declaration authority:
+[`schemas/component_catalog.v2.json`](../schemas/component_catalog.v2.json). It owns stable wire IDs,
+aliases, native entry points, requirements, limitations, route metadata, component defaults, and the
+manifest/capability schema versions. [`scripts/generate_component_catalog.py`](../scripts/generate_component_catalog.py)
+generates the Python route/schema products and the C++ catalog header. `routes.py`, `route_ids.hpp`,
+and the Python/C++ brick inspection APIs contain behavior only; they must never declare mirrored
+rows or fallback defaults. The generator's `--check` mode is a CI drift gate. The semantic catalog
+digest enters native route signatures and compiled-artifact cache keys; the full digest additionally
+authenticates documentary summaries and limitations without forcing recompilation.
+
+Adding a builtin component is consequently one catalog change followed by regeneration. Adding an
+external family does not require a base-class branch: it implements the small facet protocols named
+by its manifest, registers that manifest, and lowers through an advertised entry point. Unsupported
+targets and missing capabilities fail with a path, error code, and machine-readable evidence before
+native execution.
 
 ## Grid conventions
 
@@ -149,7 +191,7 @@ device kernel without returning garbage value under nvcc.
 Three modules carry a grid, each with its own convention. The table below fixes
 the notations used in the rest of this section.
 
-### Cartesian: `System` cell-centered, $N_x \times N_y$
+### Cartesian single-level runtime, $N_x \times N_y$
 
 `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) carries a single
 grid shared by all the blocks (species). The configuration lives in `SystemConfig`.
@@ -167,7 +209,7 @@ returns $x_{lo} + (i + 1/2)\,dx$ with $dx = (x_{hi} - x_{lo}) / N_x$ and likewis
 therefore uniform and the cell center exists even outside the valid domain, which allows filling
 the ghost layers by simple evaluation.
 
-### Polar: `System` geometry `"polar"`, ring $n_r \times n_\theta$
+### Polar single-level runtime, ring $n_r \times n_\theta$
 
 When `geometry == "polar"`, the same `System` runs on a global ring $(r, \theta)$ described by
 `PolarGeometry`. The axis convention is fixed: the index-0 direction is radial (i traverses
@@ -181,7 +223,7 @@ $2\pi$).
 | `r_min`, `r_max` | physical radial bounds of the ring |
 
 The resolution `0 -> n` is wired on the facade side: `polar_nr` / `polar_ntheta` in
-[`python/bindings/system/base/system.cpp`](../python/bindings/system/base/system.cpp) return `c.nr > 0 ? c.nr : c.n` (same for `ntheta`), and the
+[`src/runtime/system/system.cpp`](../src/runtime/system/system.cpp) return `c.nr > 0 ? c.nr : c.n` (same for `ntheta`), and the
 index box becomes `Box2D::from_extents(polar_nr(c), polar_ntheta(c))`. The mesh is uniform
 in index: $dr = (r_{max} - r_{min}) / N_r$ and $d\theta = 2\pi / N_\theta$. The physical mesh in
 $\theta$ equals $r\,d\theta$ and therefore grows with $r$; this is the origin of the $1/r$ metric of the
@@ -194,7 +236,7 @@ when `polar_` is true.
 The polar is `nr != ntheta` in general (the grid is not square), contrary to the cartesian
 $n \times n$.
 
-### AMR: `AmrSystem`, hierarchy of levels at constant physical extent
+### Adaptive runtime: hierarchy of levels at constant physical extent
 
 `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) is the
 refined counterpart of `System`: one or more blocks carried over a hierarchy of levels
@@ -303,19 +345,21 @@ four fine cells, closing the coarse/fine coherence.
 
 ## Pipeline of a time step
 
-The time step has two incarnations that share the same grammar of steps (solve the elliptic,
-populate the aux, transport, source) but distinct engines: `System` on single-level grid and
-`AmrSystem` on adaptive hierarchy. The construction phase (`set_poisson`, `add_block`,
-`set_density`) is identical from afar: it declares the system Poisson, composes the bricks of
-each block and sets the initial state. It is the macro-step that differs.
+The time step has two runtime targets that share one generated Program grammar but distinct storage
+providers: `System` on a single-level grid and
+`AmrSystem` on adaptive hierarchy. Both are private execution engines materialized by `pops.bind`
+from one authenticated install plan; their low-level setters and block installers are not authoring
+APIs. The plan declares field providers, composes each block and binds its initial state atomically.
+It is the macro-step that differs.
 
-### Single-level: `System.step_cfl`
+### Single-level runtime execution
 
 The core is `SystemStepper::step_cfl` (and `step`), in
 [`include/pops/runtime/system/system_stepper.hpp`](../include/pops/runtime/system/system_stepper.hpp). The order is an
-explicit invariant (cf. the contract at the head of the file): `solve_fields` once at the head, then for
-each block DU (honored stride cadence) an `advance_transport` followed by a `run_source_stage`
-interleaved, then `apply_couplings`, then `advance the time` and `advance the macro-step counter`.
+explicit invariant (cf. the contract at the head of the file): without an installed Program it runs
+`solve_fields`, advances each due transport block, applies inter-block couplings and advances the
+clock. With an installed Program, the authored Program owns every stage and the runtime only supplies
+cadence, data and operator/provider seams.
 
 The `solve_fields` delegates to `SystemFieldSolver`
 ([`include/pops/runtime/system/system_field_solver.hpp`](../include/pops/runtime/system/system_field_solver.hpp)): it
@@ -335,17 +379,49 @@ a validity token recording which field problem, block and stage produced the aux
 one stage cannot be silently read as another. These are descriptors around already-computed values;
 they add no numerics.
 
-The default shared Poisson and each named elliptic field are described by ONE native
-`FieldProblemRegistry`
-([`include/pops/runtime/system/field_problem_registry.hpp`](../include/pops/runtime/system/field_problem_registry.hpp)):
-both the Uniform `SystemFieldSolver` and the AMR `AmrRuntime` register their field problems into it
-(id, equation kind, output `AuxLayout`, solver kind, route support), so the two routes share one field
-abstraction. Its `validate(id, route)` refuses an illegal combination BEFORE bind (an FFT solver on
-the AMR route, an FFT solve with a Dirichlet potential, an entry declared on a route it does not
-support, or a problem producing no output), and `field_problem_routes` surfaces each entry as a
-`field_problem:<id>` capability report row. The registry owns no solver: the lazy solver build
-(`ensure_named_elliptic`) and RHS assembly (`assemble_poisson_rhs`) remain the numerical truth; the
-`NamedField` component fields become the derived low-level view of an entry's layout.
+Field solve legality is resolved from the owner-qualified Python `FieldSolvePlan` and its capability
+proof before native artifact creation.  The native runtime receives only authenticated prepared
+providers and executable operator callbacks; it does not maintain a second closed enum registry or
+privilege a field named `phi`.
+
+Each resolved field install carries the ordered, block-qualified RHS provider pack, output route,
+method/solver options, four complete physical-face laws, hierarchy policy, and nullspace/gauge proof.
+Non-constant Robin/Dirichlet/Neumann laws are compiled into named device launchers: runtime parameters
+are copied into POD functors before launch. Pointwise dependencies use the explicit
+`pops.fields.boundary_value(handle, component)` expression, while `logical_time(...)` reads the exact
+Program-supplied time point; the resolver turns both into ordered direct-buffer/POD slots. Handles
+remain Boolean/hashable identities and a vector state cannot be sampled without naming its component.
+An iterate-dependent law installs its exact symbolic JVP and requires an explicit nonlinear solver,
+and a device-invalid denominator is reduced to one rank-consistent witness before the solve can
+publish. Uniform state/field dependencies and single-level AMR state dependencies are prepared
+outside the iteration; multilevel AMR state providers and AMR field-to-field providers are rejected
+until a per-level materialization contract exists. No route falls through to a Python callback or a
+per-cell registry lookup.
+Linear and nonlinear field routes both retain the accepted warm start until their `SolveReport` is
+consumed; an invalid boundary evaluation or iteration limit restores that value and cannot update the
+published aux channel.
+
+Nullspace dimension is derived from operator, boundary closure, and the material topology, while the
+gauge remains an explicit representative choice. The Cartesian topology recipe is an explicit
+axis-neighbor cell graph with its periodic and coarse/fine identifications; its connected-component
+derivation proves one full-domain component (and, for composite AMR, masks coarse cells covered by
+finer levels).
+An embedded-boundary field solve or a level-local solve over partial AMR BoxArrays is therefore
+refused until its material connectivity and coarse/fine boundary closure can be materialised; PoPS
+does not pretend that a single constant mode covers an unknown disconnected topology.  Every AMR
+topology replacement increments a runtime epoch embedded in the nullspace recipe, so no coverage mask
+survives a regrid or restart hierarchy rebuild.
+
+Field warm starts are checkpoint payloads keyed by the complete qualified provider slot.  The AMR v3
+reader validates topology, ownership maps, state, aux, potentials, provider slots and history rings
+before its first write, then restores the hierarchy through the final clock update inside one native
+accepted-state transaction.  Any exception restores the previous hierarchy, data, field warm starts,
+histories, diagnostics and cadence counters; a partially restored simulation is never observable.
+The sealed accepted-state contract also records the topology epoch and regrid count, exact rational
+level clocks, owner/state/space-qualified ring slots, lagged effective-flux publications, parent/child
+temporal relations and every required transfer route.  Restart compares the bound identities and this
+provenance before mutation.  Multi-block and active-regrid layouts use this same strict route; PoPS does
+not silently degrade to a weaker regrid-on-restart guarantee.
 
 The transport of a block, in turn, reads this aux:
 `advance_transport` routes toward the closure `s.advance` (full path) or its disk variants, and
@@ -360,43 +436,47 @@ cartesian and $h = \min(dr,\, r_{\min}\, d\theta)$ in polar.
 sequenceDiagram
     autonumber
     actor Utilisateur
-    participant System
-    participant EllipticSolver as EllipticSolver (SystemFieldSolver)
+    participant Case
+    participant Program
+    participant Runtime as RuntimeInstance
+    participant EllipticSolver as EllipticSolver
     participant SpatialOperator as SpatialOperator (assemble_rhs)
-    participant TimeIntegrator as TimeIntegrator (SSPRK)
+    participant Executor as ProgramExecutor
 
-    Note over Utilisateur,System: Construction (une fois)
-    Utilisateur->>System: set_poisson(rhs, solver, bc)
-    Utilisateur->>System: add_block(model, limiter, riemann, recon, time, substeps)
-    Utilisateur->>System: set_density(name, rho)
+    Note over Utilisateur,Program: Authoring pur (une fois)
+    Utilisateur->>Case: block(model), field(...), numerics(...), layout(...)
+    Utilisateur->>Program: state(...), value(...), solve(...), commit(...)
+    Utilisateur->>Case: program(Program), outputs(...), restart(...)
+    Utilisateur->>Runtime: bind(compile(resolve(validate(Case))), valeurs)
 
-    Note over Utilisateur,TimeIntegrator: Un macro-pas (System.step_cfl)
-    Utilisateur->>System: step_cfl(cfl)
-    System->>EllipticSolver: solve_fields()
+    Note over Utilisateur,Executor: Un macro-pas transactionnel
+    Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
+    Runtime->>EllipticSolver: exécute les noeuds solve du Program
     EllipticSolver->>EllipticSolver: assemble le second membre (somme des q_b n_b) puis resout Poisson pour phi
-    EllipticSolver-->>System: renvoie aux (phi, grad phi, et B_z ou T_e si declares)
-    System->>System: calcule le pas dt par la condition CFL multi-blocs
+    EllipticSolver-->>Runtime: renvoie aux (phi, grad phi, et B_z ou T_e si declares)
+    Runtime->>Runtime: propose dt via la StepStrategy liée
 
-    loop pour chaque bloc DU (stride honore), eff_dt = stride*dt
-        System->>TimeIntegrator: advance_transport(s, eff_dt)
-        loop etages SSPRK (substeps sous-pas)
-            TimeIntegrator->>SpatialOperator: fill_ghosts(U) puis assemble_rhs(U, aux)
+    loop noeuds du graphe temporel explicite / implicite
+        Runtime->>Executor: évalue le noeud avec ses handles qualifiés
+        loop étages et sous-pas déclarés dans Program
+            Executor->>SpatialOperator: fill_ghosts(U) puis assemble_rhs(U, aux)
             SpatialOperator->>SpatialOperator: reconstruction limitee puis flux numerique
-            SpatialOperator-->>TimeIntegrator: assemble le residu R (moins divergence du flux, plus source)
-            TimeIntegrator->>TimeIntegrator: combinaison RK (mise a jour de U)
+            SpatialOperator-->>Executor: assemble le residu R (moins divergence du flux, plus source)
+            Executor->>Executor: combinaison du graphe (mise à jour provisoire)
         end
-        System->>System: run_source_stage(s, eff_dt) (Schur condense, opt-in)
     end
-    System->>System: apply_couplings(dt) (sources inter-especes, splitting)
-    System->>System: avance le temps et le compteur de macro-pas
-    System-->>Utilisateur: dt utilise
+    Runtime->>Runtime: vérifie les gardes puis commit ou rollback atomique
+    Runtime-->>Utilisateur: RunReport immuable (pas, horloge, arrêt, identités) et sorties acceptées
 ```
 
-Strang variant (`step_strang`, opt-in via `set_scheme`): the transport is split into
-$H(dt/2)\,;\,S(dt)\,;\,H(dt/2)$ and `solve_fields` is RE-solved before each stage that consumes $\phi$
-(the $\phi$ of the step head would be stale for the second half-advance).
+Le `RunReport` compte les macro-pas acceptés et les tentatives rejetées de l'appel, expose le temps et
+le macro-pas finaux ainsi que les identités authentifiées du run, du bind, du contexte d'exécution et
+de l'artefact. Un run qui échoue lève une exception ; il ne retourne jamais un rapport marqué succès.
 
-### AMR: `AmrSystem.step`
+Strang and Lie composition are Program macros (`pops.lib.time.strang` / `lie`). They lower explicit
+sub-flows into the same IR rather than selecting a native `System` stepper branch.
+
+### Adaptive runtime execution
 
 On the adaptive hierarchy, `AmrSystem::step`
 ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) forces the lazy build
@@ -422,21 +502,21 @@ inter-species sources by splitting, before `advance the macro-step counter`.
 sequenceDiagram
     autonumber
     actor Utilisateur
-    participant AmrSystem
-    participant AmrRuntime
+    participant Case
+    participant Runtime as RuntimeInstance
+    participant AmrRuntime as AdaptiveExecutor
     participant EllipticSolver as EllipticSolver (GeometricMG)
     participant SpatialOperator as SpatialOperator (advance_amr)
     participant TimeIntegrator as TimeIntegrator (SSPRK / IMEX)
 
-    Note over Utilisateur,AmrSystem: Construction (une fois)
-    Utilisateur->>AmrSystem: set_poisson(rhs, geometric_mg, bc)
-    Utilisateur->>AmrSystem: add_block(name, model, limiter, ...)
-    Utilisateur->>AmrSystem: set_refinement(threshold) et set_phi_refinement
-    Utilisateur->>AmrSystem: set_density(name, rho)
+    Note over Utilisateur,Case: Authoring pur (une fois)
+    Utilisateur->>Case: layout(AMRHierarchy, tagging, transfer, reflux)
+    Utilisateur->>Case: block(...), field(...), program(...), outputs(...), restart(...)
+    Utilisateur->>Runtime: bind(compile(resolve(validate(Case))), valeurs)
 
-    Note over Utilisateur,TimeIntegrator: Un macro-pas (AmrSystem.step)
-    Utilisateur->>AmrSystem: step(dt)
-    AmrSystem->>AmrRuntime: step(dt)
+    Note over Utilisateur,TimeIntegrator: Une tentative de macro-pas transactionnelle
+    Utilisateur->>Runtime: run(t_end, contrôles d'exécution)
+    Runtime->>AmrRuntime: propose(dt, snapshot complet)
 
     opt regrid_every > 0 et macro_step % regrid_every == 0
         AmrRuntime->>AmrRuntime: regrid() (union des tags densite et gradient de phi, nouveau layout fin)
@@ -456,10 +536,14 @@ sequenceDiagram
             SpatialOperator-->>TimeIntegrator: U mis a jour (conservatif par bloc)
         end
     end
-    AmrRuntime->>AmrRuntime: coupled_source_step(dt) : sources inter-especes (splitting, cascade)
-    AmrRuntime->>AmrRuntime: avance le compteur de macro-pas
-    AmrRuntime-->>AmrSystem: retour
-    AmrSystem->>AmrSystem: avance le temps
+    AmrRuntime->>AmrRuntime: évalue les gardes sur état, hiérarchie et rapports collectifs
+    alt tentative acceptée
+        AmrRuntime->>AmrRuntime: commit état + topologie + historiques + compteurs
+        AmrRuntime-->>Runtime: rapport accepté et état publiable
+    else tentative rejetée
+        AmrRuntime->>AmrRuntime: rollback intégral puis nouvelle proposition de dt
+        AmrRuntime-->>Runtime: rapport de rejet structuré
+    end
 ```
 
 The parallel between the two pipelines is deliberate: `AmrRuntime::solve_fields` reproduces
@@ -474,13 +558,20 @@ and in the periodic regrid, proper to the hierarchy.
 
 The library distinguishes two safety nets (cf. [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) section 11): the bit-identical is a software net (the refactoring did not break anything), not a numerical proof. Both are necessary. The properties below are those actually measured by the test suite, not objectives.
 
-**Mass conservation at round-off.** The finite-volume scheme is conservative by telescoping of the fluxes; at the coarse-fine reflux (FluxRegister), the global mass stays conserved at machine precision. The source test `tests/python/unit/solvers/test_schur_conservation.py` measures on 64x64 periodic, axisymmetric ring, 40 steps a relative mass drift of the order of $1.9\times 10^{-16}$ (machine precision), well below the threshold $10^{-12}$. On the AMR side, the extraction of the couplers into thin schedulers has been validated at unchanged mass conservation at round-off (`amr_mass`, section 5 of the architecture). The momentum is only exact ($\sim 5\times 10^{-18}$) when the net force is zero by discrete symmetry; under real electrostatic/Lorentz force it is not conserved by construction, which is the expected behavior of an FV scheme (and not of a structure-preserving weak-form scheme).
+**Mass conservation at round-off.** The finite-volume scheme is conservative by telescoping of the
+fluxes; at coarse/fine interfaces the FluxRegister reflux closes the same balance. A condensed Program
+freezes density during its implicit sub-flow, so any density change comes from the explicitly authored
+transport/coupling sub-flows. The AMR conservation suites validate the resulting ledger at round-off.
 
 **MPI bit-identical outputs np=1/2/4.** The distributed multipatch (FillPatch / FluxRegister 2-level) is bit-identical to the single-process reference on the MPI ctest entries (`-DPOPS_USE_MPI=ON`, np=1/2/4). `test_mpi_mbox_parity`, `test_mpi_amr_compiled_parity`, `test_krylov_solver`, `test_schur_condensation`, `test_mpi_poisson` and their `_np1/2/4` variants pass in CI in the MPI job. Honest caveat documented: a distributed multi-box coarse is not bit-identical on the global sums (the FMA reduction order changes), but the `max` stays exact and the behavior stays correct.
 
-**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). Device caveats: `add_compiled_model` with extended lambdas is not zero-copy on device (host bounce, nvcc cross-TU limit), the multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
+**Device-clean kernels GH200.** The Kokkos Cuda backend has been validated on GH200 (node `armgpu`, `Kokkos_ARCH_HOPPER90`, `nvcc_wrapper`, OpenMPI CUDA-aware) with components bit-identical to CPU: single-grid System, AMR field operations (flux_register, diffusion), multi-GPU MPI halos (fill_boundary np=1/2/4, gfails=0), screened and anisotropic EPM (`dmax=0`), B_z per AMR level (`dmax=0`), compiled path with named functors multi-box and MPI. The integrated validation AmrSystem + MPI + GPU is done (the three axes in a single run, np=1/2/4, `dmax=0`, mass conserved at `0`). These harnesses live in `tests/gpu/romeo/` (out of CI for lack of GPU runner). A component variant that does not declare and prove the selected GPU execution context is refused; there is no implicit host fallback. Multi-rank additive sums are not bit-exact across np (FMA order), and the AMR strong-scaling by distributed coarse is negative at this scale.
 
-**Parity production == add_block.** The production path (native model compiled AOT via `add_compiled_model`) produces the same result as the brick assembly (`add_block`): the parity of the AOT compiled block is validated on CPU/Serial (`test_compiled_model_parity`). The single-process System production has been validated separately. Limit to know: this path is not yet validated on Kokkos Cuda; the workaround by named functors exists and is validated device, but has not been ported to `test_compiled_model_parity` itself.
+**Parity of authenticated generated blocks.** The private native block artifact specializes the same
+catalog-selected templates as the builtin leaf. `test_compiled_model_parity` validates their numerical
+parity on CPU/Serial, and `test_amr_compiled_model` validates the hierarchy installation. This is a
+test oracle, not a second public registration route or a compatibility fallback. The generic native
+component protocol separately proves its exact interface and target variant before installation.
 
 ## Backends
 
@@ -549,23 +640,54 @@ operations (coarse Poisson -> `aux = grad phi` -> advance + regrid Berger-Rigout
 hierarchy in `AmrLevelStack`. The multi-species coupler carried over AMR is `AmrSystemCoupler`
 ([`include/pops/coupling/system/amr_system_coupler.hpp`](../include/pops/coupling/system/amr_system_coupler.hpp)).
 
-The runtime facades `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp)) and
-`AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap these
-couplers for the multi-block composition; it is they that the Python bindings expose.
+The private engines `System` ([`include/pops/runtime/system.hpp`](../include/pops/runtime/system.hpp))
+and `AmrSystem` ([`include/pops/runtime/amr_system.hpp`](../include/pops/runtime/amr_system.hpp)) wrap
+these couplers for multi-block execution. Pybind exposes only their private installation/execution
+seams, consumed by `pops.bind` and held by `RuntimeInstance`; neither engine is a Python authoring
+surface.
+
+## Component interfaces and registration
+
+Source components, generated components, builtins and external compiled components cross one manifest
+trust boundary. `schemas/component_catalog.v2.json` owns the interface vocabulary and the builtin
+route bindings; its generator emits the identical Python and C++ tables. A
+`ComponentManifest.interfaces` row has exactly `name`, `mode` and `binding`. `mode` is one of
+`method`, `value` or `entry_point`; every facet has exactly one row and an entry-point binding must
+name a declared `ComponentManifest.entry_points` key. Missing or extra bindings are errors, never
+method-name guesses.
+
+The interfaces are deliberately small: Requirement, Lowering, Stencil, Stability, Provider,
+Effects, Restart, Report, FallibleEvaluation and Format. Python uses an immutable
+`ComponentAdapter`; C++ exposes independent concepts in
+`include/pops/runtime/config/component_interfaces.hpp`. There is no component base class,
+scientific concrete-class switch, `provides(any)` capability escape hatch or process-global
+registry. Registration is atomic, content-addressed and explicitly frozen. Builtins and extensions
+emit the same provenance/report shape.
+
+A fallible evaluation returns an explicit `EvaluationOutcome` (`ok`, `retry`, `reject` or
+`failed`). It has no implicit Python truth value. Native and Python callers therefore propagate the
+declared transaction action instead of converting a missing/error outcome into a neutral value.
+
+Finite-volume components use the same small-interface rule. `PhysicalFluxView` exposes only
+constitutive density, wave/stability and declared Riemann structure. A `NumericalFlux` consumes two
+model-qualified `FaceTrace` values plus `FaceContext` and returns a typed density/outcome; the mesh
+`SpatialOperator` alone applies face and cell measures. Provider packs are selected from exact
+`(owner, space kind, space name, component)` identities. Missing, unavailable or contract-mismatched
+providers fail during selection; homonymous components from different owners never alias.
 
 ## Limitations
 
 The following limits are guarded in the code (they raise a clear error rather than drift
 silently), or are assumed scope boundaries.
 
-- AMR composite elliptic and global Schur: present at Phase-4a scope. A 2-level composite FAC
+- AMR composite tensor elliptic: a generated hierarchy-scoped solve routes through
   Poisson (`CompositeFacPoisson`,
   [`include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp`](../include/pops/numerics/elliptic/mg/composite_fac_poisson.hpp))
-  and the AMR condensed Schur source stage (`AmrCondensedSchurSourceStepper`,
-  [`include/pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp`](../include/pops/coupling/schur/amr/amr_condensed_schur_source_stepper.hpp))
-  are wired on the refined hierarchy. The supported scope is 2 levels, 1..N disjoint NON-adjacent fine
-  patches, a replicated mono-block coarse, mono-rank; adjacent patches, more than 2 levels, MPI and
-  multi-block are refused explicitly (Phase 4b). See ALGORITHMS.md section 25 for the full scope.
+  via `AmrTensorElliptic`
+  ([`include/pops/runtime/amr/amr_tensor_elliptic.hpp`](../include/pops/runtime/amr/amr_tensor_elliptic.hpp)).
+  The provider owns per-level coefficients, RHS, initial guess and publication; the generated Program
+  remains independent of FAC and hierarchy storage. Unsupported hierarchy/MPI shapes return a typed
+  capability failure consumed by the authored solve action; there is no fallback to a flat solve.
 
 - FFT under `System` in MPI np>1: supported since ADC-287. `System` distributes a single box in
   round-robin, so `PoissonFFTSolver` (which needs the whole grid) is kept only for `n_ranks()==1`; at
@@ -601,8 +723,8 @@ include/pops/
   numerics/           flux de Riemann (Rusanov/HLL/HLLC/Roe), reconstruction (MUSCL/WENO5-Z), spatial_operator (cartesien, EB cut-cell, polaire), LorentzEliminator
   numerics/elliptic/  concepts EllipticOperator/Solver, GeometricMG (eps(x), anisotrope, kappa), Poisson FFT (mono + bandes), polaire direct + tensoriel, TensorKrylovSolver, composite FAC AMR (mg/composite_fac_poisson)
   numerics/time/      tags SSPRK, integrateurs objets, scheduler de sous-cyclage, IMEX/AP, splitting Lie/Strang, moteur AMR de production (amr_reflux_mf)
-  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, source couplee, condensation de Schur (cartesien + polaire + AMR + operateur programme compile schur/program)
-  runtime/            facades System / AmrSystem, model_factory (briques -> CompositeModel), block builders, chemins DSL (compiled/native/aot), canal aux extensible
+  coupling/           Coupler, SystemCoupler, AmrCouplerMP, AmrSystemCoupler, regrid BR extrait, sources couplees
+  runtime/            moteurs prives System / AmrSystem, installation authentifiee, block builders, canal aux extensible
   amr/                AmrHierarchy, tag_box, clustering Berger-Rigoutsos, regrid (proper nesting)
   parallel/           seam MPI (comm degenere en serie), load balance (round-robin / SFC)
 ```

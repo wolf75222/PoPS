@@ -34,11 +34,10 @@ def capability_map(**supported: Any) -> dict:
 
     Two descriptor families carry this map: a :class:`pops.descriptors.Descriptor` (the rich
     elliptic solvers) exposes it through a ``capabilities()`` METHOD, while a
-    :class:`~pops.descriptors.BrickDescriptor` (the native Krylov / Schur / brick catalog)
+    :class:`~pops.descriptors.BrickDescriptor` (the native Krylov / brick catalog)
     stores it as a ``capabilities`` dict ATTRIBUTE. A consumer that reads a descriptor's
-    capabilities must therefore handle both shapes -- the field-problem solver checks
-    (:meth:`pops.fields.FieldProblem._require_solver_capability`) guard with ``callable(...)``
-    before calling, so a dict-attribute solver is treated as "capability absent", never crashed.
+    capabilities must therefore handle both shapes. Consumers normalize the two protocols at their
+    typed boundary rather than guessing from a descriptor name.
     """
     unknown = sorted(set(supported) - set(CAPABILITY_TAGS))
     if unknown:

@@ -30,6 +30,38 @@ def _abi_token(abi_key: Any, name: str) -> Any:
     return None
 
 
+def _qualified_executable_values(compiled: Any, name: str) -> tuple[Any, dict[str, Any]]:
+    """Return a scalar value only when every executable agrees, plus qualified evidence.
+
+    A multi-block AMR artifact has one model binary per block and a multi-layout system artifact
+    has one Program binary per layout.  Inspection must never select the first component merely to
+    preserve a scalar presentation field: callers get the common value when it is truly common and
+    the complete owner-qualified mapping in every case.
+    """
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    if type(compiled) is CompiledSimulationArtifact:
+        if compiled.layout_programs:
+            components = tuple(
+                ("layout:%s" % row.layout_id, row.program)
+                for row in compiled.layout_programs
+            )
+        else:
+            components = tuple(
+                ("block:%s" % block.name, block.model)
+                for block in compiled.blocks
+            )
+    else:
+        components = (("artifact", compiled),)
+    qualified = {
+        owner: getattr(component, name, None)
+        for owner, component in components
+    }
+    values = tuple(qualified.values())
+    common = values[0] if values and all(value == values[0] for value in values[1:]) else None
+    return common, qualified
+
+
 class CompiledReport(Report):
     """The printable ``print(compiled)`` summary of a compiled artifact (Spec 5 sec.12.1).
 
@@ -37,7 +69,7 @@ class CompiledReport(Report):
     computes nothing of its own. :meth:`to_dict` is a JSON-ready view; :meth:`__str__` is the
     deterministic, array-free, multi-line report shaped like the Spec 5 sec.12.1 example. It never
     prints the ``.so`` contents, a field array, or a ``<...object at 0x...>`` repr. Adopts the shared
-    :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape (the compile
+    internal report base; its ``to_dict`` keeps the established compile-report shape (the compile
     stream may ADD fields, which the base leaves untouched).
     """
 
@@ -47,22 +79,21 @@ class CompiledReport(Report):
     def __init__(self, *, name: Any, backend: Any, platform: Any, layout: Any, blocks: Any,
                  fields: Any, program: Any, inputs: Any, artifacts: Any, status: Any,
                  env: Any = None, runtime: Any = None, capabilities: Any = None,
-                 options: Any = None, module_manifest: Any = None) -> None:
+                 options: Any = None, module_manifest: Any = None,
+                 lowering_coverage: Any = None) -> None:
         self.name = name
         self.backend = backend
         self.platform = platform
         self.layout = layout
         self.blocks = list(blocks)        # [{name, state, components, spatial}]
-        self.fields = list(fields)        # [{name, solver}]
+        self.fields = list(fields)        # resolved field-plan summaries
         self.program = dict(program)      # {name, commits, ops, hash}
         self.inputs = dict(inputs)        # {states, params, aux} -> [names]
-        self.artifacts = dict(artifacts)  # {so_path, abi_key, cache_key}
+        self.artifacts = dict(artifacts)  # scalar common values + owner-qualified evidence
         self.status = status
         # Active codegen POPS_* environment (Spec 5 sec.12.4, #47-48): the resolved CodegenEnv as a
         # plain dict (log_level / codegen_dir / keep_generated / dump_ir / dump_cpp / cache_dir /
-        # profile / autotune / jit_backdoor), or {} when the handle carried no env snapshot. Surfaced
-        # so the env state that governed the compile -- including the UNSAFE jit_backdoor gate -- is
-        # inspectable, never hidden.
+        # profile), or {} when the handle carried no env snapshot.
         self.env = dict(env) if env else {}
         self.runtime = dict(runtime) if runtime else {}
         self.capabilities = dict(capabilities) if capabilities else {}
@@ -71,6 +102,7 @@ class CompiledReport(Report):
         # Module (spaces / params / aux / typed operators / native routes), or None when the artifact
         # carries a bare dsl.Model with no backing Module -- absent, never fabricated.
         self.module_manifest = dict(module_manifest) if module_manifest else None
+        self.lowering_coverage = dict(lowering_coverage) if lowering_coverage else None
 
     def to_dict(self) -> dict:
         """A plain-dict view of the whole report (JSON-ready)."""
@@ -81,7 +113,9 @@ class CompiledReport(Report):
                 "artifacts": dict(self.artifacts), "status": self.status,
                 "env": dict(self.env), "runtime": dict(self.runtime),
                 "capabilities": dict(self.capabilities), "options": dict(self.options),
-                "module_manifest": dict(self.module_manifest) if self.module_manifest else None}
+                "module_manifest": dict(self.module_manifest) if self.module_manifest else None,
+                "lowering_coverage": (
+                    dict(self.lowering_coverage) if self.lowering_coverage else None)}
 
     def __str__(self) -> str:
         lines = ["compiled problem %r" % self.name]
@@ -96,7 +130,9 @@ class CompiledReport(Report):
         lines.append("  fields   :")
         if self.fields:
             for field in self.fields:
-                lines.append("    %-14s solver=%s" % (field.get("name"), field.get("solver")))
+                lines.append("    %-14s solver=%s provider=%s plan=%s"
+                             % (field.get("name"), field.get("solver"),
+                                field.get("provider_kind"), field.get("identity")))
         else:
             lines.append("    (none)")
         prog = self.program
@@ -109,6 +145,8 @@ class CompiledReport(Report):
         art = self.artifacts
         lines.append("  artifacts:")
         lines.append("    so_path  : %s" % art.get("so_path"))
+        for owner, path in sorted(art.get("so_paths", {}).items()):
+            lines.append("    %-9s: %s" % (owner, path))
         lines.append("    abi_key  : %s" % art.get("abi_key"))
         lines.append("    cache_key: %s" % art.get("cache_key"))
         if self.runtime:
@@ -155,13 +193,6 @@ class CompiledReport(Report):
             lines.append("    dump_cpp      : %s" % self.env.get("dump_cpp"))
             lines.append("    cache_dir     : %s" % self.env.get("cache_dir"))
             lines.append("    profile       : %s" % self.env.get("profile"))
-            lines.append("    autotune      : %s%s"
-                         % (self.env.get("autotune"),
-                            "  (no-op stub: no autotune engine today)"
-                            if self.env.get("autotune") not in (None, "off") else ""))
-            backdoor = self.env.get("jit_backdoor")
-            lines.append("    jit_backdoor  : %s%s"
-                         % (backdoor, "  *** UNSAFE debug gate ENABLED ***" if backdoor else ""))
         if self.module_manifest:
             manifest = self.module_manifest
             ops = manifest.get("operators", [])
@@ -170,6 +201,9 @@ class CompiledReport(Report):
             lines.append("    name           : %s" % manifest.get("name"))
             lines.append("    state_spaces   : %s"
                          % (", ".join(sorted(manifest.get("state_spaces", {}))) or "(none)"))
+            provider_pack = manifest.get("provider_pack", {})
+            lines.append("    providers      : %d"
+                         % len(provider_pack.get("entries", ())))
             lines.append("    operators      : %s"
                          % (", ".join(op.get("name") for op in ops) or "(none)"))
         lines.append("  status   : %s" % self.status)
@@ -191,7 +225,8 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
       - platform / layout: read from :meth:`CompiledProblem.arguments` (the layout the artifact
         targets and whether it supports MPI);
       - blocks: the committed blocks, each with the model's state space + component count;
-      - fields: the elliptic / Krylov field solves in the IR (the solver brick is a bind input);
+      - fields: resolved field-install plans retained by the compiled artifact, including the
+        provider kind, native solver route and canonical plan identity;
       - required runtime inputs: the REQUIRED ``arguments()`` entries (states / runtime params /
         aux), the human counterpart of the machine-readable :meth:`CompiledProblem.arguments`;
       - artifacts: ``so_path`` + short ``abi_key`` / ``cache_key``;
@@ -199,15 +234,27 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     """
     args = compiled.arguments()
     instances = getattr(args, "instances", {})
-    solvers = getattr(args, "solvers", {})
     layout_runtime = getattr(args, "layout_runtime", {})
 
     blocks = [{"name": name, "state": spec.get("state"),
-               "components": spec.get("components"), "spatial": "bind-time"}
+               "components": spec.get("components"), "spatial": "resolved"}
               for name, spec in sorted(instances.items())]
 
-    fields = [{"name": name, "solver": spec.get("solver")}
-              for name, spec in sorted(solvers.items())]
+    fields = []
+    field_plans = getattr(getattr(compiled, "plan", None), "field_plans", {}) or {}
+    for name, field_plan in sorted(field_plans.items()):
+        native = field_plan.native_install_data()
+        provider = native["solver_provider"]
+        provider_kind = provider["provider_kind"]
+        solver = provider["solver"]
+        solver_label = (solver["route"] if provider_kind == "builtin_v1"
+                        else solver["component_id"])
+        fields.append({
+            "name": name,
+            "solver": solver_label,
+            "provider_kind": provider_kind,
+            "identity": field_plan.identity.token,
+        })
 
     states = [name for name, spec in sorted(instances.items()) if spec.get("required")]
     req_params = [name for name, spec in sorted(getattr(args, "params", {}).items())
@@ -215,12 +262,24 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     req_aux = [name for name, spec in sorted(getattr(args, "aux", {}).items())
                if spec.get("required")]
 
-    program = getattr(compiled, "program", None)
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+    from pops.codegen.loader import CompiledProblem
+
+    if type(compiled) is CompiledSimulationArtifact:
+        program = getattr(compiled.program, "program", None)
+    elif type(compiled) is CompiledProblem:
+        program = compiled.program
+    else:
+        raise TypeError("build_compiled_report requires an exact compiled artifact or problem")
+    from pops.time.references import block_name, handle_data
+    commit_handles = (sorted(program.commits(), key=lambda item: item.qualified_id)
+                      if (program is not None and hasattr(program, "commits")) else [])
+    commit_names = sorted(block_name(state_ref.block_ref) for state_ref in commit_handles)
     prog_summary = {
         "name": getattr(compiled, "program_name", None) or "problem",
         "ops": len(getattr(program, "_values", [])) if program is not None else 0,
-        "commits": sorted(program.commits()) if (program is not None
-                                                  and hasattr(program, "commits")) else [],
+        "commits": commit_names,
+        "commit_identities": [handle_data(state_ref) for state_ref in commit_handles],
         "hash": _short(getattr(compiled, "program_hash", None)),
     }
 
@@ -229,12 +288,17 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
     from pops.runtime_environment import compiled_runtime_facts
     runtime = compiled_runtime_facts(supports_mpi=layout_runtime.get("supports_mpi"))
 
-    abi_key = getattr(compiled, "abi_key", None)
-    artifacts = {"so_path": getattr(compiled, "so_path", None),
+    so_path, so_paths = _qualified_executable_values(compiled, "so_path")
+    abi_key, abi_keys = _qualified_executable_values(compiled, "abi_key")
+    cache_key, cache_keys = _qualified_executable_values(compiled, "cache_key")
+    artifacts = {"so_path": so_path,
+                 "so_paths": so_paths,
                  "abi_key": _short(abi_key),
                  "abi_key_full": abi_key,
+                 "abi_keys": abi_keys,
                  "header_signature": _abi_token(abi_key, "headers") or "unknown",
-                 "cache_key": _short(getattr(compiled, "cache_key", None))}
+                 "cache_key": _short(cache_key),
+                 "cache_keys": cache_keys}
     from pops._capabilities import native_capability_report
     try:
         capability_report = native_capability_report(
@@ -243,14 +307,15 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
         capability_report = {}
 
     # The active codegen POPS_* environment snapshot (sec.12.4, #47-48): the resolved CodegenEnv as a
-    # plain dict, or {} for a handle that carries none. Surfacing it keeps the env state -- including
-    # the UNSAFE jit_backdoor gate -- inspectable rather than hidden.
+    # plain dict, or {} for a handle that carries none.
     codegen_env = getattr(compiled, "codegen_env", None)
     env = codegen_env.to_dict() if codegen_env is not None else {}
 
     # The operator-first Module manifest (ADC-585), when the artifact carries a backing Module.
     manifest = getattr(compiled, "module_manifest", None)
     module_manifest = manifest.to_dict() if manifest is not None else None
+    coverage = getattr(compiled, "lowering_coverage", None)
+    lowering_coverage = coverage.to_data() if coverage is not None else None
 
     return CompiledReport(
         name=prog_summary["name"], backend="production", platform=platform, layout=layout,
@@ -258,7 +323,7 @@ def build_compiled_report(compiled: Any) -> CompiledReport:
         inputs={"states": states, "params": req_params, "aux": req_aux},
         artifacts=artifacts, status="compiled, waiting for pops.bind(...)", env=env,
         runtime=runtime, capabilities=capability_report, options=_compiled_options(compiled),
-        module_manifest=module_manifest)
+        module_manifest=module_manifest, lowering_coverage=lowering_coverage)
 
 
 def _compiled_options(compiled: Any) -> dict:
@@ -266,26 +331,58 @@ def _compiled_options(compiled: Any) -> dict:
     from pops.runtime.defaults import PHYSICAL_DEFAULT_GAMMA, numerical_defaults_report
 
     defaults = numerical_defaults_report()
-    model = getattr(compiled, "model", None)
-    params = dict(getattr(model, "params", {}) or {})
-    const_params = sorted(
-        name for name, param in params.items() if getattr(param, "kind", "const") != "runtime")
+    from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    if type(compiled) is CompiledSimulationArtifact:
+        model_rows = artifact_model_metadata(compiled)
+    else:
+        model_rows = component_model_metadata(compiled)
+    models = tuple(row.model for row in model_rows)
+
+    def param_kind(param: Any) -> str:
+        kind = getattr(param, "kind", "const")
+        return getattr(kind, "value", kind)
+
+    def qualified_param(block_name: Any, name: str) -> str:
+        return "%s.%s" % (block_name, name) if len(model_rows) > 1 else name
+
+    parameter_entries = tuple(
+        (row.block_name, name, param)
+        for row in model_rows for name, param in row.params.items())
+    const_params = sorted(qualified_param(block, name) for block, name, param in parameter_entries
+                          if param_kind(param) == "const")
     runtime_params = sorted(
-        name for name, param in params.items() if getattr(param, "kind", "const") == "runtime")
+        qualified_param(block, name) for block, name, param in parameter_entries
+        if param_kind(param) == "runtime")
+    derived_params = sorted(
+        qualified_param(block, name) for block, name, param in parameter_entries
+        if param_kind(param) == "derived")
 
     default_gamma = defaults.get("physical", {}).get("gamma", PHYSICAL_DEFAULT_GAMMA)
-    model_gamma = getattr(model, "gamma", None)
-    gamma_source = "compiled_model_metadata" if model_gamma is not None else "legacy_fallback"
-    gamma_value = model_gamma if model_gamma is not None else default_gamma
+    gamma_by_block = {row.block_name: getattr(row.model, "gamma", None) for row in model_rows}
+    explicit_gamma = {value for value in gamma_by_block.values() if value is not None}
+    if len(explicit_gamma) == 1 and len(explicit_gamma) == len(set(gamma_by_block.values())):
+        gamma_value = next(iter(explicit_gamma))
+        gamma_source = "compiled_model_metadata"
+    elif not explicit_gamma:
+        gamma_value = default_gamma
+        gamma_source = "legacy_fallback"
+    else:
+        gamma_value = None
+        gamma_source = "heterogeneous_block_metadata"
 
     param_rows = []
-    for name in sorted(params):
-        param = params[name]
-        kind = getattr(param, "kind", "const")
+    for block, name, param in sorted(parameter_entries, key=lambda row: (str(row[0]), row[1])):
+        kind = param_kind(param)
+        value = (getattr(param, "value", None) if kind == "const" else
+                 getattr(param, "default", None) if getattr(param, "has_default", False)
+                 else None)
         param_rows.append({
             "name": name,
+            "block": block,
             "kind": kind,
-            "value": getattr(param, "value", None),
+            "value": value,
             "affects_cache_key": kind != "runtime",
         })
 
@@ -296,7 +393,8 @@ def _compiled_options(compiled: Any) -> dict:
             "gamma": {
                 "value": gamma_value,
                 "source": gamma_source,
-                "affects_cache_key": model_gamma is not None,
+                "affects_cache_key": bool(explicit_gamma),
+                "by_block": gamma_by_block,
             },
             "params": param_rows,
         },
@@ -304,10 +402,18 @@ def _compiled_options(compiled: Any) -> dict:
             "cache_key": getattr(compiled, "cache_key", None),
             "problem_hash": getattr(compiled, "problem_hash", None),
             "program_hash": getattr(compiled, "program_hash", None),
-            "model_hash": getattr(model, "model_hash", None),
+            "problem_snapshot_hash": getattr(
+                getattr(compiled, "_problem_snapshot", None), "hash", None),
+            "model_hash": (
+                next(iter({getattr(model, "model_hash", None) for model in models}))
+                if len({getattr(model, "model_hash", None) for model in models}) == 1
+                else None),
+            "model_hashes": {
+                row.block_name: getattr(row.model, "model_hash", None) for row in model_rows},
             "abi_key": getattr(compiled, "abi_key", None),
             "participates": [
                 "program_source",
+                "problem_snapshot",
                 "model_hash",
                 "abi_key",
                 "compiler",
@@ -319,6 +425,7 @@ def _compiled_options(compiled: Any) -> dict:
             ],
             "const_params": const_params,
             "runtime_params": runtime_params,
+            "derived_params": derived_params,
             "runtime_params_affect_cache_key": False,
             # Route registry / report vocabulary components (ADC-599): the native catalog the
             # artifact was keyed against. A registry change (route added/removed/re-tokenized)

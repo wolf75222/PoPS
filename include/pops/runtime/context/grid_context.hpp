@@ -5,9 +5,11 @@
 #include <pops/mesh/geometry/geometry.hpp>
 #include <pops/mesh/storage/multifab.hpp>
 #include <pops/mesh/boundary/physical_bc.hpp>
+#include <pops/mesh/boundary/prepared_boundary_plan.hpp>
 #include <pops/numerics/spatial/embedded_boundary/domain.hpp>  // detail::DiscDomain (built-in level-set domain instance)
 
 #include <functional>
+#include <memory>
 
 /// @file
 /// @brief Block grid context plus closures, shared between System (which installs them) and
@@ -53,7 +55,68 @@ struct GridContext {
   Real eb_kappa_min = Real(1e-2);
   Real eb_face_open_eps = Real(1e-6);
   Real eb_cut_theta_min = Real(1e-3);
+  /// Exact per-block ghost-production authority. Empty only for legacy low-level construction;
+  /// resolved Case installation always supplies one before closures are built.
+  std::shared_ptr<const PreparedBoundaryPlan> boundary_plan{};
+  /// Open N-ary storage-binding protocol.  A runtime that owns several states/fields/outputs binds
+  /// their exact qualified identities here; the boundary executor remains independent of System,
+  /// AMR, field registries and storage classes.  Empty selects the ordinary one-state/one-aux
+  /// convenience adapter and never fabricates aliases for an N-ary request.
+  using BoundaryFieldRegistryFactory = std::function<detail::BoundaryFieldRegistry(
+      const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, const MultiFab*, MultiFab*)>;
+  BoundaryFieldRegistryFactory boundary_field_registry{};
 };
+
+/// The single transport ghost-fill entry used by compiled block closures.  The historical BCRec
+/// path remains for low-level native construction with no resolved boundary authority; a resolved
+/// plan never falls back because its pointer is captured when the block is built.
+inline void fill_grid_ghosts(MultiFab& state, const GridContext& context) {
+  if (context.boundary_plan) {
+    context.boundary_plan->fill_same_level_and_physical(state, context.dom);
+    return;
+  }
+  fill_ghosts(state, context.dom, context.bc);
+}
+
+inline void fill_grid_ghosts(MultiFab& state, const GridContext& context,
+                             const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (context.boundary_plan) {
+    if (context.boundary_field_registry) {
+      auto fields = context.boundary_field_registry(point, state, nullptr, nullptr);
+      context.boundary_plan->fill_same_level_and_physical(state, fields, context.geom, point);
+    } else {
+      context.boundary_plan->fill_same_level_and_physical(state, context.aux, context.geom, point);
+    }
+    return;
+  }
+  fill_ghosts(state, context.dom, context.bc);
+}
+
+inline void add_grid_boundary_residual(MultiFab& state, MultiFab& residual,
+                                       const GridContext& context,
+                                       const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (!context.boundary_plan)
+    return;
+  if (context.boundary_field_registry) {
+    auto fields = context.boundary_field_registry(point, state, nullptr, &residual);
+    context.boundary_plan->add_residual(point, fields, context.geom);
+  } else {
+    context.boundary_plan->add_residual(point, state, context.aux, context.geom, residual);
+  }
+}
+
+inline void apply_grid_boundary_jvp(MultiFab& state, const MultiFab& direction, MultiFab& output,
+                                    const GridContext& context,
+                                    const runtime::multiblock::BoundaryEvaluationPoint& point) {
+  if (!context.boundary_plan)
+    return;
+  if (context.boundary_field_registry) {
+    auto fields = context.boundary_field_registry(point, state, &direction, &output);
+    context.boundary_plan->apply_jvp(point, fields, context.geom);
+  } else {
+    context.boundary_plan->apply_jvp(point, state, direction, context.aux, context.geom, output);
+  }
+}
 
 /// Compiled block closures, frozen at add time.
 ///
@@ -88,6 +151,28 @@ struct BlockClosures {
   /// -div F base leaking in (spec: rhs flux=False is source-only). OPTIONAL (empty for block paths that
   /// do not build it, e.g. the host .so prototype loader): System::block_source_into fails loud then.
   std::function<void(MultiFab&, MultiFab&)> source_only;
+  /// Point-qualified full/flux-only residuals used by every compiled Program rate.  These are not
+  /// optional aliases of the legacy closures: a prepared native boundary component requires the
+  /// exact clock/stage/dt carried by BoundaryEvaluationPoint and the legacy unqualified route fails.
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_flux_only_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_without_prepared_interfaces;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_flux_only_without_prepared_interfaces;
+  /// Core residuals exclude additive FieldBoundary contributions but retain ghost producers and
+  /// shared-interface face ownership.  Residual/JVP closures expose that boundary term separately.
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_core_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      rhs_flux_only_core_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&, MultiFab&)>
+      boundary_residual_at_point;
+  std::function<void(const runtime::multiblock::BoundaryEvaluationPoint&, MultiFab&,
+                     const MultiFab&, MultiFab&)>
+      boundary_jvp_at_point;
   /// dt_hotspot diagnostic (ADC-182): (U, w, i, j) -> GLOBAL cell dominating the transport
   /// CFL and its speed. OPTIONAL (empty = block without diagnostic, e.g. historical
   /// unrewired paths); never called by step/step_cfl (off the hot path).

@@ -1,170 +1,364 @@
-"""PARAMETRES RUNTIME du DSL (P7-b) : un parametre declare pops.dsl.Param(..., kind='runtime') peut voir
-sa valeur CHANGEE a l'execution SANS recompiler le .so, alors qu'un parametre kind='const' (defaut)
-reste INLINE EN DUR (bit-identique a l'historique).
+"""A typed RuntimeParam crosses bind and changes native execution without recompilation.
 
-Mecanique (backend "aot", add_compiled_block) : le codegen emet `params.get(<indice>)` pour un param
-runtime (lecture d'un membre pops::RuntimeParams de la brique generee) au lieu d'une constante ; l'ABI du
-.so AOT transporte un bloc plat de valeurs (symboles `_p`) ; System.set_block_params(name, values) ecrit
-dans le bloc PARTAGE -> le comportement change au prochain pas. cf. include/pops/runtime/runtime_params.hpp.
-
-Ce test verifie :
-  1) NON-REGRESSION : un param const reste inline (codegen byte-identique a un modele sans param runtime ;
-     aucun #include runtime_params.hpp, aucun membre RuntimeParams, valeur ecrite en dur) ;
-  2) RUNTIME : un modele avec un param runtime cs2 (vitesse du son au carre) compile, tourne, et
-     set_block_params change eval_rhs en consequence (le residu = -div F scale avec cs2 via p = cs2*rho) ;
-  3) PAS DE RECOMPILATION : recompiler le MEME modele (meme model_hash + abi_key) reutilise le .so en cache
-     (cache HIT) ; changer cs2 au runtime n'engendre AUCUNE recompilation ;
-  4) cohrence avec un modele OU cs2 est cuit en CONST : eval_rhs(runtime cs2=k) == eval_rhs(const cs2=k).
+One final Production artifact is bound twice with two owner-qualified values.  Its fixed-step
+Forward Euler Program advances a spatially uniform scalar according to ``du/dt = -k*u``; therefore
+the exact one-step oracle is ``u1 = u0 * (1 - k*dt)``.  Both runs use the same binaries, whose bytes
+and timestamps are checked before and after bind/execution.
 """
-import os
-import shutil
-import tempfile
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
 
 import numpy as np
+import pytest
 
 import pops
-from pops.ir.ops import sqrt
-from pops.physics.facade import Model
-
-from tests.python.support.requirements import repo_include
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
-INCLUDE = repo_include()
-
-
-def _build_iso(cs2_kind, cs2_value=1.0):
-    """Modele isotherme 2D (rho, rho_u, rho_v) avec p = cs2 * rho. @p cs2_kind = 'runtime' | 'const'.
-    Le SEUL parametre est cs2 : un meme modele a deux variantes (cs2 runtime vs cs2 const)."""
-    from pops.physics import ConstParam, RuntimeParam
-    m = Model("iso")
-    rho, mx, my = m.conservative_vars("rho", "rho_u", "rho_v")
-    _typed = {"const": ConstParam, "runtime": RuntimeParam}[cs2_kind]
-    cs2 = m.param(_typed("cs2", cs2_value))
-    u = m.primitive("u", mx / rho)
-    v = m.primitive("v", my / rho)
-    p = m.primitive("p", cs2 * rho)
-    m.primitive_vars(rho=rho, u=u, v=v, p=p)
-    m.conservative_from([rho, rho * u, rho * v])
-    m.flux(x=[mx, mx * u + p, my * u], y=[my, mx * v, my * v + p])
-    cs = sqrt(cs2)
-    m.eigenvalues(x=[u - cs, u, u + cs], y=[v - cs, v, v + cs])
-    return m
-
-
-def _initial_state(n):
-    xs = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(xs, xs)
-    U = np.zeros((3, n, n))
-    U[0] = 1.0 + 0.3 * np.exp(-((X - 0.5) ** 2 + (Y - 0.5) ** 2) / 0.02)  # densite non uniforme
-    return U
-
-
-def _check_codegen_non_regression():
-    """(1) Un param CONST reste INLINE : le codegen d'un modele a param const est byte-identique a
-    celui du MEME modele sans aucun param (cs2 ecrit en dur), et ne porte aucun artefact runtime."""
-    const_src = _build_iso("const", 2.5)._m.emit_cpp_brick(name="IsoHyp")
-    assert "runtime_params.hpp" not in const_src, "param const : ne doit PAS inclure runtime_params.hpp"
-    assert "RuntimeParams" not in const_src, "param const : ne doit PAS porter de membre RuntimeParams"
-    assert "params.get" not in const_src, "param const : doit etre INLINE (pas de params.get)"
-    assert "2.5" in const_src, "param const cs2=2.5 doit etre ecrit EN DUR dans la brique"
-
-    rt_src = _build_iso("runtime", 2.5)._m.emit_cpp_brick(name="IsoHyp")
-    assert "runtime_params.hpp" in rt_src, "param runtime : doit inclure runtime_params.hpp"
-    assert "pops::RuntimeParams params{1, {2.5}}" in rt_src, "param runtime : membre seede a la declaration"
-    assert "params.get(0)" in rt_src, "param runtime : doit lire params.get(0) (pas de valeur en dur)"
-    print("OK  (1) param const INLINE (byte-identique), param runtime -> params.get(0) + membre seede")
+from pops.amr import (
+    AMRExecution,
+    AMRHierarchy,
+    AMRRegrid,
+    AMRTagging,
+    AMRTransfer,
+    Buffer,
+    ConflictPolicy,
+    EqualityPolicy,
+    Hysteresis,
+    Tag,
+)
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.fields import (
+    CellCenteredSecondOrder,
+    CompositeHierarchySolve,
+    FieldDiscretization,
+    FieldOutput,
+)
+from pops.fields.bcs import AllPhysicalBoundaries, BoundaryCondition, Periodic
+from pops.frames import Cartesian2D
+from pops.initial import InitialCondition
+from pops.layouts import AMR, Uniform
+from pops.lib.amr import EllipticRecompute, StateTransfer
+from pops.lib.initial import Gaussian
+from pops.lib.time import ForwardEuler
+from pops.math import ValueExpr, ddt, div, laplacian, unknown
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.params import RuntimeParam
+from pops.physics import Model
+from pops.projection import ConservativeCellAverage
+from pops.solvers.elliptic import GeometricMG
+from pops.time import FailRun, FixedDt, every
 
 
-def main():
-    cxx = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
-    if not cxx or not os.path.isdir(INCLUDE):
-        print("skip  compilateur ou en-tetes pops absents")
-        print("test_dsl_runtime_params : OK (rien a compiler)")
-        return
+pytestmark = [pytest.mark.compiler, pytest.mark.native_loader]
+ROOT = Path(__file__).resolve().parents[4]
+# The file deliberately compiles three distinct resolved plans (uniform runtime source plus
+# uniform/AMR named-field routes).  Keep process isolation below the 30-minute workflow bound while
+# allowing a cold compiler cache on slower runners.
+POPS_PROCESS_TIMEOUT = 1200
 
-    _check_codegen_non_regression()
-
-    n, L = 32, 1.0
-    U = _initial_state(n)
-    Uflat = U.reshape(-1).tolist()
-    tmp = tempfile.mkdtemp()
-    try:
-        m = _build_iso("runtime", 1.0)
-        compiled = m.compile(os.path.join(tmp, "iso_runtime.so"), INCLUDE, backend="aot")
-        assert compiled.runtime_param_names == ["cs2"], \
-            "runtime_param_names attendu ['cs2'], recu %r" % compiled.runtime_param_names
-        so = compiled.so_path
-
-        def build(cs2):
-            sys = System(n=n, L=L, periodic=True)
-            sys._s.add_compiled_block("gas", so, limiter="minmod", riemann="rusanov",
-                                      recon="conservative", time="explicit",
-                                      names=["rho", "rho_u", "rho_v"])
-            sys._s.set_state("gas", Uflat)
-            if cs2 is not None:
-                sys._s.set_block_params("gas", [cs2])
-            return sys
-
-        # (2) RUNTIME : eval_rhs au defaut (cs2=1) puis apres set_block_params (cs2=4), SANS recompiler.
-        sys = build(cs2=None)  # defaut de declaration cs2=1
-        R1 = np.array(sys._s.eval_rhs("gas")).reshape(3, n, n)
-        sys._s.set_block_params("gas", [4.0])  # CHANGE le param au RUNTIME, meme .so
-        R4 = np.array(sys._s.eval_rhs("gas")).reshape(3, n, n)
-        # Avec u=0, deux effets DISTINCTS de cs2, tous deux exacts au runtime (verifies pointwise) :
-        #  - qte de mvt : rho_u=0 partout -> AUCUNE dissipation Rusanov sur rho_u ; le flux se reduit a la
-        #    pression p=cs2*rho, donc le residu = -div(cs2*rho) scale LINEAIREMENT en cs2 (1 -> 4 => x4) ;
-        #  - densite : le flux advectif rho*u est nul, mais la DISSIPATION de Rusanov vaut
-        #    -0.5*c*(rho_R-rho_L) avec c=sqrt(cs2) et rho NON uniforme -> le residu scale en sqrt(cs2)
-        #    (1 -> 4 => x2). (L'ancienne assertion "densite independante de cs2" oubliait cette
-        #    dissipation : fausse des que rho n'est pas uniforme, cf. ADC-104.)
-        assert np.max(np.abs(R1[1])) > 1e-3, "residu qte de mvt trivial (cs2=1)"
-        assert np.allclose(R4[1], 4.0 * R1[1], rtol=1e-9, atol=1e-12), \
-            "residu de qte de mvt = -div(cs2*rho) doit scaler en cs2 (x4 quand cs2 1 -> 4) au runtime"
-        assert np.max(np.abs(R1[0])) > 1e-3, "residu de densite trivial : etat non uniforme attendu"
-        assert np.allclose(R4[0], 2.0 * R1[0], rtol=1e-9, atol=1e-12), \
-            "residu de densite (dissipation Rusanov ~ sqrt(cs2)) doit scaler x2 quand cs2 1 -> 4 au runtime"
-        print("OK  (2) set_block_params change eval_rhs SANS recompiler : qte mvt ~cs2 (x4), densite ~sqrt(cs2) (x2)")
-
-        # (3) PAS DE RECOMPILATION : recompiler le MEME modele (sans so_path) -> cache HIT (meme chemin).
-        m2 = _build_iso("runtime", 1.0)
-        c_a = m2.compile(include=INCLUDE, backend="aot")  # cache hors source, keye sur model_hash+abi
-        c_b = m2.compile(include=INCLUDE, backend="aot")  # 2e compile du MEME modele
-        assert c_a.so_path == c_b.so_path, "cache : meme modele -> meme chemin .so"
-        mtime = os.path.getmtime(c_b.so_path)
-        c_c = _build_iso("runtime", 1.0).compile(include=INCLUDE, backend="aot")
-        assert os.path.getmtime(c_c.so_path) == mtime, "cache HIT : le .so NE doit PAS etre recompile"
-        print("OK  (3) recompiler le meme modele runtime -> cache HIT (.so reutilise, pas recompile)")
-
-        # (4) COHERENCE runtime vs const : eval_rhs(runtime cs2=k) == eval_rhs(const cs2=k). On compile un
-        # modele a cs2 CONST=2.0 et on le compare au modele runtime apres set_block_params(cs2=2.0).
-        mc = _build_iso("const", 2.0)
-        so_const = mc.compile(os.path.join(tmp, "iso_const2.so"), INCLUDE, backend="aot").so_path
-        sysc = System(n=n, L=L, periodic=True)
-        sysc._s.add_compiled_block("gas", so_const, limiter="minmod", riemann="rusanov",
-                                   recon="conservative", time="explicit",
-                                   names=["rho", "rho_u", "rho_v"])
-        sysc._s.set_state("gas", Uflat)
-        Rc = np.array(sysc._s.eval_rhs("gas")).reshape(3, n, n)
-
-        sysr = build(cs2=2.0)  # MEME .so runtime, param fixe a 2.0
-        Rr = np.array(sysr._s.eval_rhs("gas")).reshape(3, n, n)
-        drc = float(np.max(np.abs(Rr - Rc)))
-        assert drc < 1e-12, "eval_rhs(runtime cs2=2) != eval_rhs(const cs2=2) (ecart %.2e)" % drc
-        print("OK  (4) runtime cs2=2 == const cs2=2 (eval_rhs ecart %.1e) : meme numerique" % drc)
-
-        # (5) GARDE-FOU : set_block_params sur un bloc SANS param runtime leve une erreur explicite.
-        raised = False
-        try:
-            sysc._s.set_block_params("gas", [1.0])  # le bloc 'gas' de sysc est const-only
-        except RuntimeError as ex:
-            raised = True
-            assert "kind='runtime'" in str(ex), "message inattendu : %s" % ex
-        assert raised, "set_block_params sur un bloc const-only doit lever (sinon set silencieux)"
-        print("OK  (5) set_block_params sur un bloc const-only REJETE explicitement")
-
-        print("test_dsl_runtime_params : tout est vert")
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+N = 8
+DT = 1.0e-2
+INITIAL_VALUE = 3.0
 
 
-if __name__ == "__main__":
-    main()
+def _resolved_runtime_parameter_case():
+    frame = Rectangle(
+        "runtime-parameter-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("runtime-parameter-model", frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    declaration = model.param(RuntimeParam("decay_rate", default=1.0))
+    decay_rate = model.value(declaration)
+    flux = model.flux(
+        "zero_transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    source = model.source("decay", on=state, value=(-decay_rate * rho,))
+    rate = model.rate(
+        "explicit_rhs", equation=ddt(state) == -div(flux) + source
+    )
+
+    case = pops.Case("runtime-parameter-case")
+    block = case.block("scalar", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block[state], rate=rate)
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+
+    validated = pops.validate(case)
+    bound_parameter = validated.resolve(declaration)
+    layout = Uniform(
+        CartesianGrid(
+            frame=frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(frame.axes),
+        )
+    )
+    resolved = pops.resolve(
+        validated,
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    return resolved, bound_parameter
+
+
+def _initial_field_state() -> np.ndarray:
+    coordinates = (np.arange(N, dtype=np.float64) + 0.5) / N
+    xx, yy = np.meshgrid(coordinates, coordinates, indexing="ij")
+    density = 0.1 + 0.9 * np.exp(-60.0 * ((xx - 0.3) ** 2 + (yy - 0.4) ** 2))
+    return density.reshape(1, N, N)
+
+
+def _resolved_named_field_runtime_parameter_case(*, target: str):
+    """Resolve one named-field-only RuntimeParam route for an exact native target."""
+    if target not in {"system", "amr_system"}:
+        raise ValueError("target must be 'system' or 'amr_system'")
+
+    frame = Rectangle(
+        "named-field-runtime-%s-domain" % target,
+        lower=(0.0, 0.0),
+        upper=(1.0, 1.0),
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model("named-field-runtime-%s-model" % target, frame=frame)
+    state = model.state("U", components=("rho",))
+    (rho,) = state
+    parameter = model.param(RuntimeParam("named_rhs_scale", default=1.0))
+    scale = model.value(parameter)
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+        waves={x_axis: (0.0 * rho,), y_axis: (0.0 * rho,)},
+    )
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux))
+    potential = model.field("potential")
+    phi = unknown(potential)
+    field_operator = model.field_operator(
+        "electrostatic",
+        unknown=potential,
+        equation=-laplacian(phi) + 1.0 * phi == scale * rho,
+        outputs=(FieldOutput("phi", potential),),
+    )
+
+    case = pops.Case("named-field-runtime-%s-case" % target)
+    block = case.block("scalar", model)
+    state_instance = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    field_instance = case.field(
+        field_operator,
+        FieldDiscretization(
+            method=CellCenteredSecondOrder(),
+            boundaries=(BoundaryCondition(AllPhysicalBoundaries(), Periodic()),),
+            solver=GeometricMG(),
+            hierarchy_policy=(
+                CompositeHierarchySolve() if target == "amr_system" else None
+            ),
+        ),
+    )
+    program = ForwardEuler(
+        state_instance,
+        rate=rate,
+        fields=field_instance,
+        solve_action=FailRun(),
+    )
+    program.step_strategy(FixedDt(DT))
+    case.program(program)
+
+    if target == "system":
+        layout = Uniform(CartesianGrid(
+            frame=frame,
+            cells=(N, N),
+            periodic=PeriodicAxes(frame.axes),
+        ))
+    else:
+        case.initials.add(InitialCondition(
+            state=state_instance,
+            value=Gaussian(
+                frame=frame,
+                center={frame.x: 0.3, frame.y: 0.4},
+                background=0.1,
+                amplitude=0.9,
+                inverse_width=60.0,
+            ),
+            projection=ConservativeCellAverage(),
+        ))
+        refine_threshold = case.param(
+            # The analytic Gaussian is bounded by 1.0.  A 0.5 threshold selects a compact,
+            # deterministic interior patch on the 8x8 parent grid (and leaves untagged coarse
+            # cells), so this test exercises a genuine two-level field solve instead of asking the
+            # bootstrap to create a level from an identically-empty tag mask.
+            RuntimeParam("named_field_refine_threshold", default=0.5)
+        )
+        transfer = AMRTransfer()
+        transfer.state(state_instance, StateTransfer())
+        transfer.field(field_instance, EllipticRecompute())
+        layout = AMR(
+            grid=CartesianGrid(frame=frame, cells=(N, N)),
+            hierarchy=AMRHierarchy(max_levels=2, ratios=(2,)),
+            tagging=AMRTagging(
+                rules=(
+                    Tag(ValueExpr(state_instance) > case.value(refine_threshold)),
+                    Buffer(cells=1),
+                ),
+                hysteresis=Hysteresis(0, EqualityPolicy.HOLD),
+                conflict_policy=ConflictPolicy.REFINE_WINS,
+            ),
+            regrid=AMRRegrid(schedule=every(2, clock=program.clock)),
+            transfer=transfer,
+            execution=AMRExecution.synchronous(),
+        )
+
+    validated = pops.validate(case)
+    bound_parameter = validated.resolve(parameter)
+    resolved = pops.resolve(
+        validated,
+        layout=layout,
+        backend=Production(),
+        compile_options={"include": str(ROOT / "include")},
+    )
+    return resolved, bound_parameter
+
+
+def _binary_paths(artifact) -> tuple[Path, ...]:
+    paths = tuple(Path(block.model.so_path) for block in artifact.blocks)
+    paths += tuple(Path(path) for path in artifact.layout_program_paths.values())
+    assert paths and len(paths) == len(set(paths)) and all(path.is_file() for path in paths)
+    return paths
+
+
+def _binary_fingerprints(paths: tuple[Path, ...]):
+    result = {}
+    for path in paths:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        stat = path.stat()
+        result[path] = (digest, stat.st_size, stat.st_mtime_ns)
+    return result
+
+
+def test_runtime_parameter_bind_values_drive_native_execution_without_recompile(
+    isolated_native_cache, native_cxx, kokkos_root
+):
+    del isolated_native_cache, native_cxx, kokkos_root
+    resolved, parameter = _resolved_runtime_parameter_case()
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    paths = _binary_paths(artifact)
+    before = _binary_fingerprints(paths)
+    initial = np.full((1, N, N), INITIAL_VALUE, dtype=np.float64)
+
+    values = (1.25, 4.0)
+    instances = tuple(
+        pops.bind(
+            artifact,
+            initial_state={"scalar": initial.copy()},
+            params={parameter: value},
+        )
+        for value in values
+    )
+    reports = tuple(
+        pops.run(instance, t_end=DT, max_steps=1) for instance in instances
+    )
+
+    for value, instance, report in zip(values, instances, reports, strict=True):
+        assert report.accepted_steps == 1
+        assert report.final_time == DT
+        actual = np.asarray(instance.get_state("scalar"), dtype=np.float64).reshape(1, N, N)
+        expected = np.full_like(actual, INITIAL_VALUE * (1.0 - value * DT))
+        np.testing.assert_allclose(actual, expected, rtol=0.0, atol=2.0e-14)
+
+    first = np.asarray(instances[0].get_state("scalar"), dtype=np.float64)
+    second = np.asarray(instances[1].get_state("scalar"), dtype=np.float64)
+    assert not np.array_equal(first, second)
+    assert _binary_fingerprints(paths) == before
+
+
+@pytest.mark.parametrize(
+    "target",
+    ("system", "amr_system"),
+    ids=("uniform", "amr"),
+)
+def test_named_elliptic_runtime_parameter_binds_into_native_rhs_without_recompile(
+    target, isolated_native_cache, native_cxx, kokkos_root
+):
+    """The shared BindSchema carrier reaches a standalone named elliptic RHS brick."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    resolved, parameter = _resolved_named_field_runtime_parameter_case(target=target)
+    artifact = pops.compile(resolved)
+    artifact.verify()
+    assert artifact.plan.target == target
+    parameter_slot = artifact.bind_schema.slot(parameter)
+    assert parameter_slot.kind == "runtime"
+    assert parameter_slot.handle == parameter
+    paths = _binary_paths(artifact)
+    before = _binary_fingerprints(paths)
+
+    values = (0.75, 2.25)
+    simulations = []
+    for value in values:
+        bind_inputs = {"params": {parameter: value}}
+        if target == "system":
+            bind_inputs["initial_state"] = {"scalar": _initial_field_state()}
+        simulations.append(pops.bind(artifact, **bind_inputs))
+    assert simulations[0].bind_identity != simulations[1].bind_identity
+
+    centered_potentials = []
+    provider_slots = []
+    for simulation in simulations:
+        if target == "amr_system":
+            assert simulation.n_levels() == 2
+        report = pops.run(simulation, t_end=DT, max_steps=1)
+        assert report.accepted_steps == 1
+        assert report.final_time == DT
+        slots = simulation.field_provider_slots()
+        assert len(slots) == 1
+        if target == "amr_system":
+            assert simulation.field_provider_levels(slots[0]) == 2
+        provider_slots.append(slots[0])
+        potential_values = np.asarray(
+            simulation.field_potential_global(slots[0]), dtype=np.float64
+        ).reshape(-1)
+        assert potential_values.size > 0 and np.all(np.isfinite(potential_values))
+        centered = potential_values - potential_values.mean()
+        assert np.max(np.abs(centered)) > 1.0e-8
+        centered_potentials.append(centered)
+
+    assert provider_slots[0] == provider_slots[1]
+    assert not np.array_equal(centered_potentials[0], centered_potentials[1])
+    np.testing.assert_allclose(
+        centered_potentials[1],
+        (values[1] / values[0]) * centered_potentials[0],
+        rtol=5.0e-5,
+        atol=5.0e-8,
+    )
+    assert _binary_fingerprints(paths) == before

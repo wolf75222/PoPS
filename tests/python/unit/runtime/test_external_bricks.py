@@ -21,9 +21,11 @@ import pytest
 
 # Spec 5 (sec.4): the brick-loader + generic external() live in pops.descriptors, and
 # the riemann ``User`` selector in pops.numerics.riemann (formerly all under pops.lib).
-_desc = pytest.importorskip("pops.descriptors")
+import pops.descriptors as _desc
+from pops.numerics import riemann
+
 lib = types.SimpleNamespace(
-    riemann=pytest.importorskip("pops.numerics.riemann").riemann,
+    riemann=riemann,
     external=_desc.external,
     load_cpp_library=_desc.load_cpp_library,
     _register_manifest=_desc._register_manifest,
@@ -80,7 +82,7 @@ def _clean_catalog():
     lib._clear_external_catalog()
 
 
-def _manifest(*entries, schema_version=2):
+def _manifest(*entries, schema_version=None):
     """Build a STRICT versioned manifest (ADC-611 / ADC-544): stamp schema_version and fill each entry's
     four required fields (id / category / requirements / capabilities) with defaults so the happy-path
     tests exercise a valid payload. The ADC-544 v2 fields (native_id / supported_layouts / ...) are
@@ -88,10 +90,20 @@ def _manifest(*entries, schema_version=2):
     field passes the raw dict via _register_manifest directly rather than through this helper."""
     normed = []
     for e in entries:
-        row = {"category": "brick", "requirements": "", "capabilities": ""}
+        row = {
+            "category": "brick", "requirements": "", "capabilities": "",
+            "supported_layouts": "", "supported_platforms": "", "params": "", "options": "",
+            "exported_symbols": "",
+        }
         row.update(e)
+        if "id" in row:
+            row.setdefault("native_id", row["id"])
         normed.append(row)
-    return json.dumps({"schema_version": schema_version, "bricks": normed})
+    return json.dumps({
+        "schema_version": (_desc.BRICK_MANIFEST_SCHEMA_VERSION
+                           if schema_version is None else schema_version),
+        "abi_key": "test-abi", "annotations": {}, "bricks": normed,
+    })
 
 
 def test_unknown_external_id_raises_clear_error():
@@ -156,7 +168,7 @@ def test_manifest_must_be_well_formed():
 
 
 def test_load_cpp_library_rejects_a_missing_path():
-    with pytest.raises((OSError, ValueError)):
+    with pytest.raises(FileNotFoundError):
         lib.load_cpp_library("/no/such/brick.so")
 
 

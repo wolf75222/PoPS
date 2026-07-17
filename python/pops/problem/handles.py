@@ -1,83 +1,149 @@
-"""pops.problem.handles -- stable authoring handles for a Problem's parts (ADC-526).
-
-When a user declares a block or a field on a :class:`pops.problem.Problem`, the setter returns a
-STABLE handle: an inert reference (name + kind + stable id) the user can hold to inspect that part
-or wire a later reference to it, without reaching into the Problem's internal registries. The id is
-stable for the life of the Problem so a handle keeps pointing at the same declared part even as more
-are added (mirrors the :mod:`pops.physics.board_handles` pattern for the model board).
-
-A handle owns NO runtime data and computes nothing: it is a typed name. Two handles compare equal
-when they name the same part of the same Problem (id + kind), so a handle can key a lookup.
-"""
+"""Owner-qualified declaration handles for a Case assembly."""
 from __future__ import annotations
 
 from typing import Any
 
+from pops.model.handles import Handle
+from pops.model.ownership import MissingOwnershipError, OwnerKind, OwnerPath
 
-class ProblemHandle:
-    """Base of the stable problem-part handles: a name, a kind and a stable id.
 
-    ``kind`` is the family the handle points into (``block`` / ``state`` / ``field`` / ``operator``);
-    ``name`` is the declared identifier; ``handle_id`` is a stable ``kind:name`` slug that does not
-    change as the Problem grows. Inert -- it carries a weak reference to the owning Problem for
-    :meth:`inspect` only, never the runtime.
-    """
+class BlockHandle(Handle):
+    """Reference to one physics block declaration."""
 
-    kind = "handle"
-
-    def __init__(self, name: Any, *, owner: Any = None) -> None:
-        self._name = str(name)
-        self._owner = owner
+    __slots__ = ("model_owner_path", "_instance_registry")
 
     @property
-    def name(self) -> Any:
-        return self._name
+    def expression_readable(self) -> bool:
+        """A block selects an owner scope; it is not a scientific value."""
+        return False
+
+    def __init__(
+        self,
+        name: Any,
+        *,
+        owner: Any,
+        model_owner: Any,
+        instance_registry: Any = None,
+        schema_version: int = 1,
+    ) -> None:
+        super().__init__(
+            name,
+            kind="block",
+            owner=owner,
+            schema_version=schema_version,
+        )
+        object.__setattr__(self, "model_owner_path", OwnerPath.coerce(model_owner))
+        object.__setattr__(self, "_instance_registry", instance_registry)
+
+    def inspect(self) -> dict[str, Any]:
+        result = super().inspect()
+        result.update({
+            "handle_type": "block",
+            "model_owner_path": self.model_owner_path.presentation().to_data(),
+        })
+        return result
+
+    def canonical_identity(self) -> dict[str, Any]:
+        """Serialize the concrete subtype and exact model-definition provenance."""
+        result = super().canonical_identity()
+        model_owner = self.model_owner_path
+        if model_owner.is_authoring:
+            model_owner = model_owner.canonical()
+        result.update({
+            "handle_type": "block",
+            "model_owner_path": model_owner.to_data(),
+        })
+        return result
+
+    def _resolved(self, owner: Any = None) -> BlockHandle:
+        """Detach a canonical block while preserving canonical model provenance."""
+        result = super()._resolved(owner)
+        if not isinstance(result, BlockHandle):
+            raise RuntimeError("BlockHandle resolution did not preserve its concrete type")
+        object.__setattr__(result, "model_owner_path", self.model_owner_path.canonical())
+        object.__setattr__(result, "_instance_registry", None)
+        return result
+
+    def _identity(self) -> tuple[Any, ...]:
+        return super()._identity() + (self.model_owner_path,)
 
     @property
-    def handle_id(self) -> str:
-        return "%s:%s" % (self.kind, self._name)
+    def instance_owner_path(self) -> OwnerPath:
+        """Owner of this block's instantiated model declarations."""
+        block_owner = self.owner_path.child(OwnerKind.BLOCK, self.local_id)
+        return block_owner.instance_of(self.model_owner_path)
 
-    def inspect(self) -> Any:
-        """A plain ``{kind, name, id}`` view of the handle (no build, no compile)."""
-        return {"kind": self.kind, "name": self._name, "id": self.handle_id}
+    def accepts(self, declaration: Any) -> bool:
+        if not isinstance(declaration, Handle):
+            return False
+        expected = (
+            self.model_owner_path.canonical()
+            if declaration.is_resolved
+            else self.model_owner_path
+        )
+        return declaration.owner_path == expected
 
-    def __eq__(self, other: Any) -> bool:
-        return isinstance(other, ProblemHandle) and other.kind == self.kind \
-            and other._name == self._name
-
-    def __hash__(self) -> int:
-        return hash((self.kind, self._name))
-
-    def __repr__(self) -> str:
-        return "%s(%r)" % (type(self).__name__, self._name)
-
-
-class BlockHandle(ProblemHandle):
-    """A stable reference to a declared physics block (``problem.add_block(...)`` returns one)."""
-
-    kind = "block"
-
-    def state(self, name: Any) -> Any:
-        """A :class:`StateHandle` for a named state component of this block (inert reference)."""
-        return StateHandle("%s.%s" % (self._name, name), owner=self._owner)
-
-
-class StateHandle(ProblemHandle):
-    """A stable reference to a block's state component (``block.state('ne')``)."""
-
-    kind = "state"
+    def __getitem__(self, declaration: Any) -> Handle:
+        """Qualify a model-local declaration into this exact block instance."""
+        if not isinstance(declaration, Handle):
+            raise TypeError(
+                "block qualification expects a declared Handle, not %r"
+                % type(declaration).__name__)
+        if self._instance_registry is None:
+            raise MissingOwnershipError(
+                "block handle %s is detached from its authoritative case registry and cannot "
+                "qualify declarations" % self.qualified_id)
+        return self._instance_registry.qualify(
+            declaration, block=self, allow_existing=False)
 
 
-class FieldHandle(ProblemHandle):
-    """A stable reference to a declared elliptic field problem (``problem.field(...)`` returns one)."""
+class StateHandle(Handle):
+    """Reference to one state declared by a block."""
 
-    kind = "field"
+    __slots__ = ()
 
-
-class OperatorHandle(ProblemHandle):
-    """A stable reference to a declared coupling / local operator on the Problem (inert)."""
-
-    kind = "operator"
+    def __init__(self, name: Any, *, owner: Any) -> None:
+        super().__init__(name, kind="state", owner=owner)
 
 
-__all__ = ["ProblemHandle", "BlockHandle", "StateHandle", "FieldHandle", "OperatorHandle"]
+class FieldHandle(Handle):
+    """Callable reference to one Case-owned field operator declaration."""
+
+    __slots__ = ("_field_registry",)
+
+    def __init__(self, name: Any, *, owner: Any, field_registry: Any = None) -> None:
+        super().__init__(name, kind="field", owner=owner)
+        object.__setattr__(self, "_field_registry", field_registry)
+
+    def __call__(
+        self,
+        *states: Any,
+        name: Any = None,
+        schedule: Any = None,
+    ) -> Any:
+        """Build this field solve from exact temporal states at an optional schedule."""
+        program = next((getattr(state, "prog", None) for state in states
+                        if getattr(state, "prog", None) is not None), None)
+        if program is None:
+            raise ValueError(
+                "field operator %r must be called with one or more time-Program State values"
+                % self.name)
+        return program._solve_field_operator(
+            self, states, name=name, schedule=schedule)
+
+
+class OperatorHandle(Handle):
+    """Reference to a Case-scoped coupling/local operator declaration."""
+
+    __slots__ = ()
+
+    @property
+    def expression_readable(self) -> bool:
+        """An operator is callable/control identity, never a pointwise value."""
+        return False
+
+    def __init__(self, name: Any, *, owner: Any) -> None:
+        super().__init__(name, kind="operator", owner=owner)
+
+
+__all__ = ["BlockHandle", "StateHandle", "FieldHandle", "OperatorHandle"]

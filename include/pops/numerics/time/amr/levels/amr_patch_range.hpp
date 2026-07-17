@@ -1,6 +1,7 @@
 #pragma once
 
 #include <pops/numerics/time/amr/reflux/amr_flux_helpers.hpp>
+#include <pops/numerics/time/amr/levels/amr_clock.hpp>
 #include <pops/amr/hierarchy/refinement_ratio.hpp>
 #include <pops/parallel/comm.hpp>  // all_reduce_sum_inplace (distributed multi-patch reflux)
 
@@ -178,11 +179,19 @@ struct CoverageMask {
 // `Real(s) / r` scattered across the subcycling loops. Arithmetic strictly preserved:
 // dt_sub(dt) == dt / r and frac(s) == Real(s) / r at the same types, thus bit-identical.
 struct SubcyclingSchedule {
-  int r;
-  explicit SubcyclingSchedule(int ratio = kAmrRefRatio) : r(ratio) {}
-  int count() const { return r; }                 // number of substeps
-  Real dt_sub(Real dt) const { return dt / r; }   // fine step = parent step / r
-  Real frac(int s) const { return Real(s) / r; }  // temporal position of substep s
+  amr::ParentChildClockRelation clocks;
+
+  SubcyclingSchedule(int parent_level, int child_level, amr::Rational temporal_ratio,
+                     amr::RemainderPolicy remainder_policy)
+      : clocks(parent_level, child_level, temporal_ratio, remainder_policy) {
+    if (!temporal_ratio.integral())
+      throw std::invalid_argument(
+          "SubcyclingSchedule scalar loop requires an integral temporal ratio; use the explicit "
+          "clock partition for a declared remainder");
+  }
+  int count() const { return static_cast<int>(clocks.temporal_ratio().numerator); }
+  Real dt_sub(Real dt) const { return dt / static_cast<Real>(count()); }
+  Real frac(int s) const { return Real(s) / static_cast<Real>(count()); }
 };
 
 // CoarseFineInterface (review, point 2). The coarse-fine interface of a level: coverage

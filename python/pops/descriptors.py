@@ -1,45 +1,20 @@
-"""pops.descriptors -- the typed brick descriptor and the external-brick catalog.
-
-This is the canonical home of :class:`BrickDescriptor` (the inert, numerics-free
-metadata record of a numerical brick) and of the EXTERNAL C++ brick catalog
-(:func:`load_cpp_library` / :func:`external` / :func:`_external_descriptor`).
-
-It also owns the shared descriptor factories ``_native`` / ``_planned`` that the
-catalog namespace modules (riemann, reconstruction, ...) import, so those
-factories are defined ONCE here instead of in six files.
-
-The hybrid/native brick CLASSES (``NativeBrick`` / ``HybridModel`` / the partial
-DSL bricks) are NOT here: they live permanently in :mod:`pops.physics.bricks` and
-:mod:`pops.physics.hybrid`. ``lib.descriptors`` is the Spec-3 catalog descriptor
-only.
-"""
+"""Typed brick descriptors, factories, and the strict external-brick catalog."""
 from __future__ import annotations
 
-import json
 from typing import Any
+
+from pops._manifest_protocol import strict_json_loads
 
 BRICK_TYPES = ("native", "generated", "macro", "external_cpp")
 
-# STRICT versioned schema of the external-brick manifest (ADC-611 / ADC-544). The JSON
-# pops_brick_manifest() exports carries schema_version at the top level; the parser refuses a manifest
-# without it (legacy / pre-ADC-611 -> "regenerate the brick library"), a wrong version, a missing
-# required field, or an UNKNOWN field (top-level or per entry). Emitter (POPS_DEFINE_BRICK_MANIFEST /
-# BrickRegistry::to_json) and parser stay in LOCKSTEP: they share this version and this field set.
-#
-# ADC-544 widens the per-entry schema (v1 -> v2) with the OPTIONAL fields native_id / supported_layouts
-# / supported_platforms / params / options / exported_symbols. They are additive with safe defaults
-# (native_id -> id, the CSV lists -> []), but the strict allow-list REFUSES an unknown key, so adding
-# them IS a version bump: the parser accepts EXACTLY version 2 and a version-1 manifest is refused with
-# the existing "regenerate the brick library" error -- the correct refuse-never-warn posture for a
-# versioned wire format. The four REQUIRED fields stay id / category / requirements / capabilities.
-BRICK_MANIFEST_SCHEMA_VERSION = 2
-# Allowed keys at the top level and per brick entry (strict allow-lists -- anything else is refused).
-_BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "bricks"})
-_BRICK_MANIFEST_ENTRY_REQUIRED = ("id", "category", "requirements", "capabilities")
-# ADC-544 optional per-entry fields (v2). A missing one defaults to id (native_id) or [] (the CSVs).
-_BRICK_MANIFEST_ENTRY_OPTIONAL = ("native_id", "supported_layouts", "supported_platforms",
-                                  "params", "options", "exported_symbols")
-_BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED + _BRICK_MANIFEST_ENTRY_OPTIONAL)
+BRICK_MANIFEST_SCHEMA_VERSION = 3
+_BRICK_MANIFEST_TOP_KEYS = frozenset({"schema_version", "abi_key", "annotations", "bricks"})
+_BRICK_MANIFEST_TOP_REQUIRED = ("schema_version", "abi_key", "annotations", "bricks")
+_BRICK_MANIFEST_ENTRY_REQUIRED = (
+    "id", "category", "requirements", "capabilities", "native_id", "supported_layouts",
+    "supported_platforms", "params", "options", "exported_symbols",
+)
+_BRICK_MANIFEST_ENTRY_KEYS = frozenset(_BRICK_MANIFEST_ENTRY_REQUIRED)
 
 
 class BrickDescriptor:
@@ -83,6 +58,11 @@ class BrickDescriptor:
         The :class:`BrickDescriptor` counterpart of :meth:`pops.descriptors.Descriptor.freeze`; the
         assembly that holds it (a frozen ``Problem`` / ``Program``) seals it so a route the compiled
         artifact committed cannot be silently re-pointed. Idempotent."""
+        from pops._descriptor_protocol import _freeze_descriptor_value
+
+        for name, value in tuple(self.__dict__.items()):
+            if name != "_frozen":
+                object.__setattr__(self, name, _freeze_descriptor_value(value))
         object.__setattr__(self, "_frozen", True)
         return self
 
@@ -121,7 +101,6 @@ class BrickDescriptor:
         with an empty ``native_id`` (a catalogued-but-not-native brick) is left to the loud
         :meth:`validate` refusal upstream -- never a silent fallback.
         """
-        from pops.descriptors_report import LoweredDescriptor
         return LoweredDescriptor(name=self.name, category=self.category,
                                  native_id=self.native_id or None, options=dict(self.options),
                                  scheme=self.scheme)
@@ -142,7 +121,9 @@ class BrickDescriptor:
         return Availability.no(
             "%s [%s] has no native C++ symbol yet" % (self.name, self.category),
             missing=["native_id"],
-            alternatives=["choose an available descriptor from pops.inspect_capabilities()"])
+            alternatives=[
+                "choose a typed descriptor from its pops.lib catalog and inspect it with pops.inspect()"
+            ])
 
     def inspect(self) -> dict:
         """A plain-dict view of the brick descriptor (Spec 5 sec.12.1).
@@ -155,6 +136,24 @@ class BrickDescriptor:
                 "requirements": dict(self.requirements),
                 "capabilities": dict(self.capabilities), "available": self.available().ok}
 
+    def to_data(self) -> dict[str, Any]:
+        """Exact inert identity data for any consumer implementing the descriptor protocol."""
+        if self.expression is not None or self.builder is not None:
+            raise TypeError(
+                "BrickDescriptor with expression/builder payload cannot claim an exact data identity"
+            )
+        return {
+            "name": self.name,
+            "brick_type": self.brick_type,
+            "category": self.category,
+            "native_id": self.native_id,
+            "scheme": self.scheme,
+            "requirements": dict(self.requirements),
+            "capabilities": dict(self.capabilities),
+            "options": dict(self.options),
+            "available": self.available().ok,
+        }
+
     def validate(self, context: Any = None) -> bool:
         """Raise a clear error when this brick has no native symbol yet (unavailable route)."""
         if not self.available(context).ok:
@@ -162,7 +161,7 @@ class BrickDescriptor:
                 "%s [%s] is not available: it has no native C++ symbol yet; unsupported route: "
                 "requested %s:%s; available route: native %s descriptors with a non-empty "
                 "native_id; alternative: choose an available descriptor from "
-                "pops.inspect_capabilities()."
+                "its pops.lib catalog and inspect it with pops.inspect()."
                 % (self.name, self.category, self.category, self.name, self.category))
         return True
 
@@ -176,7 +175,7 @@ class BrickDescriptor:
         if not ok:
             error = ("unsupported route: requested %s:%s; available route: native %s "
                      "descriptors with a non-empty native_id; alternative: choose an available "
-                     "descriptor from pops.inspect_capabilities()."
+                     "typed descriptor from its pops.lib catalog and inspect it with pops.inspect()."
                      % (self.category, self.name, self.category))
         row = CapabilityRouteRow(
             "%s:%s" % (self.category, self.name),
@@ -209,16 +208,6 @@ def _native(name: str, native_id: str, scheme: Any, *, category: str, caps: Any 
                            options=options or None)
 
 
-def _planned(name: str, scheme: Any, *, category: str, **options: Any) -> BrickDescriptor:
-    """A catalogued brick with NO native C++ symbol yet (available=False, no id).
-
-    It names the slot in the catalog without overclaiming a symbol; wiring a native
-    type for it is tracked as a follow-up.
-    """
-    return BrickDescriptor(name, "native", category=category, native_id="",
-                           scheme=scheme, options=options or None, available=False)
-
-
 # --- external C++ bricks (Spec 3 section 21-22 / criterion 20) -------------
 # A user ships a brick in a standalone ``.so`` that registers a manifest entry at
 # static-init time (the C++ ``POPS_REGISTER_BRICK`` macro -> ``BrickRegistry``) and exports
@@ -228,50 +217,58 @@ def _planned(name: str, scheme: Any, *, category: str, **options: Any) -> BrickD
 # requirements/capabilities. An id that was never loaded raises a clear error -- a
 # descriptor is NEVER fabricated for an unregistered brick.
 _EXTERNAL_BRICKS: dict = {}
+_EXTERNAL_BRICK_ORIGINS: dict = {}
 
 
 def _clear_external_catalog() -> None:
     """Drop every loaded external brick (test isolation; not part of the public API)."""
     _EXTERNAL_BRICKS.clear()
+    _EXTERNAL_BRICK_ORIGINS.clear()
 
 
 def _split_csv(value: Any) -> list:
-    """Split a manifest CSV field into a stripped, non-empty token list ([] when absent)."""
-    if value is None:
-        return []
+    """Split one canonical CSV string; the empty string denotes an explicit empty list."""
     if not isinstance(value, str):
         raise ValueError("manifest CSV field (requirements / capabilities / supported_layouts / "
                          "supported_platforms / params / options / exported_symbols) must be a CSV "
                          "string; got %r" % (value,))
-    return [tok.strip() for tok in value.split(",") if tok.strip()]
+    if not value:
+        return []
+    tokens = value.split(",")
+    if any(not token or token != token.strip() for token in tokens):
+        raise ValueError("manifest CSV field must be canonical (no whitespace or empty tokens): %r"
+                         % value)
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("manifest CSV field contains duplicate token(s): %r" % value)
+    return tokens
 
 
-def parse_brick_manifest(manifest_json: Any) -> tuple:
-    """Parse a brick manifest (the JSON ``pops_brick_manifest()`` returns) under the STRICT versioned
-    schema (ADC-611) into ``(records, abi_key)`` WITHOUT registering anything.
+def _validate_annotations(value: Any) -> dict:
+    """Validate documentary extension keys without interpreting or normalising their values."""
+    from urllib.parse import urlparse
 
-    The manifest is ``{"schema_version": 2, "abi_key": <opt str>, "bricks": [{"id", "category",
-    "requirements", "capabilities", <optional native_id / supported_layouts / supported_platforms /
-    params / options / exported_symbols>}, ...]}``. STRICT policy -- the error always NAMES the offending
-    field:
-      - not valid JSON / not an object -> ValueError;
-      - missing ``schema_version`` -> ValueError ("regenerate the brick library"): a manifest without it
-        is legacy (pre-ADC-611); the in-tree emitter always writes it now;
-      - ``schema_version`` != BRICK_MANIFEST_SCHEMA_VERSION -> ValueError (naming got vs expected); a
-        version-1 manifest (no v2 fields) is refused here -- the ADC-544 widening is a wire-format bump;
-      - an UNKNOWN top-level key or an UNKNOWN entry key -> ValueError (no permissive silent-ignore);
-      - a brick entry missing any of id / category / requirements / capabilities -> ValueError (naming
-        the field and the brick id). requirements/capabilities are CSV strings (possibly empty "").
-    The v2 OPTIONAL fields (ADC-544) default when absent: ``native_id`` -> the entry ``id`` (the exported
-    numerical symbol base, distinct from the user-facing selector id); ``supported_layouts`` /
-    ``supported_platforms`` / ``params`` / ``options`` / ``exported_symbols`` are CSV strings -> ``[]``.
-    ``abi_key`` is carried as inert metadata (the .so's dlopen-time ABI guard is enforced separately for
-    the library-.so path; a brick .so rebuilds against the headers, so it is documented-optional here).
-    """
+    if not isinstance(value, dict):
+        raise ValueError("external brick manifest 'annotations' must be an object")
+    for key in value:
+        if not isinstance(key, str):
+            raise ValueError("external brick manifest annotation keys must be strings")
+        parsed = urlparse(key)
+        if not (key.startswith("x-") and len(key) > 2) and not parsed.scheme:
+            raise ValueError(
+                "external brick manifest annotation key %r must be a namespace URI or start with 'x-'"
+                % key
+            )
+    return value
+
+
+def _parse_brick_manifest_document(manifest_json: Any) -> tuple:
+    """Return canonical records, ABI key, and exact documentary annotations for schema v3."""
     try:
-        doc = json.loads(manifest_json)
-    except (json.JSONDecodeError, TypeError) as err:
-        raise ValueError("external brick manifest is not valid JSON: %s" % (err,)) from err
+        doc = strict_json_loads(manifest_json, where="external brick manifest")
+    except ValueError as err:
+        if "duplicate" in str(err) or "non-finite" in str(err):
+            raise
+        raise ValueError("external brick manifest is not valid JSON: %s" % err) from err
     if not isinstance(doc, dict):
         raise ValueError("external brick manifest must be a JSON object with 'schema_version' and "
                          "'bricks'; got %r" % (manifest_json,))
@@ -279,20 +276,34 @@ def parse_brick_manifest(manifest_json: Any) -> tuple:
     if unknown_top:
         raise ValueError("external brick manifest has unknown top-level field(s) %s; the strict schema "
                          "allows only %s" % (unknown_top, sorted(_BRICK_MANIFEST_TOP_KEYS)))
-    if "schema_version" not in doc:
-        raise ValueError("external brick manifest is missing the required 'schema_version' field "
-                         "(expected %d); it predates the versioned schema -- regenerate the brick "
-                         "library against the current headers" % (BRICK_MANIFEST_SCHEMA_VERSION,))
+    for field in _BRICK_MANIFEST_TOP_REQUIRED:
+        if field not in doc:
+            remedy = ("; it predates the versioned schema -- migrate the manifest offline"
+                      if field == "schema_version" else "")
+            raise ValueError("external brick manifest is missing the required %r field%s"
+                             % (field, remedy))
     version = doc["schema_version"]
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise ValueError("external brick manifest 'schema_version' must be an integer")
     if version != BRICK_MANIFEST_SCHEMA_VERSION:
         raise ValueError("external brick manifest 'schema_version' is %r, incompatible with the "
-                         "supported version %d; regenerate the brick library"
+                         "supported version %d; migrate or regenerate the brick library"
                          % (version, BRICK_MANIFEST_SCHEMA_VERSION))
-    bricks = doc.get("bricks")
+    abi_key = doc["abi_key"]
+    if not isinstance(abi_key, str) or not abi_key:
+        raise ValueError("external brick manifest 'abi_key' must be a non-empty string")
+    annotations = _validate_annotations(doc["annotations"])
+    bricks = doc["bricks"]
     if not isinstance(bricks, list):
-        raise ValueError("external brick manifest 'bricks' must be a list; got %r"
-                         % (manifest_json,))
-    records: list = []
+        raise ValueError("external brick manifest 'bricks' must be a list; got %r" % bricks)
+
+    records = []
+    seen_ids = set()
+    seen_native_ids = set()
+    csv_fields = {
+        "requirements", "capabilities", "supported_layouts", "supported_platforms", "params",
+        "options", "exported_symbols",
+    }
     for entry in bricks:
         if not isinstance(entry, dict):
             raise ValueError("external brick manifest entry must be an object; got %r" % (entry,))
@@ -301,39 +312,68 @@ def parse_brick_manifest(manifest_json: Any) -> tuple:
             raise ValueError("external brick manifest entry %r has unknown field(s) %s; the strict "
                              "schema allows only %s"
                              % (entry.get("id"), unknown_entry,
-                                list(_BRICK_MANIFEST_ENTRY_REQUIRED + _BRICK_MANIFEST_ENTRY_OPTIONAL)))
+                                list(_BRICK_MANIFEST_ENTRY_REQUIRED)))
         for field in _BRICK_MANIFEST_ENTRY_REQUIRED:
             if field not in entry:
                 raise ValueError("external brick manifest entry %r is missing the required '%s' field"
                                  % (entry.get("id"), field))
-        if not entry.get("id"):
-            raise ValueError("external brick manifest entry must carry a non-empty 'id'; got %r"
-                             % (entry,))
-        brick_id = str(entry["id"])
-        # ADC-544 v2: native_id defaults to the selector id; the CSV lists default to [] when absent.
+        for field in ("id", "category", "native_id"):
+            if not isinstance(entry[field], str) or not entry[field]:
+                raise ValueError("external brick manifest entry field %r must be a non-empty string"
+                                 % field)
+        for field in csv_fields:
+            if not isinstance(entry[field], str):
+                raise ValueError("external brick manifest entry field %r must be a CSV string" % field)
+        brick_id = entry["id"]
+        native_id = entry["native_id"]
+        if brick_id in seen_ids:
+            raise ValueError("external brick manifest contains duplicate brick id %r" % brick_id)
+        if native_id in seen_native_ids:
+            raise ValueError("external brick manifest contains duplicate native_id %r" % native_id)
+        seen_ids.add(brick_id)
+        seen_native_ids.add(native_id)
         records.append({
             "id": brick_id,
-            "category": str(entry.get("category") or "brick"),
-            "requirements": _split_csv(entry.get("requirements")),
-            "capabilities": _split_csv(entry.get("capabilities")),
-            "native_id": str(entry.get("native_id") or brick_id),
-            "supported_layouts": _split_csv(entry.get("supported_layouts")),
-            "supported_platforms": _split_csv(entry.get("supported_platforms")),
-            "params": _split_csv(entry.get("params")),
-            "options": _split_csv(entry.get("options")),
-            "exported_symbols": _split_csv(entry.get("exported_symbols")),
+            "category": entry["category"],
+            "requirements": _split_csv(entry["requirements"]),
+            "capabilities": _split_csv(entry["capabilities"]),
+            "native_id": native_id,
+            "supported_layouts": _split_csv(entry["supported_layouts"]),
+            "supported_platforms": _split_csv(entry["supported_platforms"]),
+            "params": _split_csv(entry["params"]),
+            "options": _split_csv(entry["options"]),
+            "exported_symbols": _split_csv(entry["exported_symbols"]),
         })
-    return records, doc.get("abi_key")
+    return records, abi_key, annotations
+
+
+def parse_brick_manifest(manifest_json: Any) -> tuple:
+    """Strictly parse schema v3 into canonical records and the required ABI key."""
+    records, abi_key, _annotations = _parse_brick_manifest_document(manifest_json)
+    return records, abi_key
 
 
 def _register_manifest(manifest_json: Any) -> int:
-    """Parse a brick manifest under the strict versioned schema and register its bricks in the in-process
-    catalog (last load wins on a repeated id). Returns the number of bricks registered. Delegates the
+    """Parse a manifest and register its bricks transactionally in the in-process catalog.
+
+    Identical repetitions are idempotent; conflicting ids or manifest authorities are refused. Delegates the
     strict parse (schema_version / required fields / unknown-field refusal) to :func:`parse_brick_manifest`;
     this is the seam ``load_cpp_library`` calls after dlopen (also usable directly, no compiled ``.so``)."""
-    records, _abi_key = parse_brick_manifest(manifest_json)
+    from copy import deepcopy
+
+    records, abi_key, annotations = _parse_brick_manifest_document(manifest_json)
+    conflicts = [record["id"] for record in records
+                 if record["id"] in _EXTERNAL_BRICKS
+                 and (_EXTERNAL_BRICKS[record["id"]] != record
+                      or _EXTERNAL_BRICK_ORIGINS[record["id"]]
+                      != (abi_key, annotations))]
+    if conflicts:
+        raise ValueError("external brick id collision has different metadata: %s"
+                         % ", ".join(sorted(conflicts)))
     for record in records:
-        _EXTERNAL_BRICKS[record["id"]] = dict(record)
+        _EXTERNAL_BRICKS.setdefault(record["id"], dict(record))
+        _EXTERNAL_BRICK_ORIGINS.setdefault(
+            record["id"], (abi_key, deepcopy(annotations)))
     return len(records)
 
 
@@ -348,7 +388,9 @@ def load_cpp_library(path: Any) -> int:
     Returns the number of bricks registered.
     """
     import ctypes
-    handle = ctypes.CDLL(str(path))  # raises OSError if the path is not a loadable library
+    import os
+    os.stat(path)  # normalize every missing-path route to the exact FileNotFoundError contract
+    handle = ctypes.CDLL(str(path))  # raises OSError if the existing path is not loadable
     try:
         manifest_fn = handle.pops_brick_manifest
     except AttributeError as err:
@@ -360,42 +402,6 @@ def load_cpp_library(path: Any) -> int:
         raise ValueError("external brick library %r: pops_brick_manifest() returned NULL"
                          % (path,))
     return _register_manifest(raw.decode("utf-8"))
-
-
-def load_compiled_manifest(path: Any) -> Any:
-    """Read the per-artifact NativeManifest JSON of a compiled block ``.so`` (Spec 5 sec.13.12, #36).
-
-    The sibling of :func:`load_cpp_library` for an AOT model artifact (one built by the DSL through
-    ``POPS_DEFINE_COMPILED_BLOCK``): it dlopens @p path with :func:`ctypes.CDLL` and calls the
-    exported C function ``const char* pops_compiled_manifest()`` -- the JSON the macro emits at the
-    ``.so``'s OWN compile time from the model traits ({abi_version, n_vars, n_aux, n_params,
-    ghost_depth, supports_stride, supports_partial_imex_mask, supports_named_fields, roles,
-    native_entrypoints}). Returns the parsed dict.
-
-    GRACEFUL FALLBACK for an OLD ``.so`` (built before this work) that does NOT export the symbol:
-    returns ``None`` rather than raising, so a manifest builder can fall back to its honest-None set.
-    A path that is not a loadable library still raises ``OSError`` (it is not an pops artifact at
-    all); a present-but-malformed JSON raises ``ValueError`` (a corrupt manifest must not pass).
-    """
-    import ctypes
-    handle = ctypes.CDLL(str(path))  # raises OSError if the path is not a loadable library
-    try:
-        manifest_fn = handle.pops_compiled_manifest
-    except AttributeError:
-        return None  # old .so without the symbol: honest fallback, not an error
-    manifest_fn.restype = ctypes.c_char_p
-    raw = manifest_fn()
-    if raw is None:
-        return None
-    try:
-        doc = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, TypeError) as err:
-        raise ValueError("compiled-artifact manifest of %r is not valid JSON: %s"
-                         % (path, err)) from err
-    if not isinstance(doc, dict):
-        raise ValueError("compiled-artifact manifest of %r must be a JSON object; got %r"
-                         % (path, raw))
-    return doc
 
 
 def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> BrickDescriptor:
@@ -417,7 +423,7 @@ def _external_descriptor(brick_id: Any, *, expect_category: Any = None) -> Brick
     req = {"capabilities": list(entry["requirements"])} if entry["requirements"] else {}
     caps = {"provides": list(entry["capabilities"])} if entry["capabilities"] else {}
     return BrickDescriptor(entry["id"], "external_cpp", category=entry["category"],
-                           native_id=entry["id"], scheme="user",
+                           native_id=entry["native_id"], scheme="user",
                            requirements=req or None, capabilities=caps or None)
 
 
@@ -452,6 +458,5 @@ from pops.descriptors_report import (  # noqa: E402,F401
     LoweredDescriptor,
     Requirement,
     RequirementSet,
-    ValidationIssue,
-    ValidationReport,
+    ReportTree,
 )

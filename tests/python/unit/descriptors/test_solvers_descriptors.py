@@ -1,6 +1,6 @@
 """ADC-500 (Spec 5 sec.5.7 / criterion 4 / sec.13.11.1): the pops.solvers central package.
 
-pops.solvers homes the linear / nonlinear / Schur / elliptic solver + preconditioner catalog
+pops.solvers homes the executable linear / nonlinear / elliptic solver + preconditioner catalog
 as inert typed descriptors. These tests construct each entry, exercise the RICH GeometricMG
 parameter surface (typed smoother / coarse / tolerance + capabilities) and its protocol
 (inspect / options / capabilities / lower), check that a bare string is rejected where a typed
@@ -10,21 +10,32 @@ transitional pops.lib.solvers shim is removed). The descriptors compute nothing;
 metadata is asserted.
 """
 import pytest
+from decimal import Decimal
+from fractions import Fraction
 
 pops = pytest.importorskip("pops")
 solvers = pytest.importorskip("pops.solvers")
+elliptic = pytest.importorskip("pops.solvers.elliptic")
+krylov = pytest.importorskip("pops.solvers.krylov")
+nonlinear = pytest.importorskip("pops.solvers.nonlinear")
+_options = pytest.importorskip("pops.solvers.options")
+_preconditioners = pytest.importorskip("pops.solvers.preconditioners")
+_tolerances = pytest.importorskip("pops.solvers.tolerances")
 
-from pops.solvers import elliptic, krylov, nonlinear, schur
-from pops.solvers.options import Chebyshev, DirectSmallGrid, RedBlackGaussSeidel
-from pops.solvers.preconditioners import preconditioners
-from pops.solvers.tolerances import Absolute, AbsoluteFloor, Relative
+Chebyshev = _options.Chebyshev
+DirectSmallGrid = _options.DirectSmallGrid
+RedBlackGaussSeidel = _options.RedBlackGaussSeidel
+preconditioners = _preconditioners.preconditioners
+Absolute = _tolerances.Absolute
+AbsoluteFloor = _tolerances.AbsoluteFloor
+Relative = _tolerances.Relative
 
 
 # --- the package is wired and exposed ----------------------------------------------------
 
 def test_solvers_is_top_level_and_exposed():
     assert pops.solvers is solvers
-    for sub in ("elliptic", "krylov", "nonlinear", "schur",
+    for sub in ("elliptic", "krylov", "nonlinear",
                 "options", "tolerances", "preconditioners", "requirements"):
         assert hasattr(solvers, sub), "pops.solvers missing sub-module %r" % sub
 
@@ -103,50 +114,19 @@ def test_krylov_declare_amr_route_capabilities():
         assert d.inspect()["capabilities"]["supports_amr"] is True
 
 
-# --- nonlinear solvers (planned: no native type yet) -------------------------------------
+# --- executable nonlinear solvers ---------------------------------------------------------
 
-def test_nonlinear_are_planned():
-    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        assert d.available().ok is False
-        assert d.native_id == ""
-        assert d.category == "solver"
-    assert nonlinear.Newton().scheme == "newton"
-    assert nonlinear.FixedPoint().scheme == "fixed_point"
-
-
-def test_nonlinear_refuse_cleanly_with_no_native_backing():
-    # ADC-535: Newton / FixedPoint have NO native solver TYPE (Newton is the implicit-stepper
-    # kernel; a fixed point is authored over Krylov). They must REFUSE cleanly -- validate()
-    # raises a clear "no native C++ symbol yet" message, never fabricating a symbol.
-    for d in (nonlinear.Newton(), nonlinear.FixedPoint()):
-        with pytest.raises(ValueError, match=r"no native C\+\+ symbol"):
-            d.validate()
-        # the refusal is surfaced structurally too (the ADC-549 capability-matrix row).
-        row = d.capability_matrix().rows[0]
-        assert row.status == "unavailable"
-        assert row.error_message  # names the unsupported route
-
-
-# --- Schur-condensation solver -----------------------------------------------------------
-
-def test_schur_native_id_and_alias():
-    assert schur.Schur().native_id == "pops::SchurCondensationOperator"
-    assert schur.Schur().scheme == "schur"
-    # CondensedSchur is an alias naming the same native operator (distinct from the
-    # pops.time CondensedSchur splitting POLICY).
-    assert schur.CondensedSchur().native_id == "pops::SchurCondensationOperator"
-    assert schur.CondensedSchur() == schur.Schur()
-
-
-def test_schur_declares_amr_route_capabilities():
-    # Spec 6 sec.4 / sec.9: the Schur-condensation solver runs on AMR (the amr-schur source
-    # stage) and System, under MPI and on the GPU, so it declares every route capability.
-    for d in (schur.Schur(), schur.CondensedSchur()):
-        caps = d.capabilities
-        assert caps["supports_uniform"] is True
-        assert caps["supports_amr"] is True
-        assert caps["supports_mpi"] is True
-        assert caps["supports_gpu"] is True
+def test_nonlinear_surface_contains_only_executable_descriptors():
+    assert not hasattr(nonlinear, "FixedPoint")
+    local = nonlinear.LocalNewton(
+        tolerance=1e-10, max_iterations=12, finite_difference_step=1e-6)
+    assert local.to_data() == {
+        "scheme": "newton",
+        "tolerance": 1e-10,
+        "max_iterations": 12,
+        "finite_difference_step": 1e-6,
+    }
+    assert nonlinear.Newton().available().ok is True
 
 
 # --- the RICH GeometricMG elliptic solver ------------------------------------------------
@@ -189,7 +169,7 @@ def test_geometric_mg_capabilities():
     assert caps.supports("gpu") is True
     assert caps.supports("variable_epsilon") is True
     assert caps.supports("anisotropic") is False
-    assert caps.supports("screened") is False
+    assert caps.supports("screened") is True
 
 
 def test_geometric_mg_inspect_and_lower():
@@ -208,6 +188,8 @@ def test_geometric_mg_inspect_and_lower():
     assert rec["smoother"] == {"kind": "red_black_gauss_seidel"}
     assert rec["coarse"]["kind"] == "direct_small_grid"
     assert rec["tolerance"]["kind"] == "relative"
+    assert rec["mg_options"]["schema_version"] == 1
+    assert rec["mg_options"]["kind"] == "geometric_mg_options"
     assert rec["mg_options"]["max_cycles"] == 50
     assert rec["mg_options"]["rel_tol"] == 1e-8
 
@@ -250,9 +232,9 @@ def test_fft_is_a_real_solver_with_route_constraints():
 def test_fft_rejects_amr_layout_with_precise_message():
     # Spec 6 sec.8: pairing FFT with an AMR layout is a MATHEMATICAL incompatibility -- it must
     # be refused with the PRECISE message (not a vague "AMR unsupported"), naming GeometricMG.
-    from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR, Uniform
-    amr = AMR(base=CartesianMesh(n=64))
+    from pops.layouts import Uniform
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
+    amr = final_amr_layout(cartesian_grid(n=64))
     status = elliptic.FFT().available({"layout": amr})
     assert status.status == "no"
     assert status.reason == "FFT requires Uniform(periodic=True), got AMR. Use GeometricMG()."
@@ -260,7 +242,7 @@ def test_fft_rejects_amr_layout_with_precise_message():
     # the context may BE the layout descriptor, not only wrap it under a "layout" key.
     assert elliptic.FFT().available(amr).status == "no"
     # a Uniform layout context (or no context at all) keeps the plain route-constraint 'partial'.
-    assert elliptic.FFT().available({"layout": Uniform(CartesianMesh(n=64))}).status == "partial"
+    assert elliptic.FFT().available({"layout": Uniform(cartesian_grid(n=64))}).status == "partial"
     assert elliptic.FFT().available().status == "partial"
 
 
@@ -283,11 +265,10 @@ def test_fft_available_never_raises_on_odd_context():
 def test_geometric_mg_accepts_amr_layout():
     # GeometricMG is the AMR-capable elliptic solver: it advertises amr and stays available with
     # an AMR layout context (no rejection), so it is the alternative FFT points at.
-    from pops.mesh.cartesian import CartesianMesh
-    from pops.mesh.layouts import AMR
+    from tests.python.support.layout_plan import cartesian_grid, final_amr_layout
     g = elliptic.GeometricMG()
     assert g.capabilities().supports("amr") is True
-    assert g.available(AMR(base=CartesianMesh(n=64))).status == "yes"
+    assert g.available(final_amr_layout(cartesian_grid(n=64))).status == "yes"
 
 
 # --- preconditioners ---------------------------------------------------------------------
@@ -296,9 +277,11 @@ def test_preconditioners_catalog():
     pre = solvers.preconditioners
     assert pre.GeometricMG().native_id == "pops::GeometricMG"
     assert pre.GeometricMG().category == "preconditioner"
-    for d in (pre.Identity(), pre.Jacobi(), pre.BlockJacobi()):
-        assert d.available().ok is False
-        assert d.native_id == ""
+    identity = pre.Identity()
+    assert identity.available().ok is True
+    assert identity.native_id == "pops::ApplyFn"
+    for removed in ("Jacobi", "BlockJacobi"):
+        assert not hasattr(pre, removed)
 
 
 # --- requirements vocabulary -------------------------------------------------------------
@@ -327,8 +310,8 @@ def test_lib_solvers_shim_is_removed():
     ns = solvers.solvers
     assert ns.GMRES(max_iter=200).scheme == "gmres"
     assert ns.CG(max_iter=200).native_id == "pops::cg_solve"
-    assert ns.Schur().native_id == "pops::SchurCondensationOperator"
-    assert ns.Newton().available().ok is False
+    assert ns.Newton().available().ok is True
+    assert ns.LocalNewton().scheme == "newton"
     assert solvers.preconditioners.GeometricMG().native_id == "pops::GeometricMG"
 
     # The custom-solver authoring / generation DSL is internal / experimental under
@@ -345,12 +328,12 @@ def test_lib_solvers_shim_is_removed():
     assert callable(ns.registered)
 
 
-def test_install_path_token_resolution_for_rich_descriptor():
-    # The unified-install solver-token resolver reads .scheme; the new rich GeometricMG
-    # resolves to the same 'geometric_mg' token as the brick-catalog pops.fields.catalog descriptor.
+def test_install_path_has_no_bind_time_solver_token_adapter():
+    # Solver descriptors are lowered into resolved field plans before bind; the runtime install
+    # seam must not reinterpret descriptor classes or tokens.
     from pops.runtime._system_unified_install import _SystemUnifiedInstall
-    assert _SystemUnifiedInstall._solver_token(elliptic.GeometricMG()) == "geometric_mg"
-    assert _SystemUnifiedInstall._solver_token(pops.fields.catalog.GeometricMG()) == "geometric_mg"
+    assert not hasattr(_SystemUnifiedInstall, "_solver_token")
+    assert not hasattr(_SystemUnifiedInstall, "_install_solver")
 
 
 # --- ADC-644: the wired GeometricMG preconditioner option surface -----------------------------
@@ -413,34 +396,63 @@ def test_direct_small_grid_refuses_non_positive(bad):
 def test_composite_fac_defaults_and_domain():
     from pops.solvers.options import CompositeFAC
     d = CompositeFAC()
-    # None -> the 0 wire sentinels (native kFAC* defaults), the CondensedSchur fac_* convention.
-    assert d.options() == {"max_iters": 0, "fine_sweeps": 0, "tol": 0.0, "coarse_rel_tol": 0.0,
-                           "coarse_cycles": 0, "verbose": False}
-    kw = d.set_poisson_kwargs()
-    assert kw["composite"] is True and kw["fac_max_iters"] == 0
-    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, tol=1e-8, coarse_rel_tol=1e-11,
-                       coarse_cycles=50, verbose=True)
-    assert cfg.set_poisson_kwargs() == {"composite": True, "fac_max_iters": 10,
-                                        "fac_fine_sweeps": 200, "fac_tol": 1e-8,
-                                        "fac_coarse_rel_tol": 1e-11, "fac_coarse_cycles": 50,
-                                        "fac_verbose": True}
-    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"tol": 1.5}, {"coarse_rel_tol": 0.0},
-                {"coarse_cycles": 0}):
+    # None remains authored omission until the final field resolver snapshots the native POD.
+    assert d.options() == {"max_iters": None, "fine_sweeps": None, "rel_tol": None,
+                           "abs_tol": None,
+                           "coarse_rel_tol": None, "coarse_abs_tol": None,
+                           "coarse_cycles": None, "verbose": False}
+    cfg = CompositeFAC(max_iters=10, fine_sweeps=200, rel_tol=1e-8, abs_tol=1e-14,
+                       coarse_rel_tol=1e-11, coarse_abs_tol=1e-15, coarse_cycles=50,
+                       verbose=True)
+    assert cfg.options() == {
+        "max_iters": 10, "fine_sweeps": 200, "rel_tol": 1e-8, "abs_tol": 1e-14,
+        "coarse_rel_tol": 1e-11, "coarse_abs_tol": 1e-15, "coarse_cycles": 50,
+        "verbose": True,
+    }
+    assert not hasattr(cfg, "set_poisson_kwargs")
+    assert CompositeFAC(abs_tol=0.0).abs_tol == 0.0
+    assert CompositeFAC(coarse_abs_tol=0.0).coarse_abs_tol == 0.0
+    for bad in ({"max_iters": 0}, {"fine_sweeps": -1}, {"rel_tol": 1.5}, {"abs_tol": -1.0},
+                {"coarse_rel_tol": 0.0}, {"coarse_abs_tol": -1.0}, {"coarse_cycles": 0}):
         with pytest.raises(ValueError):
+            CompositeFAC(**bad)
+    for bad in ({"max_iters": 1.9}, {"max_iters": True}, {"fine_sweeps": False},
+                {"verbose": 1}):
+        with pytest.raises(TypeError):
             CompositeFAC(**bad)
 
 
-def test_geometric_mg_amr_composite_slot():
+def test_solver_tolerances_retain_exact_domains_until_native_lowering():
+    rel = Relative(Fraction(1, 3), AbsoluteFloor(Decimal("1e-30")))
+    absolute = Absolute(Decimal("1e-24"))
+
+    assert rel.rel == Fraction(1, 3)
+    assert rel.floor.abs_floor == Decimal("1e-30")
+    assert rel.options()["rel"] == Fraction(1, 3)
+    assert absolute.abs_tol == Decimal("1e-24")
+    mg = elliptic.GeometricMG(tolerance=rel).mg_options()
+    assert mg["rel_tol"] == Fraction(1, 3)
+    assert mg["abs_tol"] == Decimal("1e-30")
+
+
+@pytest.mark.parametrize("factory", [Relative, Absolute, AbsoluteFloor])
+@pytest.mark.parametrize("bad", [True, 0, -1, float("nan"), float("inf")])
+def test_solver_tolerances_reject_bool_nonpositive_and_nonfinite(factory, bad):
+    with pytest.raises((TypeError, ValueError)):
+        factory(bad)
+
+
+def test_geometric_mg_fac_slot():
     from pops.solvers.options import CompositeFAC
     # Default None: the options view is UNCHANGED (omit-when-default, byte-identity).
     g = elliptic.GeometricMG()
-    assert g.amr_composite is None
-    assert "amr_composite" not in g.options()
+    assert g.fac is None
+    assert "fac" not in g.options()
     # Typed slot: a CompositeFAC is carried; a bare bool/string refuses.
-    g2 = elliptic.GeometricMG(amr_composite=CompositeFAC())
-    assert g2.options()["amr_composite"] == "composite_fac"
+    g2 = elliptic.GeometricMG(fac=CompositeFAC())
+    assert g2.options()["fac"] == "composite_fac"
     with pytest.raises(TypeError, match="CompositeFAC"):
-        elliptic.GeometricMG(amr_composite=True)
+        elliptic.GeometricMG(fac=True)
 
 
 def test_richardson_omega_and_krylov_rel_tol():
@@ -458,29 +470,57 @@ def test_richardson_omega_and_krylov_rel_tol():
             factory(max_iter=10, rel_tol=2.0)
 
 
-def test_condensed_schur_precond_knobs():
-    # ADC-645: n_precond_vcycles in {1, 2}; polar_precond in {radial_line, jacobi}; defaults 0/"".
-    cs = pops.CondensedSchur()
-    assert cs.n_precond_vcycles == 0 and cs.polar_precond == ""
-    cs2 = pops.CondensedSchur(n_precond_vcycles=2, polar_precond="jacobi")
-    assert cs2.n_precond_vcycles == 2 and cs2.polar_precond == "jacobi"
-    with pytest.raises(ValueError, match="n_precond_vcycles"):
-        pops.CondensedSchur(n_precond_vcycles=3)
-    with pytest.raises(ValueError, match="polar_precond"):
-        pops.CondensedSchur(polar_precond="bogus")
+def test_krylov_descriptor_controls_preserve_exact_number_domains():
+    from decimal import Decimal
+    from fractions import Fraction
+
+    descriptor = krylov.Richardson(
+        max_iter=10, rel_tol=Decimal("1e-12"), omega=Fraction(2, 3))
+
+    assert descriptor.options["rel_tol"] == Decimal("1e-12")
+    assert isinstance(descriptor.options["rel_tol"], Decimal)
+    assert descriptor.options["omega"] == Fraction(2, 3)
+    assert isinstance(descriptor.options["omega"], Fraction)
+
+    from pops._ir import ScalarLiteral
+    annotated = ScalarLiteral.from_value(Fraction(1, 2), unit="s")
+    with pytest.raises(ValueError, match="rel_tol"):
+        krylov.CG(max_iter=10, rel_tol=annotated)
+    with pytest.raises(ValueError, match="omega"):
+        krylov.Richardson(max_iter=10, omega=annotated)
 
 
 def test_weno5_epsilon_descriptor():
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.numerics import FiniteVolume
     from pops.numerics.reconstruction import reconstruction
+    from pops.numerics.riemann import ScalarUpwind
+    from pops.numerics.variables import Conservative
     # Default: no epsilon option (omit-when-default; the native kWenoEpsilon literal governs).
     assert "epsilon" not in reconstruction.WENO5().options
     assert reconstruction.WENO5(epsilon=1e-30).options["epsilon"] == 1e-30
     with pytest.raises(ValueError, match="epsilon"):
         reconstruction.WENO5(epsilon=-1.0)
-    # The Spatial ride-along (mirror of waves_provider).
-    sp = pops.Spatial(reconstruction=reconstruction.WENO5(epsilon=1e-30))
-    assert sp.weno_epsilon == 1e-30
-    assert pops.Spatial(reconstruction=reconstruction.WENO5()).weno_epsilon is None
+    # The exact descriptor rides in the final typed finite-volume method; no root Spatial facade.
+    frame = Rectangle("weno-domain", lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    model = pops.Model("weno", frame=frame)
+    state = model.state("U", components=("u",))
+    (u,) = state
+    velocity = model.vector("a", frame=frame, components={frame.x: 1, frame.y: 0})
+    flux = model.flux(
+        "F", frame=frame, state=state,
+        components={frame.x: (u,), frame.y: (0 * u,)},
+        waves={frame.x: (1,), frame.y: (0,)},
+    )
+    method = FiniteVolume(
+        flux=flux,
+        variables=Conservative(state),
+        reconstruction=reconstruction.WENO5(epsilon=1e-30),
+        riemann=ScalarUpwind(velocity=velocity),
+    )
+    assert method.reconstruction.options["epsilon"] == 1e-30
+    assert "epsilon" not in reconstruction.WENO5().options
 
 
 if __name__ == "__main__":

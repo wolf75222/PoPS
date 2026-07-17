@@ -1,116 +1,76 @@
-"""P.rhs(terms=[...]) typed RHS composition (Spec 5 sec.14.2.4, ADC-479 criterion 27).
-
-The typed ``terms=`` front door -- the ONE public RHS path -- lowers onto the INTERNAL
-``P._rhs_legacy`` ``flux=``/``sources=`` builder: each :class:`pops.numerics.terms.Flux`/source term
-maps onto the existing booleans/name-list, so the built IR is BYTE-IDENTICAL to the private path.
-These tests pin that equivalence on the ``Program._ir_hash``:
-
-  - ``terms=[Flux(), <source>]`` builds the byte-identical hash to the private
-    ``_rhs_legacy(flux=True, sources=[<name>])``;
-  - ``Flux()`` is a typed term, not a bool (a bare bool in terms= is a TypeError);
-  - every accepted source form (name str / SourceTerm / OperatorHandle) maps onto the same name;
-  - a non-term object in terms= is a clear TypeError.
-
-Pure Python; no compilation, no ``_pops``. Run with python3 (PYTHONPATH = built pops package).
-"""
+"""The sole public RHS route composes exact typed terms."""
 import pytest
 
-from pops import time as adctime
-from pops.model import OperatorHandle
-from pops.numerics.terms import Flux, LocalTerm, SourceTerm
+from pops.numerics.terms import DefaultSource, Flux, LocalTerm, SourceTerm
+from pops.physics._facade import Model
+from tests.python.unit.runtime._typed_program import solve_field, typed_program_state
 
 
-def _terms_program(terms):
-    """A one-block forward-Euler Program whose single rhs is built from ``terms=``."""
-    P = adctime.Program("rhs_terms")
-    dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    R = P.rhs("R", state=U, fields=f, terms=terms)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
-    P.validate()
-    return P
+_HANDLE = object()
+_SOURCE_TERM = object()
+_LOCAL_TERM = object()
 
 
-def _legacy_program(flux, sources):
-    """The same Program built through the INTERNAL ``_rhs_legacy`` flux=/sources= builder (the typed
-    terms= path lowers onto this private builder; it is the byte-identity target, not a public path)."""
-    P = adctime.Program("rhs_terms")
-    dt = P.dt
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(name="R", state=U, fields=f, flux=flux, sources=sources)
-    P.commit("plasma", P.linear_combine("U1", U + dt * R))
-    P.validate()
-    return P
+def _source_model():
+    model = Model("rhs_terms_model")
+    (u,) = model.conservative_vars("u")
+    model.elliptic_rhs(u)
+    return model, model.source_term("electric", [-u])
 
 
-def test_terms_flux_plus_source_is_byte_identical():
-    """terms=[Flux(), "electric"] == _rhs_legacy(flux=True, sources=["electric"]) (same _ir_hash)."""
-    h_terms = _terms_program([Flux(), "electric"])._ir_hash()
-    h_legacy = _legacy_program(True, ["electric"])._ir_hash()
-    assert h_terms == h_legacy, (h_terms, h_legacy)
-    print("OK  1. terms=[Flux(), 'electric'] _ir_hash == _rhs_legacy(flux=True, sources=['electric'])")
+def _terms_program(terms, authored=None):
+    model, source = authored or _source_model()
+    terms = [
+        source if term is _HANDLE else
+        SourceTerm(source) if term is _SOURCE_TERM else
+        LocalTerm(source) if term is _LOCAL_TERM else term
+        for term in terms
+    ]
+    program, _, _, _, _, temporal = typed_program_state(
+        "rhs_terms", model=model, state="U")
+    fields = solve_field(program, temporal.n)
+    rate = program.rhs("R", state=temporal.n, fields=fields, terms=terms)
+    program.commit(
+        temporal.next,
+        program.value("U1", temporal.n + program.dt * rate, at=temporal.next.point),
+    )
+    assert program.validate() is True
+    return program, rate
 
 
-def test_terms_flux_only_is_byte_identical():
-    """terms=[Flux()] (no source) == _rhs_legacy(flux=True, sources=[]) (flux only)."""
-    assert _terms_program([Flux()])._ir_hash() == _legacy_program(True, [])._ir_hash()
-    print("OK  2. terms=[Flux()] _ir_hash == _rhs_legacy(flux=True, sources=[])")
+def test_flux_and_typed_source_retain_exact_public_choices():
+    _, rate = _terms_program([Flux(), _SOURCE_TERM])
+    assert rate.attrs["flux"] is True
+    assert rate.attrs["sources"] == ("electric",)
+    assert rate.attrs["source_handles"][0].local_id == "electric"
 
 
-def test_terms_source_only_is_byte_identical():
-    """terms=["electric"] (no Flux) == _rhs_legacy(flux=False, sources=["electric"]) (source only)."""
-    assert _terms_program(["electric"])._ir_hash() == _legacy_program(False, ["electric"])._ir_hash()
-    print("OK  3. terms=['electric'] _ir_hash == _rhs_legacy(flux=False, sources=['electric'])")
+def test_flux_default_and_source_only_routes_are_explicit():
+    _, flux = _terms_program([Flux()])
+    _, default = _terms_program([DefaultSource()])
+    _, source = _terms_program([_SOURCE_TERM])
+    assert flux.attrs["flux"] is True and flux.attrs["sources"] == ()
+    assert default.attrs["flux"] is False and default.attrs["sources"] == ("default",)
+    assert source.attrs["flux"] is False and source.attrs["sources"] == ("electric",)
 
 
-def test_source_forms_map_to_same_name():
-    """Every accepted source form (name str / SourceTerm / OperatorHandle) folds in the SAME
-    source name, so all three build the byte-identical IR."""
-    h_str = _terms_program([Flux(), "electric"])._ir_hash()
-    h_srcterm = _terms_program([Flux(), SourceTerm("electric")])._ir_hash()
-    h_handle = _terms_program([Flux(), OperatorHandle("electric", kind="local_source")])._ir_hash()
-    h_local = _terms_program([Flux(), LocalTerm("electric")])._ir_hash()
-    assert h_str == h_srcterm == h_handle == h_local, (h_str, h_srcterm, h_handle, h_local)
-    print("OK  5. source forms (str/SourceTerm/OperatorHandle/LocalTerm) -> same name -> same hash")
+def test_source_wrappers_and_handle_have_one_semantic_identity():
+    handle = _terms_program([Flux(), _HANDLE])[0]._ir_hash()
+    source = _terms_program([Flux(), _SOURCE_TERM])[0]._ir_hash()
+    local = _terms_program([Flux(), _LOCAL_TERM])[0]._ir_hash()
+    assert handle == source == local
 
 
-def test_flux_is_a_term_not_a_bool():
-    """Flux() is a typed term (sets flux=True), and a bare bool in terms= is rejected: the spec
-    distinguishes a Flux term from a flux boolean."""
-    # Flux() lowers to flux=True (proven by the byte-identical hash above); a bare True does not.
-    assert _terms_program([Flux()])._ir_hash() != _terms_program([])._ir_hash()
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    with pytest.raises(TypeError):
-        P.rhs("R", state=U, fields=f, terms=[True])
-    print("OK  6. Flux() is a term not a bool; a bare bool in terms= is a TypeError")
-
-
-def test_legacy_flux_sources_rejected_in_public_surface():
-    """The legacy flux=/sources=/fluxes= form (and a bare P.rhs) is NOT a public path: it is refused
-    with a clear TypeError naming terms= (Spec 5: terms= is the one public RHS path)."""
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    for kw in ({"flux": True}, {"sources": ["electric"]}, {"fluxes": ["default"]}, {}):
-        with pytest.raises(TypeError, match="requires the typed terms="):
-            P.rhs("R", state=U, fields=f, **kw)
-    print("OK  7. legacy P.rhs(flux=/sources=/fluxes=/bare) -> TypeError naming terms=")
-
-
-def test_bad_term_raises_typeerror():
-    """A non-term object in terms= is a clear TypeError (transparent typed surface)."""
-    P = adctime.Program("rhs_terms")
-    U = P.state("plasma")
-    f = P.solve_fields(U)
-    for bad in (123, 4.5, object(), ["nested"]):
+def test_free_source_name_boolean_and_bad_terms_are_rejected():
+    for bad in ("electric", True, 123, 4.5, object(), ["nested"]):
         with pytest.raises(TypeError):
-            P.rhs("R", state=U, fields=f, terms=[Flux(), bad])
-    # An unnamed SourceTerm/LocalTerm has no declared source name to fold in.
-    for unnamed in (SourceTerm(), LocalTerm()):
-        with pytest.raises(ValueError, match="must be named"):
-            P.rhs("R", state=U, fields=f, terms=[Flux(), unnamed])
-    print("OK  8. a non-term in terms= -> TypeError; an unnamed source term -> ValueError")
+            _terms_program([Flux(), bad])
+    for constructor in (SourceTerm, LocalTerm):
+        with pytest.raises(TypeError, match="typed OperatorHandle"):
+            constructor("electric")
+
+
+def test_rhs_requires_explicit_terms_keyword():
+    program, _, _, _, _, temporal = typed_program_state("rhs_terms_required")
+    with pytest.raises(TypeError, match="terms"):
+        program.rhs(state=temporal.n)

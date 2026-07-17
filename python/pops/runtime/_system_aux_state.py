@@ -1,7 +1,7 @@
 """System aux/state mixin (Spec-4 PR-F): named aux fields, disc domain, primitive state.
 
 Named-aux resolution + set/get, the disc transport-domain controls, and the primitive-variable
-state helpers of :class:`pops.runtime.system.System`. Mixed in via inheritance; methods operate
+state helpers of :class:`pops.runtime._system.System`. Mixed in via inheritance; methods operate
 on ``self._s`` and ``self._aux_field_index``.
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ class _SystemAuxState(_System):
         if table is None:
             raise ValueError(
                 "set_aux_field: block '%s' unknown (or bound without a named aux field); declare "
-                "m.aux_field('%s') on that block's model in the pops.Problem." % (block, name))
+                "m.aux_field('%s') on that block's model in the pops.Case." % (block, name))
         if name not in table:
             known = sorted(table) if table else "(none)"
             raise ValueError(
@@ -55,7 +55,7 @@ class _SystemAuxState(_System):
         from one step to the next (solve_fields never rewrites named components). For B_z / T_e,
         use their dedicated paths (set_magnetic_field / set_electron_temperature_from).
 
-        @p halo (ADC-369): an optional pops.AuxHalo declaring this field's own ghost boundary policy
+        @p halo (ADC-369): an optional ``pops.mesh.AuxHalo`` declaring this field's own ghost policy
         (foextrap / dirichlet), applied to the non-periodic faces after the shared aux fill. Default
         None inherits the shared aux BC (bit-identical)."""
         import numpy as np
@@ -73,29 +73,18 @@ class _SystemAuxState(_System):
         comp = self._resolve_aux_field(block, name)
         return np.asarray(self._s.aux_field_component(comp), dtype=float)
 
-    def set_disc_domain(self, cx: Any, cy: Any = None, R: Any = None, mode: Any = "none") -> Any:
-        """Set the TRANSPORT DOMAIN as a DISC of center (cx, cy) and radius R, and WIRE the
-        transport according to mode= (T2 / T5-PR3 work). Materializes a 0/1 cell-centered mask (cell
-        active when its center is inside the disc, level set hypot(x-cx, y-cy) - R < 0, SAME convention
-        as the conducting wall of Poisson). This is the finite-volume counterpart of the elliptic wall: the paper
-        (Hoffart et al., arXiv:2510.11808) transports on a REAL disc whereas PoPS transports on the
-        full Cartesian square, the circle acting only in the Poisson wall (lock from the Cartesian ring
-        edges, cf. docs/HOFFART_FIDELITY.md).
+    def set_disc_domain(self, domain: Any) -> Any:
+        """Materialise a typed disc transport domain.
 
-        Spec 5 sec.8.16 adds a TYPED form: pass a single ``pops.mesh.geometry.DiscDomain``
-        carrying the center, the radius and a typed transport mode::
+        The sole public input is :class:`pops.mesh.geometry.DiscDomain`, which carries the center,
+        radius, and typed transport mask as one validated object::
 
             from pops.mesh.geometry import DiscDomain
             from pops.mesh.masks import CutCell
             sim.set_disc_domain(DiscDomain(center=(0.5, 0.5), radius=0.4, mode=CutCell()))
 
-        The legacy four-argument string form ``set_disc_domain(cx, cy, R, mode="cutcell")`` keeps
-        working unchanged; both lower to the SAME native ``set_disc_domain(cx, cy, R, mode_token)``
-        call (byte-identical mask and trajectory). ``mode`` accepts a typed
-        :mod:`pops.mesh.masks` descriptor (``NoMask`` / ``Staircase`` / ``CutCell``) OR the legacy
-        string.
-
-        The ``mode`` parameter wires the transport:
+        A string or a loose ``(cx, cy, radius, mode)`` tuple is rejected; it cannot bypass descriptor
+        validation or lose the cut-cell thresholds owned by the mask. The selected mask wires:
 
         - 'none' (default): the mask is materialized (queryable via disc_mask()) but the transport
           stays FULL Cartesian (assemble_rhs) -> step() BIT-IDENTICAL even with the disc set;
@@ -109,27 +98,16 @@ class _SystemAuxState(_System):
         guard_assembling(self, "set_disc_domain")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.geometry import DiscDomain
         from pops.mesh.masks import disc_mode_thresholds, lower_disc_mode
-        if isinstance(cx, DiscDomain):
-            # Typed DiscDomain positional (Spec 5 sec.8.16): it carries center + radius + mode.
-            # cy / R / mode keywords must NOT be doubled up with the typed object.
-            if cy is not None or R is not None:
-                raise TypeError(
-                    "set_disc_domain: pass EITHER a typed DiscDomain (center+radius+mode carried "
-                    "by the object) OR the legacy (cx, cy, R, mode=) scalars, not both")
-            mode_obj = cx.mode  # keep the mode object for its ADC-615 cut-cell thresholds
-            cx, cy, R, mode = cx.lower()
-        else:
-            if cy is None or R is None:
-                raise TypeError(
-                    "set_disc_domain: the legacy form needs (cx, cy, R[, mode]); pass a typed "
-                    "pops.mesh.geometry.DiscDomain(center=..., radius=..., mode=...) otherwise")
-            # mode= may be the legacy string OR a typed pops.mesh.masks descriptor.
-            mode_obj = mode
-            mode = lower_disc_mode(mode)
+        if not isinstance(domain, DiscDomain):
+            raise TypeError(
+                "set_disc_domain requires a pops.mesh.geometry.DiscDomain descriptor, got %s"
+                % type(domain).__name__)
+        cx, cy, radius, mode = domain.lower()
+        lower_disc_mode(domain.mode)
         # ADC-615: forward the typed CutCell numeric thresholds (kappa_min / face_open_eps /
-        # cut_theta_min). 0.0 = keep the native default -> bit-identical for the string / NoMask path.
-        th = disc_mode_thresholds(mode_obj)
-        self._s.set_disc_domain(cx, cy, R, mode, kappa_min=th.get("kappa_min", 0.0),
+        # cut_theta_min). 0.0 keeps the native default.
+        th = disc_mode_thresholds(domain.mode)
+        self._s.set_disc_domain(cx, cy, radius, mode, kappa_min=th.get("kappa_min", 0.0),
                                 face_open_eps=th.get("face_open_eps", 0.0),
                                 cut_theta_min=th.get("cut_theta_min", 0.0))
 
@@ -138,8 +116,7 @@ class _SystemAuxState(_System):
         disc. A mode != 'none' requires a disc already set (set_disc_domain) -> error otherwise. Setting
         back to 'none' restores the full Cartesian transport (bit-identical).
 
-        ``mode`` accepts the legacy string OR a typed :mod:`pops.mesh.masks` descriptor
-        (``NoMask`` / ``Staircase`` / ``CutCell``); both lower to the same native token."""
+        ``mode`` must be a typed :class:`pops.mesh.masks.TransportMask`; strings are rejected."""
         from pops.runtime._lifecycle import guard_assembling
         guard_assembling(self, "set_geometry_mode")  # frozen once pops.bind completes (ADC-592)
         from pops.mesh.masks import lower_disc_mode

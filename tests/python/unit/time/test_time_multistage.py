@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Multi-stage compiled time Programs: SSPRK2 + RK4 parity (epic ADC-399 / ADC-407).
 
-`Program.emit_cpp_program` lowers a multi-stage scheme (intermediate scratch states + a `lincomb`
+`pops.codegen.program_codegen.emit_cpp_program` lowers a multi-stage scheme (scratch states + a `lincomb`
 commit) to a problem.so. This test builds SSPRK2 and RK4 Programs, compiles + installs + runs each,
 and checks parity against an OFFLINE stage-by-stage reference computed from the same runtime
 primitives (`set_state` + `solve_fields` + `eval_rhs`) -- the exact stages the compiled program
 drives -- so the match is to machine precision. SSPRK2 is additionally checked against the native
-`pops.Explicit("ssprk2")` step (spec test 32).
+`engine.Explicit("ssprk2")` step (spec test 32).
 
 Uses a pure-transport (isothermal, no field coupling) model so the per-stage `solve_fields` is inert
 and identical along both paths (the compiled codegen now lowers each solve_fields to a per-stage
@@ -15,21 +15,35 @@ nothing, so re-solving from a stage state vs the current state is bit-identical 
 field-coupled case is exercised by test_time_solve_fields_from_state). Skips cleanly (exit 0)
 without the install_program binding / numpy / a compiler / a visible Kokkos -- never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model as BoardModel
+from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefaultSource
+from typed_program_support import solve_field, typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
 
 def _skip(msg):
-    print("skip test_time_multistage (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_time_multistage (%s)' % msg)
 
 
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
@@ -45,10 +59,65 @@ def chk(cond, label):
 
 
 def transport_model():
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(),
+                         elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
+
+
+def _public_multistage_artifact(name, method):
+    """Build the same pure-transport tableau through the final Case lifecycle."""
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = BoardModel(name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (mx, 0.0 * rho, 0.0 * rho),
+                     y_axis: (my, 0.0 * rho, 0.0 * rho)},
+        waves={x_axis: (1.0 + 0.0 * rho,) * 3,
+               y_axis: (1.0 + 0.0 * rho,) * 3},
+    )
+    source = model.source("zero", on=state, value=(0.0 * rho, 0.0 * rho, 0.0 * rho))
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+    case = pops.Case("%s-case" % name)
+    block = case.block("ions", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(rate, FiniteVolume(
+        flux=flux, variables=variables.Conservative(state),
+        reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov()))
+    case.numerics(numerics, block=block)
+    P = adctime.Program(name)
+    temporal = P.state(block[state])
+    U0 = temporal.n
+    dt = P.dt
+    def rhs(u):
+        return P.rhs(state=u, terms=[FinalFlux(), FinalDefaultSource()])
+    if method == "ssprk2":
+        k0 = rhs(U0)
+        stage1 = adctime.StagePoint("ssprk2_stage_1", {"main": adctime.TimePoint(P.clock, 1)})
+        U1 = P.value("U1", U0 + dt * k0, at=stage1)
+        k1 = rhs(U1)
+        result = 0.5 * U0 + 0.5 * (U1 + dt * k1)
+    else:
+        k1 = rhs(U0)
+        stage1 = adctime.StagePoint("rk4_stage_1", {"main": adctime.TimePoint(P.clock, 0.5)})
+        U1 = P.value("U1", U0 + 0.5 * dt * k1, at=stage1)
+        k2 = rhs(U1)
+        stage2 = adctime.StagePoint("rk4_stage_2", {"main": adctime.TimePoint(P.clock, 0.5)})
+        U2 = P.value("U2", U0 + 0.5 * dt * k2, at=stage2)
+        k3 = rhs(U2)
+        stage3 = adctime.StagePoint("rk4_stage_3", {"main": adctime.TimePoint(P.clock, 1)})
+        U3 = P.value("U3", U0 + dt * k3, at=stage3)
+        k4 = rhs(U3)
+        result = U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4
+    P.commit(temporal.next, P.value("Unp1", result, at=temporal.next.point))
+    case.program(P)
+    layout = Uniform(CartesianGrid(frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(pops.validate(case), layout=layout, backend=Production(),
+                            compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")})
+    return pops.compile(resolved)
 
 
 N = 24
@@ -56,9 +125,9 @@ N = 24
 
 def make_sim(method="euler"):
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method=method))
+    sim.add_equation("ions", transport_model(),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(method=method))
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -81,11 +150,12 @@ def offline_rhs(ref, U):
 def run_compiled(P, dt):
     """compile_problem(P) -> install -> one step; returns the advanced state (or None to skip)."""
     try:
-        compiled = pops.codegen.compile_problem(model=transport_model(), time=P)
+        compiled = _public_multistage_artifact(
+            "public_%s" % P.name, "rk4" if "rk4" in P.name else "ssprk2")
     except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
         _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
     sim = make_sim()
-    sim.install_program(compiled.so_path)
+    sim.install_program(compiled.program.so_path)
     sim.step(dt)
     return np.array(sim.get_state("ions"))
 
@@ -93,29 +163,45 @@ def run_compiled(P, dt):
 def ssprk2_program():
     P = adctime.Program("ssprk2_parity")
     dt = P.dt
-    U0 = P.state("ions")
-    f0 = P.solve_fields(U0)
-    k0 = P._rhs_legacy(state=U0, fields=f0, flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + dt * k0)
-    f1 = P.solve_fields(U1)
-    k1 = P._rhs_legacy(state=U1, fields=f1, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U2", 0.5 * U0 + 0.5 * (U1 + dt * k1)))
+    U0 = typed_state(P, "ions")
+    f0 = solve_field(P, U0)
+    k0 = P.rhs(state=U0, fields=f0, terms=[Flux(), DefaultSource()])
+    stage1 = adctime.StagePoint(
+        "ssprk2_stage_1", {"main": adctime.TimePoint(P.clock, 1)})
+    U1 = P.value("U1", U0 + dt * k0, at=stage1)
+    f1 = solve_field(P, U1)
+    k1 = P.rhs(state=U1, fields=f1, terms=[Flux(), DefaultSource()])
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.value(
+        "U2", 0.5 * U0 + 0.5 * (U1 + dt * k1), at=endpoint.point))
     return P
 
 
 def rk4_program():
     P = adctime.Program("rk4_parity")
     dt = P.dt
-    U0 = P.state("ions")
-    k1 = P._rhs_legacy(state=U0, fields=P.solve_fields(U0), flux=True, sources=["default"])
-    U1 = P.linear_combine("U1", U0 + 0.5 * dt * k1)
-    k2 = P._rhs_legacy(state=U1, fields=P.solve_fields(U1), flux=True, sources=["default"])
-    U2 = P.linear_combine("U2", U0 + 0.5 * dt * k2)
-    k3 = P._rhs_legacy(state=U2, fields=P.solve_fields(U2), flux=True, sources=["default"])
-    U3 = P.linear_combine("U3", U0 + dt * k3)
-    k4 = P._rhs_legacy(state=U3, fields=P.solve_fields(U3), flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine(
-        "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4))
+    U0 = typed_state(P, "ions")
+    k1 = P.rhs(
+        state=U0, fields=solve_field(P, U0), terms=[Flux(), DefaultSource()])
+    stage1 = adctime.StagePoint(
+        "rk4_stage_1", {"main": adctime.TimePoint(P.clock, 0.5)})
+    U1 = P.value("U1", U0 + 0.5 * dt * k1, at=stage1)
+    k2 = P.rhs(
+        state=U1, fields=solve_field(P, U1), terms=[Flux(), DefaultSource()])
+    stage2 = adctime.StagePoint(
+        "rk4_stage_2", {"main": adctime.TimePoint(P.clock, 0.5)})
+    U2 = P.value("U2", U0 + 0.5 * dt * k2, at=stage2)
+    k3 = P.rhs(
+        state=U2, fields=solve_field(P, U2), terms=[Flux(), DefaultSource()])
+    stage3 = adctime.StagePoint(
+        "rk4_stage_3", {"main": adctime.TimePoint(P.clock, 1)})
+    U3 = P.value("U3", U0 + dt * k3, at=stage3)
+    k4 = P.rhs(
+        state=U3, fields=solve_field(P, U3), terms=[Flux(), DefaultSource()])
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.value(
+        "Unp1", U0 + dt / 6.0 * k1 + dt / 3.0 * k2 + dt / 3.0 * k3 + dt / 6.0 * k4,
+        at=endpoint.point))
     return P
 
 
@@ -135,11 +221,11 @@ ssprk2_prog = run_compiled(ssprk2_program(), dt)
 e = float(np.abs(ssprk2_prog - ssprk2_ref).max())
 chk(e < 1e-12, "compiled SSPRK2 == offline stage reference (max|d| = %.2e)" % e)
 
-# Native cross-check: the compiled SSPRK2 reproduces pops.Explicit("ssprk2") (spec test 32).
+# Native cross-check: the compiled SSPRK2 reproduces engine.Explicit("ssprk2") (spec test 32).
 nat = make_sim("ssprk2")
 nat.step(dt)
 en = float(np.abs(ssprk2_prog - np.array(nat.get_state("ions"))).max())
-chk(en < 1e-12, "compiled SSPRK2 == native pops.Explicit('ssprk2') (max|d| = %.2e)" % en)
+chk(en < 1e-12, "compiled SSPRK2 == native engine.Explicit('ssprk2') (max|d| = %.2e)" % en)
 
 print("== RK4 ==")
 k1 = offline_rhs(ref, U0)

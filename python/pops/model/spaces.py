@@ -3,7 +3,8 @@
 Defines the abstract spaces a model-free ``pops.time.Program`` composes:
 ``StateSpace`` (the components of ``U``), ``FieldSpace`` (auxiliary / solved
 fields), ``RateSpace`` / ``Rate(U)`` (the tangent of a ``StateSpace``), plus the
-``ParameterSpace`` and ``AuxSpace`` declarations a Module owns. These carry no
+``AuxSpace`` declarations a Module owns. Canonical scalar parameter declarations
+live in :mod:`pops.params` and are referenced by ``ParamHandle``. These carry no
 numerics and no array data; they are a TYPED VIEW only.
 
 Imports only the standard library so it can be exercised without the compiled
@@ -11,27 +12,140 @@ Imports only the standard library so it can be exercised without the compiled
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 
-class Space:
+def _freeze_metadata(value: Any) -> Any:
+    """Deep-freeze inert type metadata carried across Program snapshots."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_metadata(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_metadata(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return frozenset(_freeze_metadata(item) for item in value)
+    return value
+
+
+def _metadata_key(value: Any) -> Any:
+    """Hashable structural key for deeply frozen descriptor metadata."""
+    if isinstance(value, Mapping):
+        return tuple(sorted((str(key), _metadata_key(item)) for key, item in value.items()))
+    if isinstance(value, tuple):
+        return tuple(_metadata_key(item) for item in value)
+    if isinstance(value, frozenset):
+        return tuple(sorted((_metadata_key(item) for item in value), key=repr))
+    return value
+
+
+def _semantic_tag(value: Any, where: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("%s must be a non-empty string" % where)
+    return value
+
+
+def _component_units(components: tuple[str, ...], units: Any) -> tuple[None, ...]:
+    """Accept only the explicit unitless representation until a typed unit protocol exists."""
+    if units is None:
+        return (None,) * len(components)
+    if isinstance(units, Mapping):
+        unknown = sorted(set(units) - set(components))
+        missing = sorted(set(components) - set(units))
+        if unknown or missing:
+            raise ValueError(
+                "Space units must name exactly the components (unknown=%r, missing=%r)"
+                % (unknown, missing)
+            )
+        values = tuple(units[name] for name in components)
+    else:
+        values = tuple(units)
+        if len(values) != len(components):
+            raise ValueError("Space units must have one entry per component")
+    if any(value is not None for value in values):
+        raise TypeError(
+            "Space units are unsupported until a typed unit protocol participates in "
+            "validation, identity, lowering, and runtime reports"
+        )
+    return values
+
+
+class _ImmutableTypeValue:
+    """Small value-object base: authoring type descriptors are immutable once built."""
+
+    __pops_ir_immutable__ = True
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("%s is immutable" % type(self).__name__)
+
+    def __delattr__(self, name: str) -> None:
+        raise AttributeError("%s is immutable" % type(self).__name__)
+
+
+class Space(_ImmutableTypeValue):
     """Base of a typed space: a kind, a name and an ordered tuple of components.
 
     Equality and hashing are by ``(kind, name, components, layout)`` so two spaces
     built independently from the same model compare equal (used by Program type
-    checks). Subclasses may carry extra metadata (roles, storage) that does not
-    participate in identity.
+    checks). Subclasses may extend that structural identity with their own lowering-
+    relevant metadata (for example ``StateSpace.storage`` and ``StateSpace.roles``).
     """
 
     kind = "space"
 
-    def __init__(self, name: Any, components: Any = (), layout: str = "cell") -> None:
-        self.name = str(name)
-        self.components = tuple(components)
-        self.layout = str(layout)
+    name: str
+    components: tuple[str, ...]
+    layout: str
+    representation: str
+    centering: str
+    units: tuple[None, ...]
+    frame: str
+    clock: str
+
+    def __init__(
+        self,
+        name: Any,
+        components: Any = (),
+        layout: str = "cell",
+        *,
+        representation: Any = None,
+        centering: Any = None,
+        units: Any = None,
+        frame: Any = "model",
+        clock: Any = "simulation",
+    ) -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError("Space name must be a non-empty string")
+        normalized = tuple(components)
+        if any(not isinstance(component, str) or not component for component in normalized):
+            raise ValueError("Space components must be non-empty strings")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("Space components must be unique")
+        if not isinstance(layout, str) or not layout:
+            raise ValueError("Space layout must be a non-empty string")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "components", normalized)
+        object.__setattr__(self, "layout", layout)
+        object.__setattr__(self, "representation", _semantic_tag(
+            representation or self.kind, "Space representation"))
+        object.__setattr__(self, "centering", _semantic_tag(
+            centering or layout, "Space centering"))
+        object.__setattr__(self, "units", _component_units(normalized, units))
+        object.__setattr__(self, "frame", _semantic_tag(frame, "Space frame"))
+        object.__setattr__(self, "clock", _semantic_tag(clock, "Space clock"))
 
     def _key(self) -> Any:
-        return (self.kind, self.name, self.components, self.layout)
+        return (
+            self.kind,
+            self.name,
+            self.components,
+            self.layout,
+            self.representation,
+            self.centering,
+            self.units,
+            self.frame,
+            self.clock,
+        )
 
     def __eq__(self, other: Any) -> bool:
         return isinstance(other, Space) and self._key() == other._key()
@@ -40,8 +154,23 @@ class Space:
         return hash(self._key())
 
     def __repr__(self) -> str:
-        return "%s(%r, components=%r)" % (
-            type(self).__name__, self.name, list(self.components))
+        return "%s(%r, components=%r, layout=%r, representation=%r, centering=%r)" % (
+            type(self).__name__, self.name, list(self.components), self.layout,
+            self.representation, self.centering)
+
+    def to_data(self) -> dict[str, Any]:
+        """Stable structural type identity used by Program IR serialization."""
+        return {
+            "kind": self.kind,
+            "name": self.name,
+            "components": list(self.components),
+            "layout": self.layout,
+            "representation": self.representation,
+            "centering": self.centering,
+            "units": list(self.units),
+            "frame": self.frame,
+            "clock": self.clock,
+        }
 
     # Operator-first signature sugar: ``U >> Fields`` and ``(U, Fields) >> Rate(U)``.
     def __rshift__(self, output: Any) -> Any:
@@ -69,11 +198,39 @@ class StateSpace(Space):
 
     kind = "state"
 
+    roles: Mapping[str, Any]
+    storage: str
+
     def __init__(self, name: Any = "U", components: Any = (), roles: Any = None, layout: str = "cell",
-                 storage: str = "multifab") -> None:
-        super().__init__(name, components, layout)
-        self.roles = dict(roles) if roles else {}
-        self.storage = str(storage)
+                 storage: str = "multifab", *, representation: Any = "conservative",
+                 centering: Any = None, units: Any = None, frame: Any = "model",
+                 clock: Any = "simulation") -> None:
+        super().__init__(
+            name,
+            components,
+            layout,
+            representation=representation,
+            centering=centering,
+            units=units,
+            frame=frame,
+            clock=clock,
+        )
+        object.__setattr__(self, "roles", _freeze_metadata(roles or {}))
+        if not isinstance(storage, str) or not storage:
+            raise ValueError("StateSpace storage must be a non-empty string")
+        object.__setattr__(self, "storage", storage)
+
+    def _key(self) -> Any:
+        return super()._key() + (self.storage, _metadata_key(self.roles))
+
+    def __repr__(self) -> str:
+        return ("StateSpace(%r, components=%r, roles=%r, layout=%r, storage=%r)"
+                % (self.name, list(self.components), dict(self.roles), self.layout, self.storage))
+
+    def to_data(self) -> dict[str, Any]:
+        data = super().to_data()
+        data.update({"roles": dict(self.roles), "storage": self.storage})
+        return data
 
 
 class FieldSpace(Space):
@@ -86,50 +243,96 @@ class FieldSpace(Space):
 class RateSpace(Space):
     """The tangent space of a :class:`StateSpace` -- values of ``dU/dt``.
 
-    Identity is by the BASE state name so ``Rate("U") == Rate(state_space_U)``;
-    this lets introspection compare an operator's declared output type against a
-    string-named expectation without rebuilding the full state space.
+    A rate always retains its complete immutable base StateSpace.  There is no
+    name-only wildcard: two same-named states with different component/layout/storage
+    structure have different tangent spaces.
     """
 
     kind = "rate"
 
+    base_name: str
+    base_space: StateSpace
+
     def __init__(self, base: Any) -> None:
-        base_name = base.name if isinstance(base, StateSpace) else str(base)
-        # Components are intentionally NOT copied from the base: identity is by the
-        # base name (encoded in the space name "Rate(<base>)"), so Rate("U") built
-        # from a string compares equal to Rate(U) built from the state space.
-        super().__init__("Rate(%s)" % base_name, components=(), layout="cell")
-        self.base_name = base_name
+        if not isinstance(base, StateSpace):
+            raise TypeError("Rate expects a StateSpace, got %r" % (base,))
+        base_name = base.name
+        # A tangent inherits the complete physical layout of its base.  The
+        # base remains the type authority; these mirrored fields make generic
+        # Space consumers (not only Rate-aware ones) report the right shape.
+        super().__init__(
+            "Rate(%s)" % base_name,
+            components=base.components,
+            layout=base.layout,
+            representation="rate",
+            centering=base.centering,
+            units=base.units,
+            frame=base.frame,
+            clock=base.clock,
+        )
+        object.__setattr__(self, "base_name", base_name)
+        object.__setattr__(self, "base_space", base)
+
+    def _key(self) -> Any:
+        return super()._key() + (self.base_space._key(),)
+
+    def __repr__(self) -> str:
+        return "RateSpace(%r, base=%r)" % (self.name, self.base_space)
+
+    def to_data(self) -> dict[str, Any]:
+        data = super().to_data()
+        data["base_name"] = self.base_name
+        data["base_space"] = self.base_space.to_data()
+        return data
 
 
 def Rate(base: Any) -> Any:  # noqa: N802 (type-constructor sugar, intentionally capitalized)
-    """Return the :class:`RateSpace` tangent of ``base`` (a StateSpace or a name)."""
+    """Return the :class:`RateSpace` tangent of an immutable ``StateSpace``."""
     return RateSpace(base)
 
 
-class ParameterSpace:
-    """A named scalar parameter of a Module: a default value and a dtype. The Module
-    holds only the declaration; the runtime value belongs to the Simulation (read in a
-    generated kernel via ProgramContext / ModuleContext, never frozen at codegen)."""
-
-    def __init__(self, name: Any, default: Any = 0.0, dtype: str = "real") -> None:
-        self.name = str(name)
-        self.default = default
-        self.dtype = str(dtype)
-
-    def __repr__(self) -> str:
-        return "ParameterSpace(%r, default=%r, dtype=%r)" % (
-            self.name, self.default, self.dtype)
-
-
-class AuxSpace:
+class AuxSpace(_ImmutableTypeValue):
     """A named auxiliary field provided or updated by the Simulation (e.g. an externally
     imposed magnetic field, a mask). Distinct from a FieldSpace, which an operator
     produces; an AuxSpace is imposed runtime data the operators may read."""
 
-    def __init__(self, name: Any, kind: str = "cell_scalar") -> None:
-        self.name = str(name)
-        self.kind = str(kind)
+    name: str
+    kind: str
+    representation: str
+    centering: str
+    unit: str | None
+    frame: str
+    clock: str
+
+    def __init__(self, name: Any, kind: str = "cell_scalar", *, representation: Any = "auxiliary",
+                 centering: Any = "cell", unit: Any = None, frame: Any = "model",
+                 clock: Any = "simulation") -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError("AuxSpace name must be a non-empty string")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("AuxSpace kind must be a non-empty string")
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "representation", _semantic_tag(
+            representation, "AuxSpace representation"))
+        object.__setattr__(self, "centering", _semantic_tag(centering, "AuxSpace centering"))
+        if unit is not None and (not isinstance(unit, str) or not unit):
+            raise ValueError("AuxSpace unit must be a non-empty string or None")
+        object.__setattr__(self, "unit", unit)
+        object.__setattr__(self, "frame", _semantic_tag(frame, "AuxSpace frame"))
+        object.__setattr__(self, "clock", _semantic_tag(clock, "AuxSpace clock"))
 
     def __repr__(self) -> str:
         return "AuxSpace(%r, kind=%r)" % (self.name, self.kind)
+
+    def to_data(self) -> dict[str, Any]:
+        return {
+            "kind": "aux",
+            "name": self.name,
+            "aux_kind": self.kind,
+            "representation": self.representation,
+            "centering": self.centering,
+            "unit": self.unit,
+            "frame": self.frame,
+            "clock": self.clock,
+        }

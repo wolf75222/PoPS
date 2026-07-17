@@ -8,12 +8,12 @@
 #include <pops/numerics/fv/numerical_flux.hpp>
 #include <pops/numerics/fv/reconstruction.hpp>
 #include <pops/numerics/spatial/operators/polar_operator.hpp>  // assemble_rhs_polar (REUSED verbatim)
-#include <pops/numerics/time/integrators/time_steppers.hpp>      // SSPRK2Step / SSPRK3Step (core RK math)
-#include <pops/parallel/comm.hpp>   // all_reduce_max (MPI-safe collective reduction)
+#include <pops/numerics/time/integrators/time_steppers.hpp>  // SSPRK2Step / SSPRK3Step (core RK math)
+#include <pops/parallel/comm.hpp>          // all_reduce_max (MPI-safe collective reduction)
 #include <pops/physics/bricks/bricks.hpp>  // ExBVelocityPolar, CompositeModel, source/elliptic bricks
 #include <pops/runtime/builders/scheme_dispatch.hpp>  // dispatch_limiter: ONE limiter-route dispatch generator (ADC-640)
 #include <pops/runtime/config/dispatch_tags.hpp>  // UNIQUE registry of tags (validate_limiter/riemann)
-#include <pops/runtime/context/grid_context.hpp>   // BlockClosures (light header)
+#include <pops/runtime/context/grid_context.hpp>  // BlockClosures (light header)
 #include <pops/runtime/builders/factory/model_factory.hpp>  // detail::dispatch_source / dispatch_elliptic (REUSED)
 #include <pops/runtime/dynamic/model_registry.hpp>  // transport_tags_csv: polar-wired transport list (ADC-331)
 #include <pops/runtime/config/model_spec.hpp>
@@ -76,9 +76,10 @@ void dispatch_transport_polar(const ModelSpec& m, Visitor&& v) {
   // unreachable past the guard but kept for -Wswitch completeness).
   if (!is_transport(m.transport) ||
       parse_transport_route(m.transport) == TransportRouteId::kCompressible)
-    throw std::runtime_error("polar transport '" + m.transport + "' unsupported (wired in polar: " +
-                             transport_tags_csv(/*polar=*/true) +
-                             "; 'compressible' (Euler with energy) in polar is a later phase)");
+    throw std::runtime_error(
+        "polar transport '" + m.transport.get() +
+        "' unsupported (wired in polar: " + transport_tags_csv(/*polar=*/true) +
+        "; 'compressible' (Euler with energy) in polar is a later phase)");
   switch (parse_transport_route(m.transport)) {
     case TransportRouteId::kExb:
       return v(ExBVelocityPolar{Real(m.B0)});
@@ -236,7 +237,7 @@ struct PolarPoissonRhs {
 /// nonexistent azimuthal ghost. Pure HOST loop (phi host-resident after solve()). Does NOT fill the ghosts of
 /// the aux: the caller does it AFTER (fill_ghosts: theta periodic, r physical) for the transport.
 /// PRECONDITION nr >= 3 (the one-sided second-order stencil reads p(i+2)/p(i-2) at the walls): IMPOSED
-/// upstream by check_geometry (python/system.cpp) and pops.PolarMesh (nr >= 3), not merely assumed.
+/// upstream by check_geometry (python/system.cpp) and pops.mesh.PolarMesh (nr >= 3), not merely assumed.
 inline void derive_aux_polar(const MultiFab& phi, MultiFab& aux, const PolarGeometry& g) {
   const Real dr = g.dr(), dth = g.dtheta();
   for (int li = 0; li < aux.local_size(); ++li) {
@@ -351,7 +352,8 @@ BlockClosures make_block_polar(const Model& m, const std::string& lim, const std
       } else {
         throw std::runtime_error(
             "System (polar): flux 'hll' requires signed wave speeds (model.wave_speeds); "
-            "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal fluid "
+            "the scalar ExB transport does not provide them -> 'rusanov'. The polar isothermal "
+            "fluid "
             "(transport='isothermal') declares them and accepts 'hll'.");
       }
     default:

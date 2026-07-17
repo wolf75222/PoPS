@@ -1,0 +1,164 @@
+schema_version = 1
+gate = "m1-semantic-core"
+issues = ["ADC-652", "ADC-653", "ADC-654", "ADC-655", "ADC-656", "ADC-657", "ADC-658", "ADC-659", "ADC-660"]
+
+# Every issue has at least one success proof and one refusal proof.  Nodeids are
+# exact on purpose: renaming or deleting a contract test must update this reviewed
+# gate instead of silently shrinking CI coverage.
+
+[[check]]
+issue = "ADC-652"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/physics/test_rate_equation_contract.py::test_ddt_equals_minus_div_builds_the_physical_equation_before_registration"
+
+[[check]]
+issue = "ADC-652"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_symbolic_data_model.py::test_if_expr_fails_at_the_python_control_flow_boundary"
+
+[[check]]
+issue = "ADC-653"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/problem/test_handle_data_model.py::test_same_canonical_identity_is_boolean_equal_and_hash_compatible"
+
+[[check]]
+issue = "ADC-653"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/problem/test_handle_data_model.py::test_qualification_rejects_ghost_foreign_double_and_ambiguous_references"
+
+[[check]]
+issue = "ADC-654"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_bind_schema.py::test_schema_roundtrip_is_strict_and_hashes_have_separate_lifetimes"
+
+[[check]]
+issue = "ADC-654"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_param_core_contract.py::test_param_registry_accepts_explicit_case_authority_but_never_ownerless"
+
+[[check]]
+issue = "ADC-655"
+polarity = "positive"
+kind = "pytest"
+target = "snapshot"
+nodeid = "tests/python/unit/problem/test_deep_freeze_storage.py::test_case_freeze_detaches_stale_registry_views_and_keeps_hash_stable"
+
+[[check]]
+issue = "ADC-655"
+polarity = "negative"
+kind = "pytest"
+target = "snapshot"
+nodeid = "tests/python/unit/problem/test_deep_freeze_storage.py::test_plain_mutable_extension_record_cannot_cross_compiled_boundary"
+
+[[check]]
+issue = "ADC-656"
+polarity = "positive"
+kind = "pytest"
+target = "cross_language"
+nodeid = "tests/python/unit/identity/test_native_parity.py::test_native_encoder_and_sha_match_python"
+
+[[check]]
+issue = "ADC-656"
+polarity = "negative"
+kind = "pytest"
+target = "cross_language"
+nodeid = "tests/python/unit/identity/test_native_parity.py::test_native_and_python_reject_the_same_unsupported_vocabulary"
+
+[[check]]
+issue = "ADC-656"
+polarity = "positive"
+kind = "ctest"
+target = "test_canonical_identity"
+test_regex = "^CanonicalIdentity\\."
+
+[[check]]
+issue = "ADC-657"
+polarity = "positive"
+kind = "pytest"
+target = "manifest"
+nodeid = "tests/python/unit/runtime/test_manifest_schema.py::test_artifact_manifest_round_trip_from_dict"
+
+[[check]]
+issue = "ADC-657"
+polarity = "negative"
+kind = "pytest"
+target = "manifest"
+nodeid = "tests/python/unit/runtime/test_manifest_protocol.py::test_json_refuses_duplicate_keys_and_nonfinite_constants"
+
+[[check]]
+issue = "ADC-658"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_component_registry.py::test_external_structural_component_registers_and_resolves_without_allowlist"
+
+[[check]]
+issue = "ADC-658"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_component_provider_pack.py::test_provider_pack_accepts_exact_capacity_and_refuses_capacity_plus_one_atomically"
+
+[[check]]
+issue = "ADC-659"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/problem/test_total_semantic_field_accounting.py::test_block_time_and_diagnostics_never_drop_from_resolved_plan"
+
+[[check]]
+issue = "ADC-659"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/output/test_exact_writers.py::test_missing_exact_level_state_selection_fails_before_a_writer"
+
+[[check]]
+issue = "ADC-660"
+polarity = "positive"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_typed_phase_records.py::test_resolved_plan_is_exact_deeply_frozen_and_self_authenticating"
+
+[[check]]
+issue = "ADC-660"
+polarity = "negative"
+kind = "pytest"
+target = "python"
+nodeid = "tests/python/unit/codegen/test_phase_pipeline.py::test_every_public_phase_rejects_wrong_phase_inputs"
+
+# Final user-facing proof.  This file is owned by the fixture lane, not this gate
+# lane.  The source-only validator deliberately reports it missing until it lands.
+[[check]]
+issue = "ADC-660"
+polarity = "positive"
+kind = "pytest"
+target = "pipeline"
+nodeid = "tests/python/integration/bindings/test_m1_scalar_advection_pipeline.py::test_scalar_advection_completes_typed_phase_pipeline"
+
+[[scan]]
+name = "ownerless_handles"
+
+[[scan]]
+name = "phase_strict_false"
+
+[[scan]]
+name = "compiled_live_authoring_refs"
+
+[[scan]]
+name = "permissive_phase_probing"
+
+[[scan]]
+name = "runtime_legacy_loaders"

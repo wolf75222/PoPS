@@ -1,72 +1,147 @@
-"""pops.lib.time.imex -- IMEX (implicit-explicit) time-stepping schemes.
-
-Exports: imex_local, imex_local_linear.
-"""
+"""Generic pre-implemented IMEX Programs built from exact operator handles."""
 from __future__ import annotations
 
 from typing import Any
 
-from ._helpers import _opcall, _operator_handle, program_macro
+from pops.time._methods.tableau import AdditiveRungeKuttaTableau, RungeKuttaTableau
+from pops.time import LocalLinear
+from pops.solvers import DenseLU
+
+from ._factory import (
+    call_at, field_handle, instance_state, operator_handle, program_factory,
+    resolve_solve_action,
+)
+from ._helpers import _op_space_arity, _stage_point
 
 
-@program_macro
-def imex_local(P: Any, block: Any, *, linear_source: Any, sources: Any = ("default",),
-               flux: Any = True, theta: Any = 1.0) -> Any:
-    """IMEX with an EXPLICIT flux/source and an IMPLICIT cell-local linear source (ADC-423).
-
-    One step of a theta-implicit splitting of ``dU/dt = R_explicit(U) + L U`` where ``L`` is a named
-    model ``m.linear_source`` (e.g. a Lorentz operator) solved cell by cell:
-
-        R   = R_explicit(U)                                     (P.rhs: -div F + the named sources)
-        U^{n+1} = (I - theta*dt*L)^{-1} (U + dt*R)              (P.solve_local_linear)
-
-    The explicit part is assembled with `P.rhs` (flux + the requested named @p sources, on the fields
-    solved from U); the implicit part is the local solve of ``(I - theta*dt*L) U^{n+1} = U + dt*R``
-    via `P.solve_local_linear`, exactly the predictor half of the codebase's predictor-corrector
-    pattern (``test_time_local_solve``). At ``theta == 1`` this is backward Euler on the L term and
-    forward Euler on R; ``theta == 0`` would drop the implicit solve (use `forward_euler` instead) and
-    is rejected. @p linear_source is the typed handle of the model ``m.linear_source`` /
-    ``m.local_linear_map``; @p theta the implicitness of the L term (0 < theta <= 1)."""
-    linear_source = _operator_handle(linear_source, "linear_source")
-    if not (0.0 < float(theta) <= 1.0):
-        raise ValueError(
-            "imex_local: theta must be in (0, 1] (got %r); theta == 0 is fully explicit -- use "
-            "forward_euler instead" % (theta,))
-    U = P.state(block)
-    fields = P.solve_fields(U) if flux else None
-    R = P._rhs_legacy(state=U, fields=fields, flux=flux, sources=list(sources))
-    rhs = P.linear_combine(block + "_imex_rhs", U + P.dt * R)
-    operator = P.I - (float(theta) * P.dt) * P.linear_source(linear_source)
-    out = P.solve_local_linear(name=block + "_imex_step", operator=operator, rhs=rhs, fields=fields)
-    P.commit(block, out)
-    return out
+IMEX_EULER_TABLEAU = AdditiveRungeKuttaTableau(
+    RungeKuttaTableau(A=[[]], b=[1], c=[0], name="imex-euler-explicit"),
+    implicit_A=[[1]], implicit_b=[1], implicit_c=[1], name="imex-euler",
+)
 
 
-@program_macro
-def imex_local_linear(P: Any, block: Any, *, explicit_operator: Any, implicit_operator: Any,
-                      fields_operator: Any = None, theta: Any = 1.0,
-                      state_space: Any = "U") -> Any:
-    """Generic IMEX with an explicit rate and an implicit local linear operator (Spec 2).
-
-    One theta-implicit step of ``dU/dt = R(U[, fields]) + L([fields]) U``::
-
-        U^{n+1} = (I - theta dt L)^{-1} (U^n + dt R)
-
-    composing the typed ``explicit_operator`` and ``implicit_operator`` handles (and an optional
-    ``fields_operator`` handle). Each is a :class:`pops.model.OperatorHandle` from an ``m.*``
-    declarer, not a name string. Requires ``P.bind_operators(module)``.
-    """
-    if not (0.0 < theta <= 1.0):
-        raise ValueError("imex_local_linear: theta must be in (0, 1]")
-    explicit_operator = _operator_handle(explicit_operator, "explicit_operator")
-    implicit_operator = _operator_handle(implicit_operator, "implicit_operator")
+def _build_imex(
+    program: Any,
+    state: Any,
+    explicit_operator: Any,
+    implicit_operator: Any,
+    fields_operator: Any,
+    tableau: Any,
+    solve_action: Any,
+) -> None:
+    if type(tableau) is not AdditiveRungeKuttaTableau:
+        raise TypeError("IMEX tableau must be an exact AdditiveRungeKuttaTableau")
+    explicit_operator = operator_handle(explicit_operator, "IMEX explicit_operator")
+    implicit_operator = operator_handle(implicit_operator, "IMEX implicit_operator")
     if fields_operator is not None:
-        fields_operator = _operator_handle(fields_operator, "fields_operator")
-    u = P.state(block)
-    fields = _opcall(P, fields_operator, u, value_name="fields") if fields_operator else None
-    r = _opcall(P, explicit_operator, u, fields, value_name="R")
-    lin = _opcall(P, implicit_operator, fields, value_name="L")
-    q = P.linear_combine("imex_rhs", u + P.dt * r)
-    u1 = P.solve_local_linear("imex_step", operator=P.I - theta * P.dt * lin, rhs=q, fields=fields)
-    P.commit(block, u1)
-    return u1
+        fields_operator = field_handle(fields_operator, "IMEX fields_operator")
+
+    temporal = instance_state(program, state, "IMEX")
+    explicit_arity = _op_space_arity(program, explicit_operator)
+    implicit_arity = _op_space_arity(program, implicit_operator)
+    if implicit_arity != 0:
+        raise ValueError(
+            "IMEX local-linear preset requires a field-independent implicit operator; "
+            "field-coupled implicit systems must be authored as a residual Program")
+    if fields_operator is None and explicit_arity != 1:
+        raise ValueError(
+            "IMEX explicit_operator requires fields but fields_operator was not provided")
+    if fields_operator is not None and explicit_arity != 2:
+        raise ValueError(
+            "IMEX fields_operator is present but explicit_operator does not consume its FieldContext")
+
+    u0 = temporal.n
+    explicit_rates: list[Any] = []
+    implicit_rates: list[Any] = []
+    tag = (tableau.name + "_") if tableau.name else "imex_"
+
+    for i in range(tableau.stages):
+        point = _stage_point(program, "%sstage_%d" % (tag, i), partitions={
+            "explicit": tableau.explicit.c[i],
+            "implicit": tableau.implicit_c[i],
+        })
+        predictor = 1 * u0
+        for j in range(i):
+            explicit_weight = tableau.explicit.A[i][j]
+            implicit_weight = tableau.implicit_A[i][j]
+            if explicit_weight != 0:
+                predictor = predictor + (program.dt * explicit_weight) * explicit_rates[j]
+            if implicit_weight != 0:
+                predictor = predictor + (program.dt * implicit_weight) * implicit_rates[j]
+        predictor = program.value("%spredictor_%d" % (tag, i), predictor, at=point)
+        linear = call_at(
+            program, implicit_operator,
+            name="%sL_%d" % (tag, i), point=point)
+        diagonal = tableau.implicit_A[i][i]
+        stage = predictor
+        if diagonal != 0:
+            stage = program.solve(
+                LocalLinear(
+                    operator=program.I - (program.dt * diagonal) * linear,
+                    rhs=predictor),
+                solver=DenseLU(), name="%sstage_solve_%d" % (tag, i),
+            ).consume(action=solve_action)
+            stage = program.value("%sstage_%d" % (tag, i), stage, at=point)
+        fields = None
+        if fields_operator is not None:
+            # A split StagePoint may carry different explicit/implicit abscissae. The field is
+            # solved from the actual implicit stage state, so give the solve one unambiguous
+            # logical TimePoint before lifting its FieldContext back onto the joint stage.
+            field_state = program.value(
+                "%sfield_state_%d" % (tag, i), stage,
+                at=point.time_for("implicit"),
+            )
+            outcome = fields_operator(field_state)
+            fields = outcome.consume(action=solve_action)
+            fields = program.value("%sfields_%d" % (tag, i), fields, at=point)
+        explicit_rates.append(call_at(
+            program, explicit_operator, stage, fields,
+            name="%sk_exp_%d" % (tag, i), point=point))
+        implicit_rates.append(program.value(
+            "%sk_imp_%d" % (tag, i),
+            program.apply(linear, stage),
+            at=point,
+        ))
+
+    final = u0
+    for weight, rate in zip(tableau.explicit.b, explicit_rates, strict=True):
+        if weight != 0:
+            final = final + (program.dt * weight) * rate
+    for weight, rate in zip(tableau.implicit_b, implicit_rates, strict=True):
+        if weight != 0:
+            final = final + (program.dt * weight) * rate
+    out = program.value("%sstep" % tag, final, at=temporal.next.point)
+    program.commit(temporal.next, out)
+
+
+def IMEX(
+    state: Any,
+    *,
+    explicit_operator: Any,
+    implicit_operator: Any,
+    fields_operator: Any = None,
+    tableau: Any = IMEX_EULER_TABLEAU,
+    solve_action: Any = None,
+) -> Any:
+    """Return a generic ordinary IMEX Program for one exact ``block[state]`` handle.
+
+    The explicit rate and implicit local-linear map are exact qualified model handles. The optional
+    field solve is the sole case-owned handle returned by ``Case.field(...)``. ``tableau`` is the
+    complete additive RK configuration. Every field solve remains unreadable until ``solve_action``
+    explicitly consumes its outcome. No method name, hidden runtime route, fallback operator or
+    preset-specific scheme object participates in lowering.
+    """
+    action = resolve_solve_action(solve_action, "IMEX")
+    return program_factory(
+        "IMEX",
+        _build_imex,
+        state,
+        explicit_operator,
+        implicit_operator,
+        fields_operator,
+        tableau,
+        action,
+    )
+
+
+__all__ = ["IMEX", "IMEX_EULER_TABLEAU"]

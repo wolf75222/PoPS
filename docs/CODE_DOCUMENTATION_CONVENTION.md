@@ -201,15 +201,13 @@ PEP 257 rules retained:
   if it is not obvious;
 - do not copy the signature into the docstring.
 
-Python API classes must say whether they are:
+Python API classes must say whether they are an authoring descriptor, an immutable lifecycle value,
+a runtime handle, or a simple configuration object. They must name their proved target envelope and
+the point at which an unsupported target is refused.
 
-- production path;
-- CPU prototype;
-- compatibility/legacy;
-- simple configuration object.
-
-For `pops` in particular, each API class must say whether it keeps the GPU/MPI path or whether it
-falls back through a host/prototype path. This is a user contract, not a detail.
+For `pops` in particular, each API class must state its GPU/MPI support explicitly. An unavailable
+target fails closed during validation, resolution, compilation or binding; documentation must never
+promise an implicit host execution fallback. This is a user contract, not a detail.
 
 ## 9. Application process
 
@@ -230,4 +228,4 @@ Recommended order:
 4. `include/pops/numerics/time`;
 5. `include/pops/numerics/elliptic`;
 6. `include/pops/runtime`;
-7. `python/bindings/system/base/system.cpp` by extraction/refactor, not only comments.
+7. `src/runtime/system/system.cpp` by extraction/refactor, not only comments.

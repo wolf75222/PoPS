@@ -128,8 +128,8 @@ TEST(test_amr_composite_poisson, Runs) {
   // CRITERE : le patch fin raffine VRAIMENT l'elliptique -> grad phi fin nettement plus precis.
   EXPECT_TRUE(e_comp < 0.5 * e_optA)
       << "(fidelite) composite plus precis que Option A sur grad phi (e_comp < 0.5 e_optA): "
-      << "e_optionA=" << e_optA << " e_composite=" << e_comp
-      << " (x" << e_optA / std::fmax(e_comp, 1e-30) << ")";
+      << "e_optionA=" << e_optA << " e_composite=" << e_comp << " (x"
+      << e_optA / std::fmax(e_comp, 1e-30) << ")";
 
   // --- (3) non-regression : composite OFF -> Option A inchange (bit-identique a un coupleur neuf) ---
   {

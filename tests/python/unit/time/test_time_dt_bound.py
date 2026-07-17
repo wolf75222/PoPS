@@ -2,7 +2,7 @@
 """Optional per-Program dt bound (epic ADC-399 / ADC-417, spec section 18).
 
 A compiled time Program may OPTIONALLY provide a dt bound via ``@P.dt_bound`` (decorator) or
-``P.set_dt_bound(expr_or_fn)``. The bound builds an IR scalar sub-program (reading the live state +
+``P.set_dt_bound(builder)``. The bound builds an IR scalar sub-program (reading the live state +
 reductions + the geometry hmin + the per-block max wave speed); it is NOT run in Python during
 ``sim.step_cfl``. ``step_cfl`` then uses ``min(native CFL dt, program dt bound)``: a program bound
 SMALLER than the native CFL wins; a LARGER bound loses (native CFL wins); and a Program WITHOUT a dt
@@ -16,26 +16,100 @@ emitted, and a Program WITHOUT a dt bound emits ``has_dt_bound() -> false``. Sec
 (needs _pops + a compiler + a visible Kokkos via POPS_KOKKOS_ROOT) and self-skips cleanly otherwise; it
 never fakes the engine.
 """
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
+import pops
+from pops.codegen import Production
+from pops.domain import Rectangle
+from pops.frames import Cartesian2D
+from pops.layouts import Uniform
+from pops.math import ddt, div
+from pops.mesh import CartesianGrid, PeriodicAxes
+from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+from pops.numerics.spatial import FiniteVolume
+from pops.physics import Model
+from typed_program_support import codegen_field_plans, solve_field, typed_state
+
 from pops.numerics.reconstruction import FirstOrder
 from pops.numerics.riemann import Rusanov
+from pops.numerics.terms import DefaultSource, Flux
 import sys
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
+from pops.runtime._system import System  # ADC-545 advanced runtime seam
+from pops.numerics.terms import Flux as FinalFlux, DefaultSource as FinalDefaultSource
+
+
+def _final_case_program(name, *, factor=None):
+    """Author one native transport program through Case -> validate -> resolve.
+
+    The System used by the historical dt-bound oracle remains the runtime consumer, but its
+    component is now produced by the public operator-first model and resolved plan.  No legacy
+    ModelSpec/compile_drivers route is involved.
+    """
+    frame = Rectangle("%s-domain" % name, lower=(0.0, 0.0), upper=(1.0, 1.0)).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = Model(name, frame=frame)
+    state = model.state("U", components=("rho", "mx", "my"))
+    rho, mx, my = state
+    flux = model.flux(
+        "transport", frame=frame, state=state,
+        components={x_axis: (mx, 0.0 * rho, 0.0 * rho),
+                     y_axis: (my, 0.0 * rho, 0.0 * rho)},
+        waves={x_axis: (1.0 + 0.0 * rho,) * 3,
+               y_axis: (1.0 + 0.0 * rho,) * 3},
+    )
+    source = model.source("zero", on=state, value=(0.0 * rho, 0.0 * rho, 0.0 * rho))
+    rate = model.rate("explicit_rhs", equation=ddt(state) == -div(flux) + source)
+
+    case = pops.Case("%s-case" % name)
+    block = case.block("ions", model)
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux, variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(), riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = adctime.Program(name)
+    temporal = program.state(block[state])
+    current = temporal.n
+    rhs = program.rhs(state=current, terms=[FinalFlux(), FinalDefaultSource()])
+    program.commit(temporal.next, program.value("U1", current + program.dt * rhs,
+                                                  at=temporal.next.point))
+    if factor is not None:
+        program.set_dt_bound(
+            lambda P, cfl, _factor=factor: (
+                _factor * cfl * P.hmin() / P.max_wave_speed(current)
+            )
+        )
+    case.program(program)
+    layout = Uniform(CartesianGrid(
+        frame=frame, cells=(N, N), periodic=PeriodicAxes(frame.axes)))
+    resolved = pops.resolve(
+        pops.validate(case), layout=layout, backend=Production(),
+        compile_options={"include": str(__import__("pathlib").Path(__file__).resolve().parents[4] / "include")},
+    )
+    return pops.compile(resolved)
 
 
 def _skip(msg):
-    print("skip test_time_dt_bound (%s)" % msg)
-    sys.exit(0)
+    require_native_or_skip('test_time_dt_bound (%s)' % msg)
 
 
 try:
     import numpy as np
 
-    import pops
+    import pops.runtime._engine_descriptors as engine
     from pops import time as adctime
 except Exception as exc:  # noqa: BLE001
     _skip("pops/numpy unavailable: %s" % exc)
 
 fails = 0
+
+
+def _emit(program):
+    return emit_cpp_program(program, field_plans=codegen_field_plans(program))
 
 
 def chk(cond, label):
@@ -53,17 +127,19 @@ print("== (A) IR + codegen ==")
 
 def _fe(name="fe_dtbound"):
     P = adctime.Program(name)
-    U = P.state("ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
+    U = typed_state(P, "ions")
+    f = solve_field(P, U)
+    R = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.value(
+        "U1", U + P.dt * R, at=endpoint.point))
     return P
 
 
 # (A1) a Program WITHOUT a dt bound emits has_dt_bound() -> false; the dt_bound function returns +inf.
 P_no = _fe("fe_no_bound")
 chk(not P_no.has_dt_bound(), "a fresh Program has no dt bound")
-src_no = P_no.emit_cpp_program()
+src_no = _emit(P_no)
 chk("bool pops_program_has_dt_bound()" in src_no, "has_dt_bound ABI function emitted")
 chk("pops::Real pops_program_dt_bound(" in src_no, "dt_bound ABI function emitted")
 chk("return false;" in src_no, "no-bound Program: has_dt_bound() returns false")
@@ -76,43 +152,52 @@ P_dec = _fe("fe_decorator")
 
 @P_dec.dt_bound
 def _dt_bound(P, cfl):
-    U = P.state("ions")
+    U = typed_state(P, "ions")
     w = P.max_wave_speed(U)
     return cfl * P.hmin() / w
 
 
 chk(P_dec.has_dt_bound(), "@P.dt_bound records the bound")
-src_dec = P_dec.emit_cpp_program()
+src_dec = _emit(P_dec)
 chk("return true;" in src_dec, "Program with a bound: has_dt_bound() returns true")
 chk("ctx.hmin()" in src_dec, "dt_bound lowers P.hmin() -> ctx.hmin()")
 chk("ctx.max_wave_speed(0, " in src_dec, "dt_bound lowers P.max_wave_speed -> ctx.max_wave_speed(0, .)")
 chk("cfl" in src_dec.split("pops_program_dt_bound", 1)[1], "the cfl argument is used in the bound body")
 
-# (A3) P.set_dt_bound(expr) (the non-decorator form) records the same way; a different bound -> a
+# (A3) P.set_dt_bound(builder) (the non-decorator form) records the same way; a different bound -> a
 # different IR hash (the bound is part of the IR identity / cache key).
 P_set = _fe("fe_setter")
-Ub = P_set.state("ions")
-P_set.set_dt_bound(0.5 * P_set.hmin() / P_set.max_wave_speed(Ub))
-chk(P_set.has_dt_bound(), "P.set_dt_bound(expr) records the bound")
+P_set.set_dt_bound(
+    lambda P, _cfl: 0.5 * P.hmin() / P.max_wave_speed(typed_state(P, "ions")))
+chk(P_set.has_dt_bound(), "P.set_dt_bound(builder) records the bound")
 chk(P_no._ir_hash() != P_set._ir_hash(), "a dt bound changes the IR hash (distinct cache key)")
 
 # (A4) fail-loud: the body must return a Scalar, set at most once, and read only (no commit).
 P_bad = _fe("fe_bad")
 try:
-    P_bad.set_dt_bound(lambda P, cfl: P.state("ions"))  # returns a State, not a Scalar
+    P_bad.set_dt_bound(lambda P, cfl: typed_state(P, "ions"))  # returns a State, not a Scalar
 except ValueError as exc:
     chk("Scalar" in str(exc), "non-Scalar dt bound body rejected")
 else:
     chk(False, "non-Scalar dt bound body should be rejected")
 
 P_twice = _fe("fe_twice")
-P_twice.set_dt_bound(P_twice.hmin())
+P_twice.set_dt_bound(lambda P, _cfl: P.hmin())
 try:
-    P_twice.set_dt_bound(P_twice.hmin())
+    P_twice.set_dt_bound(lambda P, _cfl: P.hmin())
 except ValueError as exc:
     chk("already set" in str(exc), "a second set_dt_bound is rejected")
 else:
     chk(False, "a second set_dt_bound should be rejected")
+
+P_prebuilt = _fe("fe_prebuilt")
+prebuilt = P_prebuilt.hmin()
+try:
+    P_prebuilt.set_dt_bound(prebuilt)
+except TypeError as exc:
+    chk("builder callable" in str(exc), "a pre-built top-level Scalar is rejected clearly")
+else:
+    chk(False, "a pre-built Scalar must not become an invalid isolated dt-bound DAG")
 
 # A runtime Scalar must never collapse to a Python bool / index (it is unknown until the step runs).
 try:
@@ -141,10 +226,10 @@ if not hasattr(probe, "install_program") or not hasattr(probe, "set_program_cade
 def transport_model():
     # Pure transport (isothermal, NoSource); BackgroundDensity(n0=0) keeps solve_fields well-defined
     # but INERT (no Poisson feedback into the flux), so the compiled cadence is bit-exact vs native.
-    return pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                     transport=pops.IsothermalFlux(),
-                     source=pops.NoSource(),
-                     elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0))
+    return engine.Model(state=engine.FluidState("isothermal", cs2=0.5),
+                     transport=engine.IsothermalFlux(),
+                     source=engine.NoSource(),
+                     elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0))
 
 
 N = 24
@@ -153,9 +238,9 @@ CFL = 0.4
 
 def make_sim():
     sim = System(n=N, L=1.0, periodic=True)
-    sim.add_block("ions", transport_model(),
-                  spatial=pops.FiniteVolume(limiter=FirstOrder(), riemann=Rusanov()),
-                  time=pops.Explicit(method="euler"))
+    sim.add_equation("ions", transport_model(),
+                  spatial=engine.Spatial(limiter=FirstOrder(), flux=Rusanov()),
+                  time=engine.Explicit(method="euler"))
     sim.set_poisson("charge_density", "geometric_mg")
     x = (np.arange(N) + 0.5) / N
     X, Y = np.meshgrid(x, x, indexing="ij")
@@ -168,32 +253,32 @@ def fe_program(name, *, factor=None):
     """Forward Euler; with factor set, attach a dt bound factor * cfl * hmin / max_wave_speed (a
     multiple of the native single-block CFL dt = cfl * h / w): factor < 1 tightens, factor > 1 loosens."""
     P = adctime.Program(name)
-    U = P.state("ions")
-    f = P.solve_fields(U)
-    R = P._rhs_legacy(state=U, fields=f, flux=True, sources=["default"])
-    P.commit("ions", P.linear_combine("U1", U + P.dt * R))
+    U = typed_state(P, "ions")
+    f = solve_field(P, U)
+    R = P.rhs(state=U, fields=f, terms=[Flux(), DefaultSource()])
+    endpoint = typed_state(P, "ions", state_name="U").next
+    P.commit(endpoint, P.value(
+        "U1", U + P.dt * R, at=endpoint.point))
     if factor is not None:
         @P.dt_bound
         def _b(Pr, cfl, _f=factor):
-            Us = Pr.state("ions")
+            Us = typed_state(Pr, "ions")
             w = Pr.max_wave_speed(Us)
             return _f * cfl * Pr.hmin() / w
     return P
 
 
 try:
-    prog_none = pops.codegen.compile_problem(model=transport_model(), time=fe_program("fe_none"))
-    prog_tight = pops.codegen.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_tight", factor=0.5))
-    prog_loose = pops.codegen.compile_problem(model=transport_model(),
-                                     time=fe_program("fe_loose", factor=2.0))
+    prog_none = _final_case_program("fe_none")
+    prog_tight = _final_case_program("fe_tight", factor=0.5)
+    prog_loose = _final_case_program("fe_loose", factor=2.0)
 except RuntimeError as exc:  # no compiler / no Kokkos visible / compile failed
     _skip("compile_problem could not build the .so: %s" % str(exc)[:160])
 
 
 def install(prog):
     sim = make_sim()
-    sim.install_program(prog.so_path)
+    sim.install_program(prog.program.so_path)
     return sim
 
 

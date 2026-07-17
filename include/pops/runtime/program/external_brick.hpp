@@ -13,6 +13,7 @@
 #include <pops/runtime/export.hpp>  // POPS_BRICK_LOCAL: hidden visibility, per-.so registry (ADC-622)
 
 #include <cstddef>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -22,10 +23,9 @@ namespace pops::runtime::program {
 // STRICT versioned schema of the external-brick manifest (ADC-611 / ADC-544). Emitted at the top level
 // of pops_brick_manifest() so the host parser (pops.descriptors.parse_brick_manifest) refuses an
 // unversioned/legacy manifest with a clear "regenerate" error. MUST stay in LOCKSTEP with the Python
-// BRICK_MANIFEST_SCHEMA_VERSION. v2 (ADC-544) adds the optional per-entry fields native_id /
-// supported_layouts / supported_platforms / params / options / exported_symbols; the four required
-// fields (id / category / requirements / capabilities) are unchanged.
-inline constexpr int kBrickManifestSchemaVersion = 2;
+// BRICK_MANIFEST_SCHEMA_VERSION. v3 makes ABI identity, annotations and every one of the ten row
+// fields explicit, and rejects ambiguous duplicate registrations. Runtime readers add no defaults.
+inline constexpr int kBrickManifestSchemaVersion = 3;
 
 // Escapes a string so a manifest field built from a user-supplied id/category/CSV is always valid
 // JSON: the two structural characters (`"` and `\`) plus every control character (`\n`, `\r`, `\t`,
@@ -119,23 +119,22 @@ inline std::string json_unescape(const std::string& s) {
 // selector and codegen need. All fields are host strings (no device data); the CSV fields are
 // comma-separated lists (the manifest's wire form), empty when none.
 //
-// ADC-544 v2 adds the optional descriptors native_id / supported_layouts / supported_platforms /
-// params / options / exported_symbols. native_id is the exported numerical symbol base (distinct
-// from the user-facing selector id, empty -> defaults to id host-side); supported_layouts /
+// Schema v3 always emits native_id / supported_layouts / supported_platforms / params / options /
+// exported_symbols. native_id is the exported numerical symbol base (distinct from the user-facing
+// selector id) and must be non-empty; supported_layouts /
 // supported_platforms feed the compile-time layout/platform gates; exported_symbols drives the
-// dlsym gate (the extern "C" symbols the .so MUST export). All default to "" (the host parser then
-// fills native_id from id and the CSV lists from []).
+// dlsym gate (the extern "C" symbols the .so MUST export). Empty CSV strings explicitly mean empty.
 struct BrickManifestEntry {
-  std::string id;                    // the brick id a user selects (e.g. "my_hllc")
-  std::string category;              // the catalog slot ("riemann", "preconditioner", ...)
-  std::string requirements;          // CSV of required model capabilities ("pressure,wave_speeds")
-  std::string capabilities;          // CSV of capabilities the brick PROVIDES, or ""
-  std::string native_id;             // exported numerical symbol base, or "" (defaults to id)
-  std::string supported_layouts;     // CSV of supported layouts ("uniform,amr"), or "" (unconstrained)
-  std::string supported_platforms;   // CSV of supported platforms ("cpu,mpi,gpu"), or "" (unknown)
-  std::string params;                // CSV of runtime param names the brick reads, or ""
-  std::string options;               // CSV of compile-time option keys, or ""
-  std::string exported_symbols;      // CSV of extern "C" symbols the .so MUST export, or ""
+  std::string id;                 // the brick id a user selects (e.g. "my_hllc")
+  std::string category;           // the catalog slot ("riemann", "preconditioner", ...)
+  std::string requirements;       // CSV of required model capabilities ("pressure,wave_speeds")
+  std::string capabilities;       // CSV of capabilities the brick PROVIDES, or ""
+  std::string native_id;          // required exported numerical symbol base
+  std::string supported_layouts;  // CSV of supported layouts ("uniform,amr"), or "" (unconstrained)
+  std::string supported_platforms;  // CSV of supported platforms ("cpu,mpi,gpu"), or "" (unknown)
+  std::string params;               // CSV of runtime param names the brick reads, or ""
+  std::string options;              // CSV of compile-time option keys, or ""
+  std::string exported_symbols;     // CSV of extern "C" symbols the .so MUST export, or ""
 };
 
 // A PER-IMAGE catalog of registered external bricks, keyed by id. Populated at static-init time by
@@ -167,16 +166,22 @@ class POPS_BRICK_LOCAL BrickRegistry {
     return registry;
   }
 
-  // Register (or replace) `entry` under `entry.id`. Idempotent on id: re-registering the same id
-  // overwrites the manifest and never duplicates the id in `ids()` (last registration wins).
+  // Register `entry` under `entry.id`. An exactly identical registration is idempotent; a different
+  // row reusing the same id is a contract violation and is refused rather than hidden by load order.
   void register_brick(const BrickManifestEntry& entry) {
+    if (entry.id.empty())
+      throw std::runtime_error("BrickRegistry::register_brick: brick id must not be empty");
+    if (entry.category.empty() || entry.native_id.empty())
+      throw std::runtime_error(
+          "BrickRegistry::register_brick: category and native_id must not be empty in schema v3");
     auto it = index_.find(entry.id);
     if (it == index_.end()) {
       index_.emplace(entry.id, entries_.size());
       entries_.push_back(entry);
       ids_.push_back(entry.id);
-    } else {
-      entries_[it->second] = entry;
+    } else if (!same_entry(entries_[it->second], entry)) {
+      throw std::runtime_error("BrickRegistry::register_brick: conflicting registration for id '" +
+                               entry.id + "'");
     }
   }
 
@@ -194,13 +199,12 @@ class POPS_BRICK_LOCAL BrickRegistry {
 
   // The manifest of every registered brick as the STRICT versioned schema (ADC-611 / ADC-544) the host
   // parser `pops.descriptors.parse_brick_manifest` accepts:
-  //   {"schema_version": 2, "abi_key": "<this .so's key>",
+  //   {"schema_version": 3, "abi_key": "<this .so's key>", "annotations": {},
   //    "bricks": [{"id", "category", "requirements", "capabilities",
   //                "native_id", "supported_layouts", "supported_platforms",
   //                "params", "options", "exported_symbols"}, ...]}
-  // schema_version + the four required per-entry fields are ALWAYS present (the parser refuses a missing
-  // field or an unknown one); the six ADC-544 v2 fields are ALSO emitted (empty "" when the brick left
-  // them unset -- the host parser then defaults native_id from id and the CSV lists to []). All CSV
+  // Every top-level and per-entry field is present (the parser refuses missing and unknown fields).
+  // Empty CSV strings explicitly mean empty sets; no identity or scientific metadata is defaulted. All CSV
   // fields carry the strings the macro registered. abi_key is the LITERAL of THIS translation unit
   // (POPS_ABI_KEY_LITERAL, a preprocessor string, no symbol -- valid inside a brick .so that never links
   // the module's abi_key()). This is the wire form a brick `.so` exports through `pops_brick_manifest()`
@@ -211,7 +215,7 @@ class POPS_BRICK_LOCAL BrickRegistry {
     out += std::to_string(kBrickManifestSchemaVersion);
     out += ",\"abi_key\":\"";
     out += json_escape(POPS_ABI_KEY_LITERAL);
-    out += "\",\"bricks\":[";
+    out += "\",\"annotations\":{},\"bricks\":[";
     for (std::size_t k = 0; k < entries_.size(); ++k) {
       const BrickManifestEntry& e = entries_[k];
       if (k != 0)
@@ -240,6 +244,14 @@ class POPS_BRICK_LOCAL BrickRegistry {
  private:
   BrickRegistry() = default;
 
+  static bool same_entry(const BrickManifestEntry& a, const BrickManifestEntry& b) {
+    return a.id == b.id && a.category == b.category && a.requirements == b.requirements &&
+           a.capabilities == b.capabilities && a.native_id == b.native_id &&
+           a.supported_layouts == b.supported_layouts &&
+           a.supported_platforms == b.supported_platforms && a.params == b.params &&
+           a.options == b.options && a.exported_symbols == b.exported_symbols;
+  }
+
   std::vector<BrickManifestEntry> entries_;  // registration-order manifest list
   std::vector<std::string> ids_;             // registration-order id list (mirrors entries_)
   std::unordered_map<std::string, std::size_t> index_;  // id -> index into entries_
@@ -247,18 +259,16 @@ class POPS_BRICK_LOCAL BrickRegistry {
 
 // Registers a manifest entry at static-init time. Use at namespace scope in a brick's `.so`:
 //   POPS_REGISTER_BRICK("my_hllc", "riemann", "pressure,wave_speeds");
-// The capabilities field and the six ADC-544 v2 fields (native_id / supported_layouts /
-// supported_platforms / params / options / exported_symbols) are left empty by this 3-argument form
-// (aggregate value-initialization fills the trailing members with ""); the host parser then defaults
-// native_id from id and the CSV lists to []. A brick that PROVIDES capabilities or declares any v2
-// field calls `BrickRegistry::instance().register_brick({...})` directly with the full aggregate. The
+// The capabilities and documentary CSV fields are empty by this 3-argument form; native_id is emitted
+// explicitly as brick_id so the host never invents identity. A brick that provides capabilities or
+// declares richer fields calls `BrickRegistry::instance().register_brick({...})` directly. The
 // trailing static is a unique dummy whose initializer performs the registration (zero-cost at runtime,
 // runs once before main).
-#define POPS_REGISTER_BRICK(brick_id, brick_category, brick_requirements)            \
+#define POPS_REGISTER_BRICK(brick_id, brick_category, brick_requirements)             \
   static const bool POPS_REGISTER_BRICK_CAT_(pops_brick_registered_, __LINE__) = [] { \
-    ::pops::runtime::program::BrickRegistry::instance().register_brick(              \
-        {(brick_id), (brick_category), (brick_requirements), ""});                  \
-    return true;                                                                    \
+    ::pops::runtime::program::BrickRegistry::instance().register_brick(               \
+        {(brick_id), (brick_category), (brick_requirements), "", (brick_id)});        \
+    return true;                                                                      \
   }()
 
 // Token-paste helpers so several POPS_REGISTER_BRICK uses in one TU get distinct static names.
@@ -275,9 +285,9 @@ class POPS_BRICK_LOCAL BrickRegistry {
 // static initializers ran before any host call), so the `const char*` stays valid for the process.
 #define POPS_DEFINE_BRICK_MANIFEST()                                   \
   extern "C" const char* pops_brick_manifest() {                       \
-    static const std::string manifest =                               \
+    static const std::string manifest =                                \
         ::pops::runtime::program::BrickRegistry::instance().to_json(); \
-    return manifest.c_str();                                          \
+    return manifest.c_str();                                           \
   }
 
 }  // namespace pops::runtime::program

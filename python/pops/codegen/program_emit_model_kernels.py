@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from pops._ir.literals import scalar_cpp
+from pops.model.state_symbols import state_component_symbol
+
 from pops.codegen.program_emit_kernels import (
     _aux_comp,  # noqa: F401
     _cell_locals,
@@ -25,7 +28,7 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     """Lower ``source`` (a named ``m.source_term``): outA(i,j,c) = S_c(U, prims, aux, params) per cell.
 
     @p block_idx (ADC-510): the PROGRAM block index whose RuntimeParams the kernel reads when a source
-    expression references a runtime parameter (dsl.Param(..., kind="runtime")). The model's runtime
+    expression references a canonical RuntimeParam read. The model's runtime
     indices are assigned here (idempotent, sorted-name order matching the .so metadata + the per-block
     ``ctx.program_params`` store), so a RuntimeParamRef lowers to ``params.get(<index>)`` and _kernel_open
     binds the ``params`` struct; a source reading no runtime param is byte-identical (params_block None)."""
@@ -43,6 +46,43 @@ def _emit_source_kernel(model: Any, name: Any, state_var: Any, out_var: Any, blo
     body += ["    outA(i, j, %d) = %s;" % (c, e.to_cpp()) for c, e in enumerate(exprs)]
     body += _kernel_close()
     return body
+
+
+def _component_sources(
+    referenced: set[str], by_block: Any, source_for_state: Any,
+) -> dict[str, Any]:
+    """Map exact symbolic coordinates to their generated per-cell source.
+
+    Qualified coordinates are total for arbitrary overlapping StateSpaces. Bare
+    coordinates are a convenience only when unique across every input space.
+    """
+    from collections import Counter
+
+    states = [state for state in by_block.values() if state.space is not None]
+    counts = Counter(
+        component for state in states for component in state.space.components)
+    ambiguous = sorted(
+        component for component, count in counts.items()
+        if count > 1 and component in referenced)
+    if ambiguous:
+        raise ValueError(
+            "multi-state operator references ambiguous bare component(s) %s; obtain exact "
+            "coordinates with module.state_symbols(state_space)" % ambiguous)
+    sources = {}
+    for state in states:
+        for index, component in enumerate(state.space.components):
+            source = source_for_state(state, index)
+            qualified = state_component_symbol(state.space, component)
+            if qualified in referenced:
+                sources[qualified] = source
+            if counts[component] == 1 and component in referenced:
+                sources[component] = source
+    missing = sorted(referenced - set(sources))
+    if missing:
+        raise ValueError(
+            "multi-state operator references conservative symbol(s) %s that belong to no input "
+            "StateSpace" % missing)
+    return sources
 
 
 def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch: Any) -> list:
@@ -69,19 +109,8 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for comps in components.values():
         for e in comps:
             referenced |= e.deps()
-    cons_source = {}                             # cons name -> (state token, component index)
-    for st in by_block.values():                 # ALL input states, incl. read-only catalysts
-        if getattr(st, "space", None) is None:
-            continue
-        for idx, c in enumerate(st.space.components):
-            if c not in referenced:
-                continue
-            if c in cons_source and cons_source[c] != (var[st.id], idx):
-                raise NotImplementedError(
-                    "coupled_rate kernel codegen (ADC-457): cons var %r is a component of more than "
-                    "one input state; the cons-only MVP needs disjoint component names across the "
-                    "coupled states (rename one of them)" % (c,))
-            cons_source[c] = (var[st.id], idx)
+    cons_source = _component_sources(
+        referenced, by_block, lambda state, index: (var[state.id], index))
 
     def state_handle(token: Any) -> str:
         return "%sA" % token                     # read handle for an input state token (u0A / u1A)
@@ -107,6 +136,126 @@ def _emit_coupled_rate_kernel(components: Any, by_block: Any, var: Any, scratch:
     for blk in blocks:
         for comp, e in enumerate(components[blk]):
             lines.append("    %sA(i, j, %d) = %s;" % (scratch[blk], comp, e.to_cpp()))
+    lines += ["  });", "}"]
+    return lines
+
+
+def _emit_solve_coupled_implicit_kernel(components: Any, by_block: Any, var: Any,
+                                        scratch: Any, status: str, *, tol: Any,
+                                        max_iter: int, fd_eps: Any, coefficient: Any) -> list:
+    """Emit one fail-closed backward-Euler Newton kernel over a coupled ``RateBundle``.
+
+    Every output block is an unknown; additional signed inputs are frozen catalysts.  Results land
+    only in fresh scratches.  A per-cell status field is reduced after the kernel so generated host
+    code can construct one collective ``SolveReport`` before any result is publishable.
+    """
+    blocks = list(components)
+    offsets = {}
+    total = 0
+    for block in blocks:
+        offsets[block] = total
+        total += len(components[block])
+    referenced = {name for rows in components.values() for expr in rows for name in expr.deps()}
+    sources = _component_sources(
+        referenced,
+        by_block,
+        lambda state, index: (
+            ("unknown", offsets[state.block] + index)
+            if state.block in offsets else ("frozen", var[state.id], index)),
+    )
+    driver = scratch[blocks[0]]
+    tol_cpp = scalar_cpp(tol)
+    eps_cpp = scalar_cpp(fd_eps)
+    coefficient_cpp = scalar_cpp(coefficient)
+    lines = ["for (int li = 0; li < %s.local_size(); ++li) {" % driver]
+    for block in blocks:
+        lines.append("  const pops::Array4 %sA = %s.fab(li).array();"
+                     % (scratch[block], scratch[block]))
+    lines.append("  const pops::Array4 %sA = %s.fab(li).array();" % (status, status))
+    seen = set()
+    for state in by_block.values():
+        token = var[state.id]
+        if token not in seen:
+            seen.add(token)
+            lines.append("  const pops::ConstArray4 %sA = %s.fab(li).const_array();"
+                         % (token, token))
+    lines.append("  pops::for_each_cell(%s.box(li), [=] POPS_HD(int i, int j) {" % driver)
+    lines.append("    pops::Real G_[%d];" % total)
+    for block in blocks:
+        state = by_block[block]
+        for index in range(len(components[block])):
+            lines.append("    G_[%d] = %sA(i, j, %d);"
+                         % (offsets[block] + index, var[state.id], index))
+    lines.append(
+        "    auto residual_eval = [&](const pops::Real (&Ueval)[%d], pops::Real (&rout)[%d]) {"
+        % (total, total))
+    for component in sorted(referenced):
+        source = sources[component]
+        if source[0] == "unknown":
+            lines.append("      const pops::Real %s = Ueval[%d];" % (component, source[1]))
+        else:
+            lines.append("      const pops::Real %s = %sA(i, j, %d);"
+                         % (component, source[1], source[2]))
+    for block in blocks:
+        for index, expr in enumerate(components[block]):
+            slot = offsets[block] + index
+            lines.append(
+                "      rout[%d] = Ueval[%d] - G_[%d] - "
+                "static_cast<pops::Real>(%s) * dt * (%s);"
+                % (slot, slot, slot, coefficient_cpp, expr.to_cpp()))
+    lines.append("    };")
+    lines.append("    pops::Real U_[%d];" % total)
+    lines.append("    for (int c_ = 0; c_ < %d; ++c_) U_[c_] = G_[c_];" % total)
+    lines.append("    int failure_ = 1;")  # iteration_limit until convergence proves otherwise
+    lines.append("    for (int it_ = 0; it_ < %d; ++it_) {" % int(max_iter))
+    lines.append("      pops::Real r_[%d];" % total)
+    lines.append("      residual_eval(U_, r_);")
+    lines.append("      pops::Real rmax_ = pops::Real(0);")
+    lines.append("      for (int c_ = 0; c_ < %d; ++c_) {" % total)
+    lines.append("        if (!std::isfinite(r_[c_])) { failure_ = 3; break; }")
+    lines.append("        rmax_ = std::fmax(rmax_, std::fabs(r_[c_]));")
+    lines.append("      }")
+    lines.append("      if (failure_ == 3) break;")
+    lines.append("      if (rmax_ <= static_cast<pops::Real>(%s)) { failure_ = 0; break; }"
+                 % tol_cpp)
+    lines.append("      pops::Real J_[%d][%d];" % (total, total))
+    lines.append("      pops::Real Up_[%d], rp_[%d];" % (total, total))
+    lines.append("      for (int col_ = 0; col_ < %d; ++col_) {" % total)
+    lines.append("        for (int c_ = 0; c_ < %d; ++c_) Up_[c_] = U_[c_];" % total)
+    lines.append("        const pops::Real eps_ = static_cast<pops::Real>(%s) * "
+                 "std::fmax(std::fabs(U_[col_]), pops::Real(1));" % eps_cpp)
+    lines.append("        Up_[col_] += eps_;")
+    lines.append("        residual_eval(Up_, rp_);")
+    lines.append("        for (int row_ = 0; row_ < %d; ++row_) "
+                 "J_[row_][col_] = (rp_[row_] - r_[row_]) / eps_;" % total)
+    lines.append("      }")
+    lines.append("      pops::Real Jinv_[%d][%d];" % (total, total))
+    lines.append("      if (!pops::detail::mat_inverse<%d>(J_, Jinv_)) { failure_ = 2; break; }"
+                 % total)
+    lines.append("      for (int row_ = 0; row_ < %d; ++row_) {" % total)
+    lines.append("        pops::Real delta_ = pops::Real(0);")
+    lines.append("        for (int col_ = 0; col_ < %d; ++col_) "
+                 "delta_ += Jinv_[row_][col_] * r_[col_];" % total)
+    lines.append("        U_[row_] -= delta_;")
+    lines.append("        if (!std::isfinite(U_[row_])) failure_ = 3;")
+    lines.append("      }")
+    lines.append("      if (failure_ == 3) break;")
+    lines.append("    }")
+    lines.append("    if (failure_ == 1) {")
+    lines.append("      pops::Real final_r_[%d];" % total)
+    lines.append("      residual_eval(U_, final_r_);")
+    lines.append("      pops::Real final_max_ = pops::Real(0);")
+    lines.append("      for (int c_ = 0; c_ < %d; ++c_) "
+                 "final_max_ = std::fmax(final_max_, std::fabs(final_r_[c_]));" % total)
+    lines.append("      if (std::isfinite(final_max_) && "
+                 "final_max_ <= static_cast<pops::Real>(%s)) failure_ = 0;" % tol_cpp)
+    lines.append("      else if (!std::isfinite(final_max_)) failure_ = 3;")
+    lines.append("    }")
+    for block in blocks:
+        for index in range(len(components[block])):
+            lines.append("    %sA(i, j, %d) = U_[%d];"
+                         % (scratch[block], index, offsets[block] + index))
+    lines.append("    %sA(i, j, 0) = static_cast<pops::Real>(failure_);" % status)
     lines += ["  });", "}"]
     return lines
 
@@ -210,7 +359,7 @@ def _residual_term_exprs(impl: Any, w: Any) -> list:
 
     The iterate / guess State placeholders and ``linear_combine`` are handled by the affine walk in
     `_emit_residual_eval`, not here (they are not standalone-evaluable Exprs)."""
-    from pops.ir.expr import Const, Var
+    from pops._ir.expr import Const, Var
     if w.op == "source":
         name = w.attrs["source"]
         if name not in impl._source_terms:
@@ -291,13 +440,13 @@ def _emit_solve_local_nonlinear_kernel(model: Any, v: Any, guess_var: Any, out_v
     with a relative ``eps`` so it scales with the iterate magnitude."""
     impl = _model_impl(model)
     n = len(impl.cons_names)
-    tol = repr(float(v.attrs["tol"]))
+    tol = scalar_cpp(v.attrs["tol"])
     max_iter = int(v.attrs["max_iter"])
     # ADC-617: the FD Jacobian relative step. None on the node -> the historical "1e-7" literal
     # VERBATIM (so the emitted kernel and its program hash stay byte-identical to before). A configured
     # fd_eps replaces the literal, and since fd_eps is a hashed node attribute the cache busts.
     fd_eps = v.attrs.get("fd_eps")
-    fd_eps_lit = "1e-7" if fd_eps is None else repr(float(fd_eps))
+    fd_eps_lit = "1e-7" if fd_eps is None else scalar_cpp(fd_eps)
     # The aux fields the residual reads: bind them once per cell (constant across the Newton iterates),
     # so the residual lambda captures them by reference. Gather the dependency set over every term Expr.
     term_exprs = []

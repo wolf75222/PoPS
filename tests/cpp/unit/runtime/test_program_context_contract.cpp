@@ -57,6 +57,12 @@ using GasModel = CompositeModel<Euler, NoSource, NoEll>;
 constexpr double kGamma = 1.4;
 constexpr int kNcomp = 4;
 
+void ensure_kokkos() {
+#if defined(POPS_HAS_KOKKOS)
+  static Kokkos::ScopeGuard guard;
+#endif
+}
+
 void add_gas(System& s) {
   add_compiled_model(s, "gas", GasModel{Euler{kGamma}, NoSource{}, NoEll{}}, "minmod", "rusanov",
                      "conservative", "explicit", kGamma);
@@ -83,6 +89,11 @@ std::vector<double> ic(int n) {
   return U;
 }
 
+TEST(ProgramContextContract, AnonymousRateIdentityIsRejectedBeforeTopologyLookup) {
+  ProgramContext context(static_cast<System*>(nullptr));
+  EXPECT_THROW((void)context.boundary_evaluation_point(-1), std::invalid_argument);
+}
+
 double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) {
   double d = 0;
   for (std::size_t k = 0; k < a.size(); ++k) {
@@ -97,9 +108,7 @@ double max_abs_diff(const std::vector<double>& a, const std::vector<double>& b) 
 // reference U + dt*R computed from solve_fields + eval_rhs. Uses the PER-STAGE solve_fields_from_state
 // seam (the one the codegen lowers every solve_fields to), passing the block's own live state.
 TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -121,13 +130,17 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
   ctx.install([ctx](double h) {
+    ctx.begin_step(h);
+    ctx.set_stage_time(0, 1);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       ctx.solve_fields_from_state(b, U);  // per-stage field solve at the block's own state
       MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
+      ctx.rhs_into(b, U, R, 0);
       ctx.axpy(U, Real(h), R);  // U <- U + h R
     }
   });
@@ -138,6 +151,72 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
   EXPECT_TRUE(max_abs_diff(Up, U0) > 1e-9) << "step did not change the state";
 }
 
+TEST(ProgramContextContract, GroupedBoundaryRegistryUsesEveryProvisionalStageState) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 2;
+  cfg.L = 1.0;
+  cfg.periodic = true;
+  System sim(cfg);
+  const std::string a_state = "case::block::a::state::U";
+  const std::string b_state = "case::block::b::state::U";
+  sim.install_block_state_route("a", a_state);
+  sim.install_block_state_route("b", b_state);
+  const std::vector<std::string> faces(4, "periodic");
+  const std::vector<double> values(4, 0.0);
+  sim.install_boundary_plan("a", "case::block::a::boundary", 1, faces, values, 1, {}, a_state);
+  sim.install_boundary_plan("b", "case::block::b::boundary", 1, faces, values, 1, {}, b_state);
+
+  GridContext a_context = sim.grid_context("a");
+  ASSERT_TRUE(static_cast<bool>(a_context.boundary_field_registry));
+  constexpr int kGroupIdentity = 37;
+  int observed_a_group = -1;
+  int observed_b_group = -1;
+  BlockClosures a_closures;
+  a_closures.rhs_at_point =
+      [factory = a_context.boundary_field_registry, b_state, &observed_a_group](
+          const runtime::multiblock::BoundaryEvaluationPoint& point, MultiFab& U, MultiFab& R) {
+        observed_a_group = point.stage;
+        const auto fields = factory(point, U, nullptr, nullptr);
+        const Real observed = fields.state(b_state).fab(0).const_array()(0, 0, 0);
+        R.set_val(observed);
+      };
+  BlockClosures b_closures;
+  b_closures.rhs_at_point = [&observed_b_group](
+                                const runtime::multiblock::BoundaryEvaluationPoint& point,
+                                MultiFab&, MultiFab& R) {
+    observed_b_group = point.stage;
+    R.set_val(Real(0));
+  };
+  sim.install_block("a", 1, VariableSet{}, VariableSet{}, 1.0, std::move(a_closures), {}, {}, 1,
+                    true, 1);
+  sim.install_block("b", 1, VariableSet{}, VariableSet{}, 1.0, std::move(b_closures), {}, {}, 1,
+                    true, 1);
+  sim.block_state(0).set_val(Real(1));
+  sim.block_state(1).set_val(Real(2));
+  MultiFab stage_a = sim.block_state(0);
+  MultiFab stage_b = sim.block_state(1);
+  stage_a.set_val(Real(5));
+  stage_b.set_val(Real(9));
+  MultiFab rhs_a(stage_a.box_array(), stage_a.dmap(), 1, 0);
+  MultiFab rhs_b(stage_b.box_array(), stage_b.dmap(), 1, 0);
+  sim.set_program_block_map({0, 1});
+  ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.stage");
+  ctx.begin_step(0.1);
+  ctx.set_stage_time(1, 2);
+  ctx.rhs_group(kGroupIdentity, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}});
+
+  EXPECT_EQ(rhs_a.fab(0).const_array()(0, 0, 0), Real(9));
+  EXPECT_EQ(sim.block_state(1).fab(0).const_array()(0, 0, 0), Real(2));
+  EXPECT_EQ(observed_a_group, kGroupIdentity);
+  EXPECT_EQ(observed_b_group, kGroupIdentity);
+  EXPECT_NE(observed_a_group, 11) << "the group point must not borrow the first rate identity";
+  EXPECT_THROW(ctx.rhs_group(11, {{0, &stage_a, &rhs_a, 11, 0}, {1, &stage_b, &rhs_b, 12, 0}}),
+               std::invalid_argument)
+      << "an atomic group identity must never alias one of its member rate nodes";
+}
+
 // A 2-stage SSP-RK2 (Heun) Program through ProgramContext is bit-equal to a hand-written SSPRK2
 // reference built from the SAME primitives:
 //   U1        = U^n + dt R(U^n)
@@ -145,9 +224,7 @@ TEST(ProgramContextContract, ForwardEulerViaContextMatchesReference) {
 // The reference re-solves the fields at each stage state (solve_fields on a scratch System seeded with
 // the stage state), mirroring the per-stage ctx.solve_fields_from_state in the Program body.
 TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -179,22 +256,27 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
-  ctx.install([ctx, dt](double /*h*/) {
+  ctx.configure_primary_clock("clock.macro");
+  ctx.install([ctx](double h) {
+    ctx.begin_step(h);
     for (int b = 0; b < ctx.n_blocks(); ++b) {
       MultiFab& U = ctx.state(b);
       // stage 1: u1 = U + dt R(U)
+      ctx.set_stage_time(0, 1);
       ctx.solve_fields_from_state(b, U);
       MultiFab u1 = ctx.scratch_state_like(U);
       ctx.lincomb(u1, Real(1), U, Real(0), U);  // u1 <- U
       MultiFab R = ctx.rhs_scratch_like(U);
-      ctx.rhs_into(b, U, R);
-      ctx.axpy(u1, Real(dt), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
+      ctx.rhs_into(b, U, R, 0);
+      ctx.axpy(u1, Real(h), R);  // u1 <- U + dt R(U)  (= the Euler predictor U1)
       // stage 2 (Heun): U <- 1/2 U + 1/2 (U1 + dt R(U1)) = 1/2 U + 1/2 U1 + 1/2 dt R(U1)
+      ctx.set_stage_time(1, 1);
       ctx.solve_fields_from_state(b, u1);  // re-solve fields at the stage-1 state
       MultiFab R1 = ctx.rhs_scratch_like(u1);
-      ctx.rhs_into(b, u1, R1);
-      ctx.axpy(u1, Real(dt), R1);                   // u1 <- U1 + dt R(U1)
+      ctx.rhs_into(b, u1, R1, 0);
+      ctx.axpy(u1, Real(h), R1);                    // u1 <- U1 + dt R(U1)
       ctx.lincomb(U, Real(0.5), U, Real(0.5), u1);  // U <- 1/2 U + 1/2 (U1 + dt R(U1))
     }
   });
@@ -207,9 +289,7 @@ TEST(ProgramContextContract, SsprkTwoStageViaContextMatchesReference) {
 
 // The remaining host-validatable seams return sane, consistent results.
 TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
-#if defined(POPS_HAS_KOKKOS)
-  static Kokkos::ScopeGuard guard;
-#endif
+  ensure_kokkos();
   const int n = 16;
   const double dt = 1e-3;
   SystemConfig cfg;
@@ -221,7 +301,11 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   System sim(cfg);
   add_gas(sim);
   sim.set_state("gas", U0);
+  sim.set_program_block_map({0});
   ProgramContext ctx(&sim);
+  ctx.configure_primary_clock("clock.macro");
+  ctx.begin_step(dt);
+  ctx.set_stage_time(0, 1);
   ctx.solve_fields();
 
   const int b = 0;
@@ -231,8 +315,8 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   MultiFab Rfull = ctx.rhs_scratch_like(U);
   MultiFab Rflux = ctx.rhs_scratch_like(U);
   MultiFab Rsrc = ctx.rhs_scratch_like(U);
-  ctx.rhs_into(b, U, Rfull);
-  ctx.neg_div_flux_default_into(b, U, Rflux);
+  ctx.rhs_into(b, U, Rfull, 0);
+  ctx.neg_div_flux_default_into(b, U, Rflux, 0);
   ctx.source_default_into(b, U, Rsrc);
   MultiFab Rsum = ctx.rhs_scratch_like(U);
   ctx.lincomb(Rsum, Real(1), Rflux, Real(1), Rsrc);  // Rsum = -div F + S
@@ -268,23 +352,30 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
     EXPECT_TRUE(ctx.max_component(divg, 0) < 1e-12) << "divergence(gradient(const)) is 0";
   }
 
-  // fill_boundary runs (halo exchange; valid cells unchanged). apply_projection is a no-op for a block
-  // without a positivity projection (a plain copy). Neither should throw or change the valid cells.
+  // fill_boundary runs (halo exchange; valid cells unchanged). Projection is an explicit block
+  // capability: this block declares none, so applying one must fail rather than silently become an
+  // identity operation.
   const std::vector<double> before = sim.get_state("gas");
   ctx.fill_boundary(U);
-  ctx.apply_projection(b, U);
   EXPECT_TRUE(max_abs_diff(sim.get_state("gas"), before) < 1e-15)
-      << "fill_boundary + no-op projection left the valid cells unchanged";
+      << "fill_boundary left the valid cells unchanged";
+  EXPECT_THROW(ctx.apply_projection(b, U), std::runtime_error)
+      << "an undeclared projection capability must fail loud";
 
   // history register/store/read/rotate through the context seam.
   ctx.register_history("h", 1);
   MultiFab hv = ctx.rhs_scratch_like(U);
   hv.set_val(Real(3));
-  ctx.store_history("h", hv);
+  ctx.store_history("h", hv, 0);  // owner is a Program block, never component zero
   {
-    MultiFab& r = ctx.history("h", 1);  // cold-start fill -> lag 1 == the stored value
+    MultiFab& r = ctx.history("h", 1, 0);  // cold-start fill -> lag 1 == the stored value
+    EXPECT_TRUE(r.ncomp() == U.ncomp()) << "owner-qualified history preserves the whole field";
     EXPECT_TRUE(std::fabs(ctx.sum_component(r, 0) - Real(3) * n * n) < 1e-9) << "history lag1 read";
   }
+  MultiFab& scalar_history = ctx.history_zero_start("scalar_h", 1, 1, 0);
+  EXPECT_TRUE(scalar_history.ncomp() == 1) << "narrow history is a scalar MultiFab";
+  EXPECT_TRUE(std::fabs(ctx.sum_component(scalar_history, 0)) < 1e-12)
+      << "owner-qualified zero-start history preserves its declared cold start";
   ctx.rotate_histories();  // no throw
 
   // diagnostics: record_scalar -> program_diagnostic round-trip.
@@ -306,23 +397,48 @@ TEST(ProgramContextContract, SeamSurfaceIsConsistent) {
   EXPECT_TRUE(sf.ncomp() == 1) << "alloc_scalar_field ncomp";
 }
 
-// The per-stage FieldContext.matches() guard rejects a context read at the wrong (problem, block,
-// stage): a stage-k solve cannot be silently consumed as stage-k' or another block (ADC-588). This is
+TEST(ProgramContextContract, BlockResolutionRequiresACompleteExplicitMap) {
+  ensure_kokkos();
+  SystemConfig cfg;
+  cfg.n = 8;
+  System sim(cfg);
+  add_gas(sim);
+  ProgramContext ctx(&sim);
+  const std::vector<const MultiFab*> stages{&sim.block_state(0)};
+
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "an empty map must not imply identity";
+  EXPECT_THROW(ctx.solve_fields_from_blocks(stages), std::runtime_error)
+      << "the coupled solve must not treat an empty map as identity";
+
+  sim.set_program_block_map({0});
+  EXPECT_EQ(ctx.sys_block(0), 0);
+  EXPECT_THROW(ctx.sys_block(-1), std::runtime_error) << "negative Program index must fail";
+  EXPECT_THROW(ctx.sys_block(1), std::runtime_error) << "Program index outside the map must fail";
+
+  sim.set_program_block_map({-1});
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error) << "negative mapped System index must fail";
+  sim.set_program_block_map({1});
+  EXPECT_THROW(ctx.sys_block(0), std::runtime_error)
+      << "mapped System index outside n_blocks must fail";
+}
+
+// The per-stage FieldContext.matches() guard rejects a context read at the wrong qualified provider,
+// owner or stage: a stage-k solve cannot be silently consumed as stage-k' or another block (ADC-588). This is
 // the "per-stage field contexts" the ADC-538 contract names; it fences the compile/bind seam.
 TEST(ProgramContextContract, PerStageFieldContextGuardsRejectWrongTriple) {
   const pops::AuxLayout layout = pops::default_poisson_layout();
-  pops::FieldContext stage1;  // a context solved for problem 0, block 0, stage 1
-  stage1.field_problem_id = 0;
-  stage1.block_index = 0;
+  pops::FieldContext stage1;
+  stage1.provider_identity = "case/field/electric/provider-pack";
+  stage1.owner_identity = "case/block/plasma";
   stage1.stage_id = 1;
   stage1.layout = &layout;
 
-  EXPECT_TRUE(stage1.matches(0, 0, 1)) << "matches its own (problem, block, stage)";
-  EXPECT_FALSE(stage1.matches(0, 0, 2)) << "rejects a wrong stage";
-  EXPECT_FALSE(stage1.matches(0, 1, 1)) << "rejects a wrong block";
-  EXPECT_FALSE(stage1.matches(3, 0, 1)) << "rejects a wrong field problem";
-  EXPECT_TRUE(stage1.matches(-1, 0, 1))
-      << "a negative req_field matches any problem (default case)";
+  EXPECT_TRUE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 1));
+  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/plasma", 2));
+  EXPECT_FALSE(stage1.matches("case/field/electric/provider-pack", "case/block/other", 1));
+  EXPECT_FALSE(stage1.matches("case/field/other/provider-pack", "case/block/plasma", 1));
+  EXPECT_FALSE(stage1.matches("", "case/block/plasma", 1))
+      << "an empty provider is never a wildcard";
   // the layout resolves a real output and fails loud on an unknown one.
   EXPECT_TRUE(stage1.component_of("phi") == 0) << "phi resolves to component 0";
   EXPECT_THROW(stage1.component_of("not_a_field"), std::out_of_range)

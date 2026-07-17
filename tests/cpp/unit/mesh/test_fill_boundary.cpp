@@ -50,11 +50,11 @@ TEST(test_fill_boundary, four_boxes_nonperiodic) {
 
   fill_boundary(mf, dom, Periodicity{false, false});
 
-  const Fab2D& b0 = fab_with_lo(mf, 0, 0);       // box [0..3]x[0..3]
-  EXPECT_EQ(b0(4, 2, 0), g(4, 2)) << "edge_right";    // depuis le voisin x
-  EXPECT_EQ(b0(2, 4, 0), g(2, 4)) << "edge_top";      // depuis le voisin y
-  EXPECT_EQ(b0(4, 4, 0), g(4, 4)) << "corner_diag";   // depuis le voisin diagonal
-  EXPECT_EQ(b0(-1, 2, 0), 0.0) << "phys_left_zero";   // bord physique : intact
+  const Fab2D& b0 = fab_with_lo(mf, 0, 0);           // box [0..3]x[0..3]
+  EXPECT_EQ(b0(4, 2, 0), g(4, 2)) << "edge_right";   // depuis le voisin x
+  EXPECT_EQ(b0(2, 4, 0), g(2, 4)) << "edge_top";     // depuis le voisin y
+  EXPECT_EQ(b0(4, 4, 0), g(4, 4)) << "corner_diag";  // depuis le voisin diagonal
+  EXPECT_EQ(b0(-1, 2, 0), 0.0) << "phys_left_zero";  // bord physique : intact
   EXPECT_EQ(b0(2, -1, 0), 0.0) << "phys_bottom_zero";
   EXPECT_EQ(b0(-1, -1, 0), 0.0) << "phys_corner_zero";
 

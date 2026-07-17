@@ -16,7 +16,7 @@ import sys
 
 import pytest
 
-from pops.time.history_persistence import (
+from pops.time._history.persistence import (
     Dense, HistoryPersistence, Interval, Revolve,
     DEFAULT_HISTORY_PERSISTENCE, resolve_history_persistence,
 )
@@ -125,7 +125,7 @@ def test_revolve_placement_property_sweep():
                 if k not in ss:
                     assert any(a > k for a in ss), ("older-anchor", d, s, k, slots)
             # optimality: the largest gap does not exceed the closed-form equispaced optimum.
-            gaps = [hi - lo for lo, hi in zip(slots, slots[1:])]
+            gaps = [hi - lo for lo, hi in zip(slots, slots[1:], strict=False)]
             assert max(gaps) <= math.ceil((d - 1) / (s - 1)), ("maxgap", d, s, slots)
 
 
@@ -153,14 +153,46 @@ def test_manifest_round_trip_identity():
 
 
 def test_manifest_tags_are_the_kind():
-    assert Dense().to_manifest() == {"kind": "dense"}
-    assert Interval(3).to_manifest() == {"kind": "interval", "k": 3}
-    assert Revolve(4).to_manifest() == {"kind": "revolve", "snapshots": 4}
+    assert Dense().to_manifest()["payload"] == {"policy": "dense"}
+    assert Interval(3).to_manifest()["payload"] == {"policy": "interval", "k": 3}
+    assert Revolve(4).to_manifest()["payload"] == {"policy": "revolve", "snapshots": 4}
 
 
 def test_manifest_unknown_kind_fails_loud():
-    _expect(ValueError, lambda: HistoryPersistence.from_manifest({"kind": "brand_new"}), "unknown")
-    _expect(ValueError, lambda: HistoryPersistence.from_manifest({"no_kind": 1}), "kind")
+    unknown = Dense().to_manifest()
+    unknown["payload"]["policy"] = "brand_new"
+    _expect(ValueError, lambda: HistoryPersistence.from_manifest(unknown), "unknown")
+    missing = Dense().to_manifest()
+    missing["payload"] = {}
+    _expect(TypeError, lambda: HistoryPersistence.from_manifest(missing), "policy")
+
+
+@pytest.mark.parametrize("value", ["3", 3.0, True])
+def test_manifest_refuses_coercible_interval_values(value):
+    manifest = Interval(3).to_manifest()
+    manifest["payload"]["k"] = value
+    _expect(TypeError, lambda: HistoryPersistence.from_manifest(manifest), "integer")
+
+
+def test_manifest_refuses_missing_unknown_and_wrong_version_fields():
+    extra = Dense().to_manifest()
+    extra["payload"]["extra"] = True
+    _expect(TypeError, lambda: HistoryPersistence.from_manifest(extra), "unknown")
+    missing = Interval(3).to_manifest()
+    missing["payload"].pop("k")
+    _expect(TypeError, lambda: HistoryPersistence.from_manifest(missing), "missing")
+    wrong = Dense().to_manifest()
+    wrong["schema_version"] = 2
+    _expect(ValueError, lambda: HistoryPersistence.from_manifest(wrong), "schema_version")
+
+
+def test_manifest_json_refuses_duplicate_keys_and_nonfinite_constants():
+    _expect(ValueError, lambda: HistoryPersistence.from_json(
+        '{"protocol":"pops.manifest","protocol":"forged","kind":"history-persistence",'
+        '"schema_version":1,"payload":{"policy":"dense"}}'), "duplicate")
+    _expect(ValueError, lambda: HistoryPersistence.from_json(
+        '{"protocol":"pops.manifest","kind":"history-persistence",'
+        '"schema_version":1,"payload":{"policy":"interval","k":NaN}}'), "non-finite")
 
 
 # --- resolve default ----------------------------------------------------------------------------

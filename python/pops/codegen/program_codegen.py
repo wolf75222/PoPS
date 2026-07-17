@@ -4,8 +4,8 @@ FREE FUNCTIONS taking the ``program`` (and an optional physical ``model``), mirr
 ``pops.codegen.module_codegen`` for models. ``emit_cpp_program(program, model=None)`` lowers
 the Program SSA IR to the C++ source of a ``problem.so`` (the stable .so ABI installed by
 ``System::install_program``); the ``_emit_*`` / ``_check_*`` helpers and the per-cell kernel
-emitters are the lowering machinery. ``pops.time.Program.emit_cpp_program`` is a thin
-delegator into this module (lazy import), keeping ``pops.time`` free of any codegen edge.
+emitters are the lowering machinery. This module exclusively owns compiler materialization;
+``pops.time.Program`` remains an inert authoring and IR object.
 
 This is the THIN public module of the program emitter.  The lowering machinery is split
 across sibling modules so each file fits the Spec-4 size budget, and every name re-imported
@@ -19,9 +19,10 @@ below so the public surface of ``pops.codegen.program_codegen`` is unchanged:
   - ``program_emit_control``       -- the body walk + control-flow (while/range/if) emitters;
   - ``program_emit_ops``           -- the per-op ``_emit_op`` dispatcher;
   - ``program_emit_amr``           -- the AMR install-entry emitter (target='amr_system', ADC-508).
+  - ``program_metadata``           -- complete owner-qualified GeneratedModule metadata.
 
-The orchestration (``emit_cpp_program`` + the block-name / module-metadata / dt-bound
-emitters + the lowerability checks) stays here.
+The orchestration (``emit_cpp_program`` + the block-name / dt-bound emitters + the lowerability
+checks) stays here.
 
 The emission-only tables (_MODEL_OPS / _ALLOWED_OPS / _PROFILE_SKIP_OPS / _AUX_OUTPUT_OPS)
 are module-level constants in ``program_emit_kernels``, re-exported here.
@@ -29,6 +30,7 @@ are module-level constants in ``program_emit_kernels``, re-exported here.
 from __future__ import annotations
 
 from typing import Any
+from pops.time.references import block_name
 
 import json  # noqa: F401  (kept for any external reference to program_codegen.json)
 
@@ -41,7 +43,7 @@ from pops.codegen.program_emit_kernels import (  # noqa: F401
     _PROGRAM_CPP_TEMPLATE,
     _block_inverse_include,
     _coeff_elliptic_include,
-    Value,
+    ProgramValue,
     _apply_in_arg,
     _aux_comp,
     _cell_locals,
@@ -64,6 +66,7 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
     _emit_residual_eval,
     _emit_solve_local_linear_kernel,
     _emit_solve_local_nonlinear_kernel,
+    _emit_solve_coupled_implicit_kernel,
     _emit_source_kernel,
     _linear_source_rows,
     _residual_term_exprs,
@@ -71,6 +74,7 @@ from pops.codegen.program_emit_model_kernels import (  # noqa: F401
 from pops.codegen.program_emit_solve import (  # noqa: F401
     _emit_matrix_free_operator,
     _emit_solve_linear,
+    _validate_matrix_free_contract,
 )
 from pops.codegen.program_emit_schedule import (  # noqa: F401
     _emit_schedule_wrap,
@@ -79,8 +83,9 @@ from pops.codegen.program_emit_schedule import (  # noqa: F401
 )
 from pops.codegen.program_emit_control import (  # noqa: F401
     _coupled_rate_components,
+    _emit_amr_hierarchy_bodies,
     _emit_body,
-    _emit_if,
+    _emit_branch,
     _emit_range,
     _emit_while,
     _walk_expr,
@@ -91,12 +96,25 @@ from pops.codegen.program_emit_params import (  # noqa: F401
     program_param_entries as _program_param_entries,
 )
 from pops.codegen.program_emit_amr import _emit_amr_install  # noqa: F401
-from pops.codegen.compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
+from pops.codegen.program_metadata import emit_module_metadata as _emit_module_metadata
+from pops.codegen._compile_emit import _emit_route_manifest  # noqa: F401 (ADC-599 embedded manifest)
+from pops.codegen.program_lowerability import (
+    check_model_owner_dispatch as _check_model_owner_dispatch,
+    check_schedules_lowerable as _check_schedules_lowerable,
+)
+from pops.codegen.program_models import ProgramModelGraph, model_for_node
 
 
 # --- Program -> C++ lowering (free functions taking `program`) ------------------------------
 # --- C++ codegen (Phase 2c-ii / Phase 4b): lower the IR to a problem.so source ---
-def emit_cpp_program(program: Any, model: Any = None, target: str = "system") -> str:
+def emit_cpp_program(
+    program: Any,
+    model: Any = None,
+    target: str = "system",
+    *,
+    model_graph: Any = None,
+    field_plans: Any = None,
+) -> str:
     """Generate the C++ source of a problem.so implementing this Program (codegen).
 
     Exports the stable .so ABI -- ``pops_program_abi_key`` (the ``POPS_ABI_KEY_LITERAL``
@@ -119,16 +137,16 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     with ``axpy``; the committed combine writes the block state via ``lincomb``. Forward Euler,
     SSPRK2/SSPRK3 and RK4 all lower this way -- no per-scheme class.
 
-    Multi-block (ADC-426): N ``P.state(\"a\")`` / ``P.state(\"b\")`` declarations + N ``P.commit``
+    Multi-block (ADC-426): N typed ``T.state(block[U])`` declarations + N ``T.commit``
     are lowered -- each op routes to its own block's runtime index (``_block_indices``, in the order
-    the blocks are first declared via ``P.state``). The .so also exports its block NAMES in that
+    the blocks are first declared via ``T.state``). The .so also exports its block NAMES in that
     order (``pops_program_block_count`` / ``pops_program_block_name``); ``System::install_program``
     binds them to the instantiated System blocks BY NAME (Spec 3 criterion 23, ADC-457), so the
     System blocks (``sim.add_equation`` / ``sim.add_block``) may be added in ANY order -- a Program
     block whose name has no instantiated System block fails loud (``Program requires block instance
     '<name>', but simulation did not instantiate it``). A block declared but never committed is a
     READ-ONLY block (allowed; e.g. a passive field whose charge couples the others through the shared
-    Poisson). A commit of a block no ``P.state`` declares is rejected. A single-block Program lowers
+    Poisson). A commit of a block no ``T.state`` declares is rejected. A single-block Program lowers
     byte-identically (its one block is index 0; an order-matching multi-block Program too -- the
     name map is the identity).
 
@@ -153,7 +171,7 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     ``flux=False,sources=["default"]`` is the default source only, ``flux=False,sources=["s"]`` is
     just ``s`` -- the named ones never double-count the default (it is folded in iff "default" was
     listed). More than one block now lowers (ADC-426): each op routes to its block's runtime index
-    (``_block_indices``, in P.state declaration order) and control flow (while/range/if) inside a
+    (``_block_indices``, in T.state declaration order) and control flow (while/range/if) inside a
     block lowers per block; a SIMULTANEOUS multi-target coupled field solve
     (``solve_fields_from_blocks([Ua, Ub])``) lowers to ``ctx.solve_fields_from_blocks`` (see below).
 
@@ -165,99 +183,68 @@ def emit_cpp_program(program: Any, model: Any = None, target: str = "system") ->
     uncoupled model the field solve is inert either way. This is already a COUPLED multi-block solve:
     the system Poisson RHS is ``Sum_s elliptic_rhs_s(U_s)`` (``assemble_poisson_rhs``), so block
     ``idx`` reads its stage state while every OTHER block contributes its LIVE state into the one
-    shared phi/aux. A per-block ``P.solve_fields(state=Ub)`` therefore sees all blocks' charge. A
+    shared phi/aux. A per-block callable field operator therefore sees all blocks' charge. A
     SIMULTANEOUS multi-target override (several blocks at their stage states in ONE solve) lowers to
     ``ctx.solve_fields_from_blocks(<vec>)`` (Spec 3 criterion 24, ADC-457): the RHS is
     ``Sum_s elliptic_rhs_s(U_s)`` reading EVERY listed block's stage state at once
     (``assemble_poisson_rhs_from_blocks``), each slotted at its block index (nullptr = the block's
     live state) -- the coupled multi-species field solve."""
+    if model is not None and model_graph is not None:
+        raise TypeError("emit_cpp_program received competing model and model_graph authorities")
+    if model_graph is not None and type(model_graph) is not ProgramModelGraph:
+        raise TypeError("model_graph must be an exact ProgramModelGraph")
+    authority = model_graph if model_graph is not None else model
     if target not in ("system", "amr_system"):
         raise ValueError("emit_cpp_program: target 'system' | 'amr_system' (got %r)" % (target,))
     program.validate()
-    _check_lowerable(program, model)
-    prelude, body = _emit_body(program, model, target=target)
+    _check_lowerable(program, authority, field_plans or {}, target=target)
+    prelude, body = _emit_body(
+        program, authority, target=target, field_plans=field_plans or {})
     # Optional dt bound (spec s18 / ADC-417): emit the SECOND ABI pair -- pops_program_has_dt_bound()
     # (true iff a bound was set) and pops_program_dt_bound(ProgramContext*, cfl) (the lowered scalar
     # expression). Without a bound, has_dt_bound() returns false and the dt_bound function returns a
     # +inf sentinel (never reached: the loader stores the closure only when has_dt_bound() is true).
-    has_dt_bound, dt_bound_body = _emit_dt_bound(program, model)
+    has_dt_bound, dt_bound_body = _emit_dt_bound(program, authority)
+    from pops.codegen.program_emit_field_boundaries import emit_field_boundaries
+    field_boundaries = emit_field_boundaries(
+        program, authority, field_plans or {}, target)
     return _PROGRAM_CPP_TEMPLATE.format(
         name=json.dumps(program.name), hash=program._ir_hash(), prelude=prelude, body=body,
         has_dt_bound=has_dt_bound, dt_bound_body=dt_bound_body,
-        module_metadata=_emit_module_metadata(program, model),
-        program_params=_emit_program_params(program, model),
+        module_metadata=_emit_module_metadata(program, authority),
+        program_params=_emit_program_params(program, authority),
+        field_boundaries=field_boundaries,
         block_names=_emit_block_names(program),
         route_manifest=_emit_route_manifest("pops_program_route_manifest"),
         coeff_elliptic_include=_coeff_elliptic_include(program),
         block_inverse_include=_block_inverse_include(program),
-        amr_install=_emit_amr_install(program, target, prelude, body))
+        amr_install=_emit_amr_install(
+            program, target, prelude, body,
+            _emit_amr_hierarchy_bodies(
+                program, authority, field_plans or {}) if target == "amr_system" else None,
+            dt_bound_body if target == "amr_system" else None))
 
 def _emit_block_names(program: Any) -> str:
     """C++ source of the NAME-based block-binding ABI the .so exports (Spec 3 criterion 23, ADC-457):
     ``pops_program_block_count()`` and ``pops_program_block_name(int)`` -- the Program's block names in
-    ``_block_indices`` order (P.state declaration order, the order the step body's ``ctx.state(idx)``
+    ``_block_indices`` order (T.state declaration order, the order the step body's ``ctx.state(idx)``
     addresses). System::install_program reads them, matches each to the instantiated System block of
     that name, and stores the program-index -> system-index map (read by ProgramContext), so the
-    System blocks may be added in ANY order vs the Program's P.state declarations -- a Program block
+    System blocks may be added in ANY order vs the Program's T.state declarations -- a Program block
     whose name has no System block fails loud. The block names are also part of the IR identity (the
-    block_order field of _serialize feeds the IR hash), so reordering P.state changes the hash."""
+    block_order field of _serialize feeds the IR hash), so reordering T.state changes the hash."""
     order = program._block_indices()  # name -> index, declaration order
     names = sorted(order, key=order.get)
-    cases = "".join('    case %d: return %s;\n' % (order[nm], json.dumps(nm)) for nm in names)
+    cases = "".join(
+        '    case %d: return %s;\n' % (order[block], json.dumps(block_name(block)))
+        for block in names)
     return (
         "// NAME-based block binding (Spec 3 criterion 23, ADC-457): the Program's block names in\n"
-        "// P.state declaration order. install_program matches each to a System block BY NAME (not\n"
+        "// T.state declaration order. install_program matches each to a System block BY NAME (not\n"
         "// add-order) and builds the program-index -> system-index map ProgramContext resolves.\n"
         'extern "C" int pops_program_block_count() { return %d; }\n' % len(names) +
         'extern "C" const char* pops_program_block_name(int i) {\n'
         '  switch (i) {\n%s    default: return "";\n  }\n}\n' % cases)
-
-def _emit_module_metadata(program: Any, model: Any = None) -> str:
-    """C++ source of the GeneratedModule metadata the .so exports (Spec 2 / ADC-442).
-
-    A combined model+program .so carries, alongside ``GeneratedProgram`` (the step), a
-    ``GeneratedModule`` descriptor: ``extern "C"`` accessors exposing the typed operator registry
-    -- a count and, per integer ``OperatorId`` (the array index), the operator name / kind /
-    signature / requirements -- plus the state and field space names. These are read ONCE at
-    install (introspection + requirement validation, ``module_metadata.hpp``); the step body never
-    calls them, so operators stay inlined and there is no string lookup in any hot kernel.
-    ``model=None`` emits an empty module (count 0). The metadata is derived from the model's typed
-    registry, so it does not perturb the program IR hash.
-    """
-    ops, states, fields = [], [], []
-    if model is not None and hasattr(model, "operator_registry"):
-        reg = model.operator_registry()
-        ops = [reg.get(nm) for nm in reg.names()]
-        if hasattr(model, "state_space"):
-            states = [model.state_space().name]
-        if hasattr(model, "field_space"):
-            fields = [model.field_space().name]
-
-    def table(accessor: Any, values: Any) -> str:
-        cases = "".join('    case %d: return %s;\n' % (i, json.dumps(v))
-                        for i, v in enumerate(values))
-        return ('extern "C" const char* pops_module_%s(int i) {\n'
-                '  switch (i) {\n%s    default: return "";\n  }\n}\n' % (accessor, cases))
-
-    def req_json(op: Any) -> str:
-        # The operator's own kind always wins (a requirements dict must not shadow it).
-        return json.dumps({**op.requirements, "kind": op.kind})
-
-    parts = [
-        "// GeneratedModule metadata (Spec 2 / ADC-442): the typed operator registry exposed by\n"
-        "// the .so for introspection + install-time validation. OperatorId = the array index.\n"
-        "// NOT called from any hot kernel -- operators are inlined at codegen.\n",
-        'extern "C" int pops_module_operator_count() { return %d; }\n' % len(ops),
-        'extern "C" int pops_module_state_space_count() { return %d; }\n' % len(states),
-        'extern "C" int pops_module_field_space_count() { return %d; }\n' % len(fields),
-        table("operator_name", [op.name for op in ops]),
-        table("operator_kind", [op.kind for op in ops]),
-        table("operator_signature", [repr(op.signature) for op in ops]),
-        table("operator_requirements", [req_json(op) for op in ops]),
-        table("state_space_name", states),
-        table("field_space_name", fields),
-    ]
-    return "".join(parts)
 
 def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
     """Lower the optional dt bound (spec s18 / ADC-417) to ``(has_dt_bound, body)``: the bool literal
@@ -285,74 +272,34 @@ def _emit_dt_bound(program: Any, model: Any = None) -> tuple:
 
 
 
-def _check_lowerable(program: Any, model: Any = None) -> None:
+def _check_lowerable(
+    program: Any, model: Any = None, field_plans: Any = None, *, target: str | None = None,
+) -> None:
     """Raise NotImplementedError if the IR uses a construct the current codegen cannot lower yet,
     naming the offending construct (never a silent mis-lowering). @p model: the physical model that
     declares the named sources / linear sources; required for the Phase-4b ops.
 
-    Multi-block (ADC-426): N ``P.state`` blocks + N ``P.commit`` are supported -- each op routes to
+    Multi-block (ADC-426): N ``T.state`` blocks + N ``T.commit`` are supported -- each op routes to
     its block's index (``_block_indices``). Validation: a block is committed AT MOST once (enforced
-    at ``commit`` time); a read-only block (declared via ``P.state`` but never committed) is allowed
+    at ``commit`` time); a read-only block (declared via ``T.state`` but never committed) is allowed
     (e.g. a passive field whose charge couples the others); a commit of a block that was never
-    declared by ``P.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    declared by ``T.state`` is rejected (an unknown-block commit cannot route to an index)."""
+    _check_model_owner_dispatch(program, model)
     blocks = program._block_indices()
-    for b in program._commits:
-        if b not in blocks:
+    for state_ref in program._commits:
+        block = state_ref.block_ref
+        if block not in blocks:
             raise ValueError(
-                "commit of unknown block '%s': no P.state('%s') declares it (declared blocks: %s)"
-                % (b, b, sorted(blocks)))
-    _check_schedules_lowerable(program)
+                "commit of unknown block %r: no T.state(block[U]) declares it "
+                "(declared blocks: %s)"
+                % (block_name(block), sorted(block_name(item) for item in blocks)))
+    _check_schedules_lowerable(program, target=target)
     for v in program._values:
-        _check_op_lowerable(program, v, model)
-    # Per-cell dense fallback bound for the local dense solves (mat_inverse<N> uses fixed stack
-    # buffers): solve_local_linear (M = I - a*L) and solve_local_nonlinear (the Newton FD Jacobian).
-    dense_ops = ("solve_local_linear", "solve_local_nonlinear")
-    if model is not None and any(v.op in dense_ops for v in _all_ops(program)):
-        impl = _model_impl(model)
-        n_cons = len(getattr(impl, "cons_names", []) or [])
-        if n_cons > 8:
-            raise ValueError(
-                "local dense fallback currently supports n_cons <= 8 (got %d)" % n_cons)
+        _check_op_lowerable(program, v, model, field_plans or {})
+    # Dense local and coupled solves are specialized to the complete manifest-sized system.  The
+    # emitted ``mat_inverse<N>`` owns exactly N x N stack storage and bounded loops; no central
+    # component-count allowlist, truncating buffer, or scientific-model branch selects N.
 
-def _check_schedules_lowerable(program: Any) -> None:
-    """Gate the unified Program scheduler lowering (ADC-458, Spec 3 sections 17-18). EVERY kind/policy
-    now lowers (``_emit_schedule_wrap``) EXCEPT the two that need a runtime primitive the compiled
-    .so does not have, which still fail loud (never a silent no-op):
-
-      - ``on_end()``: a compiled ``sim.step(dt)`` loop carries no end-of-run signal, so the .so cannot
-        know which step is the last. (Use an on_end host hook instead.)
-      - ``when(cond)`` whose cond is a bare Python callable, not a Program Bool predicate: a callable
-        is not a Program value and cannot be lowered to C++.
-
-    The cadence RUNTIME (the cache cadence in a stepping .so) is exercised on ROMEO; the cache
-    MANAGER is unit-tested by tests/cpp/integration/runtime/test_cache_manager.cpp."""
-    for v in _all_ops(program):
-        sched = v.attrs.get("schedule")
-        if sched is None or sched.is_always():
-            continue
-        if not sched.so_lowerable():
-            raise NotImplementedError(
-                "schedule on_end() on node %r (op '%s') is not lowerable: a compiled sim.step(dt) "
-                "loop never sees an end-of-run signal, so the .so cannot know the last step. Use "
-                "on_start()/every()/when()/subcycle(), or an on_end host hook (ADC-458)."
-                % (v.name, v.op))
-        if sched.kind == "when":
-            cond = sched.params.get("cond")
-            if not (isinstance(cond, Value) and cond.vtype == "bool"):
-                raise NotImplementedError(
-                    "schedule when(cond) on node %r lowers only a Program Bool predicate (e.g. "
-                    "P.norm2(r) < tol), not a Python callable (ADC-458)." % v.name)
-        if sched.kind == "subcycle" and v.op not in _AUX_OUTPUT_OPS:
-            # subcycle re-runs the body COUNT times in a for-loop scope. A node whose output is a
-            # step-body scratch (rhs / source / linear_combine / ...) would declare that scratch
-            # INSIDE the loop, leaving it out of scope for any downstream consumer -- broken C++. Only
-            # an aux-output op (a field solve, which writes the persistent System aux) is well-defined
-            # under sub-cycling; a scratch sub-step has no single 'result' to consume. Fail loud.
-            raise NotImplementedError(
-                "schedule subcycle on node %r (op '%s') is lowerable only for a field solve (its "
-                "output is the persistent System aux); a scratch-output op sub-cycled has no single "
-                "result a downstream node can read (ADC-458). Sub-cycle the field solve, or express "
-                "the inner steps explicitly." % (v.name, v.op))
 
 # 'linear_source' is a pure NAME-reference SSA node (vtype 'operator'): it carries no runtime work
 # (consumed by apply / solve_local_linear, which read the model coefficients), so it lowers to
@@ -367,20 +314,16 @@ def _check_schedules_lowerable(program: Any) -> None:
 # sim.profile_report(). Every other op that emits a statement is wrapped (rhs / solve_fields /
 # linear_combine / source / apply / reductions / loops / Schur kernels / ...).
 
-def _all_ops(program: Any) -> Any:
-    """Iterate over every op of the Program, descending into control-flow + apply sub-blocks (a flat
-    view used by the lowerability guards: the sub-block ops are not in program._values). Nested control
-    flow is disallowed, so the sub-blocks are flat (one level)."""
-    for v in program._values:
-        yield v
-        for key in ("cond_block", "body_block", "apply_block", "residual_block"):
-            blk = v.attrs.get(key)
-            if isinstance(blk, list):
-                yield from blk
-
-def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
+def _check_op_lowerable(program: Any, v: Any, model: Any, field_plans: Any) -> None:
     """Lowerability check for a single op (used for both the top-level walk and a while sub-block).
     Raises NotImplementedError / ValueError naming the offending construct (never a mis-lowering)."""
+    node_model = (
+        model_for_node(model, v)
+        if model is not None
+        and (v.block is not None or v.attrs.get("operator_handle") is not None)
+        else model
+    )
+    _validate_matrix_free_contract(v, node_model)
     if v.op in _MODEL_OPS:
         if model is None:
             raise NotImplementedError(
@@ -389,31 +332,35 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "(compile_problem threads it through)" % (v.op, v.name))
         if v.op == "solve_local_nonlinear":  # recurse: the residual sub-block ops must lower too
             for w in v.attrs["residual_block"]:
-                _check_op_lowerable(program, w, model)
+                _check_op_lowerable(program, w, model, field_plans)
         return  # _emit_op lowers it from the model's symbolic coefficients
     if v.op not in _ALLOWED_OPS:
         raise NotImplementedError(
             "emit_cpp_program cannot lower op '%s' (value '%s') yet; supported ops are %s "
             "(+ %s with a model; nested control flow / Krylov are later phases)"
             % (v.op, v.name, sorted(_ALLOWED_OPS), sorted(_MODEL_OPS)))
-    if v.op == "coupled_rate":
+    if v.op in ("coupled_rate", "solve_coupled_implicit"):
         # A coupled_rate (collisions / ionization, Spec 3 criterion 27) lowers to ONE multi-state
         # for_each_cell kernel (see _emit_coupled_rate_kernel). The lowering reaches the operator
         # body (its per-block component formulas) through the BOUND registry, and binds each input
         # state's cons names from that input's StateSpace -- so the operator must be bound and the
         # formulas must be cons-only (the MVP). Validate both here so a non-lowerable coupled_rate
         # fails loud naming ADC-457, never emits an undefined reference.
-        _coupled_rate_components(program, v)
+        _coupled_rate_components(program, v, model)
         return
     if v.op == "coupled_rate_out":
         # A pure projection of one block out of the coupled bundle: it emits nothing (its var
         # aliases that block's rate scratch). Lowerable iff its producing coupled_rate is (checked
         # when that node is walked); nothing to validate here.
         return
-    if v.op in ("while", "range", "if"):  # recurse: the cond / body sub-blocks must lower too
-        for key in ("cond_block", "body_block"):
+    if v.op in ("while", "range", "branch"):  # recursively validate structured regions
+        keys = (
+            ("true_block", "false_block")
+            if v.op == "branch" else ("cond_block", "body_block")
+        )
+        for key in keys:
             for w in v.attrs.get(key, []):
-                _check_op_lowerable(program, w, model)
+                _check_op_lowerable(program, w, model, field_plans)
         return
     if v.op == "matrix_free_operator":  # recurse into the apply sub-block (set by set_apply)
         if v.attrs.get("apply_block") is None:
@@ -421,24 +368,19 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "matrix_free_operator '%s' has no apply; call P.set_apply before lowering"
                 % v.name)
         for w in v.attrs["apply_block"]:
-            _check_op_lowerable(program, w, model)
+            _check_op_lowerable(program, w, model, field_plans)
         return
-    if v.op == "solve_fields":
-        # A NAMED elliptic field (ADC-419/ADC-428) drives a SECOND elliptic solve into its own aux
-        # channel. The runtime now hosts it (System::solve_fields_from_state(field, ...) via
-        # ProgramContext); lowering needs the model so the field name can be validated against the
-        # declared m.elliptic_field set (the codegen emits the named ctx call).
-        field = v.attrs.get("field")
-        if field is not None:
-            if model is None:
-                raise NotImplementedError(
-                    "emit_cpp_program cannot lower solve_fields with a named elliptic field "
-                    "('%s') without the physical model that declares it (m.elliptic_field); pass "
-                    "model= (compile_problem threads it through)" % field)
-            if field not in _model_impl(model)._elliptic_fields:
-                raise ValueError(
-                    "unknown elliptic_field '%s' in solve_fields '%s'; declared: %s"
-                    % (field, v.name, sorted(_model_impl(model)._elliptic_fields)))
+    if v.op in ("solve_fields", "solve_fields_from_blocks"):
+        # Every field solve is routed by the exact authenticated install plan. An OperatorHandle
+        # may denote the model's default provider or any named provider; neither status is inferred
+        # from a spelling or from ``field is None``. The resolved Case field owns discretization,
+        # solver, BC, hierarchy and the native slot, so Program-only emission must refuse when that
+        # authority is absent instead of silently selecting the historical default solver.
+        field_ref = v.attrs.get("field")
+        if field_ref is None:
+            raise ValueError("field solve %r has no exact field identity" % v.name)
+        from pops.codegen.program_emit_field_routes import resolved_field_route
+        resolved_field_route(field_ref, field_plans)
         return
     if v.op == "rhs":
         named_fluxes = _named_fluxes(v)
@@ -456,7 +398,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                     "emit_cpp_program cannot lower rhs '%s' with named fluxes %r without the "
                     "physical model that declares them (m.flux_term); pass model= "
                     "(compile_problem threads it through)" % (v.name, named_fluxes))
-            impl_f = _model_impl(model)
+            impl_f = _model_impl(node_model)
             ft = impl_f._flux_terms
             for f in named_fluxes:
                 if f not in ft:
@@ -481,7 +423,7 @@ def _check_op_lowerable(program: Any, v: Any, model: Any) -> None:
                 "emit_cpp_program cannot lower rhs '%s' with named sources %r without the "
                 "physical model that declares them (m.source_term); pass model= "
                 "(compile_problem threads it through)" % (v.name, extra))
-        impl = _model_impl(model)
+        impl = _model_impl(node_model)
         # ADC-425: the named sources are axpy'd on top of an EXPLICIT base. With "default" requested
         # the base is ctx.rhs_into (flux + the model's default/composite source); without it the base
         # is ctx.neg_div_flux_default_into (flux only). Either way the default source is folded in iff

@@ -1,0 +1,17 @@
+// GENERATED from src/runtime/builders/seam_combinations.cmake (do not edit here; edit the manifest row).
+// ADC-593 seam generation, ADC-359 (flux subdivision of the compressible single-block compiled AMR seam)
+// provenance: only the @SEAM_FLUX@ flux build_amr_compiled leaves of the @SEAM_TRANSPORT@ transport. See
+// amr_compiled_compressible.cpp (the riemann dispatcher).
+#include <pops/runtime/builders/block/amr_block_seam.hpp>
+
+namespace pops::detail {
+
+AmrCompiledHooks @SEAM_SYMBOL@(const ModelSpec& spec, const std::string& limiter,
+                               const AmrBuildParams& bp) {
+  return build_amr_compiled_for_flux(@SEAM_TR_CTOR@, spec, limiter, bp,
+                                     [](auto m, const std::string& lim, const AmrBuildParams& b) {
+                                       return dispatch_amr_compiled_@SEAM_FLUX@(m, lim, b);
+                                     });
+}
+
+}  // namespace pops::detail

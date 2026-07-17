@@ -9,11 +9,16 @@ select it. MUSCL is reconstruction-by-limiter; its native limiter type is pops::
 """
 from __future__ import annotations
 
+import math
+from decimal import Decimal
+from fractions import Fraction
 from types import SimpleNamespace
 from typing import Any
 
 from pops.descriptors import _native, _external_descriptor
-from .limiters import limiters
+from pops.params.use_sites import ParamUse, resolve_param_use
+from pops.numerics.indicator_stencils import FOURTH_ORDER_AXIS, SECOND_ORDER_AXIS
+from .limiters import Minmod, limiters
 
 # Spec 5 sec.7 / criterion 11: the GHOST (halo) depth a reconstruction stencil NEEDS, by its
 # lowered scheme token. A first-order scheme reads the cell mean (1 ghost); a second-order
@@ -48,20 +53,50 @@ def _weno5(name: str, epsilon: Any = None) -> Any:
     is carried in the descriptor options and threaded to the native ``Weno5::eps`` by ``add_block``
     (cartesian System path; refused loud on the polar / disc / AMR paths, never silently dropped)."""
     if epsilon is None:
-        return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3)
-    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float)) or not (epsilon > 0.0):
-        raise ValueError("reconstruction.%s(epsilon=) must be a positive number or None; got %r"
-                         % ("WENO5" if name == "weno5" else "WENO5Z", epsilon))
-    return _native(name, "pops::Weno5", "weno5", category="reconstruction", ghost_depth=3,
-                   epsilon=float(epsilon))
+        return _native(
+            name, "pops::Weno5", "weno5", category="reconstruction",
+            formal_order=5, ghost_depth=3, amr_gradient_stencil=FOURTH_ORDER_AXIS)
+    where = "reconstruction.%s(epsilon=)" % ("WENO5" if name == "weno5" else "WENO5Z")
+    if isinstance(epsilon, bool) or not isinstance(epsilon, (int, float, Decimal, Fraction)):
+        raise TypeError("%s must be an exact Python numeric scalar" % where)
+    if isinstance(epsilon, float) and not math.isfinite(epsilon):
+        raise ValueError("%s must be finite" % where)
+    if isinstance(epsilon, Decimal) and not epsilon.is_finite():
+        raise ValueError("%s must be finite" % where)
+    if epsilon <= 0:
+        raise ValueError("%s must be a positive number or None; got %r" % (where, epsilon))
+    return _native(
+        name, "pops::Weno5", "weno5", category="reconstruction",
+        formal_order=5, ghost_depth=3, amr_gradient_stencil=FOURTH_ORDER_AXIS,
+        epsilon=epsilon)
+
+
+def _muscl(limiter: Any = None) -> Any:
+    """Second-order MUSCL reconstruction with one typed limiter authority.
+
+    The limiter determines the native reconstruction token. Formal order and ghost depth are
+    properties of this descriptor; callers never repeat them in an AMR or halo policy.
+    """
+    selected = Minmod() if limiter is None else limiter
+    if isinstance(selected, str) or getattr(selected, "category", None) != "limiter":
+        raise TypeError(
+            "MUSCL(limiter=) requires a typed limiter descriptor such as Minmod() or VanLeer()"
+        )
+    scheme = getattr(selected, "scheme", None)
+    if scheme not in ("minmod", "vanleer"):
+        raise ValueError("MUSCL does not have a native route for limiter %r" % scheme)
+    native_id = "pops::Minmod" if scheme == "minmod" else "pops::VanLeer"
+    return _native(
+        "muscl", native_id, scheme, category="reconstruction", limiter=selected,
+        formal_order=2, ghost_depth=2, amr_gradient_stencil=SECOND_ORDER_AXIS,
+    )
 
 
 reconstruction = SimpleNamespace(
-    FirstOrder=lambda: _native("firstorder", "pops::NoSlope", "firstorder",
-                               category="reconstruction", ghost_depth=1),
-    MUSCL=lambda limiter="minmod": _native(
-        "muscl", "pops::Minmod", limiter, category="reconstruction", limiter=limiter,
-        ghost_depth=2),
+    FirstOrder=lambda: _native(
+        "firstorder", "pops::NoSlope", "firstorder", category="reconstruction",
+        formal_order=1, ghost_depth=1, amr_gradient_stencil=SECOND_ORDER_AXIS),
+    MUSCL=_muscl,
     WENO5=lambda epsilon=None: _weno5("weno5", epsilon),
     WENO5Z=lambda epsilon=None: _weno5("weno5z", epsilon),
     User=lambda brick_id: _external_descriptor(brick_id, expect_category="reconstruction"),
@@ -80,6 +115,8 @@ def required_ghost_depth(reconstruction_or_token: Any) -> Any:
         return REQUIRED_GHOST_DEPTH.get(reconstruction_or_token)
     descriptor = reconstruction_or_token
     declared = (getattr(descriptor, "options", None) or {}).get("ghost_depth")
+    declared = resolve_param_use(
+        declared, ParamUse.STENCIL, where="reconstruction(ghost_depth=)")
     if isinstance(declared, int) and not isinstance(declared, bool):
         return declared
     scheme: Any = getattr(descriptor, "scheme", None)
@@ -119,6 +156,8 @@ def validate_ghost_depth(reconstruction_or_token: Any, available: Any = None,
     """
     if available is None:
         return True  # runtime grows the halo to the scheme; no explicit constraint to check.
+    available = resolve_param_use(
+        available, ParamUse.GHOST_DEPTH, where="validate_ghost_depth(available=)")
     needed = required_ghost_depth(reconstruction_or_token)
     if needed is None or needed <= available:
         return True

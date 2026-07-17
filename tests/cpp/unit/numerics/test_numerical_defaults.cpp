@@ -26,7 +26,8 @@ TEST(test_numerical_defaults, model_spec_defaults_are_centralized) {
   ModelSpec spec;
   EXPECT_EQ(spec.gamma, static_cast<double>(kPhysicalDefaultGamma)) << "ModelSpec gamma default";
   EXPECT_EQ(spec.B0, static_cast<double>(kPhysicalDefaultB0)) << "ModelSpec B0 default";
-  EXPECT_EQ(spec.cs2, static_cast<double>(kPhysicalDefaultFluidStateCs2)) << "ModelSpec cs2 default";
+  EXPECT_EQ(spec.cs2, static_cast<double>(kPhysicalDefaultFluidStateCs2))
+      << "ModelSpec cs2 default";
   EXPECT_EQ(spec.q, static_cast<double>(kPhysicalDefaultChargeQ)) << "ModelSpec charge default";
 }
 
@@ -38,6 +39,9 @@ TEST(test_numerical_defaults, mg_krylov_fac_amr_named_constants) {
   EXPECT_EQ(kSchurKrylovCartesianMaxIters, 400) << "Cartesian Schur Krylov budget is reported";
   EXPECT_EQ(kSchurKrylovPolarMaxIters, 600) << "Polar Schur Krylov budget is reported";
   EXPECT_EQ(kFACDefaultMaxIters, 30) << "FAC max_iters default is reported";
+  EXPECT_EQ(kFACDefaultRelTol, Real(1e-9)) << "FAC relative tolerance default is reported";
+  EXPECT_EQ(kFACDefaultAbsTol, Real(0)) << "FAC absolute floor default is reported";
+  EXPECT_EQ(kFACInitialCoarseAbsTol, Real(0)) << "FAC coarse absolute floor is reported";
   EXPECT_EQ(kFACInitialCoarseRelTol, Real(1e-12)) << "FAC initial coarse tolerance is reported";
   EXPECT_EQ(kFACInitialCoarseMaxCycles, 100) << "FAC initial coarse cycle budget is reported";
   EXPECT_EQ(kAmrRefinementDisabledThreshold, Real(1e30))

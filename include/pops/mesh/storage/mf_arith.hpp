@@ -37,6 +37,13 @@ struct SaxpyKernel {
   POPS_HD void operator()(int i, int j) const { Y(i, j, c) += a * X(i, j, c); }
 };
 
+struct ScaleKernel {
+  Array4 values;
+  Real factor;
+  int comp;
+  POPS_HD void operator()(int i, int j) const { values(i, j, comp) *= factor; }
+};
+
 struct LincombKernel {
   Array4 Z;
   ConstArray4 X, Y;
@@ -48,13 +55,20 @@ struct LincombKernel {
 // Reducer |f(i,j,comp)| -> max, passed DIRECTLY to reduce_max_cell (no wrapping extended
 // lambda, unlike for_each_cell_reduce_max). This is the device-clean path documented
 // in for_each.hpp. Reducer signature (i, j, Real& acc); same Kokkos::Max / same sequential host
-// loop -> bit-identical to the old norm_inf (max and fabs without rounding).
+// loop -> bit-identical to the old norm_inf for finite inputs (max and fabs without rounding).
+// NaN and either infinity are mapped to +infinity before the max reduction.  This is deliberate:
+// IEEE max reductions may otherwise ignore NaN depending on operand order, while the +infinity
+// sentinel propagates deterministically through both Kokkos::Max and the later MPI_MAX.
 struct NormInfKernel {
   ConstArray4 a;
   int comp;
   POPS_HD void operator()(int i, int j, Real& acc) const {
     const Real v = a(i, j, comp);
     const Real av = v < 0 ? -v : v;
+    if (!(av <= std::numeric_limits<Real>::max())) {
+      acc = std::numeric_limits<Real>::infinity();
+      return;
+    }
     if (av > acc)
       acc = av;
   }
@@ -123,16 +137,32 @@ inline void saxpy(MultiFab& y, Real a, const MultiFab& x) {
   }
 }
 
+/// x <- factor * x over ALL components of the valid cells.
+///
+/// This is the device-resident scalar multiplication primitive. In particular, callers must use it
+/// instead of following an asynchronous assembly kernel with raw host Array4 loops: launches remain
+/// ordered in the execution space without inserting a global fence or forcing a host round-trip.
+inline void scale(MultiFab& x, Real factor) {
+  const int nc = x.ncomp();
+  for (int li = 0; li < x.local_size(); ++li) {
+    Array4 values = x.fab(li).array();
+    const Box2D valid = x.box(li);
+    for (int c = 0; c < nc; ++c)
+      for_each_cell(valid, detail::ScaleKernel{values, factor, c});
+  }
+}
+
 // Infinity norm over the valid cells of one component. Each local fab is
 // reduced by for_each_cell_reduce_max over |f(i,j,comp)| (true Kokkos reduction,
 // Kokkos::Max), aggregated by host max over the fabs.
 //
 // No more device_fence() up front: under Kokkos parallel_reduce is blocking and
-// absorbs the barrier. EXACT everywhere: max and fabs are without rounding and max
-// is associative/commutative in IEEE754, so bit-identical to the old norm_inf
-// regardless of backend (the reduction order changes no bit).
-/// Infinity norm max |f(.,.,comp)| over the valid cells (LOCAL, without MPI all_reduce). EXACT
-/// on all backends (max without rounding, associative/commutative) -> bit-identical everywhere.
+// absorbs the barrier. EXACT for finite data: max and fabs are without rounding and max
+// is associative/commutative in IEEE754, so bit-identical to the old norm_inf regardless of
+// backend (the reduction order changes no bit). Any non-finite sample returns +infinity instead
+// of allowing NaN to be silently ignored by a max reduction.
+/// Infinity norm max |f(.,.,comp)| over the valid cells (LOCAL, without MPI all_reduce). Exact
+/// on finite data; returns +infinity if any selected value is NaN or infinite.
 inline Real norm_inf(const MultiFab& mf, int comp = 0) {
   Real m = 0;
   for (int li = 0; li < mf.local_size(); ++li) {

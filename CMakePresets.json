@@ -41,7 +41,7 @@
       "name": "python-parallel",
       "inherits": "python",
       "displayName": "Module Python _pops (PARALLELE, dispatch Kokkos)",
-      "description": "Comme 'python' mais via Kokkos ($CONDA_PREFIX). ATTENTION : le kokkos conda-forge est souvent Serial-only -> verifier 'Kokkos found ... = (OPENMP...)' au configure ; sinon `bash scripts/kokkos_openmp_conda.sh` installe un Kokkos OpenMP dans l'env (~2 min). Threads au runtime : pops.set_threads().",
+      "description": "Comme 'python' mais via Kokkos ($CONDA_PREFIX). ATTENTION : le kokkos conda-forge est souvent Serial-only -> verifier 'Kokkos found ... = (OPENMP...)' au configure ; sinon `bash scripts/kokkos_openmp_conda.sh` installe un Kokkos OpenMP dans l'env (~2 min). Les ressources et variables de threads sont fixees avant l'initialisation native.",
       "binaryDir": "${sourceDir}/build-py-kokkos",
       "cacheVariables": {
         "POPS_USE_KOKKOS": "ON",
@@ -72,12 +72,13 @@
     {
       "name": "mpi",
       "inherits": "conda",
-      "displayName": "Coeur + tests C++ (MPI distribue)",
-      "description": "OpenMPI pris dans l'env conda actif (conda activate pops).",
+      "displayName": "Coeur + tests C++ (MPI + HDF5 parallele)",
+      "description": "OpenMPI et HDF5 parallele pris dans l'env conda actif (conda activate pops).",
       "binaryDir": "${sourceDir}/build-mpi",
       "cacheVariables": {
         "POPS_BUILD_TESTS": "ON",
         "POPS_USE_MPI": "ON",
+        "POPS_USE_HDF5": "ON",
         "CMAKE_PREFIX_PATH": "$env{CONDA_PREFIX}"
       }
     },
@@ -110,11 +111,13 @@
       "cacheVariables": {
         "POPS_BUILD_TESTS": "ON",
         "POPS_USE_MPI": "ON",
+        "POPS_USE_HDF5": "ON",
         "POPS_USE_KOKKOS": "ON",
         "Kokkos_ROOT": "$env{KOKKOS_PREFIX}",
-        "POPS_TESTS_FAST_O0": "ON"
+        "POPS_TESTS_FAST_O0": "ON",
+        "POPS_HEAVY_TEST_TU_POOL": "1"
       },
-      "description": "MPI distribue + Kokkos Serial on-node (PoPS est Kokkos-only). Kokkos pointe par $KOKKOS_PREFIX, comme ci-kokkos.",
+      "description": "MPI distribue + HDF5 parallele natif + Kokkos Serial on-node (PoPS est Kokkos-only). Kokkos pointe par $KOKKOS_PREFIX, comme ci-kokkos.",
       "condition": {
         "type": "notEquals",
         "lhs": "$env{KOKKOS_PREFIX}",
@@ -136,7 +139,8 @@
         "POPS_BUILD_TESTS": "ON",
         "POPS_USE_KOKKOS": "ON",
         "Kokkos_ROOT": "$env{KOKKOS_PREFIX}",
-        "POPS_TESTS_FAST_O0": "ON"
+        "POPS_TESTS_FAST_O0": "ON",
+        "POPS_HEAVY_TEST_TU_POOL": "1"
       }
     },
     {

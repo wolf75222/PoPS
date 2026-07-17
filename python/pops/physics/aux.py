@@ -7,7 +7,7 @@ runtime-parameter bound. They are pure data + pure functions: this module
 imports nothing above the IR layer (stdlib only), so the whole ``pops.physics``
 package can depend on it without pulling in codegen or ``_pops``.
 
-Kept inside ``pops.physics`` (rather than promoted to ``pops.ir``) to avoid
+Kept inside ``pops.physics`` (rather than promoted to ``pops._ir``) to avoid
 scope-creep across the codegen consumers that already import these names
 LAZILY from ``pops.physics`` (e.g. ``codegen.compile``'s lazy
 ``from pops.physics import Model, AUX_CANONICAL``); see the Spec-4 blueprint
@@ -41,20 +41,18 @@ AUX_NAMED_MAX = 4  # maximum number of named aux fields per model (= kAuxMaxExtr
 # (include/pops/runtime/config/runtime_params.hpp): the C++ carrier RuntimeParams has an array of this
 # FIXED size (device-copiable without allocation), so a model exceeding the bound is rejected at codegen.
 # This module stays stdlib-only (no _pops import), so the value is a literal; _pops exposes the same
-# number as __max_runtime_params__ (ADC-610) and max_runtime_params() below reconciles the two when the
-# module is present -- test_capacity_limits.py asserts they agree, so the literal cannot silently drift.
-_K_MAX_RUNTIME_PARAMS = 32
+from pops._native_facts import NATIVE_MAX_RUNTIME_PARAMS
+
+_K_MAX_RUNTIME_PARAMS = NATIVE_MAX_RUNTIME_PARAMS
 
 
 def max_runtime_params() -> int:
-    """The runtime-param capacity, preferring the C++ constant _pops.__max_runtime_params__ when the
-    module is importable (single source), else the stdlib-only literal mirror. hasattr-gated so a stale
-    _pops (built before ADC-610 exposed the attribute) transparently falls back to the literal 32."""
-    try:
-        import pops._pops as _pops  # noqa: PLC0415 -- lazy, keeps this module _pops-free at import
-    except Exception:  # pragma: no cover -- _pops absent (pure-Python authoring / docs build)
-        return _K_MAX_RUNTIME_PARAMS
-    return int(getattr(_pops, "__max_runtime_params__", _K_MAX_RUNTIME_PARAMS))
+    """Return the declared release-provider capacity without loading a native runtime.
+
+    The installed-extension conformance gate independently proves that this generated/declared
+    fact equals ``pops::kMaxRuntimeParams``. Authoring and validation therefore stay pure Python.
+    """
+    return _K_MAX_RUNTIME_PARAMS
 
 
 def aux_n_aux(aux_names: Any) -> int:
@@ -77,6 +75,19 @@ def aux_total_n_aux(aux_names: Any, aux_extra_names: Any) -> int:
     if aux_extra_names:
         w = max(w, AUX_NAMED_BASE + len(aux_extra_names))
     return w
+
+
+def aux_component_index(name: Any, aux_extra_names: Any = ()) -> int:
+    """Return the native channel index of a declared canonical or named aux field."""
+    if name in AUX_CANONICAL:
+        return AUX_CANONICAL[name]
+    extra = tuple(aux_extra_names or ())
+    if name in extra:
+        return AUX_NAMED_BASE + extra.index(name)
+    raise ValueError(
+        "aux field %r is neither canonical nor present in the model's named aux layout"
+        % name
+    )
 
 
 # --- Physical roles: variable name -> VariableRole -------------------------
@@ -114,5 +125,3 @@ def roles_for(names: Any, override: Any = None) -> Any:
     if len(override) != len(names):
         raise ValueError("roles: %d roles for %d variables" % (len(override), len(names)))
     return [(r if r is not None else role_of(nm)) for nm, r in zip(names, override, strict=True)]
-
-

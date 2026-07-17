@@ -37,9 +37,7 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
 
   const int L = 64, ncomp = 2;
   const Box2D dom = Box2D::from_extents(L, L);
-  auto val = [&](int i, int j, int c) {
-    return double(i) + 0.001 * double(j) + 100.0 * c;
-  };
+  auto val = [&](int i, int j, int c) { return double(i) + 0.001 * double(j) + 100.0 * c; };
   // src / dst are two DIFFERENT decompositions of the SAME domain -> parallel_copy redistributes.
   const BoxArray sba = BoxArray::from_domain(dom, 16);  // 4x4 = 16 boxes
   const BoxArray dba = BoxArray::from_domain(dom, 32);  // 2x2 = 4 boxes
@@ -156,7 +154,7 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
     const BoxArray dba2 = BoxArray::from_domain(dom, 16);  // autre decoupage dst
     const DistributionMapping ddm2 = make_sfc_distribution(dba2, np);
     dst = MultiFab(dba2, ddm2, ncomp, 0);  // move-assign d'un dst frais (regrid)
-    parallel_copy(dst, src);  // cache abandonne -> reconstruction pour (dst #2, src)
+    parallel_copy(dst, src);               // cache abandonne -> reconstruction pour (dst #2, src)
     chk(copy_schedule_build_count() == 2, "regrid_invalidates_cache");
     chk(count_wrong(dst) == 0, "regrid_new_layout_correct");
   }
@@ -189,5 +187,6 @@ static int pops_run_test_copy_schedule_cache(int argc, char** argv) {
 }
 
 TEST(test_copy_schedule_cache, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_copy_schedule_cache, "test_copy_schedule_cache"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_copy_schedule_cache, "test_copy_schedule_cache"),
+            0);
 }

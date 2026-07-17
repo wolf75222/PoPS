@@ -1,23 +1,17 @@
-"""Spec 2 (S2-4): operator-first standard macros.
-
-pops.lib.time.predictor_corrector_local_linear / explicit_rk / imex_local_linear take typed
-operator HANDLES (pops.model.OperatorHandle, not physical terms or name strings) and compose them
-with P.call against the Module bound to the Program (ADC-532). The macros are model-free (their
-source mentions no physics) and reusable across any Module with matching signatures. Pure Python
-(emit only); skips if pops is not importable.
-"""
+"""Final operator-first time factories compose exact typed handles into ordinary Programs."""
+from tests.python.support.requirements import require_native_or_skip
+from pops.codegen.program_codegen import emit_cpp_program
 import inspect
-import sys
+
+import pytest
 
 try:
-    from pops.ir.expr import Const
-    from pops.model import OperatorHandle
-    from pops.physics.facade import Model
+    from pops.physics._facade import Model
     from pops import time as adctime
-    import pops.lib.time as libtime  # ready schemes live in pops.lib.time (Spec 4)
+    import pops.lib.time as libtime
+    from typed_program_support import fresh_field_refs, state_refs
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_macros (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_macros (pops unavailable: %s)' % exc)
 
 _PHYSICS_TOKENS = ("electric", "lorentz", "poisson", "rho", "grad_x", "grad_y", "B_z")
 
@@ -25,132 +19,187 @@ _PHYSICS_TOKENS = ("electric", "lorentz", "poisson", "rho", "grad_x", "grad_y", 
 def _model(name, gain=1.0):
     m = Model(name)
     rho, mx, my = m.conservative_vars("rho", "mx", "my")
+    m.aux("phi")
     gx = m.aux("grad_x")
     gy = m.aux("grad_y")
-    bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho],
            y=[my, mx * my / rho, my * my / rho])
-    m.source_term("electric", [Const(0.0), rho * (-gx) * gain, rho * (-gy) * gain])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0],
-                                [0.0, 0.0, bz],
-                                [0.0, -bz, 0.0]])
-    m.elliptic_rhs(rho - 1.0)
+    m.source_term("electric", [0.0 * rho, rho * (-gx) * gain, rho * (-gy) * gain])
+    m.linear_source("implicit", [[-1.0, 0.0, 0.0],
+                                 [0.0, -1.0, 0.0],
+                                 [0.0, 0.0, -1.0]])
+    m.elliptic_field("fields", rho - 1.0, aux=["phi", "grad_x", "grad_y"])
     m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
     return m
 
 
 def _handle(m, name):
-    """A typed OperatorHandle for a registered operator (the selector the de-stringed macros take)."""
-    op = m.operator_registry().get(name)
-    return OperatorHandle(op.name, kind=op.kind, signature=op.signature)
+    return m.module.operator_handle(name)
 
 
-def test_macros_are_model_free():
-    for macro in (libtime.predictor_corrector_local_linear,
-                  libtime.explicit_rk,
-                  libtime.imex_local_linear):
-        src = inspect.getsource(macro)
-        for tok in _PHYSICS_TOKENS:
-            assert tok not in src, "%s must not mention %r" % (macro.__name__, tok)
-    print("OK  the operator-first macros mention no physics term")
+def _references(m, name="plasma"):
+    return fresh_field_refs(
+        m,
+        block_name=name,
+        field_name="fields",
+        provider=_handle(m, "fields"),
+    )
 
 
-def test_predictor_corrector_macro():
-    m = _model("ep")
-    P = adctime.Program("pc").bind_operators(m)
-    libtime.predictor_corrector_local_linear(
-        P, "plasma", fields_operator=_handle(m, "fields_from_state"),
-        explicit_rate_operator=_handle(m, "explicit_rhs"),
-        implicit_operator=_handle(m, "lorentz"))
-    P.validate()
-    src = P.emit_cpp_program(model=m)
-    assert "pops_install_program" in src
-    print("OK  predictor_corrector_local_linear composes 3 typed handles -> .so source")
+def test_factories_are_model_free():
+    for factory in (libtime.PredictorCorrector, libtime.RungeKutta, libtime.IMEX):
+        source = inspect.getsource(factory)
+        for token in _PHYSICS_TOKENS:
+            assert token not in source, "%s must not mention %r" % (factory.__name__, token)
 
 
-def test_explicit_rk_macro():
-    m = _model("rk")
-    P = adctime.Program("rk").bind_operators(m)
-    libtime.explicit_rk(P, "plasma", rhs_operator=_handle(m, "explicit_rhs"),
-                            fields_operator=_handle(m, "fields_from_state"),
-                            tableau=libtime.SSPRK2_TABLEAU)
-    P.validate()
-    assert "pops_install_program" in P.emit_cpp_program(model=m)
-    print("OK  explicit_rk over a typed rate handle (SSPRK2 tableau)")
+def test_predictor_corrector_factory():
+    model = _model("ep")
+    state, fields = _references(model)
+    program = libtime.PredictorCorrector(
+        state,
+        fields=fields,
+        explicit=_handle(model, "explicit_rhs"),
+        implicit=_handle(model, "implicit"),
+    )
+    assert program.validate() is True
 
 
-def test_imex_local_linear_macro():
-    m = _model("imex")
-    P = adctime.Program("imex").bind_operators(m)
-    libtime.imex_local_linear(P, "plasma", explicit_operator=_handle(m, "explicit_rhs"),
-                                  implicit_operator=_handle(m, "lorentz"),
-                                  fields_operator=_handle(m, "fields_from_state"), theta=1.0)
-    P.validate()
-    assert "pops_install_program" in P.emit_cpp_program(model=m)
-    print("OK  imex_local_linear (theta-implicit local linear solve)")
+def test_explicit_runge_kutta_factory():
+    model = _model("rk")
+    state, fields = _references(model)
+    program = libtime.RungeKutta(
+        state,
+        rate=_handle(model, "explicit_rhs"),
+        fields=fields,
+        tableau=libtime.SSPRK2_TABLEAU,
+    )
+    assert program.validate() is True
 
 
-def test_macro_rejects_string_operator():
-    # ADC-532: a stale string operator selector is refused with a clear TypeError, not silently taken.
-    m = _model("reject")
-    P = adctime.Program("rej").bind_operators(m)
-    try:
-        libtime.imex_local_linear(P, "plasma", explicit_operator="explicit_rhs",
-                                  implicit_operator=_handle(m, "lorentz"),
-                                  fields_operator=_handle(m, "fields_from_state"))
-        raise AssertionError("a string operator selector must be refused")
-    except TypeError as exc:
-        assert "OperatorHandle" in str(exc) and "explicit_operator" in str(exc), str(exc)
-    print("OK  a string operator selector is refused pointing at the handle form")
+def test_imex_factory():
+    model = _model("imex")
+    state, fields = _references(model)
+    program = libtime.IMEX(
+        state,
+        explicit_operator=_handle(model, "explicit_rhs"),
+        implicit_operator=_handle(model, "implicit"),
+        fields_operator=fields,
+    )
+    assert program.validate() is True
 
 
-def test_handle_macro_ir_parity_with_name_call():
-    # The handle path lowers byte-identically to a manual Program built with the same primitive
-    # _call selectors (the allowed internal seam): equal _ir_hash proves no drift from de-stringing.
-    m = _model("parity")
-    P_handles = adctime.Program("imex").bind_operators(m)
-    libtime.imex_local_linear(P_handles, "plasma", explicit_operator=_handle(m, "explicit_rhs"),
-                              implicit_operator=_handle(m, "lorentz"),
-                              fields_operator=_handle(m, "fields_from_state"), theta=1.0)
-    # Manual equivalent using the internal name selectors (the pre-ADC-532 lowering).
-    P_manual = adctime.Program("imex").bind_operators(m)
-    u = P_manual.state("plasma")
-    fields = P_manual._call("fields_from_state", u, name="fields")
-    r = P_manual._call("explicit_rhs", u, fields, name="R")
-    lin = P_manual._call("lorentz", fields, name="L")
-    q = P_manual.linear_combine("imex_rhs", u + P_manual.dt * r)
-    u1 = P_manual.solve_local_linear("imex_step", operator=P_manual.I - 1.0 * P_manual.dt * lin,
-                                     rhs=q, fields=fields)
-    P_manual.commit("plasma", u1)
-    assert P_handles._ir_hash() == P_manual._ir_hash(), (
-        "handle-built macro IR must be byte-identical to the manual _call lowering\n"
-        "  handles: %s\n  manual : %s" % (P_handles._ir_hash(), P_manual._ir_hash()))
-    print("OK  handle-built imex_local_linear IR == the manual _call lowering (byte-identical)")
+def test_factory_rejects_string_operator():
+    model = _model("reject")
+    state, fields = _references(model)
+    with pytest.raises(TypeError, match="OperatorHandle"):
+        libtime.IMEX(
+            state,
+            explicit_operator="explicit_rhs",
+            implicit_operator=_handle(model, "implicit"),
+            fields_operator=fields,
+        )
 
 
-def test_macro_reused_across_modules():
-    def build(m):
-        P = adctime.Program("pc").bind_operators(m)
-        libtime.predictor_corrector_local_linear(
-            P, "plasma", fields_operator=_handle(m, "fields_from_state"),
-            explicit_rate_operator=_handle(m, "explicit_rhs"),
-            implicit_operator=_handle(m, "lorentz"))
-        return P.emit_cpp_program(model=m)
+def test_factory_ir_retains_each_exact_handle():
+    model = _model("identity")
+    state, fields = _references(model)
+    expected = {
+        _handle(model, "explicit_rhs"),
+        _handle(model, "implicit"),
+    }
+    program = libtime.IMEX(
+        state,
+        explicit_operator=_handle(model, "explicit_rhs"),
+        implicit_operator=_handle(model, "implicit"),
+        fields_operator=fields,
+    )
+    retained = {
+        value.attrs["operator_handle"]
+        for value in program._values
+        if "operator_handle" in value.attrs
+    }
+    assert expected <= retained
+    solve = next(value for value in program._values if value.op == "solve_fields")
+    assert solve.attrs["field"] is fields
 
-    src_a = build(_model("A", 1.0))
-    src_b = build(_model("B", 2.0))
-    assert "pops_install_program" in src_a and src_a != src_b
-    print("OK  the same predictor-corrector macro is reused across two modules")
+
+def test_factory_reused_across_modules():
+    def build(model):
+        block, state = state_refs(adctime.Program("refs"), "plasma", model=model)
+        program = libtime.IMEX(
+            block[state],
+            explicit_operator=_handle(model, "explicit_rhs"),
+            implicit_operator=_handle(model, "implicit"),
+        )
+        return emit_cpp_program(program, model=model)
+
+    def no_field_model(name, gain):
+        model = Model(name)
+        (u,) = model.conservative_vars("u")
+        model.source_term("explicit_source", [gain * u])
+        model.linear_source("implicit", [[-1.0]])
+        model.rate_operator("explicit_rhs", flux=False, sources=["explicit_source"])
+        return model
+
+    source_a = build(no_field_model("A", 1.0))
+    source_b = build(no_field_model("B", 2.0))
+    assert "pops_install_program" in source_a and source_a != source_b
+
+
+def _field_factory_builders(model):
+    state, fields = _references(model)
+    explicit = _handle(model, "explicit_rhs")
+    implicit = _handle(model, "implicit")
+    return {
+        "RungeKutta": lambda action: libtime.RungeKutta(
+            state, rate=explicit, fields=fields, tableau=libtime.SSPRK2_TABLEAU,
+            solve_action=action),
+        "AdamsBashforth": lambda action: libtime.AdamsBashforth(
+            state, rate=explicit, fields=fields, order=2, solve_action=action),
+        "BDF": lambda action: libtime.BDF(
+            state, implicit=implicit, explicit=explicit, fields=fields, order=1,
+            solve_action=action),
+        "PredictorCorrector": lambda action: libtime.PredictorCorrector(
+            state, fields=fields, explicit=explicit, implicit=implicit,
+            solve_action=action),
+        "IMEX": lambda action: libtime.IMEX(
+            state, explicit_operator=explicit, implicit_operator=implicit,
+            fields_operator=fields, solve_action=action),
+    }
+
+
+def _recorded_solve_actions(program):
+    return tuple(
+        value.attrs["action"]
+        for value in program._values
+        if value.op == "solve_outcome"
+    )
+
+
+def test_field_factories_consume_outcomes_with_default_and_custom_actions():
+    from pops.time import FailRun, RejectAttempt
+
+    for name, build in _field_factory_builders(_model("actions-default")).items():
+        actions = _recorded_solve_actions(build(None))
+        assert actions and all(isinstance(action, FailRun) for action in actions), name
+
+    custom = RejectAttempt(statuses=("iteration_limit", "breakdown"))
+    for name, build in _field_factory_builders(_model("actions-custom")).items():
+        actions = _recorded_solve_actions(build(custom))
+        assert actions and all(action == custom for action in actions), name
+
+
+def test_field_factories_reject_invalid_solve_actions():
+    for _, build in _field_factory_builders(_model("actions-invalid")).items():
+        with pytest.raises(TypeError, match="solve_action"):
+            build("reject")
 
 
 def main():
-    test_macros_are_model_free()
-    test_predictor_corrector_macro()
-    test_explicit_rk_macro()
-    test_imex_local_linear_macro()
-    test_macro_rejects_string_operator()
-    test_handle_macro_ir_parity_with_name_call()
-    test_macro_reused_across_modules()
+    for name, value in sorted(globals().items()):
+        if name.startswith("test_") and callable(value):
+            value()
     print("OK  test_operator_macros")
 
 

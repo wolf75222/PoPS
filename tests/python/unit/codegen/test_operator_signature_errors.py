@@ -4,7 +4,7 @@
 The operator-first type system rejects a mismatched composition with a CLEAR error that names the
 operator, the argument and the expected vs received space -- one case per typed input flavour:
 
-  - State: an argument over the wrong StateSpace fed to a P.call input typed 'U';
+  - State: an argument over the wrong StateSpace fed to an operator input typed 'U';
   - Rate: a Rate(U) combined with a State(V) (a rate must share its state's space);
   - Field: a 'state' value where a FieldSpace input is expected (wrong value flavour) and a
     wrong-arity call;
@@ -13,19 +13,34 @@ operator, the argument and the expected vs received space -- one case per typed 
 
 Pure Python (pops.model + pops.time, no numerics / no _pops); skips if pops is not importable.
 """
-import sys
+from tests.python.support.requirements import require_native_or_skip
 
 try:
     from pops import model
-    from pops.ir.expr import Const
-    from pops.physics.facade import Model
+    from pops._ir.expr import Const
+    from pops.physics._facade import Model
     from pops import time as adctime
+    from pops.solvers import DenseLU
+    from typed_program_support import solve_field, typed_field, typed_state
 except Exception as exc:  # pops not importable here -> skip, never fake
-    print("skip test_operator_signature_errors (pops unavailable: %s)" % exc)
-    sys.exit(0)
+    require_native_or_skip('test_operator_signature_errors (pops unavailable: %s)' % exc)
 
 
 _OTHER = model.StateSpace("V", ("a", "b", "c"))
+
+
+def _typed(P, block, space, physical=None):
+    if physical is not None:
+        module = physical.module
+        declared = module.state_spaces().get(space.name)
+        if declared is None:
+            declared = module.state_space(space.name, space.components)
+        return typed_state(
+            P, block, space=declared, model=module, state=module.state_handle(declared))
+    module = model.Module("%s_%s_model" % (P.name, block))
+    declared = module.state_space(space.name, space.components)
+    return typed_state(
+        P, block, space=declared, model=module, state=module.state_handle(declared))
 
 
 def _model():
@@ -36,20 +51,29 @@ def _model():
     bz = m.aux("B_z")
     m.flux(x=[mx, mx * mx / rho, mx * my / rho], y=[my, mx * my / rho, my * my / rho])
     m.source_term("electric", [Const(0.0), -rho * gx, -rho * gy])
-    m.linear_source("lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]])
+    linear_operator = m.linear_source(
+        "lorentz", [[0.0, 0.0, 0.0], [0.0, 0.0, bz], [0.0, -bz, 0.0]]
+    )
     m.elliptic_rhs(rho - 1.0)
-    m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
-    return m
+    rate_operator = m.rate_operator("explicit_rhs", flux=True, sources=["electric"])
+    field_solve = m.module.operator_handle("fields_from_state")
+    return m, field_solve, rate_operator, linear_operator
+
+
+def _solve_declared_field(program, state, provider):
+    """Cross the final Case-owned field authority while retaining the provider signature."""
+    field = typed_field(program, "fields_from_state", provider=provider)
+    return solve_field(program, state, field=field)
 
 
 def test_state_space_mismatch_message():
-    m = _model()
+    m, field_solve, rate_operator, _ = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
-    fields = P._call("fields_from_state", P.state("plasma", space=u))
-    wrong = P.state("other", space=_OTHER)
+    P = adctime.Program("p")._bind_operators(m)
+    fields = _solve_declared_field(P, _typed(P, "plasma", u, m), field_solve)
+    wrong = _typed(P, "other", _OTHER, m)
     try:
-        P._call("explicit_rhs", wrong, fields)
+        rate_operator(wrong, fields)
         raise AssertionError("expected a State-space mismatch error")
     except ValueError as exc:
         msg = str(exc)
@@ -58,28 +82,32 @@ def test_state_space_mismatch_message():
 
 
 def test_rate_combined_with_wrong_state_message():
-    m = _model()
+    m, field_solve, rate_operator, _ = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
-    rate = P._call("explicit_rhs", u_n, P._call("fields_from_state", u_n))  # Rate(U)
-    wrong = P.state("other", space=_OTHER)
+    P = adctime.Program("p")._bind_operators(m)
+    u_n = _typed(P, "plasma", u, m)
+    fields = _solve_declared_field(P, u_n, field_solve)
+    rate = rate_operator(u_n, fields)  # Rate(U)
+    wrong = _typed(P, "other", _OTHER, m)
     try:
-        P.linear_combine("bad", u_n + P.dt * rate + wrong)
+        P.value(
+            "bad", u_n + P.dt * rate + wrong,
+            at=adctime.TimePoint(P.clock, step=1),
+        )
         raise AssertionError("expected a Rate/State space combination error")
     except ValueError as exc:
-        assert "different state spaces" in str(exc), str(exc)
+        assert "incompatible state spaces" in str(exc), str(exc)
     print("OK  Rate combined with a State over another space is rejected")
 
 
 def test_field_input_wrong_value_flavour_message():
     # explicit_rhs's second input is a FieldSpace: passing a 'state' value there is a clear error.
-    m = _model()
+    m, _, rate_operator, _ = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
+    P = adctime.Program("p")._bind_operators(m)
+    u_n = _typed(P, "plasma", u, m)
     try:
-        P._call("explicit_rhs", u_n, u_n)  # second arg should be a fields value, not a state
+        rate_operator(u_n, u_n)  # second arg should be a fields value, not a state
         raise AssertionError("expected a Field-input value-flavour error")
     except ValueError as exc:
         msg = str(exc)
@@ -88,12 +116,12 @@ def test_field_input_wrong_value_flavour_message():
 
 
 def test_field_wrong_arity_message():
-    m = _model()
+    m, _, rate_operator, _ = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
-    u_n = P.state("plasma", space=u)
+    P = adctime.Program("p")._bind_operators(m)
+    u_n = _typed(P, "plasma", u, m)
     try:
-        P._call("explicit_rhs", u_n)  # explicit_rhs expects (state, fields); only state given
+        rate_operator(u_n)  # explicit_rhs expects (state, fields); only state given
         raise AssertionError("expected an arity error")
     except ValueError as exc:
         msg = str(exc)
@@ -118,18 +146,22 @@ def test_rate_bundle_block_space_mismatch_message():
 
 
 def test_local_linear_operator_domain_mismatch_message():
-    m = _model()
+    m, field_solve, _, linear_operator = _model()
     u = m.state_space("U")
-    P = adctime.Program("p").bind_operators(m)
-    fields = P._call("fields_from_state", P.state("plasma", space=u))
-    lin = P._call("lorentz", fields)  # LocalLinearOperator(U, U)
-    rhs_v = P.state("other", space=_OTHER)
+    P = adctime.Program("p")._bind_operators(m)
+    fields = _solve_declared_field(P, _typed(P, "plasma", u, m), field_solve)
+    lin = linear_operator(fields)  # LocalLinearOperator(U, U)
+    rhs_v = _typed(P, "other", _OTHER, m)
     try:
-        P.solve_local_linear("bad", operator=P.I - P.dt * lin, rhs=rhs_v, fields=fields)
+        P.solve(
+            adctime.LocalLinear(operator=P.I - P.dt * lin, rhs=rhs_v),
+            solver=DenseLU(),
+            name="bad",
+        )
         raise AssertionError("expected an operator/state domain error")
     except ValueError as exc:
         msg = str(exc)
-        assert "maps U -> U" in msg and "State over 'V'" in msg, msg
+        assert "operator maps StateSpace('U'" in msg and "State over StateSpace('V'" in msg, msg
     print("OK  LocalLinearOperator L: U->U rejects a State over another space")
 
 

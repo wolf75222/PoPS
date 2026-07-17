@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""System POLAIRE multi-box (decoupage en BANDES theta, ADC-67) a travers pops.PolarMesh(theta_boxes=N).
+"""System POLAIRE multi-box via l'avance pops.mesh.PolarMesh(theta_boxes=N).
 
 theta_boxes=1 (defaut) = mono-box, STRICTEMENT bit-identique a l'historique. theta_boxes>1 = l'anneau
 (r, theta) est decoupe en N bandes azimutales (chaque boite couvre tout le rayon) ; le TRANSPORT polaire
@@ -23,17 +23,18 @@ theta_boxes=1 (defaut) = mono-box, STRICTEMENT bit-identique a l'historique. the
 
 Mono-rang (le Poisson polaire direct refuse MPI ; le transport multi-box teste ici est single-rank).
 """
+from tests.python.support.requirements import require_native_or_skip
 import math
-import sys
 
 import numpy as np
 
 try:
-    import pops
-    from pops.runtime.system import System, SystemConfig  # ADC-545 advanced runtime seam
+    import pops.runtime._engine_descriptors as engine
+    from pops.mesh import PolarMesh
+    from pops.runtime._engine_descriptors import Dirichlet
+    from pops.runtime._system import System, SystemConfig  # ADC-545 advanced runtime seam
 except ImportError as e:  # PYTHONPATH non pose : skip CI-safe (comme les autres tests Python)
-    print("skip  module pops absent (PYTHONPATH ?) : %s" % e)
-    sys.exit(0)
+    require_native_or_skip('module pops absent (PYTHONPATH ?) : %s' % e)
 
 
 # Geometrie : anneau NON carre (nr != ntheta) pour exercer le layout (nr, ntheta) sur chaque chemin.
@@ -50,24 +51,26 @@ def _iso_system(theta_boxes):
     """System polaire isotherme NATIF (rho, mom_r, mom_theta) a theta_boxes bandes. AUCUN Poisson n'est
     configure ni resolu : on n'exerce que le TRANSPORT (eval_rhs) -- le flux isotherme est self-contenu
     (cs2 du modele), il ne lit pas grad phi."""
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.add_block(
+    sim = System(mesh=PolarMesh(
+        r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
+    sim.add_equation(
         "iso",
-        model=pops.Model(state=pops.FluidState(kind="isothermal", cs2=1.0),
-                        transport=pops.IsothermalFlux(), source=pops.NoSource(),
-                        elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        model=engine.Model(state=engine.FluidState(kind="isothermal", cs2=1.0),
+                        transport=engine.IsothermalFlux(), source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     return sim
 
 
 def _exb_system(theta_boxes):
     """System polaire ExB scalaire (1 variable) a theta_boxes bandes. Poisson NON resolu ici (cf. (c))."""
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
-    sim.add_block(
+    sim = System(mesh=PolarMesh(
+        r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=theta_boxes))
+    sim.add_equation(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0), source=pops.NoSource(),
-                        elliptic=pops.ChargeDensity(charge=1.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0), source=engine.NoSource(),
+                        elliptic=engine.ChargeDensity(charge=1.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
     return sim
 
 
@@ -80,7 +83,9 @@ def _iso_state():
     exciter le flux radial ET azimutal). Layout composante-majeur (c, theta=j, r=i) : ordre de set_state."""
     dr = (RMAX - RMIN) / NR
     dth = 2.0 * math.pi / NTH
-    rho = np.empty((NTH, NR)); mr = np.empty((NTH, NR)); mth = np.empty((NTH, NR))
+    rho = np.empty((NTH, NR))
+    mr = np.empty((NTH, NR))
+    mth = np.empty((NTH, NR))
     for j in range(NTH):
         th = (j + 0.5) * dth
         for i in range(NR):
@@ -195,7 +200,9 @@ def test_rejections_divisibility_and_direct_poisson():
     # (c1) theta_boxes ne divisant pas ntheta : PolarMesh leve cote Python.
     raised = False
     try:
-        pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH, theta_boxes=5)  # 32 % 5 != 0
+        PolarMesh(
+            r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH,
+            theta_boxes=5)  # 32 % 5 != 0
     except ValueError:
         raised = True
     assert raised, "PolarMesh(theta_boxes=5, ntheta=32) doit lever (5 ne divise pas 32)"
@@ -203,7 +210,7 @@ def test_rejections_divisibility_and_direct_poisson():
     # theta_boxes > ntheta : refuse aussi.
     raised = False
     try:
-        pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=8, theta_boxes=16)
+        PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=8, theta_boxes=16)
     except ValueError:
         raised = True
     assert raised, "PolarMesh(theta_boxes=16, ntheta=8) doit lever (theta_boxes > ntheta)"
@@ -223,7 +230,7 @@ def test_rejections_divisibility_and_direct_poisson():
 
     # (c3) Poisson polaire DIRECT + theta_boxes>1 -> message AMONT clair (avant la construction du solveur).
     sim = _exb_system(2)
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", _scalar_density())
     raised = False
     msg = ""

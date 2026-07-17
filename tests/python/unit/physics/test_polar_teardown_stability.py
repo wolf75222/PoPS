@@ -3,7 +3,7 @@
 Bug PRE-EXISTANT (signale a la revue de PR #176, present sur master propre, pas une regression) :
 un System polaire stepant un profil INSTABLE (Gaussienne raide + BackgroundDensity n0=0) crashait au
 teardown / a la premiere lecture hote (density()/potential()). Cause RACINE : les bindings (to_2d /
-to_3d, python/bindings.cpp) remodelaient TOUT champ en CARRE (nx(), nx()), alors qu'un anneau polaire
+to_3d, python/bindings/core/bindings.cpp) remodelaient TOUT champ en CARRE (nx(), nx()), alors qu'un anneau polaire
 fait nr*ntheta valeurs. Quand nr != ntheta le memcpy debordait le tampon numpy (nr*ntheta > nx()^2),
 corrompant le tas ; avec des valeurs non finies (run instable) les octets debordes (motif NaN
 0x7ff8...) ecrasaient les metadonnees de la free-list, d'ou l'abort au teardown. Le cas STABLE de
@@ -23,7 +23,6 @@ Mono-rang (le Poisson polaire direct refuse MPI) : ce n'est pas un test MPI.
 import subprocess
 import sys
 import textwrap
-from pops.runtime.system import System  # ADC-545 advanced runtime seam
 
 # Scenario INSTABLE execute dans un sous-processus isole. nr != ntheta est le declencheur deterministe
 # du debordement de tampon ; la Gaussienne raide + BackgroundDensity(n0=0) reproduit le run instable
@@ -32,7 +31,10 @@ _CHILD = textwrap.dedent(
     """
     import math
     import pops
-    from pops.runtime.system import System  # ADC-545 advanced runtime seam
+    from pops.mesh import PolarMesh
+    from pops.runtime._engine_descriptors import Dirichlet
+    import pops.runtime._engine_descriptors as engine
+    from pops.runtime._system import System  # ADC-545 advanced runtime seam
 
     RMIN, RMAX, NR, NTH = 0.30, 1.00, 48, 64  # nr != ntheta : declencheur du debordement de tampon
 
@@ -51,14 +53,14 @@ _CHILD = textwrap.dedent(
                 rho.append(100.0 * g * (1.0 + 0.5 * math.cos(3.0 * th)))
         return rho
 
-    sim = System(mesh=pops.PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
-    sim.add_block(
+    sim = System(mesh=PolarMesh(r_min=RMIN, r_max=RMAX, nr=NR, ntheta=NTH))
+    sim.add_equation(
         "ne",
-        model=pops.Model(state=pops.Scalar(), transport=pops.ExB(B0=1.0),
-                        source=pops.NoSource(),
-                        elliptic=pops.BackgroundDensity(alpha=1.0, n0=0.0)),
-        spatial=pops.Spatial(minmod=True), time=pops.Explicit())
-    sim.set_poisson(rhs="charge_density", solver="polar", bc="dirichlet")
+        model=engine.Model(state=engine.Scalar(), transport=engine.ExB(B0=1.0),
+                        source=engine.NoSource(),
+                        elliptic=engine.BackgroundDensity(alpha=1.0, n0=0.0)),
+        spatial=engine.Spatial(minmod=True), time=engine.Explicit())
+    sim.set_poisson(rhs="charge_density", solver="polar", bc=Dirichlet())
     sim.set_density("ne", steep_gaussian())
 
     # Quelques pas a GROS dt fixe -> le profil raide devient instable (NaN/Inf), comme le run signale.

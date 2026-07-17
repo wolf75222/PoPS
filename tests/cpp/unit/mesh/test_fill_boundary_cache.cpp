@@ -183,5 +183,6 @@ static int pops_run_test_fill_boundary_cache(int argc, char** argv) {
 }
 
 TEST(test_fill_boundary_cache, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_fill_boundary_cache, "test_fill_boundary_cache"), 0);
+  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_fill_boundary_cache, "test_fill_boundary_cache"),
+            0);
 }

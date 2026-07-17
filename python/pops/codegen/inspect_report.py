@@ -15,7 +15,7 @@ its physical model and its compile artifacts -- into deterministic, array-free p
     inputs ``arguments()`` enumerates. A piece unknowable from today's metadata is reported honestly
     (never fabricated).
   - :class:`BindReport` (sec.12.1) is the ``sim.explain_bind(compiled)`` view: per group, which
-    blocks / params / aux / solvers a System ALREADY provides vs which the artifact still REQUIRES,
+    blocks / params / aux a System ALREADY provides vs which the artifact still REQUIRES,
     computed by reusing ADC-463 ``collect_missing_arguments``.
 
 Nothing here compiles, binds, dlopens or allocates: the builders read Python-side metadata only.
@@ -59,7 +59,7 @@ class RequirementsReport(Report):
     on, the required descriptors and the layout / backend constraints. An inert record:
     :meth:`to_dict` is JSON-ready and :meth:`__str__` a short table. A piece genuinely unknowable
     from today's metadata is recorded in :attr:`unknown` (honestly, never fabricated). Adopts the
-    shared :class:`pops.Report` base (ADC-564); its ``to_dict`` keeps the historical shape.
+    shared internal report base; its ``to_dict`` keeps the established shape.
     """
 
     report_type = "requirements"
@@ -91,7 +91,7 @@ class RequirementsReport(Report):
             for desc in self.descriptors:
                 lines.append("    %-14s %s" % (desc.get("slot") + ":", desc.get("name")))
         else:
-            lines.append("    (selected at bind: the spatial brick is a bind input)")
+            lines.append("    (none recorded by the resolved plan)")
         lines.append("  constraints:")
         for key in sorted(self.constraints):
             lines.append("    %-14s %s" % (key + ":", self.constraints[key]))
@@ -115,21 +115,26 @@ def build_requirements(compiled: Any) -> Any:
         has_roe / has_wave_speeds``) becomes a row naming the capability TOKEN and the flux that
         needs it; a model that carries no such flag (a base Rusanov-only or a composed native
         ``pops.Model``) yields no rows;
-      - descriptors: the spatial scheme is a BIND input (chosen on the Problem block's ``spatial=`` and
-        flowed by ``pops.bind``), so it is reported as bind-time -- the artifact does not freeze a
-        reconstruction / Riemann descriptor at compile;
+      - descriptors: each resolved field discretization retained by the compiled plan;
       - constraints: backend (always ``production`` for a compiled Program), the target layout,
         whether MPI is supported, the ABI key the toolchain must match;
       - unknown: pieces genuinely not in today's metadata (e.g. the exact reconstruction stencil
         width), recorded honestly rather than guessed.
     """
-    model = getattr(compiled, "model", None)
+    from pops.codegen._artifact_models import artifact_model_metadata, component_model_metadata
+    from pops.codegen._compiled_artifact import CompiledSimulationArtifact
+
+    model_rows = (artifact_model_metadata(compiled)
+                  if type(compiled) is CompiledSimulationArtifact
+                  else component_model_metadata(compiled))
+    models = [row.model for row in model_rows]
     args = compiled.arguments()
     layout_runtime = getattr(args, "layout_runtime", {})
 
     capabilities = []
     for flag, token, used_by in _CAPABILITY_FLAGS:
-        if getattr(model, flag, False):
+        selected = [candidate for candidate in models if getattr(candidate, flag, False)]
+        if selected:
             row = {"capability": token, "used_by": used_by, "provided": True}
             # ADC-552: name the derivable wave-speed provider kind next to the wave_speeds row
             # (additive key). None when the source is not derivable from today's metadata (a bare
@@ -137,14 +142,16 @@ def build_requirements(compiled: Any) -> Any:
             if flag == "has_wave_speeds":
                 from pops.numerics.riemann.waves import provider_of
                 try:
-                    provider = provider_of(model) if model is not None else None
+                    resolved = [provider_of(candidate) for candidate in selected]
+                    providers = {provider.kind for provider in resolved if provider is not None}
+                    provider = providers.pop() if len(providers) == 1 else None
                 except ValueError:
                     provider = None
-                row["wave_speed_provider"] = provider.kind if provider is not None else None
+                row["wave_speed_provider"] = provider
             capabilities.append(row)
 
     constraints = {
-        "backend": "production",
+        "backend": getattr(compiled, "backend", "production"),
         "layout": layout_runtime.get("layout", "system"),
         "supports_mpi": bool(layout_runtime.get("supports_mpi", False)),
         "abi_key": getattr(compiled, "abi_key", None),
@@ -160,23 +167,27 @@ def build_requirements(compiled: Any) -> Any:
         "supports_custom_communicator": runtime["supports_custom_communicator"],
     })
 
+    field_plans = getattr(getattr(compiled, "plan", None), "field_plans", {}) or {}
+    descriptors = [
+        {"slot": "field:%s" % name,
+         "name": getattr(plan.discretization, "provider_id", type(plan.discretization).__name__)}
+        for name, plan in sorted(field_plans.items())
+    ]
+
     unknown = [
-        "the spatial scheme (reconstruction / Riemann / variables) is a BIND input -- it is chosen "
-        "on the Problem block (block(..., spatial=...)) and flowed by pops.bind, not frozen at compile, "
-        "so no descriptor is named here.",
         "the reconstruction stencil width (ghost depth) is not recorded in today's metadata; the "
         "memory estimate assumes the conservative 2-cell MUSCL halo (cf. estimate_memory).",
     ]
     # A native composed pops.Model carries its capabilities in its bricks (the C++ requires-gate is
     # the backstop), not in queryable has_* flags -- say so honestly rather than report "none".
     from pops.codegen.loader import CompiledModel  # lazy: codegen <-> loader edge
-    if model is not None and not isinstance(model, CompiledModel):
+    if any(not isinstance(model, CompiledModel) for model in models):
         unknown.append(
             "this artifact carries a composed (non-CompiledModel) model; its flux capabilities live "
             "in its bricks (validated by the C++ requires-gate at first use), not in queryable "
             "has_* flags -- the capability rows above may be incomplete.")
 
-    return RequirementsReport(capabilities=capabilities, descriptors=[],
+    return RequirementsReport(capabilities=capabilities, descriptors=descriptors,
                               constraints=constraints, unknown=unknown)
 
 
@@ -188,14 +199,14 @@ class BindReport(Report):
     """The ``sim.explain_bind(compiled)`` view: provided vs still-required (Spec 5 sec.12.1).
 
     A plain, inert record of which bind inputs a System / AmrSystem ALREADY provides and which the
-    artifact still REQUIRES, per group (instances / params / aux / solvers). :attr:`missing` is the
+    artifact still REQUIRES, per group (instances / params / aux). :attr:`missing` is the
     actionable list ADC-463 :func:`collect_missing_arguments` produces (each line names exactly what
     to supply); :attr:`ready` is true when nothing required is missing. :meth:`__str__` is a short,
-    deterministic table. Adopts :class:`pops.Report` (ADC-564); its ``to_dict`` keeps the shape.
+    deterministic table. It uses the internal report base; ``to_dict`` keeps the shape.
     """
 
     report_type = "bind"
-    schema_version = 1
+    schema_version = 2
 
     def __init__(self, *, program_name: Any, provided: Any, required: Any, missing: Any) -> None:
         self.program_name = program_name
@@ -216,14 +227,14 @@ class BindReport(Report):
 
     def __str__(self) -> str:
         lines = ["bind plan for compiled artifact %r" % (self.program_name or "problem")]
-        for group in ("instances", "params", "aux", "solvers"):
+        for group in ("instances", "params", "aux"):
             req = self.required.get(group, [])
             prov = self.provided.get(group, [])
             still = [name for name in req if name not in prov]
             lines.append("  %-10s required=%s provided=%s still-needed=%s"
                          % (group, req or "(none)", prov or "(none)", still or "(none)"))
         if self.missing:
-            lines.append("  MISSING (supply before install):")
+            lines.append("  MISSING (supply to pops.bind):")
             for note in self.missing:
                 lines.append("    - %s" % note)
         else:
@@ -240,11 +251,11 @@ def build_bind_report(sim: Any, compiled: Any) -> Any:
 
     INERT: reads ``compiled.arguments()`` (the DECLARED bind inputs) and the sim's already-wired
     blocks (``sim.block_names()``) + named aux (``sim._aux_field_index``), then reuses ADC-463
-    :func:`pops.runtime._system_unified_install.collect_missing_arguments` to compute the
-    provided-vs-missing split -- the SAME contract ``install`` enforces. It binds nothing and
+    :func:`pops.runtime._bind_validation.collect_missing_arguments` to compute the
+    provided-vs-missing split -- the SAME contract ``pops.bind`` enforces. It binds nothing and
     mutates nothing.
     """
-    from pops.runtime._system_unified_install import collect_missing_arguments  # lazy: runtime edge
+    from pops.runtime._bind_validation import collect_missing_arguments  # lazy: runtime edge
 
     args = compiled.arguments()
     required = {
@@ -254,8 +265,6 @@ def build_bind_report(sim: Any, compiled: Any) -> Any:
                         if spec.get("required")),
         "aux": sorted(name for name, spec in getattr(args, "aux", {}).items()
                      if spec.get("required")),
-        "solvers": sorted(name for name, spec in getattr(args, "solvers", {}).items()
-                         if spec.get("required")),
     }
 
     provided_blocks = set()
@@ -266,12 +275,12 @@ def build_bind_report(sim: Any, compiled: Any) -> Any:
     provided_aux = set()
     for table in getattr(sim, "_aux_field_index", {}).values():
         provided_aux |= set(table)
-    # A System carries no pre-supplied runtime params / solvers before install, so those provided
-    # sets are empty here: explain_bind reports the contract a FRESH install must still satisfy.
+    # A System carries no pre-supplied runtime params before bind, so that provided set is empty:
+    # explain_bind reports the contract a fresh bind must still satisfy.
     provided = {"instances": sorted(provided_blocks), "params": [],
-                "aux": sorted(provided_aux), "solvers": []}
+                "aux": sorted(provided_aux)}
 
-    missing = collect_missing_arguments(args, provided_blocks, set(), provided_aux, set())
+    missing = collect_missing_arguments(args, provided_blocks, set(), provided_aux)
 
     return BindReport(program_name=getattr(compiled, "program_name", None),
                       provided=provided, required=required, missing=missing)

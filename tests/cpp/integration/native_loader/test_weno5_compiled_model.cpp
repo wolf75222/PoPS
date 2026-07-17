@@ -146,5 +146,6 @@ static int pops_run_test_weno5_compiled_model(int argc, char** argv) {
 }
 
 TEST(test_weno5_compiled_model, Runs) {
-  EXPECT_EQ(pops::test::RunTestBody(&pops_run_test_weno5_compiled_model, "test_weno5_compiled_model"), 0);
+  EXPECT_EQ(
+      pops::test::RunTestBody(&pops_run_test_weno5_compiled_model, "test_weno5_compiled_model"), 0);
 }

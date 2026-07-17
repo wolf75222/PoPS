@@ -1,133 +1,303 @@
-#!/usr/bin/env python3
-"""ADC-542: declared typed diagnostic measures FIRE on the run loop via native reductions.
+"""Typed diagnostics execute through the final ConsumerGraph and native runtime."""
+from __future__ import annotations
 
-The typed measures (pops.diagnostics.Norm / Integral / MinMax / ConservationCheck) wire to the
-EXISTING native collective reductions through a run-loop hook (pops.runtime._diagnostics_driver). A
-LOCAL end-to-end proof on the Uniform System: it builds a REAL native System (no DSL compile, no fake
-engine), maps each measure to its native reduction, and asserts the recorded value matches a direct
-native reduce_component on the same state (the descriptors EXECUTE, they are no longer inert metadata).
-
-  (1) measure_reduction maps each category to the right native reduction (Norm(L1/L2/LInf), Integral,
-      MinMax -> min/max keys); an unmapped category raises.
-  (2) diagnostic_due (shared cadence interpreter) fires every / always / on_start / on_end / int.
-  (3) fire_diagnostics records each due measure via record_program_diagnostic (readable back).
-  (4) a role-scoped Norm resolves the role to a component; an unscoped one folds the full state.
-
-Skips if pops is absent (never fakes the engine). Runs under pytest and the __main__ guard.
-"""
+import importlib.util
+import json
+import math
+from pathlib import Path
 import sys
 
-try:
-    import numpy as np
-    import pops
-    from pops.numerics.reconstruction.limiters import Minmod
-    from pops.diagnostics import Norm, Integral, MinMax, ConservationCheck
-    from pops.linalg.norms import L1, L2, LInf
-    from pops.time.schedule import every, always, on_start, on_end
-    from pops.runtime._diagnostics_driver import (diagnostic_due, measure_reduction,
-                                                  fire_diagnostics)
-    from pops.runtime.system import System
-except Exception as exc:  # noqa: BLE001
-    print("skip test_diagnostics_driver (pops unavailable: %s)" % exc)
-    sys.exit(0)
-
-fails = 0
+import numpy as np
+import pops
+import pytest
+from pops.output import read_paraview
+from tests.python.support.native_execution_context import artifact_execution_context
 
 
-def chk(cond, label):
-    global fails
-    print(f"  [{'OK ' if cond else 'XX '}] {label}")
-    if not cond:
-        fails += 1
+ROOT = Path(__file__).resolve().parents[4]
+EXAMPLE = ROOT / "examples/final/EXEMPLE_SPEC_FINALE_ADVECTION_SCALAIRE_COMPLET.py"
 
 
-def build(n=16):
-    sim = System(n=n, L=1.0, periodic=True)
-    sim.set_poisson(rhs="charge_density", solver="geometric_mg", bc="periodic")
-    sim.add_block("ions",
-                  pops.Model(state=pops.FluidState("isothermal", cs2=0.5),
-                             transport=pops.IsothermalFlux(),
-                             source=pops.PotentialForce(charge=1.0),
-                             elliptic=pops.ChargeDensity(charge=1.0)),
-                  spatial=pops.FiniteVolume(limiter=Minmod()), time=pops.Explicit())
-    x = (np.arange(n) + 0.5) / n
-    X, Y = np.meshgrid(x, x, indexing="xy")
-    sim.set_density("ions",
-                    (1.0 + 0.4 * np.exp(-50.0 * ((X - 0.4) ** 2 + (Y - 0.5) ** 2))).ravel())
-    return sim
+def _load_example():
+    spec = importlib.util.spec_from_file_location("pops_diagnostic_acceptance", EXAMPLE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-# --- (0) shared cadence interpreter (host-testable) -----------------------------------
-print("== (0) diagnostic_due cadence ==")
-chk(diagnostic_due(every(2), 2) and not diagnostic_due(every(2), 3), "every(2) due at 2 not 3")
-chk(diagnostic_due(always(), 1) and diagnostic_due(None, 1), "always()/None every step")
-chk(diagnostic_due(on_start(), 1) and not diagnostic_due(on_start(), 2), "on_start at step 1")
-chk(diagnostic_due(on_end(), 4, last_step=4) and not diagnostic_due(on_end(), 3, last_step=4),
-    "on_end at the last step")
-
-# --- (1) measure_reduction maps each category to a native reduction --------------------
-print("== (1) measure_reduction native mapping ==")
-sim = build()
-# The block state (isothermal: 1 component, the density). reduce_component gives the native truth.
-direct_sum = sim.reduce_component("ions", "sum", 0)
-direct_min = sim.reduce_component("ions", "min", 0)
-direct_max = sim.reduce_component("ions", "max", 0)
-direct_l1 = sim.reduce_component("ions", "abs_sum", 0)
-direct_l2 = sim.reduce_component("ions", "sum_sq", 0) ** 0.5
-direct_linf = sim.reduce_component("ions", "abs_max", 0)
-
-r_int = measure_reduction(sim, Integral(block="ions"))
-chk(abs(list(r_int.values())[0] - direct_sum) < 1e-12, "Integral -> native sum")
-r_l1 = measure_reduction(sim, Norm(L1(), block="ions"))
-chk(abs(list(r_l1.values())[0] - direct_l1) < 1e-12, "Norm(L1) -> native abs_sum")
-r_l2 = measure_reduction(sim, Norm(L2(), block="ions"))
-chk(abs(list(r_l2.values())[0] - direct_l2) < 1e-9, "Norm(L2) -> sqrt(sum_sq)")
-r_linf = measure_reduction(sim, Norm(LInf(), block="ions"))
-chk(abs(list(r_linf.values())[0] - direct_linf) < 1e-12, "Norm(LInf) -> native abs_max")
-r_mm = measure_reduction(sim, MinMax(block="ions"))
-mm_name = MinMax(block="ions").name
-chk(abs(r_mm["%s.min" % mm_name] - direct_min) < 1e-12 and
-    abs(r_mm["%s.max" % mm_name] - direct_max) < 1e-12, "MinMax -> native min/max keys")
-
-# --- (2) an unmapped category raises (fail loud) --------------------------------------
-print("== (2) unmapped category raises ==")
+def _diagnostic_rows(reopened):
+    rows = reopened.manifest["snapshot"]["diagnostics"]
+    return {row["key"]["reduction"]: row for row in rows}
 
 
-class _Bogus:
-    category = "diagnostic_bogus"
-    name = "bogus"
-    block = "ions"
-    role = None
+def _scalar(row):
+    return float.fromhex(row["value"])
 
 
-try:
-    measure_reduction(sim, _Bogus())
-    chk(False, "an unmapped category should raise")
-except ValueError as e:
-    chk("not mapped" in str(e), f"unmapped category raises precisely: {str(e)[:50]}")
+def _bind_native_artifact(artifact, **inputs):
+    """Bind through the exact serial or MPI resource proven by this artifact."""
+    return pops.bind(
+        artifact,
+        resources={"execution_context": artifact_execution_context(artifact)},
+        **inputs,
+    )
 
-# --- (3) fire_diagnostics records each due measure, readable back ----------------------
-print("== (3) fire_diagnostics records via the native sink ==")
-sim3 = build()
-measures = [Norm(L2(), block="ions", cadence=every(1)), Integral(block="ions", cadence=every(2))]
-rec1 = fire_diagnostics(sim3, measures, step=1, last_step=None, baselines={})
-chk(Norm(L2(), block="ions").name in rec1 and Integral(block="ions").name not in rec1,
-    "step 1: only the every(1) Norm fires")
-rec2 = fire_diagnostics(sim3, measures, step=2, last_step=None, baselines={})
-chk(Integral(block="ions").name in rec2, "step 2: the every(2) Integral fires")
-# The recorded values are readable through the native program_diagnostics map.
-diags = sim3.program_diagnostics()
-chk(Norm(L2(), block="ions").name in diags, "recorded Norm readable via program_diagnostics")
 
-# --- (4) ConservationCheck drift anchors on the first tick -----------------------------
-print("== (4) ConservationCheck drift ==")
-sim4 = build()
-baselines = {}
-check = ConservationCheck(Integral(block="ions"))
-d0 = fire_diagnostics(sim4, [check], step=1, last_step=None, baselines=baselines)
-chk(abs(d0["%s.drift" % check.name]) < 1e-12, "first-tick conservation drift is 0 (baseline anchor)")
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_typed_diagnostics_execute_as_native_accepted_output(
+    tmp_path, isolated_native_cache, native_cxx, kokkos_root,
+):
+    """All public measures lower exactly once and publish only after an accepted native step."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    example = _load_example()
+    target = example.build_final_case(
+        output_root=tmp_path,
+        output_mode=example._native_output_mode(),
+    )
+    validated = pops.validate(target.authoring.case)
+    resolved = pops.resolve(validated, layout=target.layout)
 
-if fails:
-    print(f"FAIL test_diagnostics_driver : {fails} echec(s)")
-    sys.exit(1)
-print("OK test_diagnostics_driver")
+    diagnostic_manifest, = tuple(
+        node for node in resolved.consumer_graph.nodes
+        if node.diagnostic_quantities
+    )
+    assert len(diagnostic_manifest.diagnostics) == 5
+    assert len(diagnostic_manifest.diagnostic_quantities) == 5
+    assert all(
+        quantity.identity.domain == "consumer-quantity"
+        for quantity in diagnostic_manifest.diagnostic_quantities
+    )
+    executions = tuple(
+        quantity.execution for quantity in diagnostic_manifest.diagnostic_quantities)
+    assert sum(len(value["operations"]) for value in executions) == 6
+    assert {
+        operation["name"]
+        for execution in executions
+        for operation in execution["operations"]
+    } == {"integral", "l1", "l2", "linf", "min", "max"}
+    assert all(value["conservation"] is None for value in executions)
+    assert all(
+        quantity.reference == target.authoring.case.resolve(
+            target.authoring.tracer_state)
+        for quantity in diagnostic_manifest.diagnostic_quantities
+    )
+
+    artifact = pops.compile(resolved)
+    simulation = example._bind_artifact(
+        artifact,
+        params=example.build_bind_params(target.authoring),
+    )
+    report = pops.run(
+        simulation,
+        t_end=0.11,
+        max_steps=1_000,
+        output_dir=tmp_path,
+    )
+    assert report.accepted_steps >= 10
+
+    paths = tuple(sorted(tmp_path.rglob("*.vtu")))
+    assert paths, "the accepted diagnostic cadence did not publish its scientific output"
+    reopened = read_paraview(paths[-1])
+    rows = _diagnostic_rows(reopened)
+    assert set(rows) == {
+        "integral", "l1", "l2", "linf", "min", "max",
+    }
+
+    values = {name: _scalar(row) for name, row in rows.items()}
+    assert all(math.isfinite(value) for value in values.values())
+    assert values["min"] <= values["max"]
+    assert values["l1"] + 1.0e-14 >= abs(values["integral"])
+    assert values["linf"] + 1.0e-14 >= max(abs(values["min"]), abs(values["max"]))
+
+    recorded = simulation.inspect().diagnostics
+    for row in rows.values():
+        key = "%s:%s" % (
+            row["key"]["reference"]["qualified_id"], row["key"]["reduction"])
+        key = "%s:%s" % (key, row["key"]["state_id"])
+        assert recorded[key] == _scalar(row)
+
+
+def _periodic_conservation_target(output_mode, *, declare_case_initial=False):
+    """Build one evolving closed system whose integral is a genuine invariant."""
+    from pops.diagnostics import ConservationCheck, Integral
+    from pops.domain import Rectangle
+    from pops.frames import Cartesian2D
+    from pops.initial import InitialCondition
+    from pops.layouts import Uniform
+    from pops.lib.initial import Gaussian
+    from pops.lib.time import ForwardEuler
+    from pops.math import ddt, div
+    from pops.mesh import CartesianGrid, PeriodicAxes
+    from pops.numerics import DiscretizationPlan, reconstruction, riemann, variables
+    from pops.numerics.spatial import FiniteVolume
+    from pops.output import Checkpoint, ConsumerGraph, ParaView, ScientificOutput
+    from pops.projection import ConservativeCellAverage
+    from pops.representations import Conservative
+    from pops.spaces import CellState
+    from pops.time import FixedDt, every
+
+    frame = Rectangle(
+        "periodic-diagnostic-domain", lower=(0.0, 0.0), upper=(1.0, 1.0),
+    ).frame(Cartesian2D())
+    x_axis, y_axis = frame.axes
+    model = pops.Model("periodic-diagnostic-advection", frame=frame)
+    state = model.state(
+        "U", components=("u",), representation=Conservative(),
+        space=CellState(frame=frame),
+    )
+    (u,) = state
+    flux = model.flux(
+        "transport",
+        frame=frame,
+        state=state,
+        components={x_axis: (0.5 * u,), y_axis: (0.25 * u,)},
+        waves={x_axis: (0.5,), y_axis: (0.25,)},
+    )
+    rate = model.rate("transport-rate", equation=ddt(state) == -div(flux))
+
+    case = pops.Case("periodic-diagnostic-conservation")
+    block = case.block("tracer", model=model)
+    block_state = block[state]
+    numerics = DiscretizationPlan()
+    numerics.rates.add(
+        rate,
+        FiniteVolume(
+            flux=flux,
+            variables=variables.Conservative(state),
+            reconstruction=reconstruction.FirstOrder(),
+            riemann=riemann.Rusanov(),
+        ),
+    )
+    case.numerics(numerics, block=block)
+    program = ForwardEuler(block_state, rate=rate)
+    dt = 2.5e-3
+    program.step_strategy(FixedDt(dt))
+    case.program(program)
+    if declare_case_initial:
+        case.initials.add(InitialCondition(
+            state=block_state,
+            value=Gaussian(
+                frame=frame,
+                center={frame.x: 0.35, frame.y: 0.45},
+                background=0.2,
+                amplitude=0.8,
+                inverse_width=80.0,
+            ),
+            projection=ConservativeCellAverage(),
+        ))
+    schedule = every(1, clock=program.clock)
+    invariant = ConservationCheck(
+        Integral(block=block, cadence=schedule), tolerance=1.0e-10)
+    case.consumers(ConsumerGraph.from_consumers((
+        ScientificOutput(
+            format=ParaView(mode=output_mode),
+            schedule=schedule,
+            fields=(block_state,),
+            diagnostics=(invariant,),
+            target="periodic/conservation",
+        ),
+        Checkpoint(
+            schedule=every(100, clock=program.clock),
+            target="periodic/restart",
+            bit_identical=True,
+        ),
+    )))
+    layout = Uniform(CartesianGrid(
+        frame=frame,
+        cells=(16, 16),
+        periodic=PeriodicAxes(frame.axes),
+    ))
+    coordinates = (np.arange(16, dtype=np.float64) + 0.5) / 16.0
+    x, y = np.meshgrid(coordinates, coordinates, indexing="ij")
+    initial_state = np.ascontiguousarray(
+        (0.2 + 0.8 * np.exp(-80.0 * ((x - 0.35) ** 2 + (y - 0.45) ** 2)))[
+            np.newaxis, ...
+        ]
+    )
+    return case, layout, dt, initial_state
+
+
+def test_uniform_case_initials_are_refused_instead_of_silently_ignored():
+    """Uniform data has one authority: bind(initial_state), never an unused Case initial."""
+    example = _load_example()
+    case, layout, _, _ = _periodic_conservation_target(
+        example._native_output_mode(), declare_case_initial=True)
+    with pytest.raises(ValueError, match=r"pops\.bind\(initial_state"):
+        pops.resolve(pops.validate(case), layout=layout)
+
+
+@pytest.mark.compiler
+@pytest.mark.native_loader
+def test_conservation_check_tracks_nonzero_baseline_across_evolving_periodic_steps(
+    tmp_path, isolated_native_cache, native_cxx, kokkos_root,
+):
+    """A closed native finite-volume run proves baseline and later drift, not one zero sample."""
+    del isolated_native_cache, native_cxx, kokkos_root
+    example = _load_example()
+    case, layout, dt, initial_state = _periodic_conservation_target(
+        example._native_output_mode())
+    resolved = pops.resolve(pops.validate(case), layout=layout)
+    artifact = pops.compile(resolved)
+    simulation = _bind_native_artifact(
+        artifact, initial_state={"tracer": initial_state})
+    initial = np.asarray(simulation.get_state("tracer"), dtype=np.float64).copy()
+
+    first_report = pops.run(
+        simulation,
+        t_end=2.0 * dt,
+        max_steps=2,
+        output_dir=tmp_path,
+    )
+    assert first_report.accepted_steps == 2
+    accepted_registry = simulation.inspect().to_dict()["instance"]["accepted_diagnostics"]
+    accepted_diagnostics = {
+        key: value for key, value in simulation.inspect().diagnostics.items()
+        if key not in {"fallbacks", "solver_events"}
+    }
+    checkpoint = Path(simulation.checkpoint(tmp_path / "periodic-baseline"))
+    with np.load(checkpoint, allow_pickle=False) as stored:
+        baseline_state = json.loads(str(stored["runtime_consumer_diagnostics"]))
+    assert baseline_state["schema_version"] == 2
+    assert len(baseline_state["baselines"]) == 1
+    assert len(baseline_state["diagnostics"]) == 1
+    assert set(baseline_state["diagnostics"][0]["terms"]) == {
+        "quantity", "baseline", "absolute_drift", "tolerance",
+    }
+
+    resumed = _bind_native_artifact(
+        artifact, initial_state={"tracer": initial_state})
+    resumed.restart(checkpoint)
+    assert resumed.inspect().to_dict()["instance"]["accepted_diagnostics"] == accepted_registry
+    resumed_diagnostics = {
+        key: value for key, value in resumed.inspect().diagnostics.items()
+        if key not in {"fallbacks", "solver_events"}
+    }
+    assert resumed_diagnostics == accepted_diagnostics
+    second_report = pops.run(
+        resumed,
+        t_end=3.0 * dt,
+        max_steps=1,
+        output_dir=tmp_path,
+    )
+    assert second_report.accepted_steps == 1
+    final = np.asarray(resumed.get_state("tracer"), dtype=np.float64)
+    assert not np.array_equal(initial, final)
+
+    paths = tuple(sorted(tmp_path.rglob("*.vtu")))
+    assert len(paths) >= 2
+    samples = []
+    for path in paths:
+        rows = _diagnostic_rows(read_paraview(path))
+        assert set(rows) == {"conservation:integral"}
+        row = rows["conservation:integral"]
+        terms = {name: float.fromhex(value) for name, value in row["terms"].items()}
+        assert set(terms) == {"quantity", "baseline", "absolute_drift", "tolerance"}
+        assert terms["absolute_drift"] == abs(_scalar(row))
+        assert terms["absolute_drift"] <= terms["tolerance"]
+        samples.append(terms)
+    assert samples[0]["baseline"] > 0.0
+    assert all(row["baseline"] == samples[0]["baseline"] for row in samples[1:])
+    assert len(samples[1:]) >= 1

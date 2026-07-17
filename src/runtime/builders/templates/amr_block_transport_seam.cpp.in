@@ -1,0 +1,13 @@
+// GENERATED from src/runtime/builders/seam_combinations.cmake (do not edit here; edit the manifest row).
+// ADC-593 seam generation, ADC-335 (P0-B) provenance: multi-block AMR seam for the @SEAM_TRANSPORT@
+// transport. Instantiates only the @SEAM_TRANSPORT@ build_amr_block leaves; compiled in parallel with the
+// other transports. See amr_block_seam.hpp.
+#include <pops/runtime/builders/block/amr_block_seam.hpp>
+
+namespace pops::detail {
+
+AmrRuntimeBlock @SEAM_SYMBOL@(const AmrBlockBuildArgs& a, const SharedAmrLayout& S) {
+  return build_amr_block_for(@SEAM_TR_CTOR@, a, S);
+}
+
+}  // namespace pops::detail

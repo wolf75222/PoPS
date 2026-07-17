@@ -16,7 +16,7 @@ from pops.runtime_environment import (  # noqa: E402
 
 
 def test_runtime_environment_report_shape():
-    report = pops.runtime_environment_report()
+    report = runtime_environment_report()
     assert report["dimension"] == NATIVE_DIMENSION == 2
     assert report["amr_refinement_ratio"] == NATIVE_AMR_REFINEMENT_RATIO == 2
     assert report["precision"] == NATIVE_PRECISION == "double"
@@ -27,6 +27,34 @@ def test_runtime_environment_report_shape():
     assert report["communicator"] in ("serial", "MPI_COMM_WORLD", "unknown")
     assert "allocator_lifetime" in report
     assert "kokkos_lifecycle" in report
+
+
+def test_present_native_runtime_report_failure_is_not_silently_downgraded(monkeypatch):
+    import pops.runtime_environment as environment
+
+    native = pytest.importorskip("pops._pops")
+    monkeypatch.setattr(environment, "find_spec", lambda _name: object())
+
+    def broken_report():
+        raise RuntimeError("native runtime report ABI failure")
+
+    monkeypatch.setattr(native, "runtime_environment_report", broken_report)
+    with pytest.raises(RuntimeError, match="ABI failure"):
+        environment.runtime_environment_report()
+
+
+def test_present_native_fallback_report_failure_is_not_silently_downgraded(monkeypatch):
+    import pops.runtime.fallbacks as fallbacks
+
+    native = pytest.importorskip("pops._pops")
+    monkeypatch.setattr(fallbacks, "find_spec", lambda _name: object())
+
+    def broken_report():
+        raise RuntimeError("native fallback report ABI failure")
+
+    monkeypatch.setattr(native, "fallback_diagnostics_report", broken_report)
+    with pytest.raises(RuntimeError, match="ABI failure"):
+        fallbacks.fallback_diagnostics_report()
 
 
 def test_runtime_environment_validators_accept_native_facts():

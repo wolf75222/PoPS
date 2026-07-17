@@ -30,6 +30,25 @@ double maxdiff(const State& a, const State& b) {
   return m;
 }
 
+template <class Policy>
+State face_density(const Policy& policy, const pops::Euler& model, const State& left,
+                   const pops::Aux& left_providers, const State& right,
+                   const pops::Aux& right_providers, int axis) {
+  pops::FluxProviderValues<pops::Euler> left_values{}, right_values{};
+  left_values[0] = left_providers.phi;
+  left_values[1] = left_providers.grad_x;
+  left_values[2] = left_providers.grad_y;
+  right_values[0] = right_providers.phi;
+  right_values[1] = right_providers.grad_x;
+  right_values[2] = right_providers.grad_y;
+  return pops::evaluate_numerical_flux(policy, model, left,
+                                       pops::bind_flux_providers<pops::Euler>(left_values), right,
+                                       pops::bind_flux_providers<pops::Euler>(right_values),
+                                       pops::FaceContext::axis_aligned(axis))
+      .checked_density()
+      .value;
+}
+
 }  // namespace
 
 TEST(test_roe_flux, consistent_at_constant_state) {
@@ -41,7 +60,7 @@ TEST(test_roe_flux, consistent_at_constant_state) {
   // (1) consistance a etat constant, deux etats subsoniques, x et y
   for (const State U : {cons(1.2, 0.3, -0.1, 1.5, 1.4), cons(0.7, -0.2, 0.4, 0.9, 1.4)})
     for (int dir = 0; dir < 2; ++dir) {
-      const double d = maxdiff(roe(e, U, a, U, a, dir), e.flux(U, a, dir));
+      const double d = maxdiff(face_density(roe, e, U, a, U, a, dir), e.flux(U, a, dir));
       EXPECT_LE(d, 1e-12) << "consistance Roe (dir " << dir << ") : " << d;
     }
 }
@@ -56,21 +75,21 @@ TEST(test_roe_flux, supersonic_upwind_property) {
   {
     const State UL = cons(1.0, 8.0, 0.5, 1.0, 1.4);
     const State UR = cons(1.5, 12.0, -0.3, 1.3, 1.4);  // un ~ 10 >> c ~ 1.2
-    const double d = maxdiff(roe(e, UL, a, UR, a, 0), e.flux(UL, a, 0));
+    const double d = maxdiff(face_density(roe, e, UL, a, UR, a, 0), e.flux(UL, a, 0));
     EXPECT_LE(d, 1e-9) << "Roe supersonique +x (devrait valoir le flux amont gauche) : " << d;
   }
   // supersonique -x : un << -c -> F* == flux amont (droit)
   {
     const State UL = cons(1.2, -12.0, 0.0, 1.1, 1.4);
     const State UR = cons(0.9, -9.0, 0.4, 0.8, 1.4);
-    const double d = maxdiff(roe(e, UL, a, UR, a, 0), e.flux(UR, a, 0));
+    const double d = maxdiff(face_density(roe, e, UL, a, UR, a, 0), e.flux(UR, a, 0));
     EXPECT_LE(d, 1e-9) << "Roe supersonique -x (devrait valoir le flux amont droit) : " << d;
   }
   // supersonique +y
   {
     const State UL = cons(1.0, 0.2, 9.0, 1.0, 1.4);
     const State UR = cons(1.4, -0.1, 13.0, 1.2, 1.4);
-    const double d = maxdiff(roe(e, UL, a, UR, a, 1), e.flux(UL, a, 1));
+    const double d = maxdiff(face_density(roe, e, UL, a, UR, a, 1), e.flux(UL, a, 1));
     EXPECT_LE(d, 1e-9) << "Roe supersonique +y : " << d;
   }
 }

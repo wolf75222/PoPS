@@ -73,7 +73,7 @@ POPS_COLD_FN void dispatch_transport(const ModelSpec& m, Visitor&& v) {
   }
   // Reached only if a registry route is not routed by the switch (a registry/dispatch inconsistency,
   // i.e. a programming bug); user typos were already rejected by validate_transport above.
-  throw std::runtime_error("transport '" + m.transport +
+  throw std::runtime_error("transport '" + m.transport.get() +
                            "' valid in registry but not routed (add the dispatch case)");
 }
 
@@ -119,7 +119,7 @@ POPS_COLD_FN void dispatch_source(const ModelSpec& m, Visitor&& v) {
       }
     }
   }
-  throw std::runtime_error("source '" + m.source +
+  throw std::runtime_error("source '" + m.source.get() +
                            "' invalid here (requires a fluid transport >= 3 variables, or 'none')");
 }
 
@@ -141,7 +141,7 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
   }
   // Reached only on a registry/dispatch inconsistency (see dispatch_transport): unknown user tags
   // were already rejected by validate_elliptic above.
-  throw std::runtime_error("elliptic '" + m.elliptic +
+  throw std::runtime_error("elliptic '" + m.elliptic.get() +
                            "' valid in registry but not routed (add the dispatch case)");
 }
 
@@ -149,8 +149,10 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// brick (c_rho / c_mx / c_my / c_E) from the conservative descriptor @p cons of the TRANSPORT.
 /// This is a TRANSPARENT resolution, with no new user parameter: the native bricks adapt to the
 /// transport layout (density/momentum/energy located by their ROLE and not by a hard-coded index).
-/// An index is only WRITTEN if the role exists in @p cons; otherwise the brick KEEPS its canonical
-/// default (historical behavior for a transport without roles).
+/// Every index required by the selected brick is resolved exactly. A brick may expose the small
+/// `requires_energy_role(state_size)` protocol when energy is conditional on its state specialization;
+/// the factory contains no brick-name/type branch. Missing/partial role metadata or an absent active
+/// required role raises during assembly; canonical component defaults are never executable authority.
 ///
 /// Member detection via `requires` (if constexpr): the bricks have HETEROGENEOUS index sets
 /// (PotentialForce/GravityForce: rho/mx/my/E; MagneticLorentzForce: mx/my only;
@@ -162,25 +164,31 @@ POPS_COLD_FN void dispatch_elliptic(const ModelSpec& m, Visitor&& v) {
 /// the brick defaults -> no value changes. Resolved AT CONSTRUCTION (host, std::string); never on device.
 template <class Brick>
 POPS_COLD_FN void bind_variable_roles(Brick& brk, const VariableSet& cons) {
-  const int i_rho = cons.index_of(VariableRole::Density);
-  const int i_mx = cons.index_of(VariableRole::MomentumX);
-  const int i_my = cons.index_of(VariableRole::MomentumY);
-  const int i_E = cons.index_of(VariableRole::Energy);
   if constexpr (requires { brk.c_rho; }) {
-    if (i_rho >= 0)
-      brk.c_rho = i_rho;
+    brk.c_rho = require_role_index(cons, VariableRole::Density, "bind_variable_roles",
+                                   "model conservative state");
   }
   if constexpr (requires { brk.c_mx; }) {
-    if (i_mx >= 0)
-      brk.c_mx = i_mx;
+    brk.c_mx = require_role_index(cons, VariableRole::MomentumX, "bind_variable_roles",
+                                  "model conservative state");
   }
   if constexpr (requires { brk.c_my; }) {
-    if (i_my >= 0)
-      brk.c_my = i_my;
+    brk.c_my = require_role_index(cons, VariableRole::MomentumY, "bind_variable_roles",
+                                  "model conservative state");
   }
   if constexpr (requires { brk.c_E; }) {
-    if (i_E >= 0)
-      brk.c_E = i_E;
+    if constexpr (requires { Brick::requires_energy_role(cons.size); }) {
+      // A conditional brick owns the state-width rule that also guards its device apply().  When
+      // inactive we keep -1 (or the declared energy role when one exists); the device specialization
+      // never indexes the sentinel.  When active, absence/duplication stays a hard assembly error.
+      brk.c_E = Brick::requires_energy_role(cons.size)
+                    ? require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
+                                         "model conservative state")
+                    : cons.index_of(VariableRole::Energy);
+    } else {
+      brk.c_E = require_role_index(cons, VariableRole::Energy, "bind_variable_roles",
+                                   "model conservative state");
+    }
   }
   if constexpr (requires {
                   brk.a;
@@ -289,9 +297,9 @@ inline POPS_COLD_FN std::vector<int> resolve_implicit_components(
 /// bit-identical). At most one of name/role may be set. @p origin labels the error (e.g.
 /// "AmrSystem::set_refinement").
 inline POPS_COLD_FN int resolve_selected_component(const std::string& origin,
-                                                  const std::string& block, const VariableSet& cons,
-                                                  const std::string& name,
-                                                  const std::string& role) {
+                                                   const std::string& block,
+                                                   const VariableSet& cons, const std::string& name,
+                                                   const std::string& role) {
   if (name.empty() && role.empty())
     return -1;  // default selector -> caller's component 0
   if (!name.empty() && !role.empty())

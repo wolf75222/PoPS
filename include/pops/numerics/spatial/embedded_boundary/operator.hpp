@@ -188,10 +188,12 @@ struct EbFaceFluxXKernel {
         reconstruct_pp<Model>(model, u, i - 1, j, 0, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 0, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i - 1, j), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 0);
+    const FaceContext face = FaceContext::axis_aligned(0, alpha);
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i - 1, j, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
-      fx(i, j, c) = alpha * F[c];
+      fx(i, j, c) = F[c];
   }
 };
 
@@ -234,10 +236,12 @@ struct EbFaceFluxYKernel {
         reconstruct_pp<Model>(model, u, i, j - 1, 1, +1, lim, recon_prim, pos_floor, pos_comp);
     const auto Rr =
         reconstruct_pp<Model>(model, u, i, j, 1, -1, lim, recon_prim, pos_floor, pos_comp);
-    const auto F = nflux(model, L, load_aux<aux_comps<Model>()>(ax, i, j - 1), Rr,
-                         load_aux<aux_comps<Model>()>(ax, i, j), 1);
+    const FaceContext face = FaceContext::axis_aligned(1, alpha);
+    const auto evaluation =
+        evaluate_numerical_flux_at(nflux, model, L, ax, i, j - 1, Rr, ax, i, j, face);
+    const auto F = apply_face_measure(evaluation.checked_density(), face).value;
     for (int c = 0; c < Model::n_vars; ++c)
-      fy(i, j, c) = alpha * F[c];
+      fy(i, j, c) = F[c];
   }
 };
 
@@ -358,14 +362,12 @@ void assemble_rhs_eb(const Model& model, const MultiFab& U, const MultiFab& aux,
     Array4 fx = Fx.fab(li).array();
     Array4 fy = Fy.fab(li).array();
     const Box2D v = R.box(li);
-    for_each_cell(xface_box(v),
-                  detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
-                      face_open_eps});
-    for_each_cell(yface_box(v),
-                  detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
-                      model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim, pos_floor, pos_comp,
-                      face_open_eps});
+    for_each_cell(xface_box(v), detail::EbFaceFluxXKernel<Limiter, NumericalFlux, Model, LevelSet>{
+                                    model, u, ax, fx, dx, geom, ls, lim, nflux, recon_prim,
+                                    pos_floor, pos_comp, face_open_eps});
+    for_each_cell(yface_box(v), detail::EbFaceFluxYKernel<Limiter, NumericalFlux, Model, LevelSet>{
+                                    model, u, ax, fy, dy, geom, ls, lim, nflux, recon_prim,
+                                    pos_floor, pos_comp, face_open_eps});
   }
   // PASS 2: EB divergence / kappa_eff + source; inactive cell -> residual 0.
   for (int li = 0; li < U.local_size(); ++li) {

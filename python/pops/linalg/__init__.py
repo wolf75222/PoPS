@@ -2,8 +2,8 @@
 
 ``pops.linalg`` NAMES the linear algebra of a solve: the system ``A x = b``
 (:class:`LinearProblem`), the operators (:class:`LinearOperator` /
-:class:`MatrixFreeOperator`), the residual ``b - A x`` (:class:`Residual`), the typed vector
-norms (:class:`L1` / :class:`L2` / :class:`LInf`) and the scalar reductions (:class:`Dot` /
+:class:`MatrixFreeOperator`), the typed vector norms (:class:`L1` / :class:`L2` /
+:class:`LInf`) and the scalar reductions (:class:`Dot` /
 :class:`Norm2`, with the :func:`dot` / :func:`norm2` builders).
 
 It does NOT solve and it does NOT compute in Python -- everything is an inert typed descriptor;
@@ -14,14 +14,14 @@ NO ``preconditioners`` submodule -- a preconditioner configures a solver, so it 
 solver descriptors, and the no-retro-compat regime forbids a second public path / shim.
 """
 from .operator import LinearOperator, MatrixFreeOperator
-from .problem import LinearProblem, Residual
+from .problem import LinearProblem
 from .norms import L1, L2, LInf
 from .reductions import Dot, Norm2, dot, norm2
 from . import operator, problem, norms, reductions
 
 __all__ = [
     "LinearOperator", "MatrixFreeOperator",
-    "LinearProblem", "Residual",
+    "LinearProblem",
     "L1", "L2", "LInf",
     "Dot", "Norm2", "dot", "norm2",
     "operator", "problem", "norms", "reductions",

@@ -177,7 +177,7 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
   {
     MultiFab R0(ba, dm, EulerNoSrc::n_vars, 0), R1(ba, dm, EulerNoSrc::n_vars, 0);
     BlockClosures c0 = make_block(model, "weno5", "rusanov", ctx, false, false);
-    BlockClosures c1 = make_block(model, "weno5", "rusanov", ctx, false, false, "ssprk2", {}, {},
+    BlockClosures c1 = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
                                   nullptr, Real(0));
     c0.rhs_into(U, R0);
     c1.rhs_into(U, R1);
@@ -261,8 +261,8 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     MultiFab Uf(ba, dm, EulerNoSrc::n_vars, ng);
     init_tophat(Uf, dom, model, /*spike=*/false);
     fill_ghosts(Uf, dom, bc);
-    BlockClosures cpp =
-        make_block(model, "weno5", "rusanov", ctx, false, false, "ssprk2", {}, {}, nullptr, floor);
+    BlockClosures cpp = make_block(model, "weno5", "rusanov", ctx, false, false, "explicit", {}, {},
+                                   nullptr, floor);
     cpp.advance(Uf, dt * nsteps, nsteps);
     sync_host();
     Real min_pp = Real(1e30);
@@ -289,7 +289,7 @@ static int pops_run_test_positivity_floor(int argc, char** argv) {
     bool threw = false;
     std::string msg;
     try {
-      BlockClosures c = make_block(scal, "minmod", "rusanov", ctx, false, false, "ssprk2", {}, {},
+      BlockClosures c = make_block(scal, "minmod", "rusanov", ctx, false, false, "explicit", {}, {},
                                    nullptr, Real(1e-8));
       c.rhs_into(Us, Rs);
     } catch (const std::runtime_error& e) {

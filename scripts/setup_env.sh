@@ -24,11 +24,12 @@
 # docs/sphinx/getting-started/installation.md): it bootstraps conda guidance, configures conda-forge to
 # survive HTTP 429, forces a CPU Kokkos by default (the bare `kokkos` resolves to the CUDA variant on a
 # host with an NVIDIA driver -> `pip install .` then fails "Could not find nvcc"), persists the DSL
-# runtime variables in the env, and ends on `pops.doctor()`.
+# runtime variables in the env, and ends on the runtime-layer doctor.
 set -euo pipefail
 
 ENV_NAME="${POPS_ENV_NAME:-pops}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
+source "$HERE/scripts/conda_runtime.sh"
 
 # --- git hygiene: ignore the mechanical clang-format sweep in `git blame` (ADC-118) ----------------
 # The repo ships .git-blame-ignore-revs (the full-tree reformat SHA). Point local `git blame` at it so
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- conda present? otherwise guide the bootstrap (no silent install) -------------------------------
-if ! command -v conda >/dev/null 2>&1; then
+if ! pops_load_conda; then
   cat >&2 <<EOF
 conda not found. On a fresh machine, bootstrap Miniforge (conda-forge), then re-run this script:
 
@@ -156,28 +157,36 @@ echo "env vars pinned: POPS_INCLUDE, POPS_KOKKOS_ROOT, Kokkos_ROOT, CMAKE_PREFIX
 # --- final diagnostic --------------------------------------------------------------------------------
 echo ""
 echo "Env ready. Next, in one command (sizes the heavy-TU pool, exports the discovery vars + ccache,"
-echo "installs, then runs pops.doctor()):"
+echo "installs, then runs pops.runtime.doctor.doctor()):"
 echo "    bash scripts/build_python.sh"
 echo ""
 echo "Or by hand:"
 echo "    conda activate $ENV_NAME"
 echo "    pip install . -v          # builds the Kokkos module (Kokkos is ON and mandatory)"
 echo ""
-# ADC-338: after the ADC-335 split, the heavy module TUs are small but a size-1 Ninja pool
-# (POPS_HEAVY_TU_POOL, the CI 7GB-runner OOM guard) still serializes them. On a high-RAM local box,
-# widen it so -j actually compiles the sub-TUs in parallel (this, not -j alone, bounds the heavy TUs).
+# ADC-338: after the ADC-335 split, a conservative size-1 Ninja pool
+# (POPS_HEAVY_MODULE_TU_POOL, the memory-constrained default) still serializes the module leaves. On a
+# machine with enough RAM, widen it so -j actually compiles the sub-TUs in parallel (this, not -j alone,
+# bounds the heavy TUs).
 # scripts/build_python.sh sizes this automatically (cores capped by RAM); the manual knob:
 _ncpu="$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 echo "Manual heavy-TU pool (build_python.sh does this for you):"
-echo "    pip install . -v -C cmake.define.POPS_HEAVY_TU_POOL=$_ncpu      # or a C++ preset: -DPOPS_HEAVY_TU_POOL=$_ncpu"
-echo "    (leave it at the default 1 on memory-constrained machines / CI -- it is the OOM guard.)"
+echo "    pip install . -v -C cmake.define.POPS_HEAVY_MODULE_TU_POOL=$_ncpu      # or CMake: -DPOPS_HEAVY_MODULE_TU_POOL=$_ncpu"
+echo "    (leave it at the default 1 on memory-constrained machines -- it is the OOM guard.)"
 echo ""
-if conda run -n "$ENV_NAME" python -c "import pops" >/dev/null 2>&1; then
-  echo "--- pops.doctor() ---"
-  conda run -n "$ENV_NAME" python -c "import pops; pops.doctor()" || true
+# ADC-647: a previous wheel install may already exist. On Darwin, authenticate the exact extension
+# a clean `import pops` will resolve before the probe below can load it. A missing package is normal
+# during first-time setup; a present package with a missing/bad extension is not.
+conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+  python "$HERE/scripts/codesign_pops_extensions.py" --if-present
+if conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+    python -c "import pops" >/dev/null 2>&1; then
+echo "--- pops.runtime.doctor.doctor() ---"
+  conda run -n "$ENV_NAME" env PYTHONPATH= PYTHONNOUSERSITE=1 \
+python -c "from pops.runtime.doctor import doctor; doctor()" || true
 else
   echo "pops is not installed in '$ENV_NAME' yet. Install it, then check the environment:"
   echo "    conda activate $ENV_NAME"
   echo "    pip install . -v"
-  echo "    python -c 'import pops; pops.doctor()'"
+echo "    python -c 'from pops.runtime.doctor import doctor; doctor()'"
 fi

@@ -364,8 +364,7 @@ TEST_F(PolarDiocotronNative, NativeRunHasNoNan) {
 
 // (C2) masse conservee a ~machine (paroi radiale) dans le run avec Lorentz natif.
 TEST_F(PolarDiocotronNative, NativeRunConservesMass) {
-  EXPECT_TRUE(on_->mass_rel <= 1e-12)
-      << "masse non conservee : " << on_->mass_rel << " > 1e-12";
+  EXPECT_TRUE(on_->mass_rel <= 1e-12) << "masse non conservee : " << on_->mass_rel << " > 1e-12";
 }
 
 // (C3) le mode croit (la force magnetique native met le fluide en mouvement et l'amplifie).
